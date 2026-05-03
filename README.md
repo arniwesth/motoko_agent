@@ -22,7 +22,6 @@ Things are going to break.
 ## Highlights
 
 - **Autonomous execution** — plans and runs commands without pausing for approval
-- **Multi-model** — Anthropic (Claude), OpenAI (GPT-4o), Google (Gemini)
 - **Loadable extensions** — context-aware execution, web search, graph-based code ops, multi-agent composition, MCP bridge
 - **Terminal UI** — inline session rendering, `/model` picker, abort at any step
 - **JSON profiles** — named configs under `.motoko/config/` for per-project or per-provider setups
