@@ -185,7 +185,6 @@ export class RuntimeProcess {
   private dead = false;
   private readonly workdir: string;
   private readonly onEvent: (e: AgentEvent) => void;
-  private readonly ohMyPiToolsEnabled: boolean;
 
   constructor(
     task: string,
@@ -202,7 +201,6 @@ export class RuntimeProcess {
   ) {
     this.workdir = workdir;
     this.onEvent = onEvent;
-    this.ohMyPiToolsEnabled = (process.env.OHMY_PI_TOOLS ?? "0") === "1";
     const aiModelArg = model;
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
@@ -378,10 +376,9 @@ export class RuntimeProcess {
     const results: DelegatedResult[] = [];
     const session = createOhMyPiSession(this.workdir);
     for (const call of calls) {
-      const useOhMyPi =
-        this.ohMyPiToolsEnabled &&
-        (call.tool === "ReadFile" || call.tool === "WriteFile" || call.tool === "EditFile" || call.tool === "Search");
-      const result = useOhMyPi
+      const isFileTool =
+        call.tool === "ReadFile" || call.tool === "WriteFile" || call.tool === "EditFile" || call.tool === "Search";
+      const result = isFileTool
         ? await dispatchOhMyPiTool(session, call)
         : await this.runDelegatedCall(call);
       results.push(result);
