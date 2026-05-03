@@ -1,5 +1,5 @@
 # Motoko
-`Motoko` is a highly experimental agent harness based on the [AILANG](https://github.com/sunholo-data/ailang) language and framework. 
+`Motoko` is a highly experimental agent harness based on the [AILANG](https://github.com/sunholo-data/ailang) language. 
 
 It is designed to explore self-evolving, self-verifying software and largely follows the [The Phoenix Architecture](https://aicoding.leaflet.pub/): no human written code allowed.
 
