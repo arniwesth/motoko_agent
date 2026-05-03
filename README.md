@@ -7,6 +7,7 @@ The project is believed to be developed by the enigmatic entity known as the `Pu
 
 Things are going to break.
 <p align="center"><img src="assets/motoko.png" alt="Motoko" /></p>
+
 ## Table of Contents
 
 - [Highlights](#highlights)
