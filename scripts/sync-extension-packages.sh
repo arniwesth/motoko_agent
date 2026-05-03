@@ -36,9 +36,6 @@ sync_extension() {
       -e 's|import src/core/ext/types (|import pkg/sunholo/motoko_core/core/ext/types (|g' \
       "$f"
   done
-  # Generate lock file for the extension package so its dependencies resolve.
-  (cd "$pkg_dir" && ailang lock)
-
   if [[ -f "$src_dir/AGENT.md" ]]; then
     cp "$src_dir/AGENT.md" "$pkg_dir/AGENT.md"
   fi
@@ -51,6 +48,9 @@ sync_extension() {
       -e 's|path = "../mcp"|path = "../motoko_mcp"|g' \
       "$pkg_dir/ailang.toml"
   fi
+
+  # Generate lock file for the extension package so its dependencies resolve.
+  (cd "$pkg_dir" && ailang lock)
 
   echo "synced: $ext_name -> .packages/motoko_$ext_name"
 }
@@ -87,8 +87,8 @@ main() {
   sync_extension "omnigraph"
   sync_extension "test_dummy"
   sync_extension "context_mode"
-  sync_extension "exa_search"
   sync_extension "mcp"
+  sync_extension "exa_search"
 }
 
 main "$@"
