@@ -1,0 +1,76 @@
+-- core/cache.ail
+--
+-- Trajectory cache using AILANG SharedMem (std/sem).
+--
+-- Purpose:
+--   When the brain encounters a task, it first checks whether a similar
+--   issue has been resolved before.  If it has, the stored trajectory
+--   summary is injected into the system prompt as a hint (see
+--   core/prompts.ail: with_cache_hint).  After a successful completion the
+--   final output is stored so future runs can benefit.
+--
+-- Key convention:
+--   "core:traj:<task_hash>"
+--   task_hash is the first 32 chars of the task text, whitespace collapsed.
+--   Using a prefix namespace keeps core keys separate from other agents that
+--   share the same SharedMem process.
+--
+-- Design notes:
+--   • _sharedmem_get returns Option[bytes]; we convert to string via
+--     _bytes_to_string and unwrap to "" when absent.
+--   • We use make_frame_at / store_frame (std/sem) so the cache is compatible
+--     with SharedIndex semantic retrieval in a future phase.
+--   • The frame opaque payload carries the raw trajectory string; the content
+--     field carries the task description for embedding-based retrieval later.
+--   • Timestamp is 0 for now — std/clock is not required for phases 0-4.
+
+module src/core/cache
+
+import std/sem    (make_frame_at, store_frame, load_frame)
+import std/string (trim, replace)
+import std/bytes  (fromString, toString)
+
+-- ---------------------------------------------------------------------------
+-- task_slug : string -> string
+--
+-- Derive a stable slug from the task text.
+-- Collapses spaces and keeps first 32 chars.
+-- ---------------------------------------------------------------------------
+func task_slug(task: string) -> string {
+  let slug = replace(trim(task), " ", "_");
+  if _str_len(slug) <= 32 then slug
+  else _str_slice(slug, 0, 32)
+}
+
+func key_for(prefix: string, slug: string) -> string {
+  "${prefix}${slug}"
+}
+
+func task_key(task: string) -> string {
+  key_for("core:traj:", task_slug(task))
+}
+
+-- ---------------------------------------------------------------------------
+-- get_hint : string -> string ! {SharedMem}
+--
+-- Return the cached trajectory hint for `task`, or "" if none exists.
+-- ---------------------------------------------------------------------------
+export func get_hint(task: string) -> string ! {SharedMem} {
+  let key = task_key(task);
+  match load_frame(key) {
+    Some(f) => toString(f.opaque),
+    None    => ""
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- put_trajectory : string -> string -> () ! {SharedMem}
+--
+-- Store the final output as a trajectory hint for future runs on the same
+-- task.  Overwrites any previous entry for this task key.
+-- ---------------------------------------------------------------------------
+export func put_trajectory(task: string, output: string) -> () ! {SharedMem} {
+  let key   = task_key(task);
+  let frame = make_frame_at(key, task, fromString(output), 0);
+  store_frame(key, frame)
+}

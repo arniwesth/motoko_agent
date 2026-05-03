@@ -1,0 +1,35 @@
+-- core/prompts_test.ail
+--
+-- Property tests and named tests for core/prompts.ail.
+-- These complement the inline tests in prompts.ail with algebraic laws.
+
+module src/core/prompts_test
+
+import src/core/prompts  (with_cache_hint, fmt_msgs, fmt_obs)
+import src/core/types    (Msg, ExecResult)
+import std/string   (contains, startsWith)
+
+-- empty hint is identity
+property "with_cache_hint empty hint identity" {
+  forall(system: string) => with_cache_hint(system, "") == system
+}
+
+-- non-empty hint strictly extends the system string
+property "with_cache_hint non-empty extends" {
+  forall(system: string, hint: string) =>
+    hint == "" || startsWith(with_cache_hint(system, hint), system)
+}
+
+-- fmt_msgs: empty, single, two messages (role ordering preserved)
+test "fmt_msgs empty" { fmt_msgs([]) == "" }
+test "fmt_msgs single" { fmt_msgs([{role: "user", content: "hello"}]) == "[user]\nhello\n\n" }
+test "fmt_msgs two" {
+  fmt_msgs([{role: "user", content: "hi"}, {role: "assistant", content: "hello"}]) ==
+  "[user]\nhi\n\n[assistant]\nhello\n\n"
+}
+
+-- fmt_obs always starts with "$ "
+property "fmt_obs has dollar prefix" {
+  forall(cmd: string) =>
+    startsWith(fmt_obs(cmd, {stdout: "", stderr: "", exit_code: 0}), "$ ")
+}

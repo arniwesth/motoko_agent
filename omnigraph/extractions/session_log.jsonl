@@ -1,0 +1,5 @@
+{"type": "Decision", "data": {"slug": "tui-session-log:jsonl-session-logs", "title": "JSONL Session Logging to logfile/ Directory", "rationale": "SessionLogger class creates timestamped JSONL files (session_<ISO>.jsonl) under logfile/. One JSON object per line matches runtime protocol. Wired into event pipeline in index.ts. Per-invocation file: new SessionLogger each spawnRuntimeProcess call.", "status": "accepted", "date": "2026-04"}}
+{"type": "Component", "data": {"slug": "src/tui/src/session-logger.ts", "name": "Session Logger", "description": "Creates logfile/ directory, opens write stream to timestamped JSONL file. log(event: AgentEvent) writes one JSON line. close() flushes and closes stream.", "layer": "infrastructure"}}
+{"edge": "Governs", "from": "tui-session-log:jsonl-session-logs", "to": "src/tui/src/session-logger.ts"}
+{"edge": "DependsOn", "from": "src/tui/src/index.ts", "to": "src/tui/src/session-logger.ts"}
+{"edge": "DependsOnDecision", "from": "tui-session-log:jsonl-session-logs", "to": "ailang-agent:jsonl-protocol"}

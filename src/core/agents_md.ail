@@ -1,0 +1,200 @@
+-- core/agents_md.ail
+--
+-- AGENTS.md discovery and loading.
+--
+-- Scans for AGENTS.md files starting from a given directory and moving up
+-- the directory tree. All found files are loaded and concatenated into a
+-- single context string that can be injected into the system prompt.
+--
+-- Design notes:
+--   • Scans upward from workdir until root is reached
+--   • Collects all AGENTS.md files found (root-level first, then deeper)
+--   • Each file's content is prefixed with a header showing its path
+--   • Pure function — no side effects
+--
+
+module src/core/agents_md
+
+import std/fs   (readFile, fileExists)
+import std/string (split, join, endsWith, substring, length as str_length)
+import std/list (reverse, foldlE, head, tail, length)
+
+-- ---------------------------------------------------------------------------
+-- dirname : string -> string
+--
+-- Returns the parent directory path.
+-- Examples:
+--   dirname("/home/user/file.txt") => "/home/user"
+--   dirname("/home/user/")         => "/home/user"
+--   dirname("file.txt")            => "."
+--   dirname("/")                   => "/"
+-- ---------------------------------------------------------------------------
+-- Helper function to find the last occurrence of a character
+func find_last(i: int, s: string) -> int =
+  if i < 0 then -1
+  else if substring(s, i, i + 1) == "/" then i
+  else find_last(i - 1, s)
+
+func dirname(path: string) -> string
+  tests [
+    ("/home/user/file.txt",  "/home/user"),
+    ("/home/user/",          "/home"),
+    ("/file.txt",            "/"),
+    ("file.txt",             "."),
+    ("/",                    "/")
+  ]
+{
+  -- Remove trailing slash if present (except for root)
+  let clean =
+    if str_length(path) > 1 && endsWith(path, "/") then {
+      substring(path, 0, str_length(path) - 1)
+    } else {
+      path
+    };
+  
+  let last_slash = find_last(str_length(clean) - 1, clean);
+  
+  if last_slash <= 0 then {
+    -- No slash or slash at beginning means current dir or root
+    if last_slash == 0 then {
+      -- Path like "/file" -> "/" or "/" -> "/"
+      "/"
+    } else {
+      "."
+    }
+  } else {
+    substring(clean, 0, last_slash)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- is_root : string -> bool
+--
+-- Returns true if the path is at the filesystem root.
+-- Handles both Unix (/) and Windows (C:\, etc.) roots.
+-- ---------------------------------------------------------------------------
+func is_root(path: string) -> bool
+  tests [
+    ("/",        true),
+    ("/home",    false),
+    ("",         false),
+    ("C:",       true),
+    ("C:\\",     true),
+    ("C:\\foo",  false)
+  ]
+  { path == "/" ||
+  (str_length(path) == 2 && substring(path, 1, 2) == ":") ||
+  (str_length(path) == 3 && substring(path, 1, 2) == ":" && substring(path, 2, 3) == "\\") }
+
+-- ---------------------------------------------------------------------------
+-- find_agents_files : string -> [string]
+--
+-- Starting from dir, walk up the directory tree collecting all AGENTS.md
+-- file paths. Returns paths in order from root-most to closest to dir.
+--
+-- Example:
+--   Given workdir "/home/user/project/src":
+--   - Checks /home/user/project/src/AGENTS.md
+--   - Checks /home/user/project/AGENTS.md
+--   - Checks /home/user/AGENTS.md
+--   - Checks /home/AGENTS.md
+--   - Checks /AGENTS.md
+--
+-- Returns only the files that exist, in order from root-most to closest.
+-- ---------------------------------------------------------------------------
+-- Helper function for walking up the directory tree
+func walk_agents(current: string, acc: [string]) -> [string] {
+  if is_root(current) then {
+    -- At root; check this level, then reverse acc to get root-first order
+    if fileExists("${current}/AGENTS.md") then {
+      reverse(acc ++ ["${current}/AGENTS.md"])
+    } else {
+      reverse(acc)
+    }
+  } else {
+    let parent = dirname(current);
+    let has_agents = fileExists("${current}/AGENTS.md");
+    if parent == current then {
+      -- Reached root without detecting it (shouldn't happen, but be safe)
+      if has_agents then {
+        reverse(acc ++ ["${current}/AGENTS.md"])
+      } else {
+        reverse(acc)
+      }
+    } else if has_agents then {
+      walk_agents(parent, acc ++ ["${current}/AGENTS.md"])
+    } else {
+      walk_agents(parent, acc)
+    }
+  }
+}
+
+func find_agents_files(dir: string) -> [string] =
+  walk_agents(dir, [])
+
+-- ---------------------------------------------------------------------------
+-- load_agents_content : string -> string
+--
+-- Finds all AGENTS.md files from dir upward and loads their content.
+-- Returns a formatted string with each file's content prefixed by its path.
+--
+-- Format:
+--   ## AGENTS.md: <path>
+--   <file content>
+--
+-- Returns empty string if no AGENTS.md files found.
+-- ---------------------------------------------------------------------------
+-- Recursive helper to load all AGENTS.md files
+func load_agents_recursive(file_list: [string], acc: string) -> string ! {FS} {
+  match file_list {
+    [] => acc,
+    [f, ...rest] => {
+      let new_acc = "${acc}\n## AGENTS.md: ${f}\n```\n${readFile(f)}\n```\n\n";
+      load_agents_recursive(rest, new_acc)
+    }
+  }
+}
+
+export func load_agents_content(dir: string) -> string ! {FS} {
+  let agents_files: [string] = find_agents_files(dir);
+  if length(agents_files) == 0 then {
+    ""
+  } else {
+    let formatted: string = load_agents_recursive(agents_files, "");
+    "\n## Project-Specific Agent Instructions\n\nThe following AGENTS.md files were discovered and loaded:\n${formatted}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- with_agents_context : string -> string -> string
+--
+-- Appends AGENTS.md content to a system prompt when AGENTS.md files exist.
+-- Returns `system` unchanged when no AGENTS.md files are found.
+-- ---------------------------------------------------------------------------
+export func with_agents_context(system: string, dir: string) -> string ! {FS} {
+  let agents_content = load_agents_content(dir);
+  if agents_content == "" then {
+    system
+  } else {
+    "${system}\n${agents_content}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Z3 / SMT verification targets
+--
+-- These invariants are simple boolean predicates with no string splitting —
+-- Z3's string theory can handle them without timing out.
+-- ---------------------------------------------------------------------------
+
+-- is_root only holds for short paths: "/" "X:" "X:\"
+-- (ensures we never mistake /home or longer paths for root)
+@verify(depth: 1)
+func is_root_length_bound(path: string) -> bool
+  { not is_root(path) || str_length(path) <= 3 }
+
+-- dirname result is always strictly shorter than input (termination guarantee)
+-- This is the key property that ensures walk_agents terminates
+@verify(depth: 1)
+func dirname_shrinks(path: string) -> bool
+  { path == "/" || str_length(dirname(path)) < str_length(path) }

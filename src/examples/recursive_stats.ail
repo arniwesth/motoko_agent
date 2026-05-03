@@ -1,0 +1,25 @@
+module src/examples/recursive_stats
+
+import std/io (println)
+
+pure func calculate_stats(nums: [int], c: int, s: int, m: int) -> { count: int, sum: int, max: int } =
+  match nums {
+    [] => { count: c, sum: s, max: m }
+    head :: tail =>
+      let new_c = c + 1 in
+      let new_s = s + head in
+      let new_m = if head > m then head else m in
+      calculate_stats(tail, new_c, new_s, new_m)
+  }
+
+export func main() -> () ! {IO} {
+  let data = [10, 20, 30, 40, 50, 5, 100, 2];
+  let stats = calculate_stats(data, 0, 0, 0);
+
+  println("--- Recursive Statistics Analysis ---");
+  println("Input Data: " ++ show(data));
+  println("Count: " ++ show(stats.count));
+  println("Sum:   " ++ show(stats.sum));
+  println("Max:   " ++ show(stats.max));
+  println("--------------------------------------");
+}

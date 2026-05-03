@@ -1,0 +1,202 @@
+module src/core/ext/omnigraph/omnigraph_test
+
+import std/json (encode, jo, kv, js)
+import std/option (Option, Some, None)
+import std/string (contains)
+import pkg/sunholo/motoko_core/ext/types (ExtCtx)
+import src/core/ext/omnigraph/exec (parse_output_json, build_shell_argv)
+import src/core/ext/omnigraph/guardrail (denied_mutation_reason)
+import src/core/ext/omnigraph/omnigraph (on_build_system_prompt, on_tool_policy)
+import src/core/ext/omnigraph/normalize (normalize_call)
+
+func test_ctx() -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: true,
+    budget: { total: 10, solver: 10, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 10,
+    history_slice: [],
+    state_key: "k"
+  }
+}
+
+func list_contains(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == needle then true else list_contains(rest, needle)
+  }
+}
+
+func index_of(xs: [string], needle: string, i: int) -> int {
+  match xs {
+    [] => -1,
+    x :: rest => if x == needle then i else index_of(rest, needle, i + 1)
+  }
+}
+
+func is_none(opt: Option[string]) -> bool {
+  match opt {
+    None => true,
+    Some(_) => false
+  }
+}
+
+func is_some_with(opt: Option[string], expected: string) -> bool {
+  match opt {
+    Some(v) => v == expected,
+    None => false
+  }
+}
+
+func parse_output_json_passthrough() -> bool
+  tests [((), true)]
+  {
+    contains(encode(parse_output_json("{\"ok\":true}")), "\"ok\":true")
+  }
+
+func parse_output_raw_wrapped() -> bool
+  tests [((), true)]
+  {
+    contains(encode(parse_output_json("not-json")), "\"output\":\"not-json\"")
+  }
+
+func parse_output_empty_wrapped() -> bool
+  tests [((), true)]
+  {
+    contains(encode(parse_output_json("   ")), "\"output\":\"\"")
+  }
+
+func guardrail_allows_single_slug_delete_on_cleanup_branch() -> bool
+  tests [((), true)]
+  {
+    let c = {
+      id: "m1",
+      tool: "OmnigraphMutate",
+      arguments: jo([kv("name", js("delete_decision")), kv("branch", js("cleanup/poc"))])
+    };
+    is_none(denied_mutation_reason(c))
+  }
+
+func guardrail_denies_single_slug_delete_on_main() -> bool
+  tests [((), true)]
+  {
+    let c = {
+      id: "m1",
+      tool: "OmnigraphMutate",
+      arguments: jo([kv("name", js("delete_decision")), kv("branch", js("main"))])
+    };
+    is_some_with(denied_mutation_reason(c), "refuses to write to main directly; create a feature branch first")
+  }
+
+func guardrail_denies_bulk_wipe_on_feature_branch() -> bool
+  tests [((), true)]
+  {
+    let c = {
+      id: "m1",
+      tool: "OmnigraphMutate",
+      arguments: jo([kv("name", js("delete_all_decisions")), kv("branch", js("feature/x"))])
+    };
+    is_some_with(denied_mutation_reason(c), "bulk wipe queries (delete_all_*) are only allowed on wipe/* or cleanup/* branches")
+  }
+
+func guardrail_allows_bulk_wipe_on_cleanup_branch() -> bool
+  tests [((), true)]
+  {
+    let c = {
+      id: "m1",
+      tool: "OmnigraphMutate",
+      arguments: jo([kv("name", js("delete_all_decisions")), kv("branch", js("cleanup/poc"))])
+    };
+    is_none(denied_mutation_reason(c))
+  }
+
+func guardrail_allows_bulk_wipe_on_wipe_branch() -> bool
+  tests [((), true)]
+  {
+    let c = {
+      id: "m1",
+      tool: "OmnigraphMutate",
+      arguments: jo([kv("name", js("delete_all_decisions")), kv("branch", js("wipe/poc"))])
+    };
+    is_none(denied_mutation_reason(c))
+  }
+
+func guardrail_bulk_wipe_on_main_prefers_main_deny_reason() -> bool
+  tests [((), true)]
+  {
+    let c = {
+      id: "m1",
+      tool: "OmnigraphMutate",
+      arguments: jo([kv("name", js("delete_all_decisions")), kv("branch", js("main"))])
+    };
+    is_some_with(denied_mutation_reason(c), "refuses to write to main directly; create a feature branch first")
+  }
+
+func normalize_query_alias() -> bool
+  tests [((), true)]
+  {
+    match normalize_call({ id: "q1", tool: "OmnigraphQuery", arguments: jo([kv("query", js("list_decisions")), kv("branch", js("dev"))]) }) {
+      Some(c) => c.tool == "OmnigraphRead" && contains(encode(c.arguments), "queries/decisions.gq"),
+      None => false
+    }
+  }
+
+func normalize_create_branch_alias() -> bool
+  tests [((), true)]
+  {
+    match normalize_call({ id: "b1", tool: "OmnigraphCreateBranch", arguments: jo([kv("source_branch", js("main")), kv("new_branch", js("feature/a"))]) }) {
+      Some(c) => c.tool == "OmnigraphBranch" && contains(encode(c.arguments), "\"action\":\"create\""),
+      None => false
+    }
+  }
+
+func branch_create_argv_has_no_repo_omni_and_preserves_order() -> bool
+  tests [((), true)]
+  {
+    let argv = build_shell_argv(["branch", "create", "--from", "main", "feature/test", "--json"], "omnigraph", 30000);
+    let from_idx = index_of(argv, "--from", 0);
+    let name_idx = index_of(argv, "feature/test", 0);
+    let repo_idx = index_of(argv, "repo.omni", 0);
+    from_idx >= 0 && name_idx > from_idx && repo_idx == -1
+  }
+
+func policy_denies_main_mutation() -> bool
+  tests [((), true)]
+  {
+    match on_tool_policy(test_ctx(), { id: "m1", tool: "OmnigraphMutate", arguments: jo([kv("branch", js("main"))]) }) {
+      Deny(msg) => contains(msg, "main"),
+      _ => false
+    }
+  }
+
+func policy_noop_for_read() -> bool
+  tests [((), true)]
+  {
+    match on_tool_policy(test_ctx(), { id: "r1", tool: "OmnigraphRead", arguments: jo([kv("query_file", js("queries/decisions.gq")), kv("name", js("list_decisions"))]) }) {
+      NoOpinion => true,
+      _ => false
+    }
+  }
+
+func prompt_patch_appends_cached_prompt() -> bool
+  tests [((), true)]
+  {
+    let patch = on_build_system_prompt("omnigraph-card", test_ctx());
+    list_contains(patch.append, "omnigraph-card")
+  }
+
+func prompt_patch_empty_when_missing() -> bool
+  tests [((), true)]
+  {
+    let patch = on_build_system_prompt("", test_ctx());
+    match patch.append {
+      [] => true,
+      _ => false
+    }
+  }

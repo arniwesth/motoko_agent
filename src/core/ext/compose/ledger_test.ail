@@ -1,0 +1,28 @@
+module src/core/ext/compose/ledger_test
+
+import src/core/ext/compose/ledger (init_ledger, consume_budget, append_entry, quote_seen_for_path, remaining_budget)
+
+func t_quote_seen_matches_whitespace_normalized() -> bool
+  tests [((), true)]
+  {
+    let l0 = init_ledger(10);
+    let l1 = append_entry(l0, {
+      tool: "read_file",
+      path: "README.md",
+      args_hash: "x",
+      content_excerpt: "alpha\n  beta\tgamma",
+      ts: 0,
+      truncated: false,
+      bytes: 20
+    });
+    quote_seen_for_path(l1, "README.md", "alpha beta gamma")
+  }
+
+func t_budget_consumes_monotonically() -> bool
+  tests [((), true)]
+  {
+    let l0 = init_ledger(2);
+    let l1 = consume_budget(l0);
+    let l2 = consume_budget(l1);
+    l2.budget_used == 2 && remaining_budget(l2) == 0
+  }

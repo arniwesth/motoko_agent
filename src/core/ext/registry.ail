@@ -1,0 +1,182 @@
+module src/core/ext/registry
+
+import std/string (split, trim)
+import std/option (Option, Some, None)
+import src/core/ext/types (ExtensionHooks, ExtRegistry)
+import src/core/config (RuntimeConfig)
+import src/core/ext/test_dummy/dummy (register as test_dummy_register)
+import src/core/ext/compose/compose (register_with_config as compose_register)
+import src/core/ext/omnigraph/omnigraph (register_with_config as omnigraph_register)
+import src/core/ext/context_mode/context_mode (register_with_config as context_mode_register)
+import src/core/ext/exa_search/exa_search (register_with_config as exa_search_register)
+
+func register_test_dummy(_cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  test_dummy_register()
+}
+
+func register_compose(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  compose_register(cfg)
+}
+
+func register_omnigraph(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  omnigraph_register(cfg)
+}
+
+func register_context_mode(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  context_mode_register(cfg)
+}
+
+func register_exa_search(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  exa_search_register(cfg)
+}
+
+func with_id(h: ExtensionHooks, id: string) -> ExtensionHooks {
+  { h | id: id }
+}
+
+func resolve(name: string) -> Option[(RuntimeConfig) -> ExtensionHooks ! {Env, FS}] {
+  if name == "test_dummy" then Some(register_test_dummy)
+  else if name == "compose" then Some(register_compose)
+  else if name == "omnigraph" then Some(register_omnigraph)
+  else if name == "context_mode" then Some(register_context_mode)
+  else if name == "exa_search" then Some(register_exa_search)
+  else None
+}
+
+func parse_tokens(xs: [string], idx: int, hooks_acc: [ExtensionHooks], cfg: RuntimeConfig) -> ExtRegistry ! {Env, FS} {
+  match xs {
+    [] => { hooks: hooks_acc },
+    raw :: rest => {
+      let name = trim(raw);
+      match resolve(name) {
+        None => parse_tokens(rest, idx + 1, hooks_acc, cfg),
+        Some(ctor) => {
+          let id = "${name}#${show(idx)}";
+          let hook = with_id(ctor(cfg), id);
+          parse_tokens(rest, idx + 1, hooks_acc ++ [hook], cfg)
+        }
+      }
+    }
+  }
+}
+
+export func parse_core_ext_order(raw: string, cfg: RuntimeConfig) -> ExtRegistry ! {Env, FS} {
+  if trim(raw) == "" then { hooks: [] }
+  else parse_tokens(split(raw, ","), 0, [], cfg)
+}
+
+func hook_len(xs: [ExtensionHooks]) -> int {
+  match xs {
+    [] => 0,
+    _ :: rest => 1 + hook_len(rest)
+  }
+}
+
+export func registry_size(r: ExtRegistry) -> int {
+  hook_len(r.hooks)
+}
+
+func hook_names(xs: [ExtensionHooks]) -> [string] {
+  match xs {
+    [] => [],
+    h :: rest => h.id :: hook_names(rest)
+  }
+}
+
+export func debug_pure_names(r: ExtRegistry) -> [string] {
+  hook_names(r.hooks)
+}
+
+func parse_tokens_names(xs: [string], idx: int, names_acc: [string]) -> [string] {
+  match xs {
+    [] => names_acc,
+    raw :: rest => {
+      let name = trim(raw);
+      let next =
+        if name == "test_dummy" || name == "compose" || name == "omnigraph" || name == "context_mode" || name == "exa_search" then
+          names_acc ++ ["${name}#${show(idx)}"]
+        else names_acc;
+      parse_tokens_names(rest, idx + 1, next)
+    }
+  }
+}
+
+func parse_core_ext_order_names(raw: string) -> [string] {
+  if trim(raw) == "" then []
+  else parse_tokens_names(split(raw, ","), 0, [])
+}
+
+func len(xs: [string]) -> int {
+  match xs {
+    [] => 0,
+    _ :: rest => 1 + len(rest)
+  }
+}
+
+func first_or_empty(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: _ => x
+  }
+}
+
+func second_or_empty(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    _ :: rest => first_or_empty(rest)
+  }
+}
+
+func parse_empty() -> bool
+  tests [((), true)]
+  {
+    len(parse_core_ext_order_names("")) == 0
+  }
+
+func parse_unknown_filtered() -> bool
+  tests [((), true)]
+  {
+    len(parse_core_ext_order_names("unknown")) == 0
+  }
+
+func parse_two_dummies_keep_order() -> bool
+  tests [((), true)]
+  {
+    let names = parse_core_ext_order_names("test_dummy,test_dummy");
+    len(names) == 2 && first_or_empty(names) == "test_dummy#0" && second_or_empty(names) == "test_dummy#1"
+  }
+
+func parse_mixed_order_stable() -> bool
+  tests [((), true)]
+  {
+    let names = parse_core_ext_order_names("ignored,compose,unknown,test_dummy");
+    len(names) == 2 && first_or_empty(names) == "compose#1" && second_or_empty(names) == "test_dummy#3"
+  }
+
+func parse_omnigraph_alone() -> bool
+  tests [((), true)]
+  {
+    let names = parse_core_ext_order_names("omnigraph");
+    len(names) == 1 && first_or_empty(names) == "omnigraph#0"
+  }
+
+func parse_compose_then_omnigraph() -> bool
+  tests [((), true)]
+  {
+    let names = parse_core_ext_order_names("compose,omnigraph");
+    len(names) == 2 && first_or_empty(names) == "compose#0" && second_or_empty(names) == "omnigraph#1"
+  }
+
+func parse_context_mode_alone() -> bool
+  tests [((), true)]
+  {
+    let names = parse_core_ext_order_names("context_mode");
+    len(names) == 1 && first_or_empty(names) == "context_mode#0"
+  }
+
+func parse_exa_search_alone() -> bool
+  tests [((), true)]
+  {
+    let names = parse_core_ext_order_names("exa_search");
+    len(names) == 1 && first_or_empty(names) == "exa_search#0"
+  }

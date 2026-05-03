@@ -1,0 +1,226 @@
+flowchart TD
+  %% Motoko Decision Graph — 201 decisions across 12 domains
+  subgraph Core["Core Architecture"]
+    direction TB
+    Core_yolo_mode["Yolo Mode — No Confirm/Reject/Human Flow"]
+    Core_option_d_model_selection["Option D Model Selection via call_with(SharedMem)"]
+    Core_three_process_architecture["Three-Process Architecture (TUI ↔ AILANG Brain ↔ Env Se"]
+    Core_jsonl_protocol["JSONL Protocol for Inter-Process Communication"]
+    Core_typescript_env_server["TypeScript Environment Server Replaces Python"]
+    Core_io_poll_stdin_builtin["_io_poll_stdin Builtin for Non-Blocking Stdin Peek"]
+    Core_call_with_deferred["call_with Builtin Deferred to Optional Phase 5"]
+    Core_bash_only_prompt["Bash-Only System Prompt (No Native File API)"]
+  end
+
+  subgraph Rebase["Rebase Forward"]
+    direction TB
+    Rebase_rebase_forward_discipline["Rebase-Forward Discipline (Not Cherry-Pick)"]
+    Rebase_motoko_file_naming["_motoko File Naming Convention"]
+    Rebase_fenced_edit_constraints["Fenced Edit Five-Line Limit and Shape Constraints"]
+    Rebase_std_ai_motoko_coexistence["std/ai_motoko Coexists with Upstream std/ai"]
+    Rebase_pin_to_release_tags["Pin to Release Tags, Not dev HEAD"]
+    Rebase_dev_agent_retained["dev_agent Branch Retained and Tagged (Not Deleted)"]
+    Rebase_parallel_branch_safety["Parallel-Branch Safety During Migration"]
+    Rebase_verify_fork_surface["make verify-fork-surface Enforcement Target"]
+    Rebase_result_ai_error_handling["Result-Based AI Error Handling with Typed AIError"]
+    Rebase_openai_streaming["OpenAI Streaming with SSE Parser and Abort-Correctness"]
+    Rebase_phase0_5_gate["Phase 0.5 AI Interface Spike as Kill-Switch Gate"]
+    Rebase_execution_scope["Phase 0 and Phase 0.5 Only — Hard Stop at Gate"]
+    Rebase_self_contained_prompt["Self-Contained Handoff Prompt Execution"]
+  end
+
+  subgraph DST["DST Harness"]
+    direction TB
+    DST_ci_regression_purpose["CI Regression Harness Purpose (Not GRPO, v2)"]
+    DST_import_shim_approach["Import-Shim Approach (No AILANG Runtime Patches)"]
+    DST_scripted_mock_llm["Scripted State Machine Mock LLM (v1)"]
+    DST_tier1_canned_env["Tier 1 Canned Environment Mock"]
+    DST_ailang_native_tests["AILANG-Native Test Language (No External Driver)"]
+    DST_parameterized_run_loop["Parameterized run_loop for Test Injection"]
+    DST_fixed_seed_regression["Fixed Seed 42 for CI Regression"]
+    DST_priority_invariants["Priority-0 Invariants: Parser Fuzzing + Loop Terminatio"]
+    DST_shared_mem_isolation["SharedMem Isolation via cache_reset() Per Property"]
+    DST_tui_out_of_scope["TUI Out of Scope for v1 DST"]
+  end
+
+  subgraph TUI["TUI Rendering"]
+    direction TB
+    TUI_colored_streaming_thinking["Colored Real-Time Thinking Trace Rendering"]
+    TUI_magenta_think_label["Magenta [think] Label with Dim Metadata in Headers"]
+    TUI_strip_think_tags_helper["stripThinkTags Helper for XML Tag Removal"]
+    TUI_colored_streaming_json["Color Rendering for Streamed JSON Blocks"]
+    TUI_tool_envelope_visibility["Tool-Envelope Visibility Policy with Confidence Levels"]
+    TUI_tolerant_json_tokenizer["Tolerant JSON Tokenizer for Partial/Incomplete Input"]
+    TUI_debug_json_override["MOTOKO_SHOW_TOOL_JSON_STREAM Debug Override"]
+    TUI_incremental_segment_model["Incremental Segment Model for Live Markdown Streaming"]
+    TUI_throttle_and_caps["50ms Render Throttle with Memory Caps and Segment Diffi"]
+    TUI_scroll_safety["Fixed Stream-Block Anchor for Scroll Stability"]
+    TUI_canonical_final_render["Final Canonical Markdown Render from Full Payload (Not "]
+    TUI_two_layer_timeline["Two-Layer Rendering with Single Tool Execution Timeline"]
+    TUI_canonical_identity_keys["Canonical Identity Keys for Tool Deduplication"]
+    TUI_incremental_parser_caps["128 KiB Stream Cap with 64 KiB Parser Window"]
+    TUI_local_token_estimate["Local Token Estimate via chars÷4 (Not Provider-Reported"]:::proposed
+    TUI_per_model_limits["Per-Model Context Window Limits in Runtime"]:::proposed
+    TUI_color_thresholds["Color Escalation at 75% and 90% Thresholds"]:::proposed
+    TUI_jsonl_session_logs["JSONL Session Logging to logfile/ Directory"]
+    TUI_hybrid_only_model["Hybrid-Only Tool Rendering Model with Renderer Architec"]
+    TUI_ctrl_o_toggle["Ctrl+O Global Toggle for Tool Detail Expansion"]
+    TUI_progress_coalescing["50ms Progress Coalescing with Terminal Bypass"]
+    TUI_grouped_readfile["Grouped ReadFile Rendering for 2+ Calls"]
+    TUI_edit_diff_renderer["File-Edit Diff Rendering with Reused LLM Diff Helpers"]
+    TUI_edge_case_hardening["Edge-Case Hardening: Missing IDs, Out-of-Order, Dupes"]
+    TUI_language_aware_highlighting["Language-Aware Syntax Highlighting via highlightCode Ho"]
+    TUI_ailang_keyword_set["Exact AILANG 41-Keyword Reserved Set from Language Refe"]
+    TUI_diff_rendering["Diff/Patch Rendering with Deterministic Precedence"]
+    TUI_github_diff_style["GitHub-Style Diff Rendering with Background Colors"]
+    TUI_runtime_dynamic_banner["Runtime-Generated Banner Scaled to Terminal Width"]
+    TUI_preprocessed_pixel_asset["Preprocessed Pixel Data Asset (Not PNG Decode at Runtim"]
+    TUI_deprecate_static_banner["Deprecate Static banner.ts Generation"]
+    TUI_run_state_enum["Run State Enum: idle, thinking, tools_wait, tools_run, "]:::proposed
+    TUI_status_spinner_timer["Status Spinner + Elapsed Timer During Active States"]:::proposed
+    TUI_completion_handoff["Completion Handoff Message on Task Done"]:::proposed
+    TUI_tool_batch_counters["Delegated Tool Batch Counters with Progress Events"]:::proposed
+    TUI_phase_transition_markers["Phase Transition Markers in History"]:::proposed
+    TUI_declarative_registry["Declarative SlashCommand[] Registry Replacing Ad-Hoc Sw"]
+    TUI_editor_autocomplete["Replace Input with Editor for Slash-Command Autocomplet"]
+  end
+
+  subgraph ExtSys["Extension System"]
+    direction TB
+    ExtSys_generic_tool_contract["Generic Tool Contract in Core: ToolCallEnvelope and Too"]
+    ExtSys_defer_descriptor_registry["Defer Descriptor/Data-Driven Registration to Follow-Up "]
+    ExtSys_phased_migration["Eight-Phase Migration with Dual-Path Compatibility Wind"]
+    ExtSys_extension_substrate["First-Class Extension System for Core with Hook Dispatc"]:::proposed
+    ExtSys_kernel_enforced_safety["Kernel-Enforced Hard Limits Non-Overridable"]:::proposed
+    ExtSys_separate_pure_effectful_regist["Separate Pure and Effectful Hook Registries"]:::proposed
+    ExtSys_env_driven_config["Env-Driven Extension Configuration (Phase 1)"]:::proposed
+    ExtSys_test_dummy_validation["Test Dummy Extension for Substrate Validation"]:::proposed
+    ExtSys_replaces_adts_with_records["Replace PureExt/EffectExt ADTs with ExtensionHooks Reco"]
+    ExtSys_register_function_pattern["Each Extension Exports register() -> ExtensionHooks"]
+    ExtSys_fold_over_hooks_dispatch["Fold Over [ExtensionHooks] List Instead of Per-Extensio"]
+    ExtSys_test_dummy_telemetry_relocatio["TestDummy Telemetry Moved from Hook Body to Dispatcher-"]
+    ExtSys_package_lifting_phase_2["Phase 2: Lift Extensions to Packages via ailang.toml"]
+  end
+
+  subgraph Compose["Compose"]
+    direction TB
+    Compose_extension_first_dispatch["Extension-First Compose Dispatch with Rollout Gate"]
+    Compose_compose_policy_extraction["Compose Mode Gating Moved to Extension on_tool_policy"]
+    Compose_remove_compose_from_core_adts["Remove Compose Constructor from Core ToolCallReq ADT"]
+    Compose_prompt_boundary_cleanup["Core Prompt Templates Remain Extension-Neutral"]
+    Compose_ci_boundary_checks["CI Allowlist-Based Boundary Checks for Compose"]
+    Compose_x1_substrate_reshape["Reshape X1 Substrate: Add on_tool_handle + on_response_"]
+    Compose_hook_error_isolation["Defensive Hook-Error Isolation with ext_error Events"]
+    Compose_clean_cutover_no_legacy["Clean Cutover: Delete /compose HTTP Endpoint + TS SF Gu"]
+    Compose_golden_fixture_porting["Port Existing TS Tests as Golden Behavioral Tests"]
+    Compose_faithful_translation_first["Faithful Translation First, Refactor Later"]
+    Compose_regex_option_b_default["Regex Phase 5 Default: Go-Builtin (Option B) if Trigger"]
+    Compose_sf2_effect_set_evidence["SF2: Effect-Set Evidence Witness Replaces Substring Heu"]:::proposed
+    Compose_sf1_certificate_template["SF1: Certificate Template in Author Prompt"]:::proposed
+    Compose_sf3_certificate_validator["SF3: Certificate Validator for expected_output.kind=cer"]:::proposed
+    Compose_sf4_citation_binding["SF4: Citation-Binding Check (Every Premise Path Was Act"]:::proposed
+    Compose_sf5_claimcheck["SF5: Round-Trip Informalization (ClaimCheck Two-Pass)"]:::proposed
+    Compose_author_tool_whitelist["Read-Only Tool Whitelist for Compose Author Pass"]
+    Compose_fence_json_protocol["tool_call Fence + JSON Protocol (Not Native Tool-Callin"]
+    Compose_premise_ledger_binding["Premise Ledger Binding in SF3: Three-Field Grammar"]
+    Compose_sf2_recalibration["SF2 Accepts Effectless Snippets with Ledger-Bound Premi"]
+  end
+
+  subgraph Integ["Integrations"]
+    direction TB
+    Integ_library_not_extension["Generic MCP Layer as Library (Not Registered Extension)"]
+    Integ_bridge_script_pattern["Node.js MCP Bridge Script via Shell Exec"]
+    Integ_compress_output_to_motoko_core["Extract compress_output to motoko_core Shared Module"]
+    Integ_cli_shell_exec_pattern["Context-Mode as Shell Exec (Not HTTP Sidecar)"]
+    Integ_lazy_session_snapshot["Lazy Session Snapshot Loaded on First Tool Call"]
+    Integ_tool_routing["Nine Context-Mode Tools Routed Through Extension"]
+    Integ_prompt_based_curl_blocking["Prompt-Based Curl/Wget Blocking (Not Hard Enforcement)"]
+    Integ_compression_in_tool_handle["Output Compression in on_tool_handle (Not on_response_i"]
+    Integ_thin_mcp_provider["Thin Exa Extension Using Generic MCP Layer (Zero Protoc"]
+    Integ_four_tool_mappings["Four Exa Tool Mappings: Search, DeepSearch, SearchCode,"]
+    Integ_cli_only_not_http["CLI-Only Omnigraph Extension (No HTTP Server)"]
+    Integ_main_branch_guardrail["Main-Branch Write Guardrail in on_tool_policy"]
+    Integ_agent_prompt_injection["AGENT_PROMPT.md Injected via on_build_system_prompt"]
+    Integ_no_positional_uri["No Positional repo.omni URI in CLI Args (Pi Extension B"]
+    Integ_phase0_toolchain_install["Phase 0 Toolchain Install: Rust + Omnigraph from Source"]
+  end
+
+  subgraph Hyb["Hybrid Tools"]
+    direction TB
+    Hyb_unified_semantics_split_backen["Unified Tool Semantics with Two Execution Backends (Nat"]
+    Hyb_backend_selection_deterministi["Deterministic Backend Selection per Tool Call"]
+    Hyb_unified_result_model["Unified Result Model Regardless of Execution Backend"]
+    Hyb_stronger_thesis["Brain-Owned Tool Execution for Stronger AILANG Thesis"]
+    Hyb_correlation_ids_mandatory["Mandatory Correlation IDs on Every Tool Call"]
+    Hyb_output_limits_truncation["Bounded Output with Explicit Truncation Metadata"]
+    Hyb_tool_schema_in_prompt["Machine-Readable Tool Schema in System Prompt"]
+    Hyb_one_roundtrip_per_step["One JSONL Round-Trip Per Step (Non-Negotiable)"]
+    Hyb_typed_adt_boundary["Typed ADT Boundary: ToolCallReq as ADT Not String Discr"]
+    Hyb_net_effect_removed["Net Effect Removed from rpc_loop"]
+    Hyb_model_change_interleaving["model_change Commands Survive Blocked read_tool_results"]
+    Hyb_parse_status_adt["ParseToolCalls ADT: NoCalls | Calls | ParseError"]
+  end
+
+  subgraph Auth["Structured Authoring"]
+    direction TB
+    Auth_option2_skeleton_plus_bodies["Option 2 Structured Tool-Call Authoring (Skeleton + Fre"]
+    Auth_dispatcher_owns_shape["Dispatcher Owns AILANG Shape; Model Owns Content"]
+    Auth_fallback_after_n_failures["Structured-Authoring Fallback After N Consecutive Final"]
+    Auth_provider_native_transport["Provider-Native Tool Calling as Structured Authoring Tr"]
+  end
+
+  subgraph Tool["Tool Impl"]
+    direction TB
+    Tool_think_span_filtering["Payload-Safe Think-Span Filtering (Not Global Stripping"]
+    Tool_quote_aware_fence_scan["Quote-Aware Fence Scanner for Embedded Backticks"]
+    Tool_strict_single_match_default["Strict Single-Match Default with Explicit replace_all O"]
+    Tool_staleness_guard["Optimistic Hash Guard (expected_sha256) for Staleness D"]
+    Tool_atomic_write["Atomic Write: Temp File + fsync + Rename"]
+    Tool_ordered_application["Ordered Edit Application Against Current Working Conten"]
+    Tool_hybrid_channel_file_tools["oh-my-pi File Tools via Delegated Channel (Path 3)"]
+    Tool_bun_migration_phase0["Phase 0: Migrate TypeScript Frontend from Node.js to Bu"]
+    Tool_per_model_edit_mode_defaults["Per-Model Edit Mode Defaults: Hashline for Frontier, Re"]
+  end
+
+  subgraph Self["Self-Mod Brain"]
+    direction TB
+    Self_hot_swap_architecture["Hot-Swap Brain Architecture with Conversation Continuit"]
+    Self_atomic_rename_swap["Atomic Filesystem Swap via rename(2)"]
+    Self_mandatory_smoke_test["Mandatory End-to-End Smoke Test (smoke_main) Before Swa"]
+    Self_transactional_swap_watchdog["Transactional Swap with Watchdog Timer and Auto-Rollbac"]
+    Self_strict_path_allowlist["Strict Path Allowlist for upgrade_ready"]
+    Self_isolated_validation_workspace["Isolated Candidate Validation in Canonical swe/ Root"]
+  end
+
+  subgraph Ver["Testing & Verify"]
+    direction TB
+    Ver_layered_test_strategy["Three-Layer Test Strategy: Inline + Properties + Z3"]
+    Ver_semantic_drift_signal["Test Suite as Semantic Drift Signal for Self-Modificati"]
+    Ver_dafny_tier2["Dafny Tier 2: Verification-Aware Specs with Counterexam"]:::proposed
+    Ver_lean4_tier3["Lean 4 Tier 3: Full Structural Induction (Research Bet)"]:::proposed
+    Ver_cost_escalation_ladder["Cost Escalation Ladder: Cheapest Tier First"]:::proposed
+  end
+
+  %% Key cross-domain dependencies
+    Rebase_rebase_forward_discipline --> Core_three_process_architecture
+    TUI_incremental_segment_model --> Core_jsonl_protocol
+    TUI_local_token_estimate --> Core_jsonl_protocol
+    TUI_per_model_limits --> Core_option_d_model_selection
+    TUI_jsonl_session_logs --> Core_jsonl_protocol
+    TUI_declarative_registry --> Core_yolo_mode
+    Compose_extension_first_dispatch --> ExtSys_extension_substrate
+    Compose_remove_compose_from_core_adts --> ExtSys_generic_tool_contract
+    Integ_library_not_extension --> ExtSys_extension_substrate
+    Integ_cli_shell_exec_pattern --> ExtSys_extension_substrate
+    Integ_cli_only_not_http --> ExtSys_extension_substrate
+    Compose_x1_substrate_reshape --> ExtSys_extension_substrate
+    Auth_option2_skeleton_plus_bodies --> Compose_fence_json_protocol
+    Hyb_unified_semantics_split_backen --> Core_three_process_architecture
+    Self_hot_swap_architecture --> Hyb_stronger_thesis
+    Tool_think_span_filtering --> Hyb_parse_status_adt
+    Tool_strict_single_match_default --> Hyb_unified_semantics_split_backen
+    Ver_semantic_drift_signal --> Self_isolated_validation_workspace
+    Tool_hybrid_channel_file_tools --> Hyb_unified_semantics_split_backen
+
+  classDef proposed fill:#f0e6ff,stroke:#7c3aed,color:#5b21b6
+  classDef superseded fill:#fee2e2,stroke:#dc2626,color:#991b1b

@@ -1,0 +1,349 @@
+module src/core/ext/compose/author_tools
+
+import std/clock (now)
+import std/crypto (sha256Hex)
+import std/bytes (toString)
+import std/fs (readFile, listDir, fileExists, isFile, isDir)
+import std/json (Json, decode, get, asString, asNumber, encode, jo, kv, js, jb, jnum)
+import std/process (exec)
+import std/result (Ok, Err)
+import std/option (Option, Some, None)
+import std/string (trim, split, contains, startsWith, substring, find)
+
+import src/core/ext/compose/ledger (LedgerEntry)
+
+export type AuthorToolResult = {
+  ok: bool,
+  tool: string,
+  path: string,
+  bytes: int,
+  truncated: bool,
+  excerpt: string,
+  payload_json: string,
+  error: string,
+  ledger_entry: Option[LedgerEntry]
+}
+
+func cap_text(s: string, max_bytes: int) -> { text: string, truncated: bool } {
+  if max_bytes <= 0 then { text: "", truncated: _str_len(s) > 0 }
+  else if _str_len(s) <= max_bytes then { text: s, truncated: false }
+  else { text: "${substring(s, 0, max_bytes)}\n...[truncated]", truncated: true }
+}
+
+func default_deny_globs() -> [string] {
+  [".env", ".env.*", "*.pem", "*.key", "*_rsa", "*_rsa.pub", "id_ed25519*", ".git/**", ".ssh/**"]
+}
+
+func configured_deny_globs(globs: [string]) -> [string] {
+  match globs {
+    [] => default_deny_globs(),
+    _ => globs
+  }
+}
+
+func split_path(path: string) -> [string] {
+  split(path, "/")
+}
+
+func has_parent_escape(parts: [string]) -> bool {
+  match parts {
+    [] => false,
+    x :: rest => if trim(x) == ".." then true else has_parent_escape(rest)
+  }
+}
+
+func char_at(s: string, i: int) -> string {
+  substring(s, i, i + 1)
+}
+
+func glob_match(pattern: string, text: string) -> bool {
+  glob_match_rec(pattern, text, 0, 0)
+}
+
+func glob_match_rec(pattern: string, text: string, pi: int, ti: int) -> bool {
+  if pi >= _str_len(pattern) then ti >= _str_len(text)
+  else {
+    let pc = char_at(pattern, pi);
+    if pc == "*" then glob_star(pattern, text, pi + 1, ti)
+    else if pc == "?" then if ti >= _str_len(text) then false else glob_match_rec(pattern, text, pi + 1, ti + 1)
+    else if ti >= _str_len(text) then false
+    else if pc == char_at(text, ti) then glob_match_rec(pattern, text, pi + 1, ti + 1)
+    else false
+  }
+}
+
+func glob_star(pattern: string, text: string, next_pi: int, ti: int) -> bool {
+  if glob_match_rec(pattern, text, next_pi, ti) then true
+  else if ti >= _str_len(text) then false
+  else glob_star(pattern, text, next_pi, ti + 1)
+}
+
+func first_matching_deny(path: string, globs: [string]) -> string {
+  match globs {
+    [] => "",
+    g :: rest => if trim(g) != "" && glob_match(trim(g), path) then trim(g) else first_matching_deny(path, rest)
+  }
+}
+
+func mk_err(tool: string, path: string, err: string) -> AuthorToolResult {
+  let payload = encode(jo([kv("tool", js(tool)), kv("ok", jb(false)), kv("error", js(err))]));
+  { ok: false, tool: tool, path: path, bytes: 0, truncated: false, excerpt: "", payload_json: payload, error: err, ledger_entry: None }
+}
+
+func mk_ok(tool: string, path: string, raw_content: string, payload: Json, max_bytes: int) -> AuthorToolResult {
+  let capped = cap_text(raw_content, max_bytes);
+  let payload_json = encode(payload);
+  let entry: LedgerEntry = {
+    tool: tool,
+    path: path,
+    args_hash: sha256Hex("${tool}|${path}"),
+    content_excerpt: capped.text,
+    ts: now(),
+    truncated: capped.truncated,
+    bytes: _str_len(raw_content)
+  };
+  { ok: true, tool: tool, path: path, bytes: _str_len(raw_content), truncated: capped.truncated, excerpt: capped.text, payload_json: payload_json, error: "", ledger_entry: Some(entry) }
+}
+
+func path_guard(path: string, globs: [string]) -> string {
+  let p = trim(path);
+  if p == "" then "invalid_path_empty"
+  else if contains(p, "\x00") then "invalid_path_nul"
+  else if has_parent_escape(split_path(p)) then "path_escape_denied"
+  else {
+    let denied = first_matching_deny(p, globs);
+    if denied != "" then "path_denied_by_glob:${denied}" else ""
+  }
+}
+
+func json_string_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(v) => match asString(v) {
+      Some(s) => s,
+      None => fallback
+    }
+  }
+}
+
+func json_int_field(obj: Json, key: string, fallback: int) -> int {
+  match get(obj, key) {
+    None => fallback,
+    Some(v) => match asNumber(v) {
+      Some(n) => _float_to_int(n),
+      None => fallback
+    }
+  }
+}
+
+func normalize_type(path: string) -> string ! {FS} {
+  if isDir(path) then "dir"
+  else if isFile(path) then "file"
+  else "missing"
+}
+
+func list_dir_payload(path: string, entries: [string]) -> Json {
+  jo([
+    kv("tool", js("list_dir")),
+    kv("ok", jb(true)),
+    kv("result", jo([
+      kv("path", js(path)),
+      kv("entries", js(show(entries)))
+    ]))
+  ])
+}
+
+func read_file_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+  let path = json_string_field(args, "path", "");
+  let guard_err = path_guard(path, globs);
+  if guard_err != "" then mk_err("read_file", path, guard_err)
+  else if not fileExists(path) then mk_err("read_file", path, "not_found")
+  else if not isFile(path) then mk_err("read_file", path, "not_a_file")
+  else {
+    let content = readFile(path);
+    let capped = cap_text(content, max_bytes);
+    mk_ok(
+      "read_file",
+      path,
+      content,
+      jo([
+        kv("tool", js("read_file")),
+        kv("ok", jb(true)),
+        kv("result", jo([
+          kv("path", js(path)),
+          kv("bytes", jnum(_int_to_float(_str_len(content)))),
+          kv("truncated", jb(capped.truncated)),
+          kv("content", js(capped.text))
+        ]))
+      ]),
+      max_bytes
+    )
+  }
+}
+
+func list_dir_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+  let path0 = json_string_field(args, "path", ".");
+  let path = if trim(path0) == "" then "." else path0;
+  let guard_err = path_guard(path, globs);
+  if guard_err != "" then mk_err("list_dir", path, guard_err)
+  else if not fileExists(path) then mk_err("list_dir", path, "not_found")
+  else if not isDir(path) then mk_err("list_dir", path, "not_a_directory")
+  else {
+    let entries = listDir(path);
+    let text = show(entries);
+    mk_ok("list_dir", path, text, list_dir_payload(path, entries), max_bytes)
+  }
+}
+
+func file_exists_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+  let path = json_string_field(args, "path", "");
+  let guard_err = path_guard(path, globs);
+  if guard_err != "" then mk_err("file_exists", path, guard_err)
+  else {
+    let found = fileExists(path);
+    let kind = normalize_type(path);
+    mk_ok(
+      "file_exists",
+      path,
+      "exists=${show(found)} type=${kind}",
+      jo([
+        kv("tool", js("file_exists")),
+        kv("ok", jb(true)),
+        kv("result", jo([
+          kv("path", js(path)),
+          kv("exists", jb(found)),
+          kv("type", js(kind))
+        ]))
+      ]),
+      max_bytes
+    )
+  }
+}
+
+func stat_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+  let path = json_string_field(args, "path", "");
+  let guard_err = path_guard(path, globs);
+  if guard_err != "" then mk_err("stat", path, guard_err)
+  else {
+    let kind = normalize_type(path);
+    let size = if kind == "file" then _str_len(readFile(path)) else 0;
+    mk_ok(
+      "stat",
+      path,
+      "size=${show(size)} type=${kind}",
+      jo([
+        kv("tool", js("stat")),
+        kv("ok", jb(true)),
+        kv("result", jo([
+          kv("path", js(path)),
+          kv("size", jnum(_int_to_float(size))),
+          kv("type", js(kind)),
+          kv("mtime", jnum(0.0))
+        ]))
+      ]),
+      max_bytes
+    )
+  }
+}
+
+func grep_fallback_scan(path: string, pattern: string, max_matches: int) -> [string] ! {FS} {
+  if not fileExists(path) || not isFile(path) then []
+  else {
+    let lines = split(readFile(path), "\n");
+    grep_scan_lines(path, pattern, lines, 1, max_matches)
+  }
+}
+
+func grep_scan_lines(path: string, pattern: string, lines: [string], line_no: int, remaining: int) -> [string] {
+  if remaining <= 0 then []
+  else match lines {
+    [] => [],
+    x :: rest => {
+      if contains(x, pattern) then ("${path}:${show(line_no)}:${x}") :: grep_scan_lines(path, pattern, rest, line_no + 1, remaining - 1)
+      else grep_scan_lines(path, pattern, rest, line_no + 1, remaining)
+    }
+  }
+}
+
+func join_lines(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}\n${join_lines(rest)}"
+  }
+}
+
+func grep_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Process, Clock} {
+  let pattern = json_string_field(args, "pattern", "");
+  let path_glob0 = json_string_field(args, "path_glob", ".");
+  let path_glob = if trim(path_glob0) == "" then "." else path_glob0;
+  let max_matches = json_int_field(args, "max_matches", 100);
+  if trim(pattern) == "" then mk_err("grep", path_glob, "missing_pattern")
+  else {
+    let guard_err = path_guard(path_glob, globs);
+    if guard_err != "" then mk_err("grep", path_glob, guard_err)
+    else {
+      match exec("rg", ["-n", "--no-heading", "-F", pattern, path_glob]) {
+        Ok(out) => {
+          let text = toString(out.stdout);
+          let limited = cap_text(text, max_bytes);
+          let raw = if text == "" then join_lines(grep_fallback_scan(path_glob, pattern, max_matches)) else text;
+          mk_ok(
+            "grep",
+            path_glob,
+            raw,
+            jo([
+              kv("tool", js("grep")),
+              kv("ok", jb(true)),
+              kv("result", jo([
+                kv("path_glob", js(path_glob)),
+                kv("matches", js(limited.text)),
+                kv("truncated", jb(limited.truncated))
+              ]))
+            ]),
+            max_bytes
+          )
+        },
+        Err(_) => {
+          let fallback = join_lines(grep_fallback_scan(path_glob, pattern, max_matches));
+          mk_ok(
+            "grep",
+            path_glob,
+            fallback,
+            jo([
+              kv("tool", js("grep")),
+              kv("ok", jb(true)),
+              kv("result", jo([
+                kv("path_glob", js(path_glob)),
+                kv("matches", js(cap_text(fallback, max_bytes).text)),
+                kv("truncated", jb(cap_text(fallback, max_bytes).truncated))
+              ]))
+            ]),
+            max_bytes
+          )
+        }
+      }
+    }
+  }
+}
+
+export func dispatch_author_tool_with_globs(raw_tool_call_json: string, max_bytes: int, deny_globs: [string]) -> AuthorToolResult ! {FS, Process, Clock} {
+  let globs = configured_deny_globs(deny_globs);
+  match decode(raw_tool_call_json) {
+    Err(_) => mk_err("", "", "malformed_tool_call"),
+    Ok(obj) => {
+      let tool = json_string_field(obj, "tool", "");
+      let args = match get(obj, "args") { Some(v) => v, None => jo([]) };
+      if tool == "read_file" then read_file_impl(args, max_bytes, globs)
+      else if tool == "grep" then grep_impl(args, max_bytes, globs)
+      else if tool == "list_dir" then list_dir_impl(args, max_bytes, globs)
+      else if tool == "file_exists" then file_exists_impl(args, max_bytes, globs)
+      else if tool == "stat" then stat_impl(args, max_bytes, globs)
+      else mk_err(tool, "", "unsupported_tool")
+    }
+  }
+}
+
+export func dispatch_author_tool(raw_tool_call_json: string, max_bytes: int) -> AuthorToolResult ! {FS, Process, Clock} {
+  dispatch_author_tool_with_globs(raw_tool_call_json, max_bytes, [])
+}

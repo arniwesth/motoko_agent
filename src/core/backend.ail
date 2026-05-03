@@ -1,0 +1,64 @@
+module src/core/backend
+
+import std/io (println)
+import std/net (httpGet)
+import std/process (spawnProcess, ProcessHandle)
+import std/option (Option, Some, None)
+import std/json (encode, jo, kv, js)
+import src/core/config (BackendConfig)
+import src/core/types (ExecResult)
+import src/core/env_client (exec_in)
+
+export type BackendHandle = {
+  mode: string,
+  url: string,
+  process_id: string,
+  process: Option[ProcessHandle]
+}
+
+func append_backend_args(args: [string], port: int, workdir: string) -> [string] =
+  args ++ ["--port", show(port), "--workdir", workdir]
+
+func health_ok(url: string) -> bool ! {Net} {
+  let body = httpGet("${url}/health");
+  body != ""
+}
+
+export func start_or_connect_backend(cfg: BackendConfig, workdir: string) -> BackendHandle ! {IO, Process, Net} {
+  if cfg.mode == "none" then {
+    mode: cfg.mode,
+    url: cfg.url,
+    process_id: "",
+    process: None
+  } else if cfg.auto_start then {
+    let handle = spawnProcess(cfg.command, append_backend_args(cfg.args, cfg.port, workdir));
+    let _ = println(encode(jo([
+      kv("type", js("backend_start")),
+      kv("mode", js(cfg.mode)),
+      kv("url", js(cfg.url))
+    ])));
+    {
+      mode: cfg.mode,
+      url: cfg.url,
+      process_id: "spawned",
+      process: Some(handle)
+    }
+  } else {
+    let _ = if health_ok(cfg.url) then () else println(encode(jo([
+      kv("type", js("warning")),
+      kv("message", js("backend health check did not return a usable response from ${cfg.url}"))
+    ])));
+    {
+      mode: cfg.mode,
+      url: cfg.url,
+      process_id: "",
+      process: None
+    }
+  }
+}
+
+export func exec_backend(handle: BackendHandle, cmd: string, timeout_secs: int) -> ExecResult ! {Net} =
+  exec_in(handle.url, cmd, timeout_secs)
+
+export func stop_backend(_handle: BackendHandle) -> () ! {IO, Process} =
+  ()

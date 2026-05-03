@@ -1,0 +1,23 @@
+module src/core/ext/compose/claimcheck_test
+
+import std/string (contains)
+import src/core/ext/compose/claimcheck (normalized_observed_output)
+
+func strips_runtime_boilerplate_lines() -> bool
+  tests [((), true)]
+  {
+    let raw = "→ Type checking...\n→ Effect checking...\n✓ Running ./.motoko-store/snippets/snippet_x.ail\n\nPREMISES\n  src/core/rpc.ail -> rpc_loop emits session_start\nTRACE\n  startup -> rpc_loop -> tool dispatch\nCONCLUSION\n  boot and tool flow confirmed";
+    let out = normalized_observed_output(raw);
+    not contains(out, "Type checking") &&
+    not contains(out, "Effect checking") &&
+    not contains(out, "✓ Running") &&
+    contains(out, "PREMISES") &&
+    contains(out, "CONCLUSION")
+  }
+
+func returns_empty_when_only_boilerplate() -> bool
+  tests [((), true)]
+  {
+    let raw = "→ Type checking...\n→ Effect checking...\n✓ Running ./.motoko-store/snippets/snippet_y.ail\n";
+    normalized_observed_output(raw) == ""
+  }

@@ -1,0 +1,165 @@
+module src/core/ext/compose/prompts
+
+import std/string (toLower, contains, trim, split)
+
+export func normalize_intent_kind(raw: string) -> string {
+  let v = toLower(trim(raw));
+  if v == "analyze" || v == "list" || v == "transform" || v == "compute" || v == "fetch" || v == "summarize"
+  then v
+  else ""
+}
+
+export func derive_intent_kind(intent: string) -> string {
+  let i = toLower(intent);
+  if contains(i, "summarize") || contains(i, "summary") || contains(i, "tldr") || contains(i, "overview") then "summarize"
+  else if contains(i, "reason about") || contains(i, "analy") || contains(i, "architect") || contains(i, "trace") || contains(i, "understand") || contains(i, "inspect") then "analyze"
+  else if contains(i, "list ") || contains(i, "enumerat") || contains(i, "find files") || contains(i, "show files") then "list"
+  else if contains(i, "fetch") || contains(i, "download") || contains(i, "url") || contains(i, "http") || contains(i, "api") then "fetch"
+  else if contains(i, "transform") || contains(i, "rewrite") || contains(i, "convert") || contains(i, "normalize") || contains(i, "format") then "transform"
+  else "compute"
+}
+
+func join_lines(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}\n${join_lines(rest)}"
+  }
+}
+
+func truncate_chars(s: string, max_chars: int) -> string {
+  if _str_len(s) <= max_chars then s else "${_str_slice(s, 0, max_chars)}\n...[truncated]"
+}
+
+func drop_first(xs: [string], n: int) -> [string] {
+  if n <= 0 then xs
+  else match xs {
+    [] => [],
+    _ :: rest => drop_first(rest, n - 1)
+  }
+}
+
+func take_last(xs: [string], n: int) -> [string] {
+  let total = _list_length(xs);
+  if total <= n then xs else drop_first(xs, total - n)
+}
+
+func reverse(xs: [string]) -> [string] {
+  reverse_into(xs, [])
+}
+
+func reverse_into(xs: [string], acc: [string]) -> [string] {
+  match xs {
+    [] => acc,
+    x :: rest => reverse_into(rest, x :: acc)
+  }
+}
+
+func first_non_empty_line(lines: [string]) -> string {
+  match lines {
+    [] => "",
+    x :: rest => {
+      let t = trim(x);
+      if t == "" then first_non_empty_line(rest) else t
+    }
+  }
+}
+
+func error_signature(err: string) -> string {
+  first_non_empty_line(split(err, "\n"))
+}
+
+func has_sig(sigs: [string], sig: string) -> bool {
+  match sigs {
+    [] => false,
+    x :: rest => if x == sig then true else has_sig(rest, sig)
+  }
+}
+
+func take_unique_recent(xs_rev: [string], max_n: int, sigs: [string], kept_rev: [string]) -> [string] {
+  if _list_length(kept_rev) >= max_n then reverse(kept_rev)
+  else match xs_rev {
+    [] => reverse(kept_rev),
+    x :: rest => {
+      let sig = error_signature(x);
+      if sig == "" || has_sig(sigs, sig)
+      then take_unique_recent(rest, max_n, sigs, kept_rev)
+      else take_unique_recent(rest, max_n, sig :: sigs, truncate_chars(x, 800) :: kept_rev)
+    }
+  }
+}
+
+func compact_prior_errors(prior_errors: [string]) -> [string] {
+  let recent = take_last(prior_errors, 8);
+  take_unique_recent(reverse(recent), 4, [], [])
+}
+
+func hint_lines(hints_read: [string], hints_write: [string]) -> [string] {
+  let read_line = if _list_length(hints_read) == 0 then "" else "Hints read paths: ${show(hints_read)}";
+  let write_line = if _list_length(hints_write) == 0 then "" else "Hints write paths: ${show(hints_write)}";
+  if read_line == "" && write_line == "" then []
+  else if read_line != "" && write_line != "" then [read_line, write_line]
+  else if read_line != "" then [read_line]
+  else [write_line]
+}
+
+func certificate_section(intent_kind: string, cert_template_enabled: bool) -> string {
+  if not cert_template_enabled then ""
+  else if intent_kind == "analyze" then
+    "Certificate contract for this intent:\nYour snippet's stdout MUST be a certificate in this exact form:\n\n  PREMISES\n    <path_1> | \"<verbatim quote>\" | <paraphrase>\n    (legacy accepted for compatibility: <path_1> -> <observed fact>)\n  TRACE\n    <how premises compose into the conclusion>\n  CONCLUSION\n    <single-line answer to the intent>\n\n"
+  else ""
+}
+
+export func build_author_prompt(
+  system_prompt: string,
+  trigger_prompt: string,
+  intent: string,
+  intent_kind: string,
+  expected_output: string,
+  hints_read: [string],
+  hints_write: [string],
+  prior_errors: [string],
+  previous_snippet: string,
+  prefer_edit_fix: bool,
+  cert_template_enabled: bool,
+  author_tools_enabled: bool,
+  tool_budget_remaining: int,
+  tool_result_max_bytes: int,
+  prior_reads_summary_text: string
+) -> string {
+  let primary_objective = if trim(trigger_prompt) == "" then intent else trigger_prompt;
+  let compact_errors = compact_prior_errors(prior_errors);
+  let errors = if _list_length(compact_errors) == 0 then "" else "\nPrevious type-check errors:\n${join_lines(compact_errors)}\n";
+  let hint_block_lines = hint_lines(hints_read, hints_write);
+  let hint_block = if _list_length(hint_block_lines) == 0 then "" else "${join_lines(hint_block_lines)}\n";
+  let tools_section =
+    if not author_tools_enabled then ""
+    else {
+      let prior_reads = if trim(prior_reads_summary_text) == "" then "" else "\n${prior_reads_summary_text}\n";
+      "Author premise tools (read-only):\n- Use exactly one ```tool_call fenced block per turn when you need evidence.\n- JSON shape: {\"tool\":\"read_file|grep|list_dir|file_exists|stat\",\"args\":{...}}\n- Budget remaining: ${show(tool_budget_remaining)} call(s)\n- Per-call result cap: ${show(tool_result_max_bytes)} bytes\n- PREMISES line grammar must be: <path> | \"<verbatim_quote>\" | <paraphrase>\n- The quoted substring must be verbatim from previously observed tool output.\n${prior_reads}"
+    };
+  let completion_contract =
+    if author_tools_enabled then
+      "\nReturn exactly one actionable fence:\n- ```tool_call for one read-only premise tool action, or\n- ```ailang for the final snippet.\nDo not output both in one turn."
+    else "\nReturn exactly one ```ailang fenced block.";
+  let repair_section =
+    if not prefer_edit_fix || trim(previous_snippet) == "" then ""
+    else
+      "\nRepair mode:\n- Start from the previous snippet and apply minimal targeted edits to fix errors.\n- Preserve working imports/structure unless an error requires change.\n- Prefer local edits over rewriting the entire program.\n- Keep behavior aligned to the original objective.\nPrevious snippet to edit:\n```ailang\n${truncate_chars(previous_snippet, 5000)}\n```\n";
+  "${system_prompt}\n\nPrimary objective (verbatim user request):\n${primary_objective}\n\nCompose guidance (non-binding scaffold from planner):\n${intent}\n\nIntent kind: ${intent_kind}\n\nExpected output:\n${expected_output}\n\n${certificate_section(intent_kind, cert_template_enabled)}${tools_section}${hint_block}Scope guardrails:\n- Preserve the full breadth of the primary objective.\n- The guidance scaffold may help execution, but must not narrow scope to a strict subset.\n- If uncertain, include additional likely modules/files rather than fewer.\n${repair_section}${errors}${completion_contract}"
+}
+
+export func build_summary_prompt(
+  primary_objective: string,
+  intent: string,
+  expected_output: string,
+  stdout: string,
+  stderr: string,
+  exit_code: int,
+  validation_decided: bool,
+  validation_satisfied: bool,
+  validation_confidence: string,
+  validation_reason: string
+) -> string {
+  "Summarize this compose execution in 1-3 sentences for a software agent.\nState whether expected_output appears satisfied.\nPrimary objective: ${primary_objective}\nIntent: ${intent}\nExpected output: ${expected_output}\nExit code: ${show(exit_code)}\nValidator: decided=${show(validation_decided)} satisfied=${show(validation_satisfied)} confidence=${validation_confidence} reason=${validation_reason}\nStdout:\n${stdout}\nStderr:\n${stderr}\nReturn plain text only."
+}

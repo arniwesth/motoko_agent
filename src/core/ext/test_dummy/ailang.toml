@@ -1,0 +1,14 @@
+[package]
+name = "sunholo/motoko_test_dummy"
+version = "0.1.0"
+edition = "1"
+module_prefix = "src"
+
+[exports]
+modules = ["src/core/ext/test_dummy/dummy"]
+
+[dependencies]
+"sunholo/motoko_core" = { path = "../motoko_core" }
+
+[effects]
+max = ["IO", "FS", "AI", "Process", "Env", "Clock", "SharedMem"]

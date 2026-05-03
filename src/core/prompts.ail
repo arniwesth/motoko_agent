@@ -1,0 +1,74 @@
+module src/core/prompts
+
+import std/list (foldl)
+import std/string (contains)
+import src/core/types (Msg, ExecResult, ToolResultItem)
+import src/core/agents_md (load_agents_content)
+
+export func with_cache_hint(system: string, hint: string) -> string {
+  if hint == "" then system
+  else "${system}\n## A similar issue was previously resolved\n${hint}\n"
+}
+
+export func with_agents_context(system: string, dir: string) -> string ! {FS} {
+  let agents_content = load_agents_content(dir);
+  if agents_content == "" then system
+  else "${system}\n${agents_content}"
+}
+
+export func fmt_msgs(msgs: [Msg]) -> string =
+  foldl(\acc. \m. "${acc}[${m.role}]\n${m.content}\n\n", "", msgs)
+
+export func fmt_obs(cmd: string, r: ExecResult) -> string {
+  let stderr_block = if r.stderr == "" then "" else "\n[stderr]\n${r.stderr}";
+  "$ ${cmd}\n[exit ${show(r.exit_code)}]\n${r.stdout}${stderr_block}"
+}
+
+export func ailang_error_doc_section(errors: string) -> string {
+  if contains(errors, "Effect checking failed") || contains(errors, "Missing effects") || contains(errors, "missing effect") then
+    "\nAILANG reference — Effects:\nDeclare required effects in function signatures (e.g. ! {IO, FS}).\n"
+  else if contains(errors, "not found") || contains(errors, "undefined") || contains(errors, "Unknown function") then
+    "\nAILANG reference — Imports:\nImport every used symbol from std modules.\n"
+  else if contains(errors, "pattern") || contains(errors, "Pattern") || contains(errors, "match") then
+    "\nAILANG reference — Pattern Matching:\nUse match x { Pattern => expr, ... }.\n"
+  else if contains(errors, "let") || contains(errors, "scope") then
+    "\nAILANG reference — Let Bindings:\nInside { } blocks use semicolons for let bindings.\n"
+  else if contains(errors, "type mismatch") || contains(errors, "Type mismatch") || contains(errors, "cannot unify") then
+    "\nAILANG reference — Types:\nUse show(...) when printing non-string values.\n"
+  else ""
+}
+
+func one_tool_result(r: ToolResultItem) -> string {
+  match r {
+    ReadFileResult(x) =>
+      "[${x.id}] ReadFile ${x.path}\n[line_count ${show(x.line_count)}, truncated ${show(x.truncated)}]\n${x.content}",
+    SearchResult(x) =>
+      "[${x.id}] Search pattern=\"${x.pattern}\" matches=${show(_list_length(x.matches))}",
+    WriteFileResult(x) =>
+      "[${x.id}] WriteFile ${x.path} bytes=${show(x.bytes_written)}",
+    EditFileResult(x) =>
+      "[${x.id}] EditFile ${x.path} edits=${show(x.applied_edits)} dry_run=${show(x.dry_run)} bytes=${show(x.bytes_written)}",
+    BashExecResult(x) => {
+      let err = if x.stderr == "" then "" else "\n[stderr]\n${x.stderr}";
+      "[${x.id}] BashExec ${x.cmd}\n[exit ${show(x.exit_code)}]\n${x.stdout}${err}"
+    },
+    RunTestsResult(x) => {
+      let err = if x.stderr == "" then "" else "\n[stderr]\n${x.stderr}";
+      "[${x.id}] RunTests ${x.cmd}\n[exit ${show(x.exit_code)}, passed ${show(x.passed)}, failed ${show(x.failed)}]\n${x.stdout}${err}"
+    },
+    ToolErrorResult(x) =>
+      "[${x.id}] ${x.tool} error: ${x.message}"
+  }
+}
+
+func join_result_lines(xs: [ToolResultItem]) -> string {
+  match xs {
+    [] => "",
+    r :: [] => one_tool_result(r),
+    r :: rest => "${one_tool_result(r)}\n\n${join_result_lines(rest)}"
+  }
+}
+
+export func fmt_tool_obs(results: [ToolResultItem]) -> string {
+  "Tool results:\n\n${join_result_lines(results)}"
+}

@@ -1,0 +1,33 @@
+module src/examples/csp_demo/main
+
+-- Developed by gemma-4-26B-A4B-it running on a DGX Spark
+import std/stream (asyncExecProcess, asyncReadStdinLines, selectEvents)
+import std/bytes (toString)
+import std/io (println)
+
+export func main() -> () ! {Stream, Process, IO} {
+    println("--- Starting CSP Event Loop ---");
+    println("Monitoring subprocess 'echo' and stdin concurrently...");
+    println("Type something and press Enter to send to stdin, or wait for subprocess output.");
+    println("--------------------------------");
+
+    let proc = asyncExecProcess("echo", ["Subprocess: Hello from the CSP world!"], "echo_proc", 5, 4096);
+    let stdin = asyncReadStdinLines("user_stdin", 10);
+
+    selectEvents([proc, stdin], \event. match event {
+        SourceBytes(src, data) => {
+            println("[" ++ src ++ " (SUBPROCESS)] " ++ toString(data));
+            true
+        },
+        SourceText(src, text) => {
+            println("[" ++ src ++ " (STDIN)] You typed: " ++ text);
+            false 
+        },
+        _ => {
+            println("[SYSTEM] Received lifecycle event or error.");
+            true
+        }
+    });
+
+    println("--- Event Loop Terminated ---")
+}

@@ -1,0 +1,531 @@
+module src/core/config
+
+import std/env (getEnv, getArgs)
+import std/fs (fileExists, readFile)
+import std/io (println)
+import std/json (
+  Json, JObject, JArray, JString, JNumber, JBool,
+  decode, encode, jo, ja, kv, js, jb, jnum,
+  get, getString, getInt, getBool, getObject, getStringArrayOrEmpty
+)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+import std/string (trim, split, startsWith)
+
+export type AgentConfig = {
+  model: string,
+  workdir: string,
+  max_steps: int,
+  step_delay_ms: int,
+  max_retries: int,
+  retry_base_ms: int,
+  retry_cap_ms: int,
+  semi_formal_verifier_mode: bool,
+  system_prompt: string,
+  openai_base_url: string,
+  ai_options_json: string
+}
+
+export type BackendConfig = {
+  mode: string,
+  url: string,
+  port: int,
+  command: string,
+  args: [string],
+  startup_timeout_ms: int,
+  auto_start: bool
+}
+
+export type ToolConfig = {
+  hybrid: bool,
+  ohmy_pi: bool,
+  snippet_caps: [string],
+  delegated_timeout_ms: int,
+  delegated_poll_ms: int,
+  delegated_timeout_slack_ms: int,
+  edit_mode: string
+}
+
+export type ExtensionConfig = {
+  order: [string],
+  strict: bool
+}
+
+export type ComposeAuthoringConfig = {
+  structured: bool,
+  author_tools: bool,
+  author_tools_budget: int,
+  author_tools_max_bytes: int,
+  author_tools_max_turns: int,
+  author_tools_deny_globs: [string],
+  authoring_budget: int,
+  fallback_after: int,
+  min_observed_chars: int,
+  stdout_max_bytes: int
+}
+
+export type ComposeClaimcheckConfig = {
+  enabled: bool,
+  informalizer_model: string,
+  comparator_model: string,
+  timeout_ms: int,
+  max_invocations: int,
+  stdout_max_bytes: int,
+  ledger_in_informalizer: bool
+}
+
+export type ComposeConfig = {
+  mode: string,
+  subagent_model: string,
+  max_attempts: int,
+  effect_guard: string,
+  certificate_template: bool,
+  authoring: ComposeAuthoringConfig,
+  claimcheck: ComposeClaimcheckConfig
+}
+
+export type ContextModeConfig = {
+  bin: string,
+  timeout_ms: int,
+  max_output_chars: int,
+  snapshot_key_prefix: string
+}
+
+export type ExaSearchConfig = {
+  timeout_ms: int,
+  max_output_chars: int
+}
+
+export type OmnigraphConfig = {
+  timeout_ms: int
+}
+
+export type CliOverrides = {
+  profile: string,
+  model: string,
+  workdir: string,
+  port: int,
+  ext_order: string,
+  system_prompt: string,
+  no_backend: bool,
+  task: string
+}
+
+export type InvocationConfig = {
+  task: string,
+  model_override: string,
+  workdir_override: string,
+  ailang_built: string
+}
+
+export type RuntimeConfig = {
+  profile: string,
+  profile_dir: string,
+  agent: AgentConfig,
+  backend: BackendConfig,
+  tools: ToolConfig,
+  extensions: ExtensionConfig,
+  compose: ComposeConfig,
+  context_mode: ContextModeConfig,
+  exa_search: ExaSearchConfig,
+  omnigraph: OmnigraphConfig,
+  warnings: [string]
+}
+
+func empty_json() -> Json = JObject([])
+
+func empty_cli() -> CliOverrides {
+  {
+    profile: "",
+    model: "",
+    workdir: "",
+    port: 0,
+    ext_order: "",
+    system_prompt: "",
+    no_backend: false,
+    task: ""
+  }
+}
+
+func active_profile(cli_profile: string) -> string ! {Env} {
+  let p = trim(cli_profile);
+  if p != "" then p
+  else {
+    match getEnv("MOTOKO_CONFIG") {
+      Ok(raw) => if trim(raw) == "" then "default" else trim(raw),
+      Err(_) => "default"
+    }
+  }
+}
+
+func is_abs_path(path: string) -> bool =
+  startsWith(path, "/")
+
+func profile_dir_for(workdir: string, profile: string) -> string =
+  if is_abs_path(profile) then profile else "${workdir}/.motoko/config/${profile}"
+
+func motoko_dir(workdir: string) -> string =
+  "${workdir}/.motoko"
+
+func read_json_or_empty(path: string) -> Json ! {FS, IO} {
+  if fileExists(path) then {
+    match decode(readFile(path)) {
+      Ok(j) => j,
+      Err(msg) => {
+        let _ = println(encode(jo([
+          kv("type", js("warning")),
+          kv("message", js("failed to parse ${path}: ${msg}"))
+        ])));
+        empty_json()
+      }
+    }
+  } else empty_json()
+}
+
+func has_legacy_toml(profile_dir: string, workdir: string) -> bool ! {FS} =
+  fileExists("${profile_dir}/config.toml") || fileExists("${motoko_dir(workdir)}/config.toml")
+
+func csv_join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${csv_join(rest)}"
+  }
+}
+
+func csv_split(raw: string) -> [string] {
+  if trim(raw) == "" then [] else split(raw, ",")
+}
+
+func apply_flag_value(cli: CliOverrides, flag: string, value: string) -> CliOverrides {
+  if flag == "--profile" then { cli | profile: value }
+  else if flag == "--model" then { cli | model: value }
+  else if flag == "--workdir" then { cli | workdir: value }
+  else if flag == "--port" then { cli | port: match _stringToInt(value) { Some(n) => n, None => 0 } }
+  else if flag == "--ext-order" then { cli | ext_order: value }
+  else if flag == "--system-prompt" then { cli | system_prompt: value }
+  else cli
+}
+
+func parse_cli_args_rec(args: [string], cli: CliOverrides) -> CliOverrides {
+  match args {
+    [] => cli,
+    "--no-backend" :: rest => parse_cli_args_rec(rest, { cli | no_backend: true }),
+    flag :: value :: rest =>
+      if startsWith(flag, "--") then {
+        if startsWith(value, "--") then parse_cli_args_rec(value :: rest, cli)
+        else parse_cli_args_rec(rest, apply_flag_value(cli, flag, value))
+      } else parse_cli_args_rec(value :: rest, { cli | task: flag }),
+    last :: [] =>
+      if startsWith(last, "--") then cli else { cli | task: last }
+  }
+}
+
+export func parse_cli_args(args: [string]) -> CliOverrides =
+  parse_cli_args_rec(args, empty_cli())
+
+func cli_empty_task() -> bool
+  tests [((), true)]
+  {
+    parse_cli_args([]).task == ""
+  }
+
+func cli_all_flags() -> bool
+  tests [((), true)]
+  {
+    let c = parse_cli_args(["--profile", "bench", "--model", "openai/gpt-4o", "--workdir", "/tmp/repo", "--port", "9090", "--ext-order", "compose,context_mode", "--system-prompt", "SYSTEM.md", "--no-backend", "Fix it"]);
+    c.profile == "bench" && c.model == "openai/gpt-4o" && c.workdir == "/tmp/repo" && c.port == 9090 && c.ext_order == "compose,context_mode" && c.system_prompt == "SYSTEM.md" && c.no_backend && c.task == "Fix it"
+  }
+
+func cli_last_positional_wins() -> bool
+  tests [((), true)]
+  {
+    parse_cli_args(["first", "--model", "m", "last"]).task == "last"
+  }
+
+func cli_unknown_flags_ignored() -> bool
+  tests [((), true)]
+  {
+    let c = parse_cli_args(["--unknown", "value", "--model", "m", "task"]);
+    c.model == "m" && c.task == "task"
+  }
+
+func cli_mixed_order() -> bool
+  tests [((), true)]
+  {
+    let c = parse_cli_args(["task-a", "--port", "8081", "--profile", "p", "task-b"]);
+    c.profile == "p" && c.port == 8081 && c.task == "task-b"
+  }
+
+func object_at(root: Json, key: string) -> Json {
+  match getObject(root, key) {
+    Some(j) => j,
+    None => empty_json()
+  }
+}
+
+func json_string(obj: Json, key: string, fallback: string) -> string {
+  match getString(obj, key) { Some(v) => v, None => fallback }
+}
+
+func json_int(obj: Json, key: string, fallback: int) -> int {
+  match getInt(obj, key) { Some(v) => v, None => fallback }
+}
+
+func json_bool(obj: Json, key: string, fallback: bool) -> bool {
+  match getBool(obj, key) { Some(v) => v, None => fallback }
+}
+
+func json_string_array(obj: Json, key: string, fallback: [string]) -> [string] {
+  match get(obj, key) {
+    Some(JArray(_)) => getStringArrayOrEmpty(obj, key),
+    _ => fallback
+  }
+}
+
+func load_agent(core: Json) -> AgentConfig {
+  let a = object_at(core, "agent");
+  {
+    model: json_string(a, "model", "anthropic/claude-sonnet-4-6"),
+    workdir: json_string(a, "workdir", "."),
+    max_steps: json_int(a, "max_steps", 50),
+    step_delay_ms: json_int(a, "step_delay_ms", 0),
+    max_retries: json_int(a, "max_retries", 3),
+    retry_base_ms: json_int(a, "retry_base_ms", 1000),
+    retry_cap_ms: json_int(a, "retry_cap_ms", 30000),
+    semi_formal_verifier_mode: json_bool(a, "semi_formal_verifier_mode", json_bool(object_at(core, "verification"), "semi_formal", false)),
+    system_prompt: json_string(a, "system_prompt", ""),
+    openai_base_url: json_string(a, "openai_base_url", ""),
+    ai_options_json: json_string(a, "ai_options_json", "")
+  }
+}
+
+func load_backend(core: Json) -> BackendConfig {
+  let b = object_at(core, "backend");
+  let port = json_int(b, "port", 8080);
+  {
+    mode: json_string(b, "mode", "external_http"),
+    url: json_string(b, "url", "http://127.0.0.1:${show(port)}"),
+    port: port,
+    command: json_string(b, "command", "bun"),
+    args: json_string_array(b, "args", ["src/tui/src/env-server-main.ts"]),
+    startup_timeout_ms: json_int(b, "startup_timeout_ms", 5000),
+    auto_start: json_bool(b, "auto_start", true)
+  }
+}
+
+func load_tools(core: Json) -> ToolConfig {
+  let t = object_at(core, "tools");
+  {
+    hybrid: json_bool(t, "hybrid", true),
+    ohmy_pi: json_bool(t, "ohmy_pi", false),
+    snippet_caps: json_string_array(t, "snippet_caps", ["IO", "FS", "Process"]),
+    delegated_timeout_ms: json_int(t, "delegated_timeout_ms", 30000),
+    delegated_poll_ms: json_int(t, "delegated_poll_ms", 100),
+    delegated_timeout_slack_ms: json_int(t, "delegated_timeout_slack_ms", 5000),
+    edit_mode: json_string(t, "edit_mode", "")
+  }
+}
+
+func load_extensions(core: Json) -> ExtensionConfig {
+  let e = object_at(core, "extensions");
+  {
+    order: json_string_array(e, "order", []),
+    strict: json_bool(e, "strict", false)
+  }
+}
+
+func load_compose(root: Json) -> ComposeConfig {
+  let c = object_at(root, "compose");
+  let authoring = object_at(c, "authoring");
+  let claimcheck = object_at(c, "claimcheck");
+  {
+    mode: json_string(c, "mode", "subagent"),
+    subagent_model: json_string(c, "subagent_model", ""),
+    max_attempts: json_int(c, "max_attempts", 50),
+    effect_guard: json_string(c, "effect_guard", "1"),
+    certificate_template: json_bool(c, "certificate_template", false),
+    authoring: {
+      structured: json_bool(authoring, "structured", true),
+      author_tools: json_bool(authoring, "author_tools", false),
+      author_tools_budget: json_int(authoring, "author_tools_budget", 25),
+      author_tools_max_bytes: json_int(authoring, "author_tools_max_bytes", 16384),
+      author_tools_max_turns: json_int(authoring, "author_tools_max_turns", 24),
+      author_tools_deny_globs: json_string_array(authoring, "author_tools_deny_globs", []),
+      authoring_budget: json_int(authoring, "authoring_budget", 40),
+      fallback_after: json_int(authoring, "fallback_after", 3),
+      min_observed_chars: json_int(authoring, "min_observed_chars", 180),
+      stdout_max_bytes: json_int(authoring, "stdout_max_bytes", 4000)
+    },
+    claimcheck: {
+      enabled: json_bool(claimcheck, "enabled", true),
+      informalizer_model: json_string(claimcheck, "informalizer_model", ""),
+      comparator_model: json_string(claimcheck, "comparator_model", ""),
+      timeout_ms: json_int(claimcheck, "timeout_ms", 30000),
+      max_invocations: json_int(claimcheck, "max_invocations", 10),
+      stdout_max_bytes: json_int(claimcheck, "stdout_max_bytes", 4000),
+      ledger_in_informalizer: json_bool(claimcheck, "ledger_in_informalizer", true)
+    }
+  }
+}
+
+func load_context_mode(root: Json) -> ContextModeConfig {
+  let c = object_at(root, "context_mode");
+  {
+    bin: json_string(c, "bin", "context-mode"),
+    timeout_ms: json_int(c, "timeout_ms", 25000),
+    max_output_chars: json_int(c, "max_output_chars", 6000),
+    snapshot_key_prefix: json_string(c, "snapshot_key_prefix", "ctxmode:snapshot:")
+  }
+}
+
+func json_strings(xs: [string]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => js(x) :: json_strings(rest)
+  }
+}
+
+func warnings_for(profile_dir: string, workdir: string) -> [string] ! {FS} {
+  if not fileExists("${profile_dir}/config.json") && has_legacy_toml(profile_dir, workdir) then
+    ["profile contains legacy TOML config but no JSON config; run make init-config or migrate .motoko/config/<profile>/*.toml to JSON for headless mode"]
+  else []
+}
+
+func load_exa_search(root: Json) -> ExaSearchConfig {
+  let e = object_at(root, "exa_search");
+  {
+    timeout_ms: json_int(e, "timeout_ms", 30000),
+    max_output_chars: json_int(e, "max_output_chars", 8000)
+  }
+}
+
+func load_omnigraph(root: Json) -> OmnigraphConfig {
+  let o = object_at(root, "omnigraph");
+  {
+    timeout_ms: json_int(o, "timeout_ms", 30000)
+  }
+}
+
+func apply_agent_cli(agent: AgentConfig, cli: CliOverrides) -> AgentConfig {
+  {
+    agent |
+    model: if cli.model != "" then cli.model else agent.model,
+    workdir: if cli.workdir != "" then cli.workdir else agent.workdir,
+    system_prompt: if cli.system_prompt != "" then cli.system_prompt else agent.system_prompt
+  }
+}
+
+func apply_backend_cli(backend: BackendConfig, cli: CliOverrides) -> BackendConfig {
+  let port = if cli.port > 0 then cli.port else backend.port;
+  {
+    backend |
+    mode: if cli.no_backend then "none" else backend.mode,
+    port: port,
+    url: if cli.port > 0 then "http://127.0.0.1:${show(port)}" else backend.url,
+    auto_start: if cli.no_backend then false else backend.auto_start
+  }
+}
+
+func apply_extensions_cli(ext: ExtensionConfig, cli: CliOverrides) -> ExtensionConfig {
+  {
+    ext |
+    order: if cli.ext_order != "" then csv_split(cli.ext_order) else ext.order
+  }
+}
+
+export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO} {
+  let cli = parse_cli_args(args);
+  let profile = active_profile(cli.profile);
+  let workdir = if cli.workdir != "" then cli.workdir else ".";
+  let dir0 = profile_dir_for(workdir, profile);
+  let flat_dir = motoko_dir(workdir);
+  let profile_dir = if fileExists("${flat_dir}/config.json") && not fileExists("${dir0}/config.json") then flat_dir else dir0;
+  let core = read_json_or_empty("${profile_dir}/config.json");
+  let compose = read_json_or_empty("${profile_dir}/compose.json");
+  let context_mode = read_json_or_empty("${profile_dir}/context_mode.json");
+  let exa_search = read_json_or_empty("${profile_dir}/exa_search.json");
+  let omnigraph = read_json_or_empty("${profile_dir}/omnigraph.json");
+  let agent = apply_agent_cli(load_agent(core), cli);
+  let backend = apply_backend_cli(load_backend(core), cli);
+  let extensions = apply_extensions_cli(load_extensions(core), cli);
+  {
+    profile: profile,
+    profile_dir: profile_dir,
+    agent: agent,
+    backend: backend,
+    tools: load_tools(core),
+    extensions: extensions,
+    compose: load_compose(compose),
+    context_mode: load_context_mode(context_mode),
+    exa_search: load_exa_search(exa_search),
+    omnigraph: load_omnigraph(omnigraph),
+    warnings: warnings_for(profile_dir, workdir)
+  }
+}
+
+export func load_runtime_config() -> RuntimeConfig ! {Env, FS, IO} {
+  load_config_from_cli(getArgs())
+}
+
+export func load_invocation_from_cli(args: [string]) -> InvocationConfig {
+  let cli = parse_cli_args(args);
+  {
+    task: cli.task,
+    model_override: cli.model,
+    workdir_override: cli.workdir,
+    ailang_built: "unknown"
+  }
+}
+
+export func load_invocation_config() -> InvocationConfig ! {Env} =
+  load_invocation_from_cli(getArgs())
+
+func runtime_config_json(cfg: RuntimeConfig) -> Json =
+  jo([
+    kv("profile", js(cfg.profile)),
+    kv("profile_dir", js(cfg.profile_dir)),
+    kv("agent", jo([
+      kv("model", js(cfg.agent.model)),
+      kv("workdir", js(cfg.agent.workdir)),
+      kv("max_steps", jnum(_int_to_float(cfg.agent.max_steps))),
+      kv("step_delay_ms", jnum(_int_to_float(cfg.agent.step_delay_ms))),
+      kv("max_retries", jnum(_int_to_float(cfg.agent.max_retries))),
+      kv("retry_base_ms", jnum(_int_to_float(cfg.agent.retry_base_ms))),
+      kv("retry_cap_ms", jnum(_int_to_float(cfg.agent.retry_cap_ms))),
+      kv("semi_formal_verifier_mode", jb(cfg.agent.semi_formal_verifier_mode)),
+      kv("system_prompt", js(cfg.agent.system_prompt)),
+      kv("openai_base_url", js(cfg.agent.openai_base_url)),
+      kv("ai_options_json", js(cfg.agent.ai_options_json))
+    ])),
+    kv("backend", jo([
+      kv("mode", js(cfg.backend.mode)),
+      kv("url", js(cfg.backend.url)),
+      kv("port", jnum(_int_to_float(cfg.backend.port))),
+      kv("command", js(cfg.backend.command)),
+      kv("args", ja(json_strings(cfg.backend.args))),
+      kv("startup_timeout_ms", jnum(_int_to_float(cfg.backend.startup_timeout_ms))),
+      kv("auto_start", jb(cfg.backend.auto_start))
+    ])),
+    kv("tools", jo([
+      kv("hybrid", jb(cfg.tools.hybrid)),
+      kv("ohmy_pi", jb(cfg.tools.ohmy_pi)),
+      kv("snippet_caps", ja(json_strings(cfg.tools.snippet_caps))),
+      kv("delegated_timeout_ms", jnum(_int_to_float(cfg.tools.delegated_timeout_ms))),
+      kv("delegated_poll_ms", jnum(_int_to_float(cfg.tools.delegated_poll_ms))),
+      kv("delegated_timeout_slack_ms", jnum(_int_to_float(cfg.tools.delegated_timeout_slack_ms))),
+      kv("edit_mode", js(cfg.tools.edit_mode))
+    ])),
+    kv("extensions", jo([
+      kv("order", ja(json_strings(cfg.extensions.order))),
+      kv("strict", jb(cfg.extensions.strict))
+    ])),
+    kv("warnings", ja(json_strings(cfg.warnings)))
+  ])
+
+export func config_json() -> string ! {Env, FS, IO} =
+  encode(runtime_config_json(load_runtime_config()))
+
+export func print_config_json() -> () ! {IO, FS, Env} {
+  println(config_json())
+}

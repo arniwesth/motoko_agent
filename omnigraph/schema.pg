@@ -1,0 +1,22 @@
+node Decision {
+    slug: String @key
+    title: String @index
+    rationale: String
+    status: enum(proposed, accepted, superseded, deprecated)
+    date: String
+}
+
+node Component {
+    slug: String @key
+    name: String @index
+    description: String
+    layer: enum(domain, infrastructure, api, frontend)
+}
+
+edge DependsOn: Component -> Component
+edge Governs: Decision -> Component
+edge Supersedes: Decision -> Decision
+edge DependsOnDecision: Decision -> Decision
+edge Refines: Decision -> Decision
+edge Implements: Decision -> Decision
+edge ConflictsWith: Decision -> Decision

@@ -1,0 +1,91 @@
+query insert_component($slug: String, $name: String, $description: String, $layer: String)
+  @description("Insert a component")
+  @instruction("Use when adding a newly tracked system component")
+{
+  insert Component {
+    slug: $slug,
+    name: $name,
+    description: $description,
+    layer: $layer
+  }
+}
+
+query insert_dependency($from_slug: String, $to_slug: String)
+  @description("Insert a DependsOn edge")
+  @instruction("Use when one component directly depends on another")
+{
+  insert DependsOn {
+    from: $from_slug,
+    to: $to_slug
+  }
+}
+
+query insert_governs($decision_slug: String, $component_slug: String)
+  @description("Insert a Governs edge")
+  @instruction("Use when a decision governs a component")
+{
+  insert Governs {
+    from: $decision_slug,
+    to: $component_slug
+  }
+}
+
+query delete_component($slug: String)
+  @description("Delete a Component by slug")
+  @instruction("Only safe after all DependsOn/Governs edges referencing this slug are removed first")
+{
+  delete Component
+  where slug = $slug
+}
+
+query delete_dependency($from_slug: String)
+  @description("Delete DependsOn edges by source component slug")
+{
+  delete DependsOn
+  where from = $from_slug
+}
+
+query delete_dependency_to($to_slug: String)
+  @description("Delete DependsOn edges by target component slug")
+{
+  delete DependsOn
+  where to = $to_slug
+}
+
+query delete_governs($decision_slug: String)
+  @description("Delete Governs edges by decision slug")
+{
+  delete Governs
+  where from = $decision_slug
+}
+
+query delete_governs_to($component_slug: String)
+  @description("Delete Governs edges by component slug")
+{
+  delete Governs
+  where to = $component_slug
+}
+
+query delete_all_components()
+  @description("Delete every Component node on this branch — DESTRUCTIVE")
+  @instruction("Only on a branch named wipe/* or cleanup/*; never run unscoped")
+{
+  delete Component
+  where slug != ""
+}
+
+query delete_all_dependencies()
+  @description("Delete every DependsOn edge on this branch — DESTRUCTIVE")
+  @instruction("Only on a branch named wipe/* or cleanup/*; never run unscoped")
+{
+  delete DependsOn
+  where from != ""
+}
+
+query delete_all_governs()
+  @description("Delete every Governs edge on this branch — DESTRUCTIVE")
+  @instruction("Only on a branch named wipe/* or cleanup/*; never run unscoped")
+{
+  delete Governs
+  where from != ""
+}

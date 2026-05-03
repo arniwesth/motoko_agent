@@ -1,0 +1,49 @@
+module src/core/supervisor
+
+import std/io (println)
+import std/json (encode, jo, kv, js)
+import std/env (getArgs, getEnv)
+import std/string (startsWith)
+import src/core/config (load_config_from_cli, load_invocation_from_cli)
+import src/core/backend (start_or_connect_backend)
+import src/core/rpc (run_with_config)
+
+func emit_warnings(xs: [string]) -> () ! {IO} {
+  match xs {
+    [] => (),
+    w :: rest => {
+      println(encode(jo([kv("type", js("warning")), kv("message", js(w))])));
+      emit_warnings(rest)
+    }
+  }
+}
+
+func required_secret_for_model(model: string) -> string {
+  if startsWith(model, "anthropic/") then "ANTHROPIC_API_KEY"
+  else if startsWith(model, "openrouter/") then "OPENROUTER_API_KEY"
+  else if startsWith(model, "openai/") then "OPENAI_API_KEY"
+  else if startsWith(model, "google/") then "GOOGLE_API_KEY"
+  else ""
+}
+
+func validate_secrets(model: string) -> [string] ! {Env} {
+  let key = required_secret_for_model(model);
+  if key == "" then []
+  else {
+    match getEnv(key) {
+      Ok(v) => if v == "" then ["model ${model} needs ${key}, but it is empty"] else [],
+      Err(_) => ["model ${model} needs ${key}, but it is not set"]
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS, Env, Process, Net, AI, SharedMem, Clock, Stream} {
+  let args = getArgs();
+  let cfg = load_config_from_cli(args);
+  let inv = load_invocation_from_cli(args);
+  let workdir = if inv.workdir_override != "" then inv.workdir_override else cfg.agent.workdir;
+  let model = if inv.model_override != "" then inv.model_override else cfg.agent.model;
+  let _ = emit_warnings(cfg.warnings ++ validate_secrets(model));
+  let _ = start_or_connect_backend(cfg.backend, workdir);
+  run_with_config(cfg, inv)
+}

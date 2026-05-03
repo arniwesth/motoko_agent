@@ -1,0 +1,5 @@
+{"type": "Decision", "data": {"slug": "rebase-handoff:execution-scope", "title": "Phase 0 and Phase 0.5 Only \u2014 Hard Stop at Gate", "rationale": "Execute Phase 0 (baseline, branch setup) and Phase 0.5 (AI interface spike with six gate questions). Do not start Phase 1. Report go/no-go verdict and wait for user review. Do not modify dev_agent.", "status": "accepted", "date": "2026-04"}}
+{"type": "Decision", "data": {"slug": "rebase-handoff:self-contained-prompt", "title": "Self-Contained Handoff Prompt Execution", "rationale": "Paste prompt into fresh session. Plan document is source of truth; handoff only scopes what to execute. No conversational context from planning session carried forward.", "status": "accepted", "date": "2026-04"}}
+{"edge": "Governs", "from": "rebase-handoff:execution-scope", "to": "ailang/FORK.md"}
+{"edge": "DependsOnDecision", "from": "rebase-handoff:execution-scope", "to": "rebase-forward:phase0-5-gate"}
+{"edge": "DependsOnDecision", "from": "rebase-handoff:self-contained-prompt", "to": "rebase-forward:rebase-forward-discipline"}

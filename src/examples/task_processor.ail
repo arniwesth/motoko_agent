@@ -1,0 +1,79 @@
+module src/examples/task_processor
+
+import std/io (println)
+import std/ai (call)
+
+type Task = {id: int, description: string, priority: int, completed: bool}
+
+pure func fib(n: int) -> int {
+  match n {
+    0 => 0,
+    1 => 1,
+    _ => fib(n - 1) + fib(n - 2)
+  }
+}
+
+pure func filter_completed(tasks: [Task]) -> [Task] {
+  match tasks {
+    [] => [],
+    t :: rest => if t.completed then t :: filter_completed(rest) else filter_completed(rest)
+  }
+}
+
+pure func process_task(t: Task) -> Task ! {IO, AI} {
+  let prompt = "Summarize this task in 5 words: " ++ t.description;
+  let summary = call(prompt);
+  println("AI Summary for Task " ++ show(t.id) ++ ": " ++ summary);
+  {t | description: summary}
+}
+
+pure func process_all_tasks(tasks: [Task]) -> [Task] ! {IO, AI} {
+  match tasks {
+    [] => [],
+    t :: rest => let updated_t = process_task(t) in let processed_rest = process_all_tasks(rest) in updated_t :: processed_rest
+  }
+}
+
+export func main() -> () ! {IO, AI} {
+  let fib_val = fib(10);
+  println("Fibonacci(10) is: " ++ show(fib_val));
+
+  let tasks = [
+    {id: 1, description: "Fix the leaking faucet", priority: 1, completed: true},
+    {id: 2, description: "Write documentation", priority: 2, completed: false},
+    {id: 3, description: "Deploy production server", priority: 3, completed: false},
+    {id: 4, description: "Buy milk", priority: 1, completed: true}
+  ];
+
+  let completed_tasks = filter_completed(tasks);
+  println("Found " ++ show(length(completed_tasks)) ++ " completed tasks.");
+
+  let incomplete_tasks = filter_incomplete(tasks);
+  println("Processing " ++ show(length(incomplete_tasks)) ++ " incomplete tasks...");
+  
+  let processed_tasks = process_all_tasks(incomplete_tasks);
+
+  println("Final list of processed task descriptions:");
+  print_descriptions(processed_tasks);
+}
+
+pure func filter_incomplete(tasks: [Task]) -> [Task] {
+  match tasks {
+    [] => [],
+    t :: rest => if not t.completed then t :: filter_incomplete(rest) else filter_incomplete(rest)
+  }
+}
+
+pure func print_descriptions(tasks: [Task]) -> () ! {IO} {
+  match tasks {
+    [] => (),
+    t :: rest => let _ = println("- " ++ t.description) in print_descriptions(rest)
+  }
+}
+
+pure func length(tasks: [any]) -> int {
+  match tasks {
+    [] => 0,
+    _ :: rest => 1 + length(rest)
+  }
+}

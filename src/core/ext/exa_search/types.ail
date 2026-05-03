@@ -1,0 +1,43 @@
+module src/core/ext/exa_search/types
+
+import src/core/ext/mcp/types (McpServerConfig, McpToolMapping)
+
+export func tool_filter() -> [string] {
+  ["web_search_exa", "deep_search_exa", "get_code_context_exa", "crawling_exa"]
+}
+
+export func tool_mappings() -> [McpToolMapping] {
+  [
+    {
+      canonical: "ExaSearch",
+      mcp_name: "web_search_exa",
+      aliases: ["exa_search", "exa.search", "exa_search.search"]
+    },
+    {
+      canonical: "ExaSearchDeep",
+      mcp_name: "deep_search_exa",
+      aliases: ["exa_search_deep", "exa.search_deep", "exa_search.deep"]
+    },
+    {
+      canonical: "ExaSearchCode",
+      mcp_name: "get_code_context_exa",
+      aliases: ["exa_search_code", "exa.search_code", "exa_search.code"]
+    },
+    {
+      canonical: "ExaCrawl",
+      mcp_name: "crawling_exa",
+      aliases: ["exa_crawl", "exa.crawl", "exa_search.crawl"]
+    }
+  ]
+}
+
+export func mcp_config(timeout_ms: int, max_output_chars: int) -> McpServerConfig {
+  {
+    base_url: "https://mcp.exa.ai/mcp",
+    auth_env_var: "EXA_API_KEY",
+    auth_style: "query:exaApiKey",
+    tool_filter: tool_filter(),
+    timeout_ms: timeout_ms,
+    max_output_chars: max_output_chars
+  }
+}

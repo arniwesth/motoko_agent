@@ -1,0 +1,19 @@
+module src/core/ext/omnigraph/guardrail
+
+import std/string (startsWith)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_core/tool_contract (ToolCallEnvelope)
+import src/core/ext/omnigraph/args (arg_string)
+
+export func denied_mutation_reason(call: ToolCallEnvelope) -> Option[string] {
+  if call.tool != "OmnigraphMutate" then None
+  else {
+    let branch = arg_string(call.arguments, "branch", "");
+    let name = arg_string(call.arguments, "name", "");
+    if branch == "main" then
+      Some("refuses to write to main directly; create a feature branch first")
+    else if startsWith(name, "delete_all_") && not (startsWith(branch, "wipe/") || startsWith(branch, "cleanup/")) then
+      Some("bulk wipe queries (delete_all_*) are only allowed on wipe/* or cleanup/* branches")
+    else None
+  }
+}

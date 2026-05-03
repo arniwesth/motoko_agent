@@ -1,0 +1,7 @@
+{"type": "Decision", "data": {"slug": "tui-om-commands:declarative-registry", "title": "Declarative SlashCommand[] Registry Replacing Ad-Hoc Switch", "rationale": "Adopt oh-my-pi pattern: declarative SlashCommand[] with name, description, subcommands, execute, getArgumentCompletions, getInlineHint. Replace ad-hoc handleCommand switch. Zero coupling to om session/auth stack. parseSlashCommand splits /model args \u2192 {cmd, args}.", "status": "accepted", "date": "2026-04"}}
+{"type": "Decision", "data": {"slug": "tui-om-commands:editor-autocomplete", "title": "Replace Input with Editor for Slash-Command Autocomplete", "rationale": "Editor from pi-tui supports setAutocompleteProvider() natively. Tab-complete /model, /abort, model names. Fuzzy matching. Surgical swap within existing 1-2 day Phase 2c budget.", "status": "accepted", "date": "2026-04"}}
+{"type": "Component", "data": {"slug": "src/tui/src/commands.ts", "name": "Slash Command Registry", "description": "Declarative SlashCommand[] registry: BUILTIN_SLASH_COMMANDS, parseSlashCommand, createAutocompleteProvider. Model argument completions. Command execution dispatches to Brain/UI.", "layer": "frontend"}}
+{"edge": "Governs", "from": "tui-om-commands:declarative-registry", "to": "src/tui/src/commands.ts"}
+{"edge": "Governs", "from": "tui-om-commands:editor-autocomplete", "to": "src/tui/src/ui.ts"}
+{"edge": "DependsOn", "from": "src/tui/src/ui.ts", "to": "src/tui/src/commands.ts"}
+{"edge": "Refines", "from": "tui-om-commands:declarative-registry", "to": "ailang-agent:yolo-mode"}

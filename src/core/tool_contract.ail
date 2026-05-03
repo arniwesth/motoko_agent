@@ -1,0 +1,103 @@
+module src/core/tool_contract
+
+import std/option (Option, Some, None)
+import std/json (Json, jo, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray)
+
+export type ToolCallEnvelope = {
+  id: string,
+  tool: string,
+  arguments: Json
+}
+  deriving (Eq)
+
+export type ToolResultEnvelope = {
+  tool_call_id: string,
+  tool: string,
+  exit_code: int,
+  stdout: string,
+  stderr: string,
+  metadata: Json
+}
+  deriving (Eq)
+
+export func call_to_json(call: ToolCallEnvelope) -> Json {
+  jo([
+    kv("id", js(call.id)),
+    kv("tool", js(call.tool)),
+    kv("arguments", call.arguments)
+  ])
+}
+
+export func result_to_json(result: ToolResultEnvelope) -> Json {
+  jo([
+    kv("tool_call_id", js(result.tool_call_id)),
+    kv("tool", js(result.tool)),
+    kv("exit_code", jnum(_int_to_float(result.exit_code))),
+    kv("stdout", js(result.stdout)),
+    kv("stderr", js(result.stderr)),
+    kv("metadata", result.metadata)
+  ])
+}
+
+export func string_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asString(j) {
+      None => fallback,
+      Some(v) => v
+    }
+  }
+}
+
+export func number_field(obj: Json, key: string, fallback: int) -> int {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asNumber(j) {
+      None => fallback,
+      Some(v) => _float_to_int(v)
+    }
+  }
+}
+
+export func bool_field(obj: Json, key: string, fallback: bool) -> bool {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asBool(j) {
+      None => fallback,
+      Some(v) => v
+    }
+  }
+}
+
+export func optional_string_field(obj: Json, key: string) -> Option[string] {
+  let v = string_field(obj, key, "");
+  if v == "" then None else Some(v)
+}
+
+export func array_field(obj: Json, key: string) -> [Json] {
+  match get(obj, key) {
+    None => [],
+    Some(j) => match asArray(j) {
+      None => [],
+      Some(xs) => xs
+    }
+  }
+}
+
+export func string_list(value: Json) -> [string] {
+  match asArray(value) {
+    None => [],
+    Some(xs) => string_list_rec(xs)
+  }
+}
+
+func string_list_rec(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      match asString(x) {
+        None => string_list_rec(rest),
+        Some(s) => s :: string_list_rec(rest)
+      }
+  }
+}

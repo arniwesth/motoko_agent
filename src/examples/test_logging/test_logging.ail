@@ -1,0 +1,23 @@
+module src/examples/test_logging/test_logging
+
+import pkg/sunholo/logging/logger (info, warn, err, trace, infoWith, verify)
+import std/json (kv, js, jnum)
+
+export func main() -> () ! {IO} {
+  info("Application starting");
+  trace("Debug-level trace message");
+
+  infoWith("Request handled", [
+    kv("path", js("/api/users")),
+    kv("status", jnum(200.0)),
+    kv("latency_ms", jnum(12.0))
+  ]);
+
+  warn("Cache miss on key 'user:42'");
+  err("Connection failed", "timeout after 30s");
+
+  verify(1 + 1 == 2, "basic math works");
+  verify(true, "truth holds");
+
+  println("Done — check stderr for structured JSON logs")
+}

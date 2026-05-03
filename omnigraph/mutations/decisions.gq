@@ -1,0 +1,89 @@
+query insert_decision($slug: String, $title: String, $rationale: String, $status: String, $date: String)
+  @description("Insert a decision")
+  @instruction("Use on a feature branch to record a new decision")
+{
+  insert Decision {
+    slug: $slug,
+    title: $title,
+    rationale: $rationale,
+    status: $status,
+    date: $date
+  }
+}
+
+query update_decision_status($slug: String, $status: String)
+  @description("Update the status of an existing decision")
+  @instruction("Use when promoting or superseding decisions")
+{
+  update Decision
+  set {
+    status: $status
+  }
+  where slug = $slug
+}
+
+query delete_decision($slug: String)
+  @description("Delete a Decision by slug")
+  @instruction("Use on a feature branch to remove an obsolete or PoC decision; merge to main when reviewed")
+{
+  delete Decision
+  where slug = $slug
+}
+
+query delete_all_decisions()
+  @description("Delete every Decision node on this branch — DESTRUCTIVE")
+  @instruction("Only on a branch named wipe/* or cleanup/*; never run unscoped")
+{
+  delete Decision
+  where slug != ""
+}
+
+query insert_supersedes($from_slug: String, $to_slug: String)
+  @description("Insert a Supersedes edge between two decisions")
+  @instruction("Use when a newer decision replaces an older one")
+{
+  insert Supersedes {
+    from: $from_slug,
+    to: $to_slug
+  }
+}
+
+query insert_depends_on_decision($from_slug: String, $to_slug: String)
+  @description("Insert a DependsOnDecision edge between two decisions")
+  @instruction("Use when a decision depends on another decision being made first")
+{
+  insert DependsOnDecision {
+    from: $from_slug,
+    to: $to_slug
+  }
+}
+
+query insert_refines($from_slug: String, $to_slug: String)
+  @description("Insert a Refines edge between two decisions")
+  @instruction("Use when a decision adds detail or scope to another")
+{
+  insert Refines {
+    from: $from_slug,
+    to: $to_slug
+  }
+}
+
+query insert_implements($from_slug: String, $to_slug: String)
+  @description("Insert an Implements edge between two decisions")
+  @instruction("Use when a decision implements or executes another decision's intent")
+{
+  insert Implements {
+    from: $from_slug,
+    to: $to_slug
+  }
+}
+
+query insert_conflicts_with($from_slug: String, $to_slug: String)
+  @description("Insert a ConflictsWith edge between two decisions")
+  @instruction("Use when two decisions present mutually exclusive approaches")
+{
+  insert ConflictsWith {
+    from: $from_slug,
+    to: $to_slug
+  }
+}

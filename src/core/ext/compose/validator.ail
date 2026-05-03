@@ -1,0 +1,279 @@
+module src/core/ext/compose/validator
+
+import std/json (decode, get, asString, asNumber, asBool, jo)
+import std/result (Result, Ok, Err)
+import std/option (Some, None)
+import std/string (trim, toLower, contains, split, startsWith, endsWith, find, substring)
+
+import src/core/ext/compose/types (Validation)
+import src/core/ext/compose/ledger (PremiseLedger, PremiseBinding, quote_seen_for_path)
+import src/core/ext/compose/guard (parse_declared_effects)
+
+func contains_all_rec(hay: string, tokens: [string]) -> [string] {
+  match tokens {
+    [] => [],
+    t :: rest =>
+      if contains(hay, t) then contains_all_rec(hay, rest)
+      else t :: contains_all_rec(hay, rest)
+  }
+}
+
+func non_empty_lines(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => if x == "" then non_empty_lines(rest) else x :: non_empty_lines(rest)
+  }
+}
+
+func line_matches_lowered(pattern: string, line: string) -> { ok: bool, reason: string } {
+  let p = trim(pattern);
+  let has_regex_meta = contains(p, "[") || contains(p, "]") || contains(p, "(") || contains(p, ")") || contains(p, "{") || contains(p, "}") || contains(p, "|") || contains(p, "\\d") || contains(p, ".*") || contains(p, "+") || contains(p, "?");
+  if has_regex_meta then { ok: false, reason: "pattern requires regex extension (Phase 5)" }
+  else {
+    let anchored_start = startsWith(p, "^");
+    let anchored_end = endsWith(p, "$");
+    let p1 = if anchored_start then substring(p, 1, _str_len(p)) else p;
+    let p2 = if anchored_end then substring(p1, 0, _str_len(p1) - 1) else p1;
+    if anchored_start && anchored_end then { ok: line == p2, reason: "" }
+    else if anchored_start then { ok: startsWith(line, p2), reason: "" }
+    else if anchored_end then { ok: endsWith(line, p2), reason: "" }
+    else { ok: contains(line, p2), reason: "" }
+  }
+}
+
+func mk(decided: bool, satisfied: bool, confidence: string, reason: string) -> Validation {
+  { decided: decided, satisfied: satisfied, confidence: confidence, reason: reason }
+}
+
+func split_pipe3(line: string) -> { ok: bool, a: string, b: string, c: string } {
+  let i1 = find(line, "|");
+  if i1 < 0 then { ok: false, a: "", b: "", c: "" }
+  else {
+    let rest = substring(line, i1 + 1, _str_len(line));
+    let i2 = find(rest, "|");
+    if i2 < 0 then { ok: false, a: "", b: "", c: "" }
+    else {
+      let left = trim(substring(line, 0, i1));
+      let mid = trim(substring(rest, 0, i2));
+      let right = trim(substring(rest, i2 + 1, _str_len(rest)));
+      if find(right, "|") >= 0 then { ok: false, a: "", b: "", c: "" }
+      else { ok: true, a: left, b: mid, c: right }
+    }
+  }
+}
+
+func split_arrow2(line: string) -> { ok: bool, a: string, b: string } {
+  let i1 = find(line, "->");
+  if i1 < 0 then { ok: false, a: "", b: "" }
+  else {
+    let left = trim(substring(line, 0, i1));
+    let right = trim(substring(line, i1 + 2, _str_len(line)));
+    if left == "" || right == "" then { ok: false, a: "", b: "" }
+    else { ok: true, a: left, b: right }
+  }
+}
+
+func unquote(s: string) -> string {
+  let t = trim(s);
+  if _str_len(t) >= 2 && startsWith(t, "\"") && endsWith(t, "\"") then substring(t, 1, _str_len(t) - 1)
+  else ""
+}
+
+func has_effect(xs: [string], name: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == name then true else has_effect(rest, name)
+  }
+}
+
+func classify_premise_binding(path: string, quote: string, snippet: string, ledger: PremiseLedger) -> string {
+  if quote_seen_for_path(ledger, path, quote) then "ledger"
+  else {
+    let effects = parse_declared_effects(snippet);
+    if (has_effect(effects, "FS") || has_effect(effects, "Process")) && trim(path) != "" then "snippet"
+    else "unbound"
+  }
+}
+
+func parse_certificate_binding(
+  lines: [string],
+  section: string,
+  has_premises: bool,
+  has_trace: bool,
+  has_conclusion: bool,
+  premises_count: int,
+  bad_line: string,
+  trace: string,
+  conclusion: string,
+  snippet: string,
+  ledger: PremiseLedger,
+  binding: PremiseBinding
+) -> { has_premises: bool, has_trace: bool, has_conclusion: bool, premises_count: int, bad_line: string, trace: string, conclusion: string, binding: PremiseBinding } {
+  match lines {
+    [] => {
+      {
+        has_premises: has_premises,
+        has_trace: has_trace,
+        has_conclusion: has_conclusion,
+        premises_count: premises_count,
+        bad_line: bad_line,
+        trace: trim(trace),
+        conclusion: trim(conclusion),
+        binding: binding
+      }
+    },
+    line :: rest => {
+      let t = trim(line);
+      let tl = toLower(t);
+      if tl == "premises" || tl == "premises:" then
+        parse_certificate_binding(rest, "premises", true, has_trace, has_conclusion, premises_count, bad_line, trace, conclusion, snippet, ledger, binding)
+      else if tl == "trace" || tl == "trace:" then
+        parse_certificate_binding(rest, "trace", has_premises, true, has_conclusion, premises_count, bad_line, trace, conclusion, snippet, ledger, binding)
+      else if tl == "conclusion" || tl == "conclusion:" then
+        parse_certificate_binding(rest, "conclusion", has_premises, has_trace, true, premises_count, bad_line, trace, conclusion, snippet, ledger, binding)
+      else if section == "premises" then {
+        if t == "" then parse_certificate_binding(rest, section, has_premises, has_trace, has_conclusion, premises_count, bad_line, trace, conclusion, snippet, ledger, binding)
+        else {
+          let parsed = split_pipe3(t);
+          if not parsed.ok then {
+            let legacy = split_arrow2(t);
+            if legacy.ok then {
+              -- Backward compatibility: legacy premise form has no verbatim quote,
+              -- so treat it as snippet-bound evidence to avoid false retry loops.
+              let b = { ledger_bound: binding.ledger_bound, snippet_bound: binding.snippet_bound + 1, unbound: binding.unbound, malformed: binding.malformed };
+              parse_certificate_binding(rest, section, has_premises, has_trace, has_conclusion, premises_count + 1, bad_line, trace, conclusion, snippet, ledger, b)
+            } else {
+              let b = { ledger_bound: binding.ledger_bound, snippet_bound: binding.snippet_bound, unbound: binding.unbound, malformed: binding.malformed + 1 };
+              parse_certificate_binding(rest, section, has_premises, has_trace, has_conclusion, premises_count, if bad_line == "" then t else bad_line, trace, conclusion, snippet, ledger, b)
+            }
+          } else {
+            let path = trim(parsed.a);
+            let quote = unquote(parsed.b);
+            if path == "" || quote == "" then {
+              let b = { ledger_bound: binding.ledger_bound, snippet_bound: binding.snippet_bound, unbound: binding.unbound, malformed: binding.malformed + 1 };
+              parse_certificate_binding(rest, section, has_premises, has_trace, has_conclusion, premises_count, if bad_line == "" then t else bad_line, trace, conclusion, snippet, ledger, b)
+            } else {
+              let cls = classify_premise_binding(path, quote, snippet, ledger);
+              let b2 =
+                if cls == "ledger" then { ledger_bound: binding.ledger_bound + 1, snippet_bound: binding.snippet_bound, unbound: binding.unbound, malformed: binding.malformed }
+                else if cls == "snippet" then { ledger_bound: binding.ledger_bound, snippet_bound: binding.snippet_bound + 1, unbound: binding.unbound, malformed: binding.malformed }
+                else { ledger_bound: binding.ledger_bound, snippet_bound: binding.snippet_bound, unbound: binding.unbound + 1, malformed: binding.malformed };
+              parse_certificate_binding(rest, section, has_premises, has_trace, has_conclusion, premises_count + 1, bad_line, trace, conclusion, snippet, ledger, b2)
+            }
+          }
+        }
+      } else if section == "trace" then
+        parse_certificate_binding(rest, section, has_premises, has_trace, has_conclusion, premises_count, bad_line, "${trace}${if trace == "" then "" else "\n"}${line}", conclusion, snippet, ledger, binding)
+      else if section == "conclusion" then
+        parse_certificate_binding(rest, section, has_premises, has_trace, has_conclusion, premises_count, bad_line, trace, "${conclusion}${if conclusion == "" then "" else "\n"}${line}", snippet, ledger, binding)
+      else
+        parse_certificate_binding(rest, section, has_premises, has_trace, has_conclusion, premises_count, bad_line, trace, conclusion, snippet, ledger, binding)
+    }
+  }
+}
+
+func validate_certificate(raw_expected_output: string, stdout: string, snippet: string, ledger: PremiseLedger) -> { validation: Validation, binding: PremiseBinding } {
+  let obj = match decode(raw_expected_output) { Ok(v) => v, Err(_) => jo([]) };
+  let min_p = match get(obj, "min_premises") { Some(nj) => match asNumber(nj) { Some(n) => _float_to_int(n), None => 1 }, None => 1 };
+  let require_trace = match get(obj, "require_trace") { Some(bj) => match asBool(bj) { Some(b) => b, None => true }, None => true };
+  let require_conclusion = match get(obj, "require_conclusion") { Some(bj) => match asBool(bj) { Some(b) => b, None => true }, None => true };
+  let parsed = parse_certificate_binding(split(stdout, "\n"), "", false, false, false, 0, "", "", "", snippet, ledger, { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 });
+  if not parsed.has_premises then { validation: mk(true, false, "high", "certificate missing PREMISES section"), binding: parsed.binding }
+  else if require_trace && not parsed.has_trace then { validation: mk(true, false, "high", "certificate missing TRACE section"), binding: parsed.binding }
+  else if require_conclusion && not parsed.has_conclusion then { validation: mk(true, false, "high", "certificate missing CONCLUSION section"), binding: parsed.binding }
+  else if parsed.bad_line != "" then { validation: mk(true, false, "high", "certificate premise line must be '<path> | \"<verbatim_quote>\" | <paraphrase>' (legacy also accepted: '<path> -> <text>'): ${parsed.bad_line}"), binding: parsed.binding }
+  else if parsed.premises_count < min_p then { validation: mk(true, false, "high", "certificate has too few premises"), binding: parsed.binding }
+  else if require_trace && parsed.trace == "" then { validation: mk(true, false, "high", "certificate TRACE section is empty"), binding: parsed.binding }
+  else if require_conclusion && parsed.conclusion == "" then { validation: mk(true, false, "high", "certificate CONCLUSION section is empty"), binding: parsed.binding }
+  else if parsed.binding.malformed > 0 then { validation: mk(true, false, "high", "certificate has malformed premise lines"), binding: parsed.binding }
+  else if parsed.binding.unbound > 0 then { validation: mk(true, false, "high", "certificate has unbound premises"), binding: parsed.binding }
+  else { validation: mk(true, true, "high", "certificate structure and premise binding satisfied"), binding: parsed.binding }
+}
+
+func filter_tokens(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => {
+      match asString(x) {
+        Some(s) => if trim(s) == "" then filter_tokens(rest) else s :: filter_tokens(rest),
+        None => filter_tokens(rest)
+      }
+    }
+  }
+}
+
+func lower_tokens(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => toLower(x) :: lower_tokens(rest)
+  }
+}
+
+func validate_lines(lines: [string], pattern: string) -> Validation {
+  match lines {
+    [] => mk(true, true, "high", "all lines satisfy regex"),
+    x :: rest => {
+      let r = line_matches_lowered(pattern, x);
+      if not r.ok then {
+        if r.reason == "" then mk(true, false, "high", "line failed regex: ${x}")
+        else mk(false, true, "low", r.reason)
+      } else validate_lines(rest, pattern)
+    }
+  }
+}
+
+export func validate_expected_output_with_context(raw_expected_output: string, stdout: string, snippet: string, ledger: PremiseLedger) -> { validation: Validation, premise_binding: PremiseBinding } {
+  if trim(raw_expected_output) == "" then { validation: mk(false, true, "low", "no expected_output provided"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } }
+  else {
+    match decode(raw_expected_output) {
+      Err(_) => { validation: mk(false, true, "low", "expected_output is free-text; no deterministic validator applied"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } },
+      Ok(obj) => {
+        match get(obj, "kind") {
+          None => { validation: mk(false, true, "low", "expected_output is free-text; no deterministic validator applied"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } },
+          Some(kj) => {
+            match asString(kj) {
+              None => { validation: mk(false, true, "low", "expected_output kind must be a string"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } },
+              Some(kind) => {
+                if kind == "non_empty" then {
+                  let ok = trim(stdout) != "";
+                  { validation: mk(true, ok, "high", if ok then "stdout is non-empty" else "stdout is empty"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } }
+                } else if kind == "contains_all" then {
+                  let case_sensitive = match get(obj, "case_sensitive") { Some(bj) => match asBool(bj) { Some(b) => b, None => false }, None => false };
+                  let hay = if case_sensitive then stdout else toLower(stdout);
+                  let tokens = match get(obj, "tokens") {
+                    Some(arrj) => match arrj {
+                      JArray(xs) => filter_tokens(xs),
+                      _ => []
+                    },
+                    None => []
+                  };
+                  let needles = if case_sensitive then tokens else lower_tokens(tokens);
+                  let missing = contains_all_rec(hay, needles);
+                  { validation: mk(true, _list_length(missing) == 0, "high", if _list_length(missing) == 0 then "all expected tokens found" else "missing expected tokens"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } }
+                } else if kind == "certificate" then {
+                  let c = validate_certificate(raw_expected_output, stdout, snippet, ledger);
+                  { validation: c.validation, premise_binding: c.binding }
+                } else if kind == "lines_regex" then {
+                  let pattern = match get(obj, "pattern") { Some(pj) => match asString(pj) { Some(s) => s, None => "" }, None => "" };
+                  if pattern == "" then { validation: mk(false, true, "low", "invalid regex in expected_output spec: missing pattern"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } }
+                  else {
+                    let lines = non_empty_lines(split(stdout, "\n"));
+                    let min_lines = match get(obj, "min_lines") { Some(nj) => match asNumber(nj) { Some(n) => _float_to_int(n), None => -1 }, None => -1 };
+                    let max_lines = match get(obj, "max_lines") { Some(nj) => match asNumber(nj) { Some(n) => _float_to_int(n), None => -1 }, None => -1 };
+                    if min_lines >= 0 && _list_length(lines) < min_lines then { validation: mk(true, false, "high", "line count is below min_lines"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } }
+                    else if max_lines >= 0 && _list_length(lines) > max_lines then { validation: mk(true, false, "high", "line count exceeds max_lines"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } }
+                    else { validation: validate_lines(lines, pattern), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } }
+                  }
+                } else { validation: mk(false, true, "low", "expected_output kind unsupported"), premise_binding: { ledger_bound: 0, snippet_bound: 0, unbound: 0, malformed: 0 } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+export func validate_expected_output(raw_expected_output: string, stdout: string) -> Validation {
+  validate_expected_output_with_context(raw_expected_output, stdout, "", { entries: [], budget_used: 0, budget_cap: 0 }).validation
+}

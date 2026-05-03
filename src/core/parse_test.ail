@@ -1,0 +1,194 @@
+module src/core/parse_test
+
+import src/core/parse (extract_bash, extract_fence, extract_ailang, first_shell_line, parse_tool_calls, split_think_answer, assistant_history_content, assistant_visible_output, indicates_continuation_intent)
+import src/core/types (ToolParseStatus)
+import std/option (Some, None)
+import std/string (contains)
+import std/json (get, asString, asNumber)
+
+func ef_some(text: string, fence: string) -> bool
+  tests [
+    (("```bash\necho hello\n```",    "```bash"), true),
+    (("```python\nprint(1)\n```",    "```bash"), false),
+    (("```bash\necho hello",         "```bash"), false),
+    (("",                            "```bash"), false)
+  ]
+  { match extract_fence(text, fence) { Some(_) => true, None => false } }
+
+func ef_value(text: string, fence: string) -> string
+  tests [
+    (("```bash\necho hello\n```",      "```bash"), "echo hello"),
+    (("```bash\n  echo hello  \n```",  "```bash"), "echo hello"),
+    (("```bash\n```",                  "```bash"), "")
+  ]
+  { match extract_fence(text, fence) { Some(v) => v, None => "__none__" } }
+
+func fsl_some(lines: [string]) -> bool
+  tests [
+    (["echo hello"],                     true),
+    (["  ls -la  "],                     true),
+    (["The answer is 42", "git status"], true),
+    ([],                                 false),
+    (["This is prose", "So is this"],    false)
+  ]
+  { match first_shell_line(lines) { Some(_) => true, None => false } }
+
+func eb_some(text: string) -> bool
+  tests [
+    ("Here is the fix:\n```bash\necho hello\n```\nDone.", true),
+    ("```sh\ngit status\n```",                            true),
+    ("```shell\nls -la\n```",                             true),
+    ("```\ncd /tmp\n```",                                 true),
+    ("Let me check:\ngit log --oneline",                  true),
+    ("```\nThis is prose.\n```",                          false),
+    ("The answer is 42.",                                  false)
+  ]
+  { match extract_bash(text) { Some(_) => true, None => false } }
+
+func ptc_readfile_core_parse() -> bool
+  tests [((), true)]
+  {
+    let text = "{\"tool_calls\":[{\"id\":\"t1\",\"tool\":\"ReadFile\",\"path\":\"x.ail\",\"start\":1,\"end\":10}]}";
+    match parse_tool_calls(text) {
+      ParsedToolCalls(res) =>
+        match res.calls {
+          c :: _ =>
+            c.id == "t1" &&
+            c.tool == "ReadFile" &&
+            match get(c.arguments, "path") { Some(j) => match asString(j) { Some(p) => p == "x.ail", None => false }, None => false },
+          _ => false
+        },
+      _ => false
+    }
+  }
+
+func ptc_bash_alias_ls_maps_to_bashexec() -> bool
+  tests [((), true)]
+  {
+    let text = "[{\"name\":\"ls\",\"arguments\":{\"path\":\"src/core\"}}]";
+    match parse_tool_calls(text) {
+      ParsedToolCalls(res) =>
+        match res.calls {
+          c :: _ => c.tool == "BashExec" && c.id != "",
+          _ => false
+        },
+      _ => false
+    }
+  }
+
+func ptc_compose_envelope_parse() -> bool
+  tests [((), true)]
+  {
+    let text = "{\"tool_calls\":[{\"id\":\"c1\",\"tool\":\"Compose\",\"arguments\":{\"intent\":\"scan src\",\"expected_output\":\"lines\"}}]}";
+    match parse_tool_calls(text) {
+      ParsedToolCalls(res) =>
+        match res.calls {
+          c :: _ =>
+            c.tool == "Compose" &&
+            match get(c.arguments, "intent") { Some(j) => match asString(j) { Some(v) => v == "scan src", None => false }, None => false },
+          _ => false
+        },
+      _ => false
+    }
+  }
+
+func ptc_unknown_tool_passthrough_envelope() -> bool
+  tests [((), true)]
+  {
+    let text = "{\"calls\":[{\"id\":\"og1\",\"tool\":\"omnigraph_read\",\"arguments\":{\"name\":\"list_decisions\"}}]}";
+    match parse_tool_calls(text) {
+      ParsedToolCalls(res) =>
+        match res.calls {
+          c :: _ => c.id == "og1" && c.tool == "omnigraph_read",
+          _ => false
+        },
+      _ => false
+    }
+  }
+
+func ptc_think_preface_unfenced() -> bool
+  tests [((), true)]
+  {
+    let text = "<think>plan</think>\n{\"tool_calls\":[{\"id\":\"t1\",\"tool\":\"ReadFile\",\"path\":\"x.ail\",\"start\":1,\"end\":10}]}";
+    match parse_tool_calls(text) {
+      ParsedToolCalls(res) =>
+        match res.calls {
+          c :: _ => c.id == "t1" && c.tool == "ReadFile",
+          _ => false
+        },
+      _ => false
+    }
+  }
+
+func ptc_invalid_tool_json_gets_error() -> bool
+  tests [((), true)]
+  {
+    let text = "```json\n{\"tool_calls\":[{\"tool\":\"WriteFile\",\"content\":\"bad \"quote\"\"}]}\n```";
+    match parse_tool_calls(text) {
+      ToolParseError(err) => contains(err, "invalid tool json") || contains(err, "Hint:"),
+      _ => false
+    }
+  }
+
+func think_split_roundtrip() -> bool
+  tests [((), true)]
+  {
+    let x = split_think_answer("<think>internal\nnotes</think>final answer");
+    x.think == "internal\nnotes" && x.answer == "final answer"
+  }
+
+func thinking_tag_split_roundtrip() -> bool
+  tests [((), true)]
+  {
+    let x = split_think_answer("<thinking>chain\nof thought</thinking>final answer");
+    x.think == "chain\nof thought" && x.answer == "final answer"
+  }
+
+func assistant_history_content_value(text: string) -> string
+  tests [
+    ("<thinking>x</thinking>answer", "answer"),
+    ("<think>x</think>{\"tool_calls\":[]}", "{\"tool_calls\":[]}"),
+    ("plain answer", "plain answer"),
+    ("<thinking>x</thinking>", "[assistant produced thinking with no answer]")
+  ]
+  { assistant_history_content(text) }
+
+func assistant_visible_output_value(text: string) -> string
+  tests [
+    ("<thinking>x</thinking>answer", "answer"),
+    ("plain answer", "plain answer"),
+    ("<thinking>x</thinking>", "[assistant produced thinking with no answer]")
+  ]
+  { assistant_visible_output(text) }
+
+func continuation_intent_value(text: string) -> bool
+  tests [
+    ("I will issue the next tool call in a separate turn.", true),
+    ("I will now use `Search` to inspect the repository.", true),
+    ("Proceeding to search the codebase for the parser.", true),
+    ("I will now run a command to verify this.", true),
+    ("The task is complete. I changed the parser and ran tests.", false),
+    ("Next step: review the output.", false),
+    ("I will read the docs if more detail is needed.", false)
+  ]
+  { indicates_continuation_intent(text) }
+
+func extract_ailang_ignores_think() -> bool
+  tests [((), true)]
+  {
+    let text = "<think>```ailang\nmodule bad\n```</think>\n```ailang\nmodule ok\n```";
+    match extract_ailang(text) {
+      Some(v) => v == "module ok",
+      None => false
+    }
+  }
+
+func extract_ailang_ignores_thinking() -> bool
+  tests [((), true)]
+  {
+    let text = "<thinking>```ailang\nmodule bad\n```</thinking>\n```ailang\nmodule ok\n```";
+    match extract_ailang(text) {
+      Some(v) => v == "module ok",
+      None => false
+    }
+  }

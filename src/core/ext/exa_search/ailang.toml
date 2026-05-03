@@ -1,0 +1,15 @@
+[package]
+name = "sunholo/motoko_exa_search"
+version = "0.1.0"
+edition = "1"
+module_prefix = "src"
+
+[exports]
+modules = ["src/core/ext/exa_search/exa_search"]
+
+[dependencies]
+"sunholo/motoko_core" = { path = "../.." }
+"sunholo/motoko_mcp" = { path = "../mcp" }
+
+[effects]
+max = ["Process", "FS", "IO", "Env", "Net"]

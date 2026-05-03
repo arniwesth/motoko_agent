@@ -1,0 +1,367 @@
+module src/core/ext/runtime
+
+import std/clock (now)
+import std/io (println)
+import std/json (encode, jo, kv, js, jnum)
+import std/option (Option, Some, None)
+import std/string (startsWith)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/config (RuntimeConfig)
+import src/core/ext/types (
+  BudgetPlan,
+  ExtCtx,
+  PromptPatch,
+  BudgetPatch,
+  ToolPolicyDecision,
+  ToolHandleDecision,
+  ResponseInterceptDecision,
+  FinalizeDecision,
+  ExtensionHooks,
+  ExtRuntime
+)
+import src/core/ext/registry (parse_core_ext_order)
+
+export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, FS} {
+  {
+    registry: parse_core_ext_order(join_order(cfg.extensions.order), cfg),
+    strict_mode: cfg.extensions.strict
+  }
+}
+
+export func init_runtime() -> ExtRuntime ! {Env, FS} {
+  { registry: { hooks: [] }, strict_mode: false }
+}
+
+func join_order(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${join_order(rest)}"
+  }
+}
+
+func hook_names(hooks: [ExtensionHooks]) -> [string] {
+  match hooks {
+    [] => [],
+    h :: rest => hook_name(h.id) :: hook_names(rest)
+  }
+}
+
+func hash_index(id: string) -> int {
+  _str_find(id, "#")
+}
+
+func hook_name(id: string) -> string {
+  let i = hash_index(id);
+  if i < 0 then id else _str_slice(id, 0, i)
+}
+
+export func loaded_extension_names(rt: ExtRuntime) -> [string] {
+  hook_names(rt.registry.hooks)
+}
+
+func join_lines(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}\n${join_lines(rest)}"
+  }
+}
+
+func apply_prompt_patch(base: string, patch: PromptPatch) -> string {
+  let prefix = join_lines(patch.prepend);
+  let suffix = join_lines(patch.append);
+  let with_prefix = if prefix == "" then base else "${prefix}\n${base}";
+  if suffix == "" then with_prefix else "${with_prefix}\n${suffix}"
+}
+
+func with_int_opt(current: int, requested: Option[int]) -> int {
+  match requested {
+    None => current,
+    Some(n) => n
+  }
+}
+
+func apply_budget_patch(plan: BudgetPlan, patch: BudgetPatch) -> BudgetPlan {
+  {
+    total: with_int_opt(plan.total, patch.requested_total),
+    solver: with_int_opt(plan.solver, patch.requested_solver),
+    verifier: with_int_opt(plan.verifier, patch.requested_verifier)
+  }
+}
+
+func emit_dummy_hook(hook: string, key: string, val: string) -> () ! {IO, Clock} {
+  let _ = println(encode(jo([
+    kv("type", js("dummy_hook")),
+    kv("ts", jnum(now())),
+    kv("hook", js(hook)),
+    kv(key, js(val))
+  ])));
+  ()
+}
+
+func is_test_dummy(hook_id: string) -> bool {
+  hook_id == "test_dummy" || startsWith(hook_id, "test_dummy#")
+}
+
+func fold_prompt_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, base: string) -> string ! {IO, Clock} {
+  match hooks {
+    [] => base,
+    h :: rest => {
+      let patch = (h.on_build_system_prompt)(ctx);
+      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_build_system_prompt", "appended", join_lines(patch.append)) else ();
+      fold_prompt_hooks(rest, ctx, apply_prompt_patch(base, patch))
+    }
+  }
+}
+
+export func dispatch_build_system_prompt(rt: ExtRuntime, ctx: ExtCtx, base: string) -> string ! {IO, Clock} {
+  fold_prompt_hooks(rt.registry.hooks, ctx, base)
+}
+
+func fold_budget_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock, Env, FS} {
+  match hooks {
+    [] => plan,
+    h :: rest => {
+      let patch = (h.on_budget_plan)(ctx, plan);
+      let val = match patch.requested_total { None => "", Some(n) => show(n) };
+      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_budget_plan", "requested_total", val) else ();
+      fold_budget_hooks(rest, ctx, apply_budget_patch(plan, patch))
+    }
+  }
+}
+
+export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock, Env, FS} {
+  fold_budget_hooks(rt.registry.hooks, ctx, plan)
+}
+
+func decide_one_policy(h: ExtensionHooks, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
+  let decision = (h.on_tool_policy)(ctx, call);
+  let _ = if is_test_dummy(h.id) then {
+    let tag = match decision {
+      Allow => "allow",
+      Deny(_) => "deny",
+      NoOpinion => "noop"
+    };
+    emit_dummy_hook("on_tool_policy", "decision", tag)
+  } else ();
+  decision
+}
+
+func merge_tool_decisions(xs: [ToolPolicyDecision], seen_allow: bool) -> ToolPolicyDecision {
+  match xs {
+    [] => if seen_allow then Allow else NoOpinion,
+    x :: rest =>
+      match x {
+        Deny(msg) => Deny(msg),
+        Allow => merge_tool_decisions(rest, true),
+        NoOpinion => merge_tool_decisions(rest, seen_allow)
+      }
+  }
+}
+
+func collect_tool_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope) -> [ToolPolicyDecision] ! {IO, Clock} {
+  match hooks {
+    [] => [],
+    h :: rest => decide_one_policy(h, ctx, call) :: collect_tool_decisions(rest, ctx, call)
+  }
+}
+
+export func dispatch_tool_policy(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
+  merge_tool_decisions(collect_tool_decisions(rt.registry.hooks, ctx, call), false)
+}
+
+func tool_name(call: ToolCallEnvelope) -> string {
+  call.tool
+}
+
+func contains_tool(xs: [string], name: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == name then true else contains_tool(rest, name)
+  }
+}
+
+func first_handle(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope, name: string) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  match hooks {
+    [] => Delegate,
+    h :: rest => {
+      if contains_tool(h.provided_tools, name) then {
+        match (h.on_tool_handle)(ctx, call) {
+          Delegate => first_handle(rest, ctx, call, name),
+          Handled(r) => Handled(r)
+        }
+      } else first_handle(rest, ctx, call, name)
+    }
+  }
+}
+
+export func dispatch_tool_handle(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  first_handle(rt.registry.hooks, ctx, call, tool_name(call))
+}
+
+func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  match hooks {
+    [] => NoIntercept,
+    h :: rest =>
+      match (h.on_response_intercept)(ctx, response_text) {
+        InterceptHandled(r) => InterceptHandled(r),
+        NoIntercept => first_intercept(rest, ctx, response_text)
+      }
+  }
+}
+
+export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  first_intercept(rt.registry.hooks, ctx, response_text)
+}
+
+func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let decision = (h.on_solver_candidate)(ctx, candidate);
+  let _ = if is_test_dummy(h.id) then {
+    let tag = match decision {
+      Accept(_) => "accept",
+      ContinueWithFeedback(_) => "continue",
+      NoDecision => "noop"
+    };
+    emit_dummy_hook("on_solver_candidate", "decision", tag)
+  } else ();
+  decision
+}
+
+func collect_finalize_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, candidate: string) -> [FinalizeDecision] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  match hooks {
+    [] => [],
+    h :: rest => decide_one_finalize(h, ctx, candidate) :: collect_finalize_decisions(rest, ctx, candidate)
+  }
+}
+
+func first_accept(xs: [FinalizeDecision]) -> Option[string] {
+  match xs {
+    [] => None,
+    Accept(out) :: _ => Some(out),
+    _ :: rest => first_accept(rest)
+  }
+}
+
+func first_continue(xs: [FinalizeDecision]) -> Option[string] {
+  match xs {
+    [] => None,
+    ContinueWithFeedback(msg) :: _ => Some(msg),
+    _ :: rest => first_continue(rest)
+  }
+}
+
+export func merge_finalize_decisions(xs: [FinalizeDecision]) -> FinalizeDecision {
+  match first_continue(xs) {
+    Some(msg) => ContinueWithFeedback(msg),
+    None =>
+      match first_accept(xs) {
+        Some(out) => Accept(out),
+        None => NoDecision
+      }
+  }
+}
+
+export func dispatch_solver_candidate(rt: ExtRuntime, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  merge_finalize_decisions(collect_finalize_decisions(rt.registry.hooks, ctx, candidate))
+}
+
+func smoke_ctx() -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: true,
+    budget: { total: 10, solver: 6, verifier: 4 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 10,
+    history_slice: [],
+    state_key: "k"
+  }
+}
+
+func smoke_hook_a() -> ExtensionHooks {
+  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    if call.tool == "Alpha" then Handled({ tool_call_id: call.id, tool: "Alpha", exit_code: 0, stdout: "alpha", stderr: "", metadata: jo([]) })
+    else Delegate
+  };
+  let intercept = func(_ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    if response_text == "trip" then InterceptHandled({ tool_call_id: "ri", tool: "Intercept", exit_code: 0, stdout: "ok", stderr: "", metadata: jo([]) })
+    else NoIntercept
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    ContinueWithFeedback("needs-fix")
+  };
+  let budget = func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+    { requested_total: Some(9), requested_solver: None, requested_verifier: None }
+  };
+  {
+    id: "hook_a",
+    provided_tools: ["Alpha"],
+    on_build_system_prompt: \_ctx. { prepend: [], append: ["A"] },
+    on_budget_plan: budget,
+    on_tool_policy: \_ctx _call. Allow,
+    on_tool_handle: handle,
+    on_response_intercept: intercept,
+    on_solver_candidate: finalize
+  }
+}
+
+func smoke_hook_b() -> ExtensionHooks {
+  let handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    Delegate
+  };
+  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoIntercept
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    Accept("accepted")
+  };
+  let budget = func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+    { requested_total: None, requested_solver: Some(5), requested_verifier: None }
+  };
+  {
+    id: "hook_b",
+    provided_tools: ["Beta"],
+    on_build_system_prompt: \_ctx. { prepend: [], append: ["B"] },
+    on_budget_plan: budget,
+    on_tool_policy: \_ctx _call. Deny("blocked"),
+    on_tool_handle: handle,
+    on_response_intercept: intercept,
+    on_solver_candidate: finalize
+  }
+}
+
+func dispatch_smoke_record_hooks() -> bool
+  tests [((), true)]
+  {
+    let rt = { registry: { hooks: [smoke_hook_a(), smoke_hook_b()] }, strict_mode: false };
+    let ctx = smoke_ctx();
+    let prompt_ok = dispatch_build_system_prompt(rt, ctx, "BASE") == "BASE\nA\nB";
+    let budget = dispatch_budget_plan(rt, ctx, { total: 10, solver: 6, verifier: 4 });
+    let budget_ok = budget.total == 9 && budget.solver == 5 && budget.verifier == 4;
+    let policy_ok =
+      match dispatch_tool_policy(rt, ctx, { id: "p", tool: "ReadFile", arguments: jo([]) }) {
+        Deny(msg) => msg == "blocked",
+        _ => false
+      };
+    let handle_ok =
+      match dispatch_tool_handle(rt, ctx, { id: "h", tool: "Alpha", arguments: jo([]) }) {
+        Handled(r) => r.exit_code == 0 && r.stdout == "alpha",
+        Delegate => false
+      };
+    let intercept_ok =
+      match dispatch_response_intercept(rt, ctx, "trip") {
+        InterceptHandled(r) => r.tool_call_id == "ri",
+        NoIntercept => false
+      };
+    let finalize_ok =
+      match dispatch_solver_candidate(rt, ctx, "candidate") {
+        ContinueWithFeedback(msg) => msg == "needs-fix",
+        _ => false
+      };
+    prompt_ok && budget_ok && policy_ok && handle_ok && intercept_ok && finalize_ok
+  }

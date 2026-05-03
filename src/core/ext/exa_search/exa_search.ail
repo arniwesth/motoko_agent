@@ -1,0 +1,135 @@
+module src/core/ext/exa_search/exa_search
+
+import std/option (Option, Some, None)
+
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/ext/types (ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
+import src/core/config (RuntimeConfig)
+
+import src/core/ext/mcp/types (McpServerConfig, McpToolMapping)
+import src/core/ext/mcp/exec (run_mcp_tool)
+import src/core/ext/mcp/resolve (resolve_tool, all_tool_names)
+import src/core/ext/exa_search/types (mcp_config, tool_mappings)
+import src/core/ext/exa_search/prompts (load_agent_prompt, build_prompt_patch)
+
+func no_budget_patch() -> BudgetPatch {
+  {
+    requested_total: None,
+    requested_solver: None,
+    requested_verifier: None
+  }
+}
+
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  no_budget_patch()
+}
+
+func no_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+func no_response_intercept() -> ResponseInterceptDecision {
+  NoIntercept
+}
+
+func no_finalize_decision() -> FinalizeDecision {
+  NoDecision
+}
+
+export func provided_tools() -> [string] {
+  all_tool_names(tool_mappings())
+}
+
+export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> PromptPatch {
+  build_prompt_patch(cached_prompt)
+}
+
+export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process} {
+  match resolve_tool(call.tool, mappings) {
+    Some(m) => match run_mcp_tool(call.id, m.canonical, ctx.workdir, cfg, m.mcp_name, call.arguments) {
+      Some(result) => Handled(result),
+      None => Delegate
+    },
+    None => Delegate
+  }
+}
+
+export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks ! {FS} {
+  let workdir = runtime_cfg.agent.workdir;
+  let cfg = mcp_config(
+    runtime_cfg.exa_search.timeout_ms,
+    runtime_cfg.exa_search.max_output_chars
+  );
+  let mappings = tool_mappings();
+  let cached_prompt = load_agent_prompt(workdir);
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle(cfg, mappings, ctx, call)
+  };
+  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    no_response_intercept()
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    no_finalize_decision()
+  };
+  {
+    id: "exa_search",
+    provided_tools: all_tool_names(mappings),
+    on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
+    on_budget_plan: budget_hook,
+    on_tool_policy: no_tool_policy,
+    on_tool_handle: handle,
+    on_response_intercept: intercept,
+    on_solver_candidate: finalize
+  }
+}
+
+func list_len(xs: [string]) -> int {
+  match xs {
+    [] => 0,
+    _ :: rest => 1 + list_len(rest)
+  }
+}
+
+func first_or_empty(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: _ => x
+  }
+}
+
+func eq_string_list(a: [string], b: [string]) -> bool {
+  match (a, b) {
+    ([], []) => true,
+    (x :: xs, y :: ys) => x == y && eq_string_list(xs, ys),
+    _ => false
+  }
+}
+
+func mappings_define_expected_canonicals() -> bool
+  tests [((), true)]
+  {
+    let names = all_tool_names(tool_mappings());
+    list_len(names) == 16
+      && first_or_empty(names) == "ExaSearch"
+      && eq_string_list(names, [
+        "ExaSearch", "exa_search", "exa.search", "exa_search.search",
+        "ExaSearchDeep", "exa_search_deep", "exa.search_deep", "exa_search.deep",
+        "ExaSearchCode", "exa_search_code", "exa.search_code", "exa_search.code",
+        "ExaCrawl", "exa_crawl", "exa.crawl", "exa_search.crawl"
+      ])
+  }
+
+func alias_resolves_to_mcp_tool() -> bool
+  tests [((), true)]
+  {
+    match resolve_tool("exa.search_deep", tool_mappings()) {
+      Some(m) => m.canonical == "ExaSearchDeep" && m.mcp_name == "deep_search_exa",
+      None => false
+    }
+  }
+
+func provided_tools_matches_resolver_flattening() -> bool
+  tests [((), true)]
+  {
+    eq_string_list(provided_tools(), all_tool_names(tool_mappings()))
+  }

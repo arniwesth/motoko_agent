@@ -1,0 +1,103 @@
+module src/core/ext/compose/authoring/render
+
+import std/string (trim, split)
+import src/core/ext/compose/authoring/state (ProgramState, ImportDecl, FuncDecl)
+
+func join_with(xs: [string], sep: string) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}${sep}${join_with(rest, sep)}"
+  }
+}
+
+func normalize_effects(effects: [string]) -> [string] {
+  normalize_effects_rec(effects, [])
+}
+
+func contains_trim(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if trim(x) == trim(target) then true else contains_trim(rest, target)
+  }
+}
+
+func normalize_effects_rec(effects: [string], acc: [string]) -> [string] {
+  match effects {
+    [] => acc,
+    x :: rest => {
+      let t = trim(x);
+      let next = if t == "" || contains_trim(acc, t) then acc else acc ++ [t];
+      normalize_effects_rec(rest, next)
+    }
+  }
+}
+
+func render_import(i: ImportDecl) -> string {
+  let syms = join_with(i.symbols, ", ");
+  if trim(syms) == "" then "import ${i.module_name}"
+  else "import ${i.module_name} (${syms})"
+}
+
+func render_imports(xs: [ImportDecl]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => render_import(x) :: render_imports(rest)
+  }
+}
+
+func indent_body_lines(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => {
+      let t = trim(x);
+      let lead = if t == "" then "" else "  ";
+      ("${lead}${x}") :: indent_body_lines(rest)
+    }
+  }
+}
+
+func render_body(body: string) -> string {
+  let lines = split(body, "\n");
+  join_with(indent_body_lines(lines), "\n")
+}
+
+func render_effect_sig(f: FuncDecl) -> string {
+  if f.is_pure then ""
+  else {
+    let normalized = normalize_effects(f.effects);
+    if _list_length(normalized) == 0 then ""
+    else " ! {${join_with(normalized, ", ")}}"
+  }
+}
+
+func render_func(f: FuncDecl) -> string {
+  let export_kw = if f.is_export then "export " else "";
+  let pure_kw = if f.is_pure then "pure " else "";
+  let head = "${export_kw}${pure_kw}func ${f.name}(${f.params_sig}) -> ${f.return_type}${render_effect_sig(f)}";
+  "${head} {\n${render_body(f.body)}\n}"
+}
+
+func render_funcs(xs: [FuncDecl]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => render_func(x) :: render_funcs(rest)
+  }
+}
+
+func non_empty_lines(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => if trim(x) == "" then non_empty_lines(rest) else x :: non_empty_lines(rest)
+  }
+}
+
+export func render_program(st: ProgramState) -> string {
+  let header = "module ${if trim(st.module_path) == "" then "tmp/compose_authoring" else trim(st.module_path)}";
+  let import_lines = render_imports(st.imports);
+  let type_alias_lines = non_empty_lines(st.type_aliases);
+  let type_def_lines = non_empty_lines(st.type_defs);
+  let func_lines = render_funcs(st.funcs);
+  let sections = [header] ++ import_lines ++ type_alias_lines ++ type_def_lines ++ func_lines;
+  "${join_with(non_empty_lines(sections), "\n\n")}\n"
+}

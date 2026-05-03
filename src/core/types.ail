@@ -1,0 +1,157 @@
+module src/core/types
+
+import std/option (Option)
+import src/core/tool_contract (ToolCallEnvelope)
+
+export func version() -> string = "0.2.0"
+
+export type Msg = { role: string, content: string }
+
+export type ExecResult = {
+  stdout:    string,
+  stderr:    string,
+  exit_code: int
+}
+
+export type AilangExecResult = {
+  stdout:       string,
+  stderr:       string,
+  exit_code:    int,
+  check_passed: bool,
+  check_errors: string
+}
+
+export type AgentState = {
+  env_url: string,
+  msgs:    [Msg],
+  cwd:     string,
+  step:    int,
+  inbox:   [string]
+}
+
+export type StepOutcome
+  = Continue(AgentState)
+  | Done(string)
+  | LimitReached
+  | ParseFailed(string)
+  | Aborted
+
+export type ToolBackend = Native | Delegated
+  deriving (Eq)
+
+export type ProcessExecReq = {
+  cmd:               string,
+  args:              [string],
+  cwd:               Option[string],
+  streaming:         bool,
+  needs_stderr_live: bool,
+  needs_hard_cancel: bool
+}
+
+export type EditOp = {
+  old:         string,
+  new:         string,
+  replace_all: bool
+}
+  deriving (Eq)
+
+export type ToolCallReq
+  = ReadFile({ id: string, path: string, start: int, end: int })
+  | Search({ id: string, pattern: string, dir: string, context: int })
+  | WriteFile({ id: string, path: string, content: string })
+  | EditFile({
+      id:              string,
+      path:            string,
+      edits:           [EditOp],
+      dry_run:         bool,
+      expected_sha256: string
+    })
+  | BashExec({ id: string, exec: ProcessExecReq })
+  | RunTests({ id: string, exec: ProcessExecReq })
+  deriving (Eq)
+
+export type ToolResultMeta = {
+  truncated:          bool,
+  stdout_bytes:       int,
+  stdout_total_bytes: int,
+  stderr_bytes:       int,
+  stderr_total_bytes: int,
+  stdout_sha256:      string,
+  stderr_sha256:      string
+}
+
+export type SearchMatch = {
+  path:        string,
+  line_number: int,
+  line_text:   string,
+  context:     [string]
+}
+
+export type TestFailure = { test: string, message: string }
+
+export type ToolResultItem
+  = ReadFileResult({
+      id:         string,
+      path:       string,
+      content:    string,
+      line_count: int,
+      truncated:  bool,
+      sha256:     string
+    })
+  | SearchResult({
+      id:      string,
+      pattern: string,
+      matches: [SearchMatch]
+    })
+  | WriteFileResult({
+      id:            string,
+      path:          string,
+      bytes_written: int,
+      sha256:        string,
+      diff:          string
+    })
+  | EditFileResult({
+      id:                 string,
+      path:               string,
+      bytes_written:      int,
+      sha256:             string,
+      diff:               string,
+      first_changed_line: int,
+      applied_edits:      int,
+      dry_run:            bool,
+      match_strategy:     string
+    })
+  | BashExecResult({
+      id:        string,
+      cmd:       string,
+      stdout:    string,
+      stderr:    string,
+      exit_code: int,
+      meta:      ToolResultMeta
+    })
+  | RunTestsResult({
+      id:        string,
+      cmd:       string,
+      stdout:    string,
+      stderr:    string,
+      exit_code: int,
+      passed:    int,
+      failed:    int,
+      failures:  [TestFailure],
+      meta:      ToolResultMeta
+    })
+  | ToolErrorResult({
+      id:      string,
+      tool:    string,
+      message: string
+    })
+  deriving (Eq)
+
+export type ToolParseStatus
+  = NoToolCalls
+  | ParsedToolCalls({ calls: [ToolCallEnvelope], warnings: [string] })
+  | ToolParseError(string)
+
+export type ToolResultParseStatus
+  = ParsedToolResults([ToolResultItem])
+  | ToolResultParseError(string)

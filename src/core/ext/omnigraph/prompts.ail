@@ -1,0 +1,19 @@
+module src/core/ext/omnigraph/prompts
+
+import std/fs (fileExists, readFile)
+import pkg/sunholo/motoko_core/ext/types (PromptPatch)
+
+export func load_agent_prompt(cwd: string) -> string ! {FS} {
+  let legacy_path = "${cwd}/omnigraph/AGENT_PROMPT.md";
+  let pkg_path = "${cwd}/src/core/ext/omnigraph/AGENT.md";
+  let packaged_workspace_path = "${cwd}/.packages/motoko_omnigraph/AGENT.md";
+  if fileExists(legacy_path) then readFile(legacy_path)
+  else if fileExists(pkg_path) then readFile(pkg_path)
+  else if fileExists(packaged_workspace_path) then readFile(packaged_workspace_path)
+  else ""
+}
+
+export func build_prompt_patch(cached_prompt: string) -> PromptPatch {
+  if cached_prompt == "" then { prepend: [], append: [] }
+  else { prepend: [], append: [cached_prompt] }
+}

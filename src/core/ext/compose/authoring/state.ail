@@ -1,0 +1,110 @@
+module src/core/ext/compose/authoring/state
+
+import std/string (trim)
+
+export type ImportDecl = {
+  module_name: string,
+  symbols: [string],
+  alias: string
+}
+
+export type FuncDecl = {
+  name: string,
+  params_sig: string,
+  return_type: string,
+  effects: [string],
+  body: string,
+  is_pure: bool,
+  is_export: bool
+}
+
+export type ProgramState = {
+  module_path: string,
+  imports: [ImportDecl],
+  type_aliases: [string],
+  type_defs: [string],
+  funcs: [FuncDecl]
+}
+
+export func init_program_state() -> ProgramState {
+  {
+    module_path: "tmp/compose_authoring",
+    imports: [],
+    type_aliases: [],
+    type_defs: [],
+    funcs: []
+  }
+}
+
+func str_eq(a: string, b: string) -> bool {
+  trim(a) == trim(b)
+}
+
+func list_contains(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if str_eq(x, target) then true else list_contains(rest, target)
+  }
+}
+
+func unique_append(xs: [string], ys: [string]) -> [string] {
+  match ys {
+    [] => xs,
+    y :: rest => {
+      let next = if list_contains(xs, y) then xs else xs ++ [trim(y)];
+      unique_append(next, rest)
+    }
+  }
+}
+
+func same_import(a: ImportDecl, b: ImportDecl) -> bool {
+  str_eq(a.module_name, b.module_name) && str_eq(a.alias, b.alias)
+}
+
+func upsert_import_rec(existing: [ImportDecl], next: ImportDecl) -> [ImportDecl] {
+  match existing {
+    [] => [next],
+    x :: rest => {
+      if same_import(x, next) then {
+        let merged = {
+          module_name: x.module_name,
+          symbols: unique_append(x.symbols, next.symbols),
+          alias: x.alias
+        };
+        merged :: rest
+      } else x :: upsert_import_rec(rest, next)
+    }
+  }
+}
+
+export func set_module_path(st: ProgramState, path: string) -> ProgramState {
+  { module_path: trim(path), imports: st.imports, type_aliases: st.type_aliases, type_defs: st.type_defs, funcs: st.funcs }
+}
+
+export func add_import_decl(st: ProgramState, module_name: string, symbols: [string], alias: string) -> ProgramState {
+  let imp = { module_name: trim(module_name), symbols: symbols, alias: trim(alias) };
+  { module_path: st.module_path, imports: upsert_import_rec(st.imports, imp), type_aliases: st.type_aliases, type_defs: st.type_defs, funcs: st.funcs }
+}
+
+func upsert_func_rec(existing: [FuncDecl], next: FuncDecl) -> [FuncDecl] {
+  match existing {
+    [] => [next],
+    x :: rest => if str_eq(x.name, next.name) then next :: rest else x :: upsert_func_rec(rest, next)
+  }
+}
+
+export func upsert_func(st: ProgramState, f: FuncDecl) -> ProgramState {
+  { module_path: st.module_path, imports: st.imports, type_aliases: st.type_aliases, type_defs: st.type_defs, funcs: upsert_func_rec(st.funcs, f) }
+}
+
+func add_unique_line(lines: [string], line: string) -> [string] {
+  if list_contains(lines, line) then lines else lines ++ [line]
+}
+
+export func add_type_alias_line(st: ProgramState, line: string) -> ProgramState {
+  { module_path: st.module_path, imports: st.imports, type_aliases: add_unique_line(st.type_aliases, trim(line)), type_defs: st.type_defs, funcs: st.funcs }
+}
+
+export func add_type_def_line(st: ProgramState, line: string) -> ProgramState {
+  { module_path: st.module_path, imports: st.imports, type_aliases: st.type_aliases, type_defs: add_unique_line(st.type_defs, trim(line)), funcs: st.funcs }
+}

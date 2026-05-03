@@ -1,0 +1,17 @@
+module src/core/context_usage_test
+
+import src/core/context_usage (estimate_tokens)
+
+func sum_of_two(a: string, b: string) -> int
+  tests [
+    (("abcd", "efgh"),   2),
+    (("abcde", "fghij"), 3),
+    (("hello", ""),      2)
+  ]
+  {
+    let msgs = [
+      { role: "user", content: a },
+      { role: "assistant", content: b }
+    ];
+    estimate_tokens(msgs, "")
+  }

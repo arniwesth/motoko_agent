@@ -1,0 +1,15 @@
+-- core/version.ail
+--
+-- Thin entry point that prints the brain version.
+-- Called by the TUI at startup to populate the banner.
+--
+-- Usage: ailang run --entry print_version --caps IO core/version.ail
+
+module src/core/version
+
+import std/io (println)
+import src/core/types as T
+
+export func print_version() -> () ! {IO} {
+  println(T.version())
+}

@@ -1,0 +1,368 @@
+graph LR
+  %% Motoko Decision Graph — hierarchical left-to-right layout
+  ROOT("🏠 Motoko{br}Decision Graph{br}201 decisions")
+  D0["Core Architecture"]
+  ROOT --> D0
+  N0["✓ Yolo Mode — No Confirm/Reject/Human Flow"]
+  D0 --> N0
+  N1["✓ Option D Model Selection via call_with(SharedMem)"]
+  D0 --> N1
+  N2["✓ Three-Process Architecture (TUI ↔ AILANG Brain ↔ Env..."]
+  D0 --> N2
+  N3["✓ JSONL Protocol for Inter-Process Communication"]
+  D0 --> N3
+  N4["+4 more"]
+  D0 -.-> N4
+  D1["Rebase Forward"]
+  ROOT --> D1
+  N5["✓ Rebase-Forward Discipline (Not Cherry-Pick)"]
+  D1 --> N5
+  N6["✓ _motoko File Naming Convention"]
+  D1 --> N6
+  N7["✓ Fenced Edit Five-Line Limit and Shape Constraints"]
+  D1 --> N7
+  N8["✓ std/ai_motoko Coexists with Upstream std/ai"]
+  D1 --> N8
+  N9["+9 more"]
+  D1 -.-> N9
+  D2["DST Harness"]
+  ROOT --> D2
+  N10["✓ CI Regression Harness Purpose (Not GRPO, v2)"]
+  D2 --> N10
+  N11["✓ Import-Shim Approach (No AILANG Runtime Patches)"]
+  D2 --> N11
+  N12["✓ Scripted State Machine Mock LLM (v1)"]
+  D2 --> N12
+  N13["✓ Tier 1 Canned Environment Mock"]
+  D2 --> N13
+  N14["+6 more"]
+  D2 -.-> N14
+  D3["TUI Rendering"]
+  ROOT --> D3
+  S15["Streaming"]
+  D3 --> S15
+  N16["✓ Colored Real-Time Thinking Trace Rendering"]
+  S15 --> N16
+  N17["✓ Magenta think Label with Dim Metadata in Headers"]
+  S15 --> N17
+  N18["✓ stripThinkTags Helper for XML Tag Removal"]
+  S15 --> N18
+  N19["✓ Color Rendering for Streamed JSON Blocks"]
+  S15 --> N19
+  N20["+7 more"]
+  S15 -.-> N20
+  S21["Tool UX"]
+  D3 --> S21
+  N22["✓ Two-Layer Rendering with Single Tool Execution Timeline"]
+  S21 --> N22
+  N23["✓ Canonical Identity Keys for Tool Deduplication"]
+  S21 --> N23
+  N24["✓ 128 KiB Stream Cap with 64 KiB Parser Window"]
+  S21 --> N24
+  N25["✓ Hybrid-Only Tool Rendering Model with Renderer Archi..."]
+  S21 --> N25
+  N26["+9 more"]
+  S21 -.-> N26
+  S27["State"]
+  D3 --> S27
+  N28["○ Local Token Estimate via chars÷4 (Not Provider-Repor..."]
+  S27 --> N28
+  N29["○ Per-Model Context Window Limits in Runtime"]
+  S27 --> N29
+  N30["○ Color Escalation at 75% and 90% Thresholds"]
+  S27 --> N30
+  N31["✓ JSONL Session Logging to logfile/ Directory"]
+  S27 --> N31
+  N32["+10 more"]
+  S27 -.-> N32
+  D4["Extension System"]
+  ROOT --> D4
+  S33["Substrate"]
+  D4 --> S33
+  N34["○ First-Class Extension System for Core with Hook Disp..."]
+  S33 --> N34
+  N35["○ Kernel-Enforced Hard Limits Non-Overridable"]
+  S33 --> N35
+  N36["○ Separate Pure and Effectful Hook Registries"]
+  S33 --> N36
+  N37["○ Env-Driven Extension Configuration (Phase 1)"]
+  S33 --> N37
+  N38["+1 more"]
+  S33 -.-> N38
+  S39["Disentangle"]
+  D4 --> S39
+  N40["✓ Generic Tool Contract in Core: ToolCallEnvelope and ..."]
+  S39 --> N40
+  N41["✓ Defer Descriptor/Data-Driven Registration to Follow-..."]
+  S39 --> N41
+  N42["✓ Eight-Phase Migration with Dual-Path Compatibility W..."]
+  S39 --> N42
+  S43["Packageize"]
+  D4 --> S43
+  N44["✓ Replace PureExt/EffectExt ADTs with ExtensionHooks R..."]
+  S43 --> N44
+  N45["✓ Each Extension Exports register() - ExtensionHooks"]
+  S43 --> N45
+  N46["✓ Fold Over ExtensionHooks List Instead of Per-Extensi..."]
+  S43 --> N46
+  N47["✓ TestDummy Telemetry Moved from Hook Body to Dispatch..."]
+  S43 --> N47
+  N48["+1 more"]
+  S43 -.-> N48
+  D5["Compose"]
+  ROOT --> D5
+  S49["Extraction"]
+  D5 --> S49
+  N50["✓ Extension-First Compose Dispatch with Rollout Gate"]
+  S49 --> N50
+  N51["✓ Compose Mode Gating Moved to Extension on_tool_policy"]
+  S49 --> N51
+  N52["✓ Remove Compose Constructor from Core ToolCallReq ADT"]
+  S49 --> N52
+  N53["✓ Core Prompt Templates Remain Extension-Neutral"]
+  S49 --> N53
+  N54["+1 more"]
+  S49 -.-> N54
+  S55["Extension"]
+  D5 --> S55
+  N56["✓ Reshape X1 Substrate: Add on_tool_handle + on_respon..."]
+  S55 --> N56
+  N57["✓ Defensive Hook-Error Isolation with ext_error Events"]
+  S55 --> N57
+  N58["✓ Clean Cutover: Delete /compose HTTP Endpoint + TS SF..."]
+  S55 --> N58
+  N59["✓ Port Existing TS Tests as Golden Behavioral Tests"]
+  S55 --> N59
+  N60["+2 more"]
+  S55 -.-> N60
+  S61["SF Guard"]
+  D5 --> S61
+  N62["○ SF2: Effect-Set Evidence Witness Replaces Substring ..."]
+  S61 --> N62
+  N63["○ SF1: Certificate Template in Author Prompt"]
+  S61 --> N63
+  N64["○ SF3: Certificate Validator for expected_output.kind=..."]
+  S61 --> N64
+  N65["○ SF4: Citation-Binding Check (Every Premise Path Was ..."]
+  S61 --> N65
+  N66["+1 more"]
+  S61 -.-> N66
+  S67["Premise Tools"]
+  D5 --> S67
+  N68["✓ Read-Only Tool Whitelist for Compose Author Pass"]
+  S67 --> N68
+  N69["✓ tool_call Fence + JSON Protocol (Not Native Tool-Cal..."]
+  S67 --> N69
+  N70["✓ Premise Ledger Binding in SF3: Three-Field Grammar"]
+  S67 --> N70
+  N71["✓ SF2 Accepts Effectless Snippets with Ledger-Bound Pr..."]
+  S67 --> N71
+  D6["Tool Execution"]
+  ROOT --> D6
+  S72["Hybrid"]
+  D6 --> S72
+  N73["✓ Unified Tool Semantics with Two Execution Backends (..."]
+  S72 --> N73
+  N74["✓ Deterministic Backend Selection per Tool Call"]
+  S72 --> N74
+  N75["✓ Unified Result Model Regardless of Execution Backend"]
+  S72 --> N75
+  S76["Brain-Owned"]
+  D6 --> S76
+  N77["✓ Brain-Owned Tool Execution for Stronger AILANG Thesis"]
+  S76 --> N77
+  N78["✓ Mandatory Correlation IDs on Every Tool Call"]
+  S76 --> N78
+  N79["✓ Bounded Output with Explicit Truncation Metadata"]
+  S76 --> N79
+  N80["✓ Machine-Readable Tool Schema in System Prompt"]
+  S76 --> N80
+  S81["TUI Dispatch"]
+  D6 --> S81
+  N82["✓ One JSONL Round-Trip Per Step (Non-Negotiable)"]
+  S81 --> N82
+  N83["✓ Typed ADT Boundary: ToolCallReq as ADT Not String Di..."]
+  S81 --> N83
+  N84["✓ Net Effect Removed from rpc_loop"]
+  S81 --> N84
+  N85["✓ model_change Commands Survive Blocked read_tool_results"]
+  S81 --> N85
+  N86["+1 more"]
+  S81 -.-> N86
+  D7["Tool Authoring"]
+  ROOT --> D7
+  N87["✓ Option 2 Structured Tool-Call Authoring (Skeleton + ..."]
+  D7 --> N87
+  N88["✓ Dispatcher Owns AILANG Shape; Model Owns Content"]
+  D7 --> N88
+  N89["✓ Structured-Authoring Fallback After N Consecutive Fi..."]
+  D7 --> N89
+  N90["✓ Provider-Native Tool Calling as Structured Authoring..."]
+  D7 --> N90
+  D8["Tool Impl"]
+  ROOT --> D8
+  S91["Parse"]
+  D8 --> S91
+  N92["✓ Payload-Safe Think-Span Filtering (Not Global Stripp..."]
+  S91 --> N92
+  N93["✓ Quote-Aware Fence Scanner for Embedded Backticks"]
+  S91 --> N93
+  S94["EditFile"]
+  D8 --> S94
+  N95["✓ Strict Single-Match Default with Explicit replace_al..."]
+  S94 --> N95
+  N96["✓ Optimistic Hash Guard (expected_sha256) for Stalenes..."]
+  S94 --> N96
+  N97["✓ Atomic Write: Temp File + fsync + Rename"]
+  S94 --> N97
+  N98["✓ Ordered Edit Application Against Current Working Con..."]
+  S94 --> N98
+  S99["oh-my-pi"]
+  D8 --> S99
+  N100["✓ oh-my-pi File Tools via Delegated Channel (Path 3)"]
+  S99 --> N100
+  N101["✓ Phase 0: Migrate TypeScript Frontend from Node.js to..."]
+  S99 --> N101
+  N102["✓ Per-Model Edit Mode Defaults: Hashline for Frontier,..."]
+  S99 --> N102
+  D9["Integrations"]
+  ROOT --> D9
+  S103["MCP"]
+  D9 --> S103
+  N104["✓ Generic MCP Layer as Library (Not Registered Extension)"]
+  S103 --> N104
+  N105["✓ Node.js MCP Bridge Script via Shell Exec"]
+  S103 --> N105
+  N106["✓ Extract compress_output to motoko_core Shared Module"]
+  S103 --> N106
+  S107["ContextMode"]
+  D9 --> S107
+  N108["✓ Context-Mode as Shell Exec (Not HTTP Sidecar)"]
+  S107 --> N108
+  N109["✓ Lazy Session Snapshot Loaded on First Tool Call"]
+  S107 --> N109
+  N110["✓ Nine Context-Mode Tools Routed Through Extension"]
+  S107 --> N110
+  N111["✓ Prompt-Based Curl/Wget Blocking (Not Hard Enforcement)"]
+  S107 --> N111
+  N112["+1 more"]
+  S107 -.-> N112
+  S113["Exa"]
+  D9 --> S113
+  N114["✓ Thin Exa Extension Using Generic MCP Layer (Zero Pro..."]
+  S113 --> N114
+  N115["✓ Four Exa Tool Mappings: Search, DeepSearch, SearchCo..."]
+  S113 --> N115
+  S116["Omnigraph"]
+  D9 --> S116
+  N117["✓ CLI-Only Omnigraph Extension (No HTTP Server)"]
+  S116 --> N117
+  N118["✓ Main-Branch Write Guardrail in on_tool_policy"]
+  S116 --> N118
+  N119["✓ AGENT_PROMPT.md Injected via on_build_system_prompt"]
+  S116 --> N119
+  N120["✓ No Positional repo.omni URI in CLI Args (Pi Extensio..."]
+  S116 --> N120
+  N121["+1 more"]
+  S116 -.-> N121
+  D10["Self-Mod Brain"]
+  ROOT --> D10
+  S122["Hot Swap"]
+  D10 --> S122
+  N123["✓ Hot-Swap Brain Architecture with Conversation Contin..."]
+  S122 --> N123
+  N124["✓ Atomic Filesystem Swap via rename(2)"]
+  S122 --> N124
+  N125["✓ Mandatory End-to-End Smoke Test (smoke_main) Before ..."]
+  S122 --> N125
+  N126["✓ Transactional Swap with Watchdog Timer and Auto-Roll..."]
+  S122 --> N126
+  N127["+2 more"]
+  S122 -.-> N127
+  S128["Safe Cutover"]
+  D10 --> S128
+  N129["✓ Mandatory End-to-End Smoke Test (smoke_main) Before ..."]
+  S128 --> N129
+  N130["✓ Transactional Swap with Watchdog Timer and Auto-Roll..."]
+  S128 --> N130
+  N131["✓ Strict Path Allowlist for upgrade_ready"]
+  S128 --> N131
+  N132["✓ Isolated Candidate Validation in Canonical swe/ Root"]
+  S128 --> N132
+  D11["Verification"]
+  ROOT --> D11
+  S133["Tests"]
+  D11 --> S133
+  N134["✓ Three-Layer Test Strategy: Inline + Properties + Z3"]
+  S133 --> N134
+  N135["✓ Test Suite as Semantic Drift Signal for Self-Modific..."]
+  S133 --> N135
+  S136["Formal"]
+  D11 --> S136
+  N137["○ Dafny Tier 2: Verification-Aware Specs with Countere..."]
+  S136 --> N137
+  N138["○ Lean 4 Tier 3: Full Structural Induction (Research Bet)"]
+  S136 --> N138
+  N139["○ Cost Escalation Ladder: Cheapest Tier First"]
+  S136 --> N139
+  D12["Config & Runtime"]
+  ROOT --> D12
+  S140["Config"]
+  D12 --> S140
+  N141["✓ TOML-based config system with layered precedence"]
+  S140 --> N141
+  N142["○ JSON profile config with CLI arg overrides for headl..."]
+  S140 --> N142
+  S143["Error Recov"]
+  D12 --> S143
+  N144["○ TUI-layer retry on 429 with exponential backoff"]
+  S143 --> N144
+  N145["✓ Merged plan combining runtime Result ops with builti..."]
+  S143 --> N145
+  S146["Streaming"]
+  D12 --> S146
+  N147["○ Sanitize thinking traces from conversation history; ..."]
+  S146 --> N147
+  N148["○ Real-time LLM output streaming from runtime to TUI f..."]
+  S146 --> N148
+  S149["ML/Bench"]
+  D12 --> S149
+  N150["✓ Add low-cost, reliable experiment tracking for GRPO/..."]
+  S149 --> N150
+  N151["✓ Implement MLflow Tracking for GRPO/SFT Training"]
+  S149 --> N151
+  N152["✓ Prove GRPO improves Gemma 4 AILANG code generation u..."]
+  S149 --> N152
+  N153["✓ Add benchmark-level control for Gemma 4 thinking mod..."]
+  S149 --> N153
+  N154["+1 more"]
+  S149 -.-> N154
+  S155["Rebrand"]
+  D12 --> S155
+  N156["✓ Rename swe namespace to core"]
+  S155 --> N156
+  N157["✓ Backward-compatible SharedMem key migration"]
+  S155 --> N157
+  N158["✓ Rewrite SYSTEM.md and AGENTS.md for harness identity"]
+  S155 --> N158
+  N159["✓ Pre-flight inventory before mechanical migration"]
+  S155 --> N159
+  S160["Composition"]
+  D12 --> S160
+  N161["✓ AILANG as composition language for multi-step workflows"]
+  S160 --> N161
+  N162["✓ Effect-based capability control for AILANG snippets"]
+  S160 --> N162
+  N163["✓ Filesystem sandbox via AILANG_FS_SANDBOX env var"]
+  S160 --> N163
+  N164["✓ Type-check retry loop with targeted error feedback"]
+  S160 --> N164
+  N165["+5 more"]
+  S160 -.-> N165
+
+  classDef root fill:#000,stroke:#A6E22E,color:#A6E22E,font-weight:bold,font-size:16px
+  classDef domain fill:#000c18,stroke:#66D9EF,color:#66D9EF,font-weight:bold
+  classDef sub fill:#000c18,stroke:#8f8f8f,color:#A6E22E
+  classDef leaf fill:#000c18,stroke:#333,color:#ccc,font-size:10px
+  class ROOT root
+  class D0,D1,D2,D3,D4,D5,D6,D7,D8,D9,D10,D11,D12 domain

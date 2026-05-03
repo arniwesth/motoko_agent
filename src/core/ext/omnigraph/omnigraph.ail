@@ -1,0 +1,173 @@
+module src/core/ext/omnigraph/omnigraph
+
+import std/json (Json, encode, jo, kv, js)
+import std/option (Option, Some, None)
+import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
+import src/core/ext/types (ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
+import src/core/config (RuntimeConfig)
+import src/core/ext/omnigraph/exec (run_omnigraph)
+import src/core/ext/omnigraph/args (arg_string)
+import src/core/ext/omnigraph/guardrail (denied_mutation_reason)
+import src/core/ext/omnigraph/prompts (load_agent_prompt, build_prompt_patch)
+import src/core/ext/omnigraph/normalize (normalize_call)
+
+func cwd_for(ctx: ExtCtx) -> string {
+  "${ctx.cwd}/omnigraph"
+}
+
+func with_optional_arg(args: [string], flag: string, val: Option[string]) -> [string] {
+  match val {
+    Some(v) => args ++ [flag, v],
+    None => args
+  }
+}
+
+func arg_optional(args: Json, key: string) -> Option[string] {
+  let v = arg_string(args, key, "");
+  if v == "" then None else Some(v)
+}
+
+func handled_error(id: string, tool: string, message: string) -> ToolHandleDecision {
+  Handled({
+    tool_call_id: id,
+    tool: tool,
+    stdout: "",
+    stderr: message,
+    exit_code: 1,
+    metadata: jo([kv("json_metadata", js(encode(jo([kv("output", js(message))]))))])
+  })
+}
+
+export func provided_tools() -> [string] {
+  [
+    "OmnigraphRead",
+    "OmnigraphMutate",
+    "OmnigraphBranch",
+    "OmnigraphStatus",
+    "omnigraph_read",
+    "omnigraph_mutate",
+    "omnigraph_branch",
+    "omnigraph_status",
+    "omnigraph.query",
+    "omnigraph.mutate",
+    "omnigraph.branch",
+    "omnigraph.status",
+    "OmnigraphQuery",
+    "OmnigraphCreateBranch",
+    "list_branches",
+    "omnigraph_list_branches"
+  ]
+}
+
+func no_budget_patch() -> BudgetPatch {
+  {
+    requested_total: None,
+    requested_solver: None,
+    requested_verifier: None
+  }
+}
+
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  no_budget_patch()
+}
+
+func no_response_intercept() -> ResponseInterceptDecision {
+  NoIntercept
+}
+
+func no_finalize_decision() -> FinalizeDecision {
+  NoDecision
+}
+
+export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> PromptPatch {
+  build_prompt_patch(cached_prompt)
+}
+
+export func on_tool_policy(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  match normalize_call(call) {
+    Some(canonical) => match denied_mutation_reason(canonical) {
+      Some(msg) => Deny(msg),
+      None => NoOpinion
+    },
+    None => NoOpinion
+  }
+}
+
+func handle_branch(ctx: ExtCtx, req_id: string, args: Json) -> ToolHandleDecision ! {Process} {
+  let action = arg_string(args, "action", "");
+  let name = arg_optional(args, "name");
+  let from = arg_optional(args, "from");
+  let into = arg_optional(args, "into");
+  if action == "create" then {
+    match name {
+      None => handled_error(req_id, "OmnigraphBranch", "omnigraph_branch create requires name"),
+      Some(n) => {
+        let base = with_optional_arg(["branch", "create"], "--from", from);
+        Handled(run_omnigraph(req_id, "OmnigraphBranch", base ++ [n, "--json"], cwd_for(ctx), 30000))
+      }
+    }
+  } else if action == "list" then {
+    Handled(run_omnigraph(req_id, "OmnigraphBranch", ["branch", "list", "--json"], cwd_for(ctx), 30000))
+  } else if action == "merge" then {
+    match name {
+      None => handled_error(req_id, "OmnigraphBranch", "omnigraph_branch merge requires name (source branch)"),
+      Some(n) =>
+        match into {
+          None => handled_error(req_id, "OmnigraphBranch", "omnigraph_branch merge requires into (target branch)"),
+          Some(i) => Handled(run_omnigraph(req_id, "OmnigraphBranch", ["branch", "merge", n, "--into", i, "--json"], cwd_for(ctx), 30000))
+        }
+    }
+  } else if action == "delete" then {
+    match name {
+      None => handled_error(req_id, "OmnigraphBranch", "omnigraph_branch delete requires name"),
+      Some(n) => Handled(run_omnigraph(req_id, "OmnigraphBranch", ["branch", "delete", n, "--json"], cwd_for(ctx), 30000))
+    }
+  } else {
+    handled_error(req_id, "OmnigraphBranch", "Unknown omnigraph_branch action: ${action}. Valid actions: create, list, merge, delete")
+  }
+}
+
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process} {
+  match normalize_call(call) {
+    None => Delegate,
+    Some(canonical) => {
+      let args = canonical.arguments;
+      if canonical.tool == "OmnigraphRead" then {
+        let args0 = ["read", "--query", arg_string(args, "query_file", ""), "--name", arg_string(args, "name", "")];
+        let args1 = with_optional_arg(args0, "--params", arg_optional(args, "params"));
+        let args2 = with_optional_arg(args1, "--branch", arg_optional(args, "branch"));
+        Handled(run_omnigraph(canonical.id, "OmnigraphRead", args2 ++ ["--json"], cwd_for(ctx), 30000))
+      } else if canonical.tool == "OmnigraphMutate" then {
+        Handled(run_omnigraph(canonical.id, "OmnigraphMutate", ["change", "--query", arg_string(args, "query_file", ""), "--name", arg_string(args, "name", ""), "--params", arg_string(args, "params", "{}"), "--branch", arg_string(args, "branch", ""), "--json"], cwd_for(ctx), 30000))
+      } else if canonical.tool == "OmnigraphBranch" then {
+        handle_branch(ctx, canonical.id, canonical.arguments)
+      } else if canonical.tool == "OmnigraphStatus" then {
+        Handled(run_omnigraph(canonical.id, "OmnigraphStatus", ["snapshot", "--json"], cwd_for(ctx), 30000))
+      } else Delegate
+    }
+  }
+}
+
+export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks ! {FS} {
+  let workdir = runtime_cfg.agent.workdir;
+  let cached_prompt = load_agent_prompt(workdir);
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle(ctx, call)
+  };
+  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    no_response_intercept()
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    no_finalize_decision()
+  };
+  {
+    id: "omnigraph",
+    provided_tools: provided_tools(),
+    on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
+    on_budget_plan: budget_hook,
+    on_tool_policy: on_tool_policy,
+    on_tool_handle: handle,
+    on_response_intercept: intercept,
+    on_solver_candidate: finalize
+  }
+}

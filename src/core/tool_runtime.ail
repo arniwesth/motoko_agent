@@ -1,0 +1,846 @@
+module src/core/tool_runtime
+
+import std/option  (Option, Some, None)
+import std/result  (Result, Ok, Err)
+import std/string  (split, contains, trim, length, startsWith, substring, find)
+import std/list    (reverse)
+import std/json    (Json, jo, get, asString, asNumber, asBool, asArray)
+import std/fs      (readFile, writeFile, fileExists)
+import std/process (exec, ProcessError, ProcessOutput)
+import std/bytes   (toString)
+import std/crypto  (sha256Hex)
+import src/core/types   (ToolBackend, ProcessExecReq, ToolResultItem, ToolResultMeta, SearchMatch, TestFailure, EditOp)
+import src/core/tool_contract (ToolCallEnvelope)
+
+export pure func needs_delegation_for_process(req: ProcessExecReq) -> bool {
+  req.streaming
+    || req.needs_stderr_live
+    || req.needs_hard_cancel
+    || isSome(req.cwd)
+    || shell_tokens_in_process(req)
+}
+
+func isSome(opt: Option[string]) -> bool {
+  match opt {
+    Some(_) => true,
+    None => false
+  }
+}
+
+func has_shell_tokens(s: string) -> bool {
+  contains(s, "|")
+    || contains(s, ">")
+    || contains(s, "<")
+    || contains(s, "&&")
+    || contains(s, "||")
+    || contains(s, ";")
+    || contains(s, "$(")
+    || contains(s, "`")
+}
+
+func any_shell_tokens(xs: [string]) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if has_shell_tokens(x) then true else any_shell_tokens(rest)
+  }
+}
+
+func shell_tokens_in_process(req: ProcessExecReq) -> bool {
+  if req.cmd == "bash" || req.cmd == "sh" || req.cmd == "zsh" then true
+  else if contains(req.cmd, " ") then true
+  else has_shell_tokens(req.cmd) || any_shell_tokens(req.args)
+}
+
+func arg_json(args: Json, key: string) -> Json {
+  match get(args, key) {
+    Some(v) => v,
+    None => jo([])
+  }
+}
+
+func arg_string(args: Json, key: string, fallback: string) -> string {
+  match get(args, key) {
+    Some(j) => match asString(j) { Some(v) => v, None => fallback },
+    None => fallback
+  }
+}
+
+func arg_number(args: Json, key: string, fallback: int) -> int {
+  match get(args, key) {
+    Some(j) => match asNumber(j) { Some(v) => _float_to_int(v), None => fallback },
+    None => fallback
+  }
+}
+
+func arg_bool(args: Json, key: string, fallback: bool) -> bool {
+  match get(args, key) {
+    Some(j) => match asBool(j) { Some(v) => v, None => fallback },
+    None => fallback
+  }
+}
+
+func arg_string_list(args: Json, key: string) -> [string] {
+  match get(args, key) {
+    Some(j) =>
+      match asArray(j) {
+        Some(xs) => arg_string_list_rec(xs),
+        None => []
+      },
+    None => []
+  }
+}
+
+func arg_string_list_rec(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      match asString(x) {
+        Some(v) => v :: arg_string_list_rec(rest),
+        None => arg_string_list_rec(rest)
+      }
+  }
+}
+
+func parse_exec_from_args(args: Json) -> ProcessExecReq {
+  let cwd_opt = match get(args, "cwd") {
+    Some(j) => match asString(j) {
+      Some(v) => if v == "" then None else Some(v),
+      None => None
+    },
+    None => None
+  };
+  {
+    cmd: arg_string(args, "cmd", ""),
+    args: arg_string_list(args, "args"),
+    cwd: cwd_opt,
+    streaming: arg_bool(args, "streaming", false),
+    needs_stderr_live: arg_bool(args, "needs_stderr_live", false),
+    needs_hard_cancel: arg_bool(args, "needs_hard_cancel", false)
+  }
+}
+
+func parse_edit_ops(value: Json) -> [EditOp] {
+  match asArray(value) {
+    None => [],
+    Some(xs) => parse_edit_ops_rec(xs)
+  }
+}
+
+func parse_edit_ops_rec(xs: [Json]) -> [EditOp] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({
+        old: arg_string(x, "old", ""),
+        new: arg_string(x, "new", ""),
+        replace_all: arg_bool(x, "replace_all", false)
+      }) :: parse_edit_ops_rec(rest)
+  }
+}
+
+export pure func backend_for(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBackend {
+  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" then
+    if ohmy_pi then Delegated else Native
+  else if call.tool == "BashExec" || call.tool == "RunTests" then
+    if needs_delegation_for_process(parse_exec_from_args(call.arguments)) then Delegated else Native
+  else Native
+}
+
+export func run_native_batch(calls: [ToolCallEnvelope], workdir: string) -> [ToolResultItem] ! {FS, Process} {
+  run_native_batch_rec(calls, [], workdir)
+}
+
+func run_native_batch_rec(calls: [ToolCallEnvelope], read_paths: [string], workdir: string) -> [ToolResultItem] ! {FS, Process} {
+  match calls {
+    [] => [],
+    call :: rest => {
+      let result = run_native_call(call, read_paths, workdir);
+      let next_read_paths = append_read_path_if_success(call, result, read_paths);
+      result :: run_native_batch_rec(rest, next_read_paths, workdir)
+    }
+  }
+}
+
+func append_read_path_if_success(call: ToolCallEnvelope, result: ToolResultItem, read_paths: [string]) -> [string] {
+  if call.tool == "ReadFile" then
+    match result {
+      ReadFileResult(_) => normalize_relative_path(arg_string(call.arguments, "path", "")) :: read_paths,
+      _ => read_paths
+    }
+  else read_paths
+}
+
+func run_native_call(call: ToolCallEnvelope, read_paths: [string], workdir: string) -> ToolResultItem ! {FS, Process} {
+  let args = call.arguments;
+  if call.tool == "ReadFile" then
+    run_read_file(call.id, arg_string(args, "path", ""), arg_number(args, "start", 1), arg_number(args, "end", 200), workdir)
+  else if call.tool == "Search" then
+    run_search(call.id, arg_string(args, "pattern", ""), arg_string(args, "dir", "."))
+  else if call.tool == "WriteFile" then
+    run_write_file(call.id, arg_string(args, "path", ""), arg_string(args, "content", ""), workdir)
+  else if call.tool == "EditFile" then
+    run_edit_file(call.id, arg_string(args, "path", ""), parse_edit_ops(arg_json(args, "edits")), arg_bool(args, "dry_run", false), arg_string(args, "expected_sha256", ""), read_paths, workdir)
+  else if call.tool == "BashExec" then
+    run_process_result("BashExec", call.id, parse_exec_from_args(args))
+  else if call.tool == "RunTests" then
+    run_process_result("RunTests", call.id, parse_exec_from_args(args))
+  else
+    ToolErrorResult({ id: call.id, tool: call.tool, message: "${call.tool} requires extension capability and is not available in native runtime" })
+}
+
+func mk_meta(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta {
+  {
+    truncated: truncated,
+    stdout_bytes: length(stdout),
+    stdout_total_bytes: length(stdout),
+    stderr_bytes: length(stderr),
+    stderr_total_bytes: length(stderr),
+    stdout_sha256: sha256Hex(stdout),
+    stderr_sha256: sha256Hex(stderr)
+  }
+}
+
+func normalize_range(start: int, end: int) -> { start: int, end: int } {
+  let s = if start <= 0 then 1 else start;
+  let e = if end < s then s else end;
+  { start: s, end: e }
+}
+
+func line_count_of(content: string) -> int {
+  if content == "" then 0 else list_len(split(content, "\n"))
+}
+
+func select_lines(lines: [string], idx: int, start: int, end: int) -> [string] {
+  match lines {
+    [] => [],
+    line :: rest =>
+      if idx < start then select_lines(rest, idx + 1, start, end)
+      else if idx > end then []
+      else line :: select_lines(rest, idx + 1, start, end)
+  }
+}
+
+func join_lines(lines: [string]) -> string {
+  match lines {
+    [] => "",
+    line :: [] => line,
+    line :: rest => "${line}\n${join_lines(rest)}"
+  }
+}
+
+func list_len[a](xs: [a]) -> int {
+  match xs {
+    [] => 0,
+    _ :: rest => 1 + list_len(rest)
+  }
+}
+
+func list_contains(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == needle then true else list_contains(rest, needle)
+  }
+}
+
+func normalize_relative_path(path: string) -> string {
+  let parts = split(path, "/");
+  let norm_parts = normalize_relative_path_parts(parts);
+  match norm_parts {
+    [] => ".",
+    _ => join_with_slash(norm_parts)
+  }
+}
+
+func normalize_relative_path_parts(parts: [string]) -> [string] {
+  match parts {
+    [] => [],
+    p :: rest =>
+      if p == "" || p == "." then normalize_relative_path_parts(rest)
+      else p :: normalize_relative_path_parts(rest)
+  }
+}
+
+func join_with_slash(parts: [string]) -> string {
+  match parts {
+    [] => "",
+    p :: [] => p,
+    p :: rest => "${p}/${join_with_slash(rest)}"
+  }
+}
+
+func has_parent_traversal_segment(path: string) -> bool {
+  has_parent_traversal_segment_rec(split(path, "/"))
+}
+
+func has_parent_traversal_segment_rec(parts: [string]) -> bool {
+  match parts {
+    [] => false,
+    p :: rest => if p == ".." then true else has_parent_traversal_segment_rec(rest)
+  }
+}
+
+func is_absolute_path(path: string) -> bool {
+  startsWith(path, "/")
+}
+
+func path_error(id: string, tool: string, message: string) -> ToolResultItem {
+  ToolErrorResult({ id: id, tool: tool, message: message })
+}
+
+func validate_path_common(tool: string, id: string, path: string, workdir: string) -> Result[(), ToolResultItem] ! {Process} {
+  if path == "" then Err(path_error(id, tool, "missing path"))
+  else if is_absolute_path(path) then Err(path_error(id, tool, "absolute paths are not allowed: ${path}"))
+  else if has_parent_traversal_segment(path) then Err(path_error(id, tool, "path traversal is not allowed: ${path}"))
+  else {
+    let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
+    match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, path]) {
+      Ok(_) => Ok(()),
+      Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+    }
+  }
+}
+
+func run_read_file(id: string, path: string, start: int, end: int, workdir: string) -> ToolResultItem ! {FS, Process} {
+  match validate_path_common("ReadFile", id, path, workdir) {
+    Err(e) => e,
+    Ok(_) =>
+      if not fileExists(path) then
+        ToolErrorResult({ id: id, tool: "ReadFile", message: "path does not exist: ${path}" })
+      else {
+        let content = readFile(path);
+        let lines = split(content, "\n");
+        let total = line_count_of(content);
+        let r = normalize_range(start, end);
+        let selected = select_lines(lines, 1, r.start, r.end);
+        let shown = join_lines(selected);
+        ReadFileResult({
+          id: id,
+          path: path,
+          content: shown,
+          line_count: total,
+          truncated: total > list_len(selected),
+          sha256: sha256Hex(content)
+        })
+      }
+  }
+}
+
+func parse_line_number(s: string) -> int {
+  match _stringToInt(trim(s)) {
+    Some(n) => n,
+    None => 0
+  }
+}
+
+func join_with_colon(parts: [string]) -> string {
+  match parts {
+    [] => "",
+    p :: [] => p,
+    p :: rest => "${p}:${join_with_colon(rest)}"
+  }
+}
+
+func parse_search_lines(lines: [string]) -> [SearchMatch] {
+  match lines {
+    [] => [],
+    line :: rest =>
+      if trim(line) == "" then parse_search_lines(rest)
+      else {
+        let segs = split(line, ":");
+        match segs {
+          path :: ln :: text_parts => {
+            let item = {
+              path: path,
+              line_number: parse_line_number(ln),
+              line_text: join_with_colon(text_parts),
+              context: []
+            };
+            item :: parse_search_lines(rest)
+          },
+          _ => parse_search_lines(rest)
+        }
+      }
+  }
+}
+
+func run_search(id: string, pattern: string, dir: string) -> ToolResultItem ! {Process} {
+  if pattern == "" then
+    ToolErrorResult({ id: id, tool: "Search", message: "missing pattern" })
+  else {
+    let target = if dir == "" then "." else dir;
+    match exec("rg", ["-n", "--no-heading", "--color", "never", pattern, target]) {
+      Err(err) =>
+        ToolErrorResult({ id: id, tool: "Search", message: process_error_to_string(err) }),
+      Ok(out) => {
+        let stdout = toString(out.stdout);
+        let matches = parse_search_lines(split(stdout, "\n"));
+        SearchResult({ id: id, pattern: pattern, matches: matches })
+      }
+    }
+  }
+}
+
+func non_empty_lines(content: string) -> [string] {
+  if content == "" then [] else split(content, "\n")
+}
+
+func prefix_lines(lines: [string], prefix: string) -> [string] {
+  match lines {
+    [] => [],
+    line :: rest => ("${prefix}${line}") :: prefix_lines(rest, prefix)
+  }
+}
+
+func render_hunk_range(line_count: int) -> string {
+  if line_count <= 0 then "0,0" else "1,${show(line_count)}"
+}
+
+func build_write_file_diff(path: string, before: string, after: string, existed_before: bool) -> string {
+  if before == after then ""
+  else {
+    let before_lines = non_empty_lines(before);
+    let after_lines = non_empty_lines(after);
+    let before_count = list_len(before_lines);
+    let after_count = list_len(after_lines);
+    let old_header = if existed_before then "--- a/${path}" else "--- /dev/null";
+    let new_header = "+++ b/${path}";
+    let hunk = "@@ -${render_hunk_range(before_count)} +${render_hunk_range(after_count)} @@";
+    join_lines([old_header, new_header, hunk] ++ prefix_lines(before_lines, "-") ++ prefix_lines(after_lines, "+"))
+  }
+}
+
+func drop_n[a](xs: [a], n: int) -> [a] {
+  if n <= 0 then xs
+  else
+    match xs {
+      [] => [],
+      _ :: rest => drop_n(rest, n - 1)
+    }
+}
+
+func common_prefix_len_lines(a: [string], b: [string]) -> int {
+  match a {
+    [] => 0,
+    x :: a_rest =>
+      match b {
+        [] => 0,
+        y :: b_rest => if x == y then 1 + common_prefix_len_lines(a_rest, b_rest) else 0
+      }
+  }
+}
+
+func trim_suffix_n[a](xs: [a], n: int) -> [a] {
+  if n <= 0 then xs
+  else reverse(drop_n(reverse(xs), n))
+}
+
+func render_hunk_range_at(start: int, line_count: int) -> string {
+  "${show(start)},${show(line_count)}"
+}
+
+func build_edit_file_diff(path: string, before: string, after: string, existed_before: bool) -> string {
+  if before == after then ""
+  else {
+    let before_lines = non_empty_lines(before);
+    let after_lines = non_empty_lines(after);
+    let prefix_len = common_prefix_len_lines(before_lines, after_lines);
+    let before_rest = drop_n(before_lines, prefix_len);
+    let after_rest = drop_n(after_lines, prefix_len);
+    let suffix_len = common_prefix_len_lines(reverse(before_rest), reverse(after_rest));
+    let before_mid = trim_suffix_n(before_rest, suffix_len);
+    let after_mid = trim_suffix_n(after_rest, suffix_len);
+    let old_start = prefix_len + 1;
+    let new_start = prefix_len + 1;
+    let old_header = if existed_before then "--- a/${path}" else "--- /dev/null";
+    let new_header = "+++ b/${path}";
+    let hunk = "@@ -${render_hunk_range_at(old_start, list_len(before_mid))} +${render_hunk_range_at(new_start, list_len(after_mid))} @@";
+    join_lines([old_header, new_header, hunk] ++ prefix_lines(before_mid, "-") ++ prefix_lines(after_mid, "+"))
+  }
+}
+
+func run_write_file(id: string, path: string, content: string, workdir: string) -> ToolResultItem ! {FS, Process} {
+  match validate_path_common("WriteFile", id, path, workdir) {
+    Err(e) => e,
+    Ok(_) => {
+      let existed_before = fileExists(path);
+      let before = if existed_before then readFile(path) else "";
+      let _ = writeFile(path, content);
+      WriteFileResult({
+        id: id,
+        path: path,
+        bytes_written: length(content),
+        sha256: sha256Hex(content),
+        diff: build_write_file_diff(path, before, content, existed_before)
+      })
+    }
+  }
+}
+
+func path_dirname(path: string) -> string {
+  let parts = split(path, "/");
+  path_dirname_rec(parts, "")
+}
+
+func path_dirname_rec(parts: [string], acc: string) -> string {
+  match parts {
+    [] => ".",
+    _ :: [] => if acc == "" then "." else acc,
+    p :: rest => {
+      let next = if acc == "" then p else "${acc}/${p}";
+      path_dirname_rec(rest, next)
+    }
+  }
+}
+
+func find_from(hay: string, needle: string, offset: int) -> int {
+  let sub = substring(hay, offset, length(hay));
+  let idx = find(sub, needle);
+  if idx == -1 then -1 else idx + offset
+}
+
+func count_occurrences(text: string, needle: string, pos: int) -> int {
+  let idx = find_from(text, needle, pos);
+  if idx == -1 then 0
+  else 1 + count_occurrences(text, needle, idx + length(needle))
+}
+
+func replace_all_occurrences(text: string, old: string, new: string, pos: int, acc: string) -> string {
+  let idx = find_from(text, old, pos);
+  if idx == -1 then "${acc}${substring(text, pos, length(text))}"
+  else {
+    let prefix = substring(text, pos, idx);
+    let next_pos = idx + length(old);
+    replace_all_occurrences(text, old, new, next_pos, "${acc}${prefix}${new}")
+  }
+}
+
+func replace_once(text: string, old: string, new: string) -> string {
+  let idx = find(text, old);
+  if idx == -1 then text
+  else "${substring(text, 0, idx)}${new}${substring(text, idx + length(old), length(text))}"
+}
+
+func first_changed_line(before: string, after: string) -> int {
+  if before == after then 0
+  else first_changed_line_rec(split(before, "\n"), split(after, "\n"), 1)
+}
+
+func first_changed_line_rec(before_lines: [string], after_lines: [string], line_no: int) -> int {
+  match before_lines {
+    [] =>
+      match after_lines {
+        [] => line_no,
+        _ => line_no
+      },
+    b :: b_rest =>
+      match after_lines {
+        [] => line_no,
+        a :: a_rest =>
+          if a == b then first_changed_line_rec(b_rest, a_rest, line_no + 1)
+          else line_no
+      }
+  }
+}
+
+func apply_edits(text: string, edits: [EditOp], idx: int) -> Result[{ content: string, applied: int }, string] {
+  match edits {
+    [] => Ok({ content: text, applied: idx - 1 }),
+    e :: rest =>
+      if e.old == "" then Err("edit #${show(idx)} old must be non-empty")
+      else {
+        let matches = count_occurrences(text, e.old, 0);
+        if matches == 0 then Err("edit #${show(idx)} matched 0 occurrences")
+        else if not e.replace_all && matches > 1 then Err("edit #${show(idx)} matched multiple occurrences; set replace_all=true")
+        else {
+          let next_text =
+            if e.replace_all
+            then replace_all_occurrences(text, e.old, e.new, 0, "")
+            else replace_once(text, e.old, e.new);
+          apply_edits(next_text, rest, idx + 1)
+        }
+      }
+  }
+}
+
+func acquire_temp_path(path: string) -> Result[string, string] ! {Process} {
+  let dir = path_dirname(path);
+  let script = "set -eu\nmktemp \"$1/.motoko-edit.XXXXXX\"\n";
+  match exec("bash", ["-lc", script, "motoko-mktemp", dir]) {
+    Err(err) => Err("failed to create temp file: ${process_error_to_string(err)}"),
+    Ok(out) => {
+      let tmp = trim(toString(out.stdout));
+      if tmp == "" then Err("failed to create temp file")
+      else Ok(tmp)
+    }
+  }
+}
+
+func atomic_write(path: string, content: string) -> Result[(), string] ! {FS, Process} {
+  match acquire_temp_path(path) {
+    Err(msg) => Err(msg),
+    Ok(tmp) => {
+      let _ = writeFile(tmp, content);
+      let chmod_result =
+        if fileExists(path) then
+          match exec("chmod", ["--reference", path, tmp]) {
+            Ok(_) => Ok(()),
+            Err(err) => Err("failed to preserve mode bits: ${process_error_to_string(err)}")
+          }
+        else Ok(());
+      match chmod_result {
+        Err(msg) => {
+          let _ = exec("rm", ["-f", tmp]);
+          Err(msg)
+        },
+        Ok(_) =>
+          match exec("mv", ["-f", tmp, path]) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+              let _ = exec("rm", ["-f", tmp]);
+              Err("atomic rename failed: ${process_error_to_string(err)}")
+            }
+          }
+      }
+    }
+  }
+}
+
+func run_edit_file(
+  id: string,
+  path: string,
+  edits: [EditOp],
+  dry_run: bool,
+  expected_sha256: string,
+  read_paths: [string],
+  workdir: string
+) -> ToolResultItem ! {FS, Process} {
+  match validate_path_common("EditFile", id, path, workdir) {
+    Err(e) => e,
+    Ok(_) =>
+      if not list_contains(read_paths, normalize_relative_path(path)) then
+        ToolErrorResult({ id: id, tool: "EditFile", message: "read-before-edit policy violation: call ReadFile for this path before EditFile in the same tool batch" })
+      else if not fileExists(path) then
+        ToolErrorResult({ id: id, tool: "EditFile", message: "path does not exist: ${path}" })
+      else if list_len(edits) <= 0 then
+        ToolErrorResult({ id: id, tool: "EditFile", message: "missing edits" })
+      else {
+        let before = readFile(path);
+        let before_sha = sha256Hex(before);
+        if expected_sha256 != "" && expected_sha256 != before_sha then
+          ToolErrorResult({ id: id, tool: "EditFile", message: "expected_sha256 mismatch" })
+        else
+          match apply_edits(before, edits, 1) {
+            Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", message: msg }),
+            Ok(applied) => {
+              let after = applied.content;
+              let diff = build_edit_file_diff(path, before, after, true);
+              let changed_line = first_changed_line(before, after);
+              if dry_run then
+                EditFileResult({
+                  id: id,
+                  path: path,
+                  bytes_written: 0,
+                  sha256: sha256Hex(after),
+                  diff: diff,
+                  first_changed_line: changed_line,
+                  applied_edits: applied.applied,
+                  dry_run: true,
+                  match_strategy: "exact"
+                })
+              else
+                match atomic_write(path, after) {
+                  Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", message: msg }),
+                  Ok(_) =>
+                    EditFileResult({
+                      id: id,
+                      path: path,
+                      bytes_written: length(after),
+                      sha256: sha256Hex(after),
+                      diff: diff,
+                      first_changed_line: changed_line,
+                      applied_edits: applied.applied,
+                      dry_run: false,
+                      match_strategy: "exact"
+                    })
+                }
+            }
+          }
+      }
+  }
+}
+
+func process_error_to_string(err: ProcessError) -> string {
+  match err {
+    NotAllowed(cmd) => "not allowed: ${cmd}",
+    NotFound(cmd) => "not found: ${cmd}",
+    PermissionDenied(cmd) => "permission denied: ${cmd}",
+    Timeout(ms) => "timeout after ${show(ms)}ms",
+    OutputLimitExceeded(n) => "output limit exceeded: ${show(n)} bytes",
+    SpawnFailed(msg) => "spawn failed: ${msg}",
+    AbnormalExit(sig, name) => "abnormal exit signal ${show(sig)} (${name})"
+  }
+}
+
+func cmd_string(cmd: string, args: [string]) -> string {
+  "${cmd}${cmd_args_suffix(args)}"
+}
+
+func cmd_args_suffix(args: [string]) -> string {
+  match args {
+    [] => "",
+    a :: rest => " ${a}${cmd_args_suffix(rest)}"
+  }
+}
+
+func to_bash_result(id: string, req: ProcessExecReq, out: ProcessOutput) -> ToolResultItem {
+  let stdout = toString(out.stdout);
+  let stderr = toString(out.stderr);
+  BashExecResult({
+    id: id,
+    cmd: cmd_string(req.cmd, req.args),
+    stdout: stdout,
+    stderr: stderr,
+    exit_code: out.exitCode,
+    meta: mk_meta(stdout, stderr, out.truncated)
+  })
+}
+
+func to_test_result(id: string, req: ProcessExecReq, out: ProcessOutput) -> ToolResultItem {
+  let stdout = toString(out.stdout);
+  let stderr = toString(out.stderr);
+  let failed = if out.exitCode == 0 then 0 else 1;
+  let passed = if out.exitCode == 0 then 1 else 0;
+  RunTestsResult({
+    id: id,
+    cmd: cmd_string(req.cmd, req.args),
+    stdout: stdout,
+    stderr: stderr,
+    exit_code: out.exitCode,
+    passed: passed,
+    failed: failed,
+    failures: if failed == 0 then [] else [{ test: "test-command", message: "non-zero exit code" }],
+    meta: mk_meta(stdout, stderr, out.truncated)
+  })
+}
+
+func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolResultItem ! {Process} {
+  if needs_delegation_for_process(req) then
+    ToolErrorResult({ id: id, tool: tool, message: "requires delegated backend" })
+  else
+    match exec(req.cmd, req.args) {
+      Err(err) =>
+        if tool == "RunTests" then
+          RunTestsResult({
+            id: id,
+            cmd: cmd_string(req.cmd, req.args),
+            stdout: "",
+            stderr: process_error_to_string(err),
+            exit_code: 1,
+            passed: 0,
+            failed: 1,
+            failures: [{ test: "test-command", message: process_error_to_string(err) }],
+            meta: mk_meta("", process_error_to_string(err), false)
+          })
+        else
+          BashExecResult({
+            id: id,
+            cmd: cmd_string(req.cmd, req.args),
+            stdout: "",
+            stderr: process_error_to_string(err),
+            exit_code: 1,
+            meta: mk_meta("", process_error_to_string(err), false)
+          }),
+      Ok(out) =>
+        if tool == "RunTests" then to_test_result(id, req, out)
+        else to_bash_result(id, req, out)
+    }
+}
+
+func t_edit_single_replace_success() -> bool
+  tests [((), true)]
+  {
+    let edits = [{ old: "x=1", new: "x=2", replace_all: false }];
+    match apply_edits("x=1\n", edits, 1) {
+      Ok(r) => r.content == "x=2\n" && r.applied == 1,
+      Err(_) => false
+    }
+  }
+
+func t_edit_single_replace_ambiguous_fails() -> bool
+  tests [((), true)]
+  {
+    let edits = [{ old: "x", new: "y", replace_all: false }];
+    match apply_edits("x x", edits, 1) {
+      Ok(_) => false,
+      Err(msg) => contains(msg, "matched multiple occurrences")
+    }
+  }
+
+func t_edit_replace_all_success() -> bool
+  tests [((), true)]
+  {
+    let edits = [{ old: "x", new: "y", replace_all: true }];
+    match apply_edits("x x", edits, 1) {
+      Ok(r) => r.content == "y y" && r.applied == 1,
+      Err(_) => false
+    }
+  }
+
+func t_edit_transactional_failure_keeps_sequence() -> bool
+  tests [((), true)]
+  {
+    let edits = [
+      { old: "x=1", new: "x=2", replace_all: false },
+      { old: "missing", new: "noop", replace_all: false }
+    ];
+    match apply_edits("x=1\n", edits, 1) {
+      Ok(_) => false,
+      Err(msg) => contains(msg, "edit #2 matched 0 occurrences")
+    }
+  }
+
+func t_first_changed_line_detects_line() -> bool
+  tests [((), true)]
+  {
+    first_changed_line("a\nb\nc", "a\nz\nc") == 2
+  }
+
+func t_path_traversal_segment() -> bool
+  tests [((), true)]
+  {
+    has_parent_traversal_segment("src/../etc/passwd")
+      && not has_parent_traversal_segment("src/core/parse.ail")
+  }
+
+func t_normalize_relative_path() -> bool
+  tests [((), true)]
+  {
+    normalize_relative_path("./src//core/./rpc.ail") == "src/core/rpc.ail"
+      && normalize_relative_path("src/core/rpc.ail") == "src/core/rpc.ail"
+  }
+
+export func split_by_backend(calls: [ToolCallEnvelope], ohmy_pi: bool) -> { native: [ToolCallEnvelope], delegated: [ToolCallEnvelope] } {
+  split_by_backend_rec(calls, [], [], ohmy_pi)
+}
+
+func is_native_backend(b: ToolBackend) -> bool {
+  match b {
+    Native => true,
+    Delegated => false
+  }
+}
+
+func split_by_backend_rec(
+  calls: [ToolCallEnvelope],
+  native_acc: [ToolCallEnvelope],
+  delegated_acc: [ToolCallEnvelope],
+  ohmy_pi: bool
+) -> { native: [ToolCallEnvelope], delegated: [ToolCallEnvelope] } {
+  match calls {
+    [] => { native: reverse(native_acc), delegated: reverse(delegated_acc) },
+    c :: rest =>
+      if is_native_backend(backend_for(c, ohmy_pi))
+      then split_by_backend_rec(rest, c :: native_acc, delegated_acc, ohmy_pi)
+      else split_by_backend_rec(rest, native_acc, c :: delegated_acc, ohmy_pi)
+  }
+}

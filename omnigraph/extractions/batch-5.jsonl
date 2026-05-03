@@ -1,0 +1,45 @@
+{"type": "Decision", "data": {"slug": "motoko-config:env-to-toml", "title": "TOML-based config system with layered precedence", "rationale": "Provide discoverability, grouping, and project-specific defaults for 49+ env vars. TOML supports comments and nested tables; JSON lacks comments.", "status": "accepted", "date": "2026-04"}}
+{"type": "Component", "data": {"slug": "src/tui/src/config.ts", "name": "TypeScript config loader", "description": "Loads .motoko/*.toml files and flattens to env vars", "layer": "infrastructure"}}
+{"edge": "Governs", "from": "motoko-config:env-to-toml", "to": "src/tui/src/config.ts"}
+{"type": "Decision", "data": {"slug": "headless-json:cli-args", "title": "JSON profile config with CLI arg overrides for headless operation", "rationale": "Enable fully headless supervisor invocation without TypeScript TUI; config from JSON profiles + CLI args; only secrets via env vars.", "status": "proposed", "date": "2026-04"}}
+{"type": "Component", "data": {"slug": "src/core/config.ail", "name": "AILANG config module", "description": "Parse CLI args, load JSON profiles, merge defaults", "layer": "domain"}}
+{"edge": "Governs", "from": "headless-json:cli-args", "to": "src/core/config.ail"}
+{"edge": "DependsOnDecision", "from": "headless-json:cli-args", "to": "motoko-config:env-to-toml"}
+{"type": "Decision", "data": {"slug": "multi-profile:config-selection", "title": "Named config profiles under .motoko/config/<profile>/ directory", "rationale": "Support A/B testing and reproducible benchmarks with named profiles (default, benchmark, debug); use MOTOKO_CONFIG env var for selection.", "status": "proposed", "date": "2026-04"}}
+{"edge": "Refines", "from": "multi-profile:config-selection", "to": "motoko-config:env-to-toml"}
+{"type": "Decision", "data": {"slug": "motoko-core:config-ownership", "title": "Move config ownership to AILANG core; JSON profile files; supervisor as entry point", "rationale": "Motoko core should own runtime config semantics instead of TypeScript; switch from TOML to JSON (AILANG has no TOML parser); supervisor.ail becomes primary entry point.", "status": "proposed", "date": "2026-04"}}
+{"type": "Component", "data": {"slug": "src/core/supervisor.ail", "name": "AILANG supervisor", "description": "Primary entry point for headless and TUI-driven execution", "layer": "domain"}}
+{"edge": "Governs", "from": "motoko-core:config-ownership", "to": "src/core/supervisor.ail"}
+{"edge": "DependsOnDecision", "from": "motoko-core:config-ownership", "to": "headless-json:cli-args"}
+{"edge": "Supersedes", "from": "motoko-core:config-ownership", "to": "motoko-config:env-to-toml"}
+{"type": "Decision", "data": {"slug": "error-idle:tui-retry", "title": "TUI-layer retry on 429 with exponential backoff", "rationale": "Capture runtime stderr, emit synthetic error event, retry on 429 with backoff; no runtime changes needed.", "status": "proposed", "date": "2026-05"}}
+{"edge": "Governs", "from": "error-idle:tui-retry", "to": "src/tui/src/runtime-process.ts"}
+{"edge": "Governs", "from": "error-idle:tui-retry", "to": "src/tui/src/index.ts"}
+{"type": "Decision", "data": {"slug": "error-runtime:result-ops", "title": "Add Result-returning AI ops to runtime; retry in AILANG with backoff", "rationale": "Process stays alive on AI errors; retry happens in-process with full history; policy in AILANG, not buried in Go or TUI.", "status": "proposed", "date": "2026-05"}}
+{"type": "Component", "data": {"slug": "ailang/internal/effects/ai.go", "name": "AILANG AI effect operations", "description": "Add callResult, callJsonResult returning structured error records", "layer": "infrastructure"}}
+{"edge": "Governs", "from": "error-runtime:result-ops", "to": "ailang/internal/effects/ai.go"}
+{"edge": "Governs", "from": "error-runtime:result-ops", "to": "src/core/rpc.ail"}
+{"type": "Decision", "data": {"slug": "error-merged:best-approach", "title": "Merged plan combining runtime Result ops with builtin registration and stdlib wrappers", "rationale": "Best version: prevents crashes, implements retry in AILANG, preserves conversation history, keeps existing APIs stable.", "status": "accepted", "date": "2026-05"}}
+{"edge": "Supersedes", "from": "error-merged:best-approach", "to": "error-idle:tui-retry"}
+{"edge": "Supersedes", "from": "error-merged:best-approach", "to": "error-runtime:result-ops"}
+{"type": "Decision", "data": {"slug": "ai-runtime:result-api", "title": "Add AIError type and Result-returning AI stdlib wrappers", "rationale": "Enable core/rpc.ail to branch on retryable vs non-retryable errors; bounded retry with backoff; preserve backward compat for existing call* APIs.", "status": "proposed", "date": "2026-05"}}
+{"edge": "Implements", "from": "ai-runtime:result-api", "to": "error-merged:best-approach"}
+{"type": "Decision", "data": {"slug": "continuation:intent-guard", "title": "Guard prose-only responses that indicate future tool intent", "rationale": "Avoid premature 'done' when model says 'I will now use Search...'; detect continuation intent phrases and inject corrective feedback instead.", "status": "proposed", "date": "2026-05"}}
+{"type": "Component", "data": {"slug": "src/core/parse.ail", "name": "AILANG parse module", "description": "Response parsing, sanitization, continuation intent detection", "layer": "domain"}}
+{"edge": "Governs", "from": "continuation:intent-guard", "to": "src/core/parse.ail"}
+{"type": "Decision", "data": {"slug": "filter-thinking:context-cleanup", "title": "Sanitize thinking traces from conversation history; keep in TUI display and logs", "rationale": "Avoid replaying raw thinking in subsequent model calls; preserve thinking for display; reduce context bloat; prevent prompt leakage.", "status": "proposed", "date": "2026-05"}}
+{"edge": "Governs", "from": "filter-thinking:context-cleanup", "to": "src/core/parse.ail"}
+{"edge": "Governs", "from": "filter-thinking:context-cleanup", "to": "src/core/rpc.ail"}
+{"type": "Decision", "data": {"slug": "openai-stream:incremental", "title": "Real-time LLM output streaming from runtime to TUI for OpenAI models", "rationale": "Users see answer text incrementally; preserve existing final thinking/done flow; implement as typed streaming effect.", "status": "proposed", "date": "2026-05"}}
+{"type": "Component", "data": {"slug": "ailang/internal/ai/openai", "name": "OpenAI provider streaming", "description": "Chat Completions and Responses API streaming implementation", "layer": "infrastructure"}}
+{"edge": "Governs", "from": "openai-stream:incremental", "to": "ailang/internal/ai/openai"}
+{"edge": "Governs", "from": "openai-stream:incremental", "to": "src/core/rpc.ail"}
+{"type": "Component", "data": {"slug": "src/core/rpc.ail", "name": "AILANG RPC loop module", "description": "Runtime loop, tool dispatch, response parsing", "layer": "domain"}}
+{"type": "Component", "data": {"slug": "src/tui/src/runtime-process.ts", "name": "TypeScript runtime process spawner", "description": "Spawn and manage AILANG subprocess", "layer": "infrastructure"}}
+{"type": "Component", "data": {"slug": "src/tui/src/index.ts", "name": "TypeScript TUI entry point", "description": "Main TUI initialization and event loop", "layer": "api"}}
+{"type": "Component", "data": {"slug": "src/tui/src/ui.ts", "name": "TypeScript TUI UI renderer", "description": "Terminal UI rendering and interactivity", "layer": "frontend"}}
+{"edge": "Governs", "from": "openai-stream:incremental", "to": "src/tui/src/ui.ts"}
+{"edge": "DependsOn", "from": "src/core/rpc.ail", "to": "src/core/parse.ail"}
+{"edge": "DependsOn", "from": "src/core/supervisor.ail", "to": "src/core/rpc.ail"}
+{"edge": "DependsOn", "from": "src/tui/src/runtime-process.ts", "to": "src/core/rpc.ail"}
+{"edge": "DependsOn", "from": "src/tui/src/index.ts", "to": "src/tui/src/runtime-process.ts"}

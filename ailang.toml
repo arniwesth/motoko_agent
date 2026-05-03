@@ -1,0 +1,18 @@
+[package]
+name = "local/motoko_agent"
+version = "0.1.0"
+edition = "1"
+module_prefix = "src"
+
+[dependencies]
+"sunholo/logging" = "0.4.0"
+"sunholo/motoko_core" = { path = ".packages/motoko_core" }
+"sunholo/motoko_test_dummy" = { path = ".packages/motoko_test_dummy" }
+"sunholo/motoko_compose" = { path = ".packages/motoko_compose" }
+"sunholo/motoko_omnigraph" = { path = ".packages/motoko_omnigraph" }
+"sunholo/motoko_context_mode" = { path = ".packages/motoko_context_mode" }
+"sunholo/motoko_exa_search" = { path = ".packages/motoko_exa_search" }
+"sunholo/motoko_mcp" = { path = ".packages/motoko_mcp" }
+
+[effects]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex"]

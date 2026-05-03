@@ -1,0 +1,110 @@
+-- core/env_client.ail
+--
+-- HTTP client for the embedded environment server.
+--
+-- The environment server (tui/src/env-server.ts) always returns HTTP 200
+-- with a JSON body; the exit_code field communicates command failure.
+-- This client decodes that body and returns a typed ExecResult.
+--
+-- Design notes:
+--   • httpPost returns the response body as a string.  We decode it as JSON
+--     and extract the three fields.  If the body is malformed we return a
+--     synthetic ExecResult with exit_code 1 so the brain can observe the
+--     failure and decide whether to retry.
+--   • The timeout field is forwarded to the server; the server enforces it
+--     via execSync's timeout option, not via an HTTP-level timeout.
+--   • exec_in prepends nothing — the caller (rpc_loop) is responsible for
+--     prepending `cd <cwd> && ` before calling exec_in.
+
+module src/core/env_client
+
+import std/net    (httpPost)
+import std/json   (encode, decode, jo, kv, js, jnum, get, asString, asNumber, asBool)
+import src/core/types  (ExecResult, AilangExecResult)
+
+-- ---------------------------------------------------------------------------
+-- exec_in : string -> string -> int -> ExecResult ! {Net}
+--
+-- Execute `cmd` via the environment server at `url`.
+-- `timeout_secs` is the maximum number of seconds the command may run.
+-- ---------------------------------------------------------------------------
+export func exec_in(url: string, cmd: string, timeout_secs: int) -> ExecResult ! {Net} {
+  let body = encode(jo([
+    kv("cmd",     js(cmd)),
+    kv("timeout", jnum(_int_to_float(timeout_secs)))
+  ]));
+  let raw = httpPost("${url}/exec", body);
+  match decode(raw) {
+    Err(_) =>
+      -- Malformed response — surface as a synthetic failure so the brain
+      -- can emit an observation and continue (or hit the step limit).
+      { stdout: "", stderr: "env-server: malformed response: ${raw}", exit_code: 1 },
+    Ok(obj) => {
+      let stdout = match get(obj, "stdout") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      let stderr = match get(obj, "stderr") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      let exit_code = match get(obj, "exit_code") {
+        None    => 0,
+        Some(j) => match asNumber(j) {
+          None    => 0,
+          Some(n) => _float_to_int(n)
+        }
+      };
+      { stdout: stdout, stderr: stderr, exit_code: exit_code }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- exec_ailang : string -> string -> string -> int -> AilangExecResult ! {Net}
+--
+-- Execute an AILANG snippet via the environment server at `url`.
+-- `code` is the snippet body (without module declaration).
+-- `caps` is the comma-separated capabilities string (e.g. "IO,FS,Process").
+-- `timeout_secs` is the maximum number of seconds the snippet may run.
+-- ---------------------------------------------------------------------------
+export func exec_ailang(url: string, code: string, caps: string, timeout_secs: int, task: string, prompt: string) -> AilangExecResult ! {Net} {
+  let body = encode(jo([
+    kv("code",    js(code)),
+    kv("caps",    js(caps)),
+    kv("timeout", jnum(_int_to_float(timeout_secs))),
+    kv("task",    js(task)),
+    kv("prompt",  js(prompt))
+  ]));
+  let raw = httpPost("${url}/exec-ailang", body);
+  match decode(raw) {
+    Err(_) =>
+      { stdout: "", stderr: "env-server: malformed response: ${raw}", exit_code: 1, check_passed: false, check_errors: "malformed response" },
+    Ok(obj) => {
+      let stdout = match get(obj, "stdout") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      let stderr = match get(obj, "stderr") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      let exit_code = match get(obj, "exit_code") {
+        None    => 0,
+        Some(j) => match asNumber(j) {
+          None    => 0,
+          Some(n) => _float_to_int(n)
+        }
+      };
+      let check_passed = match get(obj, "check_passed") {
+        None    => false,
+        Some(j) => match asBool(j) { None => false, Some(b) => b }
+      };
+      let check_errors = match get(obj, "check_errors") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      { stdout: stdout, stderr: stderr, exit_code: exit_code, check_passed: check_passed, check_errors: check_errors }
+    }
+  }
+}

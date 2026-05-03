@@ -1,0 +1,35 @@
+module src/core/ext/omnigraph/types
+
+import std/option (Option)
+
+export type OmnigraphReadReq = {
+  id: string,
+  query_file: string,
+  name: string,
+  params: Option[string],
+  branch: Option[string]
+}
+  deriving (Eq)
+
+export type OmnigraphMutateReq = {
+  id: string,
+  query_file: string,
+  name: string,
+  params: string,
+  branch: string
+}
+  deriving (Eq)
+
+export type OmnigraphBranchReq = {
+  id: string,
+  action: string,
+  name: Option[string],
+  from: Option[string],
+  into: Option[string]
+}
+  deriving (Eq)
+
+export type OmnigraphStatusReq = {
+  id: string
+}
+  deriving (Eq)

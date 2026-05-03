@@ -1,0 +1,115 @@
+module src/core/ext/context_mode/context_mode_test
+
+import std/json (jo, kv, js)
+import pkg/sunholo/motoko_core/ext/types (ExtCtx)
+import src/core/ext/context_mode/context_mode (canonical_tool_name, on_build_system_prompt, on_tool_policy)
+import src/core/compress (compress_output)
+
+func test_ctx() -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: true,
+    budget: { total: 10, solver: 10, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 10,
+    history_slice: [],
+    state_key: "k"
+  }
+}
+
+func normalize_execute_alias() -> bool
+  tests [((), true)]
+  {
+    canonical_tool_name("ctx_execute") == "CtxExecute" &&
+    canonical_tool_name("CtxExecute") == "CtxExecute" &&
+    canonical_tool_name("ctx.execute") == "CtxExecute"
+  }
+
+func normalize_stats_alias() -> bool
+  tests [((), true)]
+  {
+    canonical_tool_name("ctx_stats") == "CtxStats" &&
+    canonical_tool_name("context_mode.stats") == "CtxStats"
+  }
+
+func normalize_unknown_returns_empty() -> bool
+  tests [((), true)]
+  {
+    canonical_tool_name("ReadFile") == ""
+  }
+
+func prompt_patch_appends_routing_card() -> bool
+  tests [((), true)]
+  {
+    let patch = on_build_system_prompt("routing-card", test_ctx());
+    match patch.append {
+      x :: _ => x == "routing-card",
+      _ => false
+    }
+  }
+
+func policy_is_noop() -> bool
+  tests [((), true)]
+  {
+    match on_tool_policy(test_ctx(), { id: "1", tool: "ctx_execute", arguments: jo([]) }) {
+      NoOpinion => true,
+      _ => false
+    }
+  }
+
+func policy_denies_context_mode_bashexec() -> bool
+  tests [((), true)]
+  {
+    match on_tool_policy(test_ctx(), {
+      id: "2",
+      tool: "BashExec",
+      arguments: jo([kv("cmd", js("context-mode --help"))])
+    }) {
+      Deny(msg) => _str_find(msg, "Do not run context-mode or Ctx* probes via BashExec") >= 0,
+      _ => false
+    }
+  }
+
+func policy_denies_remote_fetch_bashexec() -> bool
+  tests [((), true)]
+  {
+    match on_tool_policy(test_ctx(), {
+      id: "3",
+      tool: "BashExec",
+      arguments: jo([kv("cmd", js("curl -L https://example.com/readme.md"))])
+    }) {
+      Deny(msg) => _str_find(msg, "Use CtxFetchAndIndex/ctx_fetch_and_index") >= 0,
+      _ => false
+    }
+  }
+
+func policy_denies_non_curl_remote_fetch_bashexec() -> bool
+  tests [((), true)]
+  {
+    match on_tool_policy(test_ctx(), {
+      id: "4",
+      tool: "BashExec",
+      arguments: jo([kv("cmd", js("python -c \"import requests; print(requests.get('https://example.com').status_code)\""))])
+    }) {
+      Deny(msg) => _str_find(msg, "Use CtxFetchAndIndex/ctx_fetch_and_index") >= 0,
+      _ => false
+    }
+  }
+
+func compress_keeps_signal() -> bool
+  tests [((), true)]
+  {
+    let out = compress_output("line1\nline1\nline1\nline1\nline2", 200);
+    _str_find(out, "line2") >= 0 && _str_find(out, "repeated") >= 0
+  }
+
+func compress_honors_limit() -> bool
+  tests [((), true)]
+  {
+    _str_len(compress_output("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 20)) <= 20
+  }

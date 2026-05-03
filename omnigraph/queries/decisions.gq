@@ -1,0 +1,97 @@
+query list_decisions()
+  @description("List all architecture decisions")
+  @instruction("Use when you need the decision inventory, newest first")
+{
+  match {
+    $d: Decision
+  }
+  return {
+    $d.slug,
+    $d.title,
+    $d.rationale,
+    $d.status,
+    $d.date
+  }
+}
+
+query decisions_by_status($status: String)
+  @description("List decisions filtered by status")
+  @instruction("Use when selecting proposed/accepted/superseded/deprecated decisions")
+{
+  match {
+    $d: Decision { status: $status }
+  }
+  return {
+    $d.slug,
+    $d.title,
+    $d.rationale,
+    $d.status,
+    $d.date
+  }
+}
+
+query decisions_governing($component_slug: String)
+  @description("Find decisions governing a component")
+  @instruction("Use when mapping implementation components to decision context")
+{
+  match {
+    $d: Decision
+    $c: Component { slug: $component_slug }
+    $d governs $c
+  }
+  return {
+    $d.slug,
+    $d.title,
+    $d.status,
+    $c.slug,
+    $c.name
+  }
+}
+
+query decisions_superseded_by($slug: String)
+  @description("List decisions superseded by the given decision")
+  @instruction("Use to trace which earlier decisions this one replaces")
+{
+  match {
+    $d: Decision { slug: $slug }
+    $d supersedes $superseded
+  }
+  return {
+    $d.slug,
+    $superseded.slug,
+    $superseded.title,
+    $superseded.status
+  }
+}
+
+query decisions_depending_on($slug: String)
+  @description("List decisions that depend on the given decision")
+  @instruction("Use to find downstream decisions that require this one")
+{
+  match {
+    $d: Decision { slug: $slug }
+    $dep dependsOnDecision $d
+  }
+  return {
+    $d.slug,
+    $dep.slug,
+    $dep.title,
+    $dep.status
+  }
+}
+
+query decisions_depended_on_by($slug: String)
+  @description("List decisions that the given decision depends on")
+  @instruction("Use to find upstream prerequisites for this decision")
+{
+  match {
+    $d: Decision { slug: $slug }
+    $d dependsOnDecision $prereq
+  }
+  return {
+    $d.slug,
+    $prereq.slug,
+    $prereq.title,
+    $prereq.status
+  }
+}

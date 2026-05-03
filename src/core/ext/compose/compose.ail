@@ -1,0 +1,812 @@
+module src/core/ext/compose/compose
+
+import std/ai_motoko (callStreamResult)
+import std/bytes (toString)
+import std/clock (now)
+import std/datetime (formatRFC3339)
+import std/crypto (sha256Hex)
+import std/fs (writeFile, fileExists, removeFile, mkdirAll)
+import std/io (println)
+import std/json (encode, Json, jo, kv, js, jb, jnum, get)
+import std/process (exec, ProcessError)
+import std/result (Ok, Err)
+import std/string (trim, split, startsWith, contains, toLower)
+import std/option (None)
+
+import src/core/types (ToolResultMeta)
+import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, string_field, string_list)
+import src/core/ext/types (ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
+import src/core/config (RuntimeConfig)
+import src/core/ext/compose/prompts (build_author_prompt, build_summary_prompt, normalize_intent_kind, derive_intent_kind)
+import src/core/ext/compose/guard (compose_snippet_guard, targeted_hint, parse_declared_effects)
+import src/core/ext/compose/validator (validate_expected_output_with_context)
+import src/core/ext/compose/store (store_stdout_and_elide, store_snippet_with_meta)
+import src/core/ext/compose/claimcheck (run_claimcheck, normalized_observed_output)
+import src/core/ext/compose/author_loop (run_author_loop)
+import src/core/ext/compose/ledger (PremiseLedger, init_ledger, with_budget_cap, claimcheck_ledger_summary, prior_reads_summary)
+
+export func provided_tools() -> [string] {
+  ["Compose", "compose"]
+}
+
+func compose_subagent_prompt_card() -> string {
+  "You are the AILANG composition subagent.\nReturn exactly one ```ailang fenced block and nothing else.\n"
+}
+
+func compose_main_prompt_card() -> string {
+  "- Prefer Compose for multi-step repo reasoning (3+ operations), especially architecture, tracing, and analysis tasks.\n- Compose call shape: {\"tool\":\"Compose\",\"intent\":\"...\",\"intent_kind\":\"analyze\",\"expected_output\":\"...\"}\n"
+}
+
+export func on_build_system_prompt(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [compose_main_prompt_card()] }
+}
+
+func current_composition_mode(ctx: ExtCtx, raw: string) -> string {
+  let mode =
+    if raw == "inline" then "inline"
+    else if raw == "off" then "off"
+    else if raw == "subagent" then "subagent"
+    else "subagent";
+  if not ctx.hybrid_tools && mode == "subagent" then "inline" else mode
+}
+
+func is_compose_tool_name(name: string) -> bool {
+  name == "Compose" || name == "compose"
+}
+
+func on_tool_policy_with_mode(raw_mode: string, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  if not is_compose_tool_name(call.tool) then NoOpinion
+  else {
+    let mode = current_composition_mode(ctx, raw_mode);
+    if mode == "off" then Deny("Compose is disabled in this session. Use non-Compose tools.")
+    else if mode == "inline" then Deny("Compose is disabled in inline composition mode. Emit an inline ```ailang snippet or use non-Compose tools.")
+    else Allow
+  }
+}
+
+export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {Env} {
+  on_tool_policy_with_mode("subagent", ctx, call)
+}
+
+func json_escape(s: string) -> string {
+  encode(js(s))
+}
+
+func emit_event(event_type: string, step: int, compose_id: string, kvs: [string]) -> () ! {IO} {
+  let base = "{\"type\":\"${event_type}\",\"step\":${show(step)},\"compose_id\":\"${compose_id}\"";
+  emit_event_tail(base, kvs)
+}
+
+func emit_event_tail(base: string, kvs: [string]) -> () ! {IO} {
+  match kvs {
+    [] => {
+      let _ = println("${base}}");
+      ()
+    },
+    x :: rest => emit_event_tail("${base},${x}", rest)
+  }
+}
+
+func meta_from(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta {
+  {
+    truncated: truncated,
+    stdout_bytes: _str_len(stdout),
+    stdout_total_bytes: _str_len(stdout),
+    stderr_bytes: _str_len(stderr),
+    stderr_total_bytes: _str_len(stderr),
+    stdout_sha256: sha256Hex(stdout),
+    stderr_sha256: sha256Hex(stderr)
+  }
+}
+
+func compose_result_stdout(attempts: int, exit_code: int, summary: string, stdout: string, telemetry: string) -> string {
+  let telemetry_block = if telemetry == "" then "" else "\nTelemetry: ${telemetry}";
+  let stdout_block = if stdout == "" then "" else "\n[stdout]\n${stdout}";
+  "Compose attempts=${show(attempts)} exit=${show(exit_code)}\nSummary: ${summary}${telemetry_block}${stdout_block}"
+}
+
+func compose_metadata(intent: string, attempts: int, summary: string, telemetry: string, meta: ToolResultMeta) -> Json {
+  jo([
+    kv("intent", js(intent)),
+    kv("attempts", jnum(_int_to_float(attempts))),
+    kv("summary", js(summary)),
+    kv("telemetry_json", js(telemetry)),
+    kv("truncated", jb(meta.truncated)),
+    kv("stdout_bytes", jnum(_int_to_float(meta.stdout_bytes))),
+    kv("stdout_total_bytes", jnum(_int_to_float(meta.stdout_total_bytes))),
+    kv("stderr_bytes", jnum(_int_to_float(meta.stderr_bytes))),
+    kv("stderr_total_bytes", jnum(_int_to_float(meta.stderr_total_bytes))),
+    kv("stdout_sha256", js(meta.stdout_sha256)),
+    kv("stderr_sha256", js(meta.stderr_sha256))
+  ])
+}
+
+func join_lines(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}\n${join_lines(rest)}"
+  }
+}
+
+func non_module_lines(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => if startsWith(trim(x), "module ") then non_module_lines(rest) else x :: non_module_lines(rest)
+  }
+}
+
+export func compose_file_body(snippet: string) -> string {
+  join_lines(non_module_lines(split(snippet, "\n")))
+}
+
+func compose_module_header(snippet_name: string) -> string {
+  "module tmp/${snippet_name}"
+}
+
+func extract_ailang_fence(text: string) -> string {
+  let mark = "```ailang";
+  let i = _str_find(text, mark);
+  if i < 0 then ""
+  else {
+    let after = _str_slice(text, i + _str_len(mark), _str_len(text));
+    let j = _str_find(after, "```");
+    if j < 0 then "" else trim(_str_slice(after, 0, j))
+  }
+}
+
+func is_noise_error_line(line: string) -> bool {
+  let t = trim(line);
+  startsWith(t, "Suggestion:") ||
+  startsWith(t, "Hint:") ||
+  startsWith(t, "Suggested workaround:")
+}
+
+func compact_error_lines(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => {
+      let t = trim(x);
+      if t == "" || is_noise_error_line(t) then compact_error_lines(rest)
+      else t :: compact_error_lines(rest)
+    }
+  }
+}
+
+func take_lines(lines: [string], n: int) -> [string] {
+  if n <= 0 then []
+  else match lines {
+    [] => [],
+    x :: rest => x :: take_lines(rest, n - 1)
+  }
+}
+
+func compact_error_message(err: string) -> string {
+  let filtered = compact_error_lines(split(err, "\n"));
+  let kept = take_lines(filtered, 8);
+  if _list_length(kept) == 0 then trim(err) else join_lines(kept)
+}
+
+func reverse_strings(xs: [string]) -> [string] {
+  reverse_strings_into(xs, [])
+}
+
+func reverse_strings_into(xs: [string], acc: [string]) -> [string] {
+  match xs {
+    [] => acc,
+    x :: rest => reverse_strings_into(rest, x :: acc)
+  }
+}
+
+func retry_error_signature(err: string) -> string {
+  let e = toLower(err);
+  if contains(e, "expected next token to be else, got ; instead") then "parse:semicolon_else"
+  else if contains(e, "par_unexpected_token") || contains(e, "parse errors") then "parse:generic"
+  else if (contains(e, "failed to unify effect rows") || contains(e, "effect rows:")) && contains(e, "[io]") && contains(e, "[fs]") then "type:effect_row_io_fs"
+  else if contains(e, "failed to unify effect rows") || contains(e, "effect rows:") then "type:effect_row"
+  else if contains(e, "type error") || contains(e, "undefined variable") || contains(e, "unification failed") then "type"
+  else if contains(e, "execution failed") || contains(e, "runtime failed") then "runtime"
+  else "other"
+}
+
+func count_prefix_sig(xs: [string], sig: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => if retry_error_signature(x) == sig then 1 + count_prefix_sig(rest, sig) else 0
+  }
+}
+
+func same_sig_tail_streak(prior_errors: [string], sig: string) -> int {
+  count_prefix_sig(reverse_strings(prior_errors), sig)
+}
+
+func cap_text(s: string, max_chars: int) -> string {
+  let n = _str_len(s);
+  if n <= max_chars then s
+  else "${_str_slice(s, 0, max_chars)}\n...[truncated]"
+}
+
+func process_error_to_string(err: ProcessError) -> string {
+  show(err)
+}
+
+func check_snippet(snippet_path: string) -> { ok: bool, errors: string, exit_code: int } ! {Process} {
+  match exec("ailang", ["check", snippet_path]) {
+    Err(e) => { ok: false, errors: process_error_to_string(e), exit_code: 1 },
+    Ok(out) => {
+      if out.exitCode == 0 then { ok: true, errors: "", exit_code: 0 }
+      else {
+        let stderr = trim(toString(out.stderr));
+        let stdout = trim(toString(out.stdout));
+        let msg = if stderr != "" then stderr else stdout;
+        { ok: false, errors: msg, exit_code: out.exitCode }
+      }
+    }
+  }
+}
+
+func run_snippet(snippet_path: string, caps: string) -> { stdout: string, stderr: string, exit_code: int, truncated: bool, raw_stdout: string } ! {Process} {
+  match exec("ailang", ["run", "--caps", caps, "--entry", "main", snippet_path]) {
+    Err(e) => { stdout: "", stderr: process_error_to_string(e), exit_code: 1, truncated: false, raw_stdout: "" },
+    Ok(out) => {
+      let raw_out = toString(out.stdout);
+      let raw_err = toString(out.stderr);
+      let stdout_len = if _str_len(raw_out) > 8000 then 8000 else _str_len(raw_out);
+      let stderr_len = if _str_len(raw_err) > 2000 then 2000 else _str_len(raw_err);
+      {
+        stdout: _str_slice(raw_out, 0, stdout_len),
+        stderr: _str_slice(raw_err, 0, stderr_len),
+        exit_code: out.exitCode,
+        truncated: out.truncated || _str_len(raw_out) > stdout_len || _str_len(raw_err) > stderr_len,
+        raw_stdout: raw_out
+      }
+    }
+  }
+}
+
+func contains_id(xs: [string], name: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == name then true else contains_id(rest, name)
+  }
+}
+
+func caps_minus_avoid(base_caps: string, avoid: [string]) -> string {
+  let parts = split(base_caps, ",");
+  join_caps(parts, avoid)
+}
+
+func join_caps(parts: [string], avoid: [string]) -> string {
+  match parts {
+    [] => "",
+    p :: rest => {
+      let t = trim(p);
+      let tail = join_caps(rest, avoid);
+      if t == "" || contains_id(avoid, t) then tail
+      else if tail == "" then t else "${t},${tail}"
+    }
+  }
+}
+
+func clamp_positive(n: int, fallback: int) -> int {
+  if n <= 0 then fallback else n
+}
+
+func telemetry_json(compose_id: string, intent_kind: string, max_attempts: int, attempts: int, final_exit_code: int, duration_ms: int, validation_unsatisfied: bool, validation_inconclusive: bool, premise_binding_ledger_bound: int, premise_binding_snippet_bound: int, premise_binding_unbound: int, sf2_witness_source: string) -> string {
+  encode(jo([
+    kv("compose_id", js(compose_id)),
+    kv("max_attempts", jnum(_int_to_float(max_attempts))),
+    kv("attempts_started", jnum(_int_to_float(attempts))),
+    kv("attempts_completed", jnum(_int_to_float(attempts))),
+    kv("author_failures", jnum(0.0)),
+    kv("missing_fence_or_empty", jnum(0.0)),
+    kv("check_failures", jnum(if final_exit_code == 3 then 1.0 else 0.0)),
+    kv("run_failures", jnum(if final_exit_code == 0 then 0.0 else 1.0)),
+    kv("validator_unsatisfied", jnum(if validation_unsatisfied then 1.0 else 0.0)),
+    kv("validator_inconclusive", jnum(if validation_inconclusive then 1.0 else 0.0)),
+    kv("succeeded", jb(final_exit_code == 0 || final_exit_code == 2)),
+    kv("exhausted", jb(final_exit_code == 3)),
+    kv("final_exit_code", jnum(_int_to_float(final_exit_code))),
+    kv("duration_ms", jnum(_int_to_float(duration_ms))),
+    kv("intent_kind", js(intent_kind)),
+    kv("premise_binding", jo([
+      kv("ledger_bound", jnum(_int_to_float(premise_binding_ledger_bound))),
+      kv("snippet_bound", jnum(_int_to_float(premise_binding_snippet_bound))),
+      kv("unbound", jnum(_int_to_float(premise_binding_unbound)))
+    ])),
+    kv("sf2_witness_source", js(sf2_witness_source)),
+    kv("sf5", jo([kv("invocations", jnum(0.0)), kv("budget_exhausted", jb(false)), kv("budget_exhausted_emitted", jb(false))]))
+  ]))
+}
+
+func snippet_meta_json(
+  compose_id: string,
+  attempt: int,
+  step: int,
+  task: string,
+  prompt: string,
+  intent: string,
+  intent_kind: string,
+  model: string,
+  caps: string,
+  outcome: string,
+  check_errors: string,
+  exit_code: int
+) -> string ! {Clock} {
+  let ts = now();
+  "{\n  \"timestamp\": ${encode(js(formatRFC3339(ts)))},\n  \"model\": ${encode(js(model))},\n  \"task\": ${encode(js(task))},\n  \"prompt\": ${encode(js(prompt))},\n  \"caps\": ${encode(js(caps))},\n  \"outcome\": ${encode(js(outcome))},\n  \"check_errors\": ${encode(js(check_errors))},\n  \"exit_code\": ${show(exit_code)},\n  \"compose_id\": ${encode(js(compose_id))},\n  \"attempt\": ${show(attempt)},\n  \"step\": ${show(step)},\n  \"intent\": ${encode(js(intent))},\n  \"intent_kind\": ${encode(js(intent_kind))},\n  \"saved_at_unix_ms\": ${show(ts)}\n}"
+}
+
+func mk_result(req_id: string, intent: string, attempts: int, stdout: string, stderr: string, exit_code: int, summary: string, truncated: bool, telemetry: string) -> ToolResultEnvelope {
+  let meta = meta_from(stdout, stderr, truncated);
+  {
+    tool_call_id: req_id,
+    tool: "Compose",
+    exit_code: exit_code,
+    stdout: compose_result_stdout(attempts, exit_code, summary, stdout, telemetry),
+    stderr: stderr,
+    metadata: compose_metadata(intent, attempts, summary, telemetry, meta)
+  }
+}
+
+func parse_hints(arguments: Json) -> { read: [string], write: [string], avoid: [string] } {
+  let hints = match get(arguments, "hints") { Some(j) => j, None => jo([]) };
+  {
+    read: string_list(match get(hints, "read") { Some(j) => j, None => jo([]) }),
+    write: string_list(match get(hints, "write") { Some(j) => j, None => jo([]) }),
+    avoid: string_list(match get(hints, "avoid") { Some(j) => j, None => jo([]) })
+  }
+}
+
+func compose_req_from_call(ctx: ExtCtx, call: ToolCallEnvelope) -> { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] } {
+  let hints = parse_hints(call.arguments);
+  {
+    id: call.id,
+    intent: string_field(call.arguments, "intent", ctx.task),
+    intent_kind: string_field(call.arguments, "intent_kind", ""),
+    expected_output: string_field(call.arguments, "expected_output", ""),
+    hints_read: hints.read,
+    hints_write: hints.write,
+    hints_avoid: hints.avoid
+  }
+}
+
+type AttemptOutcome
+  = NeedRetry({ reason: string, prior_error: string, ledger: PremiseLedger, last_snippet: string })
+  | FinalResult({ item: ToolResultEnvelope, ledger: PremiseLedger })
+
+func one_attempt(
+  ctx: ExtCtx,
+  req: { id: string, intent: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] },
+  archive_key: string,
+  repair_snippet: string,
+  author_tools_enabled: bool,
+  author_tools_budget: int,
+  author_tools_max_bytes: int,
+  author_tools_max_turns: int,
+  cert_template_enabled: bool,
+  structured_authoring_enabled: bool,
+  structured_authoring_budget: int,
+  structured_authoring_fallback_after: int,
+  claimcheck_ledger_in_informalizer: bool,
+  ledger_in: PremiseLedger,
+  intent_kind: string,
+  model: string,
+  caps: string,
+  guard_mode: string,
+  claimcheck_enabled: bool,
+  claimcheck_informalizer_model: string,
+  claimcheck_comparator_model: string,
+  claimcheck_timeout_ms: int,
+  claimcheck_max_invocations: int,
+  min_observed_chars: int,
+  max_stdout_bytes: int,
+  attempt: int,
+  max_attempts: int,
+  prior_errors: [string],
+  t0: int
+) -> AttemptOutcome ! {IO, AI, Process, FS, Env, Clock} {
+  let use_repair_mode = trim(repair_snippet) != "" && _list_length(prior_errors) > 0;
+  let base_ledger = with_budget_cap(ledger_in, author_tools_budget);
+  let prompt_for_meta = build_author_prompt(
+    compose_subagent_prompt_card(),
+    "",
+    req.intent,
+    intent_kind,
+    req.expected_output,
+    req.hints_read,
+    req.hints_write,
+    prior_errors,
+    repair_snippet,
+    use_repair_mode,
+    cert_template_enabled,
+    author_tools_enabled,
+    if author_tools_enabled then (if author_tools_budget - base_ledger.budget_used < 0 then 0 else author_tools_budget - base_ledger.budget_used) else 0,
+    author_tools_max_bytes,
+    if author_tools_enabled then prior_reads_summary(base_ledger) else ""
+  );
+  let author_result =
+    if author_tools_enabled then run_author_loop(
+      ctx.step,
+      req.id,
+      attempt,
+      model,
+      compose_subagent_prompt_card(),
+      req.intent,
+      intent_kind,
+      req.expected_output,
+      req.hints_read,
+      req.hints_write,
+      prior_errors,
+      repair_snippet,
+      use_repair_mode,
+      cert_template_enabled,
+      base_ledger,
+      author_tools_max_bytes,
+      clamp_positive(author_tools_max_turns, 24),
+      structured_authoring_enabled,
+      structured_authoring_budget,
+      structured_authoring_fallback_after
+    )
+    else {
+      let author_prompt = build_author_prompt(compose_subagent_prompt_card(), "", req.intent, intent_kind, req.expected_output, req.hints_read, req.hints_write, prior_errors, repair_snippet, use_repair_mode, cert_template_enabled, false, 0, 0, "");
+      let authored = callStreamResult(author_prompt, ctx.step, "compose-author-${req.id}-${show(attempt)}", model);
+      let raw_author = trim(authored.output);
+      let _ = emit_event("compose_author_delta", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"delta\":${json_escape(cap_text(raw_author, 3000))}"]);
+      let s = extract_ailang_fence(raw_author);
+      let _ = emit_event("compose_snippet", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"code\":${json_escape(cap_text(s, 3500))}"]);
+      { ok: s != "", snippet: s, ledger: base_ledger, error: if s == "" then "author_no_snippet" else "", turns: 1 }
+    };
+  let snippet = author_result.snippet;
+  let author_ledger = author_result.ledger;
+
+  if snippet == "" then {
+    let reason = if author_tools_enabled && trim(author_result.error) != "" then author_result.error else "empty snippet returned by subagent (missing ```ailang fence or empty body)";
+    let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":false", "\"errors\":${json_escape(reason)}"]);
+    NeedRetry({ reason: reason, prior_error: "${reason}\n${targeted_hint(reason)}", ledger: author_ledger, last_snippet: repair_snippet })
+  } else {
+    let guard_err =
+      if author_tools_enabled && (intent_kind == "analyze" || intent_kind == "summarize")
+      then ""
+      else compose_snippet_guard(guard_mode, snippet, intent_kind);
+    if guard_err != "" then {
+      let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":false", "\"errors\":${json_escape(guard_err)}"]);
+      NeedRetry({ reason: guard_err, prior_error: "${guard_err}\n${targeted_hint(guard_err)}", ledger: author_ledger, last_snippet: snippet })
+    } else {
+      let _ = mkdirAll("${ctx.workdir}/tmp");
+      let snippet_name = "snippet_${show(ctx.step)}_${show(now())}_${show(attempt)}";
+      let snippet_path = "tmp/${snippet_name}.ail";
+      let clean = compose_file_body(snippet);
+      let full_source = "${compose_module_header(snippet_name)}\n\n${clean}";
+      let _ = writeFile(snippet_path, full_source);
+      let snippet_meta = snippet_meta_json(req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "pending", "", 0);
+      let _ = store_snippet_with_meta(ctx.workdir, archive_key, attempt, full_source, snippet_meta);
+      let checked = check_snippet(snippet_path);
+      if not checked.ok then {
+        let compact = compact_error_message(checked.errors);
+        let fail_meta = snippet_meta_json(req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "check_failed", compact, checked.exit_code);
+        let _ = store_snippet_with_meta(ctx.workdir, archive_key, attempt, full_source, fail_meta);
+        let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":false", "\"errors\":${json_escape(compact)}"]);
+        let _ = if fileExists(snippet_path) then removeFile(snippet_path) else ();
+        NeedRetry({ reason: compact, prior_error: "${compact}\n${targeted_hint(compact)}", ledger: author_ledger, last_snippet: snippet })
+      } else {
+        let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":true", "\"errors\":\"\""]);
+        let ran = run_snippet(snippet_path, caps);
+        let _ = if fileExists(snippet_path) then removeFile(snippet_path) else ();
+        let _ = emit_event("compose_exec", ctx.step, req.id, ["\"stdout\":${json_escape(ran.stdout)}", "\"stderr\":${json_escape(ran.stderr)}", "\"exit_code\":${show(ran.exit_code)}"]);
+        if ran.exit_code != 0 then {
+          let reason = "snippet runtime failed (exit ${show(ran.exit_code)})";
+          let run_fail_meta = snippet_meta_json(req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "run_failed", "", ran.exit_code);
+          let _ = store_snippet_with_meta(ctx.workdir, archive_key, attempt, full_source, run_fail_meta);
+          NeedRetry({ reason: reason, prior_error: "${reason}\nstderr:\n${ran.stderr}\nstdout:\n${ran.stdout}", ledger: author_ledger, last_snippet: snippet })
+        } else {
+          let observed = trim(normalized_observed_output(ran.raw_stdout));
+          let needs_substantive =
+            (intent_kind == "analyze" || intent_kind == "summarize") &&
+            trim(req.expected_output) != "" &&
+            _str_len(observed) < min_observed_chars;
+          if needs_substantive then {
+            let reason = "insufficient substantive output for ${intent_kind} intent (${show(_str_len(observed))} chars; need >= ${show(min_observed_chars)})";
+            let insufficient_meta = snippet_meta_json(req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "insufficient_output", reason, 2);
+            let _ = store_snippet_with_meta(ctx.workdir, archive_key, attempt, full_source, insufficient_meta);
+            NeedRetry({
+              reason: reason,
+              prior_error:
+                "${reason}\nOutput was too shallow/partial. Emit concrete findings (modules, paths, and interaction flow) and print concise evidence-backed conclusions, not just startup/progress lines.",
+              ledger: author_ledger,
+              last_snippet: snippet
+            })
+          } else {
+          let validated = validate_expected_output_with_context(req.expected_output, ran.stdout, snippet, author_ledger);
+          let validation = validated.validation;
+          let binding = validated.premise_binding;
+          let effects = parse_declared_effects(snippet);
+          let has_fs = contains_id(effects, "FS");
+          let has_proc = contains_id(effects, "Process");
+          let sf2_requires = intent_kind == "analyze" || intent_kind == "summarize";
+          let sf2_author_ok = binding.ledger_bound > 0;
+          let sf2_pass = if not sf2_requires then true else (has_fs || has_proc || sf2_author_ok);
+          let sf2_witness_source =
+            if has_fs || has_proc then (if sf2_author_ok then "both" else "declared_effects")
+            else if sf2_author_ok then "author_ledger"
+            else "none";
+          let final_exit_code =
+            if not sf2_pass then 2
+            else if validation.decided && validation.confidence == "high" && not validation.satisfied then 2
+            else 0;
+          let claim = run_claimcheck(
+            claimcheck_enabled,
+            intent_kind,
+            req.intent,
+            ran.stdout,
+            claimcheck_ledger_summary(author_ledger),
+            claimcheck_ledger_in_informalizer,
+            claimcheck_informalizer_model,
+            claimcheck_comparator_model,
+            claimcheck_timeout_ms,
+            claimcheck_max_invocations,
+            0,
+            ctx.step,
+            req.id,
+            attempt
+          );
+          if claim.should_retry then NeedRetry({ reason: "claimcheck ${claim.verdict}: ${claim.reason}", prior_error: claim.corrective_hint, ledger: author_ledger, last_snippet: snippet })
+          else {
+            let stored = store_stdout_and_elide(ctx.workdir, req.id, ran.raw_stdout, max_stdout_bytes);
+            let summary_prompt = build_summary_prompt(req.intent, req.intent, req.expected_output, ran.stdout, ran.stderr, final_exit_code, validation.decided, validation.satisfied, validation.confidence, validation.reason);
+            let summary_resp = callStreamResult(summary_prompt, ctx.step, "compose-summary-${req.id}-${show(attempt)}", model);
+            let summary_base = trim(summary_resp.output);
+            let summary =
+              if not sf2_pass then "${summary_base}\nValidator: unsatisfied (SF2 evidence witness missing: need declared FS/Process effect or ≥1 ledger-bound premise)"
+              else if validation.decided && validation.confidence == "high" then "${summary_base}\nValidator: ${if validation.satisfied then "satisfied" else "unsatisfied"} (${validation.reason})"
+              else if trim(req.expected_output) != "" then "${summary_base}\nValidator: inconclusive (${validation.reason})"
+              else summary_base;
+            let _ = emit_event("compose_summary_delta", ctx.step, req.id, ["\"delta\":${json_escape(summary)}"]);
+            let telemetry = telemetry_json(
+              req.id,
+              intent_kind,
+              max_attempts,
+              attempt,
+              final_exit_code,
+              now() - t0,
+              (not sf2_pass) || (validation.decided && validation.confidence == "high" && not validation.satisfied),
+              not validation.decided || validation.confidence != "high",
+              binding.ledger_bound,
+              binding.snippet_bound,
+              binding.unbound,
+              sf2_witness_source
+            );
+            let success_meta = snippet_meta_json(req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "success", "", final_exit_code);
+            let _ = store_snippet_with_meta(ctx.workdir, archive_key, attempt, full_source, success_meta);
+            FinalResult({ item: mk_result(req.id, req.intent, attempt, stored.stdout, ran.stderr, final_exit_code, summary, stored.truncated || ran.truncated, telemetry), ledger: author_ledger })
+          }
+          }
+        }
+      }
+    }
+  }
+}
+
+func run_attempts(
+  ctx: ExtCtx,
+  req: { id: string, intent: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] },
+  archive_key: string,
+  repair_snippet: string,
+  author_tools_enabled: bool,
+  author_tools_budget: int,
+  author_tools_max_bytes: int,
+  author_tools_max_turns: int,
+  cert_template_enabled: bool,
+  structured_authoring_enabled: bool,
+  structured_authoring_budget: int,
+  structured_authoring_fallback_after: int,
+  claimcheck_ledger_in_informalizer: bool,
+  intent_kind: string,
+  model: string,
+  caps: string,
+  guard_mode: string,
+  claimcheck_enabled: bool,
+  claimcheck_informalizer_model: string,
+  claimcheck_comparator_model: string,
+  claimcheck_timeout_ms: int,
+  claimcheck_max_invocations: int,
+  min_observed_chars: int,
+  max_stdout_bytes: int,
+  attempt: int,
+  max_attempts: int,
+  prior_errors: [string],
+  ledger: PremiseLedger,
+  last_reason: string,
+  t0: int
+) -> ToolResultEnvelope ! {IO, AI, Process, FS, Env, Clock} {
+  if attempt > max_attempts then {
+    let reason = if last_reason == "" then "unknown error" else last_reason;
+    let summary = "subagent exhausted attempts; last error: ${reason}";
+    let telemetry = telemetry_json(req.id, intent_kind, max_attempts, max_attempts, 3, now() - t0, false, true, 0, 0, 0, "none");
+    mk_result(req.id, req.intent, max_attempts, "", reason, 3, summary, false, telemetry)
+  } else {
+    match one_attempt(ctx, req, archive_key, repair_snippet, author_tools_enabled, author_tools_budget, author_tools_max_bytes, author_tools_max_turns, cert_template_enabled, structured_authoring_enabled, structured_authoring_budget, structured_authoring_fallback_after, claimcheck_ledger_in_informalizer, ledger, intent_kind, model, caps, guard_mode, claimcheck_enabled, claimcheck_informalizer_model, claimcheck_comparator_model, claimcheck_timeout_ms, claimcheck_max_invocations, min_observed_chars, max_stdout_bytes, attempt, max_attempts, prior_errors, t0) {
+      FinalResult(r) => r.item,
+      NeedRetry(r) => {
+        if attempt < max_attempts then {
+          let sig = retry_error_signature(r.prior_error);
+          let streak = same_sig_tail_streak(prior_errors, sig);
+          let parse_stuck = startsWith(sig, "parse") && streak >= 2;
+          let type_stuck = startsWith(sig, "type") && streak >= 2;
+          let reset_hint = "RESET MODE: repeated parse failure signature '${sig}'. Emit a minimal, syntax-safe snippet first (use the skeleton structure), then only small incremental changes.";
+          let type_reset_hint =
+            "RESET MODE: repeated type failure signature '${sig}'.\nFix effect-row mismatch with minimal edits:\n- Keep main effects consistent with effectful calls used in lambdas/iterators.\n- Do not place FS calls in lambdas expected to be pure.\n- Prefer let-bound sequencing in main over nesting effectful calls inside pure combinators.\n- If using forEachE, ensure callback effect row matches the combinator's expected row.";
+          let next_prior_errors = if parse_stuck then [reset_hint, r.prior_error] else if type_stuck then [type_reset_hint, r.prior_error] else prior_errors ++ [r.prior_error];
+          let next_snippet = if parse_stuck || type_stuck then "" else r.last_snippet;
+          let _ = if parse_stuck then emit_event("compose_retry_reset", ctx.step, req.id, ["\"attempt\":${show(attempt + 1)}", "\"signature\":${json_escape(sig)}", "\"streak\":${show(streak + 1)}"]) else ();
+          let _ = if type_stuck then emit_event("compose_retry_type_reset", ctx.step, req.id, ["\"attempt\":${show(attempt + 1)}", "\"signature\":${json_escape(sig)}", "\"streak\":${show(streak + 1)}"]) else ();
+          let _ = emit_event("compose_retry_mode", ctx.step, req.id, ["\"attempt\":${show(attempt + 1)}", "\"targeted_edit\":${if trim(next_snippet) == "" then "false" else "true"}"]);
+          let _ = emit_event("compose_retry", ctx.step, req.id, ["\"attempt\":${show(attempt + 1)}", "\"reason\":${json_escape(r.reason)}"]);
+          run_attempts(ctx, req, archive_key, next_snippet, author_tools_enabled, author_tools_budget, author_tools_max_bytes, author_tools_max_turns, cert_template_enabled, structured_authoring_enabled, structured_authoring_budget, structured_authoring_fallback_after, claimcheck_ledger_in_informalizer, intent_kind, model, caps, guard_mode, claimcheck_enabled, claimcheck_informalizer_model, claimcheck_comparator_model, claimcheck_timeout_ms, claimcheck_max_invocations, min_observed_chars, max_stdout_bytes, attempt + 1, max_attempts, next_prior_errors, r.ledger, r.reason, t0)
+        } else {
+          run_attempts(ctx, req, archive_key, r.last_snippet, author_tools_enabled, author_tools_budget, author_tools_max_bytes, author_tools_max_turns, cert_template_enabled, structured_authoring_enabled, structured_authoring_budget, structured_authoring_fallback_after, claimcheck_ledger_in_informalizer, intent_kind, model, caps, guard_mode, claimcheck_enabled, claimcheck_informalizer_model, claimcheck_comparator_model, claimcheck_timeout_ms, claimcheck_max_invocations, min_observed_chars, max_stdout_bytes, attempt + 1, max_attempts, prior_errors, r.ledger, r.reason, t0)
+        }
+      }
+    }
+  }
+}
+
+func handle_compose_tool(ctx: ExtCtx, req: { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] }, runtime_cfg: RuntimeConfig, snippet_caps: string) -> ToolResultEnvelope ! {IO, AI, Process, FS, Env, Clock} {
+  let t0 = now();
+  let explicit_kind = normalize_intent_kind(req.intent_kind);
+  let intent_kind = if explicit_kind == "" then derive_intent_kind(req.intent) else explicit_kind;
+  let compose_cfg = runtime_cfg.compose;
+  let model = if compose_cfg.subagent_model == "" then ctx.model else compose_cfg.subagent_model;
+  let max_attempts = clamp_positive(compose_cfg.max_attempts, 50);
+  let caps = caps_minus_avoid(snippet_caps, req.hints_avoid);
+  let guard_mode = trim(compose_cfg.effect_guard);
+  let claimcheck_enabled = compose_cfg.claimcheck.enabled;
+  let claimcheck_informalizer_model = if compose_cfg.claimcheck.informalizer_model == "" then model else compose_cfg.claimcheck.informalizer_model;
+  let claimcheck_comparator_model = if compose_cfg.claimcheck.comparator_model == "" then model else compose_cfg.claimcheck.comparator_model;
+  let claimcheck_timeout_ms = clamp_positive(compose_cfg.claimcheck.timeout_ms, 30000);
+  let claimcheck_max_invocations = clamp_positive(compose_cfg.claimcheck.max_invocations, 10);
+  let min_observed_chars = clamp_positive(compose_cfg.authoring.min_observed_chars, 180);
+  let max_stdout_bytes = clamp_positive(compose_cfg.authoring.stdout_max_bytes, 4000);
+  let structured_authoring_enabled = compose_cfg.authoring.structured;
+  let author_tools_enabled = compose_cfg.authoring.author_tools || structured_authoring_enabled;
+  let author_tools_budget = clamp_positive(compose_cfg.authoring.author_tools_budget, 25);
+  let author_tools_max_bytes = clamp_positive(compose_cfg.authoring.author_tools_max_bytes, 16384);
+  let author_tools_max_turns = clamp_positive(compose_cfg.authoring.author_tools_max_turns, 24);
+  let structured_authoring_budget = clamp_positive(compose_cfg.authoring.authoring_budget, 40);
+  let structured_authoring_fallback_after_raw = compose_cfg.authoring.fallback_after;
+  let structured_authoring_fallback_after = if structured_authoring_fallback_after_raw < 0 then 0 else structured_authoring_fallback_after_raw;
+  let claimcheck_ledger_in_informalizer = compose_cfg.claimcheck.ledger_in_informalizer;
+  let archive_key = "${req.id}_${show(t0)}";
+
+  let _ = emit_event(
+    "compose_start",
+    ctx.step,
+    req.id,
+    [
+      "\"intent\":${json_escape(req.intent)}",
+      "\"intent_kind\":${json_escape(intent_kind)}",
+      "\"claimcheck_enabled\":${if claimcheck_enabled && intent_kind == "analyze" then "true" else "false"}",
+      "\"author_tools_enabled\":${if author_tools_enabled then "true" else "false"}",
+      "\"structured_authoring_enabled\":${if structured_authoring_enabled then "true" else "false"}",
+      "\"model\":${json_escape(model)}",
+      "\"max_attempts\":${show(max_attempts)}"
+    ]
+  );
+
+  run_attempts(
+    ctx,
+    { id: req.id, intent: req.intent, expected_output: req.expected_output, hints_read: req.hints_read, hints_write: req.hints_write, hints_avoid: req.hints_avoid },
+    archive_key,
+    "",
+    author_tools_enabled,
+    author_tools_budget,
+    author_tools_max_bytes,
+    author_tools_max_turns,
+    compose_cfg.certificate_template,
+    structured_authoring_enabled,
+    structured_authoring_budget,
+    structured_authoring_fallback_after,
+    claimcheck_ledger_in_informalizer,
+    intent_kind,
+    model,
+    caps,
+    guard_mode,
+    claimcheck_enabled,
+    claimcheck_informalizer_model,
+    claimcheck_comparator_model,
+    claimcheck_timeout_ms,
+    claimcheck_max_invocations,
+    min_observed_chars,
+    max_stdout_bytes,
+    1,
+    max_attempts,
+    [],
+    init_ledger(author_tools_budget),
+    "",
+    t0
+  )
+}
+
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: RuntimeConfig, snippet_caps: string) -> ToolHandleDecision ! {IO, AI, Process, FS, Env, Clock} {
+  if not is_compose_tool_name(call.tool) then Delegate
+  else Handled(handle_compose_tool(ctx, compose_req_from_call(ctx, call), runtime_cfg, snippet_caps))
+}
+
+export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptDecision ! {IO, Process, FS, Clock} {
+  if mode != "inline" then NoIntercept
+  else {
+    let snippet = extract_ailang_fence(response_text);
+    if snippet == "" then NoIntercept
+    else {
+      let name = "inline_${show(now())}";
+      let path = "tmp/${name}.ail";
+      let _ = mkdirAll("${ctx.workdir}/tmp");
+      let clean = compose_file_body(snippet);
+      let _ = writeFile(path, "${compose_module_header(name)}\n\n${clean}");
+      let checked = check_snippet(path);
+      if not checked.ok then {
+        let _ = if fileExists(path) then removeFile(path) else ();
+        InterceptHandled({
+          tool_call_id: "inline-${show(ctx.step)}",
+          tool: "ComposeInline",
+          exit_code: 1,
+          stdout: "",
+          stderr: checked.errors,
+          metadata: jo([])
+        })
+      } else {
+        let ran = run_snippet(path, snippet_caps);
+        let _ = if fileExists(path) then removeFile(path) else ();
+        InterceptHandled(mk_result("inline-${show(ctx.step)}", "inline", 1, ran.stdout, ran.stderr, ran.exit_code, "inline snippet executed", ran.truncated, "{}"))
+      }
+    }
+  }
+}
+
+func no_budget_patch() -> BudgetPatch {
+  {
+    requested_total: None,
+    requested_solver: None,
+    requested_verifier: None
+  }
+}
+
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  no_budget_patch()
+}
+
+func no_finalize_decision() -> FinalizeDecision {
+  NoDecision
+}
+
+func join_csv(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${join_csv(rest)}"
+  }
+}
+
+export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  let composition_mode = runtime_cfg.compose.mode;
+  let snippet_caps = join_csv(runtime_cfg.tools.snippet_caps);
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle(ctx, call, runtime_cfg, snippet_caps)
+  };
+  let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_response_intercept(ctx, response_text, composition_mode, snippet_caps)
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    no_finalize_decision()
+  };
+  {
+    id: "compose",
+    provided_tools: provided_tools(),
+    on_build_system_prompt: on_build_system_prompt,
+    on_budget_plan: budget_hook,
+    on_tool_policy: \ctx call. on_tool_policy_with_mode(composition_mode, ctx, call),
+    on_tool_handle: handle,
+    on_response_intercept: intercept,
+    on_solver_candidate: finalize
+  }
+}

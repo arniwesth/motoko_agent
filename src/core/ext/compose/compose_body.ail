@@ -1,0 +1,22 @@
+module src/core/ext/compose/compose_body
+
+import std/string (trim, startsWith, split)
+
+func join_lines(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}\n${join_lines(rest)}"
+  }
+}
+
+func non_module_lines(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => if startsWith(trim(x), "module ") then non_module_lines(rest) else x :: non_module_lines(rest)
+  }
+}
+
+export func compose_file_body(snippet: string) -> string {
+  join_lines(non_module_lines(split(snippet, "\n")))
+}

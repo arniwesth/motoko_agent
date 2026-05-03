@@ -1,0 +1,31 @@
+query list_components()
+  @description("List all components")
+  @instruction("Use when you need all known system components")
+{
+  match {
+    $c: Component
+  }
+  return {
+    $c.slug,
+    $c.name,
+    $c.description,
+    $c.layer
+  }
+}
+
+query component_dependencies($slug: String)
+  @description("List one-hop dependencies for a component")
+  @instruction("Use when tracing direct component dependencies")
+{
+  match {
+    $c: Component { slug: $slug }
+    $c dependsOn $dep
+  }
+  return {
+    $c.slug,
+    $c.name,
+    $dep.slug,
+    $dep.name,
+    $dep.layer
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "sunholo/motoko_core"
+version = "0.1.0"
+edition = "1"
+module_prefix = "src"
+
+[exports]
+modules = [
+  "src/core/compress",
+  "src/core/config",
+  "src/core/tool_contract",
+  "src/core/types",
+  "src/core/ext/types"
+]
+
+[effects]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex"]

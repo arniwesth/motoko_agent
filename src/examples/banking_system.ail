@@ -1,0 +1,79 @@
+module src/examples/banking_system
+
+import std/list (length)
+import std/json (encode, jo, kv, js, jnum)
+
+-- A non-trivial program that simulates a simple banking system with 
+-- transaction history, using recursion and immutable state updates.
+
+type Transaction = { 
+  desc: string,
+  amount: float,
+  timestamp: int
+}
+
+type Account = { 
+  owner: string,
+  balance: float,
+  history: [Transaction]
+}
+
+pure func contains(str: string, pattern: string) -> bool = 
+  if (str == pattern) then true else false
+
+export func calculateTotalSpent(history: [Transaction], pattern: string) -> float = 
+  match history {
+    [] => 0.0,
+    t :: rest => 
+      let matchFound = if (contains(t.desc, pattern)) then 1.0 else 0.0 in
+      let currentVal = if (matchFound == 1.0) then t.amount else 0.0 in
+      currentVal + calculateTotalSpent(rest, pattern)
+  }
+
+export func processTransaction(acc: Account, desc: string, amount: float, time: int) -> Account = 
+  let newTx = {desc: desc, amount: amount, timestamp: time} in
+  let newHistory = acc.history ++ [newTx] in
+  let newBalance = acc.balance + amount in
+  {acc | balance: newBalance, history: newHistory}
+
+export func applyRecords(data: [{d: string, a: float, t: int}], acc: Account) -> Account = 
+  match data {
+    [] => acc,
+    r :: rest => 
+      let next = processTransaction(acc, r.d, r.a, r.t) in
+      applyRecords(rest, next)
+  }
+
+export func main() -> () ! {IO} {
+  let initialAccount = {
+    owner: "Alice",
+    balance: 1000.0,
+    history: []
+  };
+
+  let txData = [
+    {d: "Salary", a: 500.0, t: 101},
+    {d: "Groceries", a: -50.0, t: 102},
+    {d: "Coffee", a: -5.0, t: 103},
+    {d: "Rent", a: -400.0, t: 104},
+    {d: "Coffee", a: -6.0, t: 105}
+  ];
+
+  let finalAccount = applyRecords(txData, initialAccount);
+
+  let coffeeSpent = calculateTotalSpent(finalAccount.history, "Coffee");
+
+  println("--- Bank Statement ---");
+  println("Owner: ${finalAccount.owner}");
+  println("Final Balance: ${show(finalAccount.balance)}");
+  println("Total Transactions: ${show(length(finalAccount.history))}");
+  println("--- Spending Analysis ---");
+  println("Total spent on 'Coffee': ${show(coffeeSpent)}");
+  
+  println("Full History Log:");
+  println(encode(jo([
+    kv("owner", js(finalAccount.owner)),
+    kv("balance", jnum(finalAccount.balance)),
+    kv("history_count", jnum(length(finalAccount.history)))
+  ])));
+}

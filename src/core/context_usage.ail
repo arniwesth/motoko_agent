@@ -1,0 +1,39 @@
+module src/core/context_usage
+
+import std/string (length, startsWith, substring)
+import std/list (foldl)
+import src/core/types (Msg)
+
+export pure func estimate_tokens(msgs: [Msg], system: string) -> int =
+  let total = length(system) + foldl(\acc m. acc + length(m.content), 0, msgs) in
+  (total + 3) / 4
+
+pure func est0(system: string) -> int
+  tests [
+    ("",      0),
+    ("abcd",  1),
+    ("abcde", 2)
+  ]
+  { estimate_tokens([], system) }
+
+export pure func context_limit_for(model: string) -> int
+  tests [
+    ("anthropic/claude-sonnet-4-6",                 200000),
+    ("google/gemini-2.5-pro",                       2000000),
+    ("openrouter/anthropic/claude-sonnet-4-5",      200000),
+    ("openrouter/whatever",                         0),
+    ("totally-unknown",                             0)
+  ]
+  {
+    if model == "anthropic/claude-sonnet-4-6" then 200000
+    else if model == "anthropic/claude-sonnet-4-5" then 200000
+    else if model == "anthropic/claude-opus-4-6" then 200000
+    else if model == "anthropic/claude-haiku-4-5" then 200000
+    else if model == "openai/gpt-4o" then 128000
+    else if model == "openai/gpt-4o-mini" then 128000
+    else if model == "google/gemini-2.5-flash" then 1000000
+    else if model == "google/gemini-2.5-pro" then 2000000
+    else if startsWith(model, "openrouter/") then
+      context_limit_for(substring(model, length("openrouter/"), length(model)))
+    else 0
+  }

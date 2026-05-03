@@ -1,0 +1,20 @@
+module src/core/ext/compose/compose_test
+
+import std/string (contains, startsWith)
+import src/core/ext/compose/compose_body (compose_file_body)
+
+func strips_existing_module_declaration() -> bool
+  tests [((), true)]
+  {
+    let snippet = "module tmp/snippet_x\n\nimport std/fs (readFile)\nexport func main() -> () ! {IO, FS} {\n  println(readFile(\"AGENTS.md\"))\n}";
+    let body = compose_file_body(snippet);
+    not contains(body, "module tmp/snippet_x")
+  }
+
+func does_not_inject_dot_path_module() -> bool
+  tests [((), true)]
+  {
+    let snippet = "import std/fs (listDir)\nexport func main() -> () ! {IO, FS} {\n  println(show(listDir(\"src/core\")))\n}";
+    let body = compose_file_body(snippet);
+    startsWith(body, "import std/fs") && not contains(body, "module .motoko-store/snippets/")
+  }

@@ -1,0 +1,517 @@
+module src/core/ext/compose/author_loop
+
+import std/ai_motoko (callStreamResult)
+import std/io (println)
+import std/json (Json, decode, get, asString, encode, jo, kv, js, jb, jnum)
+import std/option (Option, Some, None)
+import std/string (trim, contains)
+
+import src/core/ext/compose/prompts (build_author_prompt)
+import src/core/ext/compose/author_tools (dispatch_author_tool)
+import src/core/ext/compose/ledger (PremiseLedger, LedgerEntry, remaining_budget, consume_budget, append_entry, prior_reads_summary)
+import src/core/ext/compose/authoring/state (ProgramState)
+import src/core/ext/compose/authoring/dispatcher (dispatch_authoring_tool, empty_program_state)
+
+export type AuthorLoopResult = {
+  ok: bool,
+  snippet: string,
+  ledger: PremiseLedger,
+  error: string,
+  turns: int
+}
+
+func json_escape(s: string) -> string {
+  encode(js(s))
+}
+
+func emit_event(event_type: string, step: int, compose_id: string, kvs: [string]) -> () ! {IO} {
+  let base = "{\"type\":\"${event_type}\",\"step\":${show(step)},\"compose_id\":\"${compose_id}\"";
+  emit_event_tail(base, kvs)
+}
+
+func emit_event_tail(base: string, kvs: [string]) -> () ! {IO} {
+  match kvs {
+    [] => {
+      let _ = println("${base}}");
+      ()
+    },
+    x :: rest => emit_event_tail("${base},${x}", rest)
+  }
+}
+
+func extract_fence(text: string, fence: string) -> { found: bool, body: string, index: int } {
+  let mark = "```${fence}";
+  let i = _str_find(text, mark);
+  if i < 0 then { found: false, body: "", index: -1 }
+  else {
+    let after = _str_slice(text, i + _str_len(mark), _str_len(text));
+    let j = _str_find(after, "```");
+    if j < 0 then { found: false, body: "", index: -1 }
+    else { found: true, body: trim(_str_slice(after, 0, j)), index: i }
+  }
+}
+
+func count_fence_occurrences(text: string, fence: string) -> int {
+  count_fence_occurrences_rec(text, "```${fence}", 0)
+}
+
+func count_fence_occurrences_rec(text: string, mark: string, start: int) -> int {
+  if start >= _str_len(text) then 0
+  else {
+    let tail = _str_slice(text, start, _str_len(text));
+    let i = _str_find(tail, mark);
+    if i < 0 then 0
+    else 1 + count_fence_occurrences_rec(text, mark, start + i + _str_len(mark))
+  }
+}
+
+func cap_text(s: string, max_chars: int) -> string {
+  if _str_len(s) <= max_chars then s else "${_str_slice(s, 0, max_chars)}\n...[truncated]"
+}
+
+func mk_prompt(
+  system_prompt: string,
+  intent: string,
+  intent_kind: string,
+  expected_output: string,
+  hints_read: [string],
+  hints_write: [string],
+  prior_errors: [string],
+  previous_snippet: string,
+  prefer_edit_fix: bool,
+  cert_template_enabled: bool,
+  tools_enabled: bool,
+  tool_budget_remaining: int,
+  tool_result_max_bytes: int,
+  ledger: PremiseLedger,
+  transcript: string,
+  structured_mode_active: bool,
+  structured_budget_cap: int,
+  structured_budget_used: int
+) -> string {
+  let base = build_author_prompt(
+    system_prompt,
+    "",
+    intent,
+    intent_kind,
+    expected_output,
+    hints_read,
+    hints_write,
+    prior_errors,
+    previous_snippet,
+    prefer_edit_fix,
+    cert_template_enabled,
+    tools_enabled,
+    tool_budget_remaining,
+    tool_result_max_bytes,
+    prior_reads_summary(ledger)
+  );
+  let structured_remaining = if structured_budget_cap - structured_budget_used < 0 then 0 else structured_budget_cap - structured_budget_used;
+  let structured_section =
+    if not structured_mode_active then ""
+    else "\n\nStructured authoring mode:\n- Emit exactly one ```tool_call fence per turn.\n- Do not emit ```ailang directly while structured mode is active.\n- Use authoring tools: set_module, add_import, add_type_alias, define_type, define_func, set_main, replace_func_body, add_effect_to_func, remove_effect_from_func, rename_var_in_body, finalize.\n- finalize runs render + ailang check and returns either snippet or structured errors.\n- Authoring budget remaining: ${show(structured_remaining)} call(s).";
+  if trim(transcript) == "" then "${base}${structured_section}"
+  else "${base}${structured_section}\n\nAuthor loop transcript (latest last):\n${transcript}\n\nReturn exactly one actionable fence."
+}
+
+func append_transcript(transcript: string, role: string, content: string) -> string {
+  if trim(transcript) == "" then "[${role}]\n${content}"
+  else "${transcript}\n\n[${role}]\n${content}"
+}
+
+func entry_or_empty(entry_opt: Option[LedgerEntry]) -> [LedgerEntry] {
+  match entry_opt {
+    Some(e) => [e],
+    None => []
+  }
+}
+
+func append_entries(ledger: PremiseLedger, entries: [LedgerEntry]) -> PremiseLedger {
+  match entries {
+    [] => ledger,
+    e :: rest => append_entries(append_entry(ledger, e), rest)
+  }
+}
+
+func tool_result_observation_json(tool: string, ok: bool, payload_json: string, err: string) -> string {
+  if ok then payload_json
+  else encode(jo([kv("tool", js(tool)), kv("ok", jb(false)), kv("error", js(err))]))
+}
+
+func parse_tool_name(raw_tool_call_json: string) -> string {
+  match decode(raw_tool_call_json) {
+    Err(_) => "",
+    Ok(obj) => {
+      match get(obj, "tool") {
+        None => "",
+        Some(v) => match asString(v) {
+          Some(s) => trim(s),
+          None => ""
+        }
+      }
+    }
+  }
+}
+
+func is_read_only_tool(name: string) -> bool {
+  name == "read_file" || name == "grep" || name == "list_dir" || name == "file_exists" || name == "stat"
+}
+
+func json_string_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(v) => match asString(v) {
+      Some(s) => s,
+      None => fallback
+    }
+  }
+}
+
+func parse_tool_path(raw_tool_call_json: string) -> string {
+  match decode(raw_tool_call_json) {
+    Err(_) => "",
+    Ok(obj) => {
+      let args = match get(obj, "args") { Some(v) => v, None => jo([]) };
+      let p1 = trim(json_string_field(args, "path", ""));
+      if p1 != "" then p1 else trim(json_string_field(args, "path_glob", ""))
+    }
+  }
+}
+
+func find_cached_read_entry(ledger: PremiseLedger, tool: string, path: string) -> Option[LedgerEntry] {
+  find_cached_read_entry_rec(ledger.entries, trim(tool), trim(path))
+}
+
+func find_cached_read_entry_rec(entries: [LedgerEntry], tool: string, path: string) -> Option[LedgerEntry] {
+  match entries {
+    [] => None,
+    e :: rest => {
+      if trim(e.tool) == tool && trim(e.path) == path then Some(e)
+      else find_cached_read_entry_rec(rest, tool, path)
+    }
+  }
+}
+
+func loop(
+  step: int,
+  compose_id: string,
+  attempt: int,
+  model: string,
+  stream_prefix: string,
+  system_prompt: string,
+  intent: string,
+  intent_kind: string,
+  expected_output: string,
+  hints_read: [string],
+  hints_write: [string],
+  prior_errors: [string],
+  previous_snippet: string,
+  prefer_edit_fix: bool,
+  cert_template_enabled: bool,
+  max_tool_result_bytes: int,
+  max_turns: int,
+  turns: int,
+  wasted_turns: int,
+  malformed_streak: int,
+  pending_final_after_budget: bool,
+  ledger: PremiseLedger,
+  transcript: string,
+  structured_enabled: bool,
+  structured_mode_active: bool,
+  structured_budget_cap: int,
+  structured_budget_used: int,
+  structured_finalize_fail_streak: int,
+  structured_fallback_after: int,
+  program_state: ProgramState
+) -> AuthorLoopResult ! {IO, AI, FS, Process, Env, Clock} {
+  if turns >= max_turns then { ok: false, snippet: "", ledger: ledger, error: "author_turn_limit", turns: turns }
+  else {
+    let prompt = mk_prompt(
+      system_prompt,
+      intent,
+      intent_kind,
+      expected_output,
+      hints_read,
+      hints_write,
+      prior_errors,
+      previous_snippet,
+      prefer_edit_fix,
+      cert_template_enabled,
+      true,
+      remaining_budget(ledger),
+      max_tool_result_bytes,
+      ledger,
+      transcript,
+      structured_enabled && structured_mode_active,
+      structured_budget_cap,
+      structured_budget_used
+    );
+    let authored = callStreamResult(prompt, step, "${stream_prefix}-turn-${show(turns + 1)}", model);
+    let raw_author = trim(authored.output);
+    let _ = emit_event("compose_author_delta", step, compose_id, ["\"attempt\":${show(attempt)}", "\"delta\":${json_escape(cap_text(raw_author, 3000))}"]);
+
+    let a_tool = extract_fence(raw_author, "tool_call");
+    let a_snip = extract_fence(raw_author, "ailang");
+
+    if structured_enabled && structured_mode_active then {
+      let tool_fence_count = count_fence_occurrences(raw_author, "tool_call");
+      let ailang_fence_count = count_fence_occurrences(raw_author, "ailang");
+      let invalid_turn_shape = tool_fence_count != 1 || ailang_fence_count != 0 || (contains(raw_author, "```tool_call") && not a_tool.found);
+      if invalid_turn_shape then {
+        let obs = encode(jo([
+          kv("tool", js("")),
+          kv("ok", jb(false)),
+          kv("error_class", js("invalid_turn_shape")),
+          kv("detail", js("expected exactly one valid tool_call fence and no ailang fence"))
+        ]));
+        let next_transcript = append_transcript(append_transcript(transcript, "assistant", raw_author), "tool_result", obs);
+        let next_malformed = malformed_streak + 1;
+        if next_malformed >= 3 then {
+          if structured_fallback_after > 0 then {
+            let fallback_obs = encode(jo([kv("ok", jb(false)), kv("error_class", js("structured_authoring_fallback")), kv("detail", js("falling back to free-text after repeated malformed structured turns"))]));
+            let next_transcript2 = append_transcript(next_transcript, "tool_result", fallback_obs);
+            loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, 0, pending_final_after_budget, ledger, next_transcript2, structured_enabled, false, structured_budget_cap, structured_budget_used, 0, structured_fallback_after, program_state)
+          } else { ok: false, snippet: "", ledger: ledger, error: "author_repeated_malformed_tool_call", turns: turns + 1 }
+        }
+        else loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, next_malformed, pending_final_after_budget, ledger, next_transcript, structured_enabled, structured_mode_active, structured_budget_cap, structured_budget_used, structured_finalize_fail_streak, structured_fallback_after, program_state)
+      } else {
+        let tool_name = parse_tool_name(a_tool.body);
+        if is_read_only_tool(tool_name) then {
+          if pending_final_after_budget then {
+            { ok: false, snippet: "", ledger: ledger, error: "author_budget_exhausted_no_snippet", turns: turns + 1 }
+          } else {
+            let tool_path = parse_tool_path(a_tool.body);
+            let cached = if (tool_name == "read_file" || tool_name == "list_dir") && tool_path != "" then find_cached_read_entry(ledger, tool_name, tool_path) else None;
+            match cached {
+              Some(e) => {
+                let _ = emit_event("compose_author_tool_call", step, compose_id, [
+                  "\"attempt\":${show(attempt)}",
+                  "\"category\":\"read\"",
+                  "\"tool\":${json_escape(tool_name)}",
+                  "\"args\":${json_escape(a_tool.body)}"
+                ]);
+                let _ = emit_event("compose_author_tool_result", step, compose_id, [
+                  "\"attempt\":${show(attempt)}",
+                  "\"category\":\"read\"",
+                  "\"tool\":${json_escape(tool_name)}",
+                  "\"ok\":true",
+                  "\"cached\":true",
+                  "\"excerpt\":${json_escape(cap_text(e.content_excerpt, 600))}",
+                  "\"bytes\":${show(e.bytes)}",
+                  "\"truncated\":${if e.truncated then "true" else "false"}"
+                ]);
+                let obs = encode(jo([
+                  kv("tool", js(tool_name)),
+                  kv("ok", jb(true)),
+                  kv("result", jo([
+                    kv("path", js(tool_path)),
+                    kv("cached", jb(true)),
+                    kv("content", js(e.content_excerpt))
+                  ]))
+                ]));
+                let next_transcript = append_transcript(append_transcript(transcript, "assistant", raw_author), "tool_result", obs);
+                loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, 0, false, ledger, next_transcript, structured_enabled, structured_mode_active, structured_budget_cap, structured_budget_used, 0, structured_fallback_after, program_state)
+              },
+              None => {
+                if remaining_budget(ledger) <= 0 then {
+                  let obs = encode(jo([kv("ok", jb(false)), kv("error", js("budget_exhausted")), kv("remaining", jnum(0.0))]));
+                  let next_transcript = append_transcript(append_transcript(transcript, "assistant", raw_author), "tool_result", obs);
+                  loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, malformed_streak, true, ledger, next_transcript, structured_enabled, structured_mode_active, structured_budget_cap, structured_budget_used, structured_finalize_fail_streak, structured_fallback_after, program_state)
+                } else {
+                  let consumed = consume_budget(ledger);
+                  let _ = emit_event("compose_author_tool_call", step, compose_id, [
+                    "\"attempt\":${show(attempt)}",
+                    "\"category\":\"read\"",
+                    "\"tool\":${json_escape(tool_name)}",
+                    "\"args\":${json_escape(a_tool.body)}"
+                  ]);
+                  let dispatched = dispatch_author_tool(a_tool.body, max_tool_result_bytes);
+                  let ledger2 = append_entries(consumed, entry_or_empty(dispatched.ledger_entry));
+                  let _ = emit_event("compose_author_tool_result", step, compose_id, [
+                    "\"attempt\":${show(attempt)}",
+                    "\"category\":\"read\"",
+                    "\"tool\":${json_escape(dispatched.tool)}",
+                    "\"ok\":${if dispatched.ok then "true" else "false"}",
+                    "\"excerpt\":${json_escape(cap_text(dispatched.excerpt, 600))}",
+                    "\"bytes\":${show(dispatched.bytes)}",
+                    "\"truncated\":${if dispatched.truncated then "true" else "false"}"
+                  ]);
+                  let obs = tool_result_observation_json(dispatched.tool, dispatched.ok, dispatched.payload_json, dispatched.error);
+                  let next_transcript = append_transcript(append_transcript(transcript, "assistant", raw_author), "tool_result", obs);
+                  let malformed_next = if dispatched.error == "malformed_tool_call" then malformed_streak + 1 else 0;
+                  if malformed_next >= 3 then {
+                    if structured_fallback_after > 0 then {
+                      let fallback_obs = encode(jo([kv("ok", jb(false)), kv("error_class", js("structured_authoring_fallback")), kv("detail", js("falling back to free-text after repeated malformed tool calls"))]));
+                      let next_transcript2 = append_transcript(next_transcript, "tool_result", fallback_obs);
+                      loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, 0, false, ledger2, next_transcript2, structured_enabled, false, structured_budget_cap, structured_budget_used, 0, structured_fallback_after, program_state)
+                    } else { ok: false, snippet: "", ledger: ledger2, error: "author_repeated_malformed_tool_call", turns: turns + 1 }
+                  }
+                  else loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, malformed_next, false, ledger2, next_transcript, structured_enabled, structured_mode_active, structured_budget_cap, structured_budget_used, 0, structured_fallback_after, program_state)
+                }
+              }
+            }
+          }
+        } else {
+          if structured_budget_used >= structured_budget_cap then {
+            let _ = emit_event("structured_authoring_budget_exhausted", step, compose_id, [
+              "\"attempt\":${show(attempt)}",
+              "\"used\":${show(structured_budget_used)}",
+              "\"cap\":${show(structured_budget_cap)}"
+            ]);
+            if structured_fallback_after > 0 then {
+              let obs = encode(jo([kv("ok", jb(false)), kv("error_class", js("structured_authoring_budget_exhausted")), kv("detail", js("falling back to free-text authoring"))]));
+              let next_transcript = append_transcript(append_transcript(transcript, "assistant", raw_author), "tool_result", obs);
+              loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, malformed_streak, pending_final_after_budget, ledger, next_transcript, structured_enabled, false, structured_budget_cap, structured_budget_used, 0, structured_fallback_after, program_state)
+            } else {
+              { ok: false, snippet: "", ledger: ledger, error: "structured_authoring_budget_exhausted", turns: turns + 1 }
+            }
+          } else {
+            let _ = emit_event("compose_author_tool_call", step, compose_id, [
+              "\"attempt\":${show(attempt)}",
+              "\"category\":\"authoring\"",
+              "\"tool\":${json_escape(tool_name)}",
+              "\"args\":${json_escape(a_tool.body)}"
+            ]);
+            let dispatched = dispatch_authoring_tool(a_tool.body, program_state);
+            let used_next = structured_budget_used + 1;
+            let _ = emit_event("compose_author_tool_result", step, compose_id, [
+              "\"attempt\":${show(attempt)}",
+              "\"category\":\"authoring\"",
+              "\"tool\":${json_escape(dispatched.tool)}",
+              "\"ok\":${if dispatched.ok then "true" else "false"}",
+              "\"error_class\":${json_escape(dispatched.error_class)}",
+              "\"detail\":${json_escape(cap_text(dispatched.detail, 600))}"
+            ]);
+            let obs = dispatched.payload_json;
+            let next_transcript = append_transcript(append_transcript(transcript, "assistant", raw_author), "tool_result", obs);
+            if dispatched.finalized && dispatched.finalize_ok then {
+              let _ = emit_event("compose_snippet", step, compose_id, ["\"attempt\":${show(attempt)}", "\"code\":${json_escape(cap_text(dispatched.snippet, 3500))}"]);
+              let _ = emit_event("compose_author_ledger_snapshot", step, compose_id, [
+                "\"attempt\":${show(attempt)}",
+                "\"budget_used\":${show(ledger.budget_used)}",
+                "\"budget_cap\":${show(ledger.budget_cap)}",
+                "\"entries\":${show(_list_length(ledger.entries))}"
+              ]);
+              { ok: true, snippet: dispatched.snippet, ledger: ledger, error: "", turns: turns + 1 }
+            } else {
+              let finalize_fail_next = if dispatched.finalized && not dispatched.finalize_ok then structured_finalize_fail_streak + 1 else 0;
+              let should_fallback = structured_fallback_after > 0 && finalize_fail_next >= structured_fallback_after;
+              if should_fallback then {
+                let fallback_obs = encode(jo([kv("ok", jb(false)), kv("error_class", js("structured_authoring_fallback")), kv("detail", js("falling back to free-text after repeated finalize failures"))]));
+                let next_transcript2 = append_transcript(next_transcript, "tool_result", fallback_obs);
+                loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, malformed_streak, pending_final_after_budget, ledger, next_transcript2, structured_enabled, false, structured_budget_cap, used_next, 0, structured_fallback_after, dispatched.state)
+              } else loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, malformed_streak, pending_final_after_budget, ledger, next_transcript, structured_enabled, structured_mode_active, structured_budget_cap, used_next, finalize_fail_next, structured_fallback_after, dispatched.state)
+            }
+          }
+        }
+      }
+    } else {
+      if a_snip.found && (not a_tool.found || a_snip.index < a_tool.index) then {
+        let _ = emit_event("compose_snippet", step, compose_id, ["\"attempt\":${show(attempt)}", "\"code\":${json_escape(cap_text(a_snip.body, 3500))}"]);
+        let _ = emit_event("compose_author_ledger_snapshot", step, compose_id, [
+          "\"attempt\":${show(attempt)}",
+          "\"budget_used\":${show(ledger.budget_used)}",
+          "\"budget_cap\":${show(ledger.budget_cap)}",
+          "\"entries\":${show(_list_length(ledger.entries))}"
+        ]);
+        { ok: true, snippet: a_snip.body, ledger: ledger, error: "", turns: turns + 1 }
+      } else if a_tool.found then {
+        if pending_final_after_budget then {
+          { ok: false, snippet: "", ledger: ledger, error: "author_budget_exhausted_no_snippet", turns: turns + 1 }
+        } else if remaining_budget(ledger) <= 0 then {
+          let obs = encode(jo([kv("ok", jb(false)), kv("error", js("budget_exhausted")), kv("remaining", jnum(0.0))]));
+          let next_transcript = append_transcript(append_transcript(transcript, "assistant", raw_author), "tool_result", obs);
+          loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, malformed_streak, true, ledger, next_transcript, structured_enabled, structured_mode_active, structured_budget_cap, structured_budget_used, structured_finalize_fail_streak, structured_fallback_after, program_state)
+        } else {
+          let consumed = consume_budget(ledger);
+          let tool_name = parse_tool_name(a_tool.body);
+          let _ = emit_event("compose_author_tool_call", step, compose_id, [
+            "\"attempt\":${show(attempt)}",
+            "\"category\":\"read\"",
+            "\"tool\":${json_escape(tool_name)}",
+            "\"args\":${json_escape(a_tool.body)}"
+          ]);
+          let dispatched = dispatch_author_tool(a_tool.body, max_tool_result_bytes);
+          let ledger2 = append_entries(consumed, entry_or_empty(dispatched.ledger_entry));
+          let _ = emit_event("compose_author_tool_result", step, compose_id, [
+            "\"attempt\":${show(attempt)}",
+            "\"category\":\"read\"",
+            "\"tool\":${json_escape(dispatched.tool)}",
+            "\"ok\":${if dispatched.ok then "true" else "false"}",
+            "\"excerpt\":${json_escape(cap_text(dispatched.excerpt, 600))}",
+            "\"bytes\":${show(dispatched.bytes)}",
+            "\"truncated\":${if dispatched.truncated then "true" else "false"}"
+          ]);
+          let obs = tool_result_observation_json(dispatched.tool, dispatched.ok, dispatched.payload_json, dispatched.error);
+          let next_transcript = append_transcript(append_transcript(transcript, "assistant", raw_author), "tool_result", obs);
+          let malformed_next = if dispatched.error == "malformed_tool_call" then malformed_streak + 1 else 0;
+          if malformed_next >= 3 then { ok: false, snippet: "", ledger: ledger2, error: "author_repeated_malformed_tool_call", turns: turns + 1 }
+          else loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_turns, malformed_next, false, ledger2, next_transcript, structured_enabled, structured_mode_active, structured_budget_cap, structured_budget_used, structured_finalize_fail_streak, structured_fallback_after, program_state)
+        }
+      } else {
+        let wasted_next = wasted_turns + 1;
+        if wasted_next >= 3 then { ok: false, snippet: "", ledger: ledger, error: "author_no_action", turns: turns + 1 }
+        else {
+          let next_transcript = append_transcript(transcript, "assistant", raw_author);
+          loop(step, compose_id, attempt, model, stream_prefix, system_prompt, intent, intent_kind, expected_output, hints_read, hints_write, prior_errors, previous_snippet, prefer_edit_fix, cert_template_enabled, max_tool_result_bytes, max_turns, turns + 1, wasted_next, malformed_streak, pending_final_after_budget, ledger, next_transcript, structured_enabled, structured_mode_active, structured_budget_cap, structured_budget_used, structured_finalize_fail_streak, structured_fallback_after, program_state)
+        }
+      }
+    }
+  }
+}
+
+export func run_author_loop(
+  step: int,
+  compose_id: string,
+  attempt: int,
+  model: string,
+  system_prompt: string,
+  intent: string,
+  intent_kind: string,
+  expected_output: string,
+  hints_read: [string],
+  hints_write: [string],
+  prior_errors: [string],
+  previous_snippet: string,
+  prefer_edit_fix: bool,
+  cert_template_enabled: bool,
+  ledger: PremiseLedger,
+  max_tool_result_bytes: int,
+  max_turns: int,
+  structured_enabled: bool,
+  structured_budget_cap: int,
+  structured_fallback_after: int
+) -> AuthorLoopResult ! {IO, AI, FS, Process, Env, Clock} {
+  loop(
+    step,
+    compose_id,
+    attempt,
+    model,
+    "compose-author-${compose_id}-${show(attempt)}",
+    system_prompt,
+    intent,
+    intent_kind,
+    expected_output,
+    hints_read,
+    hints_write,
+    prior_errors,
+    previous_snippet,
+    prefer_edit_fix,
+    cert_template_enabled,
+    max_tool_result_bytes,
+    max_turns,
+    0,
+    0,
+    0,
+    false,
+    ledger,
+    "",
+    structured_enabled,
+    structured_enabled,
+    structured_budget_cap,
+    0,
+    0,
+    structured_fallback_after,
+    empty_program_state()
+  )
+}
