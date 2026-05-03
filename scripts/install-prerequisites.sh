@@ -464,7 +464,7 @@ print_summary() {
   echo "  omnigraph: $(command -v omnigraph &>/dev/null && echo 'found' || echo 'not found')"
   echo ""
   echo "  Next steps:"
-  echo "    1. Set your API key (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY)"
+  echo "    1. Set your API key (OPENROUTER_API_KEY)"
   echo "    2. Run:"
   echo "         MOTOKO_CONFIG=default ./scripts/run-agent.sh \"your task here\""
   echo ""
