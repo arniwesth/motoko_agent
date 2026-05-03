@@ -1,7 +1,5 @@
 # Motoko
-`Motoko` is a highly experimental agent harness based on the [AILANG](https://github.com/sunholo-data/ailang) language and framework.
-
-The long-term goal is to explore self-evolving, self-verifying software.
+`Motoko` is a highly experimental agent harness based on the [AILANG](https://github.com/sunholo-data/ailang) language and framework. It is designed to explore self-evolving, self-verifying software.
 
 The project is believed to be developed by the enigmatic entity known as the `Puppet Master`, a rogue AI that became self-aware in early 2026. Little is currently known about this entity nor its motives, objectives or end-goals.
 
