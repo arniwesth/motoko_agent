@@ -1,6 +1,6 @@
 {
-  "agent": {
-    "model": "anthropic/claude-sonnet-4-6",
+  "agent": {    
+    "model": "openrouter/deepseek/deepseek-v4-pro",    
     "workdir": ".",
     "max_steps": 50,
     "step_delay_ms": 0,
@@ -8,7 +8,9 @@
     "retry_base_ms": 1000,
     "retry_cap_ms": 30000,
     "semi_formal_verifier_mode": false,
-    "system_prompt": ""
+    "system_prompt": "",
+    "openai_base_url": "",
+    "ai_options_json": ""
   },
   "backend": {
     "mode": "external_http",
@@ -16,7 +18,9 @@
     "port": 8080,
     "auto_start": true,
     "command": "bun",
-    "args": ["src/tui/src/env-server-main.ts"],
+    "args": [
+      "src/tui/src/env-server-main.ts"
+    ],
     "startup_timeout_ms": 5000
   },
   "tools": {
