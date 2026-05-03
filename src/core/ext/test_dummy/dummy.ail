@@ -3,8 +3,8 @@ module src/core/ext/test_dummy/dummy
 import std/option (Option, Some, None)
 import std/env (getEnvOr)
 import std/json (jo)
-import pkg/sunholo/motoko_core/tool_contract (ToolCallEnvelope)
-import pkg/sunholo/motoko_core/ext/types (ExtCtx, ExtensionHooks, PromptPatch, BudgetPatch, ToolPolicyDecision, FinalizeDecision, ToolHandleDecision, ResponseInterceptDecision)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/ext/types (ExtCtx, ExtensionHooks, PromptPatch, BudgetPatch, BudgetPlan, ToolPolicyDecision, FinalizeDecision, ToolHandleDecision, ResponseInterceptDecision)
 
 func normalize_decision(s: string) -> string {
   if s == "allow" then "allow"
@@ -126,7 +126,7 @@ func load_config() -> DummyConfig ! {Env} {
   }
 }
 
-export func register() -> ExtensionHooks ! {Env} {
+export func register() -> ExtensionHooks ! {Env, FS} {
   let cfg = load_config();
   let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
     on_tool_handle(cfg.tool_decision, call)
@@ -141,7 +141,7 @@ export func register() -> ExtensionHooks ! {Env} {
     id: "test_dummy",
     provided_tools: [],
     on_build_system_prompt: \_ctx. on_build_system_prompt(cfg.prompt),
-    on_budget_plan: \_ctx _plan. on_budget_plan(cfg.budget_total),
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} { on_budget_plan(cfg.budget_total) },
     on_tool_policy: \_ctx call. on_tool_policy(cfg.tool_decision, call),
     on_tool_handle: handle,
     on_response_intercept: intercept,

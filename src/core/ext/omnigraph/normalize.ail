@@ -3,7 +3,7 @@ module src/core/ext/omnigraph/normalize
 import std/json (Json, encode, jo, kv, js, get, asString)
 import std/option (Option, Some, None)
 import std/string (toLower, trim)
-import pkg/sunholo/motoko_core/tool_contract (ToolCallEnvelope)
+import src/core/tool_contract (ToolCallEnvelope)
 
 func canonical_omnigraph_tool(raw: string) -> string {
   let t = toLower(trim(raw));
