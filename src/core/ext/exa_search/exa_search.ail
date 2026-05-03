@@ -109,12 +109,11 @@ func mappings_define_expected_canonicals() -> bool
   tests [((), true)]
   {
     let names = all_tool_names(tool_mappings());
-    list_len(names) == 16
+    list_len(names) == 12
       && first_or_empty(names) == "ExaSearch"
       && eq_string_list(names, [
         "ExaSearch", "exa_search", "exa.search", "exa_search.search",
-        "ExaSearchDeep", "exa_search_deep", "exa.search_deep", "exa_search.deep",
-        "ExaSearchCode", "exa_search_code", "exa.search_code", "exa_search.code",
+        "ExaFetch", "exa_fetch", "exa.fetch", "exa_search.fetch",
         "ExaCrawl", "exa_crawl", "exa.crawl", "exa_search.crawl"
       ])
   }
@@ -122,8 +121,8 @@ func mappings_define_expected_canonicals() -> bool
 func alias_resolves_to_mcp_tool() -> bool
   tests [((), true)]
   {
-    match resolve_tool("exa.search_deep", tool_mappings()) {
-      Some(m) => m.canonical == "ExaSearchDeep" && m.mcp_name == "deep_search_exa",
+    match resolve_tool("exa.fetch", tool_mappings()) {
+      Some(m) => m.canonical == "ExaFetch" && m.mcp_name == "web_fetch_exa",
       None => false
     }
   }

@@ -3,7 +3,7 @@ module src/core/ext/exa_search/types
 import src/core/ext/mcp/types (McpServerConfig, McpToolMapping)
 
 export func tool_filter() -> [string] {
-  ["web_search_exa", "deep_search_exa", "get_code_context_exa", "crawling_exa"]
+  ["web_search_exa", "web_fetch_exa"]
 }
 
 export func tool_mappings() -> [McpToolMapping] {
@@ -14,18 +14,13 @@ export func tool_mappings() -> [McpToolMapping] {
       aliases: ["exa_search", "exa.search", "exa_search.search"]
     },
     {
-      canonical: "ExaSearchDeep",
-      mcp_name: "deep_search_exa",
-      aliases: ["exa_search_deep", "exa.search_deep", "exa_search.deep"]
-    },
-    {
-      canonical: "ExaSearchCode",
-      mcp_name: "get_code_context_exa",
-      aliases: ["exa_search_code", "exa.search_code", "exa_search.code"]
+      canonical: "ExaFetch",
+      mcp_name: "web_fetch_exa",
+      aliases: ["exa_fetch", "exa.fetch", "exa_search.fetch"]
     },
     {
       canonical: "ExaCrawl",
-      mcp_name: "crawling_exa",
+      mcp_name: "web_fetch_exa",
       aliases: ["exa_crawl", "exa.crawl", "exa_search.crawl"]
     }
   ]
