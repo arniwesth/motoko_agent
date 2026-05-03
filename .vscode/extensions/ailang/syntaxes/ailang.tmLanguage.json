@@ -1,0 +1,355 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "AILANG",
+  "scopeName": "source.ailang",
+  "fileTypes": ["ail"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#module-declaration" },
+    { "include": "#import-statement" },
+    { "include": "#export-statement" },
+    { "include": "#type-declaration" },
+    { "include": "#function-declaration" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#types" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "comment": "Double-dash comments (Haskell style)",
+          "name": "comment.line.double-dash.ailang",
+          "match": "--.*$"
+        },
+        {
+          "comment": "Double-slash comments (C style)",
+          "name": "comment.line.double-slash.ailang",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "module-declaration": {
+      "patterns": [
+        {
+          "match": "\\b(module)\\s+([a-zA-Z][a-zA-Z0-9_/]*)",
+          "captures": {
+            "1": { "name": "keyword.other.module.ailang" },
+            "2": { "name": "entity.name.namespace.ailang" }
+          }
+        }
+      ]
+    },
+    "import-statement": {
+      "patterns": [
+        {
+          "match": "\\b(import)\\s+([a-zA-Z][a-zA-Z0-9_/]*)(?:\\s+(as)\\s+([A-Z][a-zA-Z0-9]*))?",
+          "captures": {
+            "1": { "name": "keyword.control.import.ailang" },
+            "2": { "name": "entity.name.namespace.ailang" },
+            "3": { "name": "keyword.other.as.ailang" },
+            "4": { "name": "entity.name.namespace.alias.ailang" }
+          }
+        }
+      ]
+    },
+    "export-statement": {
+      "patterns": [
+        {
+          "match": "\\b(export)\\s+(func)\\s+([a-z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.export.ailang" },
+            "2": { "name": "keyword.other.func.ailang" },
+            "3": { "name": "entity.name.function.ailang" }
+          }
+        },
+        {
+          "match": "\\b(export)\\s+(type)\\s+([A-Z][a-zA-Z0-9]*)",
+          "captures": {
+            "1": { "name": "keyword.control.export.ailang" },
+            "2": { "name": "keyword.other.type.ailang" },
+            "3": { "name": "entity.name.type.ailang" }
+          }
+        }
+      ]
+    },
+    "type-declaration": {
+      "patterns": [
+        {
+          "match": "\\b(type)\\s+([A-Z][a-zA-Z0-9]*)(?:\\s*\\[([a-zA-Z,\\s]+)\\])?\\s*=",
+          "captures": {
+            "1": { "name": "keyword.other.type.ailang" },
+            "2": { "name": "entity.name.type.ailang" },
+            "3": { "name": "variable.parameter.type.ailang" }
+          }
+        }
+      ]
+    },
+    "function-declaration": {
+      "patterns": [
+        {
+          "match": "\\b(extern)\\s+(func)\\s+([a-z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.extern.ailang" },
+            "2": { "name": "keyword.other.func.ailang" },
+            "3": { "name": "entity.name.function.extern.ailang" }
+          }
+        },
+        {
+          "match": "\\b(func)\\s+([a-z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.func.ailang" },
+            "2": { "name": "entity.name.function.ailang" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "comment": "Control flow keywords",
+          "name": "keyword.control.ailang",
+          "match": "\\b(if|then|else|match|with)\\b"
+        },
+        {
+          "comment": "Binding keywords",
+          "name": "keyword.other.binding.ailang",
+          "match": "\\b(let|letrec|in|func|pure|export|import|module|extern|as)\\b"
+        },
+        {
+          "comment": "Type keywords",
+          "name": "keyword.other.type.ailang",
+          "match": "\\b(type|class|instance|forall|exists)\\b"
+        },
+        {
+          "comment": "Testing keywords",
+          "name": "keyword.other.testing.ailang",
+          "match": "\\b(test|tests|property|properties|assert)\\b"
+        },
+        {
+          "comment": "Concurrency keywords (CSP - future)",
+          "name": "keyword.other.concurrency.ailang",
+          "match": "\\b(spawn|parallel|select|channel|send|recv|timeout)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "comment": "Boolean literals",
+          "name": "constant.language.boolean.ailang",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "comment": "Unit value",
+          "name": "constant.language.unit.ailang",
+          "match": "\\(\\)"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "comment": "Double-quoted strings",
+          "name": "string.quoted.double.ailang",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.ailang",
+              "match": "\\\\[\"\\\\nrt0]"
+            },
+            {
+              "comment": "String interpolation (future)",
+              "name": "variable.other.interpolation.ailang",
+              "match": "\\$\\{[^}]+\\}"
+            }
+          ]
+        },
+        {
+          "comment": "Character literals",
+          "name": "string.quoted.single.ailang",
+          "match": "'(?:[^'\\\\]|\\\\[nrt0'\\\\])'"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "Hexadecimal integers",
+          "name": "constant.numeric.hex.ailang",
+          "match": "\\b0x[0-9a-fA-F]+\\b"
+        },
+        {
+          "comment": "Float with exponent",
+          "name": "constant.numeric.float.ailang",
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b"
+        },
+        {
+          "comment": "Float without exponent",
+          "name": "constant.numeric.float.ailang",
+          "match": "\\b\\d+\\.\\d+\\b"
+        },
+        {
+          "comment": "Integer",
+          "name": "constant.numeric.integer.ailang",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "comment": "Primitive types",
+          "name": "support.type.primitive.ailang",
+          "match": "\\b(int|float|bool|string|char|unit)\\b"
+        },
+        {
+          "comment": "Effect/Capability types",
+          "name": "support.type.effect.ailang",
+          "match": "\\b(IO|FS|Net|Clock|Env|Rand|Debug|AI)\\b"
+        },
+        {
+          "comment": "Standard library types",
+          "name": "support.type.stdlib.ailang",
+          "match": "\\b(Option|Result|List|Tuple|Array|Json)\\b"
+        },
+        {
+          "comment": "Type variables (lowercase in type context)",
+          "name": "variable.parameter.type.ailang",
+          "match": "\\[\\s*([a-z][a-zA-Z0-9]*)\\s*\\]",
+          "captures": {
+            "1": { "name": "variable.parameter.type.ailang" }
+          }
+        },
+        {
+          "comment": "User-defined types (capitalized identifiers)",
+          "name": "entity.name.type.ailang",
+          "match": "\\b[A-Z][a-zA-Z0-9]*\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Lambda arrow",
+          "name": "keyword.operator.lambda.ailang",
+          "match": "\\\\"
+        },
+        {
+          "comment": "Fat arrow (match arms)",
+          "name": "keyword.operator.arrow.ailang",
+          "match": "=>"
+        },
+        {
+          "comment": "Thin arrow (function types)",
+          "name": "keyword.operator.arrow.ailang",
+          "match": "->"
+        },
+        {
+          "comment": "Channel arrow",
+          "name": "keyword.operator.arrow.ailang",
+          "match": "<-"
+        },
+        {
+          "comment": "Cons operator",
+          "name": "keyword.operator.cons.ailang",
+          "match": "::"
+        },
+        {
+          "comment": "Append operator",
+          "name": "keyword.operator.append.ailang",
+          "match": "\\+\\+"
+        },
+        {
+          "comment": "Comparison operators",
+          "name": "keyword.operator.comparison.ailang",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "comment": "Logical operators",
+          "name": "keyword.operator.logical.ailang",
+          "match": "&&|\\|\\||\\bnot\\b"
+        },
+        {
+          "comment": "Arithmetic operators",
+          "name": "keyword.operator.arithmetic.ailang",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "comment": "Assignment",
+          "name": "keyword.operator.assignment.ailang",
+          "match": "="
+        },
+        {
+          "comment": "Effect marker",
+          "name": "keyword.operator.effect.ailang",
+          "match": "!"
+        },
+        {
+          "comment": "Type annotation",
+          "name": "keyword.operator.type.ailang",
+          "match": ":"
+        },
+        {
+          "comment": "Pipe (ADT variant separator)",
+          "name": "keyword.operator.pipe.ailang",
+          "match": "\\|"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "comment": "Brackets for type parameters",
+          "name": "punctuation.bracket.type.ailang",
+          "match": "[\\[\\]]"
+        },
+        {
+          "comment": "Braces",
+          "name": "punctuation.brace.ailang",
+          "match": "[{}]"
+        },
+        {
+          "comment": "Parentheses",
+          "name": "punctuation.parenthesis.ailang",
+          "match": "[()]"
+        },
+        {
+          "comment": "Comma separator",
+          "name": "punctuation.separator.comma.ailang",
+          "match": ","
+        },
+        {
+          "comment": "Semicolon separator",
+          "name": "punctuation.terminator.ailang",
+          "match": ";"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "comment": "Builtin functions (prefixed with underscore)",
+          "name": "support.function.builtin.ailang",
+          "match": "\\b_[a-z][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "comment": "Common prelude functions",
+          "name": "support.function.prelude.ailang",
+          "match": "\\b(print|println|show|intToFloat|floatToInt)\\b"
+        },
+        {
+          "comment": "Standard identifiers",
+          "name": "variable.other.ailang",
+          "match": "\\b[a-z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}
