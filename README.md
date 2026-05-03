@@ -54,13 +54,11 @@ make run TASK="Fix the off-by-one error in parse_config"
 
 The install script clones the AILANG runtime from `github.com/sunholo-data/ailang` (motoko branch), builds it, and installs it to `~/.local/bin/ailang`. No manual AILANG setup needed.
 
-### Docker
+### VS Code Dev Container
 
-```bash
-docker compose -f .devdocker/docker-compose.yml up --build
-```
+Open this repo in VS Code with the Dev Containers extension installed. The container pre-installs Go, Bun, Node, context-mode, and AILANG. After creation it builds the TUI automatically.
 
-The container pre-installs Go, Bun, Node, context-mode, and AILANG. It mounts the repo, builds the TUI, and drops you into a shell. Run `make run` inside.
+Run `make run` inside the container.
 
 ---
 
@@ -220,6 +218,8 @@ motoko_agent/
 ├── README.md
 ├── Makefile
 ├── .gitignore
+├── .vscode/                    VS Code settings + AILANG language extension
+├── .devcontainer/              VS Code dev container
 ├── src/
 │   ├── core/                   AILANG runtime modules
 │   │   ├── ext/                Extension modules
@@ -252,5 +252,4 @@ motoko_agent/
 ├── .agent/                         Design archive (plans, summaries, research)
 ├── omnigraph/                      Omnigraph schema, queries, seed, validator
 ├── papers/                         Curated research paper reading list
-└── .devdocker/                     Docker dev environment
 ```
