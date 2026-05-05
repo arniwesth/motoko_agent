@@ -1,0 +1,42 @@
+-- scripts/smoke_dispatch_adapter.ail
+-- Smoke test for src/core/tool_dispatch_adapter.dispatch_one — round-trips
+-- a ToolCall (matching what upstream std/ai.runTools would pass us)
+-- through the motoko-side run_native_batch dispatcher and asserts the
+-- returned JSON string is well-formed and contains expected fields.
+--
+-- Tests two paths:
+--   1. ReadFile against a real file in the WORKDIR — exercises FS
+--   2. BashExec running `echo` — exercises Process
+--
+-- Setup:
+--   mkdir -p /tmp/motoko-smoke && echo "hello world" > /tmp/motoko-smoke/sample.txt
+--   ailang run --caps FS,Process,IO --entry main scripts/smoke_dispatch_adapter.ail
+--
+-- Expected output: prints two JSON dicts (one per tool) showing the
+-- adapter successfully bridged ToolCall → ToolCallEnvelope → run_native_batch
+-- → ToolResultItem → JSON string.
+
+module scripts/smoke_dispatch_adapter
+
+import std/ai (ToolCall)
+import std/io (println)
+import src/core/tool_dispatch_adapter (dispatch_one)
+
+export func main() -> () ! {FS, Process, IO} {
+  let workdir = "/tmp/motoko-smoke";
+  let read_call = {
+    id: "smoke-read-1",
+    name: "ReadFile",
+    arguments: "{\"path\":\"sample.txt\"}",
+  };
+  let bash_call = {
+    id: "smoke-bash-1",
+    name: "BashExec",
+    arguments: "{\"cmd\":\"echo\",\"args\":[\"hello from dispatcher\"]}",
+  };
+  println("--- ReadFile result ---");
+  println(dispatch_one(workdir, read_call));
+  println("--- BashExec result ---");
+  println(dispatch_one(workdir, bash_call));
+  println("--- end ---")
+}

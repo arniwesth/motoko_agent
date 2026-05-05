@@ -65,15 +65,36 @@ The dispatch callback's `! {FS, Process}` effects propagate through `runTools` v
 
 ## Migration plan
 
-| M | Description | Estimated |
-|---|-------------|-----------|
-| **M1** | Build a small adapter module `src/core/tool_dispatch_adapter.ail` that wraps `run_native_batch` as a `(ToolCall) -> string` callback. ~50 LOC + unit tests | 30 min |
-| **M2** | Define motoko's tool catalog as `[ToolSchema]` (the fork's tool definitions are Json-Schema strings; lift them into AILANG `ToolSchema` records). ~80 LOC for the existing 6 tools (ReadFile, WriteFile, EditFile, BashExec, RunTests, Search) | 45 min |
-| **M3** | Replace `rpc.ail`'s tool-loop body with a `runTools(...)` call. Keep telemetry hooks (compose_*, ai_check, etc. emit_event calls) by wrapping them around the runTools call rather than threading through it. Tier 1 smoke per call site | 1.5–2 hours |
-| **M4** | Re-run motoko_agent end-to-end (TUI) against a benchmark task that exercises tool dispatch (e.g. "read README.md and summarize") | 30 min + iteration |
-| **M5** | Delete dead coordination code in `rpc.ail` and `tool_contract.ail` after M3 lands. Update CHANGELOG. | 30 min |
+| M | Description | Estimated | Status |
+|---|-------------|-----------|--------|
+| **M1** | Build a small adapter module `src/core/tool_dispatch_adapter.ail` that wraps `run_native_batch` as a `dispatch_one(workdir, ToolCall) -> string` callback. ~150 LOC + smoke test | 30 min | ✅ Shipped |
+| **M2** | Define motoko's tool catalog as `[ToolSchema]` in `src/core/tool_catalog.ail`. ~80 LOC for the existing 6 tools (ReadFile, WriteFile, EditFile, BashExec, RunTests, Search) | 45 min | ✅ Shipped |
+| **M3** | Replace `rpc.ail`'s tool-loop body with a `runTools(...)` call. **Scope revised upward** — see "M3 scope finding" below | **1-2 days** (originally estimated 1.5-2 hours) | 🔴 Blocked on design |
+| **M4** | Re-run motoko_agent end-to-end (TUI) against a benchmark task that exercises tool dispatch | 30 min + iteration | Pending M3 |
+| **M5** | Delete dead coordination code in `rpc.ail` and `tool_contract.ail` after M3 lands. Update CHANGELOG. | 30 min | Pending M3 |
 
-**Total estimate**: ~3.5–4 hours assuming v0.17.0 is tagged and the upstream API is stable.
+### M3 scope finding (added 2026-05-05 after walking rpc.ail in detail)
+
+The original sprint plan estimated M3 at "1.5-2 hours" assuming the tool loop in `rpc.ail` was a thin layer over `run_native_batch`. **It is not.** The loop interleaves at least 6 distinct decision points that upstream `runTools` doesn't currently model:
+
+1. **Extension intercept dispatch** (`ContinueWithFeedback` / `Accept` / `NoIntercept` / `NoDecision`) — `dispatch_response_intercept` is called BEFORE tool dispatch and can short-circuit the loop with a final answer or inject a feedback message.
+2. **Tool-call parser** — motoko's `parse_tool_calls` distinguishes `NoToolCalls` / `ToolParseError` / `ParsedToolCalls`, with the parse-error branch injecting a feedback message rather than retrying.
+3. **Tool gating policy** — `apply_tool_policy` filters allowed/denied calls per extension hooks; denied calls become `ToolErrorResult` items.
+4. **Tool-handle routing** — `route_tool_handles` lets extensions handle specific tool names directly (returning `ToolResultEnvelope`s) before the native dispatcher sees them.
+5. **Backend split** — `split_by_backend` divides calls between native (`run_native_batch`) and delegated (`ohmy_pi`) execution paths.
+6. **Continuation-intent detection** — `indicates_continuation_intent` injects a feedback message when the model's prose suggests it wants to continue without emitting tool calls.
+
+Plus per-step `emit_event` calls for telemetry (`ext_tool_calls`, `ext_tool_results`, `native_tool_calls`, `native_tool_results`, `done`, `thinking`).
+
+Upstream `runTools` provides the loop driver but no hooks for steps 1, 3, 4, 5, 6. To preserve motoko's behaviour, M3 needs one of:
+
+- **Option A**: Custom loop in motoko that calls upstream `step` directly and re-implements the extension dispatch / tool gating / backend split between turns. ~600 LOC; close to the existing rpc.ail tool-loop body. Net deletion is small.
+- **Option B**: Land all six hooks upstream as parameters / record fields on `runTools` (e.g. `RunToolsConfig { dispatch, on_response, on_call, on_result, ... }`). Substantial upstream design work; would let motoko's loop become ~30 LOC. Coordinate with the AILANG team.
+- **Option C**: Migrate motoko to a SIMPLER agent shape — drop ohmy_pi backend split + extension intercepts, accept the loss of those features in exchange for a thin rpc.ail. Larger user-facing decision, not a pure migration.
+
+**Recommendation**: defer M3 until the AILANG team and motoko team align on which option to pursue. M1 + M2 (this PR) are still useful — they lay the foundation for any of A/B/C and let new motoko consumers build on `runTools` directly without going through the legacy `rpc.ail` loop.
+
+**Total estimate (revised)**: M1+M2 shipped; M3 needs a separate design alignment before estimation.
 
 ## Open questions for arni
 
