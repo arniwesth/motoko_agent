@@ -39,7 +39,8 @@
 module src/core/ai_compat
 
 import std/ai/streaming (callStream)
-import std/json (jo, ja, kv, js, encode)
+import std/io (println)
+import std/json (jo, ja, kv, js, jnum, encode)
 import std/result (Result, Ok, Err)
 import std/string (startsWith, length, substring)
 
@@ -121,41 +122,100 @@ func status_code_for(code: string) -> int {
   else 0
 }
 
+-- Emit a JSON event line on stdout for the TS env-server to forward to the
+-- TUI. The event-stream protocol matches AgentEvent in
+-- src/tui/src/runtime-process.ts. emit_event is unbuffered (println) so the
+-- TUI sees progress in real time. Without these, the TUI shows
+-- "Input locked: task still running" with no progress for the entire turn.
+func emit_thinking_start(step: int, stream_id: string, model: string) -> () ! {IO} {
+  let payload = encode(jo([
+    kv("type", js("thinking_stream_start")),
+    kv("step", jnum(intToFloat(step))),
+    kv("stream_id", js(stream_id)),
+    kv("model", js(model))
+  ])) in
+  println(payload)
+}
+
+func emit_thinking_delta_event(step: int, stream_id: string, seq: int, text_delta: string) -> () ! {IO} {
+  let payload = encode(jo([
+    kv("type", js("thinking_delta")),
+    kv("step", jnum(intToFloat(step))),
+    kv("stream_id", js(stream_id)),
+    kv("seq", jnum(intToFloat(seq))),
+    kv("text_delta", js(text_delta))
+  ])) in
+  println(payload)
+}
+
+func emit_thinking_end(step: int, stream_id: string, status: string) -> () ! {IO} {
+  let payload = encode(jo([
+    kv("type", js("thinking_stream_end")),
+    kv("step", jnum(intToFloat(step))),
+    kv("stream_id", js(stream_id)),
+    kv("status", js(status))
+  ])) in
+  println(payload)
+}
+
 -- Synchronous-accumulator wrapper matching the fork's API exactly.
--- step + stream_id are accepted for source compatibility but currently
--- ignored — upstream's callStream emits one AI/streamCall trace span per
--- call which carries the equivalent telemetry.
+--
+-- v0.15.x migration trade-off: upstream's callStream is a synchronous
+-- accumulator (drives the SSE event loop in Go and returns the joined
+-- string). The fork's callStreamResult emitted per-token streaming events
+-- to the TUI as they arrived. To preserve responsive UX without rewriting
+-- against the lower-level openaiCompatStream + onEvent + runEventLoop
+-- primitives, this shim:
+--   1. Emits thinking_stream_start BEFORE the call (instant UI ack)
+--   2. Calls upstream callStream (synchronous, blocks until done)
+--   3. On success: emits a single thinking_delta with the full text, then
+--      thinking_stream_end with status="completed"
+--   4. On error:  emits thinking_stream_end with status="errored"
+--
+-- The user sees "thinking..." instantly, then the full response renders all
+-- at once when callStream returns. v1.1 of this shim should re-implement
+-- using openaiCompatStream + onEvent for true per-token UI updates; deferred
+-- because the AILANG ref + closure ergonomics needed to thread the
+-- accumulator through onEvent's callback are still v0.16.x territory.
 export func callStreamResult(
   input: string,
   step: int,
   stream_id: string,
   model: string
-) -> AIStreamResult ! {AI, Stream, Net} {
+) -> AIStreamResult ! {AI, Stream, Net, IO} {
   let provider_name = "motoko-or" in
   let resolved_model = model_for_provider(model) in
   let messages = messages_json_for(input) in
+  let _ = emit_thinking_start(step, stream_id, model) in
   match callStream(provider_name, resolved_model, messages) {
     Ok(text) => {
-      ok: true,
-      output: text,
-      chunks: [],            -- not surfaced by synchronous accumulator
-      streamed: true,
-      error_message: "",
-      provider: provider_name,
-      status_code: 200,
-      retryable: false,
-      error_code: ""
+      let _ = emit_thinking_delta_event(step, stream_id, 1, text) in
+      let _ = emit_thinking_end(step, stream_id, "completed") in
+      {
+        ok: true,
+        output: text,
+        chunks: [],
+        streamed: true,
+        error_message: "",
+        provider: provider_name,
+        status_code: 200,
+        retryable: false,
+        error_code: ""
+      }
     },
     Err(e) => {
-      ok: false,
-      output: "",
-      chunks: [],
-      streamed: true,
-      error_message: e.message,
-      provider: provider_name,
-      status_code: status_code_for(e.code),
-      retryable: e.retryable,
-      error_code: e.code
+      let _ = emit_thinking_end(step, stream_id, "errored") in
+      {
+        ok: false,
+        output: "",
+        chunks: [],
+        streamed: true,
+        error_message: e.message,
+        provider: provider_name,
+        status_code: status_code_for(e.code),
+        retryable: e.retryable,
+        error_code: e.code
+      }
     }
   }
 }
