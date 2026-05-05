@@ -41,7 +41,7 @@ module src/core/ai_compat
 import std/ai/streaming (callStream)
 import std/json (jo, ja, kv, js, encode)
 import std/result (Result, Ok, Err)
-import std/string (startsWith, length)
+import std/string (startsWith, length, substring)
 
 -- Unchanged from the fork's std/ai_motoko.AIError. Preserved here so call
 -- sites can `import src/core/ai_compat (callStreamResult, AIError)` without
@@ -92,26 +92,17 @@ func messages_json_for(input: string) -> string {
   encode(ja([userMsg]))
 }
 
--- Strip the "openrouter/" prefix from a model string. Returns the rest;
--- non-openrouter prefixes pass through unchanged (and will produce a
--- ProviderNotFound error downstream).
+-- Strip the "openrouter/" prefix from a model string so the upstream
+-- OpenRouter API receives the bare model identifier (e.g. "z-ai/glm-5",
+-- not "openrouter/z-ai/glm-5"). Non-openrouter prefixes pass through
+-- unchanged — they'll fail upstream with a ProviderNotFound or
+-- model-not-found error, which is the right outcome until separate
+-- [[ai_provider]] blocks for anthropic/openai/google are added.
 func model_for_provider(model: string) -> string {
   if startsWith(model, "openrouter/") then
-    -- substring(s, start, end) — strip the 11-char "openrouter/" prefix.
-    -- AILANG std/string.substring is left-inclusive, right-exclusive.
     let prefix_len = length("openrouter/") in
     let total = length(model) in
-    -- For now, since std/string doesn't expose substring directly here,
-    -- we route ALL openrouter/ models through a single shape — the model
-    -- string passed to the upstream provider is whatever OpenRouter expects.
-    -- In production motoko_agent, the model string is already in the right
-    -- shape (e.g. "z-ai/glm-5", "anthropic/claude-sonnet-4-5"). For now,
-    -- pass the full string through and let the provider's Models allow-list
-    -- filter; if not configured, OpenRouter will accept literally
-    -- "openrouter/z-ai/glm-5" and fail with a model-not-found error.
-    -- TODO: when std/string gets a slice/substring stable export, strip
-    -- the prefix here.
-    model
+    substring(model, prefix_len, total)
   else
     model
 }
