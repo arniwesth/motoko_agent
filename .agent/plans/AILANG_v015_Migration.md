@@ -96,7 +96,9 @@ import std/ai/streaming (callStream, AIError)
 --   -> Result[string, AIError] ! {AI, Stream, Net}
 -- AIError = { message: string, retryable: bool, code: string }
 
-let messagesJson = "[{\"role\":\"user\",\"content\":\"${escape(input)}\"}]";
+-- NOTE: callStream expects a JSON messages array, not the flat string that fmt_msgs produces.
+-- We must serialize [Msg] as JSON instead of using fmt_msgs. See Decision P6.
+let messagesJson = msgs_to_json(state.msgs);
 match callStream(providerName, model, messagesJson) {
   Ok(text) => Ok(text),
   Err(e) => Err({ message: e.message, provider: providerName,
@@ -110,7 +112,9 @@ match callStream(providerName, model, messagesJson) {
 2. `step` and `streamId` were used for trace spans; v0.15.1 handles tracing internally
 3. `AIError` upstream omits `provider` and `statusCode` — fill from caller context
 4. Return type is `Result[string, AIError]` instead of a record with `.ok` check
-5. Effect signature adds `Stream, Net` (currently only `AI, Clock` on the retry wrapper)
+5. Effect row: `Stream` and `Net` are already in `rpc_loop`'s effect signature and `ailang.toml` max effects — no propagation needed
+6. **Message format change**: The fork takes a flat string (produced by `fmt_msgs` which concatenates `[role]\ncontent\n\n`). Upstream `callStream` expects a JSON messages array. This requires replacing `fmt_msgs` with a JSON serializer at the call boundary (see Decision P6)
+7. **Partial-response detection lost**: The fork's `AIStreamResult.chunks` lets retry logic skip retries when partial data arrived. `callStream` returns only `Result[string, AIError]` — no partial-data signal (see Decision P7)
 
 ---
 
@@ -119,22 +123,21 @@ match callStream(providerName, model, messagesJson) {
 ```toml
 ailang = ">=0.15.1"
 
-[[ai_provider]]
-name = "openrouter"
-# Built-in as of v0.15.0 — no config block needed if using upstream's
-# native openrouter provider. The model string "openrouter/deepseek/deepseek-v4-pro"
-# routes automatically.
+# OpenRouter: built-in as of v0.15.0. No [[ai_provider]] block needed.
+# The model string "openrouter/deepseek/deepseek-v4-pro" routes automatically.
 
 [[ai_provider]]
 name = "local-vllm"
 schema_version = 1
 request_shape = "openai_chat"
-endpoint = "http://100.79.48.75:8000/v1/chat/completions"
+endpoint = "${OPENAI_BASE_URL}/chat/completions"
 auth_shape = "none"
 models.allowed = ["google/gemma-4-26B-A4B-it"]
 ```
 
-**Note**: The local provider's `ai_options_json` (thinking mode kwargs) needs investigation — v0.15.1's `[[ai_provider]]` schema may not support arbitrary request body injection yet. Fallback: pass via env var or propose schema v2 extension.
+**Notes**:
+- `OPENAI_BASE_URL` is set per-profile (e.g. `http://100.79.48.75:8000/v1` for local). This preserves multi-profile switching without runtime TOML rewriting.
+- The local provider's `ai_options_json` (thinking mode kwargs) needs investigation — v0.15.1's `[[ai_provider]]` schema may not support arbitrary request body injection yet. Fallback: pass via env var or propose schema v2 extension.
 
 ---
 
@@ -153,54 +156,53 @@ models.allowed = ["google/gemma-4-26B-A4B-it"]
 
 **Verify**: `ailang version` shows v0.15.x after fresh install
 
-### M2: Core streaming swap — `rpc.ail` (30 min)
+### M2: Core streaming swap — `rpc.ail` (45 min)
 
 This is the critical path. All agent loops flow through `ai_stream_call_with_retry`.
 
 1. Replace import: `std/ai_motoko (callStreamResult, AIError)` → `std/ai/streaming (callStream)`
 2. Define local `AIError` type (or import from upstream) with motoko's extra fields
-3. Rewrite `ai_stream_call_with_retry`:
-   - Build `messagesJson` from `input` parameter
-   - Extract provider name from model string (split on first `/`)
-   - Call `callStream(provider, model, messagesJson)`
+3. **Write `msgs_to_json` helper**: serialize `[Msg]` as a JSON messages array for `callStream`. Currently `rpc_loop` passes `fmt_msgs(state2.msgs)` (a flat `[role]\ncontent\n\n` string). The new function must produce `[{"role":"system","content":"..."},{"role":"user","content":"..."},...]`. This replaces the `fmt_msgs` call at `rpc_loop:1316`.
+4. Rewrite `ai_stream_call_with_retry`:
+   - Change signature: accept `msgs: [Msg]` instead of `input: string`
+   - Call `callStream(provider, model, msgs_to_json(msgs))`
    - Map `Result` to existing error shape
-   - Retry logic stays unchanged (it operates on the error result)
-4. Update effect signature: add `Stream, Net` to the function's effect row
+   - Retry logic: remove `r.chunks` partial-response guard (see Decision P7) — retry on all retryable errors
+5. Effect signature: no change needed (`Stream, Net` already in `rpc_loop`'s row)
 
-**Open question**: How does the `model` string map to provider selection? Currently:
-- `openrouter/deepseek/deepseek-v4-pro` → fork's Go code strips prefix, hits OpenRouter
-- `openai/google/gemma-4-26B-A4B-it` + `openai_base_url` → fork routes to local endpoint
+**Provider routing**: Model string determines provider automatically:
+- `openrouter/deepseek/deepseek-v4-pro` → built-in OpenRouter provider (handles prefix)
+- `openai/google/gemma-4-26B-A4B-it` → matched by `[[ai_provider]]` `models.allowed`
 
-With v0.15.1: OpenRouter is built-in (handles `openrouter/` prefix). For local, the `[[ai_provider]]` block maps model names to the custom endpoint.
+**Risk**: The `openai_base_url` config field currently flows from profile JSON → supervisor → env-server → ailang runtime. With `[[ai_provider]]`, this routing moves to `ailang.toml`. The `[[ai_provider]]` block references `${OPENAI_BASE_URL}` so existing profile switching works via env var (Decision P3).
 
-**Risk**: The `openai_base_url` config field currently flows from profile JSON → supervisor → env-server → ailang runtime. With `[[ai_provider]]`, this routing moves to `ailang.toml`. We may need to either:
-- (a) Generate/modify `ailang.toml` dynamically based on the active profile, or
-- (b) Keep `openai_base_url` in the config but pass it as an env var that the `[[ai_provider]]` block references via `${OPENAI_BASE_URL}`
+### M3: Compose extension (3 files, 45 min)
 
-Option (b) preserves the existing multi-profile system without runtime TOML rewriting.
-
-### M3: Compose extension (3 files, 30 min)
-
-Mechanical swap — same pattern as M2 but simpler (no retry wrapper):
+These files use `callStreamResult` and access `.output` directly **without checking `.ok`** — errors are silently swallowed (empty string flows through). The migration forces explicit error handling via `Result`.
 
 1. `src/core/ext/compose/compose.ail` — 2 call sites (lines 453, 557)
 2. `src/core/ext/compose/claimcheck.ail` — 3 call sites (lines 135, 142, 146)
 3. `src/core/ext/compose/author_loop.ail` — 1 call site (line 249)
 
-Each follows:
+**Current pattern (no error check):**
 ```ailang
--- Before:
-let r = callStreamResult(prompt, step, streamId, model);
-if r.ok then ... r.output ... else ...
-
--- After:
-match callStream(provider, model, buildMessages(prompt)) {
-  Ok(text) => ... text ...,
-  Err(e) => ...
-}
+let authored = callStreamResult(prompt, step, streamId, model);
+let raw_author = trim(authored.output);  -- empty string on error, silently continues
 ```
 
-**Note**: These files don't import `AIError` — they typically just check `.ok` and use `.output`. The migration simplifies them (Result pattern is more idiomatic).
+**New pattern (explicit error handling):**
+```ailang
+let raw_author = match callStream(provider, model, buildSingleMessage(prompt)) {
+  Ok(text) => trim(text),
+  Err(_) => ""
+};
+```
+
+The `Err(_) => ""` branch preserves current behavior (empty string on failure, downstream logic handles it via "empty snippet" / "informalizer empty output" checks). This is a conscious choice to keep the migration behavioral-equivalent rather than introducing new error paths.
+
+**Message format for compose calls**: Unlike `rpc_loop` (which passes full conversation history), compose call sites pass a single prompt string. These need a `buildSingleMessage(prompt)` helper that produces `[{"role":"user","content":"..."}]`.
+
+**Note**: These calls also pass `step` and `streamId` for tracing — dropped in the migration since `callStream` traces internally.
 
 ### M4: TypeScript codegen — `env-server.ts` (20 min)
 
@@ -256,23 +258,26 @@ Once `[[ai_provider]]` handles routing:
 | P3 | Use `[[ai_provider]]` with `${OPENAI_BASE_URL}` env var reference for local provider | Preserves multi-profile config system without runtime TOML generation |
 | P4 | Defer config cleanup (M5) until streaming path is proven | Reduces risk; old fields become dead code temporarily |
 | P5 | Keep motoko's custom tool dispatch (`tool_contract.ail`, `tool_runtime.ail`) for now | M-AI-TOOL-LOOP provides upstream equivalents but porting tool dispatch is a separate, larger effort |
+| P6 | Serialize `[Msg]` as JSON array for `callStream` instead of using `fmt_msgs` flat string | `callStream` expects `messagesJson` (a JSON array of `{"role","content"}` objects). `fmt_msgs` produces `[role]\ncontent\n\n` — a flat concatenation that loses structure. Two helpers needed: `msgs_to_json` (full conversation history for `rpc_loop`) and `buildSingleMessage` (single user prompt for compose call sites) |
+| P7 | Drop the `r.chunks` partial-response retry guard | The fork's `AIStreamResult.chunks` let retry logic skip retries when partial data had arrived (line 1273: `_list_length(r.chunks) > 0`). `callStream` returns only `Result[string, AIError]` with no partial-data signal. Accept the behavioral change: retry on all retryable errors regardless. Impact is low — if the LLM returned partial data, the retried call will likely succeed anyway |
 
 ---
 
 ## Open Questions
 
-1. **Message format**: `callStream` takes `messagesJson` (full chat format). Current fork takes a raw `prompt` string. Where is the message array constructed? Is it just a single user message wrapping the prompt, or does it include conversation history?
+1. **`ai_options_json` passthrough**: The local profile uses `{"chat_template_kwargs":{"enable_thinking":true}}`. Does v0.15.1's provider config support extra body params? If not, need upstream schema extension.
 
-2. **`ai_options_json` passthrough**: The local profile uses `{"chat_template_kwargs":{"enable_thinking":true}}`. Does v0.15.1's provider config support extra body params? If not, need upstream schema extension.
+2. **TUI streaming events**: The fork emits `MOTOKO_STREAM_EVENTS` for token-by-token TUI rendering. Does `callStream` emit equivalent events, or does the TUI need to switch to monitoring `std/stream` events?
 
-3. **TUI streaming events**: The fork emits `MOTOKO_STREAM_EVENTS` for token-by-token TUI rendering. Does `callStream` emit equivalent events, or does the TUI need to switch to monitoring `std/stream` events?
-
-4. **Profile-provider mapping**: With multi-profile configs, different profiles select different providers. The `[[ai_provider]]` blocks in `ailang.toml` are static. How do we handle profile switching at runtime? Options:
+3. **Profile-provider mapping**: With multi-profile configs, different profiles select different providers. The `[[ai_provider]]` blocks in `ailang.toml` are static. How do we handle profile switching at runtime? Options:
    - (a) All providers declared in `ailang.toml`; profile selects model string that routes to the right one
    - (b) Generate `ailang.toml` dynamically per profile
-   - (c) Pass provider config via env vars
+   - (c) Pass provider config via env vars (current approach per Decision P3)
 
-5. **Effect row widening**: Adding `Stream, Net` to `ai_stream_call_with_retry` propagates up through `rpc_loop` and ultimately `main`. What's the current max effect set and does it already include these?
+## Resolved Questions
+
+- **~~Message format~~** (resolved → Decision P6): `rpc_loop` passes `fmt_msgs(state2.msgs)` — a flat string. `callStream` needs a JSON array. Solution: write `msgs_to_json` and `buildSingleMessage` helpers.
+- **~~Effect row widening~~** (resolved): `rpc_loop` already declares `! {Net, AI, SharedMem, IO, Clock, FS, Process, Env, Stream}` and `ailang.toml` includes both `Stream` and `Net` in `effects.max`. No propagation needed.
 
 ---
 
@@ -281,11 +286,16 @@ Once `[[ai_provider]]` handles routing:
 | Milestone | Time | Blocked on |
 |-----------|------|-----------|
 | M1 | 30 min | Nothing |
-| M2 | 30 min | Clarity on message format (Q1) |
-| M3 | 30 min | M2 proven |
+| M2 | 45 min | Nothing (Q1 resolved → P6) |
+| M3 | 45 min | M2 proven |
 | M4 | 20 min | M2 pattern established |
 | M5 | 30 min | M2-M4 working (deferrable) |
 | M6 | 20 min | M2-M4 complete |
 | M7 | 30 min | Live provider access |
 
-**Total**: ~3 hours (M5 deferrable → ~2.5 hours critical path)
+**Total**: ~3.5 hours (M5 deferrable → ~3 hours critical path)
+
+## Notes
+
+- `.packages/` directory is auto-updated — no manual changes needed there after migration.
+- **Package system review needed**: Motoko's use of AILANG packages (dependency resolution, `.packages/` layout, `ailang.lock` schema, interaction with `[[ai_provider]]` config and the new `std/ai/streaming` stdlib module) needs a thorough review before or during migration. The v0.15.0 package resolver may behave differently from the fork's, and the new stdlib paths (`std/ai/streaming` vs `std/ai_motoko`) need to resolve correctly through the package system.
