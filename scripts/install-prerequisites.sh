@@ -7,7 +7,7 @@
 #   - Bun 1.x
 #   - Node.js 18+ and npm
 #   - context-mode CLI
-#   - AILANG runtime (cloned from github.com/sunholo-data/ailang, motoko branch)
+#   - AILANG runtime (cloned from github.com/sunholo-data/ailang at v0.15.1 tag)
 #   - bun dependencies for the TypeScript frontend (src/tui/)
 #   - Optional: Omnigraph CLI/server (with --with-omnigraph)
 # Usage:
@@ -352,15 +352,15 @@ install_ailang() {
   ensure_user_local_bin_on_path
 
   local ailang_src="$HOME/.local/share/ailang"
-  log_info "Cloning AILANG (motoko branch) from github.com/sunholo-data/ailang..."
+  local ailang_ref="v0.15.1"
+  log_info "Cloning AILANG ($ailang_ref) from github.com/sunholo-data/ailang..."
   if [[ -d "$ailang_src/.git" ]]; then
     log_info "Updating existing clone at $ailang_src..."
-    git -C "$ailang_src" fetch --all
-    git -C "$ailang_src" checkout motoko
-    git -C "$ailang_src" pull --ff-only
+    git -C "$ailang_src" fetch --tags --all
+    git -C "$ailang_src" checkout "$ailang_ref"
   else
     rm -rf "$ailang_src"
-    git clone --branch motoko https://github.com/sunholo-data/ailang "$ailang_src"
+    git clone --branch "$ailang_ref" https://github.com/sunholo-data/ailang "$ailang_src"
   fi
 
   log_info "Building ailang..."
