@@ -1497,7 +1497,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
       kv("type", js("v2_mode")),
       kv("note", js("running with upstream std/ai.step (typed tool_calls); legacy rpc_loop bypassed"))
     ])));
-    let _ = match run_v2(model, init, settings.workdir, budget.total) {
+    let _ = match run_v2(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total) {
       Ok(_) => (),
       Err(e) => println(encode(jo([
         kv("type", js("error")),
