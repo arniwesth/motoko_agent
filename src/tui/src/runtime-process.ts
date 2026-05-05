@@ -216,6 +216,14 @@ export class RuntimeProcess {
       AILANG_FS_SANDBOX: workdir,
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
     };
+    // AILANG v0.15.x migration: forward AILANG_STDLIB_PATH if set in the
+    // parent env so callers can point the runtime at an upstream stdlib
+    // checkout (e.g. /Users/mark/dev/sunholo/ailang/std). Without this,
+    // the agent fails with "stdlib module not found: std/ai/streaming"
+    // because it falls back to system paths that don't have the new modules.
+    if (process.env.AILANG_STDLIB_PATH) {
+      childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
+    }
     if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
     if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
 
