@@ -1,7 +1,9 @@
 module src/core/rpc
 
 import src/core/ai_compat (callStreamResult, AIError)
+import src/core/agent_loop_v2 (run_v2)
 import std/clock  (sleep)
+import std/env    (hasEnv)
 import std/io     (println, readLine)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -1483,8 +1485,33 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     inbox: []
   };
 
-  let final_state = rpc_loop(state, model, budget.total, step_delay, hybrid_enabled, ext_runtime, budget, settings);
-  conversation_loop(final_state, model, step_delay, hybrid_enabled, ext_runtime, settings)
+  -- v2 path (env-gated): use upstream std/ai.step() with TYPED tool_calls,
+  -- bypassing rpc_loop's text-based parse_tool_calls heuristic. Stress-test
+  -- only — does NOT include extension intercepts, tool gating, ohmy_pi
+  -- backend split, or hybrid mode. Set MOTOKO_AGENT_V2=1 to opt in.
+  -- Foundation for the M3 of the tool-loop migration (PR #4); will replace
+  -- rpc_loop entirely once Option A from M-AGENT-LOOP-ARCHITECTURE locks
+  -- in. See https://github.com/sunholo-data/ailang/blob/dev/design_docs/planned/v0_17_0/m-agent-loop-architecture.md
+  if hasEnv("MOTOKO_AGENT_V2") then {
+    let _ = println(encode(jo([
+      kv("type", js("v2_mode")),
+      kv("note", js("running with upstream std/ai.step (typed tool_calls); legacy rpc_loop bypassed"))
+    ])));
+    let _ = match run_v2(model, init, settings.workdir, budget.total) {
+      Ok(_) => (),
+      Err(e) => println(encode(jo([
+        kv("type", js("error")),
+        kv("source", js("agent_loop_v2")),
+        kv("code", js(e.code)),
+        kv("message", js(e.message))
+      ])))
+    };
+    ()
+  }
+  else {
+    let final_state = rpc_loop(state, model, budget.total, step_delay, hybrid_enabled, ext_runtime, budget, settings);
+    conversation_loop(final_state, model, step_delay, hybrid_enabled, ext_runtime, settings)
+  }
 }
 
 export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream} {

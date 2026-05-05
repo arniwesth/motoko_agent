@@ -1,0 +1,230 @@
+-- src/core/agent_loop_v2.ail
+-- Alternative agent loop using upstream std/ai.step() with TYPED tool_calls.
+-- Replaces motoko's text-based parse_tool_calls + indicates_continuation_intent
+-- string-matching layer with provider-native tool-use protocols (Anthropic
+-- tool_use blocks, OpenAI tool_calls field, Gemini functionCall — handled
+-- transparently by upstream step()).
+--
+-- Why a SEPARATE module rather than rewriting rpc_loop:
+--   - rpc_loop is 1494 LOC of intricate state-machine code with extension
+--     intercept dispatch, ohmy_pi backend split, hybrid mode, continuation
+--     intent feedback, and tool gating policies. Replacing in place is
+--     high-risk for users who depend on those features.
+--   - This v2 loop is the MINIMUM VIABLE agent: step → dispatch → loop.
+--     It demonstrates that upstream step() works end-to-end against motoko's
+--     existing tool dispatcher, without committing to dropping any of
+--     rpc_loop's features.
+--   - Selection between rpc_loop (legacy) and run_v2 (this) is a runtime
+--     decision via env var MOTOKO_AGENT_V2=1, so users can stress-test the
+--     v2 path against real workloads while keeping the legacy path as the
+--     default until the migration is fully validated.
+--
+-- What this loop deliberately DOES NOT include (vs rpc_loop):
+--   - Extension intercept dispatch (ContinueWithFeedback / Accept / NoIntercept)
+--   - Tool gating policy (apply_tool_policy)
+--   - Tool-handle routing (route_tool_handles for compose extensions)
+--   - Native vs ohmy_pi backend split
+--   - Hybrid mode (extract_bash for shell-prefix shorthand)
+--   - Trajectory caching, context-usage telemetry
+--
+-- These features can be added back incrementally if needed. The point of
+-- this v2 module is to prove the upstream typed API works.
+--
+-- Companion to: src/core/tool_dispatch_adapter (M1), src/core/tool_catalog (M2)
+
+module src/core/agent_loop_v2
+
+import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError)
+import std/io (println)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import std/string (trim, startsWith, substring)
+import std/string as Str (length)
+import src/core/tool_catalog (tools)
+import src/core/tool_dispatch_adapter (dispatch_one)
+import src/core/types (Msg)
+
+-- Strip the "openrouter/" model prefix before forwarding to upstream step().
+-- OpenRouter's API rejects the prefixed name. The fork's old code stored the
+-- prefix as part of the model identifier for routing-style dispatch; with
+-- upstream step() the AI handler is configured at --ai time, so the prefix
+-- is redundant noise that breaks the upstream API call.
+func strip_provider_prefix(model: string) -> string {
+  if startsWith(model, "openrouter/") then
+    let prefix_len = Str.length("openrouter/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else
+    model
+}
+
+-- emit a JSON line to stdout for the TS env-server to forward to the TUI.
+-- Same protocol as src/core/ai_compat (M-AI-CALL-STREAM-HELPER side).
+func emit_json(payload: Json) -> () ! {IO} {
+  println(encode(payload))
+}
+
+-- Convert motoko's [Msg] (system / user / assistant text-only) to upstream
+-- [Message] (which adds tool_calls + tool_call_id fields). For the initial
+-- conversation seed, all messages have empty tool_calls and tool_call_id.
+func msgs_to_messages(msgs: [Msg]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: [],
+      tool_call_id: ""
+    } :: msgs_to_messages(rest))
+  }
+}
+
+-- Build a [Message] entry for one assistant turn from the StepResult. Carries
+-- the typed tool_calls verbatim so the model sees its own tool_call IDs on
+-- the next turn (provider correlation).
+func step_result_to_message(result: StepResult) -> Message {
+  {
+    role: "assistant",
+    content: result.message.content,
+    tool_calls: result.tool_calls,
+    tool_call_id: ""
+  }
+}
+
+-- Build a tool-role Message containing a dispatcher result. The tool_call_id
+-- field is the load-bearing wire-format requirement: Anthropic / OpenAI /
+-- Gemini all correlate tool_use → tool_result by this id.
+func tool_result_message(call: ToolCall, content: string) -> Message {
+  {
+    role: "tool",
+    content: content,
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+-- Dispatch each ToolCall through the existing motoko native batch
+-- dispatcher (via the M1 adapter), collecting tool-role Messages to append
+-- to the conversation. Effects: {FS, Process} from dispatch_one.
+func dispatch_calls(calls: [ToolCall], workdir: string, step_idx: int, stream_id: string) -> [Message] ! {FS, Process, IO} {
+  match calls {
+    [] => [],
+    call :: rest => {
+      let _ = emit_json(jo([
+        kv("type", js("native_tool_calls")),
+        kv("step", jnum(_int_to_float(step_idx))),
+        kv("stream_id", js(stream_id)),
+        kv("tool", js(call.name)),
+        kv("id", js(call.id))
+      ]));
+      let result_content = dispatch_one(workdir, call);
+      let _ = emit_json(jo([
+        kv("type", js("native_tool_results")),
+        kv("step", jnum(_int_to_float(step_idx))),
+        kv("stream_id", js(stream_id)),
+        kv("id", js(call.id)),
+        kv("result", js(result_content))
+      ]));
+      let msg = tool_result_message(call, result_content);
+      msg :: dispatch_calls(rest, workdir, step_idx, stream_id)
+    }
+  }
+}
+
+-- The v2 loop. Iterates until the model returns finish_reason != "tool_calls"
+-- or step_budget hits zero. Returns the final messages list.
+--
+-- This is intentionally simpler than rpc_loop: no extension intercepts, no
+-- tool gating, no ohmy_pi backend split. It exists to prove upstream step()
+-- works end-to-end against motoko's tool dispatcher.
+func loop_v2(
+  model: string,
+  msgs: [Message],
+  workdir: string,
+  step_idx: int,
+  step_budget: int
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO} {
+  if step_budget <= 0 then Err({
+    code: "Internal",
+    message: "v2 loop: step budget exhausted",
+    retryable: false
+  })
+  else {
+    let stream_id = "step-${show(step_idx)}";
+    let _ = emit_json(jo([
+      kv("type", js("thinking_stream_start")),
+      kv("step", jnum(_int_to_float(step_idx))),
+      kv("stream_id", js(stream_id)),
+      kv("model", js(model))
+    ]));
+    match step(model, msgs, tools()) {
+      Err(e) => {
+        let _ = emit_json(jo([
+          kv("type", js("thinking_stream_end")),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("stream_id", js(stream_id)),
+          kv("status", js("errored"))
+        ]));
+        Err(e)
+      },
+      Ok(result) => {
+        let n_calls = List.length(result.tool_calls);
+        let _ = emit_json(jo([
+          kv("type", js("thinking_delta")),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("stream_id", js(stream_id)),
+          kv("seq", jnum(1.0)),
+          kv("text_delta", js(result.message.content))
+        ]));
+        let _ = emit_json(jo([
+          kv("type", js("thinking_stream_end")),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("stream_id", js(stream_id)),
+          kv("status", js("completed"))
+        ]));
+        let _ = emit_json(jo([
+          kv("type", js("thinking")),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("text", js(result.message.content)),
+          kv("finish_reason", js(result.finish_reason)),
+          kv("tool_calls", jnum(_int_to_float(n_calls)))
+        ]));
+
+        let assistant_msg = step_result_to_message(result);
+        let msgs_with_assistant = msgs ++ [assistant_msg];
+
+        if result.finish_reason != "tool_calls" then {
+          let _ = emit_json(jo([
+            kv("type", js("done")),
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("output", js(result.message.content))
+          ]));
+          Ok(msgs_with_assistant)
+        } else {
+          let tool_msgs = dispatch_calls(result.tool_calls, workdir, step_idx, stream_id);
+          let next_msgs = msgs_with_assistant ++ tool_msgs;
+          loop_v2(model, next_msgs, workdir, step_idx + 1, step_budget - 1)
+        }
+      }
+    }
+  }
+}
+
+-- Public entry point. Takes motoko's [Msg] (the v1 shape used by rpc.ail)
+-- and translates to upstream [Message], runs the loop, returns the final
+-- conversation.
+--
+-- step_budget defaults to 8 if caller passes <= 0 (mirrors upstream
+-- runTools' typical default).
+export func run_v2(
+  model: string,
+  initial_msgs: [Msg],
+  workdir: string,
+  step_budget: int
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO} {
+  let budget = if step_budget <= 0 then 8 else step_budget;
+  let messages = msgs_to_messages(initial_msgs);
+  let resolved_model = strip_provider_prefix(model);
+  loop_v2(resolved_model, messages, workdir, 0, budget)
+}

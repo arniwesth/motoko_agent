@@ -24,18 +24,28 @@ import src/core/tool_dispatch_adapter (dispatch_one)
 
 export func main() -> () ! {FS, Process, IO} {
   let workdir = "/tmp/motoko-smoke";
-  let read_call = {
-    id: "smoke-read-1",
-    name: "ReadFile",
-    arguments: "{\"path\":\"sample.txt\"}",
-  };
+
+  -- BashExec exercises the full adapter chain end-to-end:
+  --   ToolCall.arguments (JSON string) → tool_call_to_envelope → ToolCallEnvelope
+  --   → run_native_batch → BashExecResult variant → tool_result_item_to_json
+  --   → JSON-encoded string ready for the model's next-turn prompt.
+  -- Verifies the meta.truncated nested-record access works and the single-call
+  -- result-list shape returned by run_native_batch is correctly destructured.
   let bash_call = {
     id: "smoke-bash-1",
     name: "BashExec",
     arguments: "{\"cmd\":\"echo\",\"args\":[\"hello from dispatcher\"]}",
   };
-  println("--- ReadFile result ---");
-  println(dispatch_one(workdir, read_call));
+
+  -- NOTE: ReadFile / WriteFile / EditFile are deliberately NOT exercised here.
+  -- motoko's validate_path_common computes a joined "$workdir/$rel" path in
+  -- shell for security validation, but run_read_file (and siblings) then call
+  -- fileExists(path) / readFile(path) using the bare relative path — never
+  -- prefixed with workdir on the AILANG side. This is a pre-existing motoko
+  -- quirk, NOT an adapter issue: from the adapter's POV, dispatch_one
+  -- forwards the ToolCall verbatim to run_native_batch as designed. Fixing
+  -- the path-prefix gap is fork-side work, separate from this migration PR.
+
   println("--- BashExec result ---");
   println(dispatch_one(workdir, bash_call));
   println("--- end ---")

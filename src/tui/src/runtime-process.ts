@@ -224,6 +224,14 @@ export class RuntimeProcess {
     if (process.env.AILANG_STDLIB_PATH) {
       childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
     }
+    // M3 (tool-loop migration, PR #4): forward MOTOKO_AGENT_V2 to opt into
+    // the upstream std/ai.step() based loop with typed tool_calls. Defaults
+    // to the legacy rpc_loop (text-based parse_tool_calls). Stress-test
+    // only — many fork features (ohmy_pi, extension intercepts, hybrid
+    // mode) are not in v2 yet. See src/core/agent_loop_v2.ail for scope.
+    if (process.env.MOTOKO_AGENT_V2) {
+      childEnv.MOTOKO_AGENT_V2 = process.env.MOTOKO_AGENT_V2;
+    }
     if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
     if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
 
