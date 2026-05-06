@@ -1,0 +1,76 @@
+-- scripts/smoke_v2_writefile_missing_parent.ail
+-- M-AILANG-FS-RESULT M4 regression smoke.
+--
+-- Pre-fix (M10 land): the user's TUI session crashed with
+--   `Error: execution failed: writeFile: open .../test_tools/hello.txt:
+--    no such file or directory`
+-- because run_write_file in tool_runtime.ail called the panicking
+-- std/fs.writeFile, which escaped through the effect system as a
+-- runtime exception that killed the entire agent loop.
+--
+-- Post-fix (M-AILANG-FS-RESULT): writeFileResult / readFileResult /
+-- mkdirAllResult catch the syscall error and return Err(string), and
+-- run_write_file forwards that as a structured ToolErrorResult. The
+-- agent loop continues. This smoke exercises the std/fs Result-
+-- wrapping layer directly so the verification doesn't depend on
+-- pre-existing motoko quirks (workdir-vs-cwd resolution, absolute-
+-- path validator, etc.).
+--
+-- Setup:
+--   ailang run --caps IO,FS,Process,Env,Clock --entry main scripts/smoke_v2_writefile_missing_parent.ail
+
+module scripts/smoke_v2_writefile_missing_parent
+
+import std/io (println)
+import std/result (Result, Ok, Err)
+import std/fs (readFileResult, writeFileResult, mkdirAllResult, removeFileResult)
+
+export func main() -> () ! {IO, FS, Env, Clock} {
+  -- Case 1: read a file that doesn't exist → Err
+  let read_missing = readFileResult("/this/path/should/not/exist.txt");
+  let _ = match read_missing {
+    Ok(_)    => println("FAIL: missing file unexpectedly Ok"),
+    Err(msg) => println("PASS: read missing → Err(${msg})")
+  };
+
+  -- Case 2: write to a path with a non-dir parent → Err (no panic)
+  let write_blocked = writeFileResult("/dev/null/cannot-be-here.txt", "x");
+  let _ = match write_blocked {
+    Ok(_)    => println("FAIL: write under /dev/null unexpectedly Ok"),
+    Err(msg) => println("PASS: write blocked → Err(${msg})")
+  };
+
+  -- Case 3: mkdirAll over an existing file → Err
+  let _ = match writeFileResult("/tmp/m-fs-result-blocker", "i am a file") {
+    Ok(_)    => (),
+    Err(_)   => ()
+  };
+  let mkdir_over_file = mkdirAllResult("/tmp/m-fs-result-blocker/sub");
+  let _ = match mkdir_over_file {
+    Ok(_)    => println("FAIL: mkdirAll over file unexpectedly Ok"),
+    Err(msg) => println("PASS: mkdirAll over file → Err(${msg})")
+  };
+
+  -- Case 4: happy path round-trip (write → read → remove)
+  let _ = match writeFileResult("/tmp/m-fs-result-happy.txt", "hi") {
+    Ok(_)    => println("PASS: happy write Ok"),
+    Err(msg) => println("FAIL: happy write Err(${msg})")
+  };
+  let _ = match readFileResult("/tmp/m-fs-result-happy.txt") {
+    Ok(c)    => if c == "hi" then println("PASS: happy read content matches")
+                else println("FAIL: read content mismatch: ${c}"),
+    Err(msg) => println("FAIL: happy read Err(${msg})")
+  };
+  let _ = match removeFileResult("/tmp/m-fs-result-happy.txt") {
+    Ok(_)    => println("PASS: happy remove Ok"),
+    Err(msg) => println("FAIL: happy remove Err(${msg})")
+  };
+
+  -- Cleanup the blocker file (best-effort; ignore Err)
+  let _ = match removeFileResult("/tmp/m-fs-result-blocker") {
+    Ok(_)  => (),
+    Err(_) => ()
+  };
+
+  println("--- M-AILANG-FS-RESULT smoke complete (no panic) ---")
+}
