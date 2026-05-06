@@ -1,0 +1,188 @@
+module src/core/ext/mcp/mcp
+
+import std/fs (fileExists, readFile)
+import std/json (Json, decode, jo, getString, getInt, get, asArray, asString)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+
+import src/core/config (RuntimeConfig)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/ext/types (
+  ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision
+)
+import src/core/ext/mcp/types (McpToolMapping)
+import src/core/ext/mcp/resolve (all_tool_names)
+
+-- Subprocess-based MCP server definition read from profile_dir/mcp.json.
+-- Each server entry declares the command to spawn, its args, and the tool
+-- name mappings so the loop can route canonical tool calls to the right
+-- MCP server and method name.
+export type McpServerDef = {
+  name: string,
+  command: string,
+  server_args: [string],
+  tool_mappings: [McpToolMapping],
+  timeout_ms: int,
+  max_output_chars: int
+}
+
+export type McpConfig = { servers: [McpServerDef] }
+
+pure func jstr(j: Json, key: string, fallback: string) -> string {
+  match getString(j, key) { Some(s) => s, None => fallback }
+}
+
+pure func jint(j: Json, key: string, fallback: int) -> int {
+  match getInt(j, key) { Some(n) => n, None => fallback }
+}
+
+pure func parse_string_list_json(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    j :: rest =>
+      match asString(j) {
+        Some(s) => s :: parse_string_list_json(rest),
+        None    => parse_string_list_json(rest)
+      }
+  }
+}
+
+pure func parse_json_string_list(j: Json, key: string) -> [string] {
+  match get(j, key) {
+    Some(arr) => match asArray(arr) { Some(xs) => parse_string_list_json(xs), None => [] },
+    None      => []
+  }
+}
+
+pure func parse_tool_mapping(j: Json) -> McpToolMapping {
+  {
+    canonical: jstr(j, "canonical", ""),
+    mcp_name:  jstr(j, "mcp_name",  ""),
+    aliases:   parse_json_string_list(j, "aliases")
+  }
+}
+
+pure func parse_tool_mappings_rec(xs: [Json]) -> [McpToolMapping] {
+  match xs {
+    [] => [],
+    j :: rest => parse_tool_mapping(j) :: parse_tool_mappings_rec(rest)
+  }
+}
+
+pure func parse_json_tool_mappings(j: Json, key: string) -> [McpToolMapping] {
+  match get(j, key) {
+    Some(arr) => match asArray(arr) { Some(xs) => parse_tool_mappings_rec(xs), None => [] },
+    None      => []
+  }
+}
+
+pure func parse_server(j: Json) -> McpServerDef {
+  {
+    name:             jstr(j, "name",    ""),
+    command:          jstr(j, "command", ""),
+    server_args:      parse_json_string_list(j, "args"),
+    tool_mappings:    parse_json_tool_mappings(j, "tool_mappings"),
+    timeout_ms:       jint(j, "timeout_ms",       30000),
+    max_output_chars: jint(j, "max_output_chars",  8000)
+  }
+}
+
+pure func parse_servers_rec(xs: [Json]) -> [McpServerDef] {
+  match xs {
+    [] => [],
+    j :: rest => parse_server(j) :: parse_servers_rec(rest)
+  }
+}
+
+pure func parse_mcp_config(root: Json) -> McpConfig {
+  match get(root, "servers") {
+    Some(arr) => match asArray(arr) {
+      Some(xs) => { servers: parse_servers_rec(xs) },
+      None     => { servers: [] }
+    },
+    None => { servers: [] }
+  }
+}
+
+func read_mcp_config(profile_dir: string) -> McpConfig ! {FS} {
+  let path = "${profile_dir}/mcp.json";
+  if not fileExists(path) then { servers: [] }
+  else
+    match decode(readFile(path)) {
+      Ok(j)  => parse_mcp_config(j),
+      Err(_) => { servers: [] }
+    }
+}
+
+func collect_server_names_rec(servers: [McpServerDef]) -> [string] {
+  match servers {
+    [] => [],
+    s :: rest => all_tool_names(s.tool_mappings) ++ collect_server_names_rec(rest)
+  }
+}
+
+func collect_all_tool_names(cfg: McpConfig) -> [string] {
+  collect_server_names_rec(cfg.servers)
+}
+
+func no_budget_patch() -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+-- register_with_config loads mcp.json from the active profile directory and
+-- returns an ExtensionHooks that registers every listed tool name. Tool
+-- dispatch delegates to the next handler; actual subprocess execution is
+-- wired in via mcp-subprocess-call.mjs once that bridge is in place.
+export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  let cfg        = read_mcp_config(runtime_cfg.profile_dir);
+  let tool_names = collect_all_tool_names(cfg);
+  let handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    Delegate
+  };
+  let intercept = func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoIntercept
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoDecision
+  };
+  {
+    id: "mcp",
+    provided_tools: tool_names,
+    on_build_system_prompt: \ctx. { prepend: [], append: [] },
+    on_budget_plan:       func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} { no_budget_patch() },
+    on_tool_policy:       func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion },
+    on_tool_handle:       handle,
+    on_response_intercept: intercept,
+    on_solver_candidate:  finalize
+  }
+}
+
+-- Pure tests
+
+pure func server_count(xs: [McpServerDef]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + server_count(rest) }
+}
+
+pure func empty_config_has_no_servers() -> bool
+  tests [((), true)]
+  {
+    server_count(parse_mcp_config(jo([])).servers) == 0
+  }
+
+pure func single_server_parsed_correctly() -> bool
+  tests [((), true)]
+  {
+    let raw = "{\"servers\":[{\"name\":\"my_server\",\"command\":\"npx\",\"args\":[\"@my/mcp\"],\"tool_mappings\":[{\"canonical\":\"MyTool\",\"mcp_name\":\"my_tool\",\"aliases\":[\"my_tool\"]}],\"timeout_ms\":5000,\"max_output_chars\":1000}]}";
+    match decode(raw) {
+      Err(_) => false,
+      Ok(j)  => {
+        let cfg = parse_mcp_config(j);
+        server_count(cfg.servers) == 1
+          && match cfg.servers {
+               [] => false,
+               s :: _ => s.name == "my_server" && s.command == "npx" && s.timeout_ms == 5000
+             }
+      }
+    }
+  }

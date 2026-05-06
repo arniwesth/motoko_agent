@@ -289,6 +289,35 @@ pure func is_absolute_path(path: string) -> bool
     startsWith(path, "/")
   }
 
+-- Detects bare-absolute paths whose first segment is a well-known OS root
+-- directory (e.g. "Users/mark/..." on macOS, "home/user/..." on Linux).
+-- This catches the cross-workdir case that the wd_bare check misses: when
+-- the agent is running in a clone but the model emits the original project's
+-- absolute path without the leading slash.
+pure func starts_with_root_dir(path: string) -> bool {
+  startsWith(path, "Users/")   ||
+  startsWith(path, "home/")    ||
+  startsWith(path, "tmp/")     ||
+  startsWith(path, "private/") ||
+  startsWith(path, "var/")     ||
+  startsWith(path, "etc/")     ||
+  startsWith(path, "usr/")     ||
+  startsWith(path, "opt/")     ||
+  startsWith(path, "root/")
+}
+
+pure func root_dir_check_blocks_bare_abs() -> bool
+  tests [((), true)]
+  {
+    starts_with_root_dir("Users/mark/dev/project/foo.ts")
+      && starts_with_root_dir("home/user/repo/src/main.go")
+      && starts_with_root_dir("tmp/scratch/file.txt")
+      && starts_with_root_dir("private/var/folders/x/foo")
+      && not starts_with_root_dir("src/foo.ts")
+      && not starts_with_root_dir("README.md")
+      && not starts_with_root_dir("Users")
+  }
+
 func path_error(id: string, tool: string, message: string) -> ToolResultItem {
   ToolErrorResult({ id: id, tool: tool, message: message })
 }
@@ -301,8 +330,14 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
     -- Detect when model emits an absolute path without the leading "/" (e.g.
     -- "Users/mark/.../project/foo.txt" instead of "/Users/mark/.../project/foo.txt").
     -- resolve_workdir_path would otherwise silently double the workdir.
+    -- Same-workdir bare-absolute check: catches "Users/mark/.../workdir/foo"
+    -- when the model drops the leading "/" from the current workdir path.
     let wd_bare = if workdir == "" || workdir == "." || endsWith(workdir, "/") then "" else substring(workdir, 1, length(workdir));
     if wd_bare != "" && startsWith(path, "${wd_bare}/") then
+      Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
+    -- Cross-workdir bare-absolute check: catches "Users/mark/.../other-project/foo"
+    -- when the model emits an original project path while running in a clone.
+    else if starts_with_root_dir(path) then
       Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
     else {
       let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";

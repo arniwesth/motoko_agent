@@ -9,6 +9,7 @@ import src/core/ext/compose/compose (register_with_config as compose_register)
 import src/core/ext/omnigraph/omnigraph (register_with_config as omnigraph_register)
 import src/core/ext/context_mode/context_mode (register_with_config as context_mode_register)
 import src/core/ext/exa_search/exa_search (register_with_config as exa_search_register)
+import src/core/ext/mcp/mcp (register_with_config as mcp_register)
 
 func register_test_dummy(_cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
   test_dummy_register()
@@ -30,6 +31,10 @@ func register_exa_search(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
   exa_search_register(cfg)
 }
 
+func register_mcp(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  mcp_register(cfg)
+}
+
 func with_id(h: ExtensionHooks, id: string) -> ExtensionHooks {
   { h | id: id }
 }
@@ -40,6 +45,7 @@ func resolve(name: string) -> Option[(RuntimeConfig) -> ExtensionHooks ! {Env, F
   else if name == "omnigraph" then Some(register_omnigraph)
   else if name == "context_mode" then Some(register_context_mode)
   else if name == "exa_search" then Some(register_exa_search)
+  else if name == "mcp" then Some(register_mcp)
   else None
 }
 
@@ -87,15 +93,18 @@ export func debug_pure_names(r: ExtRegistry) -> [string] {
   hook_names(r.hooks)
 }
 
+-- Derive the known-name check from resolve() so there is a single source of
+-- truth: adding an extension to resolve() is the only edit needed.
 func parse_tokens_names(xs: [string], idx: int, names_acc: [string]) -> [string] {
   match xs {
     [] => names_acc,
     raw :: rest => {
       let name = trim(raw);
       let next =
-        if name == "test_dummy" || name == "compose" || name == "omnigraph" || name == "context_mode" || name == "exa_search" then
-          names_acc ++ ["${name}#${show(idx)}"]
-        else names_acc;
+        match resolve(name) {
+          Some(_) => names_acc ++ ["${name}#${show(idx)}"],
+          None    => names_acc
+        };
       parse_tokens_names(rest, idx + 1, next)
     }
   }
@@ -179,4 +188,11 @@ func parse_exa_search_alone() -> bool
   {
     let names = parse_core_ext_order_names("exa_search");
     len(names) == 1 && first_or_empty(names) == "exa_search#0"
+  }
+
+func parse_mcp_alone() -> bool
+  tests [((), true)]
+  {
+    let names = parse_core_ext_order_names("mcp");
+    len(names) == 1 && first_or_empty(names) == "mcp#0"
   }
