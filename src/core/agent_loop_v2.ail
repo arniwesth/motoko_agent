@@ -44,7 +44,8 @@ import std/string as Str (length)
 import src/core/tool_catalog (tools)
 import src/core/tool_contract (ToolResultEnvelope, result_to_json)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
-import src/core/types (Msg)
+import src/core/tool_runtime (backend_for)
+import src/core/types (Msg, ToolBackend)
 import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle)
 
@@ -162,6 +163,27 @@ func messages_to_msgs(msgs: [Message]) -> [Msg] {
   }
 }
 
+-- Build a structured tool-role Message indicating the ohmy_pi delegation
+-- pathway is not yet wired in v2. M6 plumbs split_by_backend through but
+-- defers the inbox-based wait_for_tool_results to a follow-up — for now
+-- delegated calls return this clear, recoverable error so the model can
+-- adapt (e.g. retry with a non-delegated argument shape, or surface that
+-- ohmy_pi was selected but unavailable).
+func delegated_deferred_message(call: ToolCall) -> Message {
+  let payload = encode(jo([
+    kv("error", jb(true)),
+    kv("delegated_backend_not_wired", jb(true)),
+    kv("tool", js(call.name)),
+    kv("note", js("v2 split_by_backend selected Delegated; the inbox-based ohmy_pi wait is deferred to a follow-up milestone. Re-run with settings.ohmy_pi=false or use a tool that resolves to the Native backend."))
+  ]));
+  {
+    role: "tool",
+    content: payload,
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
 -- Build a denial tool-role Message for a ToolCall the policy gate rejected.
 -- The model sees a structured `{denied_by_policy, reason, tool}` JSON in the
 -- tool result, correlated by tool_call_id, so it can correct course on the
@@ -186,14 +208,20 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
 --   2. M4 — dispatch_tool_policy: Allow/Deny/NoOpinion
 --   3. M5 — dispatch_tool_handle: extension may handle the tool directly
 --      (Handled returning ToolResultEnvelope) or Delegate to native
---   4. M6 (later) — backend split: native vs ohmy_pi
---   5. dispatch_one for native path
+--   4. M6 — backend split: native vs ohmy_pi via backend_for
+--   5. dispatch_one for native path; deferred-error envelope for delegated
 --
 -- Per-call branching:
 --   Deny     → tool-role denial Message; skip handle + dispatch
 --   Allow/NoOpinion + Handled → tool-role Message from extension's envelope;
 --                               skip dispatch_one
---   Allow/NoOpinion + Delegate → tool-role Message from dispatch_one
+--   Allow/NoOpinion + Delegate + backend_for==Native    → tool-role Message
+--                                                          from dispatch_one
+--   Allow/NoOpinion + Delegate + backend_for==Delegated → tool-role
+--                                                          delegated_deferred_message
+--                                                          (full ohmy_pi inbox
+--                                                          wait deferred to
+--                                                          follow-up M6.5)
 --
 -- Effect row: {FS, Process, IO, Clock} (M4) + {AI, Env, Net, SharedMem,
 -- Stream} from on_tool_handle's declared effects = full agent stack.
@@ -203,7 +231,8 @@ func dispatch_calls(
   calls: [ToolCall],
   workdir: string,
   step_idx: int,
-  stream_id: string
+  stream_id: string,
+  ohmy_pi: bool
 ) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream} {
   match calls {
     [] => [],
@@ -221,7 +250,7 @@ func dispatch_calls(
             kv("reason", js(reason))
           ]));
           let denial_msg = policy_denied_message(call, reason);
-          denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
+          denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
         },
         _ => {
           -- M5: ask extensions whether they want to handle this tool directly
@@ -247,26 +276,46 @@ func dispatch_calls(
                 tool_calls: [],
                 tool_call_id: call.id
               };
-              handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
+              handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
             },
             Delegate => {
-              let _ = emit_json(jo([
-                kv("type", js("native_tool_calls")),
-                kv("step", jnum(_int_to_float(step_idx))),
-                kv("stream_id", js(stream_id)),
-                kv("tool", js(call.name)),
-                kv("id", js(call.id))
-              ]));
-              let result_content = dispatch_one(workdir, call);
-              let _ = emit_json(jo([
-                kv("type", js("native_tool_results")),
-                kv("step", jnum(_int_to_float(step_idx))),
-                kv("stream_id", js(stream_id)),
-                kv("id", js(call.id)),
-                kv("result", js(result_content))
-              ]));
-              let msg = tool_result_message(call, result_content);
-              msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
+              -- M6: backend split — Native goes through dispatch_one as
+              -- before; Delegated returns a structured deferred-error tool
+              -- result so the model can adapt. Full ohmy_pi inbox wait
+              -- migration is a follow-up (M6.5) — see delegated_deferred_message.
+              let backend = backend_for(envelope, ohmy_pi);
+              match backend {
+                Delegated => {
+                  let _ = emit_json(jo([
+                    kv("type", js("delegated_tool_deferred")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("stream_id", js(stream_id)),
+                    kv("tool", js(call.name)),
+                    kv("id", js(call.id))
+                  ]));
+                  let deferred_msg = delegated_deferred_message(call);
+                  deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                },
+                Native => {
+                  let _ = emit_json(jo([
+                    kv("type", js("native_tool_calls")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("stream_id", js(stream_id)),
+                    kv("tool", js(call.name)),
+                    kv("id", js(call.id))
+                  ]));
+                  let result_content = dispatch_one(workdir, call);
+                  let _ = emit_json(jo([
+                    kv("type", js("native_tool_results")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("stream_id", js(stream_id)),
+                    kv("id", js(call.id)),
+                    kv("result", js(result_content))
+                  ]));
+                  let msg = tool_result_message(call, result_content);
+                  msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                }
+              }
             }
           }
         }
@@ -294,7 +343,8 @@ func loop_v2(
   msgs: [Message],
   workdir: string,
   step_idx: int,
-  step_budget: int
+  step_budget: int,
+  ohmy_pi: bool
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   if step_budget <= 0 then Err({
     code: "Internal",
@@ -361,7 +411,7 @@ func loop_v2(
             ]));
             let tool_msg = envelope_to_tool_message(envelope);
             let next_msgs = msgs_with_assistant ++ [tool_msg];
-            loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1)
+            loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
           },
           NoIntercept => {
             if result.finish_reason != "tool_calls" then {
@@ -394,7 +444,7 @@ func loop_v2(
                     tool_call_id: ""
                   };
                   let next_msgs = msgs_with_assistant ++ [feedback_msg];
-                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1)
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
                 },
                 NoDecision => {
                   let _ = emit_json(jo([
@@ -410,9 +460,9 @@ func loop_v2(
               -- finish_reason = "tool_calls" → run M4 policy gate per-call
               -- inside dispatch_calls; allowed dispatch via dispatch_one,
               -- denied become tool-role denial messages
-              let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id);
+              let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi);
               let next_msgs = msgs_with_assistant ++ tool_msgs;
-              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1)
+              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
             }
           }
         }
@@ -430,6 +480,14 @@ func loop_v2(
 -- the extension-intercept and solver-candidate hooks at the same decision
 -- points rpc_loop fires them today.
 --
+-- M6 signature: ohmy_pi flag added so v2's per-call backend split mirrors
+-- rpc.ail's settings.ohmy_pi semantics. ohmy_pi=false (the default for
+-- non-pi deployments) keeps everything on the Native backend; ohmy_pi=true
+-- routes Read/Write/Edit/Search and shell calls flagged by
+-- needs_delegation_for_process to the Delegated path. The full inbox-based
+-- delegation wait is deferred — Delegated calls return a structured
+-- delegated_deferred_message tool result for now (M6.5 follow-up).
+--
 -- step_budget defaults to 8 if caller passes <= 0 (mirrors upstream
 -- runTools' typical default).
 export func run_v2(
@@ -441,10 +499,11 @@ export func run_v2(
   model: string,
   initial_msgs: [Msg],
   workdir: string,
-  step_budget: int
+  step_budget: int,
+  ohmy_pi: bool
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
   let messages = msgs_to_messages(initial_msgs);
   let resolved_model = strip_provider_prefix(model);
-  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps)
+  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi)
 }
