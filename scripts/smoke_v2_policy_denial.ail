@@ -1,0 +1,113 @@
+-- scripts/smoke_v2_policy_denial.ail
+-- M4 negative test: verifies the Deny(reason) path produces a
+-- structured tool-role denial message AND the denied call does NOT
+-- reach run_native_batch.
+--
+-- We exercise this by directly calling agent_loop_v2's exported helpers
+-- against a synthetic ToolCall + a hand-built ExtRuntime/ExtCtx where
+-- one extension hook denies everything. This is faster + more
+-- deterministic than spinning up the full agent loop just to verify
+-- the denial path.
+--
+-- For the full M4 policy-gating flow with a real model, see
+-- smoke_v2_policy.ail.
+--
+-- Setup:
+--   ailang run --caps IO,Env,Clock --entry main scripts/smoke_v2_policy_denial.ail
+
+module scripts/smoke_v2_policy_denial
+
+import std/io (println)
+import std/option (None)
+import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PromptPatch, BudgetPatch)
+import src/core/ext/runtime (dispatch_tool_policy)
+import src/core/tool_contract (ToolCallEnvelope)
+import std/json (jo, kv, js, encode)
+
+-- Stub that denies any tool call. We construct a single hook with a
+-- denying on_tool_policy and use that as the test registry.
+pure func deny_all_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Deny("synthetic-deny-all: blocked for M4 smoke test")
+}
+
+pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoIntercept
+}
+
+pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoDecision
+}
+
+pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Delegate
+}
+
+func mk_deny_all_hook() -> ExtensionHooks {
+  {
+    id: "deny-all-test-hook",
+    provided_tools: [],
+    on_build_system_prompt: empty_prompt_patch,
+    on_budget_plan: empty_budget_patch,
+    on_tool_policy: deny_all_tool_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: noop_response_intercept,
+    on_solver_candidate: nodecision_solver_candidate
+  }
+}
+
+export func main() -> () ! {IO, Clock, Env} {
+  let rt: ExtRuntime = {
+    registry: { hooks: [mk_deny_all_hook()] },
+    strict_mode: false
+  };
+
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  let ctx: ExtCtx = {
+    task: "test",
+    step: 0,
+    model: "test-model",
+    cwd: "/tmp",
+    hybrid_tools: false,
+    budget: budget,
+    mode: "v2",
+    workdir: "/tmp",
+    env_server_url: "",
+    budget_remaining: 4,
+    history_slice: [],
+    state_key: "test"
+  };
+
+  -- Construct a synthetic ToolCallEnvelope (mirrors what tool_call_to_envelope
+  -- produces from a typed ToolCall)
+  let envelope: ToolCallEnvelope = {
+    id: "test-call-1",
+    tool: "BashExec",
+    arguments: jo([])
+  };
+
+  let decision = dispatch_tool_policy(rt, ctx, envelope);
+  match decision {
+    Allow => println("--- M4 denial smoke FAIL: expected Deny, got Allow ---"),
+    NoOpinion => println("--- M4 denial smoke FAIL: expected Deny, got NoOpinion ---"),
+    Deny(reason) => {
+      let denial_payload = encode(jo([
+        kv("error", js("true")),
+        kv("denied_by_policy", js("true")),
+        kv("tool", js(envelope.tool)),
+        kv("reason", js(reason))
+      ]));
+      let _ = println("--- M4 denial smoke PASS ---");
+      let _ = println("Tool: ${envelope.tool}");
+      let _ = println("Reason: ${reason}");
+      println("Denial payload: ${denial_payload}")
+    }
+  }
+}

@@ -43,10 +43,10 @@ import std/string (trim, startsWith, substring)
 import std/string as Str (length)
 import src/core/tool_catalog (tools)
 import src/core/tool_contract (ToolResultEnvelope, result_to_json)
-import src/core/tool_dispatch_adapter (dispatch_one)
+import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/types (Msg)
-import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision)
-import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate)
+import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision)
+import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
 -- OpenRouter's API rejects the prefixed name. The fork's old code stored the
@@ -162,30 +162,82 @@ func messages_to_msgs(msgs: [Message]) -> [Msg] {
   }
 }
 
--- Dispatch each ToolCall through the existing motoko native batch
--- dispatcher (via the M1 adapter), collecting tool-role Messages to append
--- to the conversation. Effects: {FS, Process} from dispatch_one.
-func dispatch_calls(calls: [ToolCall], workdir: string, step_idx: int, stream_id: string) -> [Message] ! {FS, Process, IO} {
+-- Build a denial tool-role Message for a ToolCall the policy gate rejected.
+-- The model sees a structured `{denied_by_policy, reason, tool}` JSON in the
+-- tool result, correlated by tool_call_id, so it can correct course on the
+-- next turn without ambiguity.
+func policy_denied_message(call: ToolCall, reason: string) -> Message {
+  let denial_payload = encode(jo([
+    kv("error", jb(true)),
+    kv("denied_by_policy", jb(true)),
+    kv("tool", js(call.name)),
+    kv("reason", js(reason))
+  ]));
+  {
+    role: "tool",
+    content: denial_payload,
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+-- Dispatch each ToolCall after running the M4 tool-gating policy. For each
+-- call:
+--   1. Convert ToolCall → ToolCallEnvelope (M1 adapter)
+--   2. Run dispatch_tool_policy(rt, ctx, envelope) — extension hooks decide
+--      Allow / Deny(reason) / NoOpinion
+--   3. If denied: emit native_tool_denied event + build a tool-role
+--      denial Message; do NOT run the call
+--   4. If allowed (or no opinion): dispatch via dispatch_one as before
+--
+-- Effects: {FS, Process} from dispatch_one + {IO, Clock} from policy hooks
+-- = {FS, Process, IO, Clock}. Row polymorphism propagates via call site.
+func dispatch_calls(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  calls: [ToolCall],
+  workdir: string,
+  step_idx: int,
+  stream_id: string
+) -> [Message] ! {FS, Process, IO, Clock} {
   match calls {
     [] => [],
     call :: rest => {
-      let _ = emit_json(jo([
-        kv("type", js("native_tool_calls")),
-        kv("step", jnum(_int_to_float(step_idx))),
-        kv("stream_id", js(stream_id)),
-        kv("tool", js(call.name)),
-        kv("id", js(call.id))
-      ]));
-      let result_content = dispatch_one(workdir, call);
-      let _ = emit_json(jo([
-        kv("type", js("native_tool_results")),
-        kv("step", jnum(_int_to_float(step_idx))),
-        kv("stream_id", js(stream_id)),
-        kv("id", js(call.id)),
-        kv("result", js(result_content))
-      ]));
-      let msg = tool_result_message(call, result_content);
-      msg :: dispatch_calls(rest, workdir, step_idx, stream_id)
+      let envelope = tool_call_to_envelope(call);
+      let decision = dispatch_tool_policy(rt, ctx, envelope);
+      match decision {
+        Deny(reason) => {
+          let _ = emit_json(jo([
+            kv("type", js("native_tool_denied")),
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("stream_id", js(stream_id)),
+            kv("tool", js(call.name)),
+            kv("id", js(call.id)),
+            kv("reason", js(reason))
+          ]));
+          let denial_msg = policy_denied_message(call, reason);
+          denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
+        },
+        _ => {
+          let _ = emit_json(jo([
+            kv("type", js("native_tool_calls")),
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("stream_id", js(stream_id)),
+            kv("tool", js(call.name)),
+            kv("id", js(call.id))
+          ]));
+          let result_content = dispatch_one(workdir, call);
+          let _ = emit_json(jo([
+            kv("type", js("native_tool_results")),
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("stream_id", js(stream_id)),
+            kv("id", js(call.id)),
+            kv("result", js(result_content))
+          ]));
+          let msg = tool_result_message(call, result_content);
+          msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
+        }
+      }
     }
   }
 }
@@ -322,8 +374,10 @@ func loop_v2(
               }
             }
             else {
-              -- finish_reason = "tool_calls" → existing dispatch path
-              let tool_msgs = dispatch_calls(result.tool_calls, workdir, step_idx, stream_id);
+              -- finish_reason = "tool_calls" → run M4 policy gate per-call
+              -- inside dispatch_calls; allowed dispatch via dispatch_one,
+              -- denied become tool-role denial messages
+              let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id);
               let next_msgs = msgs_with_assistant ++ tool_msgs;
               loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1)
             }
