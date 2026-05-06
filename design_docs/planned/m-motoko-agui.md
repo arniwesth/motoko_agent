@@ -4,8 +4,8 @@
 **Target**: motoko_agent (future minor release; ~1 sprint of dedicated work)
 **Priority**: P3 (architectural; ships when motoko's product strategy benefits from external UI interop)
 **Estimated**: 5-7 days (~30-40 hours)
-**Dependencies**: M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover landed (PR #4 merged)
-**Surfaced by**: M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 wire-format fixes (2026-05-06)
+**Dependencies**: M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover landed (PR #4 merged); M-MOTOKO-TOOL-POLICY-PENDING and M-MOTOKO-CONVERSATION-COMPACTION landed (both add new event types — see mapping table update below)
+**Surfaced by**: M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 wire-format fixes (2026-05-06); new Pending + compaction events need mapping (2026-05-06)
 
 ## Problem
 
@@ -49,6 +49,8 @@ Replace motoko's bespoke wire shapes with AG-UI compliant events. Two layers:
 | `native_tool_results` (batch) | one `TOOL_CALL_END` + `TOOL_CALL_RESULT` per call | |
 | `done` | `RUN_FINISHED` | |
 | `ext_tool_handled` / `delegated_tool_deferred` | per-call `TOOL_CALL_RESULT` with structured payload | These collapse — they're just specialised result shapes |
+| `tool_pending` (new — M-MOTOKO-TOOL-POLICY-PENDING) | AG-UI custom event `motoko.TOOL_APPROVAL_REQUESTED` | No AG-UI standard equivalent; human-in-the-loop approval request. Custom namespace prefix preserves schema compliance. |
+| `compaction_exhausted` (new — M-MOTOKO-CONVERSATION-COMPACTION) | `RUN_FINISHED` with `error.code = "ContextExhausted"` | Non-retryable run failure; maps cleanly to error termination |
 | `session_start` | `RUN_STARTED` (top-level run) | |
 | `error` (general) | `RUN_FINISHED` with error | |
 
@@ -91,4 +93,5 @@ This staged approach means each PR is small, reviewable, and reversible. No big-
 
 1. **Product strategy**: does motoko aim to be embedable in non-TS UIs (web, mobile, voice)? If yes, AG-UI is high-value. If motoko stays a CLI/TUI-only product, AG-UI is technical-purity-only and lower priority.
 2. **Schema versioning**: AG-UI versions its events. We pin a version in the runtime; bumping requires a coordinated runtime + client update. Worth doing now with a v0 schema or wait for AG-UI v1 stable?
-3. **Custom extensions**: motoko has v2-specific events (`ext_tool_handled`, `delegated_tool_deferred`) that don't map cleanly to AG-UI. AG-UI supports custom events via a namespace prefix; do we use that or absorb them into TOOL_CALL_RESULT payload metadata?
+3. **Custom extensions**: motoko has v2-specific events (`ext_tool_handled`, `delegated_tool_deferred`, `tool_pending`) that don't map cleanly to AG-UI. AG-UI supports custom events via a namespace prefix (`motoko.*`); the design uses that for `tool_pending` (human-in-the-loop approval). Same pattern can apply to `ext_tool_handled` and `delegated_tool_deferred`.
+4. **`tool_pending` interactivity**: AG-UI doesn't define an approval/denial round-trip today. The `motoko.TOOL_APPROVAL_REQUESTED` custom event would need a matching `motoko.TOOL_APPROVAL_RESPONSE` shape for the UI → runtime direction. This extends AG-UI's bidirectional protocol — worth proposing upstream.
