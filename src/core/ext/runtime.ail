@@ -12,6 +12,7 @@ import src/core/ext/types (
   ExtCtx,
   PromptPatch,
   BudgetPatch,
+  PolicyDefault,
   ToolPolicyDecision,
   ToolHandleDecision,
   ResponseInterceptDecision,
@@ -141,21 +142,29 @@ func decide_one_policy(h: ExtensionHooks, ctx: ExtCtx, call: ToolCallEnvelope) -
     let tag = match decision {
       Allow => "allow",
       Deny(_) => "deny",
-      NoOpinion => "noop"
+      NoOpinion => "noop",
+      Pending(_, _) => "pending"
     };
     emit_dummy_hook("on_tool_policy", "decision", tag)
   } else ();
   decision
 }
 
-func merge_tool_decisions(xs: [ToolPolicyDecision], seen_allow: bool) -> ToolPolicyDecision {
+-- Priority order: Deny > Pending > Allow > NoOpinion.
+-- Deny short-circuits immediately; Pending is recorded and returned unless
+-- a Deny is seen; Allow sets seen_allow; NoOpinion is neutral.
+func merge_tool_decisions(xs: [ToolPolicyDecision], seen_allow: bool, seen_pending: Option[ToolPolicyDecision]) -> ToolPolicyDecision {
   match xs {
-    [] => if seen_allow then Allow else NoOpinion,
+    [] => match seen_pending {
+      Some(p) => p,
+      None => if seen_allow then Allow else NoOpinion
+    },
     x :: rest =>
       match x {
         Deny(msg) => Deny(msg),
-        Allow => merge_tool_decisions(rest, true),
-        NoOpinion => merge_tool_decisions(rest, seen_allow)
+        Allow => merge_tool_decisions(rest, true, seen_pending),
+        NoOpinion => merge_tool_decisions(rest, seen_allow, seen_pending),
+        Pending(reason, default) => merge_tool_decisions(rest, seen_allow, Some(Pending(reason, default)))
       }
   }
 }
@@ -168,7 +177,7 @@ func collect_tool_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCall
 }
 
 export func dispatch_tool_policy(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
-  merge_tool_decisions(collect_tool_decisions(rt.registry.hooks, ctx, call), false)
+  merge_tool_decisions(collect_tool_decisions(rt.registry.hooks, ctx, call), false, None)
 }
 
 func tool_name(call: ToolCallEnvelope) -> string {
@@ -346,7 +355,9 @@ func dispatch_smoke_record_hooks() -> bool
     let policy_ok =
       match dispatch_tool_policy(rt, ctx, { id: "p", tool: "ReadFile", arguments: jo([]) }) {
         Deny(msg) => msg == "blocked",
-        _ => false
+        Allow => false,
+        NoOpinion => false,
+        Pending(_, _) => false
       };
     let handle_ok =
       match dispatch_tool_handle(rt, ctx, { id: "h", tool: "Alpha", arguments: jo([]) }) {
@@ -364,4 +375,61 @@ func dispatch_smoke_record_hooks() -> bool
         _ => false
       };
     prompt_ok && budget_ok && policy_ok && handle_ok && intercept_ok && finalize_ok
+  }
+
+-- Pending alone → returned as-is (takes priority over NoOpinion).
+func merge_pending_alone() -> bool
+  tests [((), true)]
+  {
+    let xs = [Pending("destructive op", DenyAfterTimeout)];
+    match merge_tool_decisions(xs, false, None) {
+      Pending(reason, _) => reason == "destructive op",
+      _ => false
+    }
+  }
+
+-- Pending + Allow → Pending wins (Pending > Allow).
+func merge_pending_over_allow() -> bool
+  tests [((), true)]
+  {
+    let xs = [Allow, Pending("needs approval", AllowAfterTimeout)];
+    match merge_tool_decisions(xs, false, None) {
+      Pending(_, _) => true,
+      _ => false
+    }
+  }
+
+-- Deny + Pending → Deny short-circuits (Deny > Pending).
+func merge_deny_over_pending() -> bool
+  tests [((), true)]
+  {
+    let xs = [Pending("needs approval", DenyAfterTimeout), Deny("blocked")];
+    match merge_tool_decisions(xs, false, None) {
+      Deny(msg) => msg == "blocked",
+      _ => false
+    }
+  }
+
+-- dispatch_tool_policy returns Pending when an extension hook returns it.
+func dispatch_pending_hook() -> bool
+  tests [((), true)]
+  {
+    let pending_hook: ExtensionHooks = {
+      id: "pending_hook",
+      provided_tools: [],
+      on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+      on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+        { requested_total: None, requested_solver: None, requested_verifier: None }
+      },
+      on_tool_policy: \_ctx _call. Pending("write outside cwd", DenyAfterTimeout),
+      on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate },
+      on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
+      on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+    };
+    let rt = { registry: { hooks: [pending_hook] }, strict_mode: false };
+    let ctx = smoke_ctx();
+    match dispatch_tool_policy(rt, ctx, { id: "p", tool: "WriteFile", arguments: jo([]) }) {
+      Pending(reason, DenyAfterTimeout) => reason == "write outside cwd",
+      _ => false
+    }
   }

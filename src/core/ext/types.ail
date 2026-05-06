@@ -32,10 +32,16 @@ export type BudgetPatch = {
   requested_verifier: Option[int]
 }
 
+export type PolicyDefault
+  = AllowAfterTimeout
+  | DenyAfterTimeout
+  deriving (Eq)
+
 export type ToolPolicyDecision
   = Allow
   | Deny(string)
   | NoOpinion
+  | Pending(string, PolicyDefault)
   deriving (Eq)
 
 export type ToolHandleDecision

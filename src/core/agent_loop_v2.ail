@@ -48,7 +48,7 @@ import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for)
 import src/core/types (Msg, ToolBackend)
 import std/option (Option, Some, None)
-import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
+import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
@@ -301,7 +301,7 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
 
 -- Dispatch each ToolCall through the full per-call rpc_loop pipeline:
 --   1. Convert ToolCall → ToolCallEnvelope (M1 adapter)
---   2. M4 — dispatch_tool_policy: Allow/Deny/NoOpinion
+--   2. M4 — dispatch_tool_policy: Allow/Deny/NoOpinion/Pending
 --   3. M5 — dispatch_tool_handle: extension may handle the tool directly
 --      (Handled returning ToolResultEnvelope) or Delegate to native
 --   4. M6 — backend split: native vs ohmy_pi via backend_for
@@ -309,15 +309,15 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
 --
 -- Per-call branching:
 --   Deny     → tool-role denial Message; skip handle + dispatch
+--   Pending  → emit tool_pending event; block stdin for approve/deny;
+--              EOF/timeout applies PolicyDefault; deny → denial Message;
+--              approve → same as Allow/NoOpinion path below
 --   Allow/NoOpinion + Handled → tool-role Message from extension's envelope;
 --                               skip dispatch_one
 --   Allow/NoOpinion + Delegate + backend_for==Native    → tool-role Message
 --                                                          from dispatch_one
 --   Allow/NoOpinion + Delegate + backend_for==Delegated → tool-role
 --                                                          delegated_deferred_message
---                                                          (full ohmy_pi inbox
---                                                          wait deferred to
---                                                          follow-up M6.5)
 --
 -- Effect row: {FS, Process, IO, Clock} (M4) + {AI, Env, Net, SharedMem,
 -- Stream} from on_tool_handle's declared effects = full agent stack.
@@ -347,6 +347,118 @@ func dispatch_calls(
           ]));
           let denial_msg = policy_denied_message(call, reason);
           denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+        },
+        Pending(reason, default) => {
+          -- Emit the pending event so the TUI / wrapper can prompt the operator.
+          let _ = emit_json(jo([
+            kv("type", js("tool_pending")),
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("stream_id", js(stream_id)),
+            kv("tool", js(call.name)),
+            kv("id", js(call.id)),
+            kv("reason", js(reason))
+          ]));
+          -- Block on stdin for {"type":"approve"} or {"type":"deny","reason":"..."}.
+          -- EOF or unparseable input applies the extension-supplied PolicyDefault.
+          let raw = readLine();
+          let resolved_denial: Option[string] =
+            if raw == "" then
+              match default {
+                AllowAfterTimeout => None,
+                DenyAfterTimeout => Some("timeout — no approval received")
+              }
+            else
+              match decode(raw) {
+                Err(_) =>
+                  match default {
+                    AllowAfterTimeout => None,
+                    DenyAfterTimeout => Some("unparseable response — default deny applied")
+                  },
+                Ok(obj) => {
+                  let cmd_type = msg_get_str(obj, "type");
+                  if cmd_type == "approve" then None
+                  else if cmd_type == "deny" then {
+                    let r = msg_get_str(obj, "reason");
+                    Some(if r == "" then "denied by operator" else r)
+                  }
+                  else
+                    match default {
+                      AllowAfterTimeout => None,
+                      DenyAfterTimeout => Some("unknown approval command — default deny applied")
+                    }
+                }
+              };
+          match resolved_denial {
+            Some(denial_reason) => {
+              let _ = emit_json(jo([
+                kv("type", js("native_tool_denied")),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("tool", js(call.name)),
+                kv("id", js(call.id)),
+                kv("reason", js(denial_reason))
+              ]));
+              let denial_msg = policy_denied_message(call, denial_reason);
+              denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+            },
+            None => {
+              -- Approved: run M5 handle + M6 dispatch, same as Allow/NoOpinion.
+              let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+              match handle_decision {
+                Handled(result_env) => {
+                  let _ = emit_json(jo([
+                    kv("type", js("ext_tool_handled")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("stream_id", js(stream_id)),
+                    kv("tool", js(call.name)),
+                    kv("id", js(call.id)),
+                    kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
+                  ]));
+                  let handled_msg: Message = {
+                    role: "tool",
+                    content: encode(result_to_json(result_env)),
+                    tool_calls: [],
+                    tool_call_id: call.id
+                  };
+                  handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                },
+                Delegate => {
+                  let backend = if ohmy_pi then backend_for(envelope, true) else Native;
+                  match backend {
+                    Delegated => {
+                      let _ = emit_json(jo([
+                        kv("type", js("delegated_tool_deferred")),
+                        kv("step", jnum(_int_to_float(step_idx))),
+                        kv("stream_id", js(stream_id)),
+                        kv("tool", js(call.name)),
+                        kv("id", js(call.id))
+                      ]));
+                      let deferred_msg = delegated_deferred_message(call);
+                      deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                    },
+                    Native => {
+                      let _ = emit_json(jo([
+                        kv("type", js("v2_tool_dispatch_start")),
+                        kv("step", jnum(_int_to_float(step_idx))),
+                        kv("stream_id", js(stream_id)),
+                        kv("tool", js(call.name)),
+                        kv("id", js(call.id))
+                      ]));
+                      let result_content = dispatch_one(workdir, call);
+                      let _ = emit_json(jo([
+                        kv("type", js("v2_tool_dispatch_complete")),
+                        kv("step", jnum(_int_to_float(step_idx))),
+                        kv("stream_id", js(stream_id)),
+                        kv("id", js(call.id))
+                      ]));
+                      let msg = tool_result_message(call, result_content);
+                      msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                    }
+                  }
+                }
+              }
+            }
+          }
         },
         _ => {
           -- M5: ask extensions whether they want to handle this tool directly

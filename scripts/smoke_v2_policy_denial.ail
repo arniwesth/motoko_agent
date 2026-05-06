@@ -97,6 +97,7 @@ export func main() -> () ! {IO, Clock, Env} {
   match decision {
     Allow => println("--- M4 denial smoke FAIL: expected Deny, got Allow ---"),
     NoOpinion => println("--- M4 denial smoke FAIL: expected Deny, got NoOpinion ---"),
+    Pending(_, _) => println("--- M4 denial smoke FAIL: expected Deny, got Pending ---"),
     Deny(reason) => {
       let denial_payload = encode(jo([
         kv("error", js("true")),
