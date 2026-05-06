@@ -5,7 +5,7 @@ import std/result  (Result, Ok, Err)
 import std/string  (split, contains, trim, length, startsWith, substring, find)
 import std/list    (reverse)
 import std/json    (Json, jo, get, asString, asNumber, asBool, asArray)
-import std/fs      (readFile, writeFile, fileExists)
+import std/fs      (readFile, writeFile, fileExists, mkdirAll, isDir)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes   (toString)
 import std/crypto  (sha256Hex)
@@ -464,6 +464,15 @@ func run_write_file(id: string, path: string, content: string, workdir: string) 
     Ok(_) => {
       let existed_before = fileExists(path);
       let before = if existed_before then readFile(path) else "";
+      -- Ensure the parent directory exists so writeFile doesn't panic on
+      -- "no such file or directory". The legacy env-server delegation path
+      -- ran writes via shell + `mkdir -p`; in v2 standalone we need to do
+      -- the equivalent in-process. mkdirAll is a no-op if the directory
+      -- already exists.
+      let parent = path_dirname(path);
+      let _ = if parent != "" && parent != "." && not isDir(parent)
+        then mkdirAll(parent)
+        else ();
       let _ = writeFile(path, content);
       WriteFileResult({
         id: id,
