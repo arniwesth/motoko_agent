@@ -1,0 +1,55 @@
+-- scripts/smoke_v2_tool_write.ail
+-- M9 task variant: explicit WriteFile tool invocation.
+--
+-- Verifies the WriteFile dispatch path through v2: model emits a typed
+-- WriteFile tool_call → dispatch_tool_policy NoOpinion → dispatch_tool_handle
+-- Delegate → backend_for=Native (ohmy_pi=false) → dispatch_one writes the
+-- file → tool result Message → next step prose-only confirmation → done.
+--
+-- The /tmp/m9-test-<provider>.txt path is unique per provider so parallel
+-- runs don't clobber each other. The smoke passes if run_v2 returns Ok —
+-- we're testing wire compat (typed tool_use protocol works), not file
+-- system semantics.
+
+module scripts/smoke_v2_tool_write
+
+import std/io (println)
+import std/env (getEnv)
+import std/result (Result, Ok, Err)
+import src/core/agent_loop_v2 (run_v2)
+import src/core/ext/runtime (init_runtime)
+import src/core/ext/types (BudgetPlan)
+import src/core/types (Msg)
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let rt = init_runtime();
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+
+  let initial_msgs: [Msg] = [
+    { role: "system", content: "You are a coding assistant. Use the WriteFile tool when asked to create files. The current working directory is /tmp; use relative paths." },
+    { role: "user", content: "Create the file m9-test.txt (relative to the current working directory) with the content: hello m9" }
+  ];
+
+  let model_arg = match getEnv("AILANG_SMOKE_MODEL") {
+    Ok(v) => if v == "" then "openrouter/z-ai/glm-5" else v,
+    Err(_) => "openrouter/z-ai/glm-5"
+  };
+
+  let result = run_v2(
+    rt,
+    "smoke-test-v2-tool-write",
+    "",
+    false,
+    budget,
+    model_arg,
+    initial_msgs,
+    "/tmp",
+    4,
+    false
+  );
+
+  match result {
+    Ok(_) => println("--- M9-tool-write smoke PASS ---"),
+    Err(e) => println("--- M9-tool-write smoke ERROR: code=${e.code} message=${e.message} ---")
+  }
+}

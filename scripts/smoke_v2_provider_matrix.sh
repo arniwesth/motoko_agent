@@ -145,15 +145,10 @@ env_get() {
 # Each entry: <task-id>:<smoke-script>
 TASKS=(
   "policy-default:scripts/smoke_v2_policy.ail"
-  # The remaining 4 tasks are placeholders for the human to add — they
-  # require minimal smoke variants that exercise tool-use against varied
-  # prompts (e.g. write a file, read a file, run a build, ask a factual
-  # question). Add them by copying smoke_v2_policy.ail and changing the
-  # prompt, then list them here:
-  #   "tool-write:scripts/smoke_v2_tool_write.ail"
-  #   "tool-read:scripts/smoke_v2_tool_read.ail"
-  #   "tool-build:scripts/smoke_v2_tool_build.ail"
-  #   "factual:scripts/smoke_v2_factual.ail"
+  "factual:scripts/smoke_v2_factual.ail"
+  "tool-write:scripts/smoke_v2_tool_write.ail"
+  "tool-read:scripts/smoke_v2_tool_read.ail"
+  "tool-build:scripts/smoke_v2_tool_build.ail"
 )
 
 # --- Matrix runner -----------------------------------------------------------

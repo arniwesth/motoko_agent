@@ -305,7 +305,17 @@ func dispatch_calls(
               -- before; Delegated returns a structured deferred-error tool
               -- result so the model can adapt. Full ohmy_pi inbox wait
               -- migration is a follow-up (M6.5) — see delegated_deferred_message.
-              let backend = backend_for(envelope, ohmy_pi);
+              --
+              -- Important: when ohmy_pi=false the env-server's delegation
+              -- infrastructure isn't wired AT ALL (no inbox to wait on, no
+              -- TS-side dispatcher), so the legacy backend_for-via-
+              -- needs_delegation_for_process Delegated path has nowhere to
+              -- land. Force Native in that case — matches the practical
+              -- reality that motoko under env-server with ohmy_pi=false
+              -- runs every shell command in-process anyway, just via the
+              -- env-server's process supervisor. v2 in standalone mode
+              -- runs them in-process directly.
+              let backend = if ohmy_pi then backend_for(envelope, true) else Native;
               match backend {
                 Delegated => {
                   let _ = emit_json(jo([
