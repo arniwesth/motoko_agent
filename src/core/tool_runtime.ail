@@ -507,8 +507,14 @@ func run_write_file(id: string, path: string, content: string, workdir: string) 
 }
 
 func path_dirname(path: string) -> string {
-  let parts = split(path, "/");
-  path_dirname_rec(parts, "")
+  if startsWith(path, "/") then {
+    let rel = substring(path, 1, length(path));
+    let dir = path_dirname(rel);
+    if dir == "." then "/" else "/${dir}"
+  } else {
+    let parts = split(path, "/");
+    path_dirname_rec(parts, "")
+  }
 }
 
 func path_dirname_rec(parts: [string], acc: string) -> string {
