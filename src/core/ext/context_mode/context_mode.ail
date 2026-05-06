@@ -238,7 +238,7 @@ export func register() -> ExtensionHooks ! {FS} {
   register_with_config({
     profile: "default",
     profile_dir: "",
-    agent: { model: "", workdir: ".", max_steps: 50, step_delay_ms: 0, max_retries: 3, retry_base_ms: 1000, retry_cap_ms: 30000, semi_formal_verifier_mode: false, system_prompt: "", openai_base_url: "", ai_options_json: "" },
+    agent: { model: "", workdir: ".", max_steps: 50, step_delay_ms: 0, max_retries: 3, retry_base_ms: 1000, retry_cap_ms: 30000, semi_formal_verifier_mode: false, system_prompt: "", openai_base_url: "", ai_options_json: "", max_cost_millicents: 0 },
     backend: { mode: "none", url: "", port: 8080, command: "", args: [], startup_timeout_ms: 0, auto_start: false },
     tools: { hybrid: true, ohmy_pi: false, snippet_caps: ["IO", "FS", "Process"], delegated_timeout_ms: 30000, delegated_poll_ms: 100, delegated_timeout_slack_ms: 5000, edit_mode: "" },
     extensions: { order: [], strict: false },
@@ -246,6 +246,7 @@ export func register() -> ExtensionHooks ! {FS} {
     context_mode: { bin: "context-mode", timeout_ms: 25000, max_output_chars: 6000, snapshot_key_prefix: "ctxmode:snapshot:" },
     exa_search: { timeout_ms: 30000, max_output_chars: 8000 },
     omnigraph: { timeout_ms: 30000 },
+    cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0 },
     warnings: []
   })
 }

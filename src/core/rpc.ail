@@ -20,7 +20,7 @@ import std/fs     (readFile, fileExists)
 import src/core/types  (Msg, version)
 import src/core/prompts (with_cache_hint, with_agents_context)
 import src/core/cache   (get_hint)
-import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config)
+import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config, CostRates)
 import src/core/ext/types (BudgetPlan, ExtRuntime)
 import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, dispatch_build_system_prompt, dispatch_budget_plan)
 
@@ -41,7 +41,9 @@ type RunSettings = {
   retry_base_ms: int,
   retry_cap_ms: int,
   max_steps: int,
-  verifier_mode: bool
+  verifier_mode: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates
 }
 
 func emit(obj: string) -> () ! {IO} {
@@ -146,7 +148,9 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     retry_base_ms: cfg.agent.retry_base_ms,
     retry_cap_ms: cfg.agent.retry_cap_ms,
     max_steps: cfg.agent.max_steps,
-    verifier_mode: cfg.agent.semi_formal_verifier_mode
+    verifier_mode: cfg.agent.semi_formal_verifier_mode,
+    max_cost_millicents: cfg.agent.max_cost_millicents,
+    cost_rates: cfg.cost_rates
   };
   let bv = version();
   let _ = emit(encode(jo([
@@ -202,7 +206,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     kv("type", js("v2_mode")),
     kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete"))
   ])));
-  run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi)
+  run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates)
 }
 
 export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream} {

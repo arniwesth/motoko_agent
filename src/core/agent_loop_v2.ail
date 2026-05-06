@@ -47,6 +47,7 @@ import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for_v2)
 import src/core/types (Msg, ToolBackend)
+import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
 import src/core/compaction (compact_step)
@@ -546,6 +547,14 @@ func dispatch_calls(
   }
 }
 
+-- Compute per-step cost in millicents from token counts and provider rates.
+-- Integer division truncates toward zero (conservative — never over-counts).
+-- Returns 0 when rates are zero (unmetered/unknown provider).
+pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: CostRates) -> int {
+  (input_tokens * rates.input_per_1m_millicents +
+   output_tokens * rates.output_per_1m_millicents) / 1000000
+}
+
 -- The v2 loop. Iterates until the model returns finish_reason != "tool_calls"
 -- (and any solver-candidate hooks accept the result) or step_budget hits zero.
 -- Returns the final messages list.
@@ -571,13 +580,30 @@ func loop_v2(
   workdir: string,
   step_idx: int,
   step_budget: int,
-  ohmy_pi: bool
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  total_cost_millicents: int,
+  cost_warned_pct: int
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   if step_budget <= 0 then Err({
     code: "Internal",
     message: "v2 loop: step budget exhausted",
     retryable: false
   })
+  else if max_cost_millicents > 0 && cost_rates.input_per_1m_millicents > 0 && total_cost_millicents >= max_cost_millicents then {
+    let _ = emit_json(jo([
+      kv("type", js("cost_exhausted")),
+      kv("step", jnum(_int_to_float(step_idx))),
+      kv("total_cost_millicents", jnum(_int_to_float(total_cost_millicents))),
+      kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))
+    ]));
+    Err({
+      code: "BudgetExceeded",
+      message: "cost cap reached: ${show(total_cost_millicents)} of ${show(max_cost_millicents)} millicents used",
+      retryable: false
+    })
+  }
   else
   -- DP0: structural compaction before the LLM call.
   -- compact_step is a no-op below 70% usage; elides old tool_result content
@@ -641,6 +667,24 @@ func loop_v2(
         let msgs_with_assistant = msgs ++ [assistant_msg];
         let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant);
 
+        -- Accumulate step cost; emit threshold warnings at most once per run.
+        let step_cost = step_cost_millicents(result.input_tokens, result.output_tokens, cost_rates);
+        let new_total_cost = total_cost_millicents + step_cost;
+        let new_warned_pct =
+          if max_cost_millicents > 0 then {
+            let pct = (new_total_cost * 100) / max_cost_millicents;
+            if pct >= 90 && cost_warned_pct < 90 then {
+              let _ = emit_json(jo([kv("type", js("cost_warning")), kv("threshold", js("90pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]));
+              90
+            } else if pct >= 75 && cost_warned_pct < 75 then {
+              let _ = emit_json(jo([kv("type", js("cost_warning")), kv("threshold", js("75pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]));
+              75
+            } else if pct >= 50 && cost_warned_pct < 50 then {
+              let _ = emit_json(jo([kv("type", js("cost_warning")), kv("threshold", js("50pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]));
+              50
+            } else cost_warned_pct
+          } else cost_warned_pct;
+
         -- M3 DP1a: response-intercept hook. Extensions can synthesize a
         -- tool result from the model's prose (e.g. compose_check_premise)
         -- without the model having emitted a typed tool_call. When this
@@ -656,7 +700,7 @@ func loop_v2(
             ]));
             let tool_msg = envelope_to_tool_message(envelope);
             let next_msgs = msgs_with_assistant ++ [tool_msg];
-            loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+            loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct)
           },
           NoIntercept => {
             if result.finish_reason != "tool_calls" then {
@@ -676,7 +720,7 @@ func loop_v2(
                   let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
                   let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi);
                   let next_msgs = msgs_with_assistant ++ tool_msgs;
-                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct)
                 },
                 None => {
               -- M3 DP1b: when the model emits prose without tool_calls, give
@@ -708,7 +752,7 @@ func loop_v2(
                     tool_call_id: ""
                   };
                   let next_msgs = msgs_with_assistant ++ [feedback_msg];
-                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct)
                 },
                 NoDecision => {
                   let _ = emit_json(jo([
@@ -751,7 +795,7 @@ func loop_v2(
                 kv("results", ja(tool_messages_to_result_jsons(tool_msgs)))
               ]));
               let next_msgs = msgs_with_assistant ++ tool_msgs;
-              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct)
             }
           }
         }
@@ -790,12 +834,14 @@ export func run_v2(
   initial_msgs: [Msg],
   workdir: string,
   step_budget: int,
-  ohmy_pi: bool
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
   let messages = msgs_to_messages(initial_msgs);
   let resolved_model = strip_provider_prefix(model);
-  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi)
+  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, 0, 0)
 }
 
 -- Run loop_v2 starting from an existing [Message] history (instead of the
@@ -812,11 +858,13 @@ export func run_v2_from_messages(
   history: [Message],
   workdir: string,
   step_budget: int,
-  ohmy_pi: bool
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
   let resolved_model = strip_provider_prefix(model);
-  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi)
+  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, 0, 0)
 }
 
 -- Read a JSON-shaped string field from a decoded Json object, returning
@@ -855,19 +903,21 @@ export func conversation_loop_v2(
   history: [Message],
   workdir: string,
   step_budget: int,
-  ohmy_pi: bool
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let raw = readLine();
   if raw == "" then ()
   else match decode(raw) {
-    Err(_) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi),
+    Err(_) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates),
     Ok(obj) => {
       let cmd_type = msg_get_str(obj, "type");
       if cmd_type == "abort" || cmd_type == "exit" then ()
       else if cmd_type == "model_change" then {
         let new_model = msg_get_str(obj, "model");
         let resolved_new = strip_provider_prefix(new_model);
-        conversation_loop_v2(rt, env_url, hybrid_tools, budget, resolved_new, history, workdir, step_budget, ohmy_pi)
+        conversation_loop_v2(rt, env_url, hybrid_tools, budget, resolved_new, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates)
       }
       else if cmd_type == "user_message" then {
         let content = msg_get_str(obj, "content");
@@ -884,8 +934,8 @@ export func conversation_loop_v2(
           kv("model", js(model)),
           kv("mode", js("v2"))
         ]));
-        match run_v2_from_messages(rt, content, env_url, hybrid_tools, budget, model, next_history, workdir, step_budget, ohmy_pi) {
-          Ok(updated_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi),
+        match run_v2_from_messages(rt, content, env_url, hybrid_tools, budget, model, next_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates) {
+          Ok(updated_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates),
           Err(e) => {
             let _ = emit_json(jo([
               kv("type", js("error")),
@@ -893,11 +943,11 @@ export func conversation_loop_v2(
               kv("code", js(e.code)),
               kv("message", js(e.message))
             ]));
-            conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi)
+            conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates)
           }
         }
       }
-      else conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi)
+      else conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates)
     }
   }
 }
@@ -918,11 +968,13 @@ export func run_v2_with_conversation(
   initial_msgs: [Msg],
   workdir: string,
   step_budget: int,
-  ohmy_pi: bool
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let initial_messages = msgs_to_messages(initial_msgs);
-  match run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi) {
-    Ok(final_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, final_history, workdir, step_budget, ohmy_pi),
+  match run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates) {
+    Ok(final_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates),
     Err(e) => {
       let _ = emit_json(jo([
         kv("type", js("error")),
@@ -930,7 +982,7 @@ export func run_v2_with_conversation(
         kv("code", js(e.code)),
         kv("message", js(e.message))
       ]));
-      conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi)
+      conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates)
     }
   }
 }
