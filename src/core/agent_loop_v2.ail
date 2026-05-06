@@ -45,8 +45,8 @@ import src/core/tool_catalog (tools)
 import src/core/tool_contract (ToolResultEnvelope, result_to_json)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/types (Msg)
-import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision)
-import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy)
+import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
+import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
 -- OpenRouter's API rejects the prefixed name. The fork's old code stored the
@@ -181,17 +181,22 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
   }
 }
 
--- Dispatch each ToolCall after running the M4 tool-gating policy. For each
--- call:
+-- Dispatch each ToolCall through the full per-call rpc_loop pipeline:
 --   1. Convert ToolCall → ToolCallEnvelope (M1 adapter)
---   2. Run dispatch_tool_policy(rt, ctx, envelope) — extension hooks decide
---      Allow / Deny(reason) / NoOpinion
---   3. If denied: emit native_tool_denied event + build a tool-role
---      denial Message; do NOT run the call
---   4. If allowed (or no opinion): dispatch via dispatch_one as before
+--   2. M4 — dispatch_tool_policy: Allow/Deny/NoOpinion
+--   3. M5 — dispatch_tool_handle: extension may handle the tool directly
+--      (Handled returning ToolResultEnvelope) or Delegate to native
+--   4. M6 (later) — backend split: native vs ohmy_pi
+--   5. dispatch_one for native path
 --
--- Effects: {FS, Process} from dispatch_one + {IO, Clock} from policy hooks
--- = {FS, Process, IO, Clock}. Row polymorphism propagates via call site.
+-- Per-call branching:
+--   Deny     → tool-role denial Message; skip handle + dispatch
+--   Allow/NoOpinion + Handled → tool-role Message from extension's envelope;
+--                               skip dispatch_one
+--   Allow/NoOpinion + Delegate → tool-role Message from dispatch_one
+--
+-- Effect row: {FS, Process, IO, Clock} (M4) + {AI, Env, Net, SharedMem,
+-- Stream} from on_tool_handle's declared effects = full agent stack.
 func dispatch_calls(
   rt: ExtRuntime,
   ctx: ExtCtx,
@@ -199,13 +204,13 @@ func dispatch_calls(
   workdir: string,
   step_idx: int,
   stream_id: string
-) -> [Message] ! {FS, Process, IO, Clock} {
+) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream} {
   match calls {
     [] => [],
     call :: rest => {
       let envelope = tool_call_to_envelope(call);
-      let decision = dispatch_tool_policy(rt, ctx, envelope);
-      match decision {
+      let policy = dispatch_tool_policy(rt, ctx, envelope);
+      match policy {
         Deny(reason) => {
           let _ = emit_json(jo([
             kv("type", js("native_tool_denied")),
@@ -219,23 +224,51 @@ func dispatch_calls(
           denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
         },
         _ => {
-          let _ = emit_json(jo([
-            kv("type", js("native_tool_calls")),
-            kv("step", jnum(_int_to_float(step_idx))),
-            kv("stream_id", js(stream_id)),
-            kv("tool", js(call.name)),
-            kv("id", js(call.id))
-          ]));
-          let result_content = dispatch_one(workdir, call);
-          let _ = emit_json(jo([
-            kv("type", js("native_tool_results")),
-            kv("step", jnum(_int_to_float(step_idx))),
-            kv("stream_id", js(stream_id)),
-            kv("id", js(call.id)),
-            kv("result", js(result_content))
-          ]));
-          let msg = tool_result_message(call, result_content);
-          msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
+          -- M5: ask extensions whether they want to handle this tool directly
+          -- (e.g. compose's `Compose` tool dispatches its own pipeline).
+          let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+          match handle_decision {
+            Handled(result_env) => {
+              let _ = emit_json(jo([
+                kv("type", js("ext_tool_handled")),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("tool", js(call.name)),
+                kv("id", js(call.id)),
+                kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
+              ]));
+              -- Use the call.id (model's typed tool_call_id) instead of the
+              -- envelope's id for the tool-role Message correlation —
+              -- providers correlate by the model-emitted id, not the
+              -- extension-internal id.
+              let handled_msg: Message = {
+                role: "tool",
+                content: encode(result_to_json(result_env)),
+                tool_calls: [],
+                tool_call_id: call.id
+              };
+              handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
+            },
+            Delegate => {
+              let _ = emit_json(jo([
+                kv("type", js("native_tool_calls")),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("tool", js(call.name)),
+                kv("id", js(call.id))
+              ]));
+              let result_content = dispatch_one(workdir, call);
+              let _ = emit_json(jo([
+                kv("type", js("native_tool_results")),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("id", js(call.id)),
+                kv("result", js(result_content))
+              ]));
+              let msg = tool_result_message(call, result_content);
+              msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id)
+            }
+          }
         }
       }
     }
