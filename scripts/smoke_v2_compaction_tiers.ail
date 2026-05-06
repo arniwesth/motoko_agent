@@ -1,0 +1,191 @@
+-- scripts/smoke_v2_compaction_tiers.ail
+--
+-- Exercises compaction.ail's three threshold transitions (70/85/95%) by
+-- constructing message lists at calibrated sizes against the Sonnet 4.6
+-- 200k context window.
+--
+-- Tier behavior under test:
+--   < 70%   → PassThrough (compact_step returns Ok with input unchanged)
+--   70-85%  → Elide all but last 10 tool results (keep_last=10)
+--   85-95%  → Elide all but last 5 tool results (keep_last=5)
+--   ≥ 95%   → Err("compaction_exhausted")
+--
+-- Run:
+--   ailang run --caps IO --entry main scripts/smoke_v2_compaction_tiers.ail
+--
+-- Pass = prints all 6 ✓ lines and exits 0.
+
+module scripts/smoke_v2_compaction_tiers
+
+import std/io (println)
+import std/result (Result, Ok, Err)
+import std/string (repeat, length, contains, concat, substring)
+import std/ai (Message)
+import src/core/compaction (
+  estimate_tokens_messages,
+  usage_percent,
+  elide_old_tool_results,
+  compact_step
+)
+
+-- Sonnet 4.6 has a 200k window per context_limit_for. Our token estimate
+-- is `length(content) / 4`, so each char ≈ 0.25 tokens. To hit usage % p:
+--   target_chars = p * 200_000 * 4 / 100  =  p * 8000
+-- e.g. p=75 → 600_000 chars, p=90 → 720_000 chars, p=97 → 776_000 chars.
+--
+-- We split that across 12 tool messages so we have enough to exercise the
+-- "keep last 10" and "keep last 5" elision rules.
+
+func mk_user(content: string) -> Message {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func mk_tool(id: string, content: string) -> Message {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+-- Log-doubling string builder. std/string.repeat has a recursion cap
+-- around 10k; we need 50k+. Each iteration doubles, so n=600_000 lands
+-- in ~20 iterations.
+func grow_string(s: string, target: int) -> string {
+  if length(s) >= target then s
+  else grow_string(concat([s, s]), target)
+}
+
+func make_payload(chars: int) -> string {
+  -- Doubling overshoots to the next power of 2; substring trims to exact
+  -- target length so tier math (which keys on usage_percent) is precise.
+  let seed = repeat("x", 100);
+  let big = grow_string(seed, chars);
+  substring(big, 0, chars)
+}
+
+-- Build N tool messages, each with `chars_each` characters of payload.
+func build_tools(count: int, chars_each: int, idx: int, acc: [Message]) -> [Message] {
+  if idx >= count then acc
+  else {
+    let payload = make_payload(chars_each);
+    let m = mk_tool("tc${show(idx)}", payload);
+    build_tools(count, chars_each, idx + 1, acc ++ [m])
+  }
+}
+
+-- Construct a message list whose total content length puts usage_percent
+-- at the requested target percent against Sonnet 4.6 (200k tokens).
+func msgs_at_pct(target_pct: int) -> [Message] {
+  -- 12 tool messages so we can see the keep_last_10 vs keep_last_5 cuts.
+  let total_chars = target_pct * 8000;
+  let chars_each = total_chars / 12;
+  build_tools(12, chars_each, 0, [mk_user("seed")])
+}
+
+-- Count messages whose content has been replaced with the elide marker.
+-- elide_content prefixes the rewritten content with "[elided" per compaction.ail.
+func count_elided(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => {
+      let inc = if m.role == "tool" && contains(m.content, "[elided") then 1 else 0;
+      inc + count_elided(rest)
+    }
+  }
+}
+
+-- Last message in a list (or a sentinel if empty).
+func last_msg(msgs: [Message]) -> Message {
+  match msgs {
+    [] => { role: "", content: "", tool_calls: [], tool_call_id: "" },
+    m :: [] => m,
+    _ :: rest => last_msg(rest)
+  }
+}
+
+-- 1. Below 70% → passthrough. Use 10% load to be unambiguous.
+func test_below_threshold_passthrough() -> bool {
+  let msgs = msgs_at_pct(10);
+  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
+  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+    Err(_) => false,
+    Ok(out) => {
+      -- pct should be roughly 10 (allow some slop), and the message list
+      -- should be untouched (no elision markers).
+      pct < 70 && count_elided(out) == 0
+    }
+  }
+}
+
+-- 2. 70-85% → keep_last=10. Use 75% load. Of 12 tool msgs, the first 2
+--    should have content elided, the last 10 should be untouched.
+func test_tier1_keeps_last_10() -> bool {
+  let msgs = msgs_at_pct(75);
+  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
+  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+    Err(_) => false,
+    Ok(out) => {
+      pct >= 70 && pct < 85 && count_elided(out) == 2
+    }
+  }
+}
+
+-- 3. 85-95% → keep_last=5. Use 90% load. Of 12 tool msgs, the first 7
+--    should be elided, the last 5 untouched.
+func test_tier2_keeps_last_5() -> bool {
+  let msgs = msgs_at_pct(90);
+  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
+  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+    Err(_) => false,
+    Ok(out) => {
+      pct >= 85 && pct < 95 && count_elided(out) == 7
+    }
+  }
+}
+
+-- 4. ≥ 95% → Err("compaction_exhausted"). Use 97% load.
+func test_tier3_returns_err() -> bool {
+  let msgs = msgs_at_pct(97);
+  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
+  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+    Ok(_) => false,
+    Err(reason) => pct >= 95 && contains(reason, "compaction_exhausted")
+  }
+}
+
+-- 5. Elision is in-place semantically: list length is preserved.
+--    Earlier smoke (smoke_v2_compaction.ail) covered this for keep_last=2;
+--    here we re-confirm at the realistic tier-1 setting.
+func test_elision_preserves_length() -> bool {
+  let msgs = msgs_at_pct(75);
+  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+    Err(_) => false,
+    Ok(out) => _list_length(out) == _list_length(msgs)
+  }
+}
+
+-- 6. Recent messages keep their full content (the load-bearing claim).
+--    Tail tool message in tier-1 must NOT be elided.
+func test_recent_content_preserved() -> bool {
+  let msgs = msgs_at_pct(75);
+  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+    Err(_) => false,
+    Ok(out) => {
+      let last = last_msg(out);
+      length(last.content) > 1000  -- still has real payload, not a marker
+    }
+  }
+}
+
+func report(name: string, ok: bool) -> () ! {IO} {
+  if ok then println("  ✓ ${name}")
+  else println("  ✗ ${name}")
+}
+
+export func main() -> () ! {IO} = {
+  println("=== smoke_v2_compaction_tiers ===");
+  report("below_threshold_passthrough     (<70% → no elision)",   test_below_threshold_passthrough());
+  report("tier1_keeps_last_10             (75% → 2 of 12 elided)", test_tier1_keeps_last_10());
+  report("tier2_keeps_last_5              (90% → 7 of 12 elided)", test_tier2_keeps_last_5());
+  report("tier3_returns_err               (97% → Err exhausted)",  test_tier3_returns_err());
+  report("elision_preserves_length        (length unchanged)",     test_elision_preserves_length());
+  report("recent_content_preserved        (tail not elided)",      test_recent_content_preserved());
+  println("done")
+}
