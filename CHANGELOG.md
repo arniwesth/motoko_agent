@@ -6,6 +6,34 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Fixed (M-MOTOKO-WORKDIR-CWD-RESOLUTION — 2026-05-06)
+
+Dispatcher `workdir` argument is now correctly applied to all filesystem
+operations. Previously `validate_path_common` used `workdir` for the bash
+path-escape guard, but the leaf fs calls (`readFileResult`, `writeFileResult`,
+`mkdirAllResult`, `rg`) resolved against the AILANG runtime's process cwd —
+producing files at unexpected locations or silent read misses.
+
+**Changes** (`src/core/tool_runtime.ail`):
+- Added `resolve_workdir_path(workdir, path)` helper — joins workdir + validated
+  relative path; handles trailing-slash, `.`, and empty-workdir edge cases
+- `run_read_file`: `readFileResult` uses resolved path
+- `run_write_file`: `fileExists`, `readFile` (prior content), `path_dirname`,
+  `mkdirAllResult`, `writeFileResult` all use resolved path
+- `run_edit_file`: `fileExists`, `readFile`, `atomic_write` use resolved path;
+  `read_paths` policy check remains on the tool-supplied relative path
+- `run_search`: new `workdir` parameter; `dir` resolved before passing to `rg`
+- `path_dirname`: fixed to handle absolute paths (was dropping the leading `/`,
+  causing `mkdirAllResult` to create parent dirs at a cwd-relative location)
+- `validate_path_common` (bash escape guard) is unchanged — security model preserved
+
+**Verification**: `scripts/smoke_v2_workdir_resolution.ail` — WriteFile to
+`deep/nested/hello.txt` within a temp workdir lands at the absolute path.
+All 6 prior v2 unit smokes pass (no regression).
+
+Design doc: `design_docs/implemented/motoko_agent/m-motoko-workdir-cwd-resolution.md`
+Sprint plan: `design_docs/implemented/motoko_agent/m-motoko-workdir-cwd-resolution-sprint-plan.md`
+
 ### Changed (M-MOTOKO-RPC-LOOP-FULL-MIGRATION — 2026-05-06)
 
 The agent loop has been **fully migrated** from motoko's text-based

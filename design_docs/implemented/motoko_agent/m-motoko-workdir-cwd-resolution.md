@@ -1,6 +1,6 @@
 # M-MOTOKO-WORKDIR-CWD-RESOLUTION — Apply dispatcher workdir to fs operations
 
-**Status**: Planned
+**Status**: Implemented (2026-05-06, branch ailang-tool-loop-migration)
 **Target**: motoko_agent (next post-cutover patch)
 **Priority**: P2 (medium — observed in M9, doesn't block the cutover, but produces surprising behaviour)
 **Estimated**: ~2-3 hours
