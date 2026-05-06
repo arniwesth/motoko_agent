@@ -64,7 +64,8 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     "openrouter/z-ai/glm-5",
     initial_msgs,
     "/tmp/motoko-smoke",         -- workdir
-    4                             -- step_budget
+    4,                           -- step_budget
+    false                        -- ohmy_pi (M6: native dispatch for smoke)
   );
 
   match result {

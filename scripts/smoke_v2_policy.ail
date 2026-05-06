@@ -24,6 +24,7 @@
 module scripts/smoke_v2_policy
 
 import std/io (println)
+import std/env (getEnv)
 import std/result (Result, Ok, Err)
 import src/core/agent_loop_v2 (run_v2)
 import src/core/ext/runtime (init_runtime)
@@ -39,7 +40,7 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     verifier: 0
   };
 
-  -- Prompt that will likely make GLM-5 try a tool. With empty extension
+  -- Prompt likely to make a model try a tool. With empty extension
   -- registry, dispatch_tool_policy returns NoOpinion → call proceeds via
   -- dispatch_one. We verify the policy gate fires (no crash), the call
   -- runs through, and the loop terminates.
@@ -48,16 +49,25 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     { role: "user", content: "What does 1+1 equal? One number, no tool calls." }
   ];
 
+  -- Model is read from AILANG_SMOKE_MODEL so the matrix runner can drive
+  -- this smoke against multiple providers. Fallback is z-ai/glm-5 (the
+  -- pre-M9 hardcoded default) for direct invocation without the matrix.
+  let model_arg = match getEnv("AILANG_SMOKE_MODEL") {
+    Ok(v) => if v == "" then "openrouter/z-ai/glm-5" else v,
+    Err(_) => "openrouter/z-ai/glm-5"
+  };
+
   let result = run_v2(
     rt,
     "smoke-test-v2-policy",
     "",
     false,
     budget,
-    "openrouter/z-ai/glm-5",
+    model_arg,
     initial_msgs,
     "/tmp/motoko-smoke",
-    4
+    4,
+    false  -- ohmy_pi (M6: native dispatch only for this smoke)
   );
 
   match result {
