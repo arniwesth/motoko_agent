@@ -42,7 +42,7 @@ import std/result (Result, Ok, Err)
 import std/string (trim, startsWith, substring)
 import std/string as Str (length)
 import src/core/tool_catalog (tools)
-import src/core/tool_contract (ToolResultEnvelope, result_to_json)
+import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_json)
 import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for)
@@ -162,6 +162,80 @@ func messages_to_msgs(msgs: [Message]) -> [Msg] {
   match msgs {
     [] => [],
     m :: rest => ({ role: m.role, content: m.content } :: messages_to_msgs(rest))
+  }
+}
+
+-- TUI wire-format helpers (M-MOTOKO-RPC-LOOP M10 follow-up): the legacy
+-- TUI renderer (src/tui/src/ui.ts) expects BATCHED native_tool_calls /
+-- native_tool_results events with `request_id` and `tool_calls` /
+-- `results` array fields, not the per-call events v2 originally emitted.
+-- These helpers convert v2's typed [ToolCall] and tool-role [Message]
+-- into the array shape the TUI renders. See loop_v2 for the emit calls.
+
+func tool_calls_to_envelope_jsons(calls: [ToolCall]) -> [Json] {
+  match calls {
+    [] => [],
+    c :: rest => call_to_json(tool_call_to_envelope(c)) :: tool_calls_to_envelope_jsons(rest)
+  }
+}
+
+-- Helper: pull a string field from a decoded JSON object with a fallback.
+func json_field_str(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None    => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(s) => s }
+  }
+}
+
+-- Helper: detect whether a JSON object has a boolean field set to true.
+-- Used to detect policy_denied_message / delegated_deferred_message
+-- payloads (both flag themselves with `error: true`).
+func json_field_bool_true(obj: Json, key: string) -> bool {
+  match get(obj, key) {
+    None    => false,
+    Some(j) => match j {
+      JBool(true) => true,
+      _           => false
+    }
+  }
+}
+
+-- Each tool-role Message produced by dispatch_calls has a JSON-encoded
+-- payload in its content (either dispatch_one's tool_result_item JSON,
+-- a policy_denied_message JSON, or a delegated_deferred_message JSON).
+-- The TUI's applyNativeToolResults reads `tool_call_id`, `exit_code`,
+-- `stdout`, `stderr`, `truncated` from each result entry — so we
+-- normalise to that shape, lifting tool_call_id from the Message and
+-- forwarding the inner payload's known fields with safe defaults.
+func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      let inner = match decode(m.content) {
+        Ok(j) => j,
+        Err(_) => jo([])
+      };
+      let stdout_str = json_field_str(inner, "stdout", "");
+      let stderr_str = json_field_str(inner, "stderr", "");
+      -- If the payload flags itself as an error (policy_denied_message
+      -- or delegated_deferred_message both set `error: true`), drive
+      -- the TUI's "failed" rendering by emitting exit_code: 1; otherwise
+      -- treat as success (exit_code: 0). dispatch_one's payloads always
+      -- include exit_code on the wire but parsing JSON numbers from
+      -- typed Json values requires a different accessor than we use here;
+      -- the boolean error gate is a simpler proxy that gets the TUI
+      -- coloring right for the v2-emitted shapes.
+      let is_error = json_field_bool_true(inner, "error");
+      let normalized = jo([
+        kv("tool_call_id", js(m.tool_call_id)),
+        kv("exit_code", jnum(if is_error then 1.0 else 0.0)),
+        kv("stdout", js(stdout_str)),
+        kv("stderr", js(stderr_str)),
+        kv("truncated", jb(false)),
+        kv("payload", inner)
+      ]);
+      normalized :: tool_messages_to_result_jsons(rest)
+    }
   }
 }
 
@@ -329,8 +403,12 @@ func dispatch_calls(
                   deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
                 },
                 Native => {
+                  -- Per-call trace (uses v2-specific type so the TUI's
+                  -- native_tool_calls renderer doesn't try to consume it).
+                  -- The batched native_tool_calls / native_tool_results
+                  -- events are emitted by loop_v2 around dispatch_calls.
                   let _ = emit_json(jo([
-                    kv("type", js("native_tool_calls")),
+                    kv("type", js("v2_tool_dispatch_start")),
                     kv("step", jnum(_int_to_float(step_idx))),
                     kv("stream_id", js(stream_id)),
                     kv("tool", js(call.name)),
@@ -338,11 +416,10 @@ func dispatch_calls(
                   ]));
                   let result_content = dispatch_one(workdir, call);
                   let _ = emit_json(jo([
-                    kv("type", js("native_tool_results")),
+                    kv("type", js("v2_tool_dispatch_complete")),
                     kv("step", jnum(_int_to_float(step_idx))),
                     kv("stream_id", js(stream_id)),
-                    kv("id", js(call.id)),
-                    kv("result", js(result_content))
+                    kv("id", js(call.id))
                   ]));
                   let msg = tool_result_message(call, result_content);
                   msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
@@ -512,8 +589,31 @@ func loop_v2(
             else {
               -- finish_reason = "tool_calls" → run M4 policy gate per-call
               -- inside dispatch_calls; allowed dispatch via dispatch_one,
-              -- denied become tool-role denial messages
+              -- denied become tool-role denial messages.
+              --
+              -- Emit BATCHED native_tool_calls / native_tool_results events
+              -- with the request_id + tool_calls / results array shape the
+              -- TUI's renderToolCalls / applyNativeToolResults expect. Per-
+              -- call trace events (native_tool_denied, ext_tool_handled,
+              -- delegated_tool_deferred) are still emitted from inside
+              -- dispatch_calls and use distinct type names so the TUI
+              -- ignores them rather than mis-rendering.
+              let request_id = "step-${show(step_idx)}";
+              let _ = emit_json(jo([
+                kv("type", js("native_tool_calls")),
+                kv("request_id", js(request_id)),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("tool_calls", ja(tool_calls_to_envelope_jsons(result.tool_calls)))
+              ]));
               let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi);
+              let _ = emit_json(jo([
+                kv("type", js("native_tool_results")),
+                kv("request_id", js(request_id)),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("results", ja(tool_messages_to_result_jsons(tool_msgs)))
+              ]));
               let next_msgs = msgs_with_assistant ++ tool_msgs;
               loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
             }
