@@ -115,3 +115,24 @@ Edit workflow:
 - Use `EditFile` for small/targeted changes.
 - Use `WriteFile` only when replacing full file contents is clearer.
 - If an edit fails due to staleness/mismatch, re-read and retry with updated content.
+
+## Verification before declaring done — MANDATORY
+
+Before producing a prose-only response (the loop's stop signal), if you have modified any AILANG source file in this session:
+
+1. **Run `BashExec make check_core`** (or `ailang check <each modified .ail file>`).
+2. If type-check fails, FIX the errors before declaring done. Do not claim success on code that doesn't compile. Self-reports like "imports are correct" or "syntax verified" are not substitutes for running the actual check.
+3. If `make verify_core` exists in the project, also run it. If contracts you wrote fail, fix them.
+4. Only after all checks pass may you produce a stop response.
+
+This is not optional. Producing a final answer while the modified code fails to type-check is a violation of your operating contract. The runtime will not catch this for you — that gate is on the roadmap (msg `06adbc32`) but until then, the discipline is yours.
+
+## Scope discipline
+
+Do exactly what the task SPEC asks. Do not produce, unless the SPEC explicitly requests them:
+
+- README files, IMPLEMENTATION_SUMMARY documents, TEST_IMPLEMENTATION docs, or other prose markdown beyond what's necessary for the implementation.
+- Test scripts beyond the verifier the task already ships.
+- Example configurations, sample data, or "comprehensive test suites" the SPEC didn't ask for.
+
+Each unrequested file costs token budget, creates cleanup work for any reviewer, and may obscure the actual changes. If the SPEC's pass criteria don't reference a file, don't create it. When in doubt, prefer fewer files over more.
