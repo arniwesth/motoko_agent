@@ -52,12 +52,18 @@ pure func count_tool_msgs(msgs: [Message]) -> int {
 
 -- Produce a 1-line elision summary for tool_result content that exceeded
 -- the compaction window. Keeps the first 80 chars as a preview.
+--
+-- The "...[elided N chars]" suffix is ~20 chars, so for inputs barely
+-- over the 80-char threshold the rewrite would actually grow the
+-- content. Guard against that: only elide when the result is genuinely
+-- shorter than the input. Otherwise return the original unchanged.
 pure func elide_content(content: string) -> string {
   let n = length(content);
   if n <= 80 then content
   else {
     let preview = substring(content, 0, 80);
-    "${preview}...[elided ${show(n - 80)} chars]"
+    let elided = "${preview}...[elided ${show(n - 80)} chars]";
+    if length(elided) < n then elided else content
   }
 }
 
@@ -156,16 +162,20 @@ func count_tool_messages() -> bool
 func elide_all_tool_results() -> bool
   tests [((), true)]
   {
+    -- Test data must be long enough for elide_content to actually shrink it:
+    -- 80-char preview + ~20-char suffix means inputs in (80, ~100] would grow
+    -- under naïve elision. We guard against that in elide_content but the
+    -- test should still drive the genuine elision path with content > 100.
+    let original = "long tool output that genuinely exceeds eighty characters in length and then keeps on going for a while longer until it definitely passes the elide threshold and triggers actual shortening of the message body";
     let msgs: [Message] = [
-      { role: "user", content: "q",   tool_calls: [], tool_call_id: "" },
-      { role: "tool", content: "long tool output that exceeds eighty characters in length for sure",
-        tool_calls: [], tool_call_id: "c1" }
+      { role: "user", content: "q", tool_calls: [], tool_call_id: "" },
+      { role: "tool", content: original, tool_calls: [], tool_call_id: "c1" }
     ];
     let compacted = elide_old_tool_results(msgs, 0);
     -- user msg unchanged; tool msg content elided (original > 80 chars)
     match compacted {
       [] => false,
-      u :: t :: [] => u.content == "q" && length(t.content) < length("long tool output that exceeds eighty characters in length for sure"),
+      u :: t :: [] => u.content == "q" && length(t.content) < length(original),
       _ => false
     }
   }
