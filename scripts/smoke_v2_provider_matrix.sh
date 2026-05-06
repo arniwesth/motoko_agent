@@ -8,9 +8,12 @@
 # only smoke that actually invokes step() against a model) with a different
 # --ai model. Tasks are differentiated via the prompt the smoke uses.
 #
-# REQUIRES API keys in env (set whichever providers you want to test):
+# REQUIRES auth in env (set whichever providers you want to test):
 #   ANTHROPIC_API_KEY       (Claude Sonnet 4.5)
-#   GOOGLE_GEMINI_API_KEY   (Gemini 3 Pro)
+#   Gemini 2.5 Flash:       prefer Vertex AI via ADC —
+#                              `gcloud auth application-default login`
+#                              + GOOGLE_CLOUD_PROJECT (or GCP_PROJECT)
+#                           fallback: GOOGLE_API_KEY (AI Studio key)
 #   OPENAI_API_KEY          (GPT-5)
 #   OPENROUTER_API_KEY      (GLM-5, MiniMax M2.7 — both via openrouter/ prefix)
 #
@@ -44,12 +47,44 @@ MODEL[glm]="openrouter/z-ai/glm-5"
 MODEL[minimax]="openrouter/minimax/minimax-m2.7"
 
 # --- Provider → required env var --------------------------------------------
+# Gemini is special: it has a custom availability check (ADC preferred, key
+# fallback) so we leave KEY_VAR[gemini] empty and gate it via gemini_available()
+# below.
 declare -A KEY_VAR
 KEY_VAR[anthropic]="ANTHROPIC_API_KEY"
-KEY_VAR[gemini]="GOOGLE_GEMINI_API_KEY"
+KEY_VAR[gemini]=""
 KEY_VAR[openai]="OPENAI_API_KEY"
 KEY_VAR[glm]="OPENROUTER_API_KEY"
 KEY_VAR[minimax]="OPENROUTER_API_KEY"
+
+# Gemini availability:
+#   - Prefer Vertex AI via ADC: `gcloud auth application-default login` +
+#     GOOGLE_CLOUD_PROJECT (or GCP_PROJECT) configured
+#   - Fall back to AI Studio: GOOGLE_API_KEY
+gemini_available() {
+  if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+    return 0  # Service account JSON path set — ADC will load it
+  fi
+  if [[ -f "$HOME/.config/gcloud/application_default_credentials.json" ]]; then
+    return 0  # User ADC from `gcloud auth application-default login`
+  fi
+  if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
+    return 0  # AI Studio fallback
+  fi
+  return 1
+}
+
+gemini_auth_summary() {
+  if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+    echo "ADC via GOOGLE_APPLICATION_CREDENTIALS"
+  elif [[ -f "$HOME/.config/gcloud/application_default_credentials.json" ]]; then
+    echo "ADC via user gcloud login"
+  elif [[ -n "${GOOGLE_API_KEY:-}" ]]; then
+    echo "AI Studio (GOOGLE_API_KEY fallback)"
+  else
+    echo "none"
+  fi
+}
 
 # --- Tasks (smoke variants) -------------------------------------------------
 # Each entry: <task-id>:<smoke-script>
@@ -76,14 +111,26 @@ echo "Logs:      $LOG_DIR/"
 echo
 
 for provider in $PROVIDERS; do
-  key_var="${KEY_VAR[$provider]:-}"
-  if [[ -z "${!key_var:-}" ]]; then
-    echo "skip: $provider (no $key_var in env)"
-    for task_entry in "${TASKS[@]}"; do
-      task_id="${task_entry%%:*}"
-      RESULT["$provider:$task_id"]="SKIP"
-    done
-    continue
+  if [[ "$provider" == "gemini" ]]; then
+    if ! gemini_available; then
+      echo "skip: gemini (no ADC, no GOOGLE_API_KEY)"
+      for task_entry in "${TASKS[@]}"; do
+        task_id="${task_entry%%:*}"
+        RESULT["$provider:$task_id"]="SKIP"
+      done
+      continue
+    fi
+    echo "info: gemini auth = $(gemini_auth_summary)"
+  else
+    key_var="${KEY_VAR[$provider]:-}"
+    if [[ -z "${!key_var:-}" ]]; then
+      echo "skip: $provider (no $key_var in env)"
+      for task_entry in "${TASKS[@]}"; do
+        task_id="${task_entry%%:*}"
+        RESULT["$provider:$task_id"]="SKIP"
+      done
+      continue
+    fi
   fi
 
   model="${MODEL[$provider]}"

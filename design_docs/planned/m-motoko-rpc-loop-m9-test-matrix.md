@@ -17,13 +17,13 @@ Test infrastructure ready to run:
 
 Currently configured for 5 providers:
 
-| Provider key | Model id                       | API key env var          |
-|--------------|--------------------------------|--------------------------|
-| anthropic    | claude-sonnet-4-5              | ANTHROPIC_API_KEY        |
-| gemini       | gemini-2-5-flash               | GOOGLE_GEMINI_API_KEY    |
-| openai       | gpt-5                          | OPENAI_API_KEY           |
-| glm          | openrouter/z-ai/glm-5          | OPENROUTER_API_KEY       |
-| minimax      | openrouter/minimax/minimax-m2.7| OPENROUTER_API_KEY       |
+| Provider key | Model id                       | Auth                                                                                          |
+|--------------|--------------------------------|-----------------------------------------------------------------------------------------------|
+| anthropic    | claude-sonnet-4-5              | `ANTHROPIC_API_KEY`                                                                           |
+| gemini       | gemini-2-5-flash               | Prefer Vertex AI via ADC (`gcloud auth application-default login` + `GOOGLE_CLOUD_PROJECT`); fallback `GOOGLE_API_KEY` (AI Studio) |
+| openai       | gpt-5                          | `OPENAI_API_KEY`                                                                              |
+| glm          | openrouter/z-ai/glm-5          | `OPENROUTER_API_KEY`                                                                          |
+| minimax      | openrouter/minimax/minimax-m2.7| `OPENROUTER_API_KEY`                                                                          |
 
 ---
 
@@ -48,14 +48,18 @@ export ANTHROPIC_API_KEY=...
 PROVIDERS=anthropic scripts/smoke_v2_provider_matrix.sh
 ```
 
-### Full matrix (requires all 5 keys)
+### Full matrix (requires all 5 auths)
 
 ```bash
 cd motoko_agent
 export ANTHROPIC_API_KEY=...
-export GOOGLE_GEMINI_API_KEY=...
 export OPENAI_API_KEY=...
 export OPENROUTER_API_KEY=...
+# Gemini: prefer ADC (no key needed once configured)
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT=your-gcp-project
+# Gemini fallback (skip if ADC works):
+# export GOOGLE_API_KEY=...
 scripts/smoke_v2_provider_matrix.sh
 ```
 
