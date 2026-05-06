@@ -1,6 +1,7 @@
 module src/core/ext/types
 
 import std/option (Option)
+import std/ai (ToolSchema)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
 
@@ -61,6 +62,7 @@ export type FinalizeDecision
 export type ExtensionHooks = {
   id: string,
   provided_tools: [string],
+  on_describe_tools: () -> [ToolSchema],
   on_build_system_prompt: (ExtCtx) -> PromptPatch,
   on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,

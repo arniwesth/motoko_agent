@@ -149,6 +149,7 @@ export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks !
   {
     id: "mcp",
     provided_tools: tool_names,
+    on_describe_tools: func() { [] },
     on_build_system_prompt: \ctx. { prepend: [], append: [] },
     on_budget_plan:       func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} { no_budget_patch() },
     on_tool_policy:       func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion },
