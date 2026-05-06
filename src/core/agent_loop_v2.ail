@@ -41,7 +41,7 @@ import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/string (trim, startsWith, substring)
 import std/string as Str (length)
-import src/core/tool_catalog (tools)
+import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_json)
 import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
@@ -632,7 +632,7 @@ func loop_v2(
       kv("stream_id", js(stream_id)),
       kv("model", js(model))
     ]));
-    let dispatched = dispatch_step(provider, model, compacted_msgs);
+    let dispatched = dispatch_step(provider, model, compacted_msgs, rt);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
       Err(e) => {

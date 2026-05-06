@@ -16,7 +16,7 @@ import std/ai (step, StepResult, ToolCall, Message, AIError)
 import std/list as List (length)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
-import src/core/tool_catalog (tools)
+import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/ext/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
@@ -77,14 +77,16 @@ export pure func terminal_step() -> StepResult {
 -- Dispatch one step call through the provider.
 -- Returns both the step result and the updated provider (tail of script for Scripted).
 -- Loop callers thread next_provider into their recursive call.
+-- rt is forwarded to tools_with_extensions so extension tools appear in the LLM catalog.
 export func dispatch_step(
   provider: StepProvider,
   model: string,
-  msgs: [Message]
+  msgs: [Message],
+  rt: ExtRuntime
 ) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI} {
   match provider {
     LiveAI => {
-      { result: step(model, msgs, tools()), next_provider: LiveAI }
+      { result: step(model, msgs, tools_with_extensions(rt)), next_provider: LiveAI }
     },
     Scripted(script) => {
       match script {
