@@ -724,10 +724,29 @@ func to_test_result(id: string, req: ProcessExecReq, out: ProcessOutput) -> Tool
 }
 
 func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolResultItem ! {Process} {
-  if needs_delegation_for_process(req) then
-    ToolErrorResult({ id: id, tool: tool, message: "requires delegated backend" })
-  else
-    match exec(req.cmd, req.args) {
+  -- M-MOTOKO-RPC-LOOP M10 follow-up: in v2 standalone mode (no
+  -- env-server delegation), wrap shell-tokened cmds in `bash -lc` so
+  -- `&&`, pipes, multi-word cmds etc. work in-process. The legacy
+  -- env-server did this via its own bash invocation; v2 has to do
+  -- it itself or every BashExec with spaces fails with "requires
+  -- delegated backend".
+  --
+  -- Cases that genuinely need supervisor support (streaming, hard-
+  -- cancel, stderr-live) still return the delegated-backend error —
+  -- those can't be faithfully reproduced in-process via a single
+  -- exec call.
+  if req.streaming || req.needs_stderr_live || req.needs_hard_cancel then
+    ToolErrorResult({ id: id, tool: tool, message: "requires delegated backend (streaming/cancel features)" })
+  else {
+    let effective = if shell_tokens_in_process(req) || isSome(req.cwd) then {
+      let prefix = match req.cwd {
+        Some(d) => "cd ${d} && ",
+        None    => ""
+      };
+      let wrapped_cmd = "${prefix}${req.cmd}";
+      { cmd: "bash", args: ["-lc", wrapped_cmd], cwd: req.cwd, streaming: false, needs_stderr_live: false, needs_hard_cancel: false }
+    } else req;
+    match exec(effective.cmd, effective.args) {
       Err(err) =>
         if tool == "RunTests" then
           RunTestsResult({
@@ -754,6 +773,7 @@ func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolRe
         if tool == "RunTests" then to_test_result(id, req, out)
         else to_bash_result(id, req, out)
     }
+  }
 }
 
 func t_edit_single_replace_success() -> bool

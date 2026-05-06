@@ -1,0 +1,49 @@
+-- scripts/smoke_v2_bash_wrap.ail
+-- Verifies the bash-lc wrapping fix: BashExec calls with spaces in cmd,
+-- pipes, &&, etc. should run in-process via `bash -lc <cmd>` rather than
+-- returning the legacy "requires delegated backend" error.
+--
+-- Setup:
+--   ailang run --caps IO,FS,Process,Env,Clock --entry main scripts/smoke_v2_bash_wrap.ail
+
+module scripts/smoke_v2_bash_wrap
+
+import std/io (println)
+import std/json (jo, kv, js, encode)
+import src/core/tool_dispatch_adapter (dispatch_one)
+
+export func main() -> () ! {IO, FS, Process, Env, Clock} {
+  -- Case 1: simple multi-word cmd (no shell tokens) — used to fail because
+  -- of the contains(cmd, " ") gate in shell_tokens_in_process. Should now
+  -- succeed via bash -lc wrapping.
+  let multi_word: { id: string, name: string, arguments: string } = {
+    id: "test-multiword",
+    name: "BashExec",
+    arguments: encode(jo([kv("cmd", js("echo hello world"))]))
+  };
+  let result1 = dispatch_one("/tmp", multi_word);
+  let _ = println("=== multi-word cmd ===");
+  let _ = println(result1);
+
+  -- Case 2: shell tokens (&&) — must wrap in bash -lc to interpret &&
+  let shell_tokens: { id: string, name: string, arguments: string } = {
+    id: "test-shell",
+    name: "BashExec",
+    arguments: encode(jo([kv("cmd", js("echo first && echo second"))]))
+  };
+  let result2 = dispatch_one("/tmp", shell_tokens);
+  let _ = println("=== shell tokens (&&) ===");
+  let _ = println(result2);
+
+  -- Case 3: simple single-word cmd — should still work (bypass wrapping)
+  let single: { id: string, name: string, arguments: string } = {
+    id: "test-single",
+    name: "BashExec",
+    arguments: encode(jo([kv("cmd", js("ls"))]))
+  };
+  let result3 = dispatch_one("/tmp", single);
+  let _ = println("=== single-word cmd (ls) ===");
+  let _ = println(result3);
+
+  println("--- bash-wrap smoke complete ---")
+}
