@@ -292,10 +292,18 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
   else if is_absolute_path(path) then Err(path_error(id, tool, "absolute paths are not allowed: ${path}"))
   else if has_parent_traversal_segment(path) then Err(path_error(id, tool, "path traversal is not allowed: ${path}"))
   else {
-    let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
-    match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, path]) {
-      Ok(_) => Ok(()),
-      Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+    -- Detect when model emits an absolute path without the leading "/" (e.g.
+    -- "Users/mark/.../project/foo.txt" instead of "/Users/mark/.../project/foo.txt").
+    -- resolve_workdir_path would otherwise silently double the workdir.
+    let wd_bare = if workdir == "" || workdir == "." || endsWith(workdir, "/") then "" else substring(workdir, 1, length(workdir));
+    if wd_bare != "" && startsWith(path, "${wd_bare}/") then
+      Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
+    else {
+      let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
+      match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, path]) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+      }
     }
   }
 }
