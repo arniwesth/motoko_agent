@@ -343,7 +343,7 @@ async function main(): Promise<void> {
   // Skip when TTY detection fails (piped output, JSONL mode) so we don't
   // pollute log streams with the escape bytes.
   if (process.stdout.isTTY && process.env.MOTOKO_JSONL_OUTPUT !== "1") {
-    process.stdout.write("\x1b]0;motoko\x07");
+    process.stdout.write("\x1b]0;[λ] motoko\x07");
   }
 
   const shellEnvKeys = new Set(Object.keys(process.env));
