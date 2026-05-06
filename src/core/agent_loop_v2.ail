@@ -49,6 +49,7 @@ import src/core/tool_runtime (backend_for)
 import src/core/types (Msg, ToolBackend)
 import std/option (Option, Some, None)
 import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
+import src/core/compaction (compact_step)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
@@ -549,6 +550,11 @@ func dispatch_calls(
 -- (and any solver-candidate hooks accept the result) or step_budget hits zero.
 -- Returns the final messages list.
 --
+-- DP0 (pre-step compaction): before each LLM call, compact_step elides old
+-- tool_result content when context usage crosses 70/85/95% thresholds. The
+-- compacted view is used for step() only; the session history that recurses
+-- into the next loop iteration always retains the original messages.
+--
 -- M3 wiring: between step() and tool dispatch, fires extension hooks at the
 -- two existing decision points motoko's rpc_loop uses (DP1 from the design
 -- doc). NoIntercept / NoDecision are no-ops; the typed-step protocol means
@@ -572,7 +578,25 @@ func loop_v2(
     message: "v2 loop: step budget exhausted",
     retryable: false
   })
-  else {
+  else
+  -- DP0: structural compaction before the LLM call.
+  -- compact_step is a no-op below 70% usage; elides old tool_result content
+  -- at 70-85% and 85-95%; refuses the step at ≥95%.
+  match compact_step(msgs, model) {
+    Err(compaction_reason) => {
+      let _ = emit_json(jo([
+        kv("type", js("compaction_exhausted")),
+        kv("step", jnum(_int_to_float(step_idx))),
+        kv("model", js(model)),
+        kv("reason", js(compaction_reason))
+      ]));
+      Err({
+        code: "ContextExhausted",
+        message: compaction_reason,
+        retryable: false
+      })
+    },
+    Ok(compacted_msgs) => {
     let stream_id = "step-${show(step_idx)}";
     let _ = emit_json(jo([
       kv("type", js("thinking_stream_start")),
@@ -580,7 +604,7 @@ func loop_v2(
       kv("stream_id", js(stream_id)),
       kv("model", js(model))
     ]));
-    match step(model, msgs, tools()) {
+    match step(model, compacted_msgs, tools()) {
       Err(e) => {
         let _ = emit_json(jo([
           kv("type", js("thinking_stream_end")),
@@ -733,7 +757,8 @@ func loop_v2(
         }
       }
     }
-  }
+    } -- Ok(compacted_msgs)
+  } -- match compact_step
 }
 
 -- Public entry point. Takes motoko's [Msg] (the v1 shape used by rpc.ail)

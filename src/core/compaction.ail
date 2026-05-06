@@ -1,0 +1,166 @@
+-- src/core/compaction.ail
+-- DP0 pre-step conversation compaction for the v2 agent loop.
+--
+-- Prevents provider-side context overflow on long-running agents by
+-- proactively eliding old tool_result content before each LLM call.
+-- Works on [Message] (upstream typed shape) so tool_call_id correlation
+-- is preserved — the provider needs those IDs for conversation continuation.
+--
+-- Thresholds (usage = estimated_tokens / context_limit_for(model)):
+--   < 70%  → PassThrough (no compaction needed)
+--   70-85% → Elide tool_result content older than last 10 turns
+--   85-95% → Elide tool_result content older than last 5 turns
+--   ≥ 95%  → Err("compaction_exhausted") — cannot recover; step refused
+--
+-- Compaction is per-step only: the session history (used for the next
+-- loop iteration) always retains the original unelided messages. The
+-- compacted view is a transient input to step() for this step only.
+--
+-- For unknown models (context_limit_for returns 0), compaction is skipped
+-- entirely — fail open rather than incorrectly refusing a valid step.
+
+module src/core/compaction
+
+import std/ai (Message)
+import std/string (length, substring)
+import std/list (foldl)
+import std/result (Result, Ok, Err)
+import src/core/context_usage (context_limit_for)
+
+-- Token estimate for [Message]: sum all content-field lengths, divide by 4.
+-- Same approximation as estimate_tokens for [Msg] in context_usage.ail.
+export pure func estimate_tokens_messages(msgs: [Message]) -> int {
+  let total = foldl(\acc m. acc + length(m.content), 0, msgs);
+  (total + 3) / 4
+}
+
+-- Context usage as integer percent (0-100). Returns 0 for unknown models.
+-- Uses integer arithmetic throughout to avoid float precision issues.
+export pure func usage_percent(msgs: [Message], model: string) -> int {
+  let limit = context_limit_for(model);
+  if limit == 0 then 0
+  else (estimate_tokens_messages(msgs) * 100) / limit
+}
+
+-- Count tool-role messages in the list.
+pure func count_tool_msgs(msgs: [Message]) -> int {
+  foldl(\acc m. acc + (if m.role == "tool" then 1 else 0), 0, msgs)
+}
+
+-- Produce a 1-line elision summary for tool_result content that exceeded
+-- the compaction window. Keeps the first 80 chars as a preview.
+pure func elide_content(content: string) -> string {
+  let n = length(content);
+  if n <= 80 then content
+  else {
+    let preview = substring(content, 0, 80);
+    "${preview}...[elided ${show(n - 80)} chars]"
+  }
+}
+
+-- Walk [Message] forward, eliding the content of tool-role messages that
+-- fall outside the keep window. `total` = total tool messages in list;
+-- `seen` = tool messages already encountered (0-based).
+-- A tool message at position `seen` is kept iff total - seen <= keep_last.
+pure func elide_walk(msgs: [Message], total: int, keep_last: int, seen: int) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      if m.role == "tool" then {
+        let keep = total - seen <= keep_last;
+        let new_content = if keep then m.content else elide_content(m.content);
+        let updated: Message = {
+          role: m.role,
+          content: new_content,
+          tool_calls: m.tool_calls,
+          tool_call_id: m.tool_call_id
+        };
+        updated :: elide_walk(rest, total, keep_last, seen + 1)
+      } else
+        m :: elide_walk(rest, total, keep_last, seen)
+    }
+  }
+}
+
+-- Elide tool_result content for all but the last `keep_last` tool messages.
+-- Non-tool messages (user, assistant, system) are never touched.
+-- List length and structural fields (tool_call_id, role) are preserved.
+export pure func elide_old_tool_results(msgs: [Message], keep_last: int) -> [Message] {
+  elide_walk(msgs, count_tool_msgs(msgs), keep_last, 0)
+}
+
+-- Apply the default structural compaction policy for one step.
+-- Returns Ok(msgs) — possibly with elided tool content — or
+-- Err("compaction_exhausted") when the window is critically full.
+export pure func compact_step(msgs: [Message], model: string) -> Result[[Message], string] {
+  let pct = usage_percent(msgs, model);
+  if pct >= 95 then Err("compaction_exhausted: context at ${show(pct)}% of ${model} limit")
+  else if pct >= 85 then Ok(elide_old_tool_results(msgs, 5))
+  else if pct >= 70 then Ok(elide_old_tool_results(msgs, 10))
+  else Ok(msgs)
+}
+
+-- Unknown model → usage 0% → no compaction.
+func unknown_model_skips_compaction() -> bool
+  tests [((), true)]
+  {
+    let msgs: [Message] = [
+      { role: "user", content: "hello", tool_calls: [], tool_call_id: "" }
+    ];
+    usage_percent(msgs, "totally-unknown") == 0
+  }
+
+-- Below threshold → Ok with same list unchanged.
+func below_threshold_passthrough() -> bool
+  tests [((), true)]
+  {
+    let msgs: [Message] = [
+      { role: "user", content: "hello", tool_calls: [], tool_call_id: "" }
+    ];
+    match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+      Ok(ms) => _list_length(ms) == 1,
+      Err(_) => false
+    }
+  }
+
+-- elide_old_tool_results preserves list length.
+func elide_preserves_length() -> bool
+  tests [((), true)]
+  {
+    let tool = func(id: string) -> Message {
+      { role: "tool", content: "some tool output", tool_calls: [], tool_call_id: id }
+    };
+    let msgs = [tool("t1"), tool("t2"), tool("t3"), tool("t4"), tool("t5")];
+    _list_length(elide_old_tool_results(msgs, 2)) == 5
+  }
+
+-- Tool count is correct.
+func count_tool_messages() -> bool
+  tests [((), true)]
+  {
+    let msgs: [Message] = [
+      { role: "user",      content: "q",   tool_calls: [], tool_call_id: "" },
+      { role: "assistant", content: "a",   tool_calls: [], tool_call_id: "" },
+      { role: "tool",      content: "r1",  tool_calls: [], tool_call_id: "c1" },
+      { role: "tool",      content: "r2",  tool_calls: [], tool_call_id: "c2" }
+    ];
+    count_tool_msgs(msgs) == 2
+  }
+
+-- elide_old_tool_results with keep_last=0 elides all tool messages.
+func elide_all_tool_results() -> bool
+  tests [((), true)]
+  {
+    let msgs: [Message] = [
+      { role: "user", content: "q",   tool_calls: [], tool_call_id: "" },
+      { role: "tool", content: "long tool output that exceeds eighty characters in length for sure",
+        tool_calls: [], tool_call_id: "c1" }
+    ];
+    let compacted = elide_old_tool_results(msgs, 0);
+    -- user msg unchanged; tool msg content elided (original > 80 chars)
+    match compacted {
+      [] => false,
+      u :: t :: [] => u.content == "q" && length(t.content) < length("long tool output that exceeds eighty characters in length for sure"),
+      _ => false
+    }
+  }
