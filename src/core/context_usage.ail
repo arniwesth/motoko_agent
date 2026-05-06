@@ -21,6 +21,8 @@ export pure func context_limit_for(model: string) -> int
     ("anthropic/claude-sonnet-4-6",                 200000),
     ("google/gemini-2.5-pro",                       2000000),
     ("openrouter/anthropic/claude-sonnet-4-5",      200000),
+    ("openrouter/z-ai/glm-5",                       128000),
+    ("openrouter/openai/gpt-5",                     400000),
     ("openrouter/whatever",                         0),
     ("totally-unknown",                             0)
   ]
@@ -28,12 +30,20 @@ export pure func context_limit_for(model: string) -> int
     if model == "anthropic/claude-sonnet-4-6" then 200000
     else if model == "anthropic/claude-sonnet-4-5" then 200000
     else if model == "anthropic/claude-opus-4-6" then 200000
+    else if model == "anthropic/claude-opus-4-7" then 1000000
     else if model == "anthropic/claude-haiku-4-5" then 200000
     else if model == "openai/gpt-4o" then 128000
     else if model == "openai/gpt-4o-mini" then 128000
+    else if model == "openai/gpt-5" then 400000
     else if model == "google/gemini-2.5-flash" then 1000000
     else if model == "google/gemini-2.5-pro" then 2000000
+    else if model == "z-ai/glm-5" then 128000
+    else if model == "minimax/minimax-m2.7" then 256000
+    else if model == "x-ai/grok-3" then 131072
     else if startsWith(model, "openrouter/") then
       context_limit_for(substring(model, length("openrouter/"), length(model)))
+    else if startsWith(model, "anthropic/") then 200000
+    else if startsWith(model, "openai/") then 128000
+    else if startsWith(model, "google/") then 1000000
     else 0
   }
