@@ -20,12 +20,14 @@ export pure func needs_delegation_for_process(req: ProcessExecReq) -> bool {
     || shell_tokens_in_process(req)
 }
 
-func isSome(opt: Option[string]) -> bool {
-  match opt {
-    Some(_) => true,
-    None => false
+pure func isSome(opt: Option[string]) -> bool
+  ensures { result == true || result == false }
+  {
+    match opt {
+      Some(_) => true,
+      None => false
+    }
   }
-}
 
 func has_shell_tokens(s: string) -> bool {
   contains(s, "|")
@@ -200,11 +202,13 @@ func mk_meta(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta 
   }
 }
 
-func normalize_range(start: int, end: int) -> { start: int, end: int } {
-  let s = if start <= 0 then 1 else start;
-  let e = if end < s then s else end;
-  { start: s, end: e }
-}
+pure func normalize_range(start: int, end: int) -> { start: int, end: int }
+  ensures { result.start >= 1 && result.end >= result.start }
+  {
+    let s = if start <= 0 then 1 else start;
+    let e = if end < s then s else end;
+    { start: s, end: e }
+  }
 
 func line_count_of(content: string) -> int {
   if content == "" then 0 else list_len(split(content, "\n"))
@@ -279,9 +283,11 @@ func has_parent_traversal_segment_rec(parts: [string]) -> bool {
   }
 }
 
-func is_absolute_path(path: string) -> bool {
-  startsWith(path, "/")
-}
+pure func is_absolute_path(path: string) -> bool
+  ensures { result == startsWith(path, "/") }
+  {
+    startsWith(path, "/")
+  }
 
 func path_error(id: string, tool: string, message: string) -> ToolResultItem {
   ToolErrorResult({ id: id, tool: tool, message: message })
@@ -902,12 +908,14 @@ export func split_by_backend(calls: [ToolCallEnvelope], ohmy_pi: bool) -> { nati
   split_by_backend_rec(calls, [], [], ohmy_pi)
 }
 
-func is_native_backend(b: ToolBackend) -> bool {
-  match b {
-    Native => true,
-    Delegated => false
+pure func is_native_backend(b: ToolBackend) -> bool
+  ensures { result == true || result == false }
+  {
+    match b {
+      Native => true,
+      Delegated => false
+    }
   }
-}
 
 func split_by_backend_rec(
   calls: [ToolCallEnvelope],

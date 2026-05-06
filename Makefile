@@ -54,3 +54,49 @@ test_core:
 	@printf "\nAll core runtime module tests passed!\n"
 
 test: test_core
+
+# Z3 contract verification for pure core modules.
+# VIOLATION or ERROR exits 1 (contracts written but broken).
+# SKIPPED exits 0 (contracts aspirational or function outside Z3 fragment).
+# Files with no contracts are noted but do not fail.
+verify_core:
+	@ok=0; fail=0; none=0; \
+	for f in src/core/*.ail; do \
+		case "$$f" in *_test.ail) continue ;; esac; \
+		out="$$(ailang verify "$$f" 2>&1)"; \
+		rc=$$?; \
+		if [ $$rc -ne 0 ]; then \
+			echo "  ✗ $$f"; \
+			echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3; \
+			fail=$$((fail + 1)); \
+		elif echo "$$out" | grep -q "no functions with contracts"; then \
+			none=$$((none + 1)); \
+		else \
+			proven="$$(echo "$$out" | grep 'VERIFIED' | wc -l | tr -d ' ')"; \
+			echo "  ✓ $$f ($$proven proven)"; \
+			ok=$$((ok + 1)); \
+		fi; \
+	done; \
+	echo "verify_core: $$ok with contracts, $$fail failed, $$none without contracts"; \
+	[ "$$fail" -eq 0 ] || exit 1
+
+# Z3 contract verification for extension modules.
+verify_ext:
+	@ok=0; fail=0; none=0; \
+	for f in $$(find src/core/ext -name "*.ail" ! -name "*_test.ail"); do \
+		out="$$(ailang verify "$$f" 2>&1)"; \
+		rc=$$?; \
+		if [ $$rc -ne 0 ]; then \
+			echo "  ✗ $$f"; \
+			echo "$$out" | grep -E 'VIOLATION|ERROR' | head -3; \
+			fail=$$((fail + 1)); \
+		elif echo "$$out" | grep -q "no functions with contracts"; then \
+			none=$$((none + 1)); \
+		else \
+			proven="$$(echo "$$out" | grep 'VERIFIED' | wc -l | tr -d ' ')"; \
+			echo "  ✓ $$f ($$proven proven)"; \
+			ok=$$((ok + 1)); \
+		fi; \
+	done; \
+	echo "verify_ext: $$ok with contracts, $$fail failed, $$none without contracts"; \
+	[ "$$fail" -eq 0 ] || exit 1

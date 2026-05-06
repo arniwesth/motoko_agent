@@ -29,6 +29,7 @@ import src/core/context_usage (context_limit_for)
 
 -- Token estimate for [Message]: sum all content-field lengths, divide by 4.
 -- Same approximation as estimate_tokens for [Msg] in context_usage.ail.
+-- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order)
 export pure func estimate_tokens_messages(msgs: [Message]) -> int {
   let total = foldl(\acc m. acc + length(m.content), 0, msgs);
   (total + 3) / 4
@@ -36,6 +37,7 @@ export pure func estimate_tokens_messages(msgs: [Message]) -> int {
 
 -- Context usage as integer percent (0-100). Returns 0 for unknown models.
 -- Uses integer arithmetic throughout to avoid float precision issues.
+-- contracts: SKIPPED — depends on foldl-based estimate_tokens_messages
 export pure func usage_percent(msgs: [Message], model: string) -> int {
   let limit = context_limit_for(model);
   if limit == 0 then 0
@@ -43,6 +45,7 @@ export pure func usage_percent(msgs: [Message], model: string) -> int {
 }
 
 -- Count tool-role messages in the list.
+-- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order)
 pure func count_tool_msgs(msgs: [Message]) -> int {
   foldl(\acc m. acc + (if m.role == "tool" then 1 else 0), 0, msgs)
 }
@@ -85,9 +88,11 @@ pure func elide_walk(msgs: [Message], total: int, keep_last: int, seen: int) -> 
 -- Elide tool_result content for all but the last `keep_last` tool messages.
 -- Non-tool messages (user, assistant, system) are never touched.
 -- List length and structural fields (tool_call_id, role) are preserved.
-export pure func elide_old_tool_results(msgs: [Message], keep_last: int) -> [Message] {
-  elide_walk(msgs, count_tool_msgs(msgs), keep_last, 0)
-}
+export pure func elide_old_tool_results(msgs: [Message], keep_last: int) -> [Message]
+  requires { keep_last >= 0 }
+  {
+    elide_walk(msgs, count_tool_msgs(msgs), keep_last, 0)
+  }
 
 -- Apply the default structural compaction policy for one step.
 -- Returns Ok(msgs) — possibly with elided tool content — or

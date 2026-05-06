@@ -53,21 +53,25 @@ func collapse_repeated_lines(lines: [string]) -> [string] {
   }
 }
 
-func truncate_with_suffix(text: string, max_chars: int) -> string {
-  if max_chars <= 0 then ""
-  else if _str_len(text) <= max_chars then text
-  else if max_chars <= 24 then _str_slice(text, 0, max_chars)
-  else {
-    let kept = _str_slice(text, 0, max_chars - 24);
-    "${kept}\n... (truncated)"
+func truncate_with_suffix(text: string, max_chars: int) -> string
+  requires { max_chars >= 0 }
+  {
+    if max_chars <= 0 then ""
+    else if _str_len(text) <= max_chars then text
+    else if max_chars <= 24 then _str_slice(text, 0, max_chars)
+    else {
+      let kept = _str_slice(text, 0, max_chars - 24);
+      "${kept}\n... (truncated)"
+    }
   }
-}
 
-export func compress_output(text: string, max_chars: int) -> string {
-  let clean = collapse_spaces(strip_ansi_escape_char(normalize_newlines(text)));
-  let compact = join("\n", collapse_repeated_lines(trim_non_empty_lines(split(clean, "\n"))));
-  truncate_with_suffix(compact, max_chars)
-}
+export func compress_output(text: string, max_chars: int) -> string
+  requires { max_chars >= 0 }
+  {
+    let clean = collapse_spaces(strip_ansi_escape_char(normalize_newlines(text)));
+    let compact = join("\n", collapse_repeated_lines(trim_non_empty_lines(split(clean, "\n"))));
+    truncate_with_suffix(compact, max_chars)
+  }
 
 func compress_removes_ansi_prefix() -> bool
   tests [((), true)]
