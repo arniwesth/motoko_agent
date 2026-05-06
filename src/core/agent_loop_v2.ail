@@ -43,9 +43,11 @@ import std/string (trim, startsWith, substring)
 import std/string as Str (length)
 import src/core/tool_catalog (tools)
 import src/core/tool_contract (ToolResultEnvelope, result_to_json)
+import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for)
 import src/core/types (Msg, ToolBackend)
+import std/option (Option, Some, None)
 import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle)
 
@@ -160,6 +162,26 @@ func messages_to_msgs(msgs: [Message]) -> [Msg] {
   match msgs {
     [] => [],
     m :: rest => ({ role: m.role, content: m.content } :: messages_to_msgs(rest))
+  }
+}
+
+-- M7: Synthesize a BashExec ToolCall from a hybrid-mode shell command
+-- extracted from the assistant's prose. The model emitted no typed
+-- tool_calls (finish_reason != "tool_calls") but its content contained
+-- a fenced shell block (```bash / ```sh / ```shell / ```), so we treat
+-- that block as the canonical hybrid shorthand and pass it through the
+-- M3-M6 dispatch pipeline as if it were a typed BashExec call.
+--
+-- This preserves the full M4 policy gate + M5 tool-handle routing + M6
+-- backend split for hybrid commands (e.g. an extension can still Deny
+-- a hybrid `rm -rf /` just as it would deny a typed call). The
+-- synthetic call uses a "hybrid-step-N" id so it doesn't collide with
+-- model-emitted tool_call_ids on the wire.
+func synthesize_hybrid_bash_call(cmd: string, step_idx: int) -> ToolCall {
+  {
+    id: "hybrid-step-${show(step_idx)}",
+    name: "BashExec",
+    arguments: encode(jo([kv("cmd", js(cmd))]))
   }
 }
 
@@ -415,6 +437,25 @@ func loop_v2(
           },
           NoIntercept => {
             if result.finish_reason != "tool_calls" then {
+              -- M7 hybrid mode: when prose contains a fenced shell block
+              -- and hybrid_tools=true, synthesize a BashExec ToolCall and
+              -- run it through the same M3-M6 dispatch pipeline as a typed
+              -- tool_call. Skips solver_candidate (the prose isn't a final
+              -- answer — it's a shell shorthand the model wants executed).
+              let hybrid_attempt: Option[string] = if hybrid_tools then extract_bash(result.message.content) else None;
+              match hybrid_attempt {
+                Some(cmd) => {
+                  let _ = emit_json(jo([
+                    kv("type", js("hybrid_bash_extracted")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("cmd", js(cmd))
+                  ]));
+                  let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
+                  let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi);
+                  let next_msgs = msgs_with_assistant ++ tool_msgs;
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+                },
+                None => {
               -- M3 DP1b: when the model emits prose without tool_calls, give
               -- extensions a final chance to validate / re-prompt via
               -- dispatch_solver_candidate. Three outcomes:
@@ -453,6 +494,8 @@ func loop_v2(
                     kv("output", js(result.message.content))
                   ]));
                   Ok(msgs_with_assistant)
+                }
+              }
                 }
               }
             }

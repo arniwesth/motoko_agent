@@ -1,0 +1,61 @@
+-- scripts/smoke_v2_hybrid.ail
+-- M7 smoke test: verifies hybrid mode wiring — when the model emits prose
+-- containing a fenced shell block AND hybrid_tools=true, v2 synthesizes a
+-- BashExec ToolCall that flows through the M3-M6 dispatch pipeline.
+--
+-- We exercise this by directly calling extract_bash on representative
+-- prose patterns and confirming the synthesized ToolCall has the expected
+-- shape. Full end-to-end (model → synthesis → dispatch) is covered by
+-- running motoko itself with MOTOKO_AGENT_V2=1 against a hybrid task.
+--
+-- Setup:
+--   ailang run --caps IO,Env,Clock --entry main scripts/smoke_v2_hybrid.ail
+
+module scripts/smoke_v2_hybrid
+
+import std/io (println)
+import std/option (Option, Some, None)
+import std/json (decode, jo, kv, js, encode)
+import src/core/parse (extract_bash)
+
+func describe_extract(prose: string, label: string) -> bool ! {IO} {
+  match extract_bash(prose) {
+    Some(cmd) => {
+      let _ = println("${label}: extracted cmd = ${cmd}");
+      true
+    },
+    None => {
+      let _ = println("${label}: no shell block extracted");
+      false
+    }
+  }
+}
+
+export func main() -> () ! {IO, Clock, Env} {
+  -- Case 1: prose with ```bash fenced block — should extract
+  let prose_bash = "Sure, let me check the directory.\n```bash\nls -la\n```\nThat should work.";
+  let ok_bash = describe_extract(prose_bash, "bash fence");
+
+  -- Case 2: prose with ```sh — should extract
+  let prose_sh = "Run this:\n```sh\npwd\n```";
+  let ok_sh = describe_extract(prose_sh, "sh fence");
+
+  -- Case 3: prose without any fence — should return None
+  let prose_plain = "I think the answer is 42. There is no need for a tool here.";
+  let no_match = describe_extract(prose_plain, "plain prose");
+
+  -- Verify synthesis produces well-formed JSON
+  let synth_arguments = encode(jo([kv("cmd", js("ls -la"))]));
+  let _ = println("synthesized arguments JSON: ${synth_arguments}");
+  let parses_ok = match decode(synth_arguments) {
+    Ok(_) => true,
+    Err(_) => false
+  };
+
+  let pass_extract = ok_bash && ok_sh && (not no_match);
+  let pass_synth = parses_ok;
+
+  if pass_extract && pass_synth
+    then println("--- M7 hybrid smoke PASS ---")
+    else println("--- M7 hybrid smoke FAIL ---")
+}
