@@ -1,0 +1,59 @@
+{
+  "sprint_id": "M-MOTOKO-WORKDIR-CWD-RESOLUTION",
+  "title": "Apply dispatcher workdir to fs operations",
+  "target": "motoko_agent post-cutover patch",
+  "design_doc_path": "design_docs/planned/m-motoko-workdir-cwd-resolution.md",
+  "sprint_plan_path": "design_docs/planned/m-motoko-workdir-cwd-resolution-sprint-plan.md",
+  "status": "ready",
+  "started": null,
+  "completed": null,
+  "github_issues": [],
+  "velocity": {
+    "target_loc_per_session": 110,
+    "estimated_total_loc": 110,
+    "estimated_hours": 2.5
+  },
+  "features": [
+    {
+      "id": "M1_PATH_RESOLUTION",
+      "description": "Add resolve_workdir_path helper + apply at leaf fs calls in run_read_file, run_write_file, run_edit_file, run_search. Thread workdir through to run_search (signature change). Preserve validate_path_common's bash-script path-escape guard untouched.",
+      "estimated_loc": 60,
+      "estimated_hours": 1.5,
+      "dependencies": [],
+      "acceptance_criteria": [
+        "resolve_workdir_path helper added to tool_runtime.ail (handles trailing slash + workdir=='.' and workdir=='' edge cases)",
+        "run_read_file uses resolved path in readFileResult call",
+        "run_write_file uses resolved path in mkdirAllResult, writeFileResult, fileExists, readFile (prior content) calls",
+        "run_edit_file uses resolved path in fileExists, readFile, temp-file write calls",
+        "run_search has workdir parameter; dir argument resolved against workdir before passing to rg",
+        "Call site at src/core/tool_runtime.ail line 178 (run_search) updated to pass workdir",
+        "make check_core: 22/22 modules type-check",
+        "validate_path_common's bash-script guard unchanged (security model preserved)"
+      ],
+      "passes": null,
+      "started": null,
+      "completed": null,
+      "notes": null
+    },
+    {
+      "id": "M2_REGRESSION_SMOKE_AND_MATRIX",
+      "description": "Write scripts/smoke_v2_workdir_resolution.ail proving dispatch_one writes to the workdir argument's location not the AILANG runtime's cwd. Re-run all 6 v2 unit smokes + M9 25/25 provider matrix. Add CHANGELOG entry.",
+      "estimated_loc": 50,
+      "estimated_hours": 1,
+      "dependencies": ["M1_PATH_RESOLUTION"],
+      "acceptance_criteria": [
+        "scripts/smoke_v2_workdir_resolution.ail created: WriteFile to /tmp/m-workdir-smoke-<pid>/deep/nested/hello.txt → file lands there, NOT in motoko_agent cwd",
+        "ReadFile against the same path returns the written content",
+        "smoke_v2_workdir_resolution.ail prints PASS",
+        "All 6 prior v2 unit smokes still PASS (smoke_v2_policy_denial, smoke_v2_handle, smoke_v2_backend, smoke_v2_hybrid, smoke_v2_conversation, smoke_v2_writefile_missing_parent)",
+        "M9 matrix re-run via GOOGLE_CLOUD_LOCATION=global scripts/smoke_v2_provider_matrix.sh: 25/25 PASS",
+        "CHANGELOG.md entry under [Unreleased] referencing the design doc + this sprint plan",
+        "Design doc + sprint plan moved from planned/ to implemented/<motoko-version>/ on completion"
+      ],
+      "passes": null,
+      "started": null,
+      "completed": null,
+      "notes": null
+    }
+  ]
+}
