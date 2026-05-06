@@ -30,39 +30,24 @@ import src/core/test/stub_step (
   ScriptedStep,
   empty_rt,
   deny_all_rt,
-  token_step,
   prose_step,
-  tool_step
+  continuing_token_step
 )
-import std/ai (ToolCall)
 
 -- GLM-5-shaped rates: $0.60/M input, $2.08/M output (in millicents).
 func glm5_rates() -> CostRates {
   { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000 }
 }
 
--- A continuing-loop step with custom token counts. token_step from the
--- fixture has finish_reason="stop" — terminates after one iteration. For
--- cost accumulation across N steps we need finish_reason="tool_calls",
--- which means a non-empty tool_calls array. We pair big token counts
--- with a deny-able BashExec call; deny_all_rt denies it (turning the
--- call into a tool-role denial Message in history) and the loop
--- continues to the next scripted step.
-func continuing_step(input_tok: int, output_tok: int, step_id: string) -> ScriptedStep {
-  let tc: ToolCall = { id: step_id, name: "BashExec", arguments: "{\"cmd\":\"echo noop\"}" };
-  {
-    prose: "",
-    tool_calls: [tc],
-    input_tokens: input_tok,
-    output_tokens: output_tok,
-    finish_reason: "tool_calls"
-  }
-}
-
--- Each step reports 100k input + 50k output tokens.
--- step_cost = (100000 * 60000 + 50000 * 208000) / 1_000_000 = 16400 mc.
+-- Each step reports 100k input + 50k output tokens via the new
+-- continuing_token_step helper (commit 9531dae addressing motoko-explore
+-- feedback msg 39904980). step_cost = (100000*60000 + 50000*208000) /
+-- 1_000_000 = 16400 mc. continuing_token_step sets finish_reason=
+-- "tool_calls" so the loop iterates rather than terminating.
 func steps_at_16400(count: int) -> [ScriptedStep] {
-  let mk = func(idx: int) -> ScriptedStep { continuing_step(100000, 50000, "tc${show(idx)}") };
+  let mk = func(idx: int) -> ScriptedStep {
+    continuing_token_step(100000, 50000, "tc${show(idx)}")
+  };
   match count {
     0 => [],
     1 => [mk(1)],
@@ -111,11 +96,11 @@ func test_cap_50k_trips_at_step_4() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 func test_cap_100k_completes_normally() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   -- 5 continuing_steps (5*16400=82000 < 100000) + prose terminator.
   let script: [ScriptedStep] = [
-    continuing_step(100000, 50000, "tc1"),
-    continuing_step(100000, 50000, "tc2"),
-    continuing_step(100000, 50000, "tc3"),
-    continuing_step(100000, 50000, "tc4"),
-    continuing_step(100000, 50000, "tc5"),
+    continuing_token_step(100000, 50000, "tc1"),
+    continuing_token_step(100000, 50000, "tc2"),
+    continuing_token_step(100000, 50000, "tc3"),
+    continuing_token_step(100000, 50000, "tc4"),
+    continuing_token_step(100000, 50000, "tc5"),
     prose_step("done")
   ];
   let result = run_v2_with_stub(
@@ -143,12 +128,12 @@ func test_cap_100k_completes_normally() -> bool ! {AI, FS, Process, IO, Env, Net
 -- Cumulative cost would be 6*16400=98400 mc, but cap=0 disables the check.
 func test_cap_zero_disables_check() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let script: [ScriptedStep] = [
-    continuing_step(100000, 50000, "tc1"),
-    continuing_step(100000, 50000, "tc2"),
-    continuing_step(100000, 50000, "tc3"),
-    continuing_step(100000, 50000, "tc4"),
-    continuing_step(100000, 50000, "tc5"),
-    continuing_step(100000, 50000, "tc6"),
+    continuing_token_step(100000, 50000, "tc1"),
+    continuing_token_step(100000, 50000, "tc2"),
+    continuing_token_step(100000, 50000, "tc3"),
+    continuing_token_step(100000, 50000, "tc4"),
+    continuing_token_step(100000, 50000, "tc5"),
+    continuing_token_step(100000, 50000, "tc6"),
     prose_step("done")
   ];
   let result = run_v2_with_stub(
@@ -175,11 +160,11 @@ func test_cap_zero_disables_check() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 -- Smoke 4: rates=zero (unmetered/Ollama) → cost check skipped even with cap set.
 func test_zero_rates_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let script: [ScriptedStep] = [
-    continuing_step(100000, 50000, "tc1"),
-    continuing_step(100000, 50000, "tc2"),
-    continuing_step(100000, 50000, "tc3"),
-    continuing_step(100000, 50000, "tc4"),
-    continuing_step(100000, 50000, "tc5"),
+    continuing_token_step(100000, 50000, "tc1"),
+    continuing_token_step(100000, 50000, "tc2"),
+    continuing_token_step(100000, 50000, "tc3"),
+    continuing_token_step(100000, 50000, "tc4"),
+    continuing_token_step(100000, 50000, "tc5"),
     prose_step("done")
   ];
   let zero_rates: CostRates = { input_per_1m_millicents: 0, output_per_1m_millicents: 0 };
