@@ -38,6 +38,7 @@ pure func context_limit_base(model: string) -> int
     else if startsWith(model, "anthropic/") then 200000
     else if startsWith(model, "openai/") then 128000
     else if startsWith(model, "google/") then 1000000
+    else if model == "test/tiny" then 100
     else 0
   }
 

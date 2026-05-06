@@ -12,6 +12,7 @@ module src/core/rpc
 -- MIGRATION sprint plan + CHANGELOG.md and git log around 2026-05-06.
 
 import src/core/agent_loop_v2 (run_v2_with_conversation)
+import src/core/test/stub_step (LiveAI)
 import std/io     (println)
 import std/json   (Json, encode, jo, ja, kv, js, jb, jnum)
 import std/list   (foldl)
@@ -206,7 +207,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     kv("type", js("v2_mode")),
     kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete"))
   ])));
-  run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates)
+  run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI)
 }
 
 export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream} {

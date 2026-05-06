@@ -53,6 +53,11 @@ test_core:
 	@ailang test src/core/ext/compose/claimcheck_test.ail || (echo "src/core/ext/compose/claimcheck_test.ail tests failed" && exit 1)
 	@printf "\nAll core runtime module tests passed!\n"
 
+test_integration:
+	@echo "Running src/core/test/integration_tests.ail tests..."
+	@ailang test src/core/test/integration_tests.ail || (echo "src/core/test/integration_tests.ail tests failed" && exit 1)
+	@printf "\nAll integration tests passed!\n"
+
 test: test_core
 
 # Z3 contract verification for pure core modules.
