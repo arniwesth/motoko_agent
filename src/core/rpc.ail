@@ -1,6 +1,6 @@
 module src/core/rpc
 
-import std/ai_motoko (callStreamResult, AIError)
+import std/ai/streaming (callStream, AIError)
 import std/clock  (sleep)
 import std/io     (println, readLine)
 import std/option (Option, Some, None)
@@ -14,7 +14,7 @@ import src/core/types  (Msg, AgentState, AilangExecResult, version, ToolResultIt
 import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, call_to_json, result_to_json, string_field)
 import src/core/env_client (exec_in, exec_ailang)
 import src/core/parse   (extract_bash, is_done, parse_cwd, parse_tool_calls, split_think_answer, assistant_history_content, assistant_visible_output, indicates_continuation_intent)
-import src/core/prompts (with_cache_hint, with_agents_context, fmt_msgs, fmt_obs, fmt_tool_obs, ailang_error_doc_section)
+import src/core/prompts (with_cache_hint, with_agents_context, fmt_obs, fmt_tool_obs, ailang_error_doc_section)
 import src/core/cache   (get_hint, put_trajectory)
 import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config)
 import src/core/context_usage (estimate_tokens, context_limit_for)
@@ -70,9 +70,39 @@ func json_string_values(xs: [string]) -> [Json] {
   }
 }
 
+func msg_to_json(m: Msg) -> Json {
+  jo([kv("role", js(m.role)), kv("content", js(m.content))])
+}
+
+func msgs_to_json_values(msgs: [Msg]) -> [Json] {
+  match msgs {
+    [] => [],
+    m :: rest => msg_to_json(m) :: msgs_to_json_values(rest)
+  }
+}
+
+func msgs_to_json(msgs: [Msg]) -> string {
+  encode(ja(msgs_to_json_values(msgs)))
+}
+
+func join_provider_model(parts: [string]) -> string {
+  match parts {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}/${join_provider_model(rest)}"
+  }
+}
+
+func split_provider_model(model_str: string) -> { provider: string, model: string } {
+  match split(model_str, "/") {
+    [] => { provider: "openai", model: model_str },
+    provider :: [] => { provider: "openai", model: provider },
+    provider :: rest => { provider: provider, model: join_provider_model(rest) }
+  }
+}
+
 func poll_cmd() -> Option[string] ! {IO} {
-  let line = _io_poll_stdin(());
-  if line == "" then None else Some(trim(line))
+  None
 }
 
 func emit_context_usage(state: AgentState, model: string) -> () ! {IO} {
@@ -1250,7 +1280,7 @@ func stream_attempt_id(stream_id: string, attempt: int) -> string {
 }
 
 func ai_stream_call_with_retry(
-  input: string,
+  msgs: [Msg],
   step: int,
   stream_id: string,
   model: string,
@@ -1258,26 +1288,22 @@ func ai_stream_call_with_retry(
   base_ms: int,
   cap_ms: int,
   attempt: int
-) -> Result[string, AIError] ! {AI, Clock} {
+) -> Result[string, AIError] ! {AI, Clock, Net, Stream} {
   let att_stream_id = stream_attempt_id(stream_id, attempt);
-  let r = callStreamResult(input, step, att_stream_id, model);
-  if r.ok then Ok(r.output)
-  else {
-    let e = {
-      message: r.error_message,
-      provider: r.provider,
-      statusCode: r.status_code,
-      retryable: r.retryable,
-      code: r.error_code
-    };
-    let got_delta = _list_length(r.chunks) > 0;
-    if e.retryable && attempt < max_retries && not got_delta then {
+  let route = split_provider_model(model);
+  let _ = att_stream_id;
+  let _ = step;
+  match callStream(route.provider, route.model, msgs_to_json(msgs)) {
+    Ok(text) => Ok(text),
+    Err(err) => {
+      if err.retryable && attempt < max_retries then {
         let wait = retry_wait_ms(base_ms, cap_ms, attempt);
         let _ = sleep(wait);
-        ai_stream_call_with_retry(input, step, stream_id, model, max_retries, base_ms, cap_ms, attempt + 1)
+        ai_stream_call_with_retry(msgs, step, stream_id, model, max_retries, base_ms, cap_ms, attempt + 1)
       } else {
-        Err(e)
+        Err(err)
       }
+    }
   }
 }
 
@@ -1313,7 +1339,7 @@ func rpc_loop(
       let _ = if step_delay > 0 then sleep(step_delay) else ();
       let retry_cfg = retry_from_settings(settings);
       let stream_id = "step-${show(state2.step)}";
-      match ai_stream_call_with_retry(fmt_msgs(state2.msgs), state2.step, stream_id, model2, retry_cfg.max_retries, retry_cfg.base_ms, retry_cfg.cap_ms, 0) {
+      match ai_stream_call_with_retry(state2.msgs, state2.step, stream_id, model2, retry_cfg.max_retries, retry_cfg.base_ms, retry_cfg.cap_ms, 0) {
         Err(e) => {
           let _ = emit(encode(jo([
             kv("type", js("error")),

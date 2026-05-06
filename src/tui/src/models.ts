@@ -3,8 +3,9 @@
 // Canonical list of known model identifiers shown in the /model SelectList.
 // Format: "provider/model-name" — matches what AILANG passes to --ai.
 //
-// OpenRouter models are prefixed with "openrouter/" and can be fetched live
-// from the OpenRouter API when OPENROUTER_API_KEY is set.
+// OpenRouter models use the config-driven streaming provider prefix
+// "openrouter-config/" and can be fetched live from the OpenRouter API when
+// OPENROUTER_API_KEY is set.
 // Local OpenAI-compatible models are prefixed with "openai/" and fetched from
 // OPENAI_BASE_URL when set.
 
@@ -20,16 +21,16 @@ export const KNOWN_MODELS: string[] = [
 
 // Static fallback shown when OPENROUTER_API_KEY is set but the live fetch fails.
 export const OPENROUTER_FALLBACK_MODELS: string[] = [
-  "openrouter/anthropic/claude-sonnet-4-5",
-  "openrouter/anthropic/claude-opus-4-5",
-  "openrouter/openai/gpt-4o",
-  "openrouter/openai/gpt-4o-mini",
-  "openrouter/google/gemini-2.5-pro",
-  "openrouter/google/gemini-2.5-flash",
-  "openrouter/meta-llama/llama-3.3-70b-instruct",
-  "openrouter/mistralai/mixtral-8x7b-instruct",
-  "openrouter/deepseek/deepseek-r1",
-  "openrouter/qwen/qwen-2.5-72b-instruct",
+  "openrouter-config/anthropic/claude-sonnet-4-5",
+  "openrouter-config/anthropic/claude-opus-4-5",
+  "openrouter-config/openai/gpt-4o",
+  "openrouter-config/openai/gpt-4o-mini",
+  "openrouter-config/google/gemini-2.5-pro",
+  "openrouter-config/google/gemini-2.5-flash",
+  "openrouter-config/meta-llama/llama-3.3-70b-instruct",
+  "openrouter-config/mistralai/mixtral-8x7b-instruct",
+  "openrouter-config/deepseek/deepseek-r1",
+  "openrouter-config/qwen/qwen-2.5-72b-instruct",
 ];
 
 /**
@@ -83,7 +84,7 @@ export function mergeUniqueModels(...lists: string[][]): string[] {
 
 /**
  * Fetch the live model list from OpenRouter and return model ids prefixed
- * with "openrouter/".  Falls back to OPENROUTER_FALLBACK_MODELS on error.
+ * with "openrouter-config/". Falls back to OPENROUTER_FALLBACK_MODELS on error.
  */
 export async function fetchOpenRouterModels(apiKey: string): Promise<string[]> {
   try {
@@ -99,7 +100,7 @@ export async function fetchOpenRouterModels(apiKey: string): Promise<string[]> {
     if (!Array.isArray(json.data)) {
       return OPENROUTER_FALLBACK_MODELS;
     }
-    return json.data.map((m) => `openrouter/${m.id}`);
+    return json.data.map((m) => `openrouter-config/${m.id}`);
   } catch {
     return OPENROUTER_FALLBACK_MODELS;
   }

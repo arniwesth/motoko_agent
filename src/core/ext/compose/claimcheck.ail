@@ -1,8 +1,8 @@
 module src/core/ext/compose/claimcheck
 
-import std/ai_motoko (callStreamResult)
+import std/ai/streaming (callStream)
 import std/io (println)
-import std/json (decode, get, asString, jo, kv, js, jb, jnum, encode)
+import std/json (decode, get, asString, jo, ja, kv, js, jb, jnum, encode)
 import std/result (Ok, Err)
 import std/string (trim, split, startsWith)
 
@@ -28,6 +28,34 @@ func emit_event_tail(base: string, kvs: [string]) -> () ! {IO} {
 
 func json_escape(s: string) -> string {
   encode(js(s))
+}
+
+func build_single_message(prompt: string) -> string {
+  encode(ja([jo([kv("role", js("user")), kv("content", js(prompt))])]))
+}
+
+func join_provider_model(parts: [string]) -> string {
+  match parts {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}/${join_provider_model(rest)}"
+  }
+}
+
+func split_provider_model(model_str: string) -> { provider: string, model: string } {
+  match split(model_str, "/") {
+    [] => { provider: "openai", model: model_str },
+    provider :: [] => { provider: "openai", model: provider },
+    provider :: rest => { provider: provider, model: join_provider_model(rest) }
+  }
+}
+
+func call_single_prompt(prompt: string, model: string) -> string ! {AI, Net, Stream} {
+  let route = split_provider_model(model);
+  match callStream(route.provider, route.model, build_single_message(prompt)) {
+    Ok(text) => text,
+    Err(_) => ""
+  }
 }
 
 func informalizer_prompt(observed: string, ledger_summary: string, include_ledger: bool) -> string {
@@ -111,7 +139,7 @@ export func run_claimcheck(
   step: int,
   compose_id: string,
   attempt: int
-) -> { ran: bool, should_retry: bool, verdict: string, confidence: string, reason: string, corrective_hint: string, invocations_used: int } ! {AI, IO} {
+) -> { ran: bool, should_retry: bool, verdict: string, confidence: string, reason: string, corrective_hint: string, invocations_used: int } ! {AI, IO, Net, Stream} {
   if not enabled || intent_kind != "analyze" then {
     { ran: false, should_retry: false, verdict: "inconclusive", confidence: "low", reason: "claimcheck disabled or non-analysis intent", corrective_hint: "", invocations_used: invocations_used }
   } else if invocations_used >= max_invocations then {
@@ -132,19 +160,19 @@ export func run_claimcheck(
       }
     } else {
     let inv_next = invocations_used + 1;
-    let inf = callStreamResult(informalizer_prompt(observed, ledger_summary, include_ledger_in_informalizer), step, "compose-claimcheck-informalize-${compose_id}-${show(attempt)}", informalizer_model);
-    let _ = emit_event("compose_claimcheck_informalize_delta", step, compose_id, attempt, ["\"delta\":${json_escape(inf.output)}"]);
-    let informalization = trim(inf.output);
+    let inf = call_single_prompt(informalizer_prompt(observed, ledger_summary, include_ledger_in_informalizer), informalizer_model);
+    let _ = emit_event("compose_claimcheck_informalize_delta", step, compose_id, attempt, ["\"delta\":${json_escape(inf)}"]);
+    let informalization = trim(inf);
     let _ = emit_event("compose_claimcheck_informalize_result", step, compose_id, attempt, ["\"informalization\":${json_escape(informalization)}"]);
     if informalization == "" then {
       { ran: true, should_retry: false, verdict: "inconclusive", confidence: "low", reason: "informalizer empty output", corrective_hint: "", invocations_used: inv_next }
     } else {
-      let cmp = callStreamResult(comparator_prompt(intent, informalization), step, "compose-claimcheck-compare-${compose_id}-${show(attempt)}", comparator_model);
-      let _ = emit_event("compose_claimcheck_compare_delta", step, compose_id, attempt, ["\"delta\":${json_escape(cmp.output)}"]);
-      let parsed0 = parse_verdict(cmp.output);
+      let cmp = call_single_prompt(comparator_prompt(intent, informalization), comparator_model);
+      let _ = emit_event("compose_claimcheck_compare_delta", step, compose_id, attempt, ["\"delta\":${json_escape(cmp)}"]);
+      let parsed0 = parse_verdict(cmp);
       let parsed = if parsed0.ok then parsed0 else {
-        let repaired = callStreamResult(comparator_repair_prompt(cmp.output), step, "compose-claimcheck-compare-repair-${compose_id}-${show(attempt)}", comparator_model);
-        parse_verdict(repaired.output)
+        let repaired = call_single_prompt(comparator_repair_prompt(cmp), comparator_model);
+        parse_verdict(repaired)
       };
       let _ = emit_event(
         "compose_claimcheck_compare_result",

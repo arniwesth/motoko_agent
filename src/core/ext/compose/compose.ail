@@ -1,13 +1,13 @@
 module src/core/ext/compose/compose
 
-import std/ai_motoko (callStreamResult)
+import std/ai/streaming (callStream)
 import std/bytes (toString)
 import std/clock (now)
 import std/datetime (formatRFC3339)
 import std/crypto (sha256Hex)
 import std/fs (writeFile, fileExists, removeFile, mkdirAll)
 import std/io (println)
-import std/json (encode, Json, jo, kv, js, jb, jnum, get)
+import std/json (encode, Json, jo, ja, kv, js, jb, jnum, get)
 import std/process (exec, ProcessError)
 import std/result (Ok, Err)
 import std/string (trim, split, startsWith, contains, toLower)
@@ -70,6 +70,34 @@ export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDec
 
 func json_escape(s: string) -> string {
   encode(js(s))
+}
+
+func build_single_message(prompt: string) -> string {
+  encode(ja([jo([kv("role", js("user")), kv("content", js(prompt))])]))
+}
+
+func join_provider_model(parts: [string]) -> string {
+  match parts {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}/${join_provider_model(rest)}"
+  }
+}
+
+func split_provider_model(model_str: string) -> { provider: string, model: string } {
+  match split(model_str, "/") {
+    [] => { provider: "openai", model: model_str },
+    provider :: [] => { provider: "openai", model: provider },
+    provider :: rest => { provider: provider, model: join_provider_model(rest) }
+  }
+}
+
+func call_single_prompt(prompt: string, model: string) -> string ! {AI, Net, Stream} {
+  let route = split_provider_model(model);
+  match callStream(route.provider, route.model, build_single_message(prompt)) {
+    Ok(text) => text,
+    Err(_) => ""
+  }
 }
 
 func emit_event(event_type: string, step: int, compose_id: string, kvs: [string]) -> () ! {IO} {
@@ -405,7 +433,7 @@ func one_attempt(
   max_attempts: int,
   prior_errors: [string],
   t0: int
-) -> AttemptOutcome ! {IO, AI, Process, FS, Env, Clock} {
+) -> AttemptOutcome ! {IO, AI, Process, FS, Env, Clock, Net, Stream} {
   let use_repair_mode = trim(repair_snippet) != "" && _list_length(prior_errors) > 0;
   let base_ledger = with_budget_cap(ledger_in, author_tools_budget);
   let prompt_for_meta = build_author_prompt(
@@ -450,8 +478,7 @@ func one_attempt(
     )
     else {
       let author_prompt = build_author_prompt(compose_subagent_prompt_card(), "", req.intent, intent_kind, req.expected_output, req.hints_read, req.hints_write, prior_errors, repair_snippet, use_repair_mode, cert_template_enabled, false, 0, 0, "");
-      let authored = callStreamResult(author_prompt, ctx.step, "compose-author-${req.id}-${show(attempt)}", model);
-      let raw_author = trim(authored.output);
+      let raw_author = trim(call_single_prompt(author_prompt, model));
       let _ = emit_event("compose_author_delta", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"delta\":${json_escape(cap_text(raw_author, 3000))}"]);
       let s = extract_ailang_fence(raw_author);
       let _ = emit_event("compose_snippet", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"code\":${json_escape(cap_text(s, 3500))}"]);
@@ -554,8 +581,7 @@ func one_attempt(
           else {
             let stored = store_stdout_and_elide(ctx.workdir, req.id, ran.raw_stdout, max_stdout_bytes);
             let summary_prompt = build_summary_prompt(req.intent, req.intent, req.expected_output, ran.stdout, ran.stderr, final_exit_code, validation.decided, validation.satisfied, validation.confidence, validation.reason);
-            let summary_resp = callStreamResult(summary_prompt, ctx.step, "compose-summary-${req.id}-${show(attempt)}", model);
-            let summary_base = trim(summary_resp.output);
+            let summary_base = trim(call_single_prompt(summary_prompt, model));
             let summary =
               if not sf2_pass then "${summary_base}\nValidator: unsatisfied (SF2 evidence witness missing: need declared FS/Process effect or ≥1 ledger-bound premise)"
               else if validation.decided && validation.confidence == "high" then "${summary_base}\nValidator: ${if validation.satisfied then "satisfied" else "unsatisfied"} (${validation.reason})"
@@ -618,7 +644,7 @@ func run_attempts(
   ledger: PremiseLedger,
   last_reason: string,
   t0: int
-) -> ToolResultEnvelope ! {IO, AI, Process, FS, Env, Clock} {
+) -> ToolResultEnvelope ! {IO, AI, Process, FS, Env, Clock, Net, Stream} {
   if attempt > max_attempts then {
     let reason = if last_reason == "" then "unknown error" else last_reason;
     let summary = "subagent exhausted attempts; last error: ${reason}";
@@ -651,7 +677,7 @@ func run_attempts(
   }
 }
 
-func handle_compose_tool(ctx: ExtCtx, req: { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] }, runtime_cfg: RuntimeConfig, snippet_caps: string) -> ToolResultEnvelope ! {IO, AI, Process, FS, Env, Clock} {
+func handle_compose_tool(ctx: ExtCtx, req: { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] }, runtime_cfg: RuntimeConfig, snippet_caps: string) -> ToolResultEnvelope ! {IO, AI, Process, FS, Env, Clock, Net, Stream} {
   let t0 = now();
   let explicit_kind = normalize_intent_kind(req.intent_kind);
   let intent_kind = if explicit_kind == "" then derive_intent_kind(req.intent) else explicit_kind;
@@ -727,7 +753,7 @@ func handle_compose_tool(ctx: ExtCtx, req: { id: string, intent: string, intent_
   )
 }
 
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: RuntimeConfig, snippet_caps: string) -> ToolHandleDecision ! {IO, AI, Process, FS, Env, Clock} {
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: RuntimeConfig, snippet_caps: string) -> ToolHandleDecision ! {IO, AI, Process, FS, Env, Clock, Net, Stream} {
   if not is_compose_tool_name(call.tool) then Delegate
   else Handled(handle_compose_tool(ctx, compose_req_from_call(ctx, call), runtime_cfg, snippet_caps))
 }

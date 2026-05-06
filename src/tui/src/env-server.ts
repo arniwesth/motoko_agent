@@ -448,6 +448,10 @@ export function startEnvServer(port: number, workdir: string): void {
         timeout: 10_000,
         encoding: "utf8",
         maxBuffer: 1 * 1024 * 1024,
+        env: {
+          ...process.env,
+          AILANG_NO_VERSION_WARNINGS: "1",
+        },
       });
       return { ok: true };
     } catch (e: any) {
@@ -475,6 +479,7 @@ export function startEnvServer(port: number, workdir: string): void {
           env: {
             ...process.env,
             AILANG_FS_SANDBOX: workdir,
+            AILANG_NO_VERSION_WARNINGS: "1",
           },
         }
       );
@@ -609,7 +614,7 @@ export function startEnvServer(port: number, workdir: string): void {
           timeout: timeoutMs,
           encoding: "utf8",
           maxBuffer: 4 * 1024 * 1024,
-          env: { ...process.env, MOTOKO_SUBAGENT_PROMPT: prompt },
+          env: { ...process.env, MOTOKO_SUBAGENT_PROMPT: prompt, AILANG_NO_VERSION_WARNINGS: "1" },
         })
       ).trim();
     } finally {
@@ -639,21 +644,40 @@ export function startEnvServer(port: number, workdir: string): void {
     const code = [
       `module tmp/${name}`,
       "",
-      "import std/ai_motoko (callStreamResult)",
+      "import std/ai/streaming (callStream)",
       "import std/io (println)",
       "import std/env (getEnvOr)",
-      "import std/json (encode, jo, kv, js, jb)",
+      "import std/json (encode, jo, ja, kv, js, jb)",
+      "import std/result (Ok, Err)",
+      "import std/string (split)",
       "",
-      "export func main() -> () ! {IO, AI, Env} {",
+      "func join_provider_model(parts: [string]) -> string {",
+      "  match parts {",
+      "    [] => \"\",",
+      "    x :: [] => x,",
+      "    x :: rest => \"${x}/${join_provider_model(rest)}\"",
+      "  }",
+      "}",
+      "",
+      "func split_provider_model(model_str: string) -> { provider: string, model: string } {",
+      "  match split(model_str, \"/\") {",
+      "    [] => { provider: \"openai\", model: model_str },",
+      "    provider :: [] => { provider: \"openai\", model: provider },",
+      "    provider :: rest => { provider: provider, model: join_provider_model(rest) }",
+      "  }",
+      "}",
+      "",
+      "export func main() -> () ! {IO, AI, Env, Net, Stream} {",
       "  let prompt = getEnvOr(\"MOTOKO_SUBAGENT_PROMPT\", \"\");",
       "  let model = getEnvOr(\"MOTOKO_SUBAGENT_MODEL\", \"\");",
-      "  let streamId = getEnvOr(\"MOTOKO_SUBAGENT_STREAM_ID\", \"compose-author\");",
-      "  let r = callStreamResult(prompt, 0, streamId, model);",
-      "  println(\"__SUBAGENT_RESULT_JSON__${encode(jo([",
-      "    kv(\"ok\", jb(r.ok)),",
-      "    kv(\"output\", js(r.output)),",
-      "    kv(\"error_message\", js(r.error_message))",
-      "  ]))}\")",
+      "  let _ = getEnvOr(\"MOTOKO_SUBAGENT_STREAM_ID\", \"compose-author\");",
+      "  let route = split_provider_model(model);",
+      "  let messages = encode(ja([jo([kv(\"role\", js(\"user\")), kv(\"content\", js(prompt))])]));",
+      "  let result = match callStream(route.provider, route.model, messages) {",
+      "    Ok(text) => jo([kv(\"ok\", jb(true)), kv(\"output\", js(text)), kv(\"error_message\", js(\"\"))]),",
+      "    Err(e) => jo([kv(\"ok\", jb(false)), kv(\"output\", js(\"\")), kv(\"error_message\", js(e.message))])",
+      "  };",
+      "  println(\"__SUBAGENT_RESULT_JSON__${encode(result)}\")",
       "}",
       "",
     ].join("\n");
@@ -670,7 +694,7 @@ export function startEnvServer(port: number, workdir: string): void {
 
       const child = spawn(
         "ailang",
-        ["run", "--caps", "IO,AI,Env", "--ai", model, "--entry", "main", path],
+        ["run", "--caps", "IO,AI,Env,Net,Stream", "--ai", model, "--entry", "main", path],
         {
           cwd: workdir,
           env: {
@@ -679,6 +703,7 @@ export function startEnvServer(port: number, workdir: string): void {
             MOTOKO_SUBAGENT_MODEL: model,
             MOTOKO_SUBAGENT_STREAM_ID: streamId,
             MOTOKO_STREAM_EVENTS: "1",
+            AILANG_NO_VERSION_WARNINGS: "1",
           },
           stdio: ["ignore", "pipe", "pipe"],
         },
@@ -1049,6 +1074,10 @@ export function startEnvServer(port: number, workdir: string): void {
         timeout: 10_000,
         encoding: "utf8",
         maxBuffer: 1 * 1024 * 1024,
+        env: {
+          ...process.env,
+          AILANG_NO_VERSION_WARNINGS: "1",
+        },
       });
     } catch (e: any) {
       checkErrors = String(e.stderr ?? e.stdout ?? e.message).slice(0, 4000);
@@ -1078,6 +1107,7 @@ export function startEnvServer(port: number, workdir: string): void {
           env: {
             ...process.env,
             AILANG_FS_SANDBOX: workdir,
+            AILANG_NO_VERSION_WARNINGS: "1",
           },
         }
       );

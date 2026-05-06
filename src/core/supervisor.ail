@@ -20,7 +20,7 @@ func emit_warnings(xs: [string]) -> () ! {IO} {
 
 func required_secret_for_model(model: string) -> string {
   if startsWith(model, "anthropic/") then "ANTHROPIC_API_KEY"
-  else if startsWith(model, "openrouter/") then "OPENROUTER_API_KEY"
+  else if startsWith(model, "openrouter/") || startsWith(model, "openrouter-config/") then "OPENROUTER_API_KEY"
   else if startsWith(model, "openai/") then "OPENAI_API_KEY"
   else if startsWith(model, "google/") then "GOOGLE_API_KEY"
   else ""

@@ -1285,6 +1285,10 @@ export function shouldRenderThinkingAfterStream(streamedSteps: Set<number>, step
   return !streamedSteps.has(step);
 }
 
+export function shouldRenderDoneOutput(renderedSteps: Set<number>, step: number): boolean {
+  return !renderedSteps.has(step);
+}
+
 interface TaggedSplit {
   think: string;
   answer: string;
@@ -1706,6 +1710,7 @@ export class AgentUI {
               const answer = this.stripToolJsonBlocks(answerRaw);
               if (answer.trim()) {
                 this.appendHistoryMarkdown(answer);
+                this.streamRenderedSteps.add(event.step);
               }
             }
           } else {
@@ -1713,6 +1718,7 @@ export class AgentUI {
             const visible = this.stripToolJsonBlocks(event.text);
             if (visible.trim() && shouldRenderThinkingAfterStream(this.streamedSteps, event.step)) {
               this.appendHistoryMarkdown(visible);
+              this.streamRenderedSteps.add(event.step);
             }
           }
         }
@@ -2045,7 +2051,7 @@ export class AgentUI {
             if (tagged?.think) this.addThinkBlock(event.step, tagged.think);
             const finalText = tagged?.answer ?? visible;
             if (finalText.trim()) this.appendHistoryMarkdown(finalText.trim());
-          } else if (!this.streamRenderedSteps.has(event.step)) {
+          } else if (shouldRenderDoneOutput(this.streamRenderedSteps, event.step)) {
             if (tagged?.answer) this.appendHistoryMarkdown(tagged.answer);
             else if (visible) this.appendHistoryMarkdown(visible);
             else this.appendHistoryMarkdown(event.output.trim());

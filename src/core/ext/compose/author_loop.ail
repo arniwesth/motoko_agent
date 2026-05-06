@@ -1,10 +1,11 @@
 module src/core/ext/compose/author_loop
 
-import std/ai_motoko (callStreamResult)
+import std/ai/streaming (callStream)
 import std/io (println)
-import std/json (Json, decode, get, asString, encode, jo, kv, js, jb, jnum)
+import std/json (Json, decode, get, asString, encode, jo, ja, kv, js, jb, jnum)
 import std/option (Option, Some, None)
-import std/string (trim, contains)
+import std/result (Ok, Err)
+import std/string (trim, contains, split)
 
 import src/core/ext/compose/prompts (build_author_prompt)
 import src/core/ext/compose/author_tools (dispatch_author_tool)
@@ -22,6 +23,34 @@ export type AuthorLoopResult = {
 
 func json_escape(s: string) -> string {
   encode(js(s))
+}
+
+func build_single_message(prompt: string) -> string {
+  encode(ja([jo([kv("role", js("user")), kv("content", js(prompt))])]))
+}
+
+func join_provider_model(parts: [string]) -> string {
+  match parts {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}/${join_provider_model(rest)}"
+  }
+}
+
+func split_provider_model(model_str: string) -> { provider: string, model: string } {
+  match split(model_str, "/") {
+    [] => { provider: "openai", model: model_str },
+    provider :: [] => { provider: "openai", model: provider },
+    provider :: rest => { provider: provider, model: join_provider_model(rest) }
+  }
+}
+
+func call_single_prompt(prompt: string, model: string) -> string ! {AI, Net, Stream} {
+  let route = split_provider_model(model);
+  match callStream(route.provider, route.model, build_single_message(prompt)) {
+    Ok(text) => text,
+    Err(_) => ""
+  }
 }
 
 func emit_event(event_type: string, step: int, compose_id: string, kvs: [string]) -> () ! {IO} {
@@ -223,7 +252,7 @@ func loop(
   structured_finalize_fail_streak: int,
   structured_fallback_after: int,
   program_state: ProgramState
-) -> AuthorLoopResult ! {IO, AI, FS, Process, Env, Clock} {
+) -> AuthorLoopResult ! {IO, AI, FS, Process, Env, Clock, Net, Stream} {
   if turns >= max_turns then { ok: false, snippet: "", ledger: ledger, error: "author_turn_limit", turns: turns }
   else {
     let prompt = mk_prompt(
@@ -246,8 +275,7 @@ func loop(
       structured_budget_cap,
       structured_budget_used
     );
-    let authored = callStreamResult(prompt, step, "${stream_prefix}-turn-${show(turns + 1)}", model);
-    let raw_author = trim(authored.output);
+    let raw_author = trim(call_single_prompt(prompt, model));
     let _ = emit_event("compose_author_delta", step, compose_id, ["\"attempt\":${show(attempt)}", "\"delta\":${json_escape(cap_text(raw_author, 3000))}"]);
 
     let a_tool = extract_fence(raw_author, "tool_call");
@@ -481,7 +509,7 @@ export func run_author_loop(
   structured_enabled: bool,
   structured_budget_cap: int,
   structured_fallback_after: int
-) -> AuthorLoopResult ! {IO, AI, FS, Process, Env, Clock} {
+) -> AuthorLoopResult ! {IO, AI, FS, Process, Env, Clock, Net, Stream} {
   loop(
     step,
     compose_id,

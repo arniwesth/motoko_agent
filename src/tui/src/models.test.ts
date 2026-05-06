@@ -96,6 +96,6 @@ describe("fetchDynamicModelsFromEnv", () => {
     expect(models).toContain("openai/google/gemma-4-26B-A4B-it");
     // Already in KNOWN_MODELS; should not duplicate.
     expect(models.filter((m) => m === "openai/gpt-4o")).toHaveLength(1);
-    expect(models).toContain("openrouter/meta-llama/llama-3.3-70b-instruct");
+    expect(models).toContain("openrouter-config/meta-llama/llama-3.3-70b-instruct");
   });
 });

@@ -143,7 +143,7 @@ models.allowed = ["google/gemma-4-26B-A4B-it"]
 
 ## Milestones
 
-### M1: Install script + ailang.toml (30 min)
+### M1: Install script + ailang.toml + config (30 min)
 
 1. `scripts/install-prerequisites.sh`:
    - Line 10: Update comment
@@ -152,7 +152,8 @@ models.allowed = ["google/gemma-4-26B-A4B-it"]
    - Line 360: pull
    - Line 363: `--branch motoko` → `--branch dev`
 2. `ailang.toml`: Add version constraint + `[[ai_provider]]` block for local-vllm
-3. Run `ailang lock` to regenerate lockfile
+3. `.motoko/config/local/config.json`: Change model from `"openai/google/gemma-4-26B-A4B-it"` to `"local-vllm/google/gemma-4-26B-A4B-it"` (provider prefix must match `[[ai_provider]]` name)
+4. Run `ailang lock` to regenerate lockfile
 
 **Verify**: `ailang version` shows v0.15.x after fresh install
 
@@ -170,9 +171,13 @@ This is the critical path. All agent loops flow through `ai_stream_call_with_ret
    - Retry logic: remove `r.chunks` partial-response guard (see Decision P7) — retry on all retryable errors
 5. Effect signature: no change needed (`Stream, Net` already in `rpc_loop`'s row)
 
-**Provider routing**: Model string determines provider automatically:
-- `openrouter/deepseek/deepseek-v4-pro` → built-in OpenRouter provider (handles prefix)
-- `openai/google/gemma-4-26B-A4B-it` → matched by `[[ai_provider]]` `models.allowed`
+**Provider routing (Decision P8)**: `callStream` takes an explicit provider name — it does NOT do prefix-routing internally. The caller must split the model string on the first `/` to extract the provider name:
+- `"openrouter/deepseek/deepseek-v4-pro"` → provider=`"openrouter"`, model=`"deepseek/deepseek-v4-pro"`
+- `"local-vllm/google/gemma-4-26B-A4B-it"` → provider=`"local-vllm"`, model=`"google/gemma-4-26B-A4B-it"`
+
+This requires updating the local profile's model string from `"openai/google/gemma-4-26B-A4B-it"` to `"local-vllm/google/gemma-4-26B-A4B-it"` (so the prefix matches the `[[ai_provider]]` block name).
+
+A `split_provider_model(model_str) -> {provider: string, model: string}` helper splits on the first `/`.
 
 **Risk**: The `openai_base_url` config field currently flows from profile JSON → supervisor → env-server → ailang runtime. With `[[ai_provider]]`, this routing moves to `ailang.toml`. The `[[ai_provider]]` block references `${OPENAI_BASE_URL}` so existing profile switching works via env var (Decision P3).
 
@@ -260,6 +265,7 @@ Once `[[ai_provider]]` handles routing:
 | P5 | Keep motoko's custom tool dispatch (`tool_contract.ail`, `tool_runtime.ail`) for now | M-AI-TOOL-LOOP provides upstream equivalents but porting tool dispatch is a separate, larger effort |
 | P6 | Serialize `[Msg]` as JSON array for `callStream` instead of using `fmt_msgs` flat string | `callStream` expects `messagesJson` (a JSON array of `{"role","content"}` objects). `fmt_msgs` produces `[role]\ncontent\n\n` — a flat concatenation that loses structure. Two helpers needed: `msgs_to_json` (full conversation history for `rpc_loop`) and `buildSingleMessage` (single user prompt for compose call sites) |
 | P7 | Drop the `r.chunks` partial-response retry guard | The fork's `AIStreamResult.chunks` let retry logic skip retries when partial data had arrived (line 1273: `_list_length(r.chunks) > 0`). `callStream` returns only `Result[string, AIError]` with no partial-data signal. Accept the behavioral change: retry on all retryable errors regardless. Impact is low — if the LLM returned partial data, the retried call will likely succeed anyway |
+| P8 | Split model string on first `/` to extract provider name for `callStream` | `callStream` takes an explicit provider name (not prefix-routed). Use a `split_provider_model` helper to extract provider from existing model strings. Local profile model string changes from `"openai/..."` to `"local-vllm/..."`. Deferred improvement: add a separate `provider` field to profile config JSON so model strings don't encode routing — cleaner but larger config system change, suitable for a follow-up PR |
 
 ---
 

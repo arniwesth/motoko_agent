@@ -3,9 +3,44 @@ name = "local/motoko_agent"
 version = "0.1.0"
 edition = "1"
 module_prefix = "src"
+ailang = ">=0.15.1"
 
 [dependencies]
 "sunholo/logging" = "0.4.0"
 
 [effects]
 max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex"]
+
+[[ai_provider]]
+name = "local-vllm"
+schema_version = 1
+request_shape = "openai_chat"
+response_path = "$.choices[0].message.content"
+error_path = "$.error.message"
+endpoint = "http://100.79.48.75:8000/v1/chat/completions"
+auth = { type = "none" }
+capabilities = { tool_calling = false, json_mode = true, streaming = true, vision = false, structured_outputs = false }
+models.allowed = ["google/gemma-4-26B-A4B-it"]
+
+[ai_provider.streaming]
+enabled = true
+delta_path = "$.choices[0].delta.content"
+reasoning_path = "$.choices[0].delta.reasoning_content"
+done_sentinel = "[DONE]"
+
+[[ai_provider]]
+name = "openrouter-config"
+schema_version = 1
+request_shape = "openai_chat"
+response_path = "$.choices[0].message.content"
+error_path = "$.error.message"
+endpoint = "https://openrouter.ai/api/v1/chat/completions"
+auth = { type = "bearer", env = "OPENROUTER_API_KEY" }
+capabilities = { tool_calling = false, json_mode = true, streaming = true, vision = false, structured_outputs = false }
+models.allowed = ["deepseek/deepseek-v4-pro"]
+
+[ai_provider.streaming]
+enabled = true
+delta_path = "$.choices[0].delta.content"
+reasoning_path = "$.choices[0].delta.reasoning_content"
+done_sentinel = "[DONE]"

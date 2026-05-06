@@ -214,6 +214,7 @@ export class RuntimeProcess {
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
       EXA_API_KEY: process.env.EXA_API_KEY,
       AILANG_FS_SANDBOX: workdir,
+      AILANG_NO_VERSION_WARNINGS: "1",
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
     };
     if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
@@ -244,6 +245,9 @@ export class RuntimeProcess {
         aiModelArg,
         "--entry",
         "main",
+        "--quiet",
+        "--emit-trace",
+        "jsonl",
         "--net-allow-http",
         "--net-allow-localhost",
         "src/core/supervisor.ail",
@@ -252,16 +256,11 @@ export class RuntimeProcess {
       ],
       {
         env: childEnv,
-        stdio: ["pipe", "pipe", "inherit"],
+        stdio: ["pipe", "pipe", "pipe"],
       }
     );
 
-    const rl = readline.createInterface({
-      input: this.proc.stdout!,
-      crlfDelay: Infinity,
-    });
-
-    rl.on("line", (line) => {
+    const handleRuntimeLine = (line: string) => {
       const event = parseAgentEventLine(line);
       if (!event) return;
       this.onEvent(event);
@@ -270,7 +269,18 @@ export class RuntimeProcess {
           void this.handleToolCalls(event);
         });
       }
+    };
+
+    // With --emit-trace jsonl, AILANG writes program IO to stderr immediately
+    // and writes semantic trace JSONL to stdout at process end. Drain stdout
+    // without parsing it so trace output cannot block or slow the TUI.
+    this.proc.stdout?.resume();
+
+    const stderrLines = readline.createInterface({
+      input: this.proc.stderr!,
+      crlfDelay: Infinity,
     });
+    stderrLines.on("line", handleRuntimeLine);
 
     this.proc.on("exit", () => {
       this.dead = true;
