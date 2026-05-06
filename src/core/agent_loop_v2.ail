@@ -45,7 +45,7 @@ import src/core/tool_catalog (tools)
 import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_json)
 import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
-import src/core/tool_runtime (backend_for)
+import src/core/tool_runtime (backend_for_v2)
 import src/core/types (Msg, ToolBackend)
 import std/option (Option, Some, None)
 import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
@@ -424,7 +424,7 @@ func dispatch_calls(
                   handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
                 },
                 Delegate => {
-                  let backend = if ohmy_pi then backend_for(envelope, true) else Native;
+                  let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
                   match backend {
                     Delegated => {
                       let _ = emit_json(jo([
@@ -502,7 +502,7 @@ func dispatch_calls(
               -- runs every shell command in-process anyway, just via the
               -- env-server's process supervisor. v2 in standalone mode
               -- runs them in-process directly.
-              let backend = if ohmy_pi then backend_for(envelope, true) else Native;
+              let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
               match backend {
                 Delegated => {
                   let _ = emit_json(jo([

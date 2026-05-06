@@ -885,6 +885,19 @@ func t_normalize_relative_path() -> bool
       && normalize_relative_path("src/core/rpc.ail") == "src/core/rpc.ail"
   }
 
+-- v2-loop variant: file tools always route Native regardless of ohmy_pi config.
+-- The ohMyPi TS dispatcher lacks the wd_bare path guard from f16421c; routing
+-- WriteFile/ReadFile/EditFile through it causes path doubling when the model
+-- emits an absolute path without the leading slash. BashExec/RunTests still
+-- use the normal delegation check (streaming/hard-cancel requirements).
+-- See: design_docs/planned/m-motoko-path-doubling-v2.md
+export pure func backend_for_v2(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBackend {
+  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" then
+    Native
+  else
+    backend_for(call, ohmy_pi)
+}
+
 export func split_by_backend(calls: [ToolCallEnvelope], ohmy_pi: bool) -> { native: [ToolCallEnvelope], delegated: [ToolCallEnvelope] } {
   split_by_backend_rec(calls, [], [], ohmy_pi)
 }

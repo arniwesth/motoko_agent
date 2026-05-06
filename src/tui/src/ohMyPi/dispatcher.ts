@@ -40,7 +40,18 @@ function argEdits(call: DelegatedCall): Array<{ old: string; new: string; replac
 
 function resolvePath(session: OhMyPiSession, p: string): string {
   if (!p) return "";
-  return path.isAbsolute(p) ? p : path.resolve(session.cwd, p);
+  // Reject absolute-without-leading-slash paths (e.g. "Users/mark/.../foo")
+  // that path.resolve would otherwise silently double past the workdir.
+  // Mirrors the wd_bare check in AILANG validate_path_common (commit f16421c).
+  const cwd = session.cwd;
+  const cwdBare = cwd.startsWith("/") ? cwd.slice(1) : cwd;
+  if (cwdBare && p.startsWith(cwdBare + "/")) {
+    throw new Error(`path appears absolute (missing leading slash): ${p}`);
+  }
+  if (path.isAbsolute(p)) {
+    throw new Error(`absolute paths are not allowed: ${p}`);
+  }
+  return path.resolve(cwd, p);
 }
 
 function normalizeRange(start: number, end: number): { start: number; end: number } {
