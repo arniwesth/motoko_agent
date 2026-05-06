@@ -2,7 +2,7 @@ module src/core/tool_runtime
 
 import std/option  (Option, Some, None)
 import std/result  (Result, Ok, Err)
-import std/string  (split, contains, trim, length, startsWith, substring, find)
+import std/string  (split, contains, trim, length, startsWith, endsWith, substring, find)
 import std/list    (reverse)
 import std/json    (Json, jo, get, asString, asNumber, asBool, asArray)
 import std/fs      (readFile, writeFile, fileExists, mkdirAll, isDir, readFileResult, writeFileResult, mkdirAllResult)
@@ -175,7 +175,7 @@ func run_native_call(call: ToolCallEnvelope, read_paths: [string], workdir: stri
   if call.tool == "ReadFile" then
     run_read_file(call.id, arg_string(args, "path", ""), arg_number(args, "start", 1), arg_number(args, "end", 200), workdir)
   else if call.tool == "Search" then
-    run_search(call.id, arg_string(args, "pattern", ""), arg_string(args, "dir", "."))
+    run_search(call.id, arg_string(args, "pattern", ""), arg_string(args, "dir", "."), workdir)
   else if call.tool == "WriteFile" then
     run_write_file(call.id, arg_string(args, "path", ""), arg_string(args, "content", ""), workdir)
   else if call.tool == "EditFile" then
@@ -300,15 +300,24 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
   }
 }
 
+-- Join workdir and a validated-relative path so leaf fs calls operate on the
+-- correct absolute location, not relative to the AILANG runtime's process cwd.
+func resolve_workdir_path(workdir: string, path: string) -> string {
+  if workdir == "" || workdir == "." then path
+  else if endsWith(workdir, "/") then "${workdir}${path}"
+  else "${workdir}/${path}"
+}
+
 func run_read_file(id: string, path: string, start: int, end: int, workdir: string) -> ToolResultItem ! {FS, Process} {
   match validate_path_common("ReadFile", id, path, workdir) {
     Err(e) => e,
-    Ok(_) =>
+    Ok(_) => {
+      let resolved = resolve_workdir_path(workdir, path);
       -- M-AILANG-FS-RESULT (v0.16.0): use readFileResult so transient
       -- failures (file vanished mid-read, permission denied, sandbox
       -- violation) get caught here as a structured ToolErrorResult
       -- instead of escaping as a runtime panic that kills the agent.
-      match readFileResult(path) {
+      match readFileResult(resolved) {
         Err(msg) => ToolErrorResult({ id: id, tool: "ReadFile", message: msg }),
         Ok(content) => {
           let lines = split(content, "\n");
@@ -326,6 +335,7 @@ func run_read_file(id: string, path: string, start: int, end: int, workdir: stri
           })
         }
       }
+    }
   }
 }
 
@@ -367,11 +377,12 @@ func parse_search_lines(lines: [string]) -> [SearchMatch] {
   }
 }
 
-func run_search(id: string, pattern: string, dir: string) -> ToolResultItem ! {Process} {
+func run_search(id: string, pattern: string, dir: string, workdir: string) -> ToolResultItem ! {Process} {
   if pattern == "" then
     ToolErrorResult({ id: id, tool: "Search", message: "missing pattern" })
   else {
-    let target = if dir == "" then "." else dir;
+    let raw_dir = if dir == "" then "." else dir;
+    let target = resolve_workdir_path(workdir, raw_dir);
     match exec("rg", ["-n", "--no-heading", "--color", "never", pattern, target]) {
       Err(err) =>
         ToolErrorResult({ id: id, tool: "Search", message: process_error_to_string(err) }),
@@ -466,20 +477,21 @@ func run_write_file(id: string, path: string, content: string, workdir: string) 
   match validate_path_common("WriteFile", id, path, workdir) {
     Err(e) => e,
     Ok(_) => {
-      let existed_before = fileExists(path);
-      let before = if existed_before then readFile(path) else "";
+      let resolved = resolve_workdir_path(workdir, path);
+      let existed_before = fileExists(resolved);
+      let before = if existed_before then readFile(resolved) else "";
       -- M-AILANG-FS-RESULT (v0.16.0): mkdirAllResult + writeFileResult
       -- catch all syscall failures (missing parent, permission denied,
       -- disk full, sandbox violation, etc.) and wrap them as Err(msg)
       -- which we forward as ToolErrorResult, instead of escaping as a
       -- runtime panic that crashes the agent process.
-      let parent = path_dirname(path);
+      let parent = path_dirname(resolved);
       let mkdir_outcome = if parent != "" && parent != "." && not isDir(parent)
         then mkdirAllResult(parent)
         else Ok(());
       match mkdir_outcome {
         Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", message: "cannot create parent directory: ${msg}" }),
-        Ok(_) => match writeFileResult(path, content) {
+        Ok(_) => match writeFileResult(resolved, content) {
           Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", message: msg }),
           Ok(_) => WriteFileResult({
             id: id,
@@ -634,15 +646,16 @@ func run_edit_file(
 ) -> ToolResultItem ! {FS, Process} {
   match validate_path_common("EditFile", id, path, workdir) {
     Err(e) => e,
-    Ok(_) =>
+    Ok(_) => {
+      let resolved = resolve_workdir_path(workdir, path);
       if not list_contains(read_paths, normalize_relative_path(path)) then
         ToolErrorResult({ id: id, tool: "EditFile", message: "read-before-edit policy violation: call ReadFile for this path before EditFile in the same tool batch" })
-      else if not fileExists(path) then
+      else if not fileExists(resolved) then
         ToolErrorResult({ id: id, tool: "EditFile", message: "path does not exist: ${path}" })
       else if list_len(edits) <= 0 then
         ToolErrorResult({ id: id, tool: "EditFile", message: "missing edits" })
       else {
-        let before = readFile(path);
+        let before = readFile(resolved);
         let before_sha = sha256Hex(before);
         if expected_sha256 != "" && expected_sha256 != before_sha then
           ToolErrorResult({ id: id, tool: "EditFile", message: "expected_sha256 mismatch" })
@@ -666,7 +679,7 @@ func run_edit_file(
                   match_strategy: "exact"
                 })
               else
-                match atomic_write(path, after) {
+                match atomic_write(resolved, after) {
                   Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", message: msg }),
                   Ok(_) =>
                     EditFileResult({
@@ -684,6 +697,7 @@ func run_edit_file(
             }
           }
       }
+    }
   }
 }
 
