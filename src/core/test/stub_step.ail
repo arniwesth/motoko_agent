@@ -1,3 +1,15 @@
+-- Stub step fixture for loop_v2 integration testing without real LLM calls.
+--
+-- Step constructors split into terminators and continuers:
+--
+--   prose_step(text)                          finish_reason="stop"        (terminates loop)
+--   token_step(prose, input, output)          finish_reason="stop"        (terminates loop)
+--   tool_step(tool, args, id)                 finish_reason="tool_calls"  (loop continues)
+--   continuing_token_step(input, output, id)  finish_reason="tool_calls"  (loop continues, with token counts)
+--
+-- For multi-step accumulation tests (cost-budget across N steps,
+-- compaction firing on growing history), use the continuers and pair
+-- with deny_all_rt() so the tool calls don't actually run.
 module src/core/test/stub_step
 
 import std/ai (step, StepResult, ToolCall, Message, AIError)
@@ -116,6 +128,20 @@ export pure func token_step(prose: string, input_tok: int, output_tok: int) -> S
     input_tokens: input_tok,
     output_tokens: output_tok,
     finish_reason: "stop"
+  }
+}
+
+-- A continuing step: emits a tool call so finish_reason="tool_calls" and
+-- the loop iterates, while recording token usage for cost-accumulation tests.
+-- The tool call is a benign no-op suitable for use with deny_all_rt().
+export pure func continuing_token_step(input_tok: int, output_tok: int, step_id: string) -> ScriptedStep {
+  let tc: ToolCall = { id: step_id, name: "BashExec", arguments: "{\"cmd\":\"true\"}" };
+  {
+    prose: "",
+    tool_calls: [tc],
+    input_tokens: input_tok,
+    output_tokens: output_tok,
+    finish_reason: "tool_calls"
   }
 }
 
