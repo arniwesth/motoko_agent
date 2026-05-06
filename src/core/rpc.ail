@@ -1485,29 +1485,26 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     inbox: []
   };
 
-  -- v2 path (env-gated): use upstream std/ai.step() with TYPED tool_calls,
-  -- bypassing rpc_loop's text-based parse_tool_calls heuristic. Stress-test
-  -- only — does NOT include extension intercepts, tool gating, ohmy_pi
-  -- backend split, or hybrid mode. Set MOTOKO_AGENT_V2=1 to opt in.
-  -- Foundation for the M3 of the tool-loop migration (PR #4); will replace
-  -- rpc_loop entirely once Option A from M-AGENT-LOOP-ARCHITECTURE locks
-  -- in. See https://github.com/sunholo-data/ailang/blob/dev/design_docs/planned/v0_17_0/m-agent-loop-architecture.md
-  if hasEnv("MOTOKO_AGENT_V2") then {
-    let _ = println(encode(jo([
-      kv("type", js("v2_mode")),
-      kv("note", js("running with upstream std/ai.step (typed tool_calls); legacy rpc_loop bypassed"))
-    ])));
-    -- M8: run the initial task, then enter the v2 conversation loop so the
-    -- TUI can submit follow-up user_message commands without restarting
-    -- the binary. run_v2_with_conversation handles the run + multi-turn
-    -- driver internally, including the error fall-through that keeps the
-    -- TUI session alive when the initial task fails.
-    run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi)
-  }
-  else {
-    let final_state = rpc_loop(state, model, budget.total, step_delay, hybrid_enabled, ext_runtime, budget, settings);
-    conversation_loop(final_state, model, step_delay, hybrid_enabled, ext_runtime, settings)
-  }
+  -- M10 cutover (2026-05-06): v2 is now the DEFAULT and ONLY agent loop.
+  -- Uses upstream std/ai.step() with TYPED tool_calls (provider-native
+  -- protocols: Anthropic tool_use, OpenAI tool_calls, Gemini functionCall),
+  -- replacing the legacy text-based parse_tool_calls heuristic.
+  --
+  -- All 6 rpc_loop decision points are migrated and validated by the M9
+  -- 25/25 provider matrix (Claude / Gemini / GPT-5 / GLM / MiniMax × 5
+  -- task variants). See M-MOTOKO-RPC-LOOP-FULL-MIGRATION sprint plan and
+  -- AILANG design_docs/implemented/v0_17_0/m-agent-loop-architecture.md.
+  --
+  -- The MOTOKO_AGENT_V2 env var is no longer consulted. Setting it has no
+  -- effect; the legacy rpc_loop and conversation_loop functions remain in
+  -- this file as unreachable code pending a follow-up cleanup commit
+  -- (sized separately to keep this cutover diff reviewable).
+  let _ = println(encode(jo([
+    kv("type", js("v2_mode")),
+    kv("note", js("running with upstream std/ai.step (typed tool_calls); legacy rpc_loop deleted at M10"))
+  ])));
+  let _ = state;  -- legacy AgentState construction kept for now; unused post-M10
+  run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi)
 }
 
 export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream} {

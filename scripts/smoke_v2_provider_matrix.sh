@@ -195,7 +195,8 @@ for provider in $PROVIDERS; do
     # --ai flag separately configures the AI handler/auth that step()
     # routes through.
     ai_flag=$(ai_flag_for "$provider")
-    if MOTOKO_AGENT_V2=1 AILANG_SMOKE_MODEL="$model" ailang run \
+    # MOTOKO_AGENT_V2 is no longer needed (M10 cutover made v2 default).
+    if AILANG_SMOKE_MODEL="$model" ailang run \
          --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
          --ai "$ai_flag" \
          --net-allow-http --net-allow-localhost \

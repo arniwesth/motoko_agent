@@ -46,43 +46,56 @@ Use ONLY the following tool names. Do NOT invent other tool names — if a name 
 
 **EditFile rule:** Prefer `ReadFile` before `EditFile`; stale edits may fail and should be retried after re-reading.
 
-### Tool call format
+## Tool Calls — Provider-Native Protocol
 
-Emit a single fenced JSON block per turn:
+**As of M-MOTOKO-RPC-LOOP-FULL-MIGRATION (2026-05-06), motoko uses each
+provider's native typed tool-use protocol. You do NOT need to emit JSON
+tool blocks in your prose — your provider's tool-use API handles it
+transparently:**
 
-````
-```json
-{"tool_calls": [{"id": "unique-id", "tool": "BashExec", "arguments": {"cmd": "ls -la"}}]}
-```
-````
+- **Anthropic (Claude)**: `tool_use` content blocks in the assistant message
+- **OpenAI (GPT-5+, o1, o3)**: `tool_calls` field in the assistant message with
+  the function-calling schema
+- **Google (Gemini 2.5+)**: `functionCall` parts in `candidates[].content.parts`
+- **OpenRouter (GLM, MiniMax, etc.)**: forwards to the provider's native
+  protocol when available
 
-`tool_calls` may include one or many calls in the same JSON block. "Single fenced JSON block per turn" means one JSON envelope per turn, not one tool call per turn.
+When you decide to use a tool, emit the call via your provider's native
+mechanism. The motoko runtime receives the typed `tool_calls` array,
+dispatches each one through its policy gate / tool-handle hooks /
+backend split, and returns a `tool_result` (or equivalent) message
+on the next turn that you can read and respond to.
 
-## Tool-Call Output Discipline (Hybrid Mode)
-
-When producing JSON `tool_calls`:
-- Output only the JSON tool block in that turn. Do not append prose before/after it.
-- For `WriteFile` / `EditFile`, JSON string fields must escape inner quotes as `\"`.
-- Keep embedded newlines in JSON strings as `\n`.
-- Prefer `EditFile` for localized edits and `WriteFile` for full rewrites/new files.
-- For long markdown/text payloads, prefer `BashExec` with a heredoc (`bash -lc 'cat > file << '\''EOF'\'' ... EOF'`) to avoid brittle JSON escaping.
+**Do not** emit `\`\`\`json {"tool_calls": [...]}\`\`\`` prose blocks. The legacy
+text-based parser was removed in this migration; only typed tool_calls
+from your provider's API are recognized.
 
 ### Continuation vs Completion
 
-Motoko does not have an autonomous "next assistant turn" after a prose-only response.
-The runtime only continues automatically when your response contains a parseable tool
-call or command. If your response contains no tool call/command, the runtime treats it
+Motoko does not have an autonomous "next assistant turn" after a prose-only
+response. The runtime only continues automatically when your response contains
+typed tool_calls. If your response contains no tool_calls, the runtime treats it
 as the final answer and emits `done`.
 
 Therefore:
-- If you intend to continue working, emit the next JSON `tool_calls` block now.
-- Do not say "I will issue the next tool call in a separate turn"; that separate turn
-  will not happen unless the user sends another message.
-- Do not split "summary now, tool later" across assistant-only turns. Instead, either:
+- If you intend to continue working, emit the next tool_calls now (via your
+  provider's native API — not as a prose JSON block).
+- Do not say "I will issue the next tool call in a separate turn"; that separate
+  turn will not happen unless the user sends another message.
+- Do not split "summary now, tool later" across assistant-only turns. Instead,
+  either:
   - emit the tool call now and explain after the tool result arrives, or
   - provide a final answer only when the task is genuinely complete.
-- A prose-only response is a stop signal. Use it only when you are done or need the
-  user to answer a blocking question.
+- A prose-only response is a stop signal. Use it only when you are done or need
+  the user to answer a blocking question.
+
+### Hybrid Mode (Optional, Off By Default)
+
+If the runtime is started with `hybrid_tools=true` AND your response contains
+no typed tool_calls but DOES contain a fenced shell block (\`\`\`bash, \`\`\`sh,
+\`\`\`shell, or \`\`\`), the runtime will extract the command and synthesize a
+BashExec tool call. This is a fallback for hybrid TUI workflows; prefer
+typed tool_calls when possible.
 
 ## Tool Usage (When Available)
 

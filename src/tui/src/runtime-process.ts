@@ -224,14 +224,13 @@ export class RuntimeProcess {
     if (process.env.AILANG_STDLIB_PATH) {
       childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
     }
-    // M3 (tool-loop migration, PR #4): forward MOTOKO_AGENT_V2 to opt into
-    // the upstream std/ai.step() based loop with typed tool_calls. Defaults
-    // to the legacy rpc_loop (text-based parse_tool_calls). Stress-test
-    // only — many fork features (ohmy_pi, extension intercepts, hybrid
-    // mode) are not in v2 yet. See src/core/agent_loop_v2.ail for scope.
-    if (process.env.MOTOKO_AGENT_V2) {
-      childEnv.MOTOKO_AGENT_V2 = process.env.MOTOKO_AGENT_V2;
-    }
+    // M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 cutover (2026-05-06): the
+    // upstream std/ai.step() typed-tool-use loop is now the default and
+    // only loop. The MOTOKO_AGENT_V2 env var is no longer consulted by
+    // the runtime — forwarding has been removed. All 6 legacy decision
+    // points (extension intercept, tool gating, tool-handle routing,
+    // ohmy_pi backend split, hybrid mode, multi-turn conversation_loop)
+    // are migrated and validated by the M9 25/25 provider matrix.
     if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
     if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
 
