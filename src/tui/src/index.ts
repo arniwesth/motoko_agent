@@ -28,6 +28,27 @@ import { SessionLogger } from "./session-logger.js";
 import { activeProfile } from "./config.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
 
+// Like describeToolCall but also checks call.arguments for native dispatch
+// events where path/content etc. are nested in the arguments JSON blob.
+function describeNativeCall(call: DelegatedCall): string {
+  const args = call.arguments ?? {};
+  const path = typeof args.path === "string" ? args.path : call.path;
+  const tool = call.tool ?? "?";
+  const id = call.id ?? "?";
+  if (tool === "ReadFile") {
+    const start = (typeof args.start === "number" ? args.start : call.start) ?? 1;
+    const end = (typeof args.end === "number" ? args.end : call.end) ?? 200;
+    return `${id} ${tool} ${path ?? ""} lines ${start}-${end}`.trim();
+  }
+  if (tool === "Search") {
+    const pattern = typeof args.pattern === "string" ? args.pattern : (call.pattern ?? "");
+    const dir = typeof args.dir === "string" ? args.dir : (call.dir ?? ".");
+    return `${id} ${tool} pattern="${pattern}" dir=${dir}`.trim();
+  }
+  if (path) return `${id} ${tool} ${path}`.trim();
+  return `${id} ${tool}`;
+}
+
 function describeToolCall(call: DelegatedCall): string {
   const id = call.id ?? "unknown";
   const tool = call.tool ?? "unknown";
@@ -310,6 +331,24 @@ class PlainLogger {
             process.stdout.write(`  [${status}] ${r.tool_call_id} exit=${r.exit_code}${r.truncated ? " truncated" : ""}\n`);
           }
         }
+        break;
+      case "native_tool_calls":
+        process.stdout.write(`[native] ${event.request_id} dispatching ${event.tool_calls.length} tool call(s)\n`);
+        for (const call of event.tool_calls) {
+          process.stdout.write(`  [dispatch] ${describeNativeCall(call)}\n`);
+        }
+        break;
+      case "native_tool_results":
+        for (const r of event.results) {
+          const status = (r.exit_code ?? 0) === 0 ? "done" : "failed";
+          process.stdout.write(`  [result] ${r.tool_call_id} exit=${r.exit_code ?? 0}${r.truncated ? " truncated" : ""}\n`);
+        }
+        break;
+      case "v2_tool_dispatch_start":
+        process.stdout.write(`[step ${event.step}] dispatch ${event.tool} id=${event.id}\n`);
+        break;
+      case "v2_tool_dispatch_complete":
+        process.stdout.write(`[step ${event.step}] dispatch_done id=${event.id}\n`);
         break;
     }
   }

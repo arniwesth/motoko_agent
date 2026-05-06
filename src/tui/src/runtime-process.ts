@@ -93,7 +93,9 @@ export type AgentEvent =
   | { type: "tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
   | { type: "tool_results"; request_id: string; phase: ToolResultsPhase; results: DelegatedResult[] }
   | { type: "native_tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
-  | { type: "native_tool_results"; request_id: string; results: NativeToolResult[] };
+  | { type: "native_tool_results"; request_id: string; results: NativeToolResult[] }
+  | { type: "v2_tool_dispatch_start"; step: number; stream_id: string; tool: string; id: string }
+  | { type: "v2_tool_dispatch_complete"; step: number; stream_id: string; id: string };
 
 export function parseAgentEventLine(line: string): AgentEvent | null {
   const trimmed = line.trim();
