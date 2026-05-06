@@ -336,6 +336,16 @@ class JsonlLogger {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // Set the terminal/tab title to "motoko" so VS Code, iTerm2, etc. show
+  // the agent name instead of the underlying runtime ("bun.exe" /
+  // "node"). OSC 0 sets both icon and window title; ST is BEL (\x07) for
+  // maximal compatibility (some terminals don't recognise ST = \x1b\\).
+  // Skip when TTY detection fails (piped output, JSONL mode) so we don't
+  // pollute log streams with the escape bytes.
+  if (process.stdout.isTTY && process.env.MOTOKO_JSONL_OUTPUT !== "1") {
+    process.stdout.write("\x1b]0;motoko\x07");
+  }
+
   const shellEnvKeys = new Set(Object.keys(process.env));
   loadDotEnv(shellEnvKeys);
 
