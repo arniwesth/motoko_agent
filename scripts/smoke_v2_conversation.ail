@@ -1,0 +1,48 @@
+-- scripts/smoke_v2_conversation.ail
+-- M8 smoke test: verifies conversation_loop_v2 handles the canonical
+-- TUI command shapes (abort, exit, model_change, user_message, garbage,
+-- EOF) by directly invoking it against piped stdin.
+--
+-- This smoke does NOT exercise the full run_v2_from_messages path
+-- (would need a model API key + network) — it only verifies that the
+-- conversation loop's command parsing terminates cleanly on abort/exit/
+-- EOF and ignores garbage / unknown commands. That's M8's wiring
+-- contract; the actual run_v2 → loop_v2 path is covered by M3-M7
+-- smokes plus the typed integration runs.
+--
+-- Setup (the key trick is feeding piped input to test EOF termination):
+--   echo '{"type":"abort"}' | ailang run --caps IO,Env,Clock,FS,Process,AI,Net,SharedMem,Stream --entry main scripts/smoke_v2_conversation.ail
+--
+-- Or feed empty input (EOF immediately) to verify clean exit:
+--   : | ailang run --caps IO,Env,Clock,FS,Process,AI,Net,SharedMem,Stream --entry main scripts/smoke_v2_conversation.ail
+
+module scripts/smoke_v2_conversation
+
+import std/io (println)
+import src/core/ext/types (BudgetPlan)
+import src/core/ext/runtime (init_runtime)
+import src/core/agent_loop_v2 (conversation_loop_v2)
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let rt = init_runtime();
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+
+  let _ = println("--- M8 conversation smoke START ---");
+  let _ = println("Calling conversation_loop_v2 with empty history; expects clean exit on abort/exit/EOF.");
+
+  -- Empty initial history. With piped input that contains an abort or
+  -- terminates with EOF, conversation_loop_v2 should return () cleanly.
+  let _ = conversation_loop_v2(
+    rt,
+    "",          -- env_url (empty for smoke)
+    false,       -- hybrid_tools
+    budget,
+    "test-model",
+    [],          -- empty Message history
+    "/tmp",      -- workdir
+    4,           -- step_budget
+    false        -- ohmy_pi
+  );
+
+  println("--- M8 conversation smoke PASS: loop returned cleanly ---")
+}

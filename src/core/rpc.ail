@@ -1,7 +1,7 @@
 module src/core/rpc
 
 import src/core/ai_compat (callStreamResult, AIError)
-import src/core/agent_loop_v2 (run_v2)
+import src/core/agent_loop_v2 (run_v2_with_conversation)
 import std/clock  (sleep)
 import std/env    (hasEnv)
 import std/io     (println, readLine)
@@ -1497,16 +1497,12 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
       kv("type", js("v2_mode")),
       kv("note", js("running with upstream std/ai.step (typed tool_calls); legacy rpc_loop bypassed"))
     ])));
-    let _ = match run_v2(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi) {
-      Ok(_) => (),
-      Err(e) => println(encode(jo([
-        kv("type", js("error")),
-        kv("source", js("agent_loop_v2")),
-        kv("code", js(e.code)),
-        kv("message", js(e.message))
-      ])))
-    };
-    ()
+    -- M8: run the initial task, then enter the v2 conversation loop so the
+    -- TUI can submit follow-up user_message commands without restarting
+    -- the binary. run_v2_with_conversation handles the run + multi-turn
+    -- driver internally, including the error fall-through that keeps the
+    -- TUI session alive when the initial task fails.
+    run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi)
   }
   else {
     let final_state = rpc_loop(state, model, budget.total, step_delay, hybrid_enabled, ext_runtime, budget, settings);
