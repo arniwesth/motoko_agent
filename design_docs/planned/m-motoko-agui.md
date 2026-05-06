@@ -4,7 +4,7 @@
 **Target**: motoko_agent (future minor release; ~1 sprint of dedicated work)
 **Priority**: P3 (architectural; ships when motoko's product strategy benefits from external UI interop)
 **Estimated**: 5-7 days (~30-40 hours)
-**Dependencies**: M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover landed (PR #4 merged); M-MOTOKO-TOOL-POLICY-PENDING and M-MOTOKO-CONVERSATION-COMPACTION landed (both add new event types — see mapping table update below)
+**Dependencies**: M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover landed (PR #4 merged); M-MOTOKO-TOOL-POLICY-PENDING, M-MOTOKO-CONVERSATION-COMPACTION, and M-MOTOKO-COST-BUDGET landed (all add new event types — see mapping table)
 **Surfaced by**: M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 wire-format fixes (2026-05-06); new Pending + compaction events need mapping (2026-05-06)
 
 ## Problem
@@ -51,6 +51,8 @@ Replace motoko's bespoke wire shapes with AG-UI compliant events. Two layers:
 | `ext_tool_handled` / `delegated_tool_deferred` | per-call `TOOL_CALL_RESULT` with structured payload | These collapse — they're just specialised result shapes |
 | `tool_pending` (new — M-MOTOKO-TOOL-POLICY-PENDING) | AG-UI custom event `motoko.TOOL_APPROVAL_REQUESTED` | No AG-UI standard equivalent; human-in-the-loop approval request. Custom namespace prefix preserves schema compliance. |
 | `compaction_exhausted` (new — M-MOTOKO-CONVERSATION-COMPACTION) | `RUN_FINISHED` with `error.code = "ContextExhausted"` | Non-retryable run failure; maps cleanly to error termination |
+| `cost_exhausted` (new — M-MOTOKO-COST-BUDGET) | `RUN_FINISHED` with `error.code = "BudgetExceeded"` | Economic cap hit; non-retryable |
+| `cost_warning` (new — M-MOTOKO-COST-BUDGET) | `motoko.COST_WARNING` custom event | Telemetry-only; fires at 50%/75%/90% of cap. `percent` field carries threshold |
 | `session_start` | `RUN_STARTED` (top-level run) | |
 | `error` (general) | `RUN_FINISHED` with error | |
 
