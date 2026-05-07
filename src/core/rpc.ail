@@ -1,6 +1,6 @@
 module src/core/rpc
 
-import std/ai_motoko (callStreamResult, AIError)
+import src/core/ai_compat (callStreamResult, AIError)
 import std/clock  (sleep)
 import std/io     (println, readLine)
 import std/option (Option, Some, None)
@@ -70,9 +70,18 @@ func json_string_values(xs: [string]) -> [Json] {
   }
 }
 
+-- AILANG v0.15.x migration regression: the fork's `_io_poll_stdin()` builtin
+-- (non-blocking stdin read) doesn't exist upstream. The stdin-polling abort
+-- + model-change feature relied on it. As a temporary workaround, this stub
+-- returns None (no pending control command), which means:
+--   - The agent CANNOT be aborted mid-turn via stdin "abort" message
+--   - The agent CANNOT receive runtime model changes via stdin
+-- Other control paths (fault-tolerant retries, normal turn completion) work.
+-- Tracked as a separate concern from the main streaming migration; needs
+-- either an upstream `_io_poll_stdin` builtin or a non-blocking-read
+-- equivalent built atop `std/process` polling (sigtimedwait pattern).
 func poll_cmd() -> Option[string] ! {IO} {
-  let line = _io_poll_stdin(());
-  if line == "" then None else Some(trim(line))
+  None
 }
 
 func emit_context_usage(state: AgentState, model: string) -> () ! {IO} {

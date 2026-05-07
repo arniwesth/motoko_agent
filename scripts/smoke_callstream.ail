@@ -1,0 +1,33 @@
+-- scripts/smoke_callstream.ail
+-- End-to-end smoke test for the v0.15.x AILANG migration.
+--
+-- Exercises:
+--   - The new src/core/ai_compat.callStreamResult shim
+--   - The [[ai_provider]] block named "motoko-or" in ailang.toml
+--   - The upstream std/ai/streaming.callStream accumulator (v0.15.1+)
+--   - GLM-5 via OpenRouter (best-performing OS model on AILANG benchmark)
+--
+-- Run from motoko_agent root:
+--   export OPENROUTER_API_KEY=...
+--   ailang run --caps AI,Stream,Net,IO --entry main scripts/smoke_callstream.ail
+
+module scripts/smoke_callstream
+
+import std/io (println)
+import src/core/ai_compat (callStreamResult)
+
+export func main() -> () ! {AI, Stream, Net, IO} {
+  let prompt = "Reply with exactly the four words: hello from glm five." in
+  let result = callStreamResult(prompt, 0, "smoke-test", "openrouter/z-ai/glm-5") in
+  if result.ok then {
+    println("=== OK ===");
+    println(result.output);
+    println("=== END ===")
+  } else {
+    println("=== ERR ===");
+    println("code: ${result.error_code}");
+    println("message: ${result.error_message}");
+    println("provider: ${result.provider}");
+    println("=== END ===")
+  }
+}

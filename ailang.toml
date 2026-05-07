@@ -3,9 +3,36 @@ name = "local/motoko_agent"
 version = "0.1.0"
 edition = "1"
 module_prefix = "src"
+ailang = ">=0.15.2"
 
 [dependencies]
 "sunholo/logging" = "0.4.0"
 
 [effects]
 max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex"]
+
+# OpenRouter provider for streaming (M-AI-PROVIDER-CONFIG, v0.15.0+).
+# All "openrouter/<model>" strings the agent accepts route through this block;
+# the compat shim in src/core/ai_compat strips the "openrouter/" prefix before
+# calling std/ai/streaming.callStream.
+#
+# Verified working with z-ai/glm-5 (best-performing OS model on the AILANG
+# benchmark suite, 85.3% success rate at $0.60/M input · $2.08/M output).
+# Other OpenRouter-routed models (anthropic/claude-sonnet-4-5, meta-llama/...)
+# work with the same block — OpenRouter dispatches per the model identifier.
+[[ai_provider]]
+schema_version = 1
+name = "motoko-or"
+endpoint = "https://openrouter.ai/api/v1/chat/completions"
+request_shape = "openai_chat"
+response_path = "$.choices[0].message.content"
+auth = { type = "bearer", env = "OPENROUTER_API_KEY" }
+auth_headers = { HTTP-Referer = "https://github.com/arniwesth/motoko_agent", X-Title = "motoko_agent" }
+cost = { input_per_1m_usd = 0.60, output_per_1m_usd = 2.08 }
+capabilities = { tool_calling = true, json_mode = true, streaming = true, vision = false, structured_outputs = false }
+
+[ai_provider.streaming]
+enabled = true
+delta_path = "$.choices[0].delta.content"
+reasoning_path = "$.choices[0].delta.reasoning_content"
+done_sentinel = "[DONE]"

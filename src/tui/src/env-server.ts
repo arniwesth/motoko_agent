@@ -636,24 +636,41 @@ export function startEnvServer(port: number, workdir: string): void {
     snippetCounter++;
     const name = `subagent_stream_${snippetCounter}_${Date.now()}`;
     const path = join(snippetDir, `${name}.ail`);
+    // AILANG v0.15.1 migration: previously this template imported
+    // `std/ai_motoko.callStreamResult` (fork-only API). Upstream replaces
+    // it with `std/ai/streaming.callStream` which routes through the
+    // [[ai_provider]] block named "motoko-or" in the project's ailang.toml.
+    // The generated subagent runs from a temp dir so it cannot import
+    // motoko_agent's src/core/ai_compat shim — it talks to upstream
+    // callStream directly and constructs the OpenAI-shape messages JSON
+    // inline.
     const code = [
       `module tmp/${name}`,
       "",
-      "import std/ai_motoko (callStreamResult)",
+      "import std/ai/streaming (callStream)",
       "import std/io (println)",
       "import std/env (getEnvOr)",
-      "import std/json (encode, jo, kv, js, jb)",
+      "import std/json (encode, jo, ja, kv, js, jb)",
+      "import std/result (Ok, Err)",
       "",
-      "export func main() -> () ! {IO, AI, Env} {",
+      "export func main() -> () ! {IO, AI, Stream, Net, Env} {",
       "  let prompt = getEnvOr(\"MOTOKO_SUBAGENT_PROMPT\", \"\");",
       "  let model = getEnvOr(\"MOTOKO_SUBAGENT_MODEL\", \"\");",
       "  let streamId = getEnvOr(\"MOTOKO_SUBAGENT_STREAM_ID\", \"compose-author\");",
-      "  let r = callStreamResult(prompt, 0, streamId, model);",
-      "  println(\"__SUBAGENT_RESULT_JSON__${encode(jo([",
-      "    kv(\"ok\", jb(r.ok)),",
-      "    kv(\"output\", js(r.output)),",
-      "    kv(\"error_message\", js(r.error_message))",
-      "  ]))}\")",
+      "  let userMsg = jo([kv(\"role\", js(\"user\")), kv(\"content\", js(prompt))]);",
+      "  let messages = encode(ja([userMsg]));",
+      "  match callStream(\"motoko-or\", model, messages) {",
+      "    Ok(text) => println(\"__SUBAGENT_RESULT_JSON__${encode(jo([",
+      "      kv(\"ok\", jb(true)),",
+      "      kv(\"output\", js(text)),",
+      "      kv(\"error_message\", js(\"\"))",
+      "    ]))}\"),",
+      "    Err(e) => println(\"__SUBAGENT_RESULT_JSON__${encode(jo([",
+      "      kv(\"ok\", jb(false)),",
+      "      kv(\"output\", js(\"\")),",
+      "      kv(\"error_message\", js(e.message))",
+      "    ]))}\")",
+      "  }",
       "}",
       "",
     ].join("\n");
