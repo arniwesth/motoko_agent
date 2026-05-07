@@ -20,6 +20,7 @@ module src/core/tool_catalog
 
 import std/ai (ToolSchema)
 import std/list as List (length)
+import src/core/config (VerificationConfig)
 import src/core/ext/types (ExtRuntime, ExtensionHooks)
 
 -- Each schema's `parameters` field is a JSON-Schema-shaped string. To keep
@@ -126,7 +127,8 @@ pure func test_base_tools_count() -> bool
 pure func test_no_extensions_returns_base_tools() -> bool
   tests [((), true)]
   {
-    let rt: ExtRuntime = { registry: { hooks: [] }, strict_mode: false, verification: { enabled: false, command: "make check_core" } };
+    let v: VerificationConfig = { enabled: false, command: "make check_core" };
+    let rt: ExtRuntime = { registry: { hooks: [] }, strict_mode: false, verification: v };
     List.length(tools_with_extensions(rt)) == 6
   }
 

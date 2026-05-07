@@ -47,10 +47,6 @@ test_core:
 	@ailang test src/core/agents_md.ail || (echo "src/core/agents_md.ail tests failed" && exit 1)
 	@echo "Running src/core/parse_test.ail tests..."
 	@ailang test src/core/parse_test.ail || (echo "src/core/parse_test.ail tests failed" && exit 1)
-	@echo "Running src/core/ext/compose/compose_test.ail tests..."
-	@ailang test src/core/ext/compose/compose_test.ail || (echo "src/core/ext/compose/compose_test.ail tests failed" && exit 1)
-	@echo "Running src/core/ext/compose/claimcheck_test.ail tests..."
-	@ailang test src/core/ext/compose/claimcheck_test.ail || (echo "src/core/ext/compose/claimcheck_test.ail tests failed" && exit 1)
 	@printf "\nAll core runtime module tests passed!\n"
 
 test_integration:

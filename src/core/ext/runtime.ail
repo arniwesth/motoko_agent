@@ -6,7 +6,7 @@ import std/json (encode, jo, kv, js, jnum)
 import std/option (Option, Some, None)
 import std/string (startsWith)
 import src/core/tool_contract (ToolCallEnvelope)
-import src/core/config (RuntimeConfig)
+import src/core/config (RuntimeConfig, VerificationConfig)
 import src/core/ext/types (
   BudgetPlan,
   ExtCtx,
@@ -31,7 +31,8 @@ export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, F
 }
 
 export func init_runtime() -> ExtRuntime ! {Env, FS} {
-  { registry: { hooks: [] }, strict_mode: false, verification: { enabled: false, command: "make check_core" } }
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { hooks: [] }, strict_mode: false, verification: v }
 }
 
 func join_order(xs: [string]) -> string {
@@ -350,7 +351,8 @@ func smoke_hook_b() -> ExtensionHooks {
 func dispatch_smoke_record_hooks() -> bool
   tests [((), true)]
   {
-    let rt = { registry: { hooks: [smoke_hook_a(), smoke_hook_b()] }, strict_mode: false, verification: { enabled: false, command: "make check_core" } };
+    let vsmoke: VerificationConfig = { enabled: false, command: "make check_core" };
+    let rt = { registry: { hooks: [smoke_hook_a(), smoke_hook_b()] }, strict_mode: false, verification: vsmoke };
     let ctx = smoke_ctx();
     let prompt_ok = dispatch_build_system_prompt(rt, ctx, "BASE") == "BASE\nA\nB";
     let budget = dispatch_budget_plan(rt, ctx, { total: 10, solver: 6, verifier: 4 });
@@ -430,7 +432,8 @@ func dispatch_pending_hook() -> bool
       on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
       on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
     };
-    let rt = { registry: { hooks: [pending_hook] }, strict_mode: false, verification: { enabled: false, command: "make check_core" } };
+    let vpending: VerificationConfig = { enabled: false, command: "make check_core" };
+    let rt = { registry: { hooks: [pending_hook] }, strict_mode: false, verification: vpending };
     let ctx = smoke_ctx();
     match dispatch_tool_policy(rt, ctx, { id: "p", tool: "WriteFile", arguments: jo([]) }) {
       Pending(reason, DenyAfterTimeout) => reason == "write outside cwd",
