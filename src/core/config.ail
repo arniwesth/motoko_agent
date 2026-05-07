@@ -106,6 +106,11 @@ export type OmnigraphConfig = {
   timeout_ms: int
 }
 
+export type VerificationConfig = {
+  enabled: bool,
+  command: string
+}
+
 export type CliOverrides = {
   profile: string,
   model: string,
@@ -136,6 +141,7 @@ export type RuntimeConfig = {
   exa_search: ExaSearchConfig,
   omnigraph: OmnigraphConfig,
   cost_rates: CostRates,
+  verification: VerificationConfig,
   warnings: [string]
 }
 
@@ -424,6 +430,14 @@ func load_cost_rates(core: Json) -> CostRates {
   }
 }
 
+func load_verification(core: Json) -> VerificationConfig {
+  let v = object_at(core, "verification");
+  {
+    enabled: json_bool(v, "enabled", false),
+    command: json_string(v, "command", "make check_core")
+  }
+}
+
 func apply_agent_cli(agent: AgentConfig, cli: CliOverrides) -> AgentConfig {
   {
     agent |
@@ -483,6 +497,7 @@ export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO
     exa_search: load_exa_search(exa_search),
     omnigraph: load_omnigraph(omnigraph),
     cost_rates: load_cost_rates(core),
+    verification: load_verification(core),
     warnings: warnings_for(profile_dir, workdir)
   }
 }

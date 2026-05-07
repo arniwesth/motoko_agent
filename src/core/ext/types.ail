@@ -4,6 +4,7 @@ import std/option (Option)
 import std/ai (ToolSchema)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
+import src/core/config (VerificationConfig)
 
 export type BudgetPlan = { total: int, solver: int, verifier: int }
 
@@ -80,7 +81,8 @@ export type ExtRegistry = {
 
 export type ExtRuntime = {
   registry: ExtRegistry,
-  strict_mode: bool
+  strict_mode: bool,
+  verification: VerificationConfig
 }
 
 export type ToolDecisionEnvelope = {

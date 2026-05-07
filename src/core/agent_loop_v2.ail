@@ -39,9 +39,8 @@ import std/io (println, readLine)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
-import std/string (trim, startsWith, substring, contains)
+import std/string (trim, startsWith, substring)
 import std/string as Str (length)
-import std/fs (fileExists)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
 import src/core/tool_catalog (tools_with_extensions)
@@ -581,26 +580,20 @@ type FinalizeVerification
   = Approve
   | Reject(string)
 
-func run_dp7_verifier(workdir: string) -> FinalizeVerification ! {Process, FS} {
-  if not fileExists("${workdir}/Makefile") then Approve
+func run_dp7_verifier(rt: ExtRuntime, workdir: string) -> FinalizeVerification ! {Process} {
+  if not rt.verification.enabled then Approve
   else
-    match exec("bash", ["-c", "cd \"$1\" && make check_core 2>&1", "_dp7", workdir]) {
+    match exec("bash", ["-c", "cd \"$1\" && ${rt.verification.command} 2>&1", "_dp7", workdir]) {
       Err(_) => Approve,
       Ok(out) => {
         if out.exitCode == 0 then Approve
-        else {
-          let output = toString(out.stdout);
-          if contains(output, "No rule to make target")
-            || contains(output, "no makefile found")
-            || contains(output, "No targets specified") then Approve
-          else Reject(output)
-        }
+        else Reject(toString(out.stdout))
       }
     }
 }
 
-func dp7_gate(workdir: string, step_idx: int) -> Option[Message] ! {Process, FS, IO} {
-  match run_dp7_verifier(workdir) {
+func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int) -> Option[Message] ! {Process, IO} {
+  match run_dp7_verifier(rt, workdir) {
     Approve => None,
     Reject(errors) => {
       let _ = emit_json(jo([
@@ -783,7 +776,7 @@ func loop_v2(
               --   NoDecision               => emit done with the model's own content
               match dispatch_solver_candidate(rt, ctx, result.message.content) {
                 Accept(output) => {
-                  match dp7_gate(workdir, step_idx) {
+                  match dp7_gate(rt, workdir, step_idx) {
                     None => {
                       let _ = emit_json(jo([
                         kv("type", js("done")),
@@ -815,7 +808,7 @@ func loop_v2(
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct, next_provider)
                 },
                 NoDecision => {
-                  match dp7_gate(workdir, step_idx) {
+                  match dp7_gate(rt, workdir, step_idx) {
                     None => {
                       let _ = emit_json(jo([
                         kv("type", js("done")),

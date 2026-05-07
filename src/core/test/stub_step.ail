@@ -150,7 +150,7 @@ export pure func continuing_token_step(input_tok: int, output_tok: int, step_id:
 -- No-op ExtRuntime for integration tests.
 -- Returns an empty extension registry with no hooks.
 export pure func empty_rt() -> ExtRuntime {
-  { registry: { hooks: [] }, strict_mode: false }
+  { registry: { hooks: [] }, strict_mode: false, verification: { enabled: false, command: "make check_core" } }
 }
 
 -- ExtRuntime for integration tests that denies all tool calls.
@@ -185,5 +185,5 @@ export func deny_all_rt() -> ExtRuntime {
     on_response_intercept: no_intercept,
     on_solver_candidate: no_solver
   };
-  { registry: { hooks: [hooks] }, strict_mode: false }
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: { enabled: false, command: "make check_core" } }
 }
