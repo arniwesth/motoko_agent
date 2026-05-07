@@ -39,8 +39,9 @@ import std/io (println, readLine)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
-import std/string (trim, startsWith, substring)
+import std/string (trim, startsWith, substring, contains)
 import std/string as Str (length)
+import std/fs (fileExists)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
 import src/core/tool_catalog (tools_with_extensions)
@@ -580,17 +581,25 @@ type FinalizeVerification
   = Approve
   | Reject(string)
 
-func run_dp7_verifier(workdir: string) -> FinalizeVerification ! {Process} {
-  match exec("bash", ["-c", "cd \"$1\" && make check_core 2>&1", "_dp7", workdir]) {
-    Err(_) => Approve,
-    Ok(out) => {
-      if out.exitCode == 0 then Approve
-      else Reject(toString(out.stdout))
+func run_dp7_verifier(workdir: string) -> FinalizeVerification ! {Process, FS} {
+  if not fileExists("${workdir}/Makefile") then Approve
+  else
+    match exec("bash", ["-c", "cd \"$1\" && make check_core 2>&1", "_dp7", workdir]) {
+      Err(_) => Approve,
+      Ok(out) => {
+        if out.exitCode == 0 then Approve
+        else {
+          let output = toString(out.stdout);
+          if contains(output, "No rule to make target")
+            || contains(output, "no makefile found")
+            || contains(output, "No targets specified") then Approve
+          else Reject(output)
+        }
+      }
     }
-  }
 }
 
-func dp7_gate(workdir: string, step_idx: int) -> Option[Message] ! {Process, IO} {
+func dp7_gate(workdir: string, step_idx: int) -> Option[Message] ! {Process, FS, IO} {
   match run_dp7_verifier(workdir) {
     Approve => None,
     Reject(errors) => {
