@@ -19,7 +19,7 @@ import pkg/sunholo/motoko_ext_mcp/mcp (McpConfig, McpServerDef, parse_mcp_config
 pure func a2a_hooks_have_correct_id() -> bool
   tests [((), true)]
   {
-    let cfg: A2AConfig = { agents: [{ name: "planner", url: "http://localhost:7070", description: "Planning agent" }] };
+    let cfg: A2AConfig = { agents: [{ name: "planner", url: "http://localhost:7070", description: "Planning agent", skill_id: "main.handle_plan" }] };
     let hooks = a2a_make_hooks(cfg);
     hooks.id == "a2a"
   }
@@ -29,8 +29,8 @@ pure func a2a_tools_roundtrip_from_config() -> bool
   {
     let cfg: A2AConfig = {
       agents: [
-        { name: "search",    url: "http://localhost:8080", description: "Search agent" },
-        { name: "summarize", url: "http://localhost:9090", description: "Summarizer" }
+        { name: "search",    url: "http://localhost:8080", description: "Search agent", skill_id: "main.handle_search" },
+        { name: "summarize", url: "http://localhost:9090", description: "Summarizer", skill_id: "main.handle_summary" }
       ]
     };
     let hooks = a2a_make_hooks(cfg);

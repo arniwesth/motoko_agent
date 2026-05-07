@@ -19,8 +19,8 @@ pure func tool_names_are_prefixed() -> bool
   tests [((), true)]
   {
     let agents: [A2AAgent] = [
-      { name: "hello", url: "http://localhost:8080", description: "Hello agent" },
-      { name: "summarizer", url: "http://localhost:9090", description: "Summarizer" }
+      { name: "hello", url: "http://localhost:8080", description: "Hello agent", skill_id: "main.handle_hello" },
+      { name: "summarizer", url: "http://localhost:9090", description: "Summarizer", skill_id: "main.handle_summary" }
     ];
     let cfg: A2AConfig = { agents: agents };
     let hooks = make_hooks(cfg);
@@ -36,7 +36,7 @@ pure func describe_tools_returns_schemas() -> bool
   tests [((), true)]
   {
     let agents: [A2AAgent] = [
-      { name: "planner", url: "http://localhost:7070", description: "Planning agent" }
+      { name: "planner", url: "http://localhost:7070", description: "Planning agent", skill_id: "main.handle_plan" }
     ];
     let cfg: A2AConfig = { agents: agents };
     let hooks = make_hooks(cfg);
