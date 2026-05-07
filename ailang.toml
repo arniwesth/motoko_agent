@@ -15,6 +15,7 @@ ailang = ">=0.16.1"
 "sunholo/motoko_ext_exa_search" = { path = "../ailang-packages/packages/motoko-ext-exa-search" }
 "sunholo/motoko_ext_ai_compat" = { path = "../ailang-packages/packages/motoko-ext-ai-compat" }
 "sunholo/motoko_ext_compose"   = { path = "../ailang-packages/packages/motoko-ext-compose" }
+"sunholo/motoko_ext_a2a"       = { path = "../ailang-packages/packages/motoko-ext-a2a" }
 
 [extensions]
 packages      = [
@@ -24,6 +25,7 @@ packages      = [
   "sunholo/motoko_ext_mcp@0.1.0",
   "sunholo/motoko_ext_exa_search@0.1.0",
   "sunholo/motoko_ext_compose@0.1.0",
+  "sunholo/motoko_ext_a2a@0.1.0",
 ]
 config_import   = "src/core/config.RuntimeConfig"
 hooks_import    = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
@@ -31,7 +33,7 @@ registry_import = "src/core/ext/types.ExtRegistry"
 output          = "src/core/ext/registry_generated.ail"
 
 [effects]
-max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex"]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex", "Rand"]
 
 # OpenRouter provider for streaming (M-AI-PROVIDER-CONFIG, v0.15.0+).
 # All "openrouter/<model>" strings the agent accepts route through this block;
