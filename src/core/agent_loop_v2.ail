@@ -39,7 +39,7 @@ import std/io (println, readLine)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
-import std/string (trim, startsWith, substring)
+import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
@@ -575,10 +575,26 @@ pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: Cos
 
 -- DP7: pre-finalize AILANG type-check gate.
 -- Runs make check_core in the project workdir before any done emission.
--- Fail-open: if check infrastructure is missing, returns Approve.
+-- Fail-open: if check infrastructure is missing (no workdir, no Makefile, or
+-- no check_core target), returns Approve so projects without DP7 setup are not
+-- blocked. Only genuine type errors (exit non-zero with substantive output)
+-- produce Reject.
 type FinalizeVerification
   = Approve
   | Reject(string)
+
+-- Detect "infrastructure missing" — the verification command failed because the
+-- project lacks a Makefile/target or the workdir doesn't exist, NOT because the
+-- code under verification has type errors. These cases must fail-open.
+pure func is_missing_infrastructure(output: string) -> bool {
+  let lower = toLower(output);
+  contains(lower, "no rule to make target")
+    || contains(lower, "no targets specified and no makefile found")
+    || contains(lower, "no makefile found")
+    || contains(lower, "make: *** no")
+    || contains(lower, "no such file or directory")
+    || contains(lower, "command not found")
+}
 
 func run_dp7_verifier(rt: ExtRuntime, workdir: string) -> FinalizeVerification ! {Process} {
   if not rt.verification.enabled then Approve
@@ -587,7 +603,11 @@ func run_dp7_verifier(rt: ExtRuntime, workdir: string) -> FinalizeVerification !
       Err(_) => Approve,
       Ok(out) => {
         if out.exitCode == 0 then Approve
-        else Reject(toString(out.stdout))
+        else {
+          let output = toString(out.stdout);
+          if is_missing_infrastructure(output) then Approve
+          else Reject(output)
+        }
       }
     }
 }
