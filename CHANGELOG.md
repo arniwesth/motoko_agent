@@ -6,6 +6,38 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Added (M-MOTOKO-EVAL-INSTRUMENTATION — 2026-05-07)
+
+Session JSONL gains schema-v1 instrumentation so downstream eval harnesses (AILANG `internal/executor/motoko/`, post-run analysis) can extract per-step token + cost data without needing a separate metrics endpoint. Strictly additive — existing consumers ignore new fields and keep working.
+
+**Schema v1 surface** (per-event metadata):
+- `schema_version: "1"` on every event — forward-compat marker
+- `session_id` top-level field — derived from `MOTOKO_SESSION_ID` env var (preferred, matches filename) or fallback `session_${now()}`
+- Per-step `thinking` events gain `input_tokens`, `output_tokens`, `cost_usd`
+- `cost_warning` events gain `total_cost_usd` (alongside existing `_millicents`)
+- `cost_exhausted` events gain `total_cost_usd`
+- `session_start` gains top-level `motoko_commit` (build-time const, "dev" fallback)
+
+**New `run_summary` terminal event** — always emitted on every termination path (success, Err, cost_exhausted, compaction_exhausted, max_steps, streaming-error). Carries: `model`, `motoko_commit`, `finish_reason` (`stop` | `cost_exhausted` | `dp7_rejected` | `compaction_exhausted` | `max_steps` | `error`), `steps_executed`, `usage: { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, total_tokens }` (cache fields omitted when upstream provider doesn't surface them), `total_cost_usd` (float, derived from millicents) + `total_cost_millicents` (int), `duration_ms` (wall-clock from `started_at_ms` to terminal), `error` (empty string on success; failure message otherwise).
+
+**Implementation** (`src/core/agent_loop_v2.ail`, +~250 LOC):
+- New helpers: `schema_version`, `motoko_commit`, `millicents_to_usd`, `emit_event`, `emit_run_summary`, `derive_session_id`, `per_step_usage_kvs`, `finish_reason_str`, `zero_totals`
+- New `LoopTotals` record bundles cumulative token/cost state — threaded through `loop_v2` recursion (replaces 2 scalar params, prepares for future totals additions without param churn)
+- `loop_v2` signature gains `session_id`, `started_at_ms`, `totals` (now passes `LoopTotals` instead of scalar `total_cost_millicents` + `cost_warned_pct`)
+- `dispatch_calls` and `dp7_gate` gain `session_id` so all event emissions thread through the same envelope helper
+- All 30+ `emit_json(jo([...]))` sites migrated to `emit_event(session_id, "type", [...])`
+- 6 inline pure tests (`test_schema_version_is_one`, `test_millicents_to_usd_*`, `test_finish_reason_str_table`, `test_zero_totals_initializes_clean`)
+
+**Snapshot fixture**: `examples/fixtures/eval_session_v1.jsonl` — canonical 15-event session demonstrating the schema. Future schema changes must update the fixture in the same PR.
+
+**Deferred to v1.1**:
+- Cache token plumbing (`cache_read_input_tokens` / `cache_creation_input_tokens`) — `std/ai.step` doesn't surface upstream cache-token data today; will land when AILANG-side support arrives
+- Build-time `motoko_commit` injection via Makefile `-ldflags` — currently hardcoded to `"dev"`; trivial to wire up but not blocking
+
+**Why now**: AILANG's planned [M-MOTOKO-EXECUTOR-ADAPTER](https://github.com/sunholo-data/ailang/blob/dev/design_docs/planned/v0_18_0/m-motoko-executor-adapter.md) needs structured token/cost data to populate `Result.CostUSD` / `Result.InputTokens`. Without this work, motoko on the eval leaderboard would appear "free" and "tokenless" — making the threshold-measurement experiment that is the strategic point of the adapter useless.
+
+Design doc: [`design_docs/planned/m-motoko-eval-instrumentation.md`](design_docs/planned/m-motoko-eval-instrumentation.md).
+
 ### Fixed (M-MOTOKO-WORKDIR-CWD-RESOLUTION — 2026-05-06)
 
 Dispatcher `workdir` argument is now correctly applied to all filesystem

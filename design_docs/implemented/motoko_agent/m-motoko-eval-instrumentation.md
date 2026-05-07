@@ -1,8 +1,9 @@
 # M-MOTOKO-EVAL-INSTRUMENTATION — JSONL schema for downstream eval harnesses
 
-**Status**: Planned
+**Status**: Implemented (2026-05-07)
 **Priority**: P0 — **blocking** AILANG's M-MOTOKO-EXECUTOR-ADAPTER (the executor adapter cannot populate `Result.CostUSD` / `Result.InputTokens` without these emissions)
 **Estimated effort**: 0.5–1 day (~4–6 hours, ~80–120 LOC of `agent_loop_v2.ail` edits + tests)
+**Actual effort**: ~3 hours; ~250 LOC of `agent_loop_v2.ail` edits + 6 inline tests + snapshot fixture (larger than estimated due to LoopTotals record refactor and `emit_event` helper threading through `dispatch_calls` + `dp7_gate` + `conversation_loop_v2`).
 **Dependencies**: `motoko-dx-compaction-pending` branch (lands as part of PR #6 against `arniwesth/motoko_agent`)
 **Target**: motoko v0.6.x (within current PR cycle)
 **Source**: AILANG sprint planning session 2026-05-07; identified during M-MOTOKO-EXECUTOR-ADAPTER design review when actual session JSONL was inspected and found to lack per-step token/cost data and a terminal totals event.

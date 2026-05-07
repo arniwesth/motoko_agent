@@ -36,6 +36,8 @@ module src/core/agent_loop_v2
 
 import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError)
 import std/io (println, readLine)
+import std/clock (now)
+import std/env (getEnvOr)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
@@ -74,6 +76,129 @@ func strip_provider_prefix(model: string) -> string {
 -- Same protocol as src/core/ai_compat (M-AI-CALL-STREAM-HELPER side).
 func emit_json(payload: Json) -> () ! {IO} {
   println(encode(payload))
+}
+
+-- M-MOTOKO-EVAL-INSTRUMENTATION (schema v1):
+-- The session JSONL is the single structured-output surface for downstream
+-- consumers (TUI replay, AILANG eval-harness adapter, post-run analysis).
+-- Schema v1 = additive metadata on every event (schema_version + session_id)
+-- + per-step token/cost telemetry + a terminal `run_summary` event with
+-- cumulative totals. Documented at:
+--   design_docs/planned/m-motoko-eval-instrumentation.md
+-- Bumping this string is a breaking change for downstream parsers.
+pure func schema_version() -> string { "1" }
+
+-- Build-time constant injected by `make build` (Makefile sets -ldflags or
+-- equivalent). Falls back to "dev" for local-source runs. Surfaced in
+-- session_start + run_summary so the AILANG eval harness can correlate
+-- benchmark results with the exact motoko commit that produced them
+-- (mitigates "self-referential masking" — see eval-instrumentation design
+-- doc Risk #4).
+pure func motoko_commit() -> string { "dev" }
+
+-- Convert millicents (integer arithmetic, used internally by the cost
+-- tracker) to USD float. 100000 millicents = $1.00.
+pure func millicents_to_usd(mc: int) -> float {
+  _int_to_float(mc) / 100000.0
+}
+
+-- Cumulative token/cost totals threaded through loop_v2 recursion. Bundled
+-- into a single record (vs 6 extra params) so adding new totals later (e.g.
+-- reasoning tokens) doesn't require touching every call site again.
+type LoopTotals = {
+  input_tokens: int,
+  output_tokens: int,
+  cache_read: int,
+  cache_creation: int,
+  cost_millicents: int,
+  cost_warned_pct: int
+}
+
+pure func zero_totals() -> LoopTotals {
+  { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0 }
+}
+
+-- Emit a schema-v1 event: prepends schema_version + session_id + type to
+-- the caller's `extra` kv list. Use this for ALL new emissions; existing
+-- emit_json sites are migrated to emit_event in M1.
+func emit_event(session_id: string, event_type: string, extra: [{key: string, value: Json}]) -> () ! {IO} {
+  emit_json(jo([
+    kv("schema_version", js(schema_version())),
+    kv("session_id",     js(session_id)),
+    kv("type",           js(event_type))
+  ] ++ extra))
+}
+
+-- Derive a session_id from MOTOKO_SESSION_ID env var (set by the TS wrapper
+-- to match the JSONL filename) or fall back to a now()-derived id. The
+-- wrapper-set form is preferred so the JSONL session_id matches the
+-- filename consumers grep for.
+func derive_session_id() -> string ! {Env, Clock} {
+  let env_id = getEnvOr("MOTOKO_SESSION_ID", "");
+  if env_id != "" then env_id
+  else "session_${show(now())}"
+}
+
+-- Build the standard kv-list emitted on every per-step event that has
+-- StepResult tokens in scope. `cost_step_mc` is the per-step millicents
+-- (computed from result.input_tokens/output_tokens × cost_rates).
+func per_step_usage_kvs(result: StepResult, cost_step_mc: int) -> [{key: string, value: Json}] {
+  [kv("input_tokens",  jnum(_int_to_float(result.input_tokens))),
+   kv("output_tokens", jnum(_int_to_float(result.output_tokens))),
+   kv("cost_usd",      jnum(millicents_to_usd(cost_step_mc)))]
+}
+
+-- Map a finish_reason variant to its JSONL string. Single source of truth
+-- so the run_summary's finish_reason values stay consistent across all 6
+-- termination paths.
+pure func finish_reason_str(r: int) -> string {
+  if r == 0 then "stop"
+  else if r == 1 then "cost_exhausted"
+  else if r == 2 then "dp7_rejected"
+  else if r == 3 then "compaction_exhausted"
+  else if r == 4 then "max_steps"
+  else "error"
+}
+
+-- Build and emit a schema-v1 run_summary event. Always emitted on every
+-- termination path (success, Err, cost_exhausted, dp7_rejected,
+-- compaction_exhausted, max_steps) so downstream eval harnesses get
+-- partial totals on crash and never see a "missing totals" case.
+func emit_run_summary(
+  session_id: string,
+  model: string,
+  totals: LoopTotals,
+  steps_executed: int,
+  finish_code: int,
+  error_msg: string,
+  started_at_ms: int
+) -> () ! {IO, Clock} {
+  let now_ms = now();
+  let duration = now_ms - started_at_ms;
+  let total_tokens = totals.input_tokens + totals.output_tokens;
+  let usage_kvs = if totals.cache_read > 0 || totals.cache_creation > 0 then
+    [kv("input_tokens",                jnum(_int_to_float(totals.input_tokens))),
+     kv("output_tokens",               jnum(_int_to_float(totals.output_tokens))),
+     kv("cache_read_input_tokens",     jnum(_int_to_float(totals.cache_read))),
+     kv("cache_creation_input_tokens", jnum(_int_to_float(totals.cache_creation))),
+     kv("total_tokens",                jnum(_int_to_float(total_tokens)))]
+    else
+    [kv("input_tokens",  jnum(_int_to_float(totals.input_tokens))),
+     kv("output_tokens", jnum(_int_to_float(totals.output_tokens))),
+     kv("total_tokens",  jnum(_int_to_float(total_tokens)))];
+  let error_kv = if error_msg == "" then kv("error", js(""))
+                 else kv("error", js(error_msg));
+  emit_event(session_id, "run_summary", [
+    kv("model",                  js(model)),
+    kv("motoko_commit",          js(motoko_commit())),
+    kv("finish_reason",          js(finish_reason_str(finish_code))),
+    kv("steps_executed",         jnum(_int_to_float(steps_executed))),
+    kv("usage",                  jo(usage_kvs)),
+    kv("total_cost_usd",         jnum(millicents_to_usd(totals.cost_millicents))),
+    kv("total_cost_millicents",  jnum(_int_to_float(totals.cost_millicents))),
+    kv("duration_ms",            jnum(_int_to_float(duration))),
+    error_kv
+  ])
 }
 
 -- Convert motoko's [Msg] (system / user / assistant text-only) to upstream
@@ -333,7 +458,8 @@ func dispatch_calls(
   workdir: string,
   step_idx: int,
   stream_id: string,
-  ohmy_pi: bool
+  ohmy_pi: bool,
+  session_id: string
 ) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream} {
   match calls {
     [] => [],
@@ -342,27 +468,25 @@ func dispatch_calls(
       let policy = dispatch_tool_policy(rt, ctx, envelope);
       match policy {
         Deny(reason) => {
-          let _ = emit_json(jo([
-            kv("type", js("native_tool_denied")),
+          let _ = emit_event(session_id, "native_tool_denied", [
             kv("step", jnum(_int_to_float(step_idx))),
             kv("stream_id", js(stream_id)),
             kv("tool", js(call.name)),
             kv("id", js(call.id)),
             kv("reason", js(reason))
-          ]));
+          ]);
           let denial_msg = policy_denied_message(call, reason);
-          denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+          denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
         },
         Pending(reason, default) => {
           -- Emit the pending event so the TUI / wrapper can prompt the operator.
-          let _ = emit_json(jo([
-            kv("type", js("tool_pending")),
+          let _ = emit_event(session_id, "tool_pending", [
             kv("step", jnum(_int_to_float(step_idx))),
             kv("stream_id", js(stream_id)),
             kv("tool", js(call.name)),
             kv("id", js(call.id)),
             kv("reason", js(reason))
-          ]));
+          ]);
           -- Block on stdin for {"type":"approve"} or {"type":"deny","reason":"..."}.
           -- EOF or unparseable input applies the extension-supplied PolicyDefault.
           let raw = readLine();
@@ -395,69 +519,64 @@ func dispatch_calls(
               };
           match resolved_denial {
             Some(denial_reason) => {
-              let _ = emit_json(jo([
-                kv("type", js("native_tool_denied")),
+              let _ = emit_event(session_id, "native_tool_denied", [
                 kv("step", jnum(_int_to_float(step_idx))),
                 kv("stream_id", js(stream_id)),
                 kv("tool", js(call.name)),
                 kv("id", js(call.id)),
                 kv("reason", js(denial_reason))
-              ]));
+              ]);
               let denial_msg = policy_denied_message(call, denial_reason);
-              denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+              denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
             },
             None => {
               -- Approved: run M5 handle + M6 dispatch, same as Allow/NoOpinion.
               let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
               match handle_decision {
                 Handled(result_env) => {
-                  let _ = emit_json(jo([
-                    kv("type", js("ext_tool_handled")),
+                  let _ = emit_event(session_id, "ext_tool_handled", [
                     kv("step", jnum(_int_to_float(step_idx))),
                     kv("stream_id", js(stream_id)),
                     kv("tool", js(call.name)),
                     kv("id", js(call.id)),
                     kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
-                  ]));
+                  ]);
                   let handled_msg: Message = {
                     role: "tool",
                     content: encode(result_to_json(result_env)),
                     tool_calls: [],
                     tool_call_id: call.id
                   };
-                  handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                  handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 },
                 Delegate => {
                   let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
                   match backend {
                     Delegated => {
-                      let _ = emit_json(jo([
-                        kv("type", js("delegated_tool_deferred")),
+                      let _ = emit_event(session_id, "delegated_tool_deferred", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("stream_id", js(stream_id)),
                         kv("tool", js(call.name)),
                         kv("id", js(call.id))
-                      ]));
+                      ]);
                       let deferred_msg = delegated_deferred_message(call);
-                      deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                      deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                     },
                     Native => {
-                      let _ = emit_json(jo([
-                        kv("type", js("v2_tool_dispatch_start")),
+                      let _ = emit_event(session_id, "v2_tool_dispatch_start", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("stream_id", js(stream_id)),
                         kv("tool", js(call.name)),
                         kv("id", js(call.id))
-                      ]));
+                      ]);
                       let result_content = dispatch_one(workdir, call);
-                      let _ = emit_json(jo([
-                        kv("type", js("v2_tool_dispatch_complete")),
+                      let _ = emit_event(session_id, "v2_tool_dispatch_complete", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("stream_id", js(stream_id)),
                         kv("id", js(call.id))
-                      ]));
+                      ]);
                       let msg = tool_result_message(call, result_content);
-                      msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                      msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                     }
                   }
                 }
@@ -471,14 +590,13 @@ func dispatch_calls(
           let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
           match handle_decision {
             Handled(result_env) => {
-              let _ = emit_json(jo([
-                kv("type", js("ext_tool_handled")),
+              let _ = emit_event(session_id, "ext_tool_handled", [
                 kv("step", jnum(_int_to_float(step_idx))),
                 kv("stream_id", js(stream_id)),
                 kv("tool", js(call.name)),
                 kv("id", js(call.id)),
                 kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
-              ]));
+              ]);
               -- Use the call.id (model's typed tool_call_id) instead of the
               -- envelope's id for the tool-role Message correlation —
               -- providers correlate by the model-emitted id, not the
@@ -489,7 +607,7 @@ func dispatch_calls(
                 tool_calls: [],
                 tool_call_id: call.id
               };
-              handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+              handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
             },
             Delegate => {
               -- M6: backend split — Native goes through dispatch_one as
@@ -509,37 +627,34 @@ func dispatch_calls(
               let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
               match backend {
                 Delegated => {
-                  let _ = emit_json(jo([
-                    kv("type", js("delegated_tool_deferred")),
+                  let _ = emit_event(session_id, "delegated_tool_deferred", [
                     kv("step", jnum(_int_to_float(step_idx))),
                     kv("stream_id", js(stream_id)),
                     kv("tool", js(call.name)),
                     kv("id", js(call.id))
-                  ]));
+                  ]);
                   let deferred_msg = delegated_deferred_message(call);
-                  deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                  deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 },
                 Native => {
                   -- Per-call trace (uses v2-specific type so the TUI's
                   -- native_tool_calls renderer doesn't try to consume it).
                   -- The batched native_tool_calls / native_tool_results
                   -- events are emitted by loop_v2 around dispatch_calls.
-                  let _ = emit_json(jo([
-                    kv("type", js("v2_tool_dispatch_start")),
+                  let _ = emit_event(session_id, "v2_tool_dispatch_start", [
                     kv("step", jnum(_int_to_float(step_idx))),
                     kv("stream_id", js(stream_id)),
                     kv("tool", js(call.name)),
                     kv("id", js(call.id))
-                  ]));
+                  ]);
                   let result_content = dispatch_one(workdir, call);
-                  let _ = emit_json(jo([
-                    kv("type", js("v2_tool_dispatch_complete")),
+                  let _ = emit_event(session_id, "v2_tool_dispatch_complete", [
                     kv("step", jnum(_int_to_float(step_idx))),
                     kv("stream_id", js(stream_id)),
                     kv("id", js(call.id))
-                  ]));
+                  ]);
                   let msg = tool_result_message(call, result_content);
-                  msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                  msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 }
               }
             }
@@ -612,15 +727,14 @@ func run_dp7_verifier(rt: ExtRuntime, workdir: string) -> FinalizeVerification !
     }
 }
 
-func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int) -> Option[Message] ! {Process, IO} {
+func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Message] ! {Process, IO} {
   match run_dp7_verifier(rt, workdir) {
     Approve => None,
     Reject(errors) => {
-      let _ = emit_json(jo([
-        kv("type", js("dp7_verifier_rejected")),
+      let _ = emit_event(session_id, "dp7_verifier_rejected", [
         kv("step", jnum(_int_to_float(step_idx))),
         kv("errors", js(errors))
-      ]));
+      ]);
       Some({
         role: "user",
         content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${errors}",
@@ -645,25 +759,30 @@ func loop_v2(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  total_cost_millicents: int,
-  cost_warned_pct: int,
-  provider: StepProvider
+  totals: LoopTotals,
+  provider: StepProvider,
+  session_id: string,
+  started_at_ms: int
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
-  if step_budget <= 0 then Err({
-    code: "Internal",
-    message: "v2 loop: step budget exhausted",
-    retryable: false
-  })
-  else if max_cost_millicents > 0 && cost_rates.input_per_1m_millicents > 0 && total_cost_millicents >= max_cost_millicents then {
-    let _ = emit_json(jo([
-      kv("type", js("cost_exhausted")),
+  if step_budget <= 0 then {
+    let _ = emit_run_summary(session_id, model, totals, step_idx, 4, "v2 loop: step budget exhausted", started_at_ms);
+    Err({
+      code: "Internal",
+      message: "v2 loop: step budget exhausted",
+      retryable: false
+    })
+  }
+  else if max_cost_millicents > 0 && cost_rates.input_per_1m_millicents > 0 && totals.cost_millicents >= max_cost_millicents then {
+    let _ = emit_event(session_id, "cost_exhausted", [
       kv("step", jnum(_int_to_float(step_idx))),
-      kv("total_cost_millicents", jnum(_int_to_float(total_cost_millicents))),
-      kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))
-    ]));
+      kv("total_cost_millicents", jnum(_int_to_float(totals.cost_millicents))),
+      kv("total_cost_usd",        jnum(millicents_to_usd(totals.cost_millicents))),
+      kv("cap_millicents",        jnum(_int_to_float(max_cost_millicents)))
+    ]);
+    let _ = emit_run_summary(session_id, model, totals, step_idx, 1, "cost cap reached: ${show(totals.cost_millicents)} of ${show(max_cost_millicents)} millicents used", started_at_ms);
     Err({
       code: "BudgetExceeded",
-      message: "cost cap reached: ${show(total_cost_millicents)} of ${show(max_cost_millicents)} millicents used",
+      message: "cost cap reached: ${show(totals.cost_millicents)} of ${show(max_cost_millicents)} millicents used",
       retryable: false
     })
   }
@@ -673,12 +792,12 @@ func loop_v2(
   -- at 70-85% and 85-95%; refuses the step at ≥95%.
   match compact_step(msgs, model) {
     Err(compaction_reason) => {
-      let _ = emit_json(jo([
-        kv("type", js("compaction_exhausted")),
+      let _ = emit_event(session_id, "compaction_exhausted", [
         kv("step", jnum(_int_to_float(step_idx))),
         kv("model", js(model)),
         kv("reason", js(compaction_reason))
-      ]));
+      ]);
+      let _ = emit_run_summary(session_id, model, totals, step_idx, 3, compaction_reason, started_at_ms);
       Err({
         code: "ContextExhausted",
         message: compaction_reason,
@@ -687,68 +806,75 @@ func loop_v2(
     },
     Ok(compacted_msgs) => {
     let stream_id = "step-${show(step_idx)}";
-    let _ = emit_json(jo([
-      kv("type", js("thinking_stream_start")),
+    let _ = emit_event(session_id, "thinking_stream_start", [
       kv("step", jnum(_int_to_float(step_idx))),
       kv("stream_id", js(stream_id)),
       kv("model", js(model))
-    ]));
+    ]);
     let dispatched = dispatch_step(provider, model, compacted_msgs, rt);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
       Err(e) => {
-        let _ = emit_json(jo([
-          kv("type", js("thinking_stream_end")),
+        let _ = emit_event(session_id, "thinking_stream_end", [
           kv("step", jnum(_int_to_float(step_idx))),
           kv("stream_id", js(stream_id)),
           kv("status", js("errored"))
-        ]));
+        ]);
+        let _ = emit_run_summary(session_id, model, totals, step_idx, 5, e.message, started_at_ms);
         Err(e)
       },
       Ok(result) => {
         let n_calls = List.length(result.tool_calls);
-        let _ = emit_json(jo([
-          kv("type", js("thinking_delta")),
+        -- Accumulate step cost; emit threshold warnings at most once per run.
+        let step_cost = step_cost_millicents(result.input_tokens, result.output_tokens, cost_rates);
+        let usage_kvs = per_step_usage_kvs(result, step_cost);
+        let _ = emit_event(session_id, "thinking_delta", [
           kv("step", jnum(_int_to_float(step_idx))),
           kv("stream_id", js(stream_id)),
           kv("seq", jnum(1.0)),
           kv("text_delta", js(result.message.content))
-        ]));
-        let _ = emit_json(jo([
-          kv("type", js("thinking_stream_end")),
+        ]);
+        let _ = emit_event(session_id, "thinking_stream_end", [
           kv("step", jnum(_int_to_float(step_idx))),
           kv("stream_id", js(stream_id)),
           kv("status", js("completed"))
-        ]));
-        let _ = emit_json(jo([
-          kv("type", js("thinking")),
+        ]);
+        let _ = emit_event(session_id, "thinking", [
           kv("step", jnum(_int_to_float(step_idx))),
           kv("text", js(result.message.content)),
           kv("finish_reason", js(result.finish_reason)),
           kv("tool_calls", jnum(_int_to_float(n_calls)))
-        ]));
+        ] ++ usage_kvs);
 
         let assistant_msg = step_result_to_message(result);
         let msgs_with_assistant = msgs ++ [assistant_msg];
         let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant);
 
-        -- Accumulate step cost; emit threshold warnings at most once per run.
-        let step_cost = step_cost_millicents(result.input_tokens, result.output_tokens, cost_rates);
-        let new_total_cost = total_cost_millicents + step_cost;
+        let new_total_cost = totals.cost_millicents + step_cost;
+        let new_input  = totals.input_tokens  + result.input_tokens;
+        let new_output = totals.output_tokens + result.output_tokens;
         let new_warned_pct =
           if max_cost_millicents > 0 then {
             let pct = (new_total_cost * 100) / max_cost_millicents;
-            if pct >= 90 && cost_warned_pct < 90 then {
-              let _ = emit_json(jo([kv("type", js("cost_warning")), kv("threshold", js("90pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]));
+            if pct >= 90 && totals.cost_warned_pct < 90 then {
+              let _ = emit_event(session_id, "cost_warning", [kv("threshold", js("90pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("total_cost_usd", jnum(millicents_to_usd(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]);
               90
-            } else if pct >= 75 && cost_warned_pct < 75 then {
-              let _ = emit_json(jo([kv("type", js("cost_warning")), kv("threshold", js("75pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]));
+            } else if pct >= 75 && totals.cost_warned_pct < 75 then {
+              let _ = emit_event(session_id, "cost_warning", [kv("threshold", js("75pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("total_cost_usd", jnum(millicents_to_usd(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]);
               75
-            } else if pct >= 50 && cost_warned_pct < 50 then {
-              let _ = emit_json(jo([kv("type", js("cost_warning")), kv("threshold", js("50pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]));
+            } else if pct >= 50 && totals.cost_warned_pct < 50 then {
+              let _ = emit_event(session_id, "cost_warning", [kv("threshold", js("50pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("total_cost_usd", jnum(millicents_to_usd(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]);
               50
-            } else cost_warned_pct
-          } else cost_warned_pct;
+            } else totals.cost_warned_pct
+          } else totals.cost_warned_pct;
+        let new_totals: LoopTotals = {
+          input_tokens:    new_input,
+          output_tokens:   new_output,
+          cache_read:      totals.cache_read,
+          cache_creation:  totals.cache_creation,
+          cost_millicents: new_total_cost,
+          cost_warned_pct: new_warned_pct
+        };
 
         -- M3 DP1a: response-intercept hook. Extensions can synthesize a
         -- tool result from the model's prose (e.g. compose_check_premise)
@@ -757,15 +883,14 @@ func loop_v2(
         -- append it as a tool-role Message and recurse for the next step.
         match dispatch_response_intercept(rt, ctx, result.message.content) {
           InterceptHandled(envelope) => {
-            let _ = emit_json(jo([
-              kv("type", js("ext_intercept_handled")),
+            let _ = emit_event(session_id, "ext_intercept_handled", [
               kv("step", jnum(_int_to_float(step_idx))),
               kv("tool", js(envelope.tool)),
               kv("exit_code", jnum(_int_to_float(envelope.exit_code)))
-            ]));
+            ]);
             let tool_msg = envelope_to_tool_message(envelope);
             let next_msgs = msgs_with_assistant ++ [tool_msg];
-            loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct, next_provider)
+            loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
           },
           NoIntercept => {
             if result.finish_reason != "tool_calls" then {
@@ -777,15 +902,14 @@ func loop_v2(
               let hybrid_attempt: Option[string] = if hybrid_tools then extract_bash(result.message.content) else None;
               match hybrid_attempt {
                 Some(cmd) => {
-                  let _ = emit_json(jo([
-                    kv("type", js("hybrid_bash_extracted")),
+                  let _ = emit_event(session_id, "hybrid_bash_extracted", [
                     kv("step", jnum(_int_to_float(step_idx))),
                     kv("cmd", js(cmd))
-                  ]));
+                  ]);
                   let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
-                  let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi);
+                  let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
                   let next_msgs = msgs_with_assistant ++ tool_msgs;
-                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct, next_provider)
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
                 None => {
               -- M3 DP1b: when the model emits prose without tool_calls, give
@@ -796,28 +920,27 @@ func loop_v2(
               --   NoDecision               => emit done with the model's own content
               match dispatch_solver_candidate(rt, ctx, result.message.content) {
                 Accept(output) => {
-                  match dp7_gate(rt, workdir, step_idx) {
+                  match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
-                      let _ = emit_json(jo([
-                        kv("type", js("done")),
+                      let _ = emit_event(session_id, "done", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("output", js(output)),
                         kv("source", js("ext_solver_accept"))
-                      ]));
+                      ]);
+                      let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
                       Ok(msgs_with_assistant)
                     },
                     Some(retry_msg) => {
                       let next_msgs = msgs_with_assistant ++ [retry_msg];
-                      loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct, next_provider)
+                      loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                     }
                   }
                 },
                 ContinueWithFeedback(feedback) => {
-                  let _ = emit_json(jo([
-                    kv("type", js("ext_solver_feedback")),
+                  let _ = emit_event(session_id, "ext_solver_feedback", [
                     kv("step", jnum(_int_to_float(step_idx))),
                     kv("feedback", js(feedback))
-                  ]));
+                  ]);
                   let feedback_msg: Message = {
                     role: "user",
                     content: feedback,
@@ -825,21 +948,21 @@ func loop_v2(
                     tool_call_id: ""
                   };
                   let next_msgs = msgs_with_assistant ++ [feedback_msg];
-                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct, next_provider)
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
                 NoDecision => {
-                  match dp7_gate(rt, workdir, step_idx) {
+                  match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
-                      let _ = emit_json(jo([
-                        kv("type", js("done")),
+                      let _ = emit_event(session_id, "done", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("output", js(result.message.content))
-                      ]));
+                      ]);
+                      let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
                       Ok(msgs_with_assistant)
                     },
                     Some(retry_msg) => {
                       let next_msgs = msgs_with_assistant ++ [retry_msg];
-                      loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct, next_provider)
+                      loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                     }
                   }
                 }
@@ -860,23 +983,21 @@ func loop_v2(
               -- dispatch_calls and use distinct type names so the TUI
               -- ignores them rather than mis-rendering.
               let request_id = "step-${show(step_idx)}";
-              let _ = emit_json(jo([
-                kv("type", js("native_tool_calls")),
+              let _ = emit_event(session_id, "native_tool_calls", [
                 kv("request_id", js(request_id)),
                 kv("step", jnum(_int_to_float(step_idx))),
                 kv("stream_id", js(stream_id)),
                 kv("tool_calls", ja(tool_calls_to_envelope_jsons(result.tool_calls)))
-              ]));
-              let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi);
-              let _ = emit_json(jo([
-                kv("type", js("native_tool_results")),
+              ]);
+              let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi, session_id);
+              let _ = emit_event(session_id, "native_tool_results", [
                 kv("request_id", js(request_id)),
                 kv("step", jnum(_int_to_float(step_idx))),
                 kv("stream_id", js(stream_id)),
                 kv("results", ja(tool_messages_to_result_jsons(tool_msgs)))
-              ]));
+              ]);
               let next_msgs = msgs_with_assistant ++ tool_msgs;
-              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_total_cost, new_warned_pct, next_provider)
+              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
             }
           }
         }
@@ -923,7 +1044,9 @@ export func run_v2(
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
   let messages = msgs_to_messages(initial_msgs);
   let resolved_model = strip_provider_prefix(model);
-  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, 0, 0, provider)
+  let session_id = derive_session_id();
+  let started_at_ms = now();
+  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms)
 }
 
 -- Run loop_v2 starting from an existing [Message] history (instead of the
@@ -947,7 +1070,9 @@ export func run_v2_from_messages(
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
   let resolved_model = strip_provider_prefix(model);
-  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, 0, 0, provider)
+  let session_id = derive_session_id();
+  let started_at_ms = now();
+  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms)
 }
 
 -- Read a JSON-shaped string field from a decoded Json object, returning
@@ -989,19 +1114,20 @@ export func conversation_loop_v2(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  provider: StepProvider
+  provider: StepProvider,
+  session_id: string
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let raw = readLine();
   if raw == "" then ()
   else match decode(raw) {
-    Err(_) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider),
+    Err(_) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
     Ok(obj) => {
       let cmd_type = msg_get_str(obj, "type");
       if cmd_type == "abort" || cmd_type == "exit" then ()
       else if cmd_type == "model_change" then {
         let new_model = msg_get_str(obj, "model");
         let resolved_new = strip_provider_prefix(new_model);
-        conversation_loop_v2(rt, env_url, hybrid_tools, budget, resolved_new, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
+        conversation_loop_v2(rt, env_url, hybrid_tools, budget, resolved_new, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
       }
       else if cmd_type == "user_message" then {
         let content = msg_get_str(obj, "content");
@@ -1012,26 +1138,24 @@ export func conversation_loop_v2(
           tool_call_id: ""
         };
         let next_history = history ++ [user_msg];
-        let _ = emit_json(jo([
-          kv("type", js("session_start")),
+        let _ = emit_event(session_id, "session_start", [
           kv("task", js(content)),
           kv("model", js(model)),
           kv("mode", js("v2"))
-        ]));
+        ]);
         match run_v2_from_messages(rt, content, env_url, hybrid_tools, budget, model, next_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
-          Ok(updated_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider),
+          Ok(updated_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
           Err(e) => {
-            let _ = emit_json(jo([
-              kv("type", js("error")),
+            let _ = emit_event(session_id, "error", [
               kv("source", js("agent_loop_v2")),
               kv("code", js(e.code)),
               kv("message", js(e.message))
-            ]));
-            conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
+            ]);
+            conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
           }
         }
       }
-      else conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
+      else conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
     }
   }
 }
@@ -1058,16 +1182,16 @@ export func run_v2_with_conversation(
   provider: StepProvider
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let initial_messages = msgs_to_messages(initial_msgs);
+  let session_id = derive_session_id();
   match run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
-    Ok(final_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider),
+    Ok(final_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
     Err(e) => {
-      let _ = emit_json(jo([
-        kv("type", js("error")),
+      let _ = emit_event(session_id, "error", [
         kv("source", js("agent_loop_v2")),
         kv("code", js(e.code)),
         kv("message", js(e.message))
-      ]));
-      conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
+      ]);
+      conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
     }
   }
 }
@@ -1090,7 +1214,62 @@ export func run_v2_with_stub(
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
+  let session_id = derive_session_id();
+  let started_at_ms = now();
   loop_v2(rt, task, env_url, hybrid_tools, budget, model, history,
           workdir, 0, budget_steps, ohmy_pi,
-          max_cost_millicents, cost_rates, 0, 0, Scripted(script))
+          max_cost_millicents, cost_rates, zero_totals(), Scripted(script),
+          session_id, started_at_ms)
 }
+
+-- M-MOTOKO-EVAL-INSTRUMENTATION inline tests (pure-only). Validates the
+-- schema-v1 contract surface that downstream eval harnesses depend on.
+
+pure func test_schema_version_is_one() -> bool
+  tests [((), true)]
+  {
+    schema_version() == "1"
+  }
+
+pure func test_millicents_to_usd_zero() -> bool
+  tests [((), true)]
+  {
+    millicents_to_usd(0) == 0.0
+  }
+
+pure func test_millicents_to_usd_one_dollar() -> bool
+  tests [((), true)]
+  {
+    millicents_to_usd(100000) == 1.0
+  }
+
+pure func test_millicents_to_usd_fraction() -> bool
+  tests [((), true)]
+  {
+    -- 12345678 millicents = $123.45678
+    millicents_to_usd(12345678) == 123.45678
+  }
+
+pure func test_finish_reason_str_table() -> bool
+  tests [((), true)]
+  {
+    finish_reason_str(0) == "stop"
+      && finish_reason_str(1) == "cost_exhausted"
+      && finish_reason_str(2) == "dp7_rejected"
+      && finish_reason_str(3) == "compaction_exhausted"
+      && finish_reason_str(4) == "max_steps"
+      && finish_reason_str(5) == "error"
+      && finish_reason_str(99) == "error"
+  }
+
+pure func test_zero_totals_initializes_clean() -> bool
+  tests [((), true)]
+  {
+    let z = zero_totals();
+    z.input_tokens == 0
+      && z.output_tokens == 0
+      && z.cache_read == 0
+      && z.cache_creation == 0
+      && z.cost_millicents == 0
+      && z.cost_warned_pct == 0
+  }
