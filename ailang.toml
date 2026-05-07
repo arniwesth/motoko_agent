@@ -7,6 +7,14 @@ ailang = ">=0.16.1"
 
 [dependencies]
 "sunholo/logging" = "0.4.0"
+"sunholo/motoko_ext_abi" = { path = "../ailang-packages/packages/motoko-ext-abi" }
+"sunholo/motoko_ext_test_dummy" = { path = "../ailang-packages/packages/motoko-ext-test-dummy" }
+
+[extensions]
+packages      = ["sunholo/motoko_ext_test_dummy@0.1.0"]
+config_import = "src/core/config.RuntimeConfig"
+hooks_import  = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
+output        = "src/core/ext/registry_generated.ail"
 
 [effects]
 max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex"]
