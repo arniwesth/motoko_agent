@@ -802,7 +802,7 @@ export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks !
   {
     id: "compose",
     provided_tools: provided_tools(),
-    on_describe_tools: func() { [] },
+    on_describe_tools: \_ . [],
     on_build_system_prompt: on_build_system_prompt,
     on_budget_plan: budget_hook,
     on_tool_policy: \ctx call. on_tool_policy_with_mode(composition_mode, ctx, call),

@@ -310,6 +310,7 @@ func smoke_hook_a() -> ExtensionHooks {
   {
     id: "hook_a",
     provided_tools: ["Alpha"],
+    on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: ["A"] },
     on_budget_plan: budget,
     on_tool_policy: \_ctx _call. Allow,
@@ -335,6 +336,7 @@ func smoke_hook_b() -> ExtensionHooks {
   {
     id: "hook_b",
     provided_tools: ["Beta"],
+    on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: ["B"] },
     on_budget_plan: budget,
     on_tool_policy: \_ctx _call. Deny("blocked"),
@@ -417,6 +419,7 @@ func dispatch_pending_hook() -> bool
     let pending_hook: ExtensionHooks = {
       id: "pending_hook",
       provided_tools: [],
+      on_describe_tools: \_ . [],
       on_build_system_prompt: \_ctx. { prepend: [], append: [] },
       on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
         { requested_total: None, requested_solver: None, requested_verifier: None }

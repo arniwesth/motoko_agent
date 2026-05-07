@@ -175,7 +175,7 @@ export func deny_all_rt() -> ExtRuntime {
   let hooks: ExtensionHooks = {
     id: "test_deny_all",
     provided_tools: [],
-    on_describe_tools: func() { [] },
+    on_describe_tools: \_ . [],
     on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
       { requested_total: None, requested_solver: None, requested_verifier: None }

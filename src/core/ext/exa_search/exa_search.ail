@@ -74,7 +74,7 @@ export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks !
   {
     id: "exa_search",
     provided_tools: all_tool_names(mappings),
-    on_describe_tools: func() { [] },
+    on_describe_tools: \_ . [],
     on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
     on_budget_plan: budget_hook,
     on_tool_policy: no_tool_policy,

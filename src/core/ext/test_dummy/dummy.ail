@@ -140,7 +140,7 @@ export func register() -> ExtensionHooks ! {Env, FS} {
   {
     id: "test_dummy",
     provided_tools: [],
-    on_describe_tools: func() { [] },
+    on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. on_build_system_prompt(cfg.prompt),
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} { on_budget_plan(cfg.budget_total) },
     on_tool_policy: \_ctx call. on_tool_policy(cfg.tool_decision, call),
