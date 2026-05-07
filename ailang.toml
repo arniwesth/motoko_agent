@@ -9,9 +9,15 @@ ailang = ">=0.16.1"
 "sunholo/logging" = "0.4.0"
 "sunholo/motoko_ext_abi" = { path = "../ailang-packages/packages/motoko-ext-abi" }
 "sunholo/motoko_ext_test_dummy" = { path = "../ailang-packages/packages/motoko-ext-test-dummy" }
+"sunholo/motoko_ext_omnigraph" = { path = "../ailang-packages/packages/motoko-ext-omnigraph" }
+"sunholo/motoko_ext_context_mode" = { path = "../ailang-packages/packages/motoko-ext-context-mode" }
 
 [extensions]
-packages      = ["sunholo/motoko_ext_test_dummy@0.1.0"]
+packages      = [
+  "sunholo/motoko_ext_test_dummy@0.1.0",
+  "sunholo/motoko_ext_omnigraph@0.1.0",
+  "sunholo/motoko_ext_context_mode@0.1.0",
+]
 config_import = "src/core/config.RuntimeConfig"
 hooks_import  = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
 output        = "src/core/ext/registry_generated.ail"

@@ -4,27 +4,13 @@ import std/string (split, trim)
 import std/option (Option, Some, None)
 import src/core/ext/types (ExtensionHooks, ExtRegistry)
 import src/core/config (RuntimeConfig)
-import src/core/ext/test_dummy/dummy (register as test_dummy_register)
 import src/core/ext/compose/compose (register_with_config as compose_register)
-import src/core/ext/omnigraph/omnigraph (register_with_config as omnigraph_register)
-import src/core/ext/context_mode/context_mode (register_with_config as context_mode_register)
 import src/core/ext/exa_search/exa_search (register_with_config as exa_search_register)
 import src/core/ext/mcp/mcp (register_with_config as mcp_register)
-
-func register_test_dummy(_cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
-  test_dummy_register()
-}
+import src/core/ext/registry_generated (resolve as gen_resolve)
 
 func register_compose(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
   compose_register(cfg)
-}
-
-func register_omnigraph(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
-  omnigraph_register(cfg)
-}
-
-func register_context_mode(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
-  context_mode_register(cfg)
 }
 
 func register_exa_search(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
@@ -39,11 +25,11 @@ func with_id(h: ExtensionHooks, id: string) -> ExtensionHooks {
   { h | id: id }
 }
 
+-- Local resolve: only extensions not yet migrated to ailang-packages.
+-- Migrated extensions (test_dummy, omnigraph, context_mode) are handled
+-- by gen_resolve (src/core/ext/registry_generated).
 func resolve(name: string) -> Option[(RuntimeConfig) -> ExtensionHooks ! {Env, FS}] {
-  if name == "test_dummy" then Some(register_test_dummy)
-  else if name == "compose" then Some(register_compose)
-  else if name == "omnigraph" then Some(register_omnigraph)
-  else if name == "context_mode" then Some(register_context_mode)
+  if name == "compose" then Some(register_compose)
   else if name == "exa_search" then Some(register_exa_search)
   else if name == "mcp" then Some(register_mcp)
   else None
@@ -54,12 +40,17 @@ func parse_tokens(xs: [string], idx: int, hooks_acc: [ExtensionHooks], cfg: Runt
     [] => { hooks: hooks_acc },
     raw :: rest => {
       let name = trim(raw);
-      match resolve(name) {
+      -- Check local registry first, then fall back to generated registry.
+      let hook_opt = match resolve(name) {
+        Some(ctor) => Some(ctor(cfg)),
+        None => gen_resolve(name, cfg)
+      };
+      match hook_opt {
         None => parse_tokens(rest, idx + 1, hooks_acc, cfg),
-        Some(ctor) => {
+        Some(hook) => {
           let id = "${name}#${show(idx)}";
-          let hook = with_id(ctor(cfg), id);
-          parse_tokens(rest, idx + 1, hooks_acc ++ [hook], cfg)
+          let hooked = with_id(hook, id);
+          parse_tokens(rest, idx + 1, hooks_acc ++ [hooked], cfg)
         }
       }
     }
@@ -93,18 +84,27 @@ export func debug_pure_names(r: ExtRegistry) -> [string] {
   hook_names(r.hooks)
 }
 
--- Derive the known-name check from resolve() so there is a single source of
--- truth: adding an extension to resolve() is the only edit needed.
+-- Returns true for names handled by the generated registry (registry_generated.ail).
+-- Keep in sync with the generated resolve() after each migration.
+func gen_is_known(name: string) -> bool {
+  name == "test_dummy" || name == "omnigraph" || name == "context_mode"
+}
+
+func is_known(name: string) -> bool {
+  match resolve(name) {
+    Some(_) => true,
+    None => gen_is_known(name)
+  }
+}
+
 func parse_tokens_names(xs: [string], idx: int, names_acc: [string]) -> [string] {
   match xs {
     [] => names_acc,
     raw :: rest => {
       let name = trim(raw);
       let next =
-        match resolve(name) {
-          Some(_) => names_acc ++ ["${name}#${show(idx)}"],
-          None    => names_acc
-        };
+        if is_known(name) then names_acc ++ ["${name}#${show(idx)}"]
+        else names_acc;
       parse_tokens_names(rest, idx + 1, next)
     }
   }
