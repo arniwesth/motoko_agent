@@ -1,0 +1,122 @@
+-- scripts/smoke_v2_dp7_gate.ail
+--
+-- Layer-2 integration smoke for DP7 (pre-finalize verifier gate).
+-- Proves that DP7 rejects `done` when `make check_core` fails in the
+-- workdir, and approves when it passes.
+--
+-- Verifies behaviour shipped in commit 052d4c2 (M-MOTOKO-DP7-VERIFIER-GATE).
+-- Surfaces the 'dp7_verifier_rejected' JSONL event as the canonical
+-- signal that the gate fired.
+--
+-- Run setup:
+--   The smoke uses two workdirs:
+--   - /tmp/dp7-smoke      : has a Makefile whose check_core always fails
+--   - /tmp/dp7-smoke-pass : has a Makefile whose check_core always passes
+--   Run scripts/setup_dp7_smoke_workdirs.sh first to create both. Or just
+--   run the smoke — it will skip individual cases that lack a workdir.
+--
+-- Run:
+--   bash scripts/setup_dp7_smoke_workdirs.sh
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --net-allow-http --net-allow-localhost \
+--     --entry main scripts/smoke_v2_dp7_gate.ail
+
+module scripts/smoke_v2_dp7_gate
+
+import std/io (println)
+import std/result (Result, Ok, Err)
+import std/ai (Message, AIError)
+import src/core/config (CostRates)
+import src/core/ext/types (BudgetPlan)
+import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/stub_step (
+  ScriptedStep,
+  empty_rt,
+  prose_step
+)
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 4, solver: 4, verifier: 0 }
+}
+
+-- 1. Broken workdir: check_core always fails. The script just declares done.
+--    With DP7 active, the loop must NOT terminate at the first done attempt
+--    because the gate rejects. With a small step_budget, the loop will eventually
+--    return Err (Scripted([]) → terminal_step → DP7 rejects → ... → budget).
+func test_dp7_rejects_broken_workdir() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let script: [ScriptedStep] = [prose_step("done")];
+  let result = run_v2_with_stub(
+    empty_rt(), "stub-test", "", false, mk_budget(),
+    "openrouter/z-ai/glm-5",
+    [],
+    "/tmp/dp7-smoke",   -- workdir whose make check_core always fails
+    4,                  -- small step_budget — loop must hit it because DP7 keeps rejecting
+    false,
+    0, no_rates(),
+    script
+  );
+  match result {
+    Ok(_) => false,    -- if Ok, DP7 didn't gate — failure
+    Err(_) => true     -- expected: budget exhaustion because DP7 keeps rejecting done
+  }
+}
+
+-- 2. Clean workdir: check_core passes. The script declares done.
+--    DP7 should approve, loop terminates Ok at step 0.
+func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let script: [ScriptedStep] = [prose_step("done")];
+  let result = run_v2_with_stub(
+    empty_rt(), "stub-test", "", false, mk_budget(),
+    "openrouter/z-ai/glm-5",
+    [],
+    "/tmp/dp7-smoke-pass",  -- workdir whose make check_core always passes
+    4,
+    false,
+    0, no_rates(),
+    script
+  );
+  match result {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+-- 3. Missing infrastructure (no Makefile): DP7 fails open → Approve.
+--    /tmp/no-makefile-here doesn't exist, exec returns Err, Approve.
+func test_dp7_fail_open_on_missing_make() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let script: [ScriptedStep] = [prose_step("done")];
+  let result = run_v2_with_stub(
+    empty_rt(), "stub-test", "", false, mk_budget(),
+    "openrouter/z-ai/glm-5",
+    [],
+    "/tmp/no-makefile-here-zzz",
+    4,
+    false,
+    0, no_rates(),
+    script
+  );
+  match result {
+    Ok(_) => true,    -- expected: fail-open lets done proceed
+    Err(_) => false
+  }
+}
+
+func report(name: string, ok: bool) -> () ! {IO} {
+  if ok then println("  ✓ ${name}")
+  else println("  ✗ ${name}")
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} = {
+  println("=== smoke_v2_dp7_gate ===");
+  let r1 = test_dp7_rejects_broken_workdir();
+  report("broken check_core → DP7 rejects → loop returns Err",       r1);
+  let r2 = test_dp7_approves_clean_workdir();
+  report("passing check_core → DP7 approves → loop returns Ok",      r2);
+  let r3 = test_dp7_fail_open_on_missing_make();
+  report("missing Makefile → DP7 fails open → loop returns Ok",      r3);
+  println("done")
+}
