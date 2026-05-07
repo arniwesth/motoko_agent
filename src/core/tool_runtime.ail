@@ -2,10 +2,10 @@ module src/core/tool_runtime
 
 import std/option  (Option, Some, None)
 import std/result  (Result, Ok, Err)
-import std/string  (split, contains, trim, length, startsWith, substring, find)
+import std/string  (split, contains, trim, length, startsWith, endsWith, substring, find)
 import std/list    (reverse)
 import std/json    (Json, jo, get, asString, asNumber, asBool, asArray)
-import std/fs      (readFile, writeFile, fileExists)
+import std/fs      (readFile, writeFile, fileExists, mkdirAll, isDir, readFileResult, writeFileResult, mkdirAllResult)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes   (toString)
 import std/crypto  (sha256Hex)
@@ -147,39 +147,29 @@ export pure func backend_for(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBacke
 }
 
 export func run_native_batch(calls: [ToolCallEnvelope], workdir: string) -> [ToolResultItem] ! {FS, Process} {
-  run_native_batch_rec(calls, [], workdir)
+  run_native_batch_rec(calls, workdir)
 }
 
-func run_native_batch_rec(calls: [ToolCallEnvelope], read_paths: [string], workdir: string) -> [ToolResultItem] ! {FS, Process} {
+func run_native_batch_rec(calls: [ToolCallEnvelope], workdir: string) -> [ToolResultItem] ! {FS, Process} {
   match calls {
     [] => [],
     call :: rest => {
-      let result = run_native_call(call, read_paths, workdir);
-      let next_read_paths = append_read_path_if_success(call, result, read_paths);
-      result :: run_native_batch_rec(rest, next_read_paths, workdir)
+      let result = run_native_call(call, workdir);
+      result :: run_native_batch_rec(rest, workdir)
     }
   }
 }
 
-func append_read_path_if_success(call: ToolCallEnvelope, result: ToolResultItem, read_paths: [string]) -> [string] {
-  if call.tool == "ReadFile" then
-    match result {
-      ReadFileResult(_) => normalize_relative_path(arg_string(call.arguments, "path", "")) :: read_paths,
-      _ => read_paths
-    }
-  else read_paths
-}
-
-func run_native_call(call: ToolCallEnvelope, read_paths: [string], workdir: string) -> ToolResultItem ! {FS, Process} {
+func run_native_call(call: ToolCallEnvelope, workdir: string) -> ToolResultItem ! {FS, Process} {
   let args = call.arguments;
   if call.tool == "ReadFile" then
     run_read_file(call.id, arg_string(args, "path", ""), arg_number(args, "start", 1), arg_number(args, "end", 200), workdir)
   else if call.tool == "Search" then
-    run_search(call.id, arg_string(args, "pattern", ""), arg_string(args, "dir", "."))
+    run_search(call.id, arg_string(args, "pattern", ""), arg_string(args, "dir", "."), workdir)
   else if call.tool == "WriteFile" then
     run_write_file(call.id, arg_string(args, "path", ""), arg_string(args, "content", ""), workdir)
   else if call.tool == "EditFile" then
-    run_edit_file(call.id, arg_string(args, "path", ""), parse_edit_ops(arg_json(args, "edits")), arg_bool(args, "dry_run", false), arg_string(args, "expected_sha256", ""), read_paths, workdir)
+    run_edit_file(call.id, arg_string(args, "path", ""), parse_edit_ops(arg_json(args, "edits")), arg_bool(args, "dry_run", false), arg_string(args, "expected_sha256", ""), workdir)
   else if call.tool == "BashExec" then
     run_process_result("BashExec", call.id, parse_exec_from_args(args))
   else if call.tool == "RunTests" then
@@ -292,36 +282,58 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
   else if is_absolute_path(path) then Err(path_error(id, tool, "absolute paths are not allowed: ${path}"))
   else if has_parent_traversal_segment(path) then Err(path_error(id, tool, "path traversal is not allowed: ${path}"))
   else {
-    let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
-    match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, path]) {
-      Ok(_) => Ok(()),
-      Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+    -- Detect when model emits an absolute path without the leading "/" (e.g.
+    -- "Users/mark/.../project/foo.txt" instead of "/Users/mark/.../project/foo.txt").
+    -- resolve_workdir_path would otherwise silently double the workdir.
+    let wd_bare = if workdir == "" || workdir == "." || endsWith(workdir, "/") then "" else substring(workdir, 1, length(workdir));
+    if wd_bare != "" && startsWith(path, "${wd_bare}/") then
+      Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
+    else {
+      let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
+      match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, path]) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+      }
     }
   }
+}
+
+-- Join workdir and a validated-relative path so leaf fs calls operate on the
+-- correct absolute location, not relative to the AILANG runtime's process cwd.
+func resolve_workdir_path(workdir: string, path: string) -> string {
+  if workdir == "" || workdir == "." then path
+  else if endsWith(workdir, "/") then "${workdir}${path}"
+  else "${workdir}/${path}"
 }
 
 func run_read_file(id: string, path: string, start: int, end: int, workdir: string) -> ToolResultItem ! {FS, Process} {
   match validate_path_common("ReadFile", id, path, workdir) {
     Err(e) => e,
-    Ok(_) =>
-      if not fileExists(path) then
-        ToolErrorResult({ id: id, tool: "ReadFile", message: "path does not exist: ${path}" })
-      else {
-        let content = readFile(path);
-        let lines = split(content, "\n");
-        let total = line_count_of(content);
-        let r = normalize_range(start, end);
-        let selected = select_lines(lines, 1, r.start, r.end);
-        let shown = join_lines(selected);
-        ReadFileResult({
-          id: id,
-          path: path,
-          content: shown,
-          line_count: total,
-          truncated: total > list_len(selected),
-          sha256: sha256Hex(content)
-        })
+    Ok(_) => {
+      let resolved = resolve_workdir_path(workdir, path);
+      -- M-AILANG-FS-RESULT (v0.16.0): use readFileResult so transient
+      -- failures (file vanished mid-read, permission denied, sandbox
+      -- violation) get caught here as a structured ToolErrorResult
+      -- instead of escaping as a runtime panic that kills the agent.
+      match readFileResult(resolved) {
+        Err(msg) => ToolErrorResult({ id: id, tool: "ReadFile", message: msg }),
+        Ok(content) => {
+          let lines = split(content, "\n");
+          let total = line_count_of(content);
+          let r = normalize_range(start, end);
+          let selected = select_lines(lines, 1, r.start, r.end);
+          let shown = join_lines(selected);
+          ReadFileResult({
+            id: id,
+            path: path,
+            content: shown,
+            line_count: total,
+            truncated: total > list_len(selected),
+            sha256: sha256Hex(content)
+          })
+        }
       }
+    }
   }
 }
 
@@ -363,11 +375,12 @@ func parse_search_lines(lines: [string]) -> [SearchMatch] {
   }
 }
 
-func run_search(id: string, pattern: string, dir: string) -> ToolResultItem ! {Process} {
+func run_search(id: string, pattern: string, dir: string, workdir: string) -> ToolResultItem ! {Process} {
   if pattern == "" then
     ToolErrorResult({ id: id, tool: "Search", message: "missing pattern" })
   else {
-    let target = if dir == "" then "." else dir;
+    let raw_dir = if dir == "" then "." else dir;
+    let target = resolve_workdir_path(workdir, raw_dir);
     match exec("rg", ["-n", "--no-heading", "--color", "never", pattern, target]) {
       Err(err) =>
         ToolErrorResult({ id: id, tool: "Search", message: process_error_to_string(err) }),
@@ -462,23 +475,44 @@ func run_write_file(id: string, path: string, content: string, workdir: string) 
   match validate_path_common("WriteFile", id, path, workdir) {
     Err(e) => e,
     Ok(_) => {
-      let existed_before = fileExists(path);
-      let before = if existed_before then readFile(path) else "";
-      let _ = writeFile(path, content);
-      WriteFileResult({
-        id: id,
-        path: path,
-        bytes_written: length(content),
-        sha256: sha256Hex(content),
-        diff: build_write_file_diff(path, before, content, existed_before)
-      })
+      let resolved = resolve_workdir_path(workdir, path);
+      let existed_before = fileExists(resolved);
+      let before = if existed_before then readFile(resolved) else "";
+      -- M-AILANG-FS-RESULT (v0.16.0): mkdirAllResult + writeFileResult
+      -- catch all syscall failures (missing parent, permission denied,
+      -- disk full, sandbox violation, etc.) and wrap them as Err(msg)
+      -- which we forward as ToolErrorResult, instead of escaping as a
+      -- runtime panic that crashes the agent process.
+      let parent = path_dirname(resolved);
+      let mkdir_outcome = if parent != "" && parent != "." && not isDir(parent)
+        then mkdirAllResult(parent)
+        else Ok(());
+      match mkdir_outcome {
+        Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", message: "cannot create parent directory: ${msg}" }),
+        Ok(_) => match writeFileResult(resolved, content) {
+          Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", message: msg }),
+          Ok(_) => WriteFileResult({
+            id: id,
+            path: path,
+            bytes_written: length(content),
+            sha256: sha256Hex(content),
+            diff: build_write_file_diff(path, before, content, existed_before)
+          })
+        }
+      }
     }
   }
 }
 
 func path_dirname(path: string) -> string {
-  let parts = split(path, "/");
-  path_dirname_rec(parts, "")
+  if startsWith(path, "/") then {
+    let rel = substring(path, 1, length(path));
+    let dir = path_dirname(rel);
+    if dir == "." then "/" else "/${dir}"
+  } else {
+    let parts = split(path, "/");
+    path_dirname_rec(parts, "")
+  }
 }
 
 func path_dirname_rec(parts: [string], acc: string) -> string {
@@ -611,20 +645,18 @@ func run_edit_file(
   edits: [EditOp],
   dry_run: bool,
   expected_sha256: string,
-  read_paths: [string],
   workdir: string
 ) -> ToolResultItem ! {FS, Process} {
   match validate_path_common("EditFile", id, path, workdir) {
     Err(e) => e,
-    Ok(_) =>
-      if not list_contains(read_paths, normalize_relative_path(path)) then
-        ToolErrorResult({ id: id, tool: "EditFile", message: "read-before-edit policy violation: call ReadFile for this path before EditFile in the same tool batch" })
-      else if not fileExists(path) then
+    Ok(_) => {
+      let resolved = resolve_workdir_path(workdir, path);
+      if not fileExists(resolved) then
         ToolErrorResult({ id: id, tool: "EditFile", message: "path does not exist: ${path}" })
       else if list_len(edits) <= 0 then
         ToolErrorResult({ id: id, tool: "EditFile", message: "missing edits" })
       else {
-        let before = readFile(path);
+        let before = readFile(resolved);
         let before_sha = sha256Hex(before);
         if expected_sha256 != "" && expected_sha256 != before_sha then
           ToolErrorResult({ id: id, tool: "EditFile", message: "expected_sha256 mismatch" })
@@ -648,7 +680,7 @@ func run_edit_file(
                   match_strategy: "exact"
                 })
               else
-                match atomic_write(path, after) {
+                match atomic_write(resolved, after) {
                   Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", message: msg }),
                   Ok(_) =>
                     EditFileResult({
@@ -666,6 +698,7 @@ func run_edit_file(
             }
           }
       }
+    }
   }
 }
 
@@ -724,10 +757,29 @@ func to_test_result(id: string, req: ProcessExecReq, out: ProcessOutput) -> Tool
 }
 
 func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolResultItem ! {Process} {
-  if needs_delegation_for_process(req) then
-    ToolErrorResult({ id: id, tool: tool, message: "requires delegated backend" })
-  else
-    match exec(req.cmd, req.args) {
+  -- M-MOTOKO-RPC-LOOP M10 follow-up: in v2 standalone mode (no
+  -- env-server delegation), wrap shell-tokened cmds in `bash -lc` so
+  -- `&&`, pipes, multi-word cmds etc. work in-process. The legacy
+  -- env-server did this via its own bash invocation; v2 has to do
+  -- it itself or every BashExec with spaces fails with "requires
+  -- delegated backend".
+  --
+  -- Cases that genuinely need supervisor support (streaming, hard-
+  -- cancel, stderr-live) still return the delegated-backend error —
+  -- those can't be faithfully reproduced in-process via a single
+  -- exec call.
+  if req.streaming || req.needs_stderr_live || req.needs_hard_cancel then
+    ToolErrorResult({ id: id, tool: tool, message: "requires delegated backend (streaming/cancel features)" })
+  else {
+    let effective = if shell_tokens_in_process(req) || isSome(req.cwd) then {
+      let prefix = match req.cwd {
+        Some(d) => "cd ${d} && ",
+        None    => ""
+      };
+      let wrapped_cmd = "${prefix}${req.cmd}";
+      { cmd: "bash", args: ["-lc", wrapped_cmd], cwd: req.cwd, streaming: false, needs_stderr_live: false, needs_hard_cancel: false }
+    } else req;
+    match exec(effective.cmd, effective.args) {
       Err(err) =>
         if tool == "RunTests" then
           RunTestsResult({
@@ -754,6 +806,7 @@ func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolRe
         if tool == "RunTests" then to_test_result(id, req, out)
         else to_bash_result(id, req, out)
     }
+  }
 }
 
 func t_edit_single_replace_success() -> bool

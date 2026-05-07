@@ -1,0 +1,77 @@
+-- scripts/smoke_v2_policy.ail
+-- M4 smoke test for v2's per-call tool-gating policy.
+--
+-- Verifies:
+--   1. v2 calls dispatch_tool_policy(rt, ctx, envelope) for each typed
+--      ToolCall returned by step()
+--   2. Allow / NoOpinion → call dispatches via dispatch_one as before
+--   3. Deny(reason) → tool-role Message with structured denial JSON; the
+--      denied call does NOT reach run_native_batch
+--   4. The model sees the denial on the next turn and can correct course
+--
+-- The smoke runs with an empty extension registry (NoOpinion default for
+-- all calls), so this is primarily a regression check that the wiring
+-- doesn't crash and that the existing dispatch path still works after
+-- adding the policy gate. Real Deny coverage comes from the existing
+-- compose extension's policy hook (M5 exercises that).
+--
+-- Setup:
+--   export OPENROUTER_API_KEY=...
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --ai openrouter/z-ai/glm-5 --net-allow-http --net-allow-localhost \
+--     scripts/smoke_v2_policy.ail
+
+module scripts/smoke_v2_policy
+
+import std/io (println)
+import std/env (getEnv)
+import std/result (Result, Ok, Err)
+import src/core/agent_loop_v2 (run_v2)
+import src/core/ext/runtime (init_runtime)
+import src/core/ext/types (BudgetPlan)
+import src/core/types (Msg)
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let rt = init_runtime();
+
+  let budget: BudgetPlan = {
+    total: 4,
+    solver: 4,
+    verifier: 0
+  };
+
+  -- Prompt likely to make a model try a tool. With empty extension
+  -- registry, dispatch_tool_policy returns NoOpinion → call proceeds via
+  -- dispatch_one. We verify the policy gate fires (no crash), the call
+  -- runs through, and the loop terminates.
+  let initial_msgs: [Msg] = [
+    { role: "system", content: "You are a helpful assistant. Answer concisely." },
+    { role: "user", content: "What does 1+1 equal? One number, no tool calls." }
+  ];
+
+  -- Model is read from AILANG_SMOKE_MODEL so the matrix runner can drive
+  -- this smoke against multiple providers. Fallback is z-ai/glm-5 (the
+  -- pre-M9 hardcoded default) for direct invocation without the matrix.
+  let model_arg = match getEnv("AILANG_SMOKE_MODEL") {
+    Ok(v) => if v == "" then "openrouter/z-ai/glm-5" else v,
+    Err(_) => "openrouter/z-ai/glm-5"
+  };
+
+  let result = run_v2(
+    rt,
+    "smoke-test-v2-policy",
+    "",
+    false,
+    budget,
+    model_arg,
+    initial_msgs,
+    "/tmp",
+    4,
+    false  -- ohmy_pi (M6: native dispatch only for this smoke)
+  );
+
+  match result {
+    Ok(_) => println("--- M4 smoke PASS: policy gate did not block prose-only response ---"),
+    Err(e) => println("--- M4 smoke ERROR: code=${e.code} message=${e.message} ---")
+  }
+}

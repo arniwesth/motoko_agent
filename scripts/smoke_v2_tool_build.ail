@@ -1,0 +1,54 @@
+-- scripts/smoke_v2_tool_build.ail
+-- M9 task variant: explicit BashExec tool invocation.
+--
+-- Verifies the BashExec dispatch path through v2: model emits a typed
+-- BashExec tool_call → policy NoOpinion → handle Delegate → backend_for=
+-- Native (ohmy_pi=false; needs_delegation_for_process false for echo) →
+-- dispatch_one runs the shell command → tool result Message → next step
+-- prose summary → done.
+--
+-- `echo build-ok` is deterministic, fast, and harmless — exit 0, stdout
+-- "build-ok\n", no side effects. The smoke passes if run_v2 returns Ok.
+
+module scripts/smoke_v2_tool_build
+
+import std/io (println)
+import std/env (getEnv)
+import std/result (Result, Ok, Err)
+import src/core/agent_loop_v2 (run_v2)
+import src/core/ext/runtime (init_runtime)
+import src/core/ext/types (BudgetPlan)
+import src/core/types (Msg)
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let rt = init_runtime();
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+
+  let initial_msgs: [Msg] = [
+    { role: "system", content: "You are a coding assistant. Use the BashExec tool to run shell commands." },
+    { role: "user", content: "Run the shell command: echo build-ok . Then tell me what it printed." }
+  ];
+
+  let model_arg = match getEnv("AILANG_SMOKE_MODEL") {
+    Ok(v) => if v == "" then "openrouter/z-ai/glm-5" else v,
+    Err(_) => "openrouter/z-ai/glm-5"
+  };
+
+  let result = run_v2(
+    rt,
+    "smoke-test-v2-tool-build",
+    "",
+    false,
+    budget,
+    model_arg,
+    initial_msgs,
+    "/tmp",
+    4,
+    false
+  );
+
+  match result {
+    Ok(_) => println("--- M9-tool-build smoke PASS ---"),
+    Err(e) => println("--- M9-tool-build smoke ERROR: code=${e.code} message=${e.message} ---")
+  }
+}

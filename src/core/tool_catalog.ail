@@ -1,0 +1,75 @@
+-- src/core/tool_catalog.ail
+-- ToolSchema definitions for motoko_agent's 6 native tools, in the
+-- shape upstream `std/ai.runTools` expects (M-AI-TOOL-LOOP, target
+-- AILANG v0.17.0):
+--
+--   ToolSchema = { name: string, description: string, parameters: string }
+--
+-- `parameters` is a JSON Schema string — same shape as the existing
+-- non-streaming AI providers' tool definitions. The model uses these to
+-- decide which tool to call and with what arguments; runTools wraps each
+-- emitted ToolCall and forwards it to the dispatch callback (provided by
+-- src/core/tool_dispatch_adapter).
+--
+-- These schemas mirror the fork's existing tool argument shapes (look at
+-- src/core/tool_runtime.ail's `arg_string`/`arg_number`/`arg_bool` calls
+-- per-tool to see the field names). Keeping them aligned means the
+-- adapter's argument-decoding layer doesn't need a translation step.
+
+module src/core/tool_catalog
+
+import std/ai (ToolSchema)
+
+-- Each schema's `parameters` field is a JSON-Schema-shaped string. To keep
+-- the strings readable AILANG-side, we build them in helper functions
+-- rather than inline. Strings carry no escape problems at this size, but
+-- if a schema grows past ~30 lines, factor it into its own pure func.
+
+pure func read_file_schema() -> ToolSchema = {
+  name: "ReadFile",
+  description: "Read a file from the workdir. Use start/end to read a line range; default reads up to 200 lines.",
+  parameters: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Relative path within the workdir.\"},\"start\":{\"type\":\"integer\",\"description\":\"1-indexed first line (default 1)\"},\"end\":{\"type\":\"integer\",\"description\":\"1-indexed last line (default 200)\"}},\"required\":[\"path\"]}"
+}
+
+pure func write_file_schema() -> ToolSchema = {
+  name: "WriteFile",
+  description: "Write the given content to a file in the workdir. Creates parent directories if needed.",
+  parameters: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}"
+}
+
+pure func edit_file_schema() -> ToolSchema = {
+  name: "EditFile",
+  description: "Apply a sequence of substring edits to a file. Supports dry-run mode and SHA-256 guard for optimistic concurrency.",
+  parameters: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"}},\"required\":[\"old\",\"new\"]}},\"dry_run\":{\"type\":\"boolean\"},\"expected_sha256\":{\"type\":\"string\"}},\"required\":[\"path\",\"edits\"]}"
+}
+
+pure func bash_exec_schema() -> ToolSchema = {
+  name: "BashExec",
+  description: "Run a shell command in the workdir with capability gating. Output is captured to stdout/stderr with truncation past a configured byte cap.",
+  parameters: "{\"type\":\"object\",\"properties\":{\"cmd\":{\"type\":\"string\"},\"args\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"timeout_secs\":{\"type\":\"integer\"}},\"required\":[\"cmd\"]}"
+}
+
+pure func run_tests_schema() -> ToolSchema = {
+  name: "RunTests",
+  description: "Run the project's test suite (e.g. make test, pytest). Returns exit code, stdout, stderr.",
+  parameters: "{\"type\":\"object\",\"properties\":{\"cmd\":{\"type\":\"string\",\"description\":\"Test command, defaults to 'make test'\"},\"args\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[]}"
+}
+
+pure func search_schema() -> ToolSchema = {
+  name: "Search",
+  description: "Search files in the workdir for a regex pattern. Returns line-level matches with file path + line number.",
+  parameters: "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},\"dir\":{\"type\":\"string\",\"description\":\"Subdirectory to scope the search (default '.')\"}},\"required\":[\"pattern\"]}"
+}
+
+-- The full tool catalog motoko_agent advertises to the model. Pass this
+-- to upstream `runTools(model, msgs, tools(), dispatch, budget)`.
+export pure func tools() -> [ToolSchema] {
+  [
+    read_file_schema(),
+    write_file_schema(),
+    edit_file_schema(),
+    bash_exec_schema(),
+    run_tests_schema(),
+    search_schema()
+  ]
+}

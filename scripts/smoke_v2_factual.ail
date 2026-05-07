@@ -1,0 +1,57 @@
+-- scripts/smoke_v2_factual.ail
+-- M9 task variant: factual question, no tools expected.
+--
+-- Verifies the simplest path through v2: model emits prose with
+-- finish_reason=stop, no tool_calls, dispatch_solver_candidate returns
+-- NoDecision (empty registry), v2 emits `done` with the model's content.
+-- This is the MINIMAL valid response shape.
+--
+-- Distinct from policy-default: that prompt explicitly says "no tool
+-- calls"; this prompt is open-ended and lets the model decide. We're
+-- relying on the model to recognize that a one-word factual answer
+-- doesn't need a tool. If a provider routes this to a tool call anyway
+-- (some over-eager fine-tuned variants do), the smoke still passes —
+-- dispatch_calls handles it via the M3-M6 pipeline.
+
+module scripts/smoke_v2_factual
+
+import std/io (println)
+import std/env (getEnv)
+import std/result (Result, Ok, Err)
+import src/core/agent_loop_v2 (run_v2)
+import src/core/ext/runtime (init_runtime)
+import src/core/ext/types (BudgetPlan)
+import src/core/types (Msg)
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let rt = init_runtime();
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+
+  let initial_msgs: [Msg] = [
+    { role: "system", content: "You are a helpful assistant. Answer concisely." },
+    { role: "user", content: "What is the capital of France? One word." }
+  ];
+
+  let model_arg = match getEnv("AILANG_SMOKE_MODEL") {
+    Ok(v) => if v == "" then "openrouter/z-ai/glm-5" else v,
+    Err(_) => "openrouter/z-ai/glm-5"
+  };
+
+  let result = run_v2(
+    rt,
+    "smoke-test-v2-factual",
+    "",
+    false,
+    budget,
+    model_arg,
+    initial_msgs,
+    "/tmp",
+    4,
+    false
+  );
+
+  match result {
+    Ok(_) => println("--- M9-factual smoke PASS ---"),
+    Err(e) => println("--- M9-factual smoke ERROR: code=${e.code} message=${e.message} ---")
+  }
+}

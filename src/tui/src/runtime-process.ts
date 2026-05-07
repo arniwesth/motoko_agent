@@ -93,7 +93,9 @@ export type AgentEvent =
   | { type: "tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
   | { type: "tool_results"; request_id: string; phase: ToolResultsPhase; results: DelegatedResult[] }
   | { type: "native_tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
-  | { type: "native_tool_results"; request_id: string; results: NativeToolResult[] };
+  | { type: "native_tool_results"; request_id: string; results: NativeToolResult[] }
+  | { type: "v2_tool_dispatch_start"; step: number; stream_id: string; tool: string; id: string }
+  | { type: "v2_tool_dispatch_complete"; step: number; stream_id: string; id: string };
 
 export function parseAgentEventLine(line: string): AgentEvent | null {
   const trimmed = line.trim();
@@ -224,6 +226,13 @@ export class RuntimeProcess {
     if (process.env.AILANG_STDLIB_PATH) {
       childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
     }
+    // M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 cutover (2026-05-06): the
+    // upstream std/ai.step() typed-tool-use loop is now the default and
+    // only loop. The MOTOKO_AGENT_V2 env var is no longer consulted by
+    // the runtime — forwarding has been removed. All 6 legacy decision
+    // points (extension intercept, tool gating, tool-handle routing,
+    // ohmy_pi backend split, hybrid mode, multi-turn conversation_loop)
+    // are migrated and validated by the M9 25/25 provider matrix.
     if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
     if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
 

@@ -1,0 +1,184 @@
+-- src/core/tool_dispatch_adapter.ail
+-- Bridges upstream AILANG std/ai's `(ToolCall) -> string` dispatch contract
+-- (M-AI-TOOL-LOOP, target v0.17.0) to motoko_agent's existing
+-- run_native_batch dispatch engine.
+--
+-- Why an adapter:
+--   - Upstream `runTools` expects a callback `dispatch: (ToolCall) -> string`
+--     where ToolCall = { id, name, arguments }, arguments is a JSON-encoded
+--     string, and the return string is the tool result content fed back to
+--     the model on the next turn.
+--   - motoko_agent's existing dispatcher `run_native_batch` takes a list of
+--     `ToolCallEnvelope { id, tool, arguments: Json }` and returns
+--     `[ToolResultItem]` (an ADT with rich per-tool metadata: stdout,
+--     stderr, exit_code, file diffs, search matches, etc.).
+--   - This module provides the impedance match: ToolCall ↔ ToolCallEnvelope
+--     and ToolResultItem → string, so callers can pass `make_dispatch(...)`
+--     to upstream `runTools`.
+--
+-- The dispatcher closes over `workdir` (which `(ToolCall) -> string`
+-- doesn't carry) by returning a closure. The closure's effect row is
+-- ! {FS, Process} (inherited from run_native_batch); upstream `runTools`
+-- propagates that via row polymorphism so the call site infers
+-- ! {AI, FS, Process} automatically.
+--
+-- Companion to the streaming-side compat shim in src/core/ai_compat.ail.
+
+module src/core/tool_dispatch_adapter
+
+import std/ai (ToolCall)
+import std/json (Json, decode, encode, jo, ja, kv, js, jnum, jb)
+import std/result (Ok, Err)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/types (ToolResultItem, SearchMatch, ReadFileResult, SearchResult, WriteFileResult, EditFileResult, BashExecResult, RunTestsResult, ToolErrorResult)
+import src/core/tool_runtime (run_native_batch)
+
+-- Convert upstream ToolCall to motoko's ToolCallEnvelope.
+-- ToolCall.name → ToolCallEnvelope.tool (rename only)
+-- ToolCall.arguments (JSON-encoded string) → ToolCallEnvelope.arguments (decoded Json)
+--
+-- If the arguments string is malformed JSON, returns an envelope with
+-- an empty object as arguments. The downstream dispatcher's argument
+-- extraction (`arg_string`, `arg_number`, etc. in tool_runtime) handles
+-- missing fields with fallbacks, so an empty Json is a safe degraded
+-- state — produces a per-tool "missing arguments" error rather than
+-- crashing the entire turn.
+export func tool_call_to_envelope(call: ToolCall) -> ToolCallEnvelope {
+  let args_json = match decode(call.arguments) {
+    Ok(j) => j,
+    Err(_) => jo([])  -- malformed args → empty object; tool will report missing fields
+  } in
+  {
+    id: call.id,
+    tool: call.name,
+    arguments: args_json
+  }
+}
+
+-- Convert one motoko ToolResultItem (rich ADT) to a JSON object suitable
+-- for feeding back to the model. Captures all fields the model would
+-- realistically need to plan its next turn — file content for ReadFile,
+-- diffs for WriteFile/EditFile, exit_code + stdout/stderr for shell
+-- commands, search matches for Search.
+--
+-- The result is a Json object; caller encode()s to string for the
+-- upstream `(ToolCall) -> string` contract.
+export func tool_result_item_to_json(item: ToolResultItem) -> Json {
+  match item {
+    ReadFileResult(r) => jo([
+      kv("tool", js("ReadFile")),
+      kv("path", js(r.path)),
+      kv("content", js(r.content)),
+      kv("line_count", jnum(_int_to_float(r.line_count))),
+      kv("truncated", jb(r.truncated)),
+      kv("sha256", js(r.sha256)),
+      kv("exit_code", jnum(0.0))
+    ]),
+
+    SearchResult(r) => jo([
+      kv("tool", js("Search")),
+      kv("pattern", js(r.pattern)),
+      kv("matches", ja(search_matches_to_json(r.matches))),
+      kv("exit_code", jnum(0.0))
+    ]),
+
+    WriteFileResult(r) => jo([
+      kv("tool", js("WriteFile")),
+      kv("path", js(r.path)),
+      kv("bytes_written", jnum(_int_to_float(r.bytes_written))),
+      kv("sha256", js(r.sha256)),
+      kv("diff", js(r.diff)),
+      kv("exit_code", jnum(0.0))
+    ]),
+
+    EditFileResult(r) => jo([
+      kv("tool", js("EditFile")),
+      kv("path", js(r.path)),
+      kv("bytes_written", jnum(_int_to_float(r.bytes_written))),
+      kv("sha256", js(r.sha256)),
+      kv("diff", js(r.diff)),
+      kv("first_changed_line", jnum(_int_to_float(r.first_changed_line))),
+      kv("applied_edits", jnum(_int_to_float(r.applied_edits))),
+      kv("dry_run", jb(r.dry_run)),
+      kv("match_strategy", js(r.match_strategy)),
+      kv("exit_code", jnum(0.0))
+    ]),
+
+    BashExecResult(r) => jo([
+      kv("tool", js("BashExec")),
+      kv("cmd", js(r.cmd)),
+      kv("exit_code", jnum(_int_to_float(r.exit_code))),
+      kv("stdout", js(r.stdout)),
+      kv("stderr", js(r.stderr)),
+      kv("truncated", jb(r.meta.truncated))
+    ]),
+
+    RunTestsResult(r) => jo([
+      kv("tool", js("RunTests")),
+      kv("exit_code", jnum(_int_to_float(r.exit_code))),
+      kv("stdout", js(r.stdout)),
+      kv("stderr", js(r.stderr)),
+      kv("truncated", jb(r.meta.truncated))
+    ]),
+
+    ToolErrorResult(r) => jo([
+      kv("tool", js(r.tool)),
+      kv("error", jb(true)),
+      kv("message", js(r.message)),
+      kv("exit_code", jnum(1.0))
+    ])
+  }
+}
+
+-- Convert SearchMatch list element-by-element. Inline recursion because
+-- AILANG's std/list.map currently goes via row polymorphism that the
+-- type-checker doesn't always pin tightly enough for ADT-element lists;
+-- explicit recursion is robust and 5 LOC.
+func search_matches_to_json(matches: [SearchMatch]) -> [Json] {
+  match matches {
+    [] => [],
+    m :: rest => match_to_json(m) :: search_matches_to_json(rest)
+  }
+}
+
+func match_to_json(m: SearchMatch) -> Json {
+  jo([
+    kv("path", js(m.path)),
+    kv("line_number", jnum(_int_to_float(m.line_number))),
+    kv("line_text", js(m.line_text))
+  ])
+}
+
+-- dispatch_one is the (almost) drop-in adapter that satisfies upstream
+-- `runTools`'s `dispatch: (ToolCall) -> string` contract. It takes
+-- `workdir` as a leading parameter; the call site partial-applies it
+-- via a one-line lambda:
+--
+--   match runTools(model, msgs, tools, \call. dispatch_one(workdir, call), 8) { ... }
+--
+-- The lambda's effect row is inferred from the body's effects ({FS,
+-- Process}, inherited from run_native_batch). Upstream runTools
+-- propagates them via row polymorphism so the call-site effect row
+-- becomes ! {AI, FS, Process} automatically.
+--
+-- Behaviour:
+--   1. Convert ToolCall → ToolCallEnvelope (name → tool, decode arguments)
+--   2. Run [envelope] through run_native_batch with the bound workdir
+--   3. Convert the single ToolResultItem → JSON object → encoded string
+--   4. Return that string (it becomes the tool-role message content)
+--
+-- The "unexpected dispatcher result count" branch is defensive — given
+-- a single-element input, run_native_batch always returns a single-element
+-- output, but the type system doesn't enforce that. The branch keeps the
+-- callback total: no exceptions, no nil returns.
+export func dispatch_one(workdir: string, call: ToolCall) -> string ! {FS, Process} {
+  let envelope = tool_call_to_envelope(call) in
+  let results = run_native_batch([envelope], workdir) in
+  match results {
+    [r] => encode(tool_result_item_to_json(r)),
+    _ => encode(jo([
+           kv("error", jb(true)),
+           kv("message", js("internal: dispatcher returned 0 or >1 results for single call"))
+         ]))
+  }
+}

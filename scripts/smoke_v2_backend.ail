@@ -1,0 +1,73 @@
+-- scripts/smoke_v2_backend.ail
+-- M6 smoke test: verifies the per-call backend split via backend_for(call,
+-- ohmy_pi). Native calls are unaffected; Delegated calls (when ohmy_pi=true)
+-- return a structured delegated_deferred_message until the inbox-based
+-- ohmy_pi wait is migrated in M6.5.
+--
+-- We exercise this by directly invoking backend_for against synthetic
+-- ToolCallEnvelopes for the canonical Native (BashExec without delegation
+-- markers) and Delegated (ReadFile under ohmy_pi=true) cases.
+--
+-- Setup:
+--   ailang run --caps IO,Env,Clock --entry main scripts/smoke_v2_backend.ail
+
+module scripts/smoke_v2_backend
+
+import std/io (println)
+import std/json (jo)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/tool_runtime (backend_for)
+import src/core/types (ToolBackend)
+
+func backend_label(b: ToolBackend) -> string {
+  match b {
+    Native => "Native",
+    Delegated => "Delegated"
+  }
+}
+
+export func main() -> () ! {IO, Clock, Env} {
+  -- Case 1: BashExec is Native regardless of ohmy_pi when args don't trigger
+  -- needs_delegation_for_process (no exec_req shape in arguments here).
+  let envelope_bash: ToolCallEnvelope = {
+    id: "bash-1",
+    tool: "BashExec",
+    arguments: jo([])
+  };
+  let bash_native = backend_label(backend_for(envelope_bash, false));
+  let bash_pi = backend_label(backend_for(envelope_bash, true));
+  let _ = println("BashExec ohmy_pi=false → ${bash_native} (expect Native)");
+  let _ = println("BashExec ohmy_pi=true  → ${bash_pi} (expect Native — no delegation marker)");
+
+  -- Case 2: ReadFile/WriteFile/EditFile/Search route to Delegated when
+  -- ohmy_pi=true, Native when ohmy_pi=false.
+  let envelope_read: ToolCallEnvelope = {
+    id: "read-1",
+    tool: "ReadFile",
+    arguments: jo([])
+  };
+  let read_native = backend_label(backend_for(envelope_read, false));
+  let read_pi = backend_label(backend_for(envelope_read, true));
+  let _ = println("ReadFile ohmy_pi=false → ${read_native} (expect Native)");
+  let _ = println("ReadFile ohmy_pi=true  → ${read_pi} (expect Delegated)");
+
+  -- Case 3: Unknown tools default to Native regardless of ohmy_pi.
+  let envelope_unknown: ToolCallEnvelope = {
+    id: "x-1",
+    tool: "ExtensionTool",
+    arguments: jo([])
+  };
+  let x_native = backend_label(backend_for(envelope_unknown, false));
+  let x_pi = backend_label(backend_for(envelope_unknown, true));
+  let _ = println("ExtensionTool ohmy_pi=false → ${x_native} (expect Native)");
+  let _ = println("ExtensionTool ohmy_pi=true  → ${x_pi} (expect Native)");
+
+  -- Verify expectations
+  let pass_bash = bash_native == "Native" && bash_pi == "Native";
+  let pass_read = read_native == "Native" && read_pi == "Delegated";
+  let pass_unknown = x_native == "Native" && x_pi == "Native";
+
+  if pass_bash && pass_read && pass_unknown
+    then println("--- M6 backend-split smoke PASS ---")
+    else println("--- M6 backend-split smoke FAIL ---")
+}

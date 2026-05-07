@@ -1,0 +1,799 @@
+-- src/core/agent_loop_v2.ail
+-- Alternative agent loop using upstream std/ai.step() with TYPED tool_calls.
+-- Replaces motoko's text-based parse_tool_calls + indicates_continuation_intent
+-- string-matching layer with provider-native tool-use protocols (Anthropic
+-- tool_use blocks, OpenAI tool_calls field, Gemini functionCall — handled
+-- transparently by upstream step()).
+--
+-- Why a SEPARATE module rather than rewriting rpc_loop:
+--   - rpc_loop is 1494 LOC of intricate state-machine code with extension
+--     intercept dispatch, ohmy_pi backend split, hybrid mode, continuation
+--     intent feedback, and tool gating policies. Replacing in place is
+--     high-risk for users who depend on those features.
+--   - This v2 loop is the MINIMUM VIABLE agent: step → dispatch → loop.
+--     It demonstrates that upstream step() works end-to-end against motoko's
+--     existing tool dispatcher, without committing to dropping any of
+--     rpc_loop's features.
+--   - Selection between rpc_loop (legacy) and run_v2 (this) is a runtime
+--     decision via env var MOTOKO_AGENT_V2=1, so users can stress-test the
+--     v2 path against real workloads while keeping the legacy path as the
+--     default until the migration is fully validated.
+--
+-- What this loop deliberately DOES NOT include (vs rpc_loop):
+--   - Extension intercept dispatch (ContinueWithFeedback / Accept / NoIntercept)
+--   - Tool gating policy (apply_tool_policy)
+--   - Tool-handle routing (route_tool_handles for compose extensions)
+--   - Native vs ohmy_pi backend split
+--   - Hybrid mode (extract_bash for shell-prefix shorthand)
+--   - Trajectory caching, context-usage telemetry
+--
+-- These features can be added back incrementally if needed. The point of
+-- this v2 module is to prove the upstream typed API works.
+--
+-- Companion to: src/core/tool_dispatch_adapter (M1), src/core/tool_catalog (M2)
+
+module src/core/agent_loop_v2
+
+import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError)
+import std/io (println, readLine)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import std/string (trim, startsWith, substring)
+import std/string as Str (length)
+import src/core/tool_catalog (tools)
+import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_json)
+import src/core/parse (extract_bash)
+import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
+import src/core/tool_runtime (backend_for)
+import src/core/types (Msg, ToolBackend)
+import std/option (Option, Some, None)
+import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
+import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle)
+
+-- Strip the "openrouter/" model prefix before forwarding to upstream step().
+-- OpenRouter's API rejects the prefixed name. The fork's old code stored the
+-- prefix as part of the model identifier for routing-style dispatch; with
+-- upstream step() the AI handler is configured at --ai time, so the prefix
+-- is redundant noise that breaks the upstream API call.
+func strip_provider_prefix(model: string) -> string {
+  if startsWith(model, "openrouter/") then
+    let prefix_len = Str.length("openrouter/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else
+    model
+}
+
+-- emit a JSON line to stdout for the TS env-server to forward to the TUI.
+-- Same protocol as src/core/ai_compat (M-AI-CALL-STREAM-HELPER side).
+func emit_json(payload: Json) -> () ! {IO} {
+  println(encode(payload))
+}
+
+-- Convert motoko's [Msg] (system / user / assistant text-only) to upstream
+-- [Message] (which adds tool_calls + tool_call_id fields). For the initial
+-- conversation seed, all messages have empty tool_calls and tool_call_id.
+func msgs_to_messages(msgs: [Msg]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: [],
+      tool_call_id: ""
+    } :: msgs_to_messages(rest))
+  }
+}
+
+-- Build a [Message] entry for one assistant turn from the StepResult. Carries
+-- the typed tool_calls verbatim so the model sees its own tool_call IDs on
+-- the next turn (provider correlation).
+func step_result_to_message(result: StepResult) -> Message {
+  {
+    role: "assistant",
+    content: result.message.content,
+    tool_calls: result.tool_calls,
+    tool_call_id: ""
+  }
+}
+
+-- Build a tool-role Message containing a dispatcher result. The tool_call_id
+-- field is the load-bearing wire-format requirement: Anthropic / OpenAI /
+-- Gemini all correlate tool_use → tool_result by this id.
+func tool_result_message(call: ToolCall, content: string) -> Message {
+  {
+    role: "tool",
+    content: content,
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+-- Build a tool-role Message from a ToolResultEnvelope returned by an
+-- extension's response-intercept (e.g. compose_check_premise). The model
+-- didn't emit a tool_call for these — the extension synthesized one — so
+-- we use the envelope's own tool_call_id (the extension is responsible for
+-- generating one) and JSON-encode the full envelope as the message content.
+func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
+  {
+    role: "tool",
+    content: encode(result_to_json(envelope)),
+    tool_calls: [],
+    tool_call_id: envelope.tool_call_id
+  }
+}
+
+-- Build the per-turn ExtCtx that motoko's extension hooks receive. Mirrors
+-- mk_ext_ctx in rpc.ail but constructs from v2's typed-loop state instead
+-- of the legacy AgentState shape. history_slice converts upstream Message
+-- to motoko's Msg (text-only) since extensions inspect text not tool_calls.
+func mk_v2_ext_ctx(
+  task: string,
+  step_idx: int,
+  model: string,
+  cwd: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  history: [Message]
+) -> ExtCtx {
+  let remaining = if budget.total - step_idx < 0 then 0 else budget.total - step_idx;
+  {
+    task: task,
+    step: step_idx,
+    model: model,
+    cwd: cwd,
+    hybrid_tools: hybrid_tools,
+    budget: budget,
+    mode: "v2",
+    workdir: cwd,
+    env_server_url: env_url,
+    budget_remaining: remaining,
+    history_slice: messages_to_msgs(history),
+    state_key: "core:ext:v2"
+  }
+}
+
+-- Convert upstream [Message] back to motoko's [Msg] for ExtCtx.history_slice.
+-- Extensions inspect role + content for prose-based decisions; tool_calls
+-- and tool_call_id aren't part of motoko's Msg shape, so they're dropped.
+func messages_to_msgs(msgs: [Message]) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest => ({ role: m.role, content: m.content } :: messages_to_msgs(rest))
+  }
+}
+
+-- TUI wire-format helpers (M-MOTOKO-RPC-LOOP M10 follow-up): the legacy
+-- TUI renderer (src/tui/src/ui.ts) expects BATCHED native_tool_calls /
+-- native_tool_results events with `request_id` and `tool_calls` /
+-- `results` array fields, not the per-call events v2 originally emitted.
+-- These helpers convert v2's typed [ToolCall] and tool-role [Message]
+-- into the array shape the TUI renders. See loop_v2 for the emit calls.
+
+func tool_calls_to_envelope_jsons(calls: [ToolCall]) -> [Json] {
+  match calls {
+    [] => [],
+    c :: rest => call_to_json(tool_call_to_envelope(c)) :: tool_calls_to_envelope_jsons(rest)
+  }
+}
+
+-- Helper: pull a string field from a decoded JSON object with a fallback.
+func json_field_str(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None    => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(s) => s }
+  }
+}
+
+-- Helper: detect whether a JSON object has a boolean field set to true.
+-- Used to detect policy_denied_message / delegated_deferred_message
+-- payloads (both flag themselves with `error: true`).
+func json_field_bool_true(obj: Json, key: string) -> bool {
+  match get(obj, key) {
+    None    => false,
+    Some(j) => match j {
+      JBool(true) => true,
+      _           => false
+    }
+  }
+}
+
+-- Each tool-role Message produced by dispatch_calls has a JSON-encoded
+-- payload in its content (either dispatch_one's tool_result_item JSON,
+-- a policy_denied_message JSON, or a delegated_deferred_message JSON).
+-- The TUI's applyNativeToolResults reads `tool_call_id`, `exit_code`,
+-- `stdout`, `stderr`, `truncated` from each result entry — so we
+-- normalise to that shape, lifting tool_call_id from the Message and
+-- forwarding the inner payload's known fields with safe defaults.
+func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      let inner = match decode(m.content) {
+        Ok(j) => j,
+        Err(_) => jo([])
+      };
+      let stdout_str = json_field_str(inner, "stdout", "");
+      let stderr_str = json_field_str(inner, "stderr", "");
+      -- If the payload flags itself as an error (policy_denied_message
+      -- or delegated_deferred_message both set `error: true`), drive
+      -- the TUI's "failed" rendering by emitting exit_code: 1; otherwise
+      -- treat as success (exit_code: 0). dispatch_one's payloads always
+      -- include exit_code on the wire but parsing JSON numbers from
+      -- typed Json values requires a different accessor than we use here;
+      -- the boolean error gate is a simpler proxy that gets the TUI
+      -- coloring right for the v2-emitted shapes.
+      let is_error = json_field_bool_true(inner, "error");
+      let normalized = jo([
+        kv("tool_call_id", js(m.tool_call_id)),
+        kv("exit_code", jnum(if is_error then 1.0 else 0.0)),
+        kv("stdout", js(stdout_str)),
+        kv("stderr", js(stderr_str)),
+        kv("truncated", jb(false)),
+        kv("payload", inner)
+      ]);
+      normalized :: tool_messages_to_result_jsons(rest)
+    }
+  }
+}
+
+-- M7: Synthesize a BashExec ToolCall from a hybrid-mode shell command
+-- extracted from the assistant's prose. The model emitted no typed
+-- tool_calls (finish_reason != "tool_calls") but its content contained
+-- a fenced shell block (```bash / ```sh / ```shell / ```), so we treat
+-- that block as the canonical hybrid shorthand and pass it through the
+-- M3-M6 dispatch pipeline as if it were a typed BashExec call.
+--
+-- This preserves the full M4 policy gate + M5 tool-handle routing + M6
+-- backend split for hybrid commands (e.g. an extension can still Deny
+-- a hybrid `rm -rf /` just as it would deny a typed call). The
+-- synthetic call uses a "hybrid-step-N" id so it doesn't collide with
+-- model-emitted tool_call_ids on the wire.
+func synthesize_hybrid_bash_call(cmd: string, step_idx: int) -> ToolCall {
+  {
+    id: "hybrid-step-${show(step_idx)}",
+    name: "BashExec",
+    arguments: encode(jo([kv("cmd", js(cmd))]))
+  }
+}
+
+-- Build a structured tool-role Message indicating the ohmy_pi delegation
+-- pathway is not yet wired in v2. M6 plumbs split_by_backend through but
+-- defers the inbox-based wait_for_tool_results to a follow-up — for now
+-- delegated calls return this clear, recoverable error so the model can
+-- adapt (e.g. retry with a non-delegated argument shape, or surface that
+-- ohmy_pi was selected but unavailable).
+func delegated_deferred_message(call: ToolCall) -> Message {
+  let payload = encode(jo([
+    kv("error", jb(true)),
+    kv("delegated_backend_not_wired", jb(true)),
+    kv("tool", js(call.name)),
+    kv("note", js("v2 split_by_backend selected Delegated; the inbox-based ohmy_pi wait is deferred to a follow-up milestone. Re-run with settings.ohmy_pi=false or use a tool that resolves to the Native backend."))
+  ]));
+  {
+    role: "tool",
+    content: payload,
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+-- Build a denial tool-role Message for a ToolCall the policy gate rejected.
+-- The model sees a structured `{denied_by_policy, reason, tool}` JSON in the
+-- tool result, correlated by tool_call_id, so it can correct course on the
+-- next turn without ambiguity.
+func policy_denied_message(call: ToolCall, reason: string) -> Message {
+  let denial_payload = encode(jo([
+    kv("error", jb(true)),
+    kv("denied_by_policy", jb(true)),
+    kv("tool", js(call.name)),
+    kv("reason", js(reason))
+  ]));
+  {
+    role: "tool",
+    content: denial_payload,
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+-- Dispatch each ToolCall through the full per-call rpc_loop pipeline:
+--   1. Convert ToolCall → ToolCallEnvelope (M1 adapter)
+--   2. M4 — dispatch_tool_policy: Allow/Deny/NoOpinion
+--   3. M5 — dispatch_tool_handle: extension may handle the tool directly
+--      (Handled returning ToolResultEnvelope) or Delegate to native
+--   4. M6 — backend split: native vs ohmy_pi via backend_for
+--   5. dispatch_one for native path; deferred-error envelope for delegated
+--
+-- Per-call branching:
+--   Deny     → tool-role denial Message; skip handle + dispatch
+--   Allow/NoOpinion + Handled → tool-role Message from extension's envelope;
+--                               skip dispatch_one
+--   Allow/NoOpinion + Delegate + backend_for==Native    → tool-role Message
+--                                                          from dispatch_one
+--   Allow/NoOpinion + Delegate + backend_for==Delegated → tool-role
+--                                                          delegated_deferred_message
+--                                                          (full ohmy_pi inbox
+--                                                          wait deferred to
+--                                                          follow-up M6.5)
+--
+-- Effect row: {FS, Process, IO, Clock} (M4) + {AI, Env, Net, SharedMem,
+-- Stream} from on_tool_handle's declared effects = full agent stack.
+func dispatch_calls(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  calls: [ToolCall],
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool
+) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream} {
+  match calls {
+    [] => [],
+    call :: rest => {
+      let envelope = tool_call_to_envelope(call);
+      let policy = dispatch_tool_policy(rt, ctx, envelope);
+      match policy {
+        Deny(reason) => {
+          let _ = emit_json(jo([
+            kv("type", js("native_tool_denied")),
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("stream_id", js(stream_id)),
+            kv("tool", js(call.name)),
+            kv("id", js(call.id)),
+            kv("reason", js(reason))
+          ]));
+          let denial_msg = policy_denied_message(call, reason);
+          denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+        },
+        _ => {
+          -- M5: ask extensions whether they want to handle this tool directly
+          -- (e.g. compose's `Compose` tool dispatches its own pipeline).
+          let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+          match handle_decision {
+            Handled(result_env) => {
+              let _ = emit_json(jo([
+                kv("type", js("ext_tool_handled")),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("tool", js(call.name)),
+                kv("id", js(call.id)),
+                kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
+              ]));
+              -- Use the call.id (model's typed tool_call_id) instead of the
+              -- envelope's id for the tool-role Message correlation —
+              -- providers correlate by the model-emitted id, not the
+              -- extension-internal id.
+              let handled_msg: Message = {
+                role: "tool",
+                content: encode(result_to_json(result_env)),
+                tool_calls: [],
+                tool_call_id: call.id
+              };
+              handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+            },
+            Delegate => {
+              -- M6: backend split — Native goes through dispatch_one as
+              -- before; Delegated returns a structured deferred-error tool
+              -- result so the model can adapt. Full ohmy_pi inbox wait
+              -- migration is a follow-up (M6.5) — see delegated_deferred_message.
+              --
+              -- Important: when ohmy_pi=false the env-server's delegation
+              -- infrastructure isn't wired AT ALL (no inbox to wait on, no
+              -- TS-side dispatcher), so the legacy backend_for-via-
+              -- needs_delegation_for_process Delegated path has nowhere to
+              -- land. Force Native in that case — matches the practical
+              -- reality that motoko under env-server with ohmy_pi=false
+              -- runs every shell command in-process anyway, just via the
+              -- env-server's process supervisor. v2 in standalone mode
+              -- runs them in-process directly.
+              let backend = if ohmy_pi then backend_for(envelope, true) else Native;
+              match backend {
+                Delegated => {
+                  let _ = emit_json(jo([
+                    kv("type", js("delegated_tool_deferred")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("stream_id", js(stream_id)),
+                    kv("tool", js(call.name)),
+                    kv("id", js(call.id))
+                  ]));
+                  let deferred_msg = delegated_deferred_message(call);
+                  deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                },
+                Native => {
+                  -- Per-call trace (uses v2-specific type so the TUI's
+                  -- native_tool_calls renderer doesn't try to consume it).
+                  -- The batched native_tool_calls / native_tool_results
+                  -- events are emitted by loop_v2 around dispatch_calls.
+                  let _ = emit_json(jo([
+                    kv("type", js("v2_tool_dispatch_start")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("stream_id", js(stream_id)),
+                    kv("tool", js(call.name)),
+                    kv("id", js(call.id))
+                  ]));
+                  let result_content = dispatch_one(workdir, call);
+                  let _ = emit_json(jo([
+                    kv("type", js("v2_tool_dispatch_complete")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("stream_id", js(stream_id)),
+                    kv("id", js(call.id))
+                  ]));
+                  let msg = tool_result_message(call, result_content);
+                  msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- The v2 loop. Iterates until the model returns finish_reason != "tool_calls"
+-- (and any solver-candidate hooks accept the result) or step_budget hits zero.
+-- Returns the final messages list.
+--
+-- M3 wiring: between step() and tool dispatch, fires extension hooks at the
+-- two existing decision points motoko's rpc_loop uses (DP1 from the design
+-- doc). NoIntercept / NoDecision are no-ops; the typed-step protocol means
+-- prose-only responses unambiguously stop the loop (no continuation-intent
+-- heuristic needed).
+func loop_v2(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  msgs: [Message],
+  workdir: string,
+  step_idx: int,
+  step_budget: int,
+  ohmy_pi: bool
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  if step_budget <= 0 then Err({
+    code: "Internal",
+    message: "v2 loop: step budget exhausted",
+    retryable: false
+  })
+  else {
+    let stream_id = "step-${show(step_idx)}";
+    let _ = emit_json(jo([
+      kv("type", js("thinking_stream_start")),
+      kv("step", jnum(_int_to_float(step_idx))),
+      kv("stream_id", js(stream_id)),
+      kv("model", js(model))
+    ]));
+    match step(model, msgs, tools()) {
+      Err(e) => {
+        let _ = emit_json(jo([
+          kv("type", js("thinking_stream_end")),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("stream_id", js(stream_id)),
+          kv("status", js("errored"))
+        ]));
+        Err(e)
+      },
+      Ok(result) => {
+        let n_calls = List.length(result.tool_calls);
+        let _ = emit_json(jo([
+          kv("type", js("thinking_delta")),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("stream_id", js(stream_id)),
+          kv("seq", jnum(1.0)),
+          kv("text_delta", js(result.message.content))
+        ]));
+        let _ = emit_json(jo([
+          kv("type", js("thinking_stream_end")),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("stream_id", js(stream_id)),
+          kv("status", js("completed"))
+        ]));
+        let _ = emit_json(jo([
+          kv("type", js("thinking")),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("text", js(result.message.content)),
+          kv("finish_reason", js(result.finish_reason)),
+          kv("tool_calls", jnum(_int_to_float(n_calls)))
+        ]));
+
+        let assistant_msg = step_result_to_message(result);
+        let msgs_with_assistant = msgs ++ [assistant_msg];
+        let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant);
+
+        -- M3 DP1a: response-intercept hook. Extensions can synthesize a
+        -- tool result from the model's prose (e.g. compose_check_premise)
+        -- without the model having emitted a typed tool_call. When this
+        -- fires, we treat the synthesized envelope as a tool result —
+        -- append it as a tool-role Message and recurse for the next step.
+        match dispatch_response_intercept(rt, ctx, result.message.content) {
+          InterceptHandled(envelope) => {
+            let _ = emit_json(jo([
+              kv("type", js("ext_intercept_handled")),
+              kv("step", jnum(_int_to_float(step_idx))),
+              kv("tool", js(envelope.tool)),
+              kv("exit_code", jnum(_int_to_float(envelope.exit_code)))
+            ]));
+            let tool_msg = envelope_to_tool_message(envelope);
+            let next_msgs = msgs_with_assistant ++ [tool_msg];
+            loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+          },
+          NoIntercept => {
+            if result.finish_reason != "tool_calls" then {
+              -- M7 hybrid mode: when prose contains a fenced shell block
+              -- and hybrid_tools=true, synthesize a BashExec ToolCall and
+              -- run it through the same M3-M6 dispatch pipeline as a typed
+              -- tool_call. Skips solver_candidate (the prose isn't a final
+              -- answer — it's a shell shorthand the model wants executed).
+              let hybrid_attempt: Option[string] = if hybrid_tools then extract_bash(result.message.content) else None;
+              match hybrid_attempt {
+                Some(cmd) => {
+                  let _ = emit_json(jo([
+                    kv("type", js("hybrid_bash_extracted")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("cmd", js(cmd))
+                  ]));
+                  let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
+                  let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi);
+                  let next_msgs = msgs_with_assistant ++ tool_msgs;
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+                },
+                None => {
+              -- M3 DP1b: when the model emits prose without tool_calls, give
+              -- extensions a final chance to validate / re-prompt via
+              -- dispatch_solver_candidate. Three outcomes:
+              --   Accept(out)              => emit done with extension's output
+              --   ContinueWithFeedback(fb) => inject a user-role feedback msg, recurse
+              --   NoDecision               => emit done with the model's own content
+              match dispatch_solver_candidate(rt, ctx, result.message.content) {
+                Accept(output) => {
+                  let _ = emit_json(jo([
+                    kv("type", js("done")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("output", js(output)),
+                    kv("source", js("ext_solver_accept"))
+                  ]));
+                  Ok(msgs_with_assistant)
+                },
+                ContinueWithFeedback(feedback) => {
+                  let _ = emit_json(jo([
+                    kv("type", js("ext_solver_feedback")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("feedback", js(feedback))
+                  ]));
+                  let feedback_msg: Message = {
+                    role: "user",
+                    content: feedback,
+                    tool_calls: [],
+                    tool_call_id: ""
+                  };
+                  let next_msgs = msgs_with_assistant ++ [feedback_msg];
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+                },
+                NoDecision => {
+                  let _ = emit_json(jo([
+                    kv("type", js("done")),
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("output", js(result.message.content))
+                  ]));
+                  Ok(msgs_with_assistant)
+                }
+              }
+                }
+              }
+            }
+            else {
+              -- finish_reason = "tool_calls" → run M4 policy gate per-call
+              -- inside dispatch_calls; allowed dispatch via dispatch_one,
+              -- denied become tool-role denial messages.
+              --
+              -- Emit BATCHED native_tool_calls / native_tool_results events
+              -- with the request_id + tool_calls / results array shape the
+              -- TUI's renderToolCalls / applyNativeToolResults expect. Per-
+              -- call trace events (native_tool_denied, ext_tool_handled,
+              -- delegated_tool_deferred) are still emitted from inside
+              -- dispatch_calls and use distinct type names so the TUI
+              -- ignores them rather than mis-rendering.
+              let request_id = "step-${show(step_idx)}";
+              let _ = emit_json(jo([
+                kv("type", js("native_tool_calls")),
+                kv("request_id", js(request_id)),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("tool_calls", ja(tool_calls_to_envelope_jsons(result.tool_calls)))
+              ]));
+              let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi);
+              let _ = emit_json(jo([
+                kv("type", js("native_tool_results")),
+                kv("request_id", js(request_id)),
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("stream_id", js(stream_id)),
+                kv("results", ja(tool_messages_to_result_jsons(tool_msgs)))
+              ]));
+              let next_msgs = msgs_with_assistant ++ tool_msgs;
+              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- Public entry point. Takes motoko's [Msg] (the v1 shape used by rpc.ail)
+-- and translates to upstream [Message], runs the loop, returns the final
+-- conversation.
+--
+-- M3 signature: rpc.ail's run_with_config now passes ExtRuntime, the task
+-- string, env_server_url, hybrid_tools flag, and BudgetPlan so v2 can fire
+-- the extension-intercept and solver-candidate hooks at the same decision
+-- points rpc_loop fires them today.
+--
+-- M6 signature: ohmy_pi flag added so v2's per-call backend split mirrors
+-- rpc.ail's settings.ohmy_pi semantics. ohmy_pi=false (the default for
+-- non-pi deployments) keeps everything on the Native backend; ohmy_pi=true
+-- routes Read/Write/Edit/Search and shell calls flagged by
+-- needs_delegation_for_process to the Delegated path. The full inbox-based
+-- delegation wait is deferred — Delegated calls return a structured
+-- delegated_deferred_message tool result for now (M6.5 follow-up).
+--
+-- step_budget defaults to 8 if caller passes <= 0 (mirrors upstream
+-- runTools' typical default).
+export func run_v2(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  initial_msgs: [Msg],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let budget_steps = if step_budget <= 0 then 8 else step_budget;
+  let messages = msgs_to_messages(initial_msgs);
+  let resolved_model = strip_provider_prefix(model);
+  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi)
+}
+
+-- Run loop_v2 starting from an existing [Message] history (instead of the
+-- legacy [Msg] shape). Used by conversation_loop_v2 to resume after each
+-- user_message arrives — preserves the assistant/tool history accumulated
+-- across the prior task so the model retains context.
+export func run_v2_from_messages(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let budget_steps = if step_budget <= 0 then 8 else step_budget;
+  let resolved_model = strip_provider_prefix(model);
+  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi)
+}
+
+-- Read a JSON-shaped string field from a decoded Json object, returning
+-- "" when the key is absent or has the wrong type. Mirrors rpc.ail's
+-- get_str helper (kept inline to avoid an import-time circular reference
+-- between rpc.ail and agent_loop_v2.ail).
+func msg_get_str(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    None    => "",
+    Some(j) => match asString(j) { None => "", Some(s) => s }
+  }
+}
+
+-- M8 multi-turn driver: after a v2 task returns, drain stdin for the next
+-- user command and resume. Mirrors rpc.ail's conversation_loop in command
+-- handling (abort/exit/model_change/user_message) but operates on
+-- [Message] history instead of [Msg] + AgentState.
+--
+-- Commands recognized:
+--   abort | exit              → return () (TUI session ends)
+--   model_change { model }    → update model, recurse with same history
+--   user_message { content }  → append user msg, run_v2_from_messages,
+--                                 recurse with returned [Message]
+--   anything else (unparseable
+--     or unknown type)        → discard line, recurse (matches legacy
+--                                 conversation_loop fall-through)
+--
+-- EOF (readLine returns "") cleanly terminates the loop — the env-server
+-- closes stdin when the user exits the TUI.
+export func conversation_loop_v2(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let raw = readLine();
+  if raw == "" then ()
+  else match decode(raw) {
+    Err(_) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi),
+    Ok(obj) => {
+      let cmd_type = msg_get_str(obj, "type");
+      if cmd_type == "abort" || cmd_type == "exit" then ()
+      else if cmd_type == "model_change" then {
+        let new_model = msg_get_str(obj, "model");
+        let resolved_new = strip_provider_prefix(new_model);
+        conversation_loop_v2(rt, env_url, hybrid_tools, budget, resolved_new, history, workdir, step_budget, ohmy_pi)
+      }
+      else if cmd_type == "user_message" then {
+        let content = msg_get_str(obj, "content");
+        let user_msg: Message = {
+          role: "user",
+          content: content,
+          tool_calls: [],
+          tool_call_id: ""
+        };
+        let next_history = history ++ [user_msg];
+        let _ = emit_json(jo([
+          kv("type", js("session_start")),
+          kv("task", js(content)),
+          kv("model", js(model)),
+          kv("mode", js("v2"))
+        ]));
+        match run_v2_from_messages(rt, content, env_url, hybrid_tools, budget, model, next_history, workdir, step_budget, ohmy_pi) {
+          Ok(updated_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi),
+          Err(e) => {
+            let _ = emit_json(jo([
+              kv("type", js("error")),
+              kv("source", js("agent_loop_v2")),
+              kv("code", js(e.code)),
+              kv("message", js(e.message))
+            ]));
+            conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi)
+          }
+        }
+      }
+      else conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi)
+    }
+  }
+}
+
+-- M8 combined entry point: runs the initial task via run_v2, then enters
+-- conversation_loop_v2 for follow-up turns. On error from the initial run,
+-- emits a structured error event and still enters conversation_loop_v2
+-- with the original [Msg] history (translated) so the TUI session stays
+-- responsive — matching the legacy behavior where run_with_config falls
+-- through to conversation_loop after rpc_loop returns.
+export func run_v2_with_conversation(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  initial_msgs: [Msg],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let initial_messages = msgs_to_messages(initial_msgs);
+  match run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi) {
+    Ok(final_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, final_history, workdir, step_budget, ohmy_pi),
+    Err(e) => {
+      let _ = emit_json(jo([
+        kv("type", js("error")),
+        kv("source", js("agent_loop_v2")),
+        kv("code", js(e.code)),
+        kv("message", js(e.message))
+      ]));
+      conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi)
+    }
+  }
+}

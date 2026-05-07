@@ -27,5 +27,14 @@
   "go.toolsEnvVars": {
     "GOWORK": "off"
   },
-  "git.ignoreLimitWarning": true
+  "git.ignoreLimitWarning": true,
+
+  // Terminal tab titles: prefer the OSC-emitted title (`${sequence}`) over
+  // the process name (`${process}`). The motoko TUI emits OSC 0 with the
+  // string "[λ] motoko" on startup so VS Code shows a useful label
+  // instead of the underlying runtime ("bun.exe", "node"). When no OSC
+  // sequence is emitted (plain shell terminals) `${sequence}` is blank
+  // and the description falls back to the process name.
+  "terminal.integrated.tabs.title": "${sequence}",
+  "terminal.integrated.tabs.description": "${process}${separator}${task}"
 }

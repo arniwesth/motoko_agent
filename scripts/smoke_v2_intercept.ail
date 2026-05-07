@@ -1,0 +1,75 @@
+-- scripts/smoke_v2_intercept.ail
+-- M3 smoke test for v2's extension intercept + solver-candidate dispatch.
+--
+-- Verifies:
+--   1. v2 calls dispatch_response_intercept on each step return
+--   2. Accept(output) from solver-candidate hooks short-circuits the loop
+--      with a `done` event carrying the extension's output
+--   3. Without an extension that triggers, prose-only model responses still
+--      end the loop normally (NoDecision path → done with model content)
+--
+-- This test verifies WIRING — not the extension behavior itself. It runs
+-- v2 with an empty ext_runtime registry (no hooks → all decisions fall
+-- through to NoIntercept / NoDecision) against a benign prompt; success
+-- = clean done event without error.
+--
+-- For a positive-Accept test, motoko's existing claimcheck-using benchmark
+-- exercises the Accept path against a real extension (M5 pulls those tests
+-- in). M3's smoke just verifies the wiring doesn't crash.
+--
+-- Setup:
+--   export OPENROUTER_API_KEY=...
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --ai openrouter/z-ai/glm-5 --entry main --net-allow-http --net-allow-localhost \
+--     scripts/smoke_v2_intercept.ail
+
+module scripts/smoke_v2_intercept
+
+import std/io (println)
+import std/result (Result, Ok, Err)
+import src/core/agent_loop_v2 (run_v2)
+import src/core/ext/runtime (init_runtime)
+import src/core/ext/types (BudgetPlan)
+import src/core/types (Msg)
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  -- Empty extension registry — all extension hooks fall through to defaults
+  -- (NoIntercept / NoDecision). This means:
+  --   - dispatch_response_intercept always returns NoIntercept
+  --   - dispatch_solver_candidate always returns NoDecision
+  -- So v2's behavior should be: prose response → done event with model content.
+  let rt = init_runtime();
+
+  let budget: BudgetPlan = {
+    total: 4,
+    solver: 4,
+    verifier: 0
+  };
+
+  -- Initial conversation: a system prompt + a benign user task that doesn't
+  -- need tool dispatch. The model should respond with prose, the
+  -- solver_candidate hook returns NoDecision (empty registry), and v2 emits
+  -- `done` with the model's text.
+  let initial_msgs: [Msg] = [
+    { role: "system", content: "You are a helpful assistant. Answer briefly." },
+    { role: "user", content: "What is 2+2? Just the number, no explanation." }
+  ];
+
+  let result = run_v2(
+    rt,
+    "smoke-test-v2-intercept",  -- task
+    "",                          -- env_url (empty for smoke)
+    false,                       -- hybrid_tools off
+    budget,
+    "openrouter/z-ai/glm-5",
+    initial_msgs,
+    "/tmp/motoko-smoke",         -- workdir
+    4,                           -- step_budget
+    false                        -- ohmy_pi (M6: native dispatch for smoke)
+  );
+
+  match result {
+    Ok(_) => println("--- M3 smoke PASS: v2 loop completed without error ---"),
+    Err(e) => println("--- M3 smoke ERROR: code=${e.code} message=${e.message} ---")
+  }
+}

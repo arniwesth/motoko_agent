@@ -1,0 +1,92 @@
+-- scripts/smoke_v2_workdir_resolution.ail
+-- M-MOTOKO-WORKDIR-CWD-RESOLUTION regression smoke.
+--
+-- Bug: validate_path_common(workdir, path) used workdir for the bash
+-- escape-guard, but the leaf fs calls (readFileResult, writeFileResult,
+-- mkdirAllResult, rg) resolved against the AILANG runtime's process cwd
+-- instead of workdir.  Files written by WriteFile ended up relative to
+-- the ailang binary's cwd — or failed silently — instead of landing at
+-- ${workdir}/${path}.
+--
+-- Fix (M1): resolve_workdir_path(workdir, path) helper; applied at all
+-- leaf calls in run_read_file, run_write_file, run_edit_file, run_search.
+--
+-- This smoke:
+--   1. Creates an isolated temp workdir under /tmp/m-workdir-smoke-test
+--   2. Calls dispatch_one(workdir, WriteFile{path:"deep/nested/hello.txt"})
+--   3. Verifies the file landed at ${workdir}/deep/nested/hello.txt
+--      (the fix location), NOT at cwd-relative deep/nested/hello.txt
+--   4. Calls dispatch_one(workdir, ReadFile{path:"deep/nested/hello.txt"})
+--      and verifies the result is not an error
+--   5. Cleans up
+--
+-- Setup:
+--   ailang run --caps IO,FS,Process,Env,Clock --entry main scripts/smoke_v2_workdir_resolution.ail
+
+module scripts/smoke_v2_workdir_resolution
+
+import std/io (println)
+import std/string (contains)
+import std/json (jo, kv, js, jnum, encode)
+import std/fs (readFileResult, fileExists, mkdirAllResult)
+import std/process (exec)
+import src/core/tool_dispatch_adapter (dispatch_one)
+
+export func main() -> () ! {IO, FS, Process, Env, Clock} {
+  let workdir = "/tmp/m-workdir-smoke-test";
+  let rel_path = "deep/nested/hello.txt";
+  let abs_path = "${workdir}/${rel_path}";
+  let content  = "hello from workdir smoke";
+
+  -- Phase 1: set up a clean isolated workdir
+  let _ = exec("rm", ["-rf", workdir]);
+  let mk = mkdirAllResult(workdir);
+  let _ = match mk {
+    Ok(_)    => (),
+    Err(msg) => println("WARN: mkdirAll(${workdir}) failed: ${msg}")
+  };
+
+  -- Phase 2: WriteFile via dispatch_one — should create file at abs_path
+  let write_call: { id: string, name: string, arguments: string } = {
+    id:        "smoke-wr-1",
+    name:      "WriteFile",
+    arguments: encode(jo([kv("path", js(rel_path)), kv("content", js(content))]))
+  };
+  let write_result = dispatch_one(workdir, write_call);
+  let write_ok = not contains(write_result, "\"isError\":true");
+  let _ = if write_ok
+    then println("PASS: WriteFile dispatch returned non-error result")
+    else println("FAIL: WriteFile dispatch returned error: ${write_result}");
+
+  -- Phase 3: verify the file physically exists at the workdir-resolved location
+  let file_at_workdir = fileExists(abs_path);
+  let _ = if file_at_workdir
+    then println("PASS: file exists at ${abs_path}")
+    else println("FAIL: file NOT found at ${abs_path} (workdir resolution broken)");
+
+  -- Phase 4: verify content at the absolute path
+  let _ = match readFileResult(abs_path) {
+    Err(msg) => println("FAIL: readFileResult(${abs_path}) → Err(${msg})"),
+    Ok(got)  =>
+      if got == content
+      then println("PASS: content matches at ${abs_path}")
+      else println("FAIL: content mismatch — got: ${got}")
+  };
+
+  -- Phase 5: ReadFile via dispatch_one — should read from workdir location
+  let read_call: { id: string, name: string, arguments: string } = {
+    id:        "smoke-wr-2",
+    name:      "ReadFile",
+    arguments: encode(jo([kv("path", js(rel_path)), kv("start", jnum(1.0)), kv("end", jnum(5.0))]))
+  };
+  let read_result = dispatch_one(workdir, read_call);
+  let read_ok = not contains(read_result, "\"isError\":true");
+  let _ = if read_ok
+    then println("PASS: ReadFile dispatch returned non-error result")
+    else println("FAIL: ReadFile dispatch returned error: ${read_result}");
+
+  -- Cleanup
+  let _ = exec("rm", ["-rf", workdir]);
+
+  println("--- smoke_v2_workdir_resolution complete ---")
+}

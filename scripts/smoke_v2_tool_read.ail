@@ -1,0 +1,53 @@
+-- scripts/smoke_v2_tool_read.ail
+-- M9 task variant: explicit ReadFile tool invocation.
+--
+-- Verifies the ReadFile dispatch path through v2: model emits a typed
+-- ReadFile tool_call → policy NoOpinion → handle Delegate → backend_for=
+-- Native → dispatch_one reads /etc/hostname → tool result Message → next
+-- step prose with the contents → done.
+--
+-- /etc/hostname is universally readable on macOS/Linux dev machines, so
+-- the read should succeed. The smoke passes if run_v2 returns Ok.
+
+module scripts/smoke_v2_tool_read
+
+import std/io (println)
+import std/env (getEnv)
+import std/result (Result, Ok, Err)
+import src/core/agent_loop_v2 (run_v2)
+import src/core/ext/runtime (init_runtime)
+import src/core/ext/types (BudgetPlan)
+import src/core/types (Msg)
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let rt = init_runtime();
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+
+  let initial_msgs: [Msg] = [
+    { role: "system", content: "You are a coding assistant. Use the ReadFile tool when asked to read files." },
+    { role: "user", content: "Read /etc/hostname and tell me what it contains in one sentence." }
+  ];
+
+  let model_arg = match getEnv("AILANG_SMOKE_MODEL") {
+    Ok(v) => if v == "" then "openrouter/z-ai/glm-5" else v,
+    Err(_) => "openrouter/z-ai/glm-5"
+  };
+
+  let result = run_v2(
+    rt,
+    "smoke-test-v2-tool-read",
+    "",
+    false,
+    budget,
+    model_arg,
+    initial_msgs,
+    "/tmp",
+    4,
+    false
+  );
+
+  match result {
+    Ok(_) => println("--- M9-tool-read smoke PASS ---"),
+    Err(e) => println("--- M9-tool-read smoke ERROR: code=${e.code} message=${e.message} ---")
+  }
+}

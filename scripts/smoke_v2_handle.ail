@@ -1,0 +1,131 @@
+-- scripts/smoke_v2_handle.ail
+-- M5 smoke test: verifies the tool-handle routing dispatches Handled
+-- envelopes through dispatch_tool_handle without falling through to the
+-- native dispatcher.
+--
+-- We exercise this by directly calling dispatch_tool_handle against a
+-- synthetic ToolCall + a hand-built ExtRuntime/ExtCtx where one extension
+-- hook returns Handled(envelope) for a known tool name. This is faster
+-- and more deterministic than spinning up the full agent loop.
+--
+-- For the full M5 flow with real compose extensions (claimcheck,
+-- author_loop), see the production agent loop with MOTOKO_AGENT_V2=1
+-- and a registry that includes those hooks.
+--
+-- Setup:
+--   ailang run --caps IO,Env,Clock --entry main scripts/smoke_v2_handle.ail
+
+module scripts/smoke_v2_handle
+
+import std/io (println)
+import std/option (None)
+import std/json (jo, kv, js, jnum, jb, encode)
+import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PromptPatch, BudgetPatch)
+import src/core/ext/runtime (dispatch_tool_handle)
+import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, result_to_json)
+
+-- Stub that handles any "FakeTool" call by returning a synthetic envelope.
+-- For other tools, returns Delegate so the native path takes over.
+pure func handle_fake_tool(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  if call.tool == "FakeTool" then {
+    let env: ToolResultEnvelope = {
+      tool_call_id: call.id,
+      tool: call.tool,
+      exit_code: 0,
+      stdout: "synthetic-handled-output",
+      stderr: "",
+      metadata: jo([kv("source", js("ext-test-hook"))])
+    };
+    Handled(env)
+  } else {
+    Delegate
+  }
+}
+
+pure func nooppolicy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoIntercept
+}
+
+pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoDecision
+}
+
+pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func mk_handle_hook() -> ExtensionHooks {
+  {
+    id: "handle-fake-tool-hook",
+    provided_tools: ["FakeTool"],
+    on_build_system_prompt: empty_prompt_patch,
+    on_budget_plan: empty_budget_patch,
+    on_tool_policy: nooppolicy,
+    on_tool_handle: handle_fake_tool,
+    on_response_intercept: noop_response_intercept,
+    on_solver_candidate: nodecision_solver_candidate
+  }
+}
+
+export func main() -> () ! {IO, Clock, Env} {
+  let rt: ExtRuntime = {
+    registry: { hooks: [mk_handle_hook()] },
+    strict_mode: false
+  };
+
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  let ctx: ExtCtx = {
+    task: "test",
+    step: 0,
+    model: "test-model",
+    cwd: "/tmp",
+    hybrid_tools: false,
+    budget: budget,
+    mode: "v2",
+    workdir: "/tmp",
+    env_server_url: "",
+    budget_remaining: 4,
+    history_slice: [],
+    state_key: "test"
+  };
+
+  -- Case 1: FakeTool — extension should return Handled
+  let envelope_fake: ToolCallEnvelope = {
+    id: "test-call-fake-1",
+    tool: "FakeTool",
+    arguments: jo([])
+  };
+
+  let decision_fake = dispatch_tool_handle(rt, ctx, envelope_fake);
+  match decision_fake {
+    Delegate => println("--- M5 handle smoke FAIL: FakeTool — expected Handled, got Delegate ---"),
+    Handled(env) => {
+      let payload = encode(result_to_json(env));
+      let _ = println("--- M5 handle smoke PASS: FakeTool routed to extension ---");
+      let _ = println("Tool: ${env.tool}");
+      let _ = println("Stdout: ${env.stdout}");
+      println("Envelope: ${payload}")
+    }
+  };
+
+  -- Case 2: BashExec — extension should Delegate (native path)
+  let envelope_bash: ToolCallEnvelope = {
+    id: "test-call-bash-1",
+    tool: "BashExec",
+    arguments: jo([])
+  };
+
+  let decision_bash = dispatch_tool_handle(rt, ctx, envelope_bash);
+  match decision_bash {
+    Handled(_env) => println("--- M5 handle smoke FAIL: BashExec — expected Delegate, got Handled ---"),
+    Delegate => println("--- M5 handle smoke PASS: BashExec correctly delegated to native ---")
+  }
+}
