@@ -147,30 +147,20 @@ export pure func backend_for(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBacke
 }
 
 export func run_native_batch(calls: [ToolCallEnvelope], workdir: string) -> [ToolResultItem] ! {FS, Process} {
-  run_native_batch_rec(calls, [], workdir)
+  run_native_batch_rec(calls, workdir)
 }
 
-func run_native_batch_rec(calls: [ToolCallEnvelope], read_paths: [string], workdir: string) -> [ToolResultItem] ! {FS, Process} {
+func run_native_batch_rec(calls: [ToolCallEnvelope], workdir: string) -> [ToolResultItem] ! {FS, Process} {
   match calls {
     [] => [],
     call :: rest => {
-      let result = run_native_call(call, read_paths, workdir);
-      let next_read_paths = append_read_path_if_success(call, result, read_paths);
-      result :: run_native_batch_rec(rest, next_read_paths, workdir)
+      let result = run_native_call(call, workdir);
+      result :: run_native_batch_rec(rest, workdir)
     }
   }
 }
 
-func append_read_path_if_success(call: ToolCallEnvelope, result: ToolResultItem, read_paths: [string]) -> [string] {
-  if call.tool == "ReadFile" then
-    match result {
-      ReadFileResult(_) => normalize_relative_path(arg_string(call.arguments, "path", "")) :: read_paths,
-      _ => read_paths
-    }
-  else read_paths
-}
-
-func run_native_call(call: ToolCallEnvelope, read_paths: [string], workdir: string) -> ToolResultItem ! {FS, Process} {
+func run_native_call(call: ToolCallEnvelope, workdir: string) -> ToolResultItem ! {FS, Process} {
   let args = call.arguments;
   if call.tool == "ReadFile" then
     run_read_file(call.id, arg_string(args, "path", ""), arg_number(args, "start", 1), arg_number(args, "end", 200), workdir)
@@ -179,7 +169,7 @@ func run_native_call(call: ToolCallEnvelope, read_paths: [string], workdir: stri
   else if call.tool == "WriteFile" then
     run_write_file(call.id, arg_string(args, "path", ""), arg_string(args, "content", ""), workdir)
   else if call.tool == "EditFile" then
-    run_edit_file(call.id, arg_string(args, "path", ""), parse_edit_ops(arg_json(args, "edits")), arg_bool(args, "dry_run", false), arg_string(args, "expected_sha256", ""), read_paths, workdir)
+    run_edit_file(call.id, arg_string(args, "path", ""), parse_edit_ops(arg_json(args, "edits")), arg_bool(args, "dry_run", false), arg_string(args, "expected_sha256", ""), workdir)
   else if call.tool == "BashExec" then
     run_process_result("BashExec", call.id, parse_exec_from_args(args))
   else if call.tool == "RunTests" then
@@ -655,16 +645,13 @@ func run_edit_file(
   edits: [EditOp],
   dry_run: bool,
   expected_sha256: string,
-  read_paths: [string],
   workdir: string
 ) -> ToolResultItem ! {FS, Process} {
   match validate_path_common("EditFile", id, path, workdir) {
     Err(e) => e,
     Ok(_) => {
       let resolved = resolve_workdir_path(workdir, path);
-      if not list_contains(read_paths, normalize_relative_path(path)) then
-        ToolErrorResult({ id: id, tool: "EditFile", message: "read-before-edit policy violation: call ReadFile for this path before EditFile in the same tool batch" })
-      else if not fileExists(resolved) then
+      if not fileExists(resolved) then
         ToolErrorResult({ id: id, tool: "EditFile", message: "path does not exist: ${path}" })
       else if list_len(edits) <= 0 then
         ToolErrorResult({ id: id, tool: "EditFile", message: "missing edits" })
