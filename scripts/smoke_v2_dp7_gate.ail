@@ -101,18 +101,18 @@ func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
 }
 
 -- 3. Missing infrastructure (no Makefile): DP7 fails open → Approve.
---    /tmp/no-makefile-here-zzz doesn't exist, so `cd "$1"` fails inside bash;
+--    /tmp/dp7-smoke-empty doesn't exist, so `cd "$1"` fails inside bash;
 --    exec returns Ok with a non-zero exit code and stderr "No such file or
 --    directory". is_missing_infrastructure() detects that pattern and approves
 --    so projects without DP7 setup are not blocked.
 func test_dp7_fail_open_on_missing_make() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let script: [ScriptedStep] = [prose_step("done")];
   let result = run_v2_with_stub(
-    enabled_rt("/tmp/no-makefile-here-zzz", "make check_core"),
+    enabled_rt("/tmp/dp7-smoke-empty", "make check_core"),
     "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
     [],
-    "/tmp/no-makefile-here-zzz",
+    "/tmp/dp7-smoke-empty",
     4,
     false,
     0, no_rates(),

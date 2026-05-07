@@ -18,6 +18,15 @@ check_core:
 	@exit 0
 MK
 
+# Empty workdir: exists but has no Makefile. make emits "No targets specified
+# and no makefile found" — the canonical infrastructure-missing signal that
+# DP7's is_missing_infrastructure() should match for fail-open behaviour.
+# (We previously used a non-existent dir, but bash's cd error went to stderr
+# unredirected by the verifier's `2>&1`; an existing-but-empty dir gives a
+# fairer test of the fail-open detection.)
+mkdir -p /tmp/dp7-smoke-empty
+
 echo "DP7 smoke workdirs ready:"
-echo "  /tmp/dp7-smoke      (always-fail check_core)"
-echo "  /tmp/dp7-smoke-pass (always-pass check_core)"
+echo "  /tmp/dp7-smoke       (always-fail check_core — DP7 should reject)"
+echo "  /tmp/dp7-smoke-pass  (always-pass check_core — DP7 should approve)"
+echo "  /tmp/dp7-smoke-empty (no Makefile at all — DP7 should fail-open)"
