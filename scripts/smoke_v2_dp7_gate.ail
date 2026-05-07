@@ -26,14 +26,27 @@ module scripts/smoke_v2_dp7_gate
 import std/io (println)
 import std/result (Result, Ok, Err)
 import std/ai (Message, AIError)
-import src/core/config (CostRates)
-import src/core/ext/types (BudgetPlan)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/ext/types (BudgetPlan, ExtRuntime, ExtensionHooks)
 import src/core/agent_loop_v2 (run_v2_with_stub)
 import src/core/test/stub_step (
   ScriptedStep,
-  empty_rt,
   prose_step
 )
+
+-- Build a runtime with DP7 verification ENABLED. Required since a78e4db made
+-- DP7 opt-in: stub_step's empty_rt() defaults to verification.enabled=false,
+-- so the broken-workdir test wouldn't fire DP7 unless we explicitly enable.
+func enabled_rt(workdir: string, command: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: true, command: command };
+  { registry: { hooks: [] }, strict_mode: false, verification: v }
+}
+
+-- Disabled runtime (matches old empty_rt semantics for the fail-open test).
+func disabled_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [] }, strict_mode: false, verification: v }
+}
 
 func no_rates() -> CostRates {
   { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
@@ -50,7 +63,8 @@ func mk_budget() -> BudgetPlan {
 func test_dp7_rejects_broken_workdir() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let script: [ScriptedStep] = [prose_step("done")];
   let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+    enabled_rt("/tmp/dp7-smoke", "make check_core"),
+    "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
     [],
     "/tmp/dp7-smoke",   -- workdir whose make check_core always fails
@@ -70,7 +84,8 @@ func test_dp7_rejects_broken_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
 func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let script: [ScriptedStep] = [prose_step("done")];
   let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+    enabled_rt("/tmp/dp7-smoke-pass", "make check_core"),
+    "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
     [],
     "/tmp/dp7-smoke-pass",  -- workdir whose make check_core always passes
@@ -90,7 +105,8 @@ func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
 func test_dp7_fail_open_on_missing_make() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
   let script: [ScriptedStep] = [prose_step("done")];
   let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+    enabled_rt("/tmp/no-makefile-here-zzz", "make check_core"),
+    "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
     [],
     "/tmp/no-makefile-here-zzz",

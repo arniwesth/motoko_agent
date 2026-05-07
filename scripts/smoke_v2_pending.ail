@@ -37,7 +37,13 @@ import src/core/ext/types (
 )
 import src/core/ext/runtime (dispatch_tool_policy)
 import src/core/tool_contract (ToolCallEnvelope)
+import src/core/config (VerificationConfig)
+import std/ai (ToolSchema)
 import std/json (jo)
+
+-- New since a9b53e7: extensions declare their tool schemas via on_describe_tools.
+-- Test hooks return empty list (the canonical "extension provides no tools" answer).
+pure func empty_describe_tools() -> [ToolSchema] { [] }
 
 -- Policy-decision producers.
 pure func always_allow(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
@@ -87,6 +93,7 @@ func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecisio
   {
     id: id,
     provided_tools: [],
+    on_describe_tools: empty_describe_tools,
     on_build_system_prompt: empty_prompt_patch,
     on_budget_plan: empty_budget_patch,
     on_tool_policy: policy,
@@ -97,9 +104,11 @@ func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecisio
 }
 
 func mk_runtime(hooks: [ExtensionHooks]) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
   {
     registry: { hooks: hooks },
-    strict_mode: false
+    strict_mode: false,
+    verification: v
   }
 }
 
