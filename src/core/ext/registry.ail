@@ -5,33 +5,20 @@ import std/option (Option, Some, None)
 import src/core/ext/types (ExtensionHooks, ExtRegistry)
 import src/core/config (RuntimeConfig)
 import src/core/ext/compose/compose (register_with_config as compose_register)
-import src/core/ext/exa_search/exa_search (register_with_config as exa_search_register)
-import src/core/ext/mcp/mcp (register_with_config as mcp_register)
 import src/core/ext/registry_generated (resolve as gen_resolve)
 
 func register_compose(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
   compose_register(cfg)
 }
 
-func register_exa_search(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
-  exa_search_register(cfg)
-}
-
-func register_mcp(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
-  mcp_register(cfg)
-}
-
 func with_id(h: ExtensionHooks, id: string) -> ExtensionHooks {
   { h | id: id }
 }
 
--- Local resolve: only extensions not yet migrated to ailang-packages.
--- Migrated extensions (test_dummy, omnigraph, context_mode) are handled
--- by gen_resolve (src/core/ext/registry_generated).
+-- Local resolve: only compose remains (not yet migrated to ailang-packages).
+-- All other extensions handled by gen_resolve (src/core/ext/registry_generated).
 func resolve(name: string) -> Option[(RuntimeConfig) -> ExtensionHooks ! {Env, FS}] {
   if name == "compose" then Some(register_compose)
-  else if name == "exa_search" then Some(register_exa_search)
-  else if name == "mcp" then Some(register_mcp)
   else None
 }
 
@@ -88,6 +75,7 @@ export func debug_pure_names(r: ExtRegistry) -> [string] {
 -- Keep in sync with the generated resolve() after each migration.
 func gen_is_known(name: string) -> bool {
   name == "test_dummy" || name == "omnigraph" || name == "context_mode"
+    || name == "mcp" || name == "exa_search"
 }
 
 func is_known(name: string) -> bool {

@@ -4,9 +4,11 @@
 
 module src/core/ext/registry_generated
 
-import pkg/sunholo/motoko_ext_test_dummy/register (register_with_config) as register_test_dummy
-import pkg/sunholo/motoko_ext_omnigraph/register (register_with_config) as register_omnigraph
-import pkg/sunholo/motoko_ext_context_mode/register (register_with_config) as register_context_mode
+import pkg/sunholo/motoko_ext_test_dummy/register (register_with_config as register_test_dummy)
+import pkg/sunholo/motoko_ext_omnigraph/register (register_with_config as register_omnigraph)
+import pkg/sunholo/motoko_ext_context_mode/register (register_with_config as register_context_mode)
+import pkg/sunholo/motoko_ext_mcp/register (register_with_config as register_mcp)
+import pkg/sunholo/motoko_ext_exa_search/register (register_with_config as register_exa_search)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
 import std/option (Option, Some, None)
@@ -15,5 +17,7 @@ export func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] 
   if name == "test_dummy" then Some(register_test_dummy(cfg))
   else if name == "omnigraph" then Some(register_omnigraph(cfg))
   else if name == "context_mode" then Some(register_context_mode(cfg))
+  else if name == "mcp" then Some(register_mcp(cfg))
+  else if name == "exa_search" then Some(register_exa_search(cfg))
   else None
 }
