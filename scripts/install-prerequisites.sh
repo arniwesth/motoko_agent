@@ -7,7 +7,7 @@
 #   - Bun 1.x
 #   - Node.js 18+ and npm
 #   - context-mode CLI
-#   - AILANG runtime (cloned from github.com/sunholo-data/ailang at v0.15.2 tag)
+#   - AILANG runtime (cloned from github.com/sunholo-data/ailang at v0.16.2 tag)
 #   - bun dependencies for the TypeScript frontend (src/tui/)
 #   - Optional: Omnigraph CLI/server (with --with-omnigraph)
 # Usage:
@@ -352,7 +352,7 @@ install_ailang() {
   ensure_user_local_bin_on_path
 
   local ailang_src="$HOME/.local/share/ailang"
-  local ailang_ref="v0.15.2"
+  local ailang_ref="v0.16.2"
   log_info "Cloning AILANG ($ailang_ref) from github.com/sunholo-data/ailang..."
   if [[ -d "$ailang_src/.git" ]]; then
     log_info "Updating existing clone at $ailang_src..."
