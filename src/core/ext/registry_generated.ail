@@ -9,15 +9,44 @@ import pkg/sunholo/motoko_ext_omnigraph/register (register_with_config as regist
 import pkg/sunholo/motoko_ext_context_mode/register (register_with_config as register_context_mode)
 import pkg/sunholo/motoko_ext_mcp/register (register_with_config as register_mcp)
 import pkg/sunholo/motoko_ext_exa_search/register (register_with_config as register_exa_search)
+import pkg/sunholo/motoko_ext_compose/register (register_with_config as register_compose)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import src/core/ext/types (ExtRegistry)
+import std/string (split, trim)
 import std/option (Option, Some, None)
 
-export func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] {
+func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] {
   if name == "test_dummy" then Some(register_test_dummy(cfg))
   else if name == "omnigraph" then Some(register_omnigraph(cfg))
   else if name == "context_mode" then Some(register_context_mode(cfg))
   else if name == "mcp" then Some(register_mcp(cfg))
   else if name == "exa_search" then Some(register_exa_search(cfg))
+  else if name == "compose" then Some(register_compose(cfg))
   else None
+}
+
+func with_id(h: ExtensionHooks, id: string) -> ExtensionHooks {
+  { h | id: id }
+}
+
+func parse_tokens(xs: [string], idx: int, acc: [ExtensionHooks], cfg: RuntimeConfig) -> ExtRegistry ! {Env, FS} {
+  match xs {
+    [] => { hooks: acc },
+    raw :: rest => {
+      let name = trim(raw);
+      match resolve(name, cfg) {
+        None => parse_tokens(rest, idx + 1, acc, cfg),
+        Some(hook) => {
+          let id = "${name}#${show(idx)}";
+          parse_tokens(rest, idx + 1, acc ++ [with_id(hook, id)], cfg)
+        }
+      }
+    }
+  }
+}
+
+export func parse_core_ext_order(raw: string, cfg: RuntimeConfig) -> ExtRegistry ! {Env, FS} {
+  if trim(raw) == "" then { hooks: [] }
+  else parse_tokens(split(raw, ","), 0, [], cfg)
 }

@@ -13,6 +13,8 @@ ailang = ">=0.16.1"
 "sunholo/motoko_ext_context_mode" = { path = "../ailang-packages/packages/motoko-ext-context-mode" }
 "sunholo/motoko_ext_mcp" = { path = "../ailang-packages/packages/motoko-ext-mcp" }
 "sunholo/motoko_ext_exa_search" = { path = "../ailang-packages/packages/motoko-ext-exa-search" }
+"sunholo/motoko_ext_ai_compat" = { path = "../ailang-packages/packages/motoko-ext-ai-compat" }
+"sunholo/motoko_ext_compose"   = { path = "../ailang-packages/packages/motoko-ext-compose" }
 
 [extensions]
 packages      = [
@@ -21,10 +23,12 @@ packages      = [
   "sunholo/motoko_ext_context_mode@0.1.0",
   "sunholo/motoko_ext_mcp@0.1.0",
   "sunholo/motoko_ext_exa_search@0.1.0",
+  "sunholo/motoko_ext_compose@0.1.0",
 ]
-config_import = "src/core/config.RuntimeConfig"
-hooks_import  = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
-output        = "src/core/ext/registry_generated.ail"
+config_import   = "src/core/config.RuntimeConfig"
+hooks_import    = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
+registry_import = "src/core/ext/types.ExtRegistry"
+output          = "src/core/ext/registry_generated.ail"
 
 [effects]
 max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex"]
