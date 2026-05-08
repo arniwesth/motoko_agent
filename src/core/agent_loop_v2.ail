@@ -1137,6 +1137,18 @@ export func conversation_loop_v2(
   provider: StepProvider,
   session_id: string
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  -- Headless mode (M-MOTOKO-HEADLESS, 2026-05-08): skip the stdin-polling
+  -- conversation loop entirely when MOTOKO_HEADLESS=1. The TS TUI layer
+  -- (src/tui/src/index.ts) sets this env var when stdin is not a TTY
+  -- (CLI subprocess, eval-harness adapter, MCP-mediated invocation) so
+  -- the agent loop runs the initial task to completion and then exits 0
+  -- instead of hanging on readLine() forever (the AILANG readLine builtin
+  -- blocks on non-TTY stdin instead of returning EOF). This is the
+  -- M-BENCH-MOTOKO Day-1 design that originally got skipped — restored
+  -- after the AILANG eval-harness adapter smoke test surfaced the hang
+  -- on 2026-05-08 (msg_20260508_102147_4f9aa71d).
+  if getEnvOr("MOTOKO_HEADLESS", "") == "1" then ()
+  else {
   let raw = readLine();
   if raw == "" then ()
   else match decode(raw) {
@@ -1177,6 +1189,7 @@ export func conversation_loop_v2(
       }
       else conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
     }
+  }
   }
 }
 

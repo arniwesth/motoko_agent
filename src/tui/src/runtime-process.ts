@@ -217,6 +217,16 @@ export class RuntimeProcess {
       EXA_API_KEY: process.env.EXA_API_KEY,
       AILANG_FS_SANDBOX: workdir,
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
+      // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
+      // MOTOKO_HEADLESS=1 so the AILANG runtime's conversation_loop_v2
+      // skips its readLine() drain (which blocks indefinitely on non-TTY
+      // stdin instead of returning EOF) and exits cleanly after the first
+      // task completes. Manual override: set MOTOKO_HEADLESS in the parent
+      // env to force either mode regardless of TTY state.
+      // See agent_loop_v2.ail conversation_loop_v2 for the AILANG-side gate.
+      MOTOKO_HEADLESS:
+        process.env.MOTOKO_HEADLESS ??
+        (process.stdin.isTTY ? "" : "1"),
     };
     // AILANG v0.15.x migration: forward AILANG_STDLIB_PATH if set in the
     // parent env so callers can point the runtime at an upstream stdlib
