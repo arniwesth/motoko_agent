@@ -12,7 +12,7 @@
 -- with deny_all_rt() so the tool calls don't actually run.
 module src/core/test/stub_step
 
-import std/ai (step, StepResult, ToolCall, Message, AIError)
+import std/ai (step, stepWithCache, StepResult, ToolCall, Message, AIError, CacheBreakpoint)
 import std/list as List (length)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
@@ -79,6 +79,22 @@ export pure func terminal_step() -> StepResult {
   }
 }
 
+-- M-AI-PROMPT-CACHING opt-in (AILANG v0.18.4): cache the stable system prompt
+-- across turns. Routes per provider:
+--   - anthropic/* (incl. via openrouter/anthropic/*): stamps
+--     cache_control:{type:"ephemeral"} on system content block. ~90% off
+--     cached reads after the first turn warms the cache.
+--   - openai/* / google/*: NO-OP + once-per-session warning (their caching
+--     models don't accept this hint shape).
+--   - ollama/unknown: silent NO-OP.
+-- Empty list ([]) would behave bit-for-bit like the legacy step() — we
+-- deliberately set the system breakpoint here because motoko's system prompt
+-- is large (~21K tokens for the AILANG eval-harness teaching prompt) and
+-- stable across all turns of a session.
+pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
+  [{ position: "system", ttl: "ephemeral" }]
+}
+
 -- Dispatch one step call through the provider.
 -- Returns both the step result and the updated provider (tail of script for Scripted).
 -- Loop callers thread next_provider into their recursive call.
@@ -91,7 +107,7 @@ export func dispatch_step(
 ) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI} {
   match provider {
     LiveAI => {
-      { result: step(model, msgs, tools_with_extensions(rt)), next_provider: LiveAI }
+      { result: stepWithCache(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint()), next_provider: LiveAI }
     },
     Scripted(script) => {
       match script {
