@@ -17,6 +17,36 @@ function isInternalComposeStream(streamId: string): boolean {
   return id.startsWith("compose-");
 }
 
+// sanitizeSessionID strips characters that would break filesystem paths or
+// allow path traversal. Defensive against hostile MOTOKO_SESSION_ID values
+// — the env var is set by the AILANG adapter from a uuid which is already
+// safe, but a misconfigured operator or future caller could pass arbitrary
+// text. Rules:
+//   1. Replace any char outside [a-zA-Z0-9_-] with underscore.
+//   2. Collapse any sequence of dots (..) to a single underscore — kills
+//      path-traversal attempts while preserving ordinary names.
+//   3. Reject results that are empty, all-dots, all-underscores, or "." /
+//      ".." — fall back to a session_<timestamp> sentinel so the run
+//      still produces a JSONL (rather than failing inside spawn).
+function sanitizeSessionID(raw: string): string {
+  // Step 1: replace forbidden chars with underscore.
+  let safe = raw.replace(/[^a-zA-Z0-9_.-]/g, "_");
+  // Step 2: collapse any run of dots — defends against ".." and ".../...".
+  safe = safe.replace(/\.\.+/g, "_");
+  // Step 3: cap length (FS path limit safety).
+  safe = safe.slice(0, 200);
+  // Step 4: reject degenerate results that can't be safe filenames.
+  if (
+    safe === "" ||
+    safe === "." ||
+    safe === ".." ||
+    /^[._]+$/.test(safe)
+  ) {
+    return `session_${Date.now()}`;
+  }
+  return safe;
+}
+
 function stripLikelyInlineToolBlob(text: string): string {
   const m = text.match(/^\s*json\s*\{/i);
   if (!m || m.index === undefined) return text;
@@ -46,9 +76,20 @@ export class SessionLogger {
     const dir = path.join(projectRoot, ".motoko", "logfile");
     fs.mkdirSync(dir, { recursive: true });
 
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    this.filePath = path.join(dir, `session_${ts}.jsonl`);
-    this.markdownPath = path.join(dir, `session_${ts}.md`);
+    // M-MOTOKO-EVAL-HARNESS-HARDENING M4a (gap #4): when MOTOKO_SESSION_ID
+    // is set (the AILANG eval harness adapter sets it before spawning), use
+    // it as the filename stem so the JSONL filename matches what the
+    // adapter searches for AND what AILANG-side derive_session_id() returns.
+    // Pre-M4a, three session_ids coexisted: (a) adapter env var, (b) this
+    // ISO-timestamp filename, (c) AILANG-side derive_session_id — only (a)
+    // and (c) matched. Now all three converge on the env var when set.
+    // ISO timestamp remains the fallback for interactive runs (no env var).
+    const envID = (process.env.MOTOKO_SESSION_ID ?? "").trim();
+    const stem = envID !== ""
+      ? sanitizeSessionID(envID)
+      : `session_${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    this.filePath = path.join(dir, `${stem}.jsonl`);
+    this.markdownPath = path.join(dir, `${stem}.md`);
     this.jsonlStream = fs.createWriteStream(this.filePath, { flags: "a" });
     this.markdownStream = fs.createWriteStream(this.markdownPath, { flags: "a" });
     this.tuiVersion = tuiVersion;
