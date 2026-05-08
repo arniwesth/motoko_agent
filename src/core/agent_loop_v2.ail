@@ -859,7 +859,6 @@ func loop_v2(
           kv("finish_reason", js(result.finish_reason)),
           kv("tool_calls", jnum(_int_to_float(n_calls)))
         ] ++ usage_kvs);
-        let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("after_thinking_emit"))]);
 
         let assistant_msg = step_result_to_message(result);
         let msgs_with_assistant = msgs ++ [assistant_msg];
@@ -896,7 +895,6 @@ func loop_v2(
           cost_millicents: new_total_cost,
           cost_warned_pct: new_warned_pct
         };
-        let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("before_dispatch_response_intercept"))]);
 
         -- M3 DP1a: response-intercept hook. Extensions can synthesize a
         -- tool result from the model's prose (e.g. compose_check_premise)
@@ -915,7 +913,6 @@ func loop_v2(
             loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
           },
           NoIntercept => {
-            let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("after_intercept_NoIntercept"))]);
             if result.finish_reason != "tool_calls" then {
               -- M7 hybrid mode: when prose contains a fenced shell block
               -- and hybrid_tools=true, synthesize a BashExec ToolCall and
@@ -941,26 +938,21 @@ func loop_v2(
               --   Accept(out)              => emit done with extension's output
               --   ContinueWithFeedback(fb) => inject a user-role feedback msg, recurse
               --   NoDecision               => emit done with the model's own content
-              let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("before_dispatch_solver_candidate"))]);
               match dispatch_solver_candidate(rt, ctx, result.message.content) {
                 Accept(output) => {
-                  let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("solver_Accept_before_dp7"))]);
                   match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
-                      let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("Accept_dp7_None_before_run_summary"))]);
                       -- IMPORTANT: emit run_summary BEFORE done. The TS TUI
                       -- layer (src/tui/src/index.ts) calls process.exit(0)
                       -- on the `done` event, which kills the AILANG runtime
                       -- subprocess. If we emitted done first, run_summary
                       -- would be lost mid-flush. Ordering: summary → done.
                       let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
-                      let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("Accept_after_run_summary_before_done"))]);
                       let _ = emit_event(session_id, "done", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("output", js(output)),
                         kv("source", js("ext_solver_accept"))
                       ]);
-                      let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("Accept_after_done"))]);
                       Ok(msgs_with_assistant)
                     },
                     Some(retry_msg) => {
@@ -984,20 +976,16 @@ func loop_v2(
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
                 NoDecision => {
-                  let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("solver_NoDecision_before_dp7"))]);
                   match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
-                      let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("NoDecision_dp7_None_before_run_summary"))]);
                       -- IMPORTANT: run_summary BEFORE done — see Accept branch
                       -- above for rationale (TS TUI's process.exit(0) on done
                       -- would otherwise truncate run_summary mid-flush).
                       let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
-                      let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("NoDecision_after_run_summary_before_done"))]);
                       let _ = emit_event(session_id, "done", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("output", js(result.message.content))
                       ]);
-                      let _ = emit_event(session_id, "debug:checkpoint", [kv("name", js("NoDecision_after_done"))]);
                       Ok(msgs_with_assistant)
                     },
                     Some(retry_msg) => {

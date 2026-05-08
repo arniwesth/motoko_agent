@@ -504,11 +504,21 @@ async function main(): Promise<void> {
       aiOptionsJson,
       (event) => {
         logger.log(event);
-        if (event.type === "done" || event.type === "error") logger.close();
+        // For terminal events, drain the JSONL stream BEFORE letting the UI
+        // handler call process.exit. Otherwise process.exit drops the
+        // WriteStream's pending buffer — losing run_summary, done, and any
+        // events emitted in the same flush window. See M-MOTOKO-EVAL-HARNESS-
+        // HARDENING gap #1 / gap #10 for the bisection.
+        if (event.type === "done" || event.type === "error") {
+          void logger.close().then(() => {
+            ui.handleEvent(event);
+          });
+          return;
+        }
         ui.handleEvent(event);
       },
       () => {
-        logger.close();
+        void logger.close();
         sessionLogger = undefined;
         ui.stop();
       },
@@ -544,7 +554,9 @@ async function main(): Promise<void> {
         ui.handleEvent(event);
       },
       () => {
-        logger.close();
+        // Drain JSONL stream BEFORE process.exit so the tail (run_summary,
+        // done) reaches disk. See M-MOTOKO-EVAL-HARNESS-HARDENING gap #1.
+        const closing = logger.close();
         sessionLogger = undefined;
         ui.runtimeProcess = undefined;
         if (interrupted) {
@@ -557,8 +569,10 @@ async function main(): Promise<void> {
           errorOccurred = false;
           ui.setAwaitingTask(true);
         } else {
-          ui.stop();
-          process.exit(0);
+          void closing.then(() => {
+            ui.stop();
+            process.exit(0);
+          });
         }
       },
     );

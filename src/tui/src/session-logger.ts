@@ -161,10 +161,12 @@ export class SessionLogger {
     this.logTranscriptEvent(event);
   }
 
-  close(): void {
-    if (this.closed) return;
+  close(): Promise<void> {
+    if (this.closed) return Promise.resolve();
     this.closed = true;
-    this.jsonlStream.end();
-    this.markdownStream.end();
+    return Promise.all([
+      new Promise<void>((resolve) => this.jsonlStream.end(() => resolve())),
+      new Promise<void>((resolve) => this.markdownStream.end(() => resolve())),
+    ]).then(() => undefined);
   }
 }
