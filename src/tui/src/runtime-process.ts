@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from "child_process";
+import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
@@ -182,6 +183,37 @@ function supervisorWorkdirArg(workdir: string): string {
   return workdir;
 }
 
+// M-MOTOKO-EVAL-HARNESS-HARDENING gap #6: when WORKDIR is a per-task scratch
+// dir (e.g. AILANG eval harness), the AILANG runtime's FS effect is sandboxed
+// to that dir — so it CANNOT read profile config from the fork at
+// MOTOKO_REPO/.motoko/config/<profile>/. This mirror copies the profile dir
+// into <workdir>/.motoko/config/<profile>/ so the runtime's profile lookup
+// succeeds inside the sandbox. No-op when (a) MOTOKO_REPO unset, (b) workdir
+// is the fork itself, or (c) workdir already has a profile dir.
+function mirrorProfileFromRepo(
+  workdir: string,
+  profile: string,
+  repoPath: string,
+): void {
+  const repo = repoPath.trim();
+  if (repo === "") return;
+  const absWorkdir = path.resolve(workdir);
+  const absRepo = path.resolve(repo);
+  if (absWorkdir === absRepo) return;
+  const dst = path.join(absWorkdir, ".motoko", "config", profile);
+  if (fs.existsSync(path.join(dst, "config.json"))) return;
+  const src = path.join(absRepo, ".motoko", "config", profile);
+  if (!fs.existsSync(path.join(src, "config.json"))) return;
+  fs.mkdirSync(dst, { recursive: true });
+  for (const entry of fs.readdirSync(src)) {
+    const srcFile = path.join(src, entry);
+    const dstFile = path.join(dst, entry);
+    if (fs.statSync(srcFile).isFile()) {
+      fs.copyFileSync(srcFile, dstFile);
+    }
+  }
+}
+
 export class RuntimeProcess {
   private proc: ChildProcess;
   private dead = false;
@@ -227,6 +259,13 @@ export class RuntimeProcess {
       MOTOKO_HEADLESS:
         process.env.MOTOKO_HEADLESS ??
         (process.stdin.isTTY ? "" : "1"),
+      // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): forward
+      // MOTOKO_REPO so the AILANG runtime can fall back to the fork's
+      // bundled profile (.motoko/config/<profile>) when WORKDIR is a
+      // per-task scratch dir without its own .motoko/config. Without
+      // this, eval-harness runs see extensions.order=[] and other
+      // profile defaults silently mask user-configured behavior.
+      MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
     };
     // AILANG v0.15.x migration: forward AILANG_STDLIB_PATH if set in the
     // parent env so callers can point the runtime at an upstream stdlib
@@ -245,6 +284,16 @@ export class RuntimeProcess {
     // are migrated and validated by the M9 25/25 provider matrix.
     if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
     if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
+
+    // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): mirror the
+     // requested profile dir from MOTOKO_REPO into <workdir>/.motoko/config
+     // when the workdir doesn't already have one. AILANG_FS_SANDBOX
+     // restricts the runtime's FS effect to <workdir>; without this mirror,
+     // the agent silently falls back to default config (extensions=[],
+     // no cost_rates) because reading the fork's profile would escape the
+     // sandbox. Mirror runs at most once per spawn and is a no-op when
+     // workdir is already the fork itself.
+    mirrorProfileFromRepo(workdir, profile, childEnv.MOTOKO_REPO ?? "");
 
     const supervisorArgs = [
       "--profile",

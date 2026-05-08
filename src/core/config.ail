@@ -465,13 +465,39 @@ func apply_extensions_cli(ext: ExtensionConfig, cli: CliOverrides) -> ExtensionC
   }
 }
 
+-- Resolve where to read the profile config from. Lookup order:
+--   1. <workdir>/.motoko/config/<profile>/config.json    (per-repo profile)
+--   2. <workdir>/.motoko/config.json                      (legacy flat config)
+--   3. <MOTOKO_REPO>/.motoko/config/<profile>/config.json (fork-bundled profile)
+-- The MOTOKO_REPO fallback is required by the AILANG eval harness adapter
+-- (M-MOTOKO-EXECUTOR-ADAPTER) — it sets WORKDIR to a per-task scratch dir
+-- that doesn't carry .motoko/config, so without this fallback the profile
+-- silently degrades to defaults (extensions.order=[], no cost_rates, etc.).
+-- See M-MOTOKO-EVAL-HARNESS-HARDENING gap #6.
+func resolve_profile_dir(workdir: string, profile: string) -> string ! {Env, FS} {
+  let dir0 = profile_dir_for(workdir, profile);
+  let flat_dir = motoko_dir(workdir);
+  if fileExists("${dir0}/config.json") then dir0
+  else if fileExists("${flat_dir}/config.json") then flat_dir
+  else
+    match getEnv("MOTOKO_REPO") {
+      Ok(repo) => {
+        let trimmed = trim(repo);
+        if trimmed == "" then dir0
+        else {
+          let repo_dir = profile_dir_for(trimmed, profile);
+          if fileExists("${repo_dir}/config.json") then repo_dir else dir0
+        }
+      },
+      Err(_) => dir0
+    }
+}
+
 export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO} {
   let cli = parse_cli_args(args);
   let profile = active_profile(cli.profile);
   let workdir = if cli.workdir != "" then cli.workdir else ".";
-  let dir0 = profile_dir_for(workdir, profile);
-  let flat_dir = motoko_dir(workdir);
-  let profile_dir = if fileExists("${flat_dir}/config.json") && not fileExists("${dir0}/config.json") then flat_dir else dir0;
+  let profile_dir = resolve_profile_dir(workdir, profile);
   let core = read_json_or_empty("${profile_dir}/config.json");
   let compose = read_json_or_empty("${profile_dir}/compose.json");
   let context_mode = read_json_or_empty("${profile_dir}/context_mode.json");
