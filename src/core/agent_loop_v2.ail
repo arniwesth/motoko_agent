@@ -927,8 +927,33 @@ func loop_v2(
                     kv("cmd", js(cmd))
                   ]);
                   let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
+                  -- M-MOTOKO-HYBRID-TOOL-CORRELATION (v0.18.3): patch the
+                  -- prior assistant message to include the synthetic
+                  -- tool_call as a tool_use block. Without this,
+                  -- Anthropic Bedrock rejects the subsequent tool_result
+                  -- with "tool_result block must have a corresponding
+                  -- tool_use block in the previous message" — it
+                  -- enforces tool_use_id correlation strictly. Direct
+                  -- Anthropic API + Vertex are permissive (accept
+                  -- orphaned tool_results) but Bedrock fails the
+                  -- entire request with HTTP 400. Same provider-
+                  -- asymmetry pattern as the v0.18.1 dotted-tool-name
+                  -- bug. The model didn't generate this tool_use, but
+                  -- Bedrock doesn't care about authorship — only about
+                  -- the tool_use_id being correlatable in the message
+                  -- thread. By replacing assistant_msg's tool_calls
+                  -- (which would otherwise be empty for prose-only
+                  -- model output), every Anthropic backend accepts
+                  -- the conversation.
+                  let augmented_assistant_msg: Message = {
+                    role: "assistant",
+                    content: result.message.content,
+                    tool_calls: [synth_call],
+                    tool_call_id: ""
+                  };
+                  let msgs_with_augmented = msgs ++ [augmented_assistant_msg];
                   let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
-                  let next_msgs = msgs_with_assistant ++ tool_msgs;
+                  let next_msgs = msgs_with_augmented ++ tool_msgs;
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
                 None => {
