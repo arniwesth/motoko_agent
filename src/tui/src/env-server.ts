@@ -398,7 +398,20 @@ type ComposeRequest = {
   system_prompt?: string;
 };
 
-export function startEnvServer(port: number, workdir: string): void {
+// startEnvServer binds the embedded HTTP server. Pass port=0 to let the
+// kernel pick a free port atomically (eliminates the TOCTOU race that
+// pick_free_port-style probes have when --agent-parallel >= 2 spawns
+// concurrent motoko sessions). Returns the actual bound port — the
+// caller MUST use this value (not the input) for downstream URLs and
+// env vars passed to the runtime.
+//
+// M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): pre-fix, the
+// wrapper's pick_free_port did `lsof -i :$port` then bound, with a race
+// window between the probe and the actual bind. Two parallel motoko
+// spawns would both pick the same port, second's bind failed → wrapper
+// exited before AILANG runtime started → 0-byte JSONL → adapter reported
+// "motoko terminated without emitting run_summary (likely crash)".
+export async function startEnvServer(port: number, workdir: string): Promise<number> {
   const app = express();
   app.use(express.json({ limit: "2mb" }));
   const tbExecProxy = (process.env.TB_EXEC_PROXY ?? "").trim();
@@ -1581,6 +1594,15 @@ export function startEnvServer(port: number, workdir: string): void {
   });
 
   const server = app.listen(port);
+  // Wait for the bind to settle so we can return the actual port. With
+  // port=0 the kernel allocates lazily — server.address() returns null
+  // until the 'listening' event fires.
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const addr = server.address();
+  const boundPort = (addr && typeof addr === "object" && addr.port) || port;
 
   // Cleanup .motoko-store on process exit
   const cleanup = () => {
@@ -1589,4 +1611,6 @@ export function startEnvServer(port: number, workdir: string): void {
   process.on("exit", cleanup);
   process.on("SIGINT", () => { cleanup(); process.exit(0); });
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+
+  return boundPort;
 }

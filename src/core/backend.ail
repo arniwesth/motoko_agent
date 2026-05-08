@@ -31,17 +31,42 @@ export func start_or_connect_backend(cfg: BackendConfig, workdir: string) -> Bac
     process_id: "",
     process: None
   } else if cfg.auto_start then {
-    let handle = spawnProcess(cfg.command, append_backend_args(cfg.args, cfg.port, workdir));
-    let _ = println(encode(jo([
-      kv("type", js("backend_start")),
-      kv("mode", js(cfg.mode)),
-      kv("url", js(cfg.url))
-    ])));
-    {
-      mode: cfg.mode,
-      url: cfg.url,
-      process_id: "spawned",
-      process: Some(handle)
+    -- M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): check
+    -- health BEFORE spawning. Pre-fix, auto_start always spawned a fresh
+    -- env-server process on cfg.port (8080 in the dogfood profile). When
+    -- the AILANG eval harness ran motoko in parallel (--agent-parallel
+    -- >= 2), both spawns tried to bind the same port — the second's bind
+    -- crashed → wrapper exited before AILANG runtime started → 0-byte
+    -- JSONL → adapter reported "motoko terminated without emitting
+    -- run_summary". Now: if cfg.url is already serving /health, connect
+    -- to it (the first parallel sibling spawned it; we share it). Only
+    -- spawn when nothing is alive there.
+    if health_ok(cfg.url) then {
+      let _ = println(encode(jo([
+        kv("type", js("backend_connect")),
+        kv("mode", js(cfg.mode)),
+        kv("url", js(cfg.url)),
+        kv("note", js("connected to existing env-server (auto_start short-circuit)"))
+      ])));
+      {
+        mode: cfg.mode,
+        url: cfg.url,
+        process_id: "shared",
+        process: None
+      }
+    } else {
+      let handle = spawnProcess(cfg.command, append_backend_args(cfg.args, cfg.port, workdir));
+      let _ = println(encode(jo([
+        kv("type", js("backend_start")),
+        kv("mode", js(cfg.mode)),
+        kv("url", js(cfg.url))
+      ])));
+      {
+        mode: cfg.mode,
+        url: cfg.url,
+        process_id: "spawned",
+        process: Some(handle)
+      }
     }
   } else {
     let _ = if health_ok(cfg.url) then () else println(encode(jo([

@@ -468,7 +468,18 @@ async function main(): Promise<void> {
   ) as { version: string };
   const projectRoot = path.resolve(import.meta.dirname, "../../..");
   const workdir = process.env.WORKDIR ?? process.cwd();
-  const envPort = Number(process.env.ENV_PORT ?? 8080);
+  // M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): default
+  // ENV_PORT to 0 = let the kernel pick a free port atomically when
+  // startEnvServer binds. The wrapper used to do its own pick_free_port
+  // probe via lsof, which raced when --agent-parallel >= 2 spawned
+  // concurrent motoko sessions (both probes saw the same port free,
+  // both tried to bind, second crashed). Setting 0 here means the bind
+  // itself is the race-resolver — kernel returns EADDRINUSE only if
+  // it actually IS in use right now, and with port=0 it picks one that
+  // ISN'T. The actual port comes back from startEnvServer() below.
+  // Operator override: explicit ENV_PORT=18080 still works for legacy
+  // setups that need a fixed port (e.g. Docker port-forwarding).
+  const envPort = Number(process.env.ENV_PORT ?? 0);
   const profile = activeProfile();
   const profileAgent = resolveProfileAgentConfig(workdir, profile);
   const model =
@@ -517,8 +528,11 @@ async function main(): Promise<void> {
   }
 
   // Start environment server first; runtime process will call /exec against it.
-  startEnvServer(envPort, workdir);
-  const envUrl = `http://localhost:${envPort}`;
+  // CRITICAL: use the RETURNED port (not the requested envPort) — when
+  // envPort=0, the kernel picks a port and we won't know it until bind
+  // completes. boundPort == envPort when envPort > 0 (operator override).
+  const boundPort = await startEnvServer(envPort, workdir);
+  const envUrl = `http://localhost:${boundPort}`;
 
   // Determine whether we have a real terminal available for the TUI.
   // process.stdout.isTTY can be undefined in piped subprocess contexts
@@ -567,7 +581,7 @@ async function main(): Promise<void> {
       model,
       workdir,
       profile,
-      envPort,
+      boundPort,
       systemPrompt,
       openaiBaseUrl,
       aiOptionsJson,
@@ -613,7 +627,7 @@ async function main(): Promise<void> {
       model,
       workdir,
       profile,
-      envPort,
+      boundPort,
       systemPrompt,
       openaiBaseUrl,
       aiOptionsJson,

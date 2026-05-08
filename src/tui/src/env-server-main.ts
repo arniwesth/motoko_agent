@@ -15,9 +15,14 @@ function argValue(name: string): string | undefined {
   return value;
 }
 
-const port = Number(argValue("--port") ?? "") || intEnv("ENV_PORT", 8080);
+// M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): default port
+// to 0 so the kernel atomically picks a free port. Eliminates the
+// pick_free_port TOCTOU race on parallel motoko spawns. Operator
+// override (--port 18080 or ENV_PORT=18080) still works for fixed-port
+// setups (Docker, etc).
+const requestedPort = Number(argValue("--port") ?? "") || intEnv("ENV_PORT", 0);
 const workdir = argValue("--workdir") ?? process.env.WORKDIR ?? process.cwd();
 
-startEnvServer(port, workdir);
+const boundPort = await startEnvServer(requestedPort, workdir);
 
-process.stdout.write(`[env-server] listening on http://127.0.0.1:${port} workdir=${workdir}\n`);
+process.stdout.write(`[env-server] listening on http://127.0.0.1:${boundPort} workdir=${workdir}\n`);
