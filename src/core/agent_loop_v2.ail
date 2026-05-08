@@ -942,12 +942,17 @@ func loop_v2(
                 Accept(output) => {
                   match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
+                      -- IMPORTANT: emit run_summary BEFORE done. The TS TUI
+                      -- layer (src/tui/src/index.ts) calls process.exit(0)
+                      -- on the `done` event, which kills the AILANG runtime
+                      -- subprocess. If we emitted done first, run_summary
+                      -- would be lost mid-flush. Ordering: summary → done.
+                      let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
                       let _ = emit_event(session_id, "done", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("output", js(output)),
                         kv("source", js("ext_solver_accept"))
                       ]);
-                      let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
                       Ok(msgs_with_assistant)
                     },
                     Some(retry_msg) => {
@@ -973,11 +978,14 @@ func loop_v2(
                 NoDecision => {
                   match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
+                      -- IMPORTANT: run_summary BEFORE done — see Accept branch
+                      -- above for rationale (TS TUI's process.exit(0) on done
+                      -- would otherwise truncate run_summary mid-flush).
+                      let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
                       let _ = emit_event(session_id, "done", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("output", js(result.message.content))
                       ]);
-                      let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
                       Ok(msgs_with_assistant)
                     },
                     Some(retry_msg) => {
