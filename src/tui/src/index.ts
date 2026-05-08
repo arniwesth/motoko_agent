@@ -374,7 +374,76 @@ class JsonlLogger {
 // main
 // ---------------------------------------------------------------------------
 
+// M-MOTOKO-EVAL-HARNESS-HARDENING M2b + M2c (gaps #7, #8): parse motoko-
+// specific CLI flags before treating argv[2] as task text.
+//   --headless       — force MOTOKO_HEADLESS=1 (more discoverable than env var)
+//   --version, -v    — print structured version info to stdout and exit 0
+// Recognized flags are removed from process.argv so downstream argv[2] reads
+// still work for the task text. Unknown flags pass through to the task text
+// (so "motoko --whatever ..." doesn't break).
+function parseMotokoFlags(): { headless: boolean; printVersion: boolean } {
+  const flags = { headless: false, printVersion: false };
+  const remaining: string[] = [process.argv[0], process.argv[1]];
+  for (let i = 2; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg === "--headless") {
+      flags.headless = true;
+    } else if (arg === "--version" || arg === "-v") {
+      flags.printVersion = true;
+    } else {
+      remaining.push(arg);
+    }
+  }
+  process.argv = remaining;
+  return flags;
+}
+
+// printVersionInfo writes structured version info to stdout then exits 0.
+// Format: line-oriented `key=value` pairs for easy parsing by the AILANG
+// adapter's HealthCheck (M-MOTOKO-EXECUTOR-ADAPTER) and other tooling.
+function printVersionInfo(pkgVersion: string, projectRoot: string): void {
+  let gitRev = "unknown";
+  try {
+    gitRev = execSync("git rev-parse --short HEAD", {
+      cwd: projectRoot,
+      timeout: 2000,
+    }).toString().trim();
+  } catch {}
+  let ailangBuilt = "unknown";
+  try {
+    const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
+      ? process.env.AILANG_BIN
+      : "ailang";
+    const raw = execSync(`${ailangBin} --version`, { timeout: 5000 }).toString().trim();
+    const m = raw.match(/^Built:\s+(.*)$/m);
+    if (m) ailangBuilt = m[1].trim();
+  } catch {}
+  process.stdout.write(`motoko ${pkgVersion}\n`);
+  process.stdout.write(`tui_version=${pkgVersion}\n`);
+  process.stdout.write(`git_rev=${gitRev}\n`);
+  process.stdout.write(`ailang_built=${ailangBuilt}\n`);
+  process.stdout.write(`motoko_repo=${projectRoot}\n`);
+  process.exit(0);
+}
+
 async function main(): Promise<void> {
+  const motokoFlags = parseMotokoFlags();
+  if (motokoFlags.headless) {
+    process.env.MOTOKO_HEADLESS = "1";
+  }
+  if (motokoFlags.printVersion) {
+    const pkgPath = path.join(
+      path.resolve(import.meta.dirname, ".."),
+      "package.json",
+    );
+    const { version: pv } = JSON.parse(
+      fs.readFileSync(pkgPath, "utf8"),
+    ) as { version: string };
+    const projectRoot = path.resolve(import.meta.dirname, "../../..");
+    printVersionInfo(pv, projectRoot);
+    return;
+  }
+
   // Set the terminal/tab title to "motoko" so VS Code, iTerm2, etc. show
   // the agent name instead of the underlying runtime ("bun.exe" /
   // "node"). OSC 0 sets both icon and window title; ST is BEL (\x07) for
