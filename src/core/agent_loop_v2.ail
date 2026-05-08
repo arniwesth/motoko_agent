@@ -142,10 +142,24 @@ func derive_session_id() -> string ! {Env, Clock} {
 -- Build the standard kv-list emitted on every per-step event that has
 -- StepResult tokens in scope. `cost_step_mc` is the per-step millicents
 -- (computed from result.input_tokens/output_tokens × cost_rates).
+--
+-- Cache token fields (cache_read_input_tokens / cache_creation_input_tokens)
+-- are emitted ONLY when non-zero — omit-when-absent semantics so consumers
+-- can distinguish "provider doesn't surface caching" from "this turn had
+-- zero cache hits". Anthropic populates both; OpenAI + Gemini populate
+-- cache_read only; other providers omit both.
 func per_step_usage_kvs(result: StepResult, cost_step_mc: int) -> [{key: string, value: Json}] {
-  [kv("input_tokens",  jnum(_int_to_float(result.input_tokens))),
-   kv("output_tokens", jnum(_int_to_float(result.output_tokens))),
-   kv("cost_usd",      jnum(millicents_to_usd(cost_step_mc)))]
+  let base = [
+    kv("input_tokens",  jnum(_int_to_float(result.input_tokens))),
+    kv("output_tokens", jnum(_int_to_float(result.output_tokens))),
+    kv("cost_usd",      jnum(millicents_to_usd(cost_step_mc)))
+  ];
+  let with_read = if result.cache_read_input_tokens > 0 then
+    base ++ [kv("cache_read_input_tokens", jnum(_int_to_float(result.cache_read_input_tokens)))]
+    else base;
+  if result.cache_creation_input_tokens > 0 then
+    with_read ++ [kv("cache_creation_input_tokens", jnum(_int_to_float(result.cache_creation_input_tokens)))]
+    else with_read
 }
 
 -- Map a finish_reason variant to its JSONL string. Single source of truth
@@ -853,6 +867,12 @@ func loop_v2(
         let new_total_cost = totals.cost_millicents + step_cost;
         let new_input  = totals.input_tokens  + result.input_tokens;
         let new_output = totals.output_tokens + result.output_tokens;
+        -- Cache totals (M4): std/ai.step now surfaces upstream prompt-cache
+        -- telemetry per-provider (Anthropic populates both; OpenAI + Gemini
+        -- populate cache_read only). Accumulating here lets run_summary
+        -- emit the omit-when-absent semantics described in schema v1.
+        let new_cache_read     = totals.cache_read     + result.cache_read_input_tokens;
+        let new_cache_creation = totals.cache_creation + result.cache_creation_input_tokens;
         let new_warned_pct =
           if max_cost_millicents > 0 then {
             let pct = (new_total_cost * 100) / max_cost_millicents;
@@ -870,8 +890,8 @@ func loop_v2(
         let new_totals: LoopTotals = {
           input_tokens:    new_input,
           output_tokens:   new_output,
-          cache_read:      totals.cache_read,
-          cache_creation:  totals.cache_creation,
+          cache_read:      new_cache_read,
+          cache_creation:  new_cache_creation,
           cost_millicents: new_total_cost,
           cost_warned_pct: new_warned_pct
         };
@@ -1272,4 +1292,47 @@ pure func test_zero_totals_initializes_clean() -> bool
       && z.cache_creation == 0
       && z.cost_millicents == 0
       && z.cost_warned_pct == 0
+  }
+
+-- Cache-token plumbing helpers (M4 from M-MOTOKO-EVAL-INSTRUMENTATION):
+-- shape sanity for a list-of-kv length given a hypothetical StepResult.
+
+pure func kv_len(xs: [{key: string, value: Json}]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + kv_len(rest) }
+}
+
+pure func mk_test_step_result(input: int, output: int, cr: int, cc: int) -> StepResult {
+  {
+    message: { role: "assistant", content: "", tool_calls: [], tool_call_id: "" },
+    tool_calls: [],
+    finish_reason: "stop",
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_input_tokens: cr,
+    cache_creation_input_tokens: cc
+  }
+}
+
+pure func test_per_step_usage_kvs_no_cache() -> bool
+  tests [((), true)]
+  {
+    -- No cache fields → exactly 3 kv entries (input, output, cost_usd)
+    let r = mk_test_step_result(100, 50, 0, 0);
+    kv_len(per_step_usage_kvs(r, 1500)) == 3
+  }
+
+pure func test_per_step_usage_kvs_cache_read_only() -> bool
+  tests [((), true)]
+  {
+    -- OpenAI / Gemini case: only cache_read populated → 4 kv entries
+    let r = mk_test_step_result(100, 50, 25, 0);
+    kv_len(per_step_usage_kvs(r, 1500)) == 4
+  }
+
+pure func test_per_step_usage_kvs_full_cache() -> bool
+  tests [((), true)]
+  {
+    -- Anthropic case: both cache_read + cache_creation → 5 kv entries
+    let r = mk_test_step_result(100, 50, 25, 12);
+    kv_len(per_step_usage_kvs(r, 1500)) == 5
   }
