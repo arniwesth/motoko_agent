@@ -1,0 +1,130 @@
+module src/core/ext/openkb/openkb
+
+import std/json (Json, encode, jo, kv, js, get, asString)
+import std/option (Option, Some, None)
+import std/string (toLower, trim)
+
+import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
+import src/core/ext/types (ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
+import src/core/config (RuntimeConfig)
+import src/core/ext/openkb/types (OpenKbConfig, provided_tool_names)
+import src/core/ext/openkb/exec (run_openkb)
+import src/core/ext/openkb/prompts (load_agent_prompt, build_prompt_patch)
+
+func canonical_tool(raw: string) -> string {
+  let t = toLower(trim(raw));
+  if t == "openkbquery" || t == "openkb_query" || t == "openkb.query" then "OpenKbQuery"
+  else if t == "openkbstatus" || t == "openkb_status" || t == "openkb.status" then "OpenKbStatus"
+  else if t == "openkbadd" || t == "openkb_add" || t == "openkb.add" then "OpenKbAdd"
+  else if t == "openkblint" || t == "openkb_lint" || t == "openkb.lint" then "OpenKbLint"
+  else if t == "openkblist" || t == "openkb_list" || t == "openkb.list" then "OpenKbList"
+  else ""
+}
+
+func arg_string(args: Json, key: string, fallback: string) -> string {
+  match get(args, key) {
+    None => fallback,
+    Some(j) => match asString(j) {
+      Some(v) => v,
+      None => fallback
+    }
+  }
+}
+
+func no_budget_patch() -> BudgetPatch {
+  {
+    requested_total: None,
+    requested_solver: None,
+    requested_verifier: None
+  }
+}
+
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  no_budget_patch()
+}
+
+func no_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+func no_response_intercept() -> ResponseInterceptDecision {
+  NoIntercept
+}
+
+func no_finalize_decision() -> FinalizeDecision {
+  NoDecision
+}
+
+export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> PromptPatch {
+  build_prompt_patch(cached_prompt)
+}
+
+export func on_tool_handle(cfg: OpenKbConfig, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process} {
+  let canon = canonical_tool(call.tool);
+  if canon == "" then Delegate
+  else {
+    let wiki = "${ctx.cwd}/${cfg.wiki_dir}";
+    if canon == "OpenKbQuery" then {
+      let question = arg_string(call.arguments, "question", "");
+      if question == "" then
+        Handled({
+          tool_call_id: call.id,
+          tool: canon,
+          stdout: "",
+          stderr: "openkb_query requires a 'question' argument",
+          exit_code: 1,
+          metadata: jo([kv("json_metadata", js("{\"output\":\"missing question argument\"}"))])
+        })
+      else
+        Handled(run_openkb(call.id, canon, ["query", question, "--save"], wiki, cfg.timeout_ms, cfg.max_output_chars))
+    } else if canon == "OpenKbStatus" then {
+      Handled(run_openkb(call.id, canon, ["status"], wiki, cfg.timeout_ms, cfg.max_output_chars))
+    } else if canon == "OpenKbAdd" then {
+      let path = arg_string(call.arguments, "path", "");
+      if path == "" then
+        Handled({
+          tool_call_id: call.id,
+          tool: canon,
+          stdout: "",
+          stderr: "openkb_add requires a 'path' argument",
+          exit_code: 1,
+          metadata: jo([kv("json_metadata", js("{\"output\":\"missing path argument\"}"))])
+        })
+      else
+        Handled(run_openkb(call.id, canon, ["add", path], wiki, cfg.timeout_ms, cfg.max_output_chars))
+    } else if canon == "OpenKbLint" then {
+      Handled(run_openkb(call.id, canon, ["lint"], wiki, cfg.timeout_ms, cfg.max_output_chars))
+    } else if canon == "OpenKbList" then {
+      Handled(run_openkb(call.id, canon, ["list"], wiki, cfg.timeout_ms, cfg.max_output_chars))
+    } else Delegate
+  }
+}
+
+export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks ! {FS} {
+  let workdir = runtime_cfg.agent.workdir;
+  let cfg = {
+    timeout_ms: runtime_cfg.openkb.timeout_ms,
+    max_output_chars: runtime_cfg.openkb.max_output_chars,
+    wiki_dir: runtime_cfg.openkb.wiki_dir
+  };
+  let cached_prompt = load_agent_prompt(workdir);
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle(cfg, ctx, call)
+  };
+  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    no_response_intercept()
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    no_finalize_decision()
+  };
+  {
+    id: "openkb",
+    provided_tools: provided_tool_names(),
+    on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
+    on_budget_plan: budget_hook,
+    on_tool_policy: no_tool_policy,
+    on_tool_handle: handle,
+    on_response_intercept: intercept,
+    on_solver_candidate: finalize
+  }
+}

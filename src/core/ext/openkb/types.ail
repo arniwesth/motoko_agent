@@ -1,0 +1,17 @@
+module src/core/ext/openkb/types
+
+export type OpenKbConfig = {
+  timeout_ms: int,
+  max_output_chars: int,
+  wiki_dir: string
+}
+
+export func provided_tool_names() -> [string] {
+  [
+    "OpenKbQuery", "openkb_query", "openkb.query",
+    "OpenKbStatus", "openkb_status", "openkb.status",
+    "OpenKbAdd", "openkb_add", "openkb.add",
+    "OpenKbLint", "openkb_lint", "openkb.lint",
+    "OpenKbList", "openkb_list", "openkb.list"
+  ]
+}
