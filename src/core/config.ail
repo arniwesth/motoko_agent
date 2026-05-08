@@ -421,12 +421,37 @@ func load_omnigraph(root: Json) -> OmnigraphConfig {
   }
 }
 
-func load_cost_rates(core: Json) -> CostRates {
+-- Read an int from an env var, falling back to a default. Used for cost
+-- rate overrides (M-MOTOKO-EVAL-HARNESS-HARDENING M5b, gaps #3 + #9):
+-- AILANG eval harness sets MOTOKO_COST_INPUT_PER_1M_MILLICENTS and
+-- MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS from its models.yml so motoko's
+-- threshold warnings + cost_exhausted gate fire and run_summary reports
+-- non-zero cost_usd — without each motoko profile needing its own
+-- per-model pricing block (the duplication burden of gap #9).
+func env_int(name: string, fallback: int) -> int ! {Env} {
+  match getEnv(name) {
+    Ok(raw) => {
+      let trimmed = trim(raw);
+      if trimmed == "" then fallback
+      else match _stringToInt(trimmed) {
+        Some(n) => if n > 0 then n else fallback,
+        None => fallback
+      }
+    },
+    Err(_) => fallback
+  }
+}
+
+func load_cost_rates(core: Json) -> CostRates ! {Env} {
   let p = object_at(core, "ai_provider");
   let c = object_at(p, "cost");
+  let profile_input  = json_int(c, "input_per_1m_millicents", 0);
+  let profile_output = json_int(c, "output_per_1m_millicents", 0);
+  -- Env vars override profile values when set (and >0). Lets the AILANG
+  -- eval harness inject pricing per-task without mutating profile config.
   {
-    input_per_1m_millicents: json_int(c, "input_per_1m_millicents", 0),
-    output_per_1m_millicents: json_int(c, "output_per_1m_millicents", 0)
+    input_per_1m_millicents:  env_int("MOTOKO_COST_INPUT_PER_1M_MILLICENTS",  profile_input),
+    output_per_1m_millicents: env_int("MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS", profile_output)
   }
 }
 
