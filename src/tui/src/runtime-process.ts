@@ -266,6 +266,16 @@ export class RuntimeProcess {
       // this, eval-harness runs see extensions.order=[] and other
       // profile defaults silently mask user-configured behavior.
       MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
+      // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
+      // pricing env vars set by the AILANG adapter from Task.Budget. Without
+      // this, the AILANG-side fix (load_cost_rates reads these env vars) is
+      // a no-op because the explicit whitelist drops them — same gotcha as
+      // MOTOKO_REPO above (gap #6). Empty string falls through to motoko's
+      // profile config fallback inside load_cost_rates.
+      MOTOKO_COST_INPUT_PER_1M_MILLICENTS:
+        process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
+      MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
+        process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
     };
     // AILANG v0.15.x migration: forward AILANG_STDLIB_PATH if set in the
     // parent env so callers can point the runtime at an upstream stdlib
