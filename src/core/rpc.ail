@@ -13,7 +13,7 @@ module src/core/rpc
 
 import src/core/agent_loop_v2 (run_v2_with_conversation)
 import src/core/test/stub_step (LiveAI)
-import std/io     (println)
+import std/io     (println, exit)
 import std/json   (Json, encode, jo, ja, kv, js, jb, jnum)
 import std/list   (foldl)
 import std/string (length)
@@ -128,7 +128,31 @@ func join_csv(xs: [string]) -> string {
   }
 }
 
+-- M-MOTOKO-OHMY-PI-DEFAULT-FLIP (2026-05-08): fail fast at startup if the
+-- caller has set tools.ohmy_pi=true. The env-server inbox-based delegation
+-- pipeline was deleted at M10b and the proper wire-up is tracked in
+-- design_docs/planned/m-motoko-m65-ohmy-pi-delegation.md. Until that lands,
+-- ohmy_pi=true causes every BashExec to return delegated_backend_not_wired
+-- and the model thrashes 10-13 wasted steps per task. Emit a structured
+-- error event and exit 2 — silent token waste is worse than a clear startup
+-- error. When M6.5 lands, remove this guard.
+func reject_if_ohmy_pi_unsupported(cfg: RuntimeConfig) -> () ! {IO} {
+  if cfg.tools.ohmy_pi then {
+    let _ = emit(encode(jo([
+      kv("type", js("session_start_error")),
+      kv("error_code", js("ohmy_pi_unsupported")),
+      kv("config_profile", js(cfg.profile)),
+      kv("config_dir", js(cfg.profile_dir)),
+      kv("message", js("tools.ohmy_pi=true but the env-server inbox-based delegation pipeline is not yet wired in this build. Every BashExec would fail with delegated_backend_not_wired:true. Set tools.ohmy_pi=false in your profile (or unset OHMY_PI_TOOLS=1). See design_docs/planned/m-motoko-m65-ohmy-pi-delegation.md for the planned wire-up."))
+    ])));
+    exit(2)
+  } else {
+    ()
+  }
+}
+
 export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream} {
+  let _ = reject_if_ohmy_pi_unsupported(cfg);
   let env_url = cfg.backend.url;
   let task = inv.task;
   let model = if inv.model_override != "" then inv.model_override else cfg.agent.model;

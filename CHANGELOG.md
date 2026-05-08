@@ -6,6 +6,25 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Fixed (M-MOTOKO-OHMY-PI-DEFAULT-FLIP — 2026-05-08)
+
+Flip `tools.ohmy_pi` from `true` to `false` in all 4 shipped config profiles (`default`, `dogfood`, `local`, `openrouter`). The env-server inbox-based delegation pipeline was deleted at M10b and the proper wire-up (M-MOTOKO-M6.5-OHMY-PI-DELEGATION) hasn't landed yet, so `ohmy_pi: true` was structurally a no-op that wasted **25-33% of every BashExec call** and triggered 10-13 wasted agent turns per task. Surfaced by motoko_explore agent (msg `7a95e4e8`) with A/B repro showing 15× faster runs and 6× fewer output tokens after the flip.
+
+**Direct evidence** (cross-checked against 90+ session JSONLs in `.motoko/logfile/`):
+- Same model + same task → with `ohmy_pi: true`: 15+ steps, 90s, gives up; with `ohmy_pi: false`: 3 steps, 6s, completes
+- Storm rate consistent across `adt_option`, `balanced_parens`, `canonical_normalization` benchmark families: 23-33% wasted tool calls in sessions where BashExec was attempted
+- Under the AILANG eval-harness (with ~21K-token teaching prompt), each wasted step costs ~32K input tokens — accounting for most of the 70× input-cost gap motoko had vs claude-code in the v0.18.3 3-harness comparison
+
+**Defense-in-depth — fail-fast at startup** (`src/core/rpc.ail`): `run_with_config` now rejects `ohmy_pi: true` with a structured `session_start_error` event + exit 2, naming the config profile dir + the M6.5 design doc. Silent token waste is worse than a clear startup error; users explicitly setting `ohmy_pi: true` deserve to know it's broken until M6.5 ships.
+
+**Regression smoke** (`make smoke_no_delegated_storm`): asserts all 4 profiles have `tools.ohmy_pi: false` via `jq`. Fast, deterministic, catches any future profile edit that re-enables the storm. Verified on dirty + clean state.
+
+`tools.hybrid: true` is **preserved** (no change). Hybrid mode (synthesizing `BashExec` from fenced bash in prose) is genuinely useful for cheap models. With `ohmy_pi: false`, hybrid bash routes through Native and works correctly post-AILANG-v0.18.3 hybrid-tool correlation fix.
+
+**Out of scope** (deferred to M-MOTOKO-M6.5): actually wiring the env-server inbox-based delegation pipeline. When that lands, the M2 fail-fast guard in this sprint must be removed.
+
+(`.motoko/config/{default,dogfood,local,openrouter}/config.json`, `src/core/rpc.ail`, `Makefile`, `design_docs/planned/m-motoko-ohmy-pi-default-flip.md`)
+
 ### Added (M-MOTOKO-EVAL-INSTRUMENTATION — 2026-05-07)
 
 Session JSONL gains schema-v1 instrumentation so downstream eval harnesses (AILANG `internal/executor/motoko/`, post-run analysis) can extract per-step token + cost data without needing a separate metrics endpoint. Strictly additive — existing consumers ignore new fields and keep working.

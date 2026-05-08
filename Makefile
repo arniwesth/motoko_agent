@@ -5,6 +5,29 @@ sync_packages:
 	./scripts/sync-extension-packages.sh
 	ailang lock
 
+# M-MOTOKO-OHMY-PI-DEFAULT-FLIP regression guard: assert every shipped config
+# profile has tools.ohmy_pi=false. Until M-MOTOKO-M6.5 (env-server inbox-based
+# delegation) lands, ohmy_pi=true is structurally a no-op that wastes 25-33%
+# of tool calls — every shipped default must therefore stay at false.
+# The matching code-side fail-fast lives in src/core/rpc.ail
+# (reject_if_ohmy_pi_unsupported).
+smoke_no_delegated_storm:
+	@fail=0; \
+	for f in .motoko/config/default/config.json \
+	         .motoko/config/dogfood/config.json \
+	         .motoko/config/local/config.json \
+	         .motoko/config/openrouter/config.json; do \
+		v=$$(jq -r '.tools.ohmy_pi' "$$f"); \
+		if [ "$$v" = "false" ]; then \
+			echo "  ✓ $$f tools.ohmy_pi=$$v"; \
+		else \
+			echo "  ✗ $$f tools.ohmy_pi=$$v (expected false; see design_docs/planned/m-motoko-ohmy-pi-default-flip.md)"; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	[ "$$fail" -eq 0 ] || { echo "smoke_no_delegated_storm FAILED — re-enabling ohmy_pi without M6.5 wired causes BashExec storms"; exit 1; }; \
+	echo "smoke_no_delegated_storm: all 4 profiles have ohmy_pi=false ✓"
+
 # Type-check every AILANG core runtime module in src/core/
 check_core:
 	@ok=0; fail=0; \
