@@ -30,8 +30,8 @@ GO_MIN_MINOR=22
 BUN_MIN_MAJOR=1
 NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
-AILANG_REF="v0.18.5"
-AILANG_MIN_VERSION="0.18.5"
+AILANG_REF="v0.18.6"
+AILANG_MIN_VERSION="0.18.6"
 INSTALL_OMNIGRAPH=0
 
 # ---------------------------------------------------------------------------
