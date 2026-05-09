@@ -12,6 +12,7 @@ import pkg/sunholo/motoko_ext_exa_search/register (register_with_config as regis
 import pkg/sunholo/motoko_ext_compose/register (register_with_config as register_compose)
 import pkg/sunholo/motoko_ext_a2a/register (register_with_config as register_a2a)
 import pkg/sunholo/motoko_ext_decision_framework/register (register_with_config as register_decision_framework)
+import pkg/sunholo/motoko_ext_microrag/register (register_with_config as register_microrag)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
 import src/core/ext/types (ExtRegistry)
@@ -27,6 +28,7 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] {
   else if name == "compose" then Some(register_compose(cfg))
   else if name == "a2a" then Some(register_a2a(cfg))
   else if name == "decision_framework" then Some(register_decision_framework(cfg))
+  else if name == "microrag" then Some(register_microrag(cfg))
   else None
 }
 
