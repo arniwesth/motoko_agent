@@ -1,0 +1,14 @@
+[package]
+name = "sunholo/motoko_openkb"
+version = "0.1.0"
+edition = "1"
+module_prefix = "src"
+
+[exports]
+modules = ["src/core/ext/openkb/openkb"]
+
+[dependencies]
+"sunholo/motoko_core" = { path = "../.." }
+
+[effects]
+max = ["Process", "FS", "IO", "Env"]

@@ -1,0 +1,211 @@
+# Knowledge Base Index
+
+## Documents
+- [[summaries/test_openkb_add]] (short) — A test document for verifying the OpenKB CLI add functionality.
+- [[summaries/2026-05-03-runtime-continuation-intent-guard]] (short) — Runtime guard to detect assistant continuation intent in prose-only responses, preventing premature session termination.
+- [[summaries/2026-05-03-multi-profile-config-and-headless-core-plan]] (short) — Implemented multi-profile Motoko config and outlined headless AILANG core supervisor plan.
+- [[summaries/2026-05-03-headless-json-config-runtime-fixes]] (short) — Fixed TUI model selection, sandboxed path resolution, and extension loading after JSON config migration.
+- [[summaries/2026-05-03-headless-config-plan-review]] (short) — Confirms JSON-only config landing and hands off native AILANG backend implementation.
+- [[summaries/2026-05-03-exa-search-tool-mapping-and-readfile-dispatch-fix]] (short) — Fixes Exa search tool mappings for correct MCP server and removes OhMyPi gate for file tool dispatch.
+- [[summaries/2026-05-03-core-config-supervisor-json]] (short) — Switched core-owned profile config to JSON for AILANG parsing without runtime modification.
+- [[summaries/2026-05-02-tui-thinking-trace-coloured-rendering]] (short) — Colored rendering of streamed thinking traces in Motoko TUI with chalk highlighting.
+- [[summaries/2026-05-02-motoko-file-config-system]] (short) — Implemented a TOML-based Motoko config system with clear precedence: defaults < .env/.export < .motoko/*.toml < shell env.
+- [[summaries/2026-04-29-ohmypi-tools-and-hashline-benchmark]] (short) — Implement OhMyPi delegated tool routing and benchmark hashline editing against replace/auto under adversarial stale/drift scenarios.
+- [[summaries/2026-04-28-benchmark-observability-and-failure-analysis]] (short) — Added runtime observability and failure analysis tools to the Motoko Polyglot benchmark.
+- [[summaries/2026-04-27-tui-session-logging-and-markdown-transcript]] (short) — Implemented SessionLogger for JSONL logs and markdown transcripts, fixing duplicate answers.
+- [[summaries/2026-04-27-motoko-benchmark-harness]] (short) — Implemented Motoko benchmark harness with JSONL output, proxy execution, and live observability.
+- [[summaries/2026-04-27-context-mode-extension-hardening]] (short) — Hardened context_mode extension reliability, routing, and package mirroring to reduce BashExec fallback.
+- [[summaries/2026-04-26-idle-termination-and-omnigraph-gating]] (short) — Fixes premature idle termination by returning tool parse errors and removing omnigraph extension.
+- [[summaries/2026-04-26-abort-history-and-omnigraph-delete]] (short) — Implements abort history preservation and Omnigraph deletion operations with branch-based guardrails.
+- [[summaries/2026-04-25-tui-context-window-counter]] (short) — Implemented TUI status bar context window counter with local token estimation and threshold coloring.
+- [[summaries/2026-04-24-packageize-extension-system-session]] (short) — Session summary of Phase 1 (open hook dispatch) and Phase 2 (packaging extensions) with regression fixes.
+- [[summaries/2026-04-24-core-extension-disentangling-session]] (short) — Disentangled Omnigraph from core using generic tool envelopes and migrated extension logic.
+- [[summaries/2026-04-24-compose_extension_extraction_summary]] (short) — Moved Compose logic from core to extension, making runtime extension-agnostic.
+- [[summaries/2026-04-23-omnigraph_session_summary]] (short) — Shows Omnigraph bridges LLM uncertainty and strict code rules via retrieval-first knowledge.
+- [[summaries/2026-04-23-omnigraph_extension]] (short) — Implemented Omnigraph extension with new tool variants, guardrails, and core wiring.
+- [[summaries/2026-04-23-compose-streaming-teacher-prompt-phase6-followup]] (short) — Fixes multiple Compose regressions: routing, streaming, teacher prompt sourcing, and parsing for single-object tool calls.
+- [[summaries/2026-04-19-runpod-additive-serverless-integration]] (short) — Implemented additive RunPod serverless integration preserving Modal and shared core logic.
+- [[summaries/2026-04-19-local-openai-model-prefix-regression-fix]] (short) — Fixes 404 error for local Gemma model by correcting api_name and normalizing provider prefixes.
+- [[summaries/2026-04-19-grpo-pilot-mlflow-instrumentation]] (short) — End-to-end MLflow instrumentation for GRPO pilot with best-effort logging and safe wrappers.
+- [[summaries/2026-04-18-md2audio-qwen-modal-and-speech-preprocessing]] (short) — md2audio: Markdown-to-audio with Qwen3-TTS, multiple GPU backends, and speech prep.
+- [[summaries/2026-04-18-grpo-pilot-ailang]] (short) — Pilot scaffold for GRPO fine-tuning of LLMs with AILANG code generation and reward functions.
+- [[summaries/2026-04-14-compose-regression-investigation-and-hardening]] (short) — Investigation and hardening of Compose subagent regressions: parse loops, prompt bloat, and weak output gating.
+- [[summaries/2026-04-14-compose-author-premise-tools-plan-implementation]] (short) — Implementation summary of the Compose Author Premise Tools plan including phase status and session deltas.
+- [[summaries/2026-04-14-compose-as-extension-implementation-session]] (short) — Implemented Compose as an extension within the registry-based framework, including runtime integration, TUI support, and stability fixes.
+- [[summaries/2026-04-13-compose-extension-debugging-session]] (short) — Stabilized Compose extension, fixed TUI regressions, and hardened claimcheck against runtime noise.
+- [[summaries/2026-04-12-compose-semi-formal-evidence-guard-implementation]] (short) — Implements SF1-SF5 anti-fabrication guard in Compose subagent: cert check, evidence, TUI.
+- [[summaries/2026-04-12-ailang-composition-subagent]] (short) — Streaming compose subagent with intent-preserving handoff, retry improvements, telemetry, and anti-fabrication.
+- [[summaries/2026-04-11-ailang-composition-language]] (short) — Adds an AILANG-composition execution mode enabling LLMs to chain multi-step ops in one agent step with type-checking and retries.
+- [[summaries/2026-04-08-tui-codeblock-and-diff-rendering]] (short) — Added syntax highlighting and diff rendering with line-number gutters to TUI.
+- [[summaries/2026-04-07-core-extension-phase-x1]] (short) — Implemented extension substrate, registry, runtime dispatch, test_dummy, and RPC hook integration for Phase X1.
+- [[summaries/2026-04-06-tool-parse-robustness]] (short) — Fixes parser bugs for think-block & backtick splitting; adds native tool events & think/answer pre-split.
+- [[summaries/2026-04-06-refactor]] (short) — Relocate core, tui, examples to src/ and update all references, verified with tests.
+- [[summaries/2026-04-06-error-recovery]] (short) — Implement retry-with-backoff for AI provider failures, keeping the runtime alive with structured error records.
+- [[summaries/2026-04-04-hybrid-tool-ui-and-timeout-debugging]] (short) — Hybrid tool UX and delegation timeout fixes in TUI, with rendering, ordering, and policy improvements.
+- [[summaries/2026-04-04-delegated-tools-timeouts-and-tui-timestamps]] (short) — Fixes delegated tool timeout false positives and adds millisecond timestamps to TUI.
+- [[summaries/2026-04-03-ailang-version-in-header]] (short) — Adds AILANG built datetime to TUI banner and history pane, completing version display.
+- [[summaries/2026-04-02-brain-version]] (short) — Displays both TUI and real brain version at startup, queried via AILANG entry point.
+- [[summaries/2026-04-02-brain-test-suite]] (short) — Implemented Brain Test Suite for swe/ modules, fixed 8 bugs, all 85 tests pass.
+- [[summaries/2026-04-01-esc-interrupt]] (short) — Adds ESC key to interrupt running agent task and immediately prompt again.
+- [[summaries/2026-03-31-system-agents-md-rewrite]] (short) — Rewrote SYSTEM.md and AGENTS.md to give agent self-knowledge and fixed infinite bash block loop.
+- [[summaries/2026-03-31-openrouter-integration]] (short) — Adds OpenRouter model support via OpenAI-compatible API, fixing model prefix handling bug.
+- [[summaries/2026-03-31-branch-cleanup-tui-openrouter]] (short) — Modernizes TUI with slash commands and OpenRouter, removes legacy scripts, updates docs and agent memory.
+- [[summaries/2026-03-31-ascii-logo-banner]] (short) — Integrated an ASCII logo banner into the agent's TUI header by capturing imageToAscii.ts output directly.
+- [[summaries/2026-03-31-ailang-replace-fork]] (short) — Replaced aiLang source with arniwesth fork and reapplied runtime stdin-poll patches.
+- [[summaries/2026-03-31-ailang-agents-md-fix]] (short) — Fixed critical bugs in AGENTS.md loading module in Ailang, enabling file discovery and loading.
+- [[summaries/2026-03-30-ailang-swe-agent]] (short) — Built a SWE agent: TypeScript TUI + AILANG brain over JSONL pipe, yolo mode.
+- [[summaries/2026-03-30-ailang-swe-agent-extensions]] (short) — Added SYSTEM_MD env var to replace the built-in system prompt with a file's content.
+- [[summaries/2026-03-30-ailang-swe-agent-debug]] (short) — Debugging multiple AILANG syntax, runtime, and configuration issues in the SWE agent across six sessions.
+- [[summaries/motoko_stream_protocol]] (short) — Defines JSONL events for incremental AI thinking stream between AILANG runtime and TUI.
+- [[summaries/TUI_Tool_Call_Rendering_UI_Spec_Drafting]] (short) — Plan for drafting Motoko TUI tool call rendering spec informed by Pi, Gemini CLI, and Codex patterns.
+- [[summaries/TUI_Tool_Call_Rendering_UI_Spec]] (short) — Defines deterministic tool call rendering for TUI: compact/expanded rows, grouping, truncation.
+- [[summaries/use_tui_editor]] (short) — PR review: declarative slash-command registry & Editor component, all issues resolved.
+- [[summaries/phoenix-architecture]] (short) — Code is a disposable, regenerable artifact; the real source of truth is the provenance — the reasoning, constraints, and decisions behind it.
+- [[summaries/Tsetlin_Machines_AILANG_Synthesis]] (short) — Synthesis: Tsetlin Machines & AILANG share symbolic computation, enabling Z3-verified TM logic and LLM-guided pipelines.
+- [[summaries/Tiny_Recursive_Models_with_LLMs_transcript]] (short) — How Tiny Recursive Models can augment LLMs for efficient reasoning, memory compression, and deterministic verification.
+- [[summaries/TRM_Context_Compression_Research]] (short) — Proposes using TRM tiny recursive networks to compress multi-turn agent conversation context into a fixed latent state.
+- [[summaries/TM_FineTuning_DualPath]] (short) — TM-derived clauses guide fine-tuning dataset; fine-tuned model still needs TM for remaining errors.
+- [[summaries/TM_Evidence_Gates_Integration]] (short) — TM serves as learning substrate improving error classification, dispatcher validation, and retrieval across evidence-gates levers.
+- [[summaries/TM_Clauses_Over_AILANG_AST_Elaboration]] (short) — TM learns AILANG error classifiers from AST features, replacing hand-written rules.
+- [[summaries/Omnigraph_Possibilities]] (short) — Outlines Omnigraph's core properties and diverse uses: agent memory, drift detection, decision provenance, speculative design.
+- [[summaries/Misc]] (short) — Miscellaneous research directions for AILANG tooling and Modal billing security.
+- [[summaries/Hybrid_Tool_Execution_Parallelism_Insight]] (short) — Proposes hybrid parallel/sequential tool execution policy for agents.
+- [[summaries/Generate_data_for_AILANG_finetuning]] (short) — Explores whether to use self-generated or teacher-generated data for fine-tuning.
+- [[summaries/Gemma4_FSharp_Benchmark_Results]] (short) — F# benchmark yields +4.8 pp over AILANG, below go threshold, leading to no-go decision for transpiler.
+- [[summaries/Gemma4_AILANG_GRPO_Reinforcement_Learning]] (short) — Proposes GRPO RL with compiler/Z3 as reward model to surpass SFT ceiling for AILANG code generation.
+- [[summaries/Gemma-4-AILANG_session_transcript]] (short) — Plan to fine-tune Gemma 4 for native AILANG coding via synthetic data & cloud GPUs.
+- [[summaries/FSharp_to_AILANG_transript]] (short) — Feasibility of F#-to-AILANG transpiler for LLM code generation with self-correction.
+- [[summaries/FSharp_Transpiler_Feasibility_Evaluation]] (short) — F# transpiler evaluation: risk outweighs benefit; suggests tool-call authoring and F# testing.
+- [[summaries/Context_Mode_Plus_Headroom]] (short) — Comparison of context-mode and headroom: two tools for LLM context optimization with exploration of combined synergy.
+- [[summaries/Claimcheck_for_system_prompts]] (short) — Detects prompt contradictions from untrusted sources via LLM back-translation and rule comparison.
+- [[summaries/Agentic_Code_Reasoning_AILANG_Integration]] (short) — Integrating Meta's semi-formal code reasoning into the AILANG runtime via prompt templates, verifier loops, and typed certificates.
+- [[summaries/AILANG_performance_evidence_gates]] (short) — Proposes evidence gates and structured authoring to improve AILANG validity on Gemma 4.
+- [[summaries/AILANG_Agent_session_transcript]] (short) — Transcript covering AILANG analysis and a detailed plan for implementing mini-swe-agent with Path 3 brain-exec separation.
+- [[summaries/Update_SYSTEM_and_AGENTS]] (short) — Plan to rewrite SYSTEM.md and AGENTS.md with agent self-knowledge of architecture and protocols.
+- [[summaries/Tool_Parse_Robustness]] (short) — Fixes two bugs in tool call parsing: think-block interference with reasoning models and backtick splitting in fenced JSON with code content.
+- [[summaries/Tool_Dispatch_to_TUI]] (short) — Plan to move tool execution from AILANG brain to TUI, preserving reasoning in AILANG.
+- [[summaries/Thinking_Traces]] (short) — Fixes missing reasoning traces from OpenRouter by mapping API reasoning field to thinking tags for UI rendering.
+- [[summaries/TUI_Wait_State_Clarity]] (short) — Plan to enhance TUI with explicit state, progress counters, and timers for wait transparency.
+- [[summaries/TUI_Tool_Call_Rendering_Implementation_Plan]] (short) — Implementation plan for TUI hybrid tool call rendering with renderer architecture, grouping, and diff previews.
+- [[summaries/TUI_Thinking_Trace_Coloured_Rendering]] (short) — Plan to add colored real-time rendering of LLM thinking traces in the TUI.
+- [[summaries/TUI_Streaming_JSON_Rendering]] (short) — Plan for streaming JSON color rendering in TUI with tolerant parsing and tool-envelope hiding.
+- [[summaries/TUI_Streamed_Tool_Plan_UX]] (short) — Plan to transform TUI streamed tool-call display from raw JSON to a live execution timeline with status transitions.
+- [[summaries/TUI_Stream_Aware_Markdown_Rendering]] (short) — Plan for rendering Markdown code blocks with live highlighting during streaming without scroll regressions.
+- [[summaries/TUI_Session_Logging]] (short) — Plan to add a SessionLogger that saves TUI agent events to timestamped JSONL files.
+- [[summaries/TUI_OM_Command_Patterns]] (short) — Plan to adopt oh-my-pi command patterns: declarative slash-command registry and Editor with autocomplete for AILANG TUI.
+- [[summaries/TUI_Dynamic_Runtime_Banner]] (short) — Plan to replace static TUI banner with runtime-generated, terminal-width-aware banner using preprocessed pixel data.
+- [[summaries/TUI_Context_Window_Counter]] (short) — Plan for a local context-window-usage counter in the TUI status bar using char-based estimation with color thresholds.
+- [[summaries/TUI_Code_Block_Rendering]] (short) — Plan for syntax-highlighted code blocks in TUI with per-language colors and GitHub-style diff rendering.
+- [[summaries/Structured_Tool_Call_Authoring]] (short) — Replacing free-text AILANG with structured tool calls to eliminate parse errors on Gemma 4.
+- [[summaries/Semi_Formal_Reasoning_Integration]] (short) — Plan for phased integration of semi-formal reasoning with verifier passes, tool policy, and configurable step budgets in the runtime.
+- [[summaries/Self_Modifying_Brain_Safe_Cutover]] (short) — A multi-gated, transactional upgrade plan for an AI agent's brain with fail-safe rollback.
+- [[summaries/Self_Modifying_Brain]] (short) — Design for hot-swapping the agent's brain (AILANG/TypeScript) while preserving conversation history.
+- [[summaries/Runtime_Filter_Thinking_From_Context]] (short) — Plan to strip thinking traces from conversation history while preserving TUI display.
+- [[summaries/Runtime_Continuation_Intent_Guard]] (short) — Detects continuation intent in prose-only responses to prevent premature task completion.
+- [[summaries/RunPod_Additive_Integration_Plan]] (short) — Design for adding RunPod as an alternative backend to training/grpo_pilot while keeping Modal unchanged.
+- [[summaries/RunPod_Additive_Integration_Kickoff]] (short) — Defines Phase 1 scope and constraints for adding RunPod as an alternative backend to Modal in the training pipeline.
+- [[summaries/Plans_Decision_Knowledge_Graph]] (short) — Converts 72 Motoko plan files into a queryable decision graph with five new edge types.
+- [[summaries/Packageize_Extension_System]] (short) — Proposes replacing extension ADT dispatch with hook records and lifting each extension to an AILANG package.
+- [[summaries/OpenRouter_Integration]] (short) — Enables AILANG Agent to use any OpenRouter model via an OpenAI-compatible API shim.
+- [[summaries/OpenAI_LLM_Streaming_For_Motoko]] (short) — Plan for first-class OpenAI LLM streaming in Motoko via typed AI effects and trace visibility.
+- [[summaries/Omnigraph_Extension]] (short) — Plan for porting Omnigraph Pi extension to Motoko core ext with CLI tools and guardrails.
+- [[summaries/OhMyPi_Tool_Integration]] (short) — Plan to replace Motoko's native file tools with oh-my-pi's TypeScript+Rust implementations via the existing delegated-tool channel.
+- [[summaries/Native_Tool_Calling_For_Motoko]] (short) — Plan to replace free-text AILANG emission with structured tool calls on Gemma 4 to reduce parse errors.
+- [[summaries/Multi_Profile_Config]] (short) — Adds named config profiles under .motoko/config/ selectable via MOTOKO_CONFIG env var.
+- [[summaries/Motoko_MLflow_Observability_Plan]] (short) — Plans MLflow-based observability for Motoko sessions with tracing, privacy, and non‑invasive rollout.
+- [[summaries/Motoko_MLflow_Observability_Kickoff]] (short) — Phase 1 plan for MLflow telemetry in Motoko: schema, instrumentation, redaction, and feature flag.
+- [[summaries/Motoko_Core_Config_Supervisor]] (short) — Plan to migrate config ownership and runtime supervision from TypeScript to AILANG core for headless Motoko execution.
+- [[summaries/Motoko_Config_System]] (short) — Design of a TOML-based config system (.motoko/) to replace Motoko's 49 scattered environment variables.
+- [[summaries/Motoko_Benchmark_Harness]] (short) — Design to adapt little-coder's benchmark harness for evaluating Motoko.
+- [[summaries/Motoko_AILANG_Rebase_Forward_Handoff]] (short) — Handoff prompt for Phase 0/0.5 of Motoko AILANG rebase to v0.13.0.
+- [[summaries/Motoko_AILANG_Rebase_Forward]] (short) — Plan to rebase Motoko's AILANG fork to v0.13.0 and maintain isolation via _motoko files and fenced edits.
+- [[summaries/Markdown_to_Audio_Qwen3_TTS_Implementation_Plan]] (short) — Implementation plan for a CLI tool to convert Markdown to spoken audio using Qwen3-TTS.
+- [[summaries/MOTOKO_PUBLIC_RELEASE]] (short) — Plan for releasing Motoko Agent as open-source with Docker setup and streamlined installation.
+- [[summaries/MLflow_Experiment_Tracking_Plan]] (short) — Add MLflow tracking to GRPO/SFT training on Modal for reproducible runs.
+- [[summaries/MLflow_Experiment_Tracking_Kickoff]] (short) — Plan to add MLflow tracking to GRPO/SFT pipeline with fail-safe logging.
+- [[summaries/Local_OpenAI_Endpoint_Integration]] (short) — Plan to integrate local OpenAI-compatible endpoints into Motoko, enabling model discovery and auth-none support.
+- [[summaries/Hybrid_Tool_Execution]] (short) — Combine native brain execution with TUI delegation for tools where AILANG lacks support.
+- [[summaries/Headless_JSON_Only_Config]] (short) — Radical simplification of Motoko config to JSON profiles + CLI args, removing env var config layer entirely.
+- [[summaries/Generic_MCP_Extension]] (short) — Plans a reusable MCP client library for Motoko extensions to call external tools via JSON-RPC 2.0 over HTTP.
+- [[summaries/Gemma4_Thinking_Mode_Enablement_Plan]] (short) — Plan to add benchmark-level thinking mode control for Gemma 4 via provider-native options.
+- [[summaries/Gemma4_FSharp_Benchmark]] (short) — Plan to benchmark Gemma 4 on F# vs AILANG code generation to evaluate transpiler viability.
+- [[summaries/GRPO_Pilot_AILANG]] (short) — A GRPO pilot to train Gemma 4 to generate valid AILANG code using compiler-based rewards.
+- [[summaries/Exa_Websearch_Extension]] (short) — Plan to add Exa web search to Motoko via a thin MCP‑based extension with tool mappings and routing.
+- [[summaries/Error_Recovery_Runtime_Merged_Best_Plan]] (short) — Plan to prevent AI runtime crashes via structured error records and retry policy in AILANG.
+- [[summaries/Error_Recovery_Runtime_Fix]] (short) — Add structured error handling and retry logic in AILANG to gracefully handle AI API errors without crashing.
+- [[summaries/Error_Recovery_Idle_Mode]] (short) — TUI stays alive on AI runtime crash: pipe stderr, retry 429 with backoff, idle on other errors.
+- [[summaries/EditFile_Tool_Implementation_Plan]] (short) — Plan for native EditFile tool with targeted edits, hash guard, and rich diff feedback.
+- [[summaries/ESC_Interrupt]] (short) — Implementation plan to enable ESC to interrupt a running task and re-enable the input, leveraging existing brain abort mechanism.
+- [[summaries/DST_v1_Motoko_Core]] (short) — A CI regression DST harness for Motoko's AILANG core modules, focusing on parser fuzzing and loop termination invariants.
+- [[summaries/Core_Rebrand_and_Prompt_Rewrite]] (short) — Plan to rename 'swe' to 'core' and rewrite prompts, repositioning as an agent harness research platform.
+- [[summaries/Core_Rebrand_Phase0_Inventory]] (short) — Inventory for migrating the `swe` codebase to `core`, defining scope, rename map, and risks.
+- [[summaries/Core_Extension_System_for_Semi_Formal]] (short) — Designs a core extension substrate to host Semi-Formal Reasoning as a module with kernel safety.
+- [[summaries/Core_Extension_Disentangling_Plan]] (short) — Plan to decouple extension-specific logic from core runtime using generic tool envelopes.
+- [[summaries/Context_Mode_Extension]] (short) — Integrates context-mode as Motoko extension via shell exec to reduce context window bloat ~98%.
+- [[summaries/Compose_Semi_Formal_Evidence_Guard]] (short) — Enhance Compose subagent guard with structured certificates, effect-set witness, and ClaimCheck-style verification.
+- [[summaries/Compose_Extension_Extraction_Plan]] (short) — Plan to decouple Compose from core into an extension using phased migration, gates, and clean ADTs.
+- [[summaries/Compose_Author_Premise_Tools]] (short) — Proposal to give Compose author LLM read-only tools with a premise ledger for verifiable snippets.
+- [[summaries/Compose_As_Extension]] (short) — Migration plan to turn Compose into an AILANG extension under a reshaped X1 substrate.
+- [[summaries/Brain_Test_Suite]] (short) — Layered test suite for swe brain modules, integrated with safe cutover self-modification.
+- [[summaries/Brain_Owned_Tool_Execution]] (short) — Proposes brain-owned tool execution using native AILANG process/stream primitives, removing TUI dispatch.
+- [[summaries/Brain_Formal_Verification]] (short) — Three-tier formal verification pipeline (Z3→Dafny→Lean 4) for autonomous brain code upgrades.
+- [[summaries/Abort_History_And_Omnigraph_Delete]] (short) — Plan to preserve in-flight state on abort and enable safe Omnigraph deletion with guardrailed queries.
+- [[summaries/AI_Runtime_Result_Error_Recovery_Plan]] (short) — Design for graceful AI provider failure handling using result-returning ops and bounded retry.
+- [[summaries/AILANG_v0.15.0_Migration]] (short) — Migration plan to replace motoko_agent's AILANG fork with upstream v0.15.0, pending provider config input.
+- [[summaries/AILANG_Composition_Subagent]] (short) — Subagent delegation for AILANG composition: offloads snippet authoring and retries from main agent.
+- [[summaries/AILANG_Composition_Language]] (short) — Proposal to use AILANG as a composition language for multi-step agent tasks with effect-based sandboxing.
+- [[summaries/AILANG_Chess_Engine]] (short) — A purely functional chess engine in AILANG with formal verification of chess rules using Z3.
+- [[summaries/AILANG_Agent]] (short) — Implementation plan for a yolo-mode SWE agent in AILANG with pi-tui TUI and model switching via Option D.
+- [[summaries/context_mode_runtime_vs_dev_paths]] (short) — Extension runtime uses mirrored .packages/ paths, not source, with sync_packages for dev.
+- [[summaries/Phase2_spike_results]] (short) — Spike validated package import constraints: single-segment prefix, no hyphens, file resolution issues.
+- [[summaries/Phase2_progress]] (short) — Phase 2 adds multi-package workspace with shared contracts, new imports, and validation.
+- [[summaries/omnigraph_chess_engine_paradigm]] (short) — Omnigraph learning paradigm for chess engines: typed graph with traversal, gap analysis, speculative design.
+- [[summaries/omnigraph_ailang_improvement]] (short) — Using Omnigraph graphs to enforce AILANG syntax and design constraints.
+- [[summaries/ailang_csp_implementation]] (short) — Key implementation lessons for Ailang: import discovery, path strictness, block syntax, and effect verification.
+- [[summaries/2026-05-03-motoko-core-package-sync]] (short) — Fix dependency resolution and import errors caused by missing sync and ambiguous package boundaries in Motoko core.
+- [[summaries/2026-05-03-local-openai-endpoint-key-relaxation]] (short) — Relaxed API key requirement for OpenAI endpoints when custom base URL is set.
+- [[summaries/2026-04-21-editfile-selection-regression]] (short) — Identifies runtime precondition, strict matching, and prompt asymmetry as root causes for EditFile under-selection.
+- [[summaries/think-block]] (short) — A collection of five open issues and proposed fixes for the Think block UI component in the terminal-based agent interface.
+
+## Concepts
+- [[concepts/knowledge-base-extension-validation]] — Testing the OpenKB extension to validate indexing, listing, linting, querying, and error handling.
+- [[concepts/large-knowledge-base-performance]] — Performance bottlenecks (lint/query timeouts) observed with large knowledge bases (166 docs).
+- [[concepts/headless]] — Configuration via JSON profiles and CLI arguments without environment variables for non-secrets.
+- [[concepts/guardrail-policy]] — Mutation guardrail that denies all changes on main and restricts bulk deletions to safety-prefixed branches.
+- [[concepts/abort-handling]] — Retaining conversation history and partial tool results after a user abort so the agent can explain what was attempted in the next turn.
+- [[concepts/decision-provenance]] — Trace why a decision was made by querying typed nodes for governance, incidents, and supersession chains.
+- [[concepts/structured-agent-memory]] — Agent memory as a typed, queryable graph of structured assertions surviving sessions, not text snippets.
+- [[concepts/teacher-student-data-generation]] — Using a stronger teacher model to generate training examples for fine‑tuning a weaker student model.
+- [[concepts/self-instruct]] — A method where a model uses its own outputs to create fine-tuning data.
+- [[concepts/language-prompt-routing]] — Routing prompts by target language to load language-specific teacher content from a central registry.
+- [[concepts/code-gen-benchmark-methodology]] — A structured approach for evaluating LLM code generation using comparative conditions, multi-seed runs, layered pass metrics, and explicit go/no-go decision bands.
+- [[concepts/robust-tool-call-parsing]] — A parsing strategy that safely extracts tool call JSON from model outputs by filtering reasoning blocks and handling embedded code fences.
+- [[concepts/thinking-trace-integration]] — Unified normalization and presentation of AI reasoning traces across provider-specific formats.
+- [[concepts/slash-command-registry]] — Declarative registry pattern for slash commands with autocomplete in terminal UIs.
+- [[concepts/long-form-speech]] — Techniques and strategies to generate stable, natural speech for texts exceeding 10 minutes.
+- [[concepts/markdown-narration-rules]] — Rules for converting Markdown elements to spoken narration, including headings, lists, links, code, and tables.
+- [[concepts/qwen3-tts]] — Qwen3‑TTS: a text‑to‑speech model family with 12Hz and 25Hz tracks, scalable 0.6B/1.7B models, and 10‑language support.
+- [[concepts/open-source-release-preparation]] — The process of selecting, sanitizing, and packaging internal code for a public open-source release.
+- [[concepts/dynamic-model-discovery]] — TUI feature that fetches available AI models from configured endpoints and merges them into the model picker.
+- [[concepts/grpo-training-loop]] — GRPO loop: model generates multiple completions, compiler rewards score them, policy updated via GRPO.
+- [[concepts/compiler-as-reward-model]] — Using compiler pass/fail as a deterministic reward signal for RL training of code generation.
+- [[concepts/motoko-extension-architecture]] — The modular framework for extending Motoko agents via hooks, tool mappings, and registry integration.
+- [[concepts/mcp-protocol-integration]] — A design pattern where a generic MCP handling layer abstracts transport and protocol details from specific tool extensions.
+- [[concepts/sharedmem-cache-layer]] — A cross-run memory layer that stores agent trajectories to accelerate future task completions via hint injection.
+- [[concepts/jsonl-protocol-for-agent-communication]] — A minimal JSON Lines protocol for structured agent-frontend IPC over stdin/stdout.
+- [[concepts/ailang-brain-communicating-processes]] — AILANG Brain Processes are child processes running AILANG code over JSONL stdin/stdout, handling AI agent loops with effect-tracking and yolo execution.
+- [[concepts/yolo-execution-mode]] — Autonomous execution mode where every proposed command runs immediately without user confirmation.
+- [[concepts/semantic-patterns]] — Structured, queryable code patterns in Omnigraph that replace unreliable similarity-based search.
+- [[concepts/architectural-fitness]] — Validating code against a graph-based architecture spec to detect drift and enforce constraints.
+- [[concepts/constraint-graph]] — A queryable graph of AILANG rules, anti-patterns, and errors that enforces structural constraints
+- [[concepts/package-sync-mechanism]] — Mechanism to mirror extension source changes into .packages/ and regenerate lockfiles for runtime resolution.
+- [[concepts/package-module-ownership]] — Ambiguity when a project and its dependency share source directories, breaking module resolution.
+- [[concepts/dependency-namespace-conflict]] — Ambiguous module resolution when a root project and its dependency package share overlapping source directories.
+- [[concepts/handler-routing-architecture]] — Separation of handler setup checks from runtime routing, enabling flexible endpoint configuration.
+- [[concepts/local-endpoint-integration]] — Strategy for routing OpenAI-compatible requests to local endpoints without authentication.
+- [[concepts/tool-selection-bias]] — Tool selection bias is the LLM's systematic preference for certain tools due to hidden risks; mitigations include explicit routing cards like Exa's AGENT.md.
+- [[concepts/editfile-contract]] — Hidden precondition requiring ReadFile before EditFile in the same tool batch, enforced by the runtime.
+- [[concepts/terminal-ui-testing]] — Testing interactive terminal UIs via mock terminals, protocol contracts, and phase-gated acceptance criteria.
+- [[concepts/session-state-management]] — Managing UI component state across session boundaries to prevent stale references, memory leaks, and display corruption.
+
+## Explorations

@@ -69,6 +69,7 @@ sync_core() {
     --exclude 'ext/exa_search/' \
     --exclude 'ext/mcp/' \
     --exclude 'ext/omnigraph/' \
+    --exclude 'ext/openkb/' \
     --exclude 'ext/test_dummy/' \
     "$src_dir/" "$pkg_mod_dir/"
 
@@ -89,6 +90,7 @@ main() {
   sync_extension "context_mode"
   sync_extension "mcp"
   sync_extension "exa_search"
+  sync_extension "openkb"
 }
 
 main "$@"

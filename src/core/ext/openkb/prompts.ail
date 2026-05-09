@@ -1,0 +1,17 @@
+module src/core/ext/openkb/prompts
+
+import std/fs (fileExists, readFile)
+import src/core/ext/types (PromptPatch)
+
+export func load_agent_prompt(cwd: string) -> string ! {FS} {
+  let workspace_path = "${cwd}/src/core/ext/openkb/AGENT.md";
+  let packaged_workspace_path = "${cwd}/.packages/motoko_openkb/AGENT.md";
+  if fileExists(workspace_path) then readFile(workspace_path)
+  else if fileExists(packaged_workspace_path) then readFile(packaged_workspace_path)
+  else ""
+}
+
+export func build_prompt_patch(cached_prompt: string) -> PromptPatch {
+  if cached_prompt == "" then { prepend: [], append: [] }
+  else { prepend: [], append: [cached_prompt] }
+}

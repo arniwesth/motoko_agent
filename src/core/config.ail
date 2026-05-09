@@ -100,6 +100,12 @@ export type OmnigraphConfig = {
   timeout_ms: int
 }
 
+export type OpenKbConfig = {
+  timeout_ms: int,
+  max_output_chars: int,
+  wiki_dir: string
+}
+
 export type CliOverrides = {
   profile: string,
   model: string,
@@ -129,6 +135,7 @@ export type RuntimeConfig = {
   context_mode: ContextModeConfig,
   exa_search: ExaSearchConfig,
   omnigraph: OmnigraphConfig,
+  openkb: OpenKbConfig,
   warnings: [string]
 }
 
@@ -407,6 +414,15 @@ func load_omnigraph(root: Json) -> OmnigraphConfig {
   }
 }
 
+func load_openkb(root: Json) -> OpenKbConfig {
+  let o = object_at(root, "openkb");
+  {
+    timeout_ms: json_int(o, "timeout_ms", 60000),
+    max_output_chars: json_int(o, "max_output_chars", 12000),
+    wiki_dir: json_string(o, "wiki_dir", ".openkb")
+  }
+}
+
 func apply_agent_cli(agent: AgentConfig, cli: CliOverrides) -> AgentConfig {
   {
     agent |
@@ -446,6 +462,7 @@ export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO
   let context_mode = read_json_or_empty("${profile_dir}/context_mode.json");
   let exa_search = read_json_or_empty("${profile_dir}/exa_search.json");
   let omnigraph = read_json_or_empty("${profile_dir}/omnigraph.json");
+  let openkb = read_json_or_empty("${profile_dir}/openkb.json");
   let agent = apply_agent_cli(load_agent(core), cli);
   let backend = apply_backend_cli(load_backend(core), cli);
   let extensions = apply_extensions_cli(load_extensions(core), cli);
@@ -460,6 +477,7 @@ export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO
     context_mode: load_context_mode(context_mode),
     exa_search: load_exa_search(exa_search),
     omnigraph: load_omnigraph(omnigraph),
+    openkb: load_openkb(openkb),
     warnings: warnings_for(profile_dir, workdir)
   }
 }
@@ -519,6 +537,11 @@ func runtime_config_json(cfg: RuntimeConfig) -> Json =
     kv("extensions", jo([
       kv("order", ja(json_strings(cfg.extensions.order))),
       kv("strict", jb(cfg.extensions.strict))
+    ])),
+    kv("openkb", jo([
+      kv("timeout_ms", jnum(_int_to_float(cfg.openkb.timeout_ms))),
+      kv("max_output_chars", jnum(_int_to_float(cfg.openkb.max_output_chars))),
+      kv("wiki_dir", js(cfg.openkb.wiki_dir))
     ])),
     kv("warnings", ja(json_strings(cfg.warnings)))
   ])
