@@ -58,6 +58,7 @@ export type AgentEvent =
   | { type: "context_usage"; step: number; tokens_est: number; limit: number }
   | { type: "thinking_stream_start"; step: number; stream_id: string; model: string }
   | { type: "thinking_delta"; step: number; stream_id: string; seq: number; text_delta: string }
+  | { type: "reasoning_delta"; step: number; stream_id: string; seq: number; text_delta: string }
   | { type: "thinking_stream_end"; step: number; stream_id: string; status: "completed" | "aborted" | "errored" }
   | { type: "thinking_stream_error"; step: number; stream_id: string; message: string; retryable: boolean }
   | { type: "thinking"; step: number; text: string; think?: string; answer?: string }

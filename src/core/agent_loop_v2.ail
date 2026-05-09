@@ -34,7 +34,7 @@
 
 module src/core/agent_loop_v2
 
-import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError, StreamChunk, ContentDelta, Usage)
+import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError, StreamChunk, ContentDelta, ThinkingDelta, Usage)
 import std/io (println, readLine)
 import std/clock (now)
 import std/env (getEnvOr)
@@ -130,15 +130,38 @@ func emit_event(session_id: string, event_type: string, extra: [{key: string, va
 }
 
 -- emit_stream_chunk: dispatch one StreamChunk variant to the JSONL event
--- protocol. ContentDelta becomes a thinking_delta event the TUI appends to
--- its per-stream_id buffer; Usage is dropped here (final usage telemetry
--- comes from the StepResult.{input,output,cache}_*_input_tokens fields
--- after the call returns). Extracted from agent_loop_v2 because match
--- inside lambda hits a known AILANG parser bug.
+-- protocol.
+--
+-- ContentDelta(text) → thinking_delta event (TUI appends to per-stream_id
+--                       buffer in arrival order; this is the assistant's
+--                       visible content as it streams).
+-- ThinkingDelta(text) → reasoning_delta event (NEW v0.18.8; AILANG-side
+--                       API-level thinking from claude-opus-4.5+,
+--                       OpenAI o1/o3, Gemini 2.5+ thinking models). TUI
+--                       renders in a separate panel; never mixed with
+--                       content stream.
+-- Usage(_)            → dropped here (final usage telemetry comes from
+--                       the StepResult.{input,output,cache}_*_input_tokens
+--                       fields after the call returns).
+--
+-- Tag-convention reasoning (glm-5, deepseek-r1: <thinking>...</thinking>
+-- inside ContentDelta) is NOT split here — that belongs in the TUI's
+-- streaming-render path which already strips think-tag bodies for live
+-- render via stripThinkBlocksForLive().
+--
+-- Extracted from agent_loop_v2 because match inside lambda hits a known
+-- AILANG parser bug.
 func emit_stream_chunk(session_id: string, step_idx: int, stream_id: string, chunk: StreamChunk) -> () ! {IO} {
   match chunk {
     ContentDelta(text) =>
       emit_event(session_id, "thinking_delta", [
+        kv("step", jnum(_int_to_float(step_idx))),
+        kv("stream_id", js(stream_id)),
+        kv("seq", jnum(0.0)),
+        kv("text_delta", js(text))
+      ]),
+    ThinkingDelta(text) =>
+      emit_event(session_id, "reasoning_delta", [
         kv("step", jnum(_int_to_float(step_idx))),
         kv("stream_id", js(stream_id)),
         kv("seq", jnum(0.0)),

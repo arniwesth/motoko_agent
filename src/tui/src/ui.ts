@@ -1444,6 +1444,12 @@ export class AgentUI {
     truncatedForParse: boolean;
     lastRenderAtMs: number;
   }>();
+  // M-AI-STEP-STREAMING-THINKING v0.18.8: per-stream_id accumulator for
+  // API-level reasoning (ThinkingDelta from claude-opus-4.5+ extended-
+  // thinking, OpenAI o1/o3, Gemini 2.5+ thoughts). Kept separate from
+  // streamBuffers so reasoning never mixes with content. Flushed into a
+  // [reason] side panel via addReasoningBlock at thinking_stream_end.
+  private readonly reasoningBuffers = new Map<string, string>();
   private readonly pendingStreamRenderTimers = new Map<string, NodeJS.Timeout>();
   private readonly streamedSteps = new Set<number>();
   private readonly streamRenderedSteps = new Set<number>();
@@ -1809,6 +1815,21 @@ export class AgentUI {
           this.step = event.step;
         }
         break;
+      case "reasoning_delta":
+        // API-level reasoning chunk (v0.18.8 ThinkingDelta from
+        // claude-opus-4.5+ extended-thinking, OpenAI o1/o3, Gemini
+        // 2.5+ thoughts). NOT mixed into the per-stream_id content
+        // buffer — accumulated separately into reasoningBuffers and
+        // rendered into a side panel via addReasoningBlock at
+        // thinking_stream_end. We also append a dim placeholder live
+        // so the user knows reasoning is happening.
+        {
+          if (isInternalComposeStream(event.stream_id)) break;
+          const prev = this.reasoningBuffers.get(event.stream_id) ?? "";
+          this.reasoningBuffers.set(event.stream_id, prev + event.text_delta);
+          this.step = event.step;
+        }
+        break;
       case "thinking_stream_error":
         if (isInternalComposeStream(event.stream_id)) break;
         this.appendHistoryStyled(`Stream error: ${event.message}`, chalk.red.dim);
@@ -1851,6 +1872,16 @@ export class AgentUI {
         const row = this.streamRows.get(event.stream_id);
         if (row) this.history.removeChild(row);
         this.clearPendingStreamRender(event.stream_id);
+        // Flush API-level reasoning into a side panel (v0.18.8). Native
+        // reasoning from claude-opus-4.5+/o1/o3/gemini-2.5+ accumulates in
+        // reasoningBuffers separately from content; render here as a
+        // [reason] block alongside any [think] block from <thinking>
+        // tag-convention content.
+        const reasoningText = this.reasoningBuffers.get(event.stream_id);
+        if (reasoningText) {
+          this.addReasoningBlock(event.step, reasoningText);
+        }
+        this.reasoningBuffers.delete(event.stream_id);
         this.streamBuffers.delete(event.stream_id);
         this.streamRows.delete(event.stream_id);
         this.tui.requestRender(true);
@@ -2593,6 +2624,42 @@ export class AgentUI {
     this.history.addChild(bodyRow);
     this.thinkBlocks.set(step, { step, content: thinkContent, charCount, headerRow, bodyRow, expanded: false });
     this.thinkStepOrder.push(step);
+  }
+
+  // addReasoningBlock renders a side-panel block for API-level reasoning
+  // (M-AI-STEP-STREAMING-THINKING v0.18.8). Distinguished visually from
+  // addThinkBlock by a [reason] label so users can tell tag-convention
+  // reasoning (parsed from <thinking>...</thinking> in content) apart
+  // from native API thinking surfaced via the new ThinkingDelta variant.
+  // Both flow into the same expandable-row UI pattern; reuses the
+  // think-block infrastructure but namespaces by step+suffix.
+  private addReasoningBlock(step: number, rawContent: string): void {
+    const reasoningContent = rawContent.trim();
+    if (!reasoningContent) return;
+    // Use a distinct map key (step + 0.5 offset) so addReasoningBlock and
+    // addThinkBlock can both fire for the same step without colliding.
+    // Step values from AILANG are integers, so non-integer keys are safe.
+    const key = step + 0.5;
+    if (this.thinkBlocks.has(key)) return;
+    const charCount = reasoningContent.length;
+    const headerRow = styledText(
+      this.renderReasoningHeader(step, charCount, false),
+      chalk.reset,
+    );
+    const bodyRow = styledText("", chalk.reset);
+    this.history.addChild(headerRow);
+    this.history.addChild(bodyRow);
+    this.thinkBlocks.set(key, { step: key, content: reasoningContent, charCount, headerRow, bodyRow, expanded: false });
+    this.thinkStepOrder.push(key);
+  }
+
+  private renderReasoningHeader(step: number, charCount: number, expanded: boolean): string {
+    const marker = expanded ? "▾" : "▸";
+    return [
+      chalk.dim(`[${formatTimestamp()}]   `),
+      chalk.cyan("[reason]"),
+      chalk.dim(` step ${step} · ${charCount} chars  ${marker}  ^r`),
+    ].join("");
   }
 
   private renderThinkHeader(step: number, charCount: number, expanded: boolean): string {
