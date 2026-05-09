@@ -1325,6 +1325,37 @@ function stripThinkTags(text: string): string {
     .replace(/^(?:hinking|inking|nking|king|ing|ng|g)>/i, "");
 }
 
+// Strip BOTH the tags AND the body content of <thinking>...</thinking>
+// blocks. Used for live streaming render so the user sees just the answer
+// (or a placeholder) instead of the model's reasoning leaking through
+// before the closing tag arrives.
+//
+// Handles three states:
+//   - Closed block: <thinking>foo</thinking>bar → "[thinking]\nbar"
+//   - Open block (mid-stream): <thinking>foo → "[thinking…]"
+//   - No block: foo → "foo" (after standard tag-strip)
+//
+// Returns the visible portion only; the full thinking content is still
+// preserved in the underlying buffer for the final render path
+// (extractTaggedThinkAnswer at thinking_stream_end).
+function stripThinkBlocksForLive(text: string): string {
+  if (!text) return "";
+  // Strip closed <thinking>...</thinking> blocks (case-insensitive,
+  // tolerant of <think>/<thinking>). Replace with a single placeholder
+  // so the user knows reasoning is happening but not what it says.
+  let out = text.replace(/<think(?:ing)?\s*>[\s\S]*?<\/think(?:ing)?\s*>/gi, "[thinking]\n");
+  // Strip an unclosed trailing <thinking>... — anything from the open
+  // tag to end-of-buffer. This is the in-flight case where the model
+  // hasn't emitted </thinking> yet. Show a thinking placeholder.
+  const openMatch = out.match(/<think(?:ing)?\s*>[\s\S]*$/i);
+  if (openMatch) {
+    out = out.slice(0, openMatch.index!) + "[thinking…]";
+  }
+  // Final pass: strip any orphan tag fragments left behind by
+  // partial-token mid-stream parsing.
+  return stripThinkTags(out);
+}
+
 export function applyToolProgressCounters(
   counters: ToolBatchCounters,
   results: DelegatedResult[],
@@ -1675,7 +1706,15 @@ export class AgentUI {
           this.setRunState("idle");
         }
         this.model = event.model;
-        this.appendHistoryStyled(`AILANG built ${event.ailangBuilt} | Core Runtime v${event.brainVersion} | TUI v${this.version}`, chalk.dim);
+        // Conversational re-emits of session_start (one per user turn in
+        // agent_loop_v2.conversation_loop_v2) omit the version fields,
+        // which would render as "AILANG built undefined | Core Runtime
+        // vundefined". Only render the banner when the full version
+        // payload is present (i.e. the runtime-startup session_start from
+        // rpc.ail). Conversational turns get a quieter status update.
+        if (event.ailangBuilt && event.brainVersion) {
+          this.appendHistoryStyled(`AILANG built ${event.ailangBuilt} | Core Runtime v${event.brainVersion} | TUI v${this.version}`, chalk.dim);
+        }
         if (Array.isArray(event.loaded_extensions)) {
           const names = event.loaded_extensions;
           const extText = names.length === 0 ? "(none)" : names.join(", ");
@@ -1751,8 +1790,15 @@ export class AgentUI {
           }
           const current = this.streamBuffers.get(event.stream_id);
           if (!current) break;
-          if (event.seq <= current.lastSeq) break;
-          current.lastSeq = event.seq;
+          // seq=0 is a placeholder used by the AILANG-side per-chunk
+          // callback (M-AI-STEP-STREAMING v0.18.7) — every event from
+          // upstream stepWithStream carries seq=0 because AILANG
+          // closures can't easily maintain monotonic counters. Treat
+          // seq=0 as "always accept" and rely on arrival order;
+          // strict-ordering dedup remains for legacy emitters that
+          // populate seq with real values.
+          if (event.seq !== 0 && event.seq <= current.lastSeq) break;
+          if (event.seq > current.lastSeq) current.lastSeq = event.seq;
           current.text += event.text_delta;
           if (current.text.length > STREAM_TEXT_MAX_BYTES) {
             current.text = current.text.slice(-STREAM_TEXT_MAX_BYTES);
@@ -2567,7 +2613,13 @@ export class AgentUI {
   }
 
   private renderStreamingVisibleText(raw: string): string {
-    return this.renderThinkingSegments(stripThinkTags(raw), true);
+    // Live render: hide the BODY of any <thinking>...</thinking> block
+    // (closed or open). The full content stays in the underlying
+    // streamBuffer for the thinking_stream_end final-render path which
+    // splits via extractTaggedThinkAnswer. Without this, thinking-mode
+    // models like glm-5 leak reasoning into the visible stream until
+    // </thinking> closes.
+    return this.renderThinkingSegments(stripThinkBlocksForLive(raw), true);
   }
 
   private renderThinkingSegments(raw: string, trimForLive: boolean): string {
