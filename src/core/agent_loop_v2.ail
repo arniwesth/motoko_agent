@@ -34,7 +34,7 @@
 
 module src/core/agent_loop_v2
 
-import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError)
+import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError, StreamChunk, ContentDelta, Usage)
 import std/io (println, readLine)
 import std/clock (now)
 import std/env (getEnvOr)
@@ -127,6 +127,25 @@ func emit_event(session_id: string, event_type: string, extra: [{key: string, va
     kv("session_id",     js(session_id)),
     kv("type",           js(event_type))
   ] ++ extra))
+}
+
+-- emit_stream_chunk: dispatch one StreamChunk variant to the JSONL event
+-- protocol. ContentDelta becomes a thinking_delta event the TUI appends to
+-- its per-stream_id buffer; Usage is dropped here (final usage telemetry
+-- comes from the StepResult.{input,output,cache}_*_input_tokens fields
+-- after the call returns). Extracted from agent_loop_v2 because match
+-- inside lambda hits a known AILANG parser bug.
+func emit_stream_chunk(session_id: string, step_idx: int, stream_id: string, chunk: StreamChunk) -> () ! {IO} {
+  match chunk {
+    ContentDelta(text) =>
+      emit_event(session_id, "thinking_delta", [
+        kv("step", jnum(_int_to_float(step_idx))),
+        kv("stream_id", js(stream_id)),
+        kv("seq", jnum(0.0)),
+        kv("text_delta", js(text))
+      ]),
+    Usage(_) => ()
+  }
 }
 
 -- Derive a session_id from MOTOKO_SESSION_ID env var (set by the TS wrapper
@@ -825,7 +844,17 @@ func loop_v2(
       kv("stream_id", js(stream_id)),
       kv("model", js(model))
     ]);
-    let dispatched = dispatch_step(provider, model, compacted_msgs, rt);
+    -- Per-chunk callback (M-AI-STEP-STREAMING, AILANG v0.18.7).
+    -- Anthropic / OpenAI / OpenRouter / Gemini emit one ContentDelta per
+    -- SSE event during the call; Ollama and config-driven providers fire
+    -- one synthetic ContentDelta(full_text) at end-of-call.
+    -- TUI (src/tui/src/{ui,session-logger,index}.ts) appends text_delta
+    -- to a per-stream_id buffer in arrival order; seq is informational
+    -- (not used for reordering on the consumer side as of v0.18.7).
+    -- Match-in-lambda is a known AILANG parser bug, so the match lives in
+    -- the top-level emit_stream_chunk helper.
+    let on_chunk = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
+    let dispatched = dispatch_step(provider, model, compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
       Err(e) => {
@@ -842,12 +871,10 @@ func loop_v2(
         -- Accumulate step cost; emit threshold warnings at most once per run.
         let step_cost = step_cost_millicents(result.input_tokens, result.output_tokens, cost_rates);
         let usage_kvs = per_step_usage_kvs(result, step_cost);
-        let _ = emit_event(session_id, "thinking_delta", [
-          kv("step", jnum(_int_to_float(step_idx))),
-          kv("stream_id", js(stream_id)),
-          kv("seq", jnum(1.0)),
-          kv("text_delta", js(result.message.content))
-        ]);
+        -- Per-chunk thinking_delta events fired during the call by on_chunk.
+        -- The single batched thinking_delta below was the pre-v0.18.7 path —
+        -- removed because it would now duplicate every text_delta the TUI
+        -- already received per chunk.
         let _ = emit_event(session_id, "thinking_stream_end", [
           kv("step", jnum(_int_to_float(step_idx))),
           kv("stream_id", js(stream_id)),

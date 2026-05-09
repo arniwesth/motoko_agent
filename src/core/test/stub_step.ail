@@ -12,7 +12,7 @@
 -- with deny_all_rt() so the tool calls don't actually run.
 module src/core/test/stub_step
 
-import std/ai (step, stepWithCache, StepResult, ToolCall, Message, AIError, CacheBreakpoint)
+import std/ai (step, stepWithCache, stepWithStream, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk)
 import std/list as List (length)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
@@ -99,15 +99,22 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
 -- Returns both the step result and the updated provider (tail of script for Scripted).
 -- Loop callers thread next_provider into their recursive call.
 -- rt is forwarded to tools_with_extensions so extension tools appear in the LLM catalog.
+--
+-- on_chunk fires per StreamChunk during the SSE drain (M-AI-STEP-STREAMING,
+-- AILANG v0.18.7). Live providers (Anthropic / OpenAI / OpenRouter / Gemini)
+-- stream content deltas natively; Ollama and config-driven providers fire
+-- one synthetic ContentDelta(full_text) + one Usage at end-of-call. The
+-- callback is wired by agent_loop_v2 to emit thinking_delta events.
 export func dispatch_step(
   provider: StepProvider,
   model: string,
   msgs: [Message],
-  rt: ExtRuntime
-) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI} {
+  rt: ExtRuntime,
+  on_chunk: (StreamChunk) -> () ! {IO}
+) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO} {
   match provider {
     LiveAI => {
-      { result: stepWithCache(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint()), next_provider: LiveAI }
+      { result: stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk), next_provider: LiveAI }
     },
     Scripted(script) => {
       match script {
