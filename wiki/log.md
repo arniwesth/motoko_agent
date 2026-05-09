@@ -340,3 +340,31 @@
 
 ## [2026-05-08 06:30:52] query | What is the Phoenix Architecture and how does it relate to Motoko?
 
+## [2026-05-08 16:54:29] lint | report → lint_20260508_165429.md
+
+## [2026-05-08 16:55:32] query | What is the Motoko extension architecture?
+
+## [2026-05-08 16:57:27] ingest | test_openkb_add.md
+
+## [2026-05-08 16:58:01] query | test
+
+## [2026-05-08 16:59:33] query | What is the Motoko extension architecture and how do extensions register?
+
+## [2026-05-08 17:00:30] query | What is context mode?
+
+## [2026-05-08 17:00:48] query | test
+
+## [2026-05-08 17:01:04] query | hello
+
+## [2026-05-08 17:12:47] lint | report → lint_20260508_171247.md
+
+## [2026-05-08 17:14:00] query | What is the Motoko core extension system?
+
+## [2026-05-08 17:16:46] query | test
+
+## [2026-05-08 17:17:05] query | test
+
+## [2026-05-08 17:18:14] query | What is the core extension system?
+
+## [2026-05-08 17:21:20] ingest | test_openkb_add.md
+

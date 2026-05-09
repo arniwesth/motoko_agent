@@ -1,6 +1,7 @@
 # Knowledge Base Index
 
 ## Documents
+- [[summaries/test_openkb_add]] (short) — A test document for verifying the OpenKB CLI add functionality.
 - [[summaries/2026-05-03-runtime-continuation-intent-guard]] (short) — Runtime guard to detect assistant continuation intent in prose-only responses, preventing premature session termination.
 - [[summaries/2026-05-03-multi-profile-config-and-headless-core-plan]] (short) — Implemented multi-profile Motoko config and outlined headless AILANG core supervisor plan.
 - [[summaries/2026-05-03-headless-json-config-runtime-fixes]] (short) — Fixed TUI model selection, sandboxed path resolution, and extension loading after JSON config migration.
@@ -167,6 +168,8 @@
 - [[summaries/think-block]] (short) — A collection of five open issues and proposed fixes for the Think block UI component in the terminal-based agent interface.
 
 ## Concepts
+- [[concepts/knowledge-base-extension-validation]] — Testing the OpenKB extension to validate indexing, listing, linting, querying, and error handling.
+- [[concepts/large-knowledge-base-performance]] — Performance bottlenecks (lint/query timeouts) observed with large knowledge bases (166 docs).
 - [[concepts/headless]] — Configuration via JSON profiles and CLI arguments without environment variables for non-secrets.
 - [[concepts/guardrail-policy]] — Mutation guardrail that denies all changes on main and restricts bulk deletions to safety-prefixed branches.
 - [[concepts/abort-handling]] — Retaining conversation history and partial tool results after a user abort so the agent can explain what was attempted in the next turn.

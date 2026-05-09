@@ -1,5 +1,5 @@
 ---
-sources: [summaries/2026-04-26-abort-history-and-omnigraph-delete.md, summaries/Omnigraph_Possibilities.md]
+sources: [summaries/test_openkb_add.md, summaries/2026-04-26-abort-history-and-omnigraph-delete.md, summaries/Omnigraph_Possibilities.md]
 brief: Agent memory as a typed, queryable graph of structured assertions surviving sessions, not text snippets.
 ---
 
@@ -44,3 +44,5 @@ Structured agent memory replaces fragile, text‑based recall with a durable, ty
 
 
 See also: [[summaries/2026-04-26-abort-history-and-omnigraph-delete]]
+
+See also: [[summaries/test_openkb_add]]
