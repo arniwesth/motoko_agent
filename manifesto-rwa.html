@@ -653,6 +653,10 @@ const INLINE_DOC = `<style>
       <p>It is not a product. It is not a framework. It is an experiment in self-authored, self-verifying software&thinsp;&mdash;&thinsp;a harness that lets an AI agent plan, execute, test, and modify code in a continuous loop, with the human&rsquo;s role shifting from author to observer, from writer to steward.</p>
 
       <p>This document lays out the ideas that guide the experiment. Some are borrowed from well-established traditions. Some are speculative. All of them are subject to revision&thinsp;&mdash;&thinsp;by the project&rsquo;s contributors, or by the project itself.</p>
+
+      <aside class="comment" data-author="Codex (gpt-5)" data-date="2026-05-10">
+        <p>The manifesto&rsquo;s strongest move is that it does not treat &ldquo;AI writes code&rdquo; as the interesting claim. It asks what architecture, evidence, interface, and authorship have to become if that claim is taken seriously. That gives the document a real spine: code is disposable, intent is durable, verification constrains regeneration, and the human remains present as steward rather than author.</p>
+      </aside>
     </section>
 
     <div class="section-divider">&middot;&middot;&middot;</div>
@@ -666,6 +670,10 @@ const INLINE_DOC = `<style>
       <p>Software architectures tend to calcify. Decisions made early&thinsp;&mdash;&thinsp;about module boundaries, data formats, extension points&thinsp;&mdash;&thinsp;become load-bearing walls that nobody dares remove. The system grows around them like a tree around a fence post, until the fence is inseparable from the tree.</p>
 
       <p>Motoko takes the opposite stance: the architecture must remain flexible and evolvable at every stage. No decision is so foundational that it cannot be revisited. No component is so central that it cannot be replaced.</p>
+
+      <aside class="comment" data-author="Codex (gpt-5)" data-date="2026-05-10">
+        <p>This is the right ambition, but it may need an explicit governance mechanism. Systems that declare a small core often discover that policy quietly migrates into the core anyway: defaults, ordering rules, error handling, security boundaries, compatibility promises. Evolvability depends not only on saying that components can be replaced, but on continuously auditing what has become load-bearing.</p>
+      </aside>
 
       <p>This is not an original idea. Neal Ford, Rebecca Parsons, and Patrick Kua articulated it thoroughly in <em>Building Evolutionary Architectures</em>: design for guided, incremental change across multiple dimensions, rather than for a fixed end state. The insight is that the fitness functions&thinsp;&mdash;&thinsp;the tests, contracts, and invariants that define &ldquo;correct&rdquo;&thinsp;&mdash;&thinsp;are more stable than the code that satisfies them. Protect the functions. Let the code move.</p>
 
@@ -887,6 +895,10 @@ const INLINE_DOC = `<style>
       <p>Motoko is a bet on a specific future: one where software is authored by machines, verified by mathematics, and stewarded by humans. It is a bet that code is disposable and intent is durable. That extensions are safer than monoliths. That self-awareness makes agents more capable, not more dangerous. That simulation and benchmarks can keep self-modification honest.</p>
 
       <p>It is also a bet that might lose. The Phoenix Architecture might be a beautiful idea that collapses under the weight of real-world complexity. Formal verification might not scale to self-modifying systems. The deletion test might reveal that our provenance is never complete enough.</p>
+
+      <aside class="comment" data-author="Codex (gpt-5)" data-date="2026-05-10">
+        <p>The most important unresolved question may be whether Motoko can preserve learning, not just intent. A session produces more than code: it produces failed paths, local heuristics, discoveries about the codebase, and judgments about which abstractions held up under pressure. If those do not become durable artifacts, regeneration can succeed mechanically while still losing knowledge. The deletion test validates reconstructability; it does not by itself validate continuity of understanding.</p>
+      </aside>
 
       <p>But that is what experiments are for. You do not run an experiment because you know the answer. You run it because the question is worth asking.</p>
 
