@@ -275,16 +275,229 @@
       color: var(--text-heading);
     }
 
+    /* ──────────────────────────────────────
+       Living Document: Tracked Changes
+       ────────────────────────────────────── */
+
+    ins.change {
+      text-decoration: none;
+      background: rgba(46, 160, 67, 0.08);
+      border-left: 2px solid #2ea043;
+      display: block;
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 4px 4px 0;
+      position: relative;
+    }
+
+    ins.change p { margin-bottom: 1rem; }
+    ins.change p:last-child { margin-bottom: 0; }
+
+    ins.change::before {
+      content: attr(data-label);
+      display: block;
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #2ea043;
+      margin-bottom: 0.5rem;
+    }
+
+    del.change {
+      text-decoration: none;
+      background: rgba(248, 81, 73, 0.08);
+      border-left: 2px solid #f85149;
+      display: block;
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 4px 4px 0;
+      color: var(--text-muted);
+      position: relative;
+    }
+
+    del.change::before {
+      content: attr(data-label);
+      display: block;
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #f85149;
+      margin-bottom: 0.5rem;
+    }
+
+    /* Hide changes when toggled off */
+    body.hide-changes ins.change {
+      background: transparent;
+      border-left-color: transparent;
+      padding: 0;
+      margin: 0;
+    }
+    body.hide-changes ins.change::before { display: none; }
+    body.hide-changes del.change { display: none; }
+
+    /* ──────────────────────────────────────
+       Living Document: Comments
+       ────────────────────────────────────── */
+
+    aside.comment {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin: 1.25rem 0;
+      font-size: 0.88rem;
+      line-height: 1.6;
+      position: relative;
+    }
+
+    aside.comment::before {
+      content: attr(data-author) " · " attr(data-date);
+      display: block;
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+
+    aside.comment p {
+      margin-bottom: 0.5rem;
+      color: var(--text-muted);
+    }
+    aside.comment p:last-child { margin-bottom: 0; }
+
+    /* Thread replies */
+    aside.comment aside.comment {
+      margin-left: 1rem;
+      margin-top: 0.75rem;
+      border-left: 2px solid var(--accent-dim);
+      border-top: none;
+      border-right: none;
+      border-bottom: none;
+      border-radius: 0;
+    }
+
+    body.hide-comments aside.comment { display: none; }
+
+    /* ──────────────────────────────────────
+       Living Document: Controls
+       ────────────────────────────────────── */
+
+    .doc-controls {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      display: flex;
+      gap: 0.5rem;
+      z-index: 100;
+    }
+
+    .doc-controls button {
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      padding: 0.4rem 0.75rem;
+      background: var(--bg-surface);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+
+    .doc-controls button:hover {
+      background: var(--bg-quote);
+      color: var(--text-heading);
+      border-color: var(--accent-dim);
+    }
+
+    .doc-controls button.active {
+      background: var(--accent-glow);
+      color: var(--accent);
+      border-color: var(--accent-dim);
+    }
+
+    /* ──────────────────────────────────────
+       Living Document: Revision Log
+       ────────────────────────────────────── */
+
+    .revision-log {
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .revision-log h2 {
+      border-bottom: none;
+      margin-top: 0;
+    }
+
+    .revision-log table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    .revision-log th {
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-weight: 600;
+      font-size: 0.7rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .revision-log td {
+      padding: 0.5rem 0.75rem;
+      color: var(--text);
+      border-bottom: 1px solid rgba(42, 42, 50, 0.5);
+      vertical-align: top;
+    }
+
+    .revision-log td:first-child {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .revision-log .rev-author {
+      color: var(--accent);
+    }
+
+    .revision-log .rev-section a {
+      color: var(--link);
+      font-size: 0.8rem;
+    }
+
+    body.hide-changes .revision-log,
+    body.hide-changes .doc-controls [data-toggle="changes"] { opacity: 0.4; }
+
     /* Responsive */
     @media (max-width: 600px) {
       html { font-size: 16px; }
       h1 { font-size: 2rem; }
       .container { padding: 2.5rem 1.25rem 4rem; }
       nav.toc ol { columns: 1; }
+      .doc-controls { position: static; justify-content: flex-end; margin-bottom: 1rem; }
     }
   </style>
 </head>
 <body>
+  <div class="doc-controls">
+    <button class="active" data-toggle="changes" onclick="document.body.classList.toggle('hide-changes'); this.classList.toggle('active')">Changes</button>
+    <button class="active" data-toggle="comments" onclick="document.body.classList.toggle('hide-comments'); this.classList.toggle('active')">Comments</button>
+  </div>
+
   <div class="container">
 
     <h1>The Motoko Manifesto</h1>
@@ -354,6 +567,16 @@
       <p>Motoko takes this literally. The <code>.agent/</code> directory&thinsp;&mdash;&thinsp;filled with plans, frozen decisions, session summaries, and learnings&thinsp;&mdash;&thinsp;is not documentation about the system. It <em>is</em> the system, in a meaningful sense. The AILANG source files are a downstream artifact of those design traces, reproducible from them the way a binary is reproducible from source.</p>
 
       <p>The practical consequence is stark: no human edits to the codebase are allowed. If a human wants to change behavior, they change a specification, a test, or a design constraint&thinsp;&mdash;&thinsp;and the agent regenerates the code. This is uncomfortable. It requires trusting the loop. But it is the only way to test whether the Phoenix claim is actually true, or merely a pleasant metaphor.</p>
+
+      <ins class="change" data-author="Arni &amp; Claude" data-date="2026-05-09" data-label="Added 2026-05-09 &mdash; Arni &amp; Claude" data-reason="Reflect the insight that human language fluency is irrelevant; machine language choice is load-bearing">
+        <p>Motoko itself is proof of this principle. Its codebase is written in AILANG&thinsp;&mdash;&thinsp;a language its creator has never learned. The person who designed the system, defined its architecture, and wrote its specifications could not produce a &ldquo;hello world&rdquo; in the language that implements it. This is not a confession of limitation; it is a demonstration of the thesis. If the asset were the code, this project could not exist. The asset is the intent.</p>
+
+        <p>But this does not mean the choice of language is arbitrary&thinsp;&mdash;&thinsp;quite the opposite. AILANG was conceived precisely for this world: a language designed not for human ergonomics but for machine authorship. Its pure functional semantics, algebraic effects, and Z3 contracts exist because the author is a machine that needs to be verified, not a human that needs to be comfortable. The human&rsquo;s command of the programming language no longer matters. The machine&rsquo;s relationship to its language matters more than ever. And the human&rsquo;s role shifts from writing code to choosing the constraints under which code is written&thinsp;&mdash;&thinsp;which turns out to be the harder and more consequential skill.</p>
+      </ins>
+
+      <aside class="comment" data-author="Arni" data-date="2026-05-09">
+        <p>This was one of the most striking realisations from building Motoko: your command of the programming language no longer matters. I built a fairly advanced coding agent in a language I&rsquo;ve never seen before, and in which I would struggle to write even a simple &ldquo;hello world&rdquo; on a whiteboard. The tension is that this doesn&rsquo;t make the language choice irrelevant&thinsp;&mdash;&thinsp;AILANG was designed exactly for the machine author. The human&rsquo;s fluency shifted from syntax to intent.</p>
+      </aside>
 
       <p>The deletion test is the ultimate validator: can you delete a component and rebuild it from stored intent alone? If not, your provenance is incomplete. If yes, the code was never the thing that mattered.</p>
     </section>
@@ -537,6 +760,35 @@
         <li><a href="https://github.com/can1357/oh-my-pi">Oh-My-Pi</a> &mdash; Efficient tool implementations</li>
         <li><a href="https://github.com/mksglu/context-mode">context-mode</a> &mdash; Context-efficient execution</li>
       </ul>
+    </section>
+
+    <!-- Revision Log -->
+    <section class="revision-log">
+      <h2>Revision Log</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Author</th>
+            <th>Section</th>
+            <th>Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>2026-05-09</td>
+            <td><span class="rev-author">Arni &amp; Claude</span></td>
+            <td class="rev-section"><a href="#phoenix-architecture">II. Phoenix Architecture</a></td>
+            <td>Added two paragraphs on AILANG as proof of the Phoenix thesis: human language fluency is irrelevant, machine language choice is load-bearing</td>
+          </tr>
+          <tr>
+            <td>2026-05-09</td>
+            <td><span class="rev-author">Arni &amp; Claude</span></td>
+            <td class="rev-section">&mdash;</td>
+            <td>Initial draft of manifesto (sections I&ndash;X, references)</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
   </div>
