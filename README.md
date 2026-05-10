@@ -17,6 +17,7 @@ Things are going to break.
 - [Extensions](#extensions)
 - [Development](#development)
 - [Project structure](#project-structure)
+- [Contributing](#contributing)
 - [Reference](#reference)
 
 ## Highlights
@@ -167,6 +168,10 @@ motoko_agent/
 ├── omnigraph/                  Graph schema, queries, seed
 └── papers/                     Research paper reading list
 ```
+
+## Contributing
+
+Bug reports, feature requests, and PRs welcome. The runtime spans two layers — Motoko (this repo) and AILANG (the language it's written in) — and each has its own reporting channel. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the routing table and how to file AILANG-side issues via GitHub, the `ailang messages` CLI, or the public `submit_feedback` MCP tool.
 
 ## Reference
 
