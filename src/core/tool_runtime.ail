@@ -775,8 +775,12 @@ func run_edit_file(
   match validate_path_common("EditFile", id, path, workdir) {
     Err(e) => e,
     Ok(_) => {
+      -- read-before-edit policy: enforced only when the batch carries read_paths
+      -- (multi-tool batch dispatch). In per-call dispatch (dispatch_one),
+      -- read_paths is empty and the policy is a no-op — the model has
+      -- already read the file on a prior turn, satisfying the intent.
       let resolved = resolve_workdir_path(workdir, path);
-      if not list_contains(read_paths, normalize_relative_path(path)) then
+      if list_len(read_paths) > 0 && not list_contains(read_paths, normalize_relative_path(path)) then
         ToolErrorResult({ id: id, tool: "EditFile", message: "read-before-edit policy violation: call ReadFile for this path before EditFile in the same tool batch" })
       else if not fileExists(resolved) then
         ToolErrorResult({ id: id, tool: "EditFile", message: "path does not exist: ${path}" })
