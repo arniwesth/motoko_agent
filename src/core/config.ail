@@ -23,7 +23,13 @@ export type AgentConfig = {
   semi_formal_verifier_mode: bool,
   system_prompt: string,
   openai_base_url: string,
-  ai_options_json: string
+  ai_options_json: string,
+  max_cost_millicents: int
+}
+
+export type CostRates = {
+  input_per_1m_millicents: int,
+  output_per_1m_millicents: int
 }
 
 export type BackendConfig = {
@@ -100,6 +106,11 @@ export type OmnigraphConfig = {
   timeout_ms: int
 }
 
+export type VerificationConfig = {
+  enabled: bool,
+  command: string
+}
+
 export type CliOverrides = {
   profile: string,
   model: string,
@@ -129,6 +140,8 @@ export type RuntimeConfig = {
   context_mode: ContextModeConfig,
   exa_search: ExaSearchConfig,
   omnigraph: OmnigraphConfig,
+  cost_rates: CostRates,
+  verification: VerificationConfig,
   warnings: [string]
 }
 
@@ -296,7 +309,8 @@ func load_agent(core: Json) -> AgentConfig {
     semi_formal_verifier_mode: json_bool(a, "semi_formal_verifier_mode", json_bool(object_at(core, "verification"), "semi_formal", false)),
     system_prompt: json_string(a, "system_prompt", ""),
     openai_base_url: json_string(a, "openai_base_url", ""),
-    ai_options_json: json_string(a, "ai_options_json", "")
+    ai_options_json: json_string(a, "ai_options_json", ""),
+    max_cost_millicents: json_int(a, "max_cost_usd_cents", 0) * 1000
   }
 }
 
@@ -407,6 +421,48 @@ func load_omnigraph(root: Json) -> OmnigraphConfig {
   }
 }
 
+-- Read an int from an env var, falling back to a default. Used for cost
+-- rate overrides (M-MOTOKO-EVAL-HARNESS-HARDENING M5b, gaps #3 + #9):
+-- AILANG eval harness sets MOTOKO_COST_INPUT_PER_1M_MILLICENTS and
+-- MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS from its models.yml so motoko's
+-- threshold warnings + cost_exhausted gate fire and run_summary reports
+-- non-zero cost_usd — without each motoko profile needing its own
+-- per-model pricing block (the duplication burden of gap #9).
+func env_int(name: string, fallback: int) -> int ! {Env} {
+  match getEnv(name) {
+    Ok(raw) => {
+      let trimmed = trim(raw);
+      if trimmed == "" then fallback
+      else match _stringToInt(trimmed) {
+        Some(n) => if n > 0 then n else fallback,
+        None => fallback
+      }
+    },
+    Err(_) => fallback
+  }
+}
+
+func load_cost_rates(core: Json) -> CostRates ! {Env} {
+  let p = object_at(core, "ai_provider");
+  let c = object_at(p, "cost");
+  let profile_input  = json_int(c, "input_per_1m_millicents", 0);
+  let profile_output = json_int(c, "output_per_1m_millicents", 0);
+  -- Env vars override profile values when set (and >0). Lets the AILANG
+  -- eval harness inject pricing per-task without mutating profile config.
+  {
+    input_per_1m_millicents:  env_int("MOTOKO_COST_INPUT_PER_1M_MILLICENTS",  profile_input),
+    output_per_1m_millicents: env_int("MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS", profile_output)
+  }
+}
+
+func load_verification(core: Json) -> VerificationConfig {
+  let v = object_at(core, "verification");
+  {
+    enabled: json_bool(v, "enabled", false),
+    command: json_string(v, "command", "make check_core")
+  }
+}
+
 func apply_agent_cli(agent: AgentConfig, cli: CliOverrides) -> AgentConfig {
   {
     agent |
@@ -434,25 +490,56 @@ func apply_extensions_cli(ext: ExtensionConfig, cli: CliOverrides) -> ExtensionC
   }
 }
 
+-- Resolve where to read the profile config from. Lookup order:
+--   1. <workdir>/.motoko/config/<profile>/config.json    (per-repo profile)
+--   2. <workdir>/.motoko/config.json                      (legacy flat config)
+--   3. <MOTOKO_REPO>/.motoko/config/<profile>/config.json (fork-bundled profile)
+-- The MOTOKO_REPO fallback is required by the AILANG eval harness adapter
+-- (M-MOTOKO-EXECUTOR-ADAPTER) — it sets WORKDIR to a per-task scratch dir
+-- that doesn't carry .motoko/config, so without this fallback the profile
+-- silently degrades to defaults (extensions.order=[], no cost_rates, etc.).
+-- See M-MOTOKO-EVAL-HARNESS-HARDENING gap #6.
+func resolve_profile_dir(workdir: string, profile: string) -> string ! {Env, FS} {
+  let dir0 = profile_dir_for(workdir, profile);
+  let flat_dir = motoko_dir(workdir);
+  if fileExists("${dir0}/config.json") then dir0
+  else if fileExists("${flat_dir}/config.json") then flat_dir
+  else
+    match getEnv("MOTOKO_REPO") {
+      Ok(repo) => {
+        let trimmed = trim(repo);
+        if trimmed == "" then dir0
+        else {
+          let repo_dir = profile_dir_for(trimmed, profile);
+          if fileExists("${repo_dir}/config.json") then repo_dir else dir0
+        }
+      },
+      Err(_) => dir0
+    }
+}
+
 export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO} {
   let cli = parse_cli_args(args);
   let profile = active_profile(cli.profile);
   let workdir = if cli.workdir != "" then cli.workdir else ".";
-  let dir0 = profile_dir_for(workdir, profile);
-  let flat_dir = motoko_dir(workdir);
-  let profile_dir = if fileExists("${flat_dir}/config.json") && not fileExists("${dir0}/config.json") then flat_dir else dir0;
+  let profile_dir = resolve_profile_dir(workdir, profile);
   let core = read_json_or_empty("${profile_dir}/config.json");
   let compose = read_json_or_empty("${profile_dir}/compose.json");
   let context_mode = read_json_or_empty("${profile_dir}/context_mode.json");
   let exa_search = read_json_or_empty("${profile_dir}/exa_search.json");
   let omnigraph = read_json_or_empty("${profile_dir}/omnigraph.json");
   let agent = apply_agent_cli(load_agent(core), cli);
+  let max_cost_env = match getEnv("AI_MAX_COST_USD_CENTS") {
+    Ok(raw) => match _stringToInt(trim(raw)) { Some(n) => if n > 0 then n * 1000 else 0, None => 0 },
+    Err(_) => 0
+  };
+  let agent_final = if max_cost_env > 0 then { agent | max_cost_millicents: max_cost_env } else agent;
   let backend = apply_backend_cli(load_backend(core), cli);
   let extensions = apply_extensions_cli(load_extensions(core), cli);
   {
     profile: profile,
     profile_dir: profile_dir,
-    agent: agent,
+    agent: agent_final,
     backend: backend,
     tools: load_tools(core),
     extensions: extensions,
@@ -460,6 +547,8 @@ export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO
     context_mode: load_context_mode(context_mode),
     exa_search: load_exa_search(exa_search),
     omnigraph: load_omnigraph(omnigraph),
+    cost_rates: load_cost_rates(core),
+    verification: load_verification(core),
     warnings: warnings_for(profile_dir, workdir)
   }
 }
@@ -496,7 +585,8 @@ func runtime_config_json(cfg: RuntimeConfig) -> Json =
       kv("semi_formal_verifier_mode", jb(cfg.agent.semi_formal_verifier_mode)),
       kv("system_prompt", js(cfg.agent.system_prompt)),
       kv("openai_base_url", js(cfg.agent.openai_base_url)),
-      kv("ai_options_json", js(cfg.agent.ai_options_json))
+      kv("ai_options_json", js(cfg.agent.ai_options_json)),
+      kv("max_cost_millicents", jnum(_int_to_float(cfg.agent.max_cost_millicents)))
     ])),
     kv("backend", jo([
       kv("mode", js(cfg.backend.mode)),

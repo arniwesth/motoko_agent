@@ -19,6 +19,9 @@
 module src/core/tool_catalog
 
 import std/ai (ToolSchema)
+import std/list as List (length)
+import src/core/config (VerificationConfig)
+import src/core/ext/types (ExtRuntime, ExtensionHooks)
 
 -- Each schema's `parameters` field is a JSON-Schema-shaped string. To keep
 -- the strings readable AILANG-side, we build them in helper functions
@@ -73,3 +76,65 @@ export pure func tools() -> [ToolSchema] {
     search_schema()
   ]
 }
+
+-- Minimal ToolSchema for an extension-provided tool. Extensions supply only
+-- a name string; we synthesise a description and an empty JSON Schema so the
+-- model can emit the call and the dispatcher can route it.
+pure func ext_tool_schema(name: string) -> ToolSchema {
+  {
+    name: name,
+    description: "Extension tool: ${name}",
+    parameters: "{\"type\":\"object\",\"properties\":{},\"required\":[]}"
+  }
+}
+
+pure func collect_hook_schemas(names: [string]) -> [ToolSchema] {
+  match names {
+    [] => [],
+    n :: rest => ext_tool_schema(n) :: collect_hook_schemas(rest)
+  }
+}
+
+-- Prefer hook-declared schemas when available; fall back to name-only synthesis.
+pure func hook_schemas(h: ExtensionHooks) -> [ToolSchema] {
+  let declared = h.on_describe_tools();
+  match declared {
+    [] => collect_hook_schemas(h.provided_tools),
+    _ => declared
+  }
+}
+
+pure func collect_ext_schemas(hooks: [ExtensionHooks]) -> [ToolSchema] {
+  match hooks {
+    [] => [],
+    h :: rest => hook_schemas(h) ++ collect_ext_schemas(rest)
+  }
+}
+
+-- Full tool catalog including any tools registered by active extensions.
+-- Use this instead of `tools()` when an ExtRuntime is available so that
+-- extension-provided tools appear in the LLM's tool list.
+export pure func tools_with_extensions(rt: ExtRuntime) -> [ToolSchema] {
+  tools() ++ collect_ext_schemas(rt.registry.hooks)
+}
+
+-- Inline tests
+
+pure func test_base_tools_count() -> bool
+  tests [((), true)]
+  { List.length(tools()) == 6 }
+
+pure func test_no_extensions_returns_base_tools() -> bool
+  tests [((), true)]
+  {
+    let v: VerificationConfig = { enabled: false, command: "make check_core" };
+    let rt: ExtRuntime = { registry: { hooks: [] }, strict_mode: false, verification: v };
+    List.length(tools_with_extensions(rt)) == 6
+  }
+
+pure func test_ext_schema_synthesised_name() -> bool
+  tests [((), true)]
+  {
+    let s = ext_tool_schema("MyTool");
+    s.name == "MyTool"
+  }

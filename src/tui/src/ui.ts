@@ -1256,6 +1256,13 @@ interface ThinkBlock {
   headerRow: Text;
   bodyRow: Text;
   expanded: boolean;
+  // kind distinguishes the two sources of think-style panels:
+  //   "think"   — tag-convention <thinking>...</thinking> from delta.content
+  //   "reason"  — API-level reasoning (v0.18.8 ThinkingDelta from Anthropic
+  //               extended-thinking, OpenAI o1/o3, Gemini thoughts, every
+  //               OpenRouter-routed reasoning model post-v0.18.9)
+  // Used by expand/collapse to render the correct header label.
+  kind: "think" | "reason";
 }
 
 function isWaitingState(state: RunState): boolean {
@@ -1323,6 +1330,37 @@ function stripThinkTags(text: string): string {
     .replace(/<\/?\s*think(?:ing)?\s*>/gi, "")
     .replace(/(?:^|[\s`])<\/?(?:t|th|thi|thin|think|thinki|thinkin|thinking)>/gi, (m) => m.match(/^\s/) ? m[0]! : "")
     .replace(/^(?:hinking|inking|nking|king|ing|ng|g)>/i, "");
+}
+
+// Strip BOTH the tags AND the body content of <thinking>...</thinking>
+// blocks. Used for live streaming render so the user sees just the answer
+// (or a placeholder) instead of the model's reasoning leaking through
+// before the closing tag arrives.
+//
+// Handles three states:
+//   - Closed block: <thinking>foo</thinking>bar → "[thinking]\nbar"
+//   - Open block (mid-stream): <thinking>foo → "[thinking…]"
+//   - No block: foo → "foo" (after standard tag-strip)
+//
+// Returns the visible portion only; the full thinking content is still
+// preserved in the underlying buffer for the final render path
+// (extractTaggedThinkAnswer at thinking_stream_end).
+function stripThinkBlocksForLive(text: string): string {
+  if (!text) return "";
+  // Strip closed <thinking>...</thinking> blocks (case-insensitive,
+  // tolerant of <think>/<thinking>). Replace with a single placeholder
+  // so the user knows reasoning is happening but not what it says.
+  let out = text.replace(/<think(?:ing)?\s*>[\s\S]*?<\/think(?:ing)?\s*>/gi, "[thinking]\n");
+  // Strip an unclosed trailing <thinking>... — anything from the open
+  // tag to end-of-buffer. This is the in-flight case where the model
+  // hasn't emitted </thinking> yet. Show a thinking placeholder.
+  const openMatch = out.match(/<think(?:ing)?\s*>[\s\S]*$/i);
+  if (openMatch) {
+    out = out.slice(0, openMatch.index!) + "[thinking…]";
+  }
+  // Final pass: strip any orphan tag fragments left behind by
+  // partial-token mid-stream parsing.
+  return stripThinkTags(out);
 }
 
 export function applyToolProgressCounters(
@@ -1413,6 +1451,12 @@ export class AgentUI {
     truncatedForParse: boolean;
     lastRenderAtMs: number;
   }>();
+  // M-AI-STEP-STREAMING-THINKING v0.18.8: per-stream_id accumulator for
+  // API-level reasoning (ThinkingDelta from claude-opus-4.5+ extended-
+  // thinking, OpenAI o1/o3, Gemini 2.5+ thoughts). Kept separate from
+  // streamBuffers so reasoning never mixes with content. Flushed into a
+  // [reason] side panel via addReasoningBlock at thinking_stream_end.
+  private readonly reasoningBuffers = new Map<string, string>();
   private readonly pendingStreamRenderTimers = new Map<string, NodeJS.Timeout>();
   private readonly streamedSteps = new Set<number>();
   private readonly streamRenderedSteps = new Set<number>();
@@ -1675,7 +1719,15 @@ export class AgentUI {
           this.setRunState("idle");
         }
         this.model = event.model;
-        this.appendHistoryStyled(`AILANG built ${event.ailangBuilt} | Core Runtime v${event.brainVersion} | TUI v${this.version}`, chalk.dim);
+        // Conversational re-emits of session_start (one per user turn in
+        // agent_loop_v2.conversation_loop_v2) omit the version fields,
+        // which would render as "AILANG built undefined | Core Runtime
+        // vundefined". Only render the banner when the full version
+        // payload is present (i.e. the runtime-startup session_start from
+        // rpc.ail). Conversational turns get a quieter status update.
+        if (event.ailangBuilt && event.brainVersion) {
+          this.appendHistoryStyled(`AILANG built ${event.ailangBuilt} | Core Runtime v${event.brainVersion} | TUI v${this.version}`, chalk.dim);
+        }
         if (Array.isArray(event.loaded_extensions)) {
           const names = event.loaded_extensions;
           const extText = names.length === 0 ? "(none)" : names.join(", ");
@@ -1751,8 +1803,15 @@ export class AgentUI {
           }
           const current = this.streamBuffers.get(event.stream_id);
           if (!current) break;
-          if (event.seq <= current.lastSeq) break;
-          current.lastSeq = event.seq;
+          // seq=0 is a placeholder used by the AILANG-side per-chunk
+          // callback (M-AI-STEP-STREAMING v0.18.7) — every event from
+          // upstream stepWithStream carries seq=0 because AILANG
+          // closures can't easily maintain monotonic counters. Treat
+          // seq=0 as "always accept" and rely on arrival order;
+          // strict-ordering dedup remains for legacy emitters that
+          // populate seq with real values.
+          if (event.seq !== 0 && event.seq <= current.lastSeq) break;
+          if (event.seq > current.lastSeq) current.lastSeq = event.seq;
           current.text += event.text_delta;
           if (current.text.length > STREAM_TEXT_MAX_BYTES) {
             current.text = current.text.slice(-STREAM_TEXT_MAX_BYTES);
@@ -1760,6 +1819,21 @@ export class AgentUI {
           }
           this.syncPlannedToolsFromStream(current.step, current.text);
           this.scheduleStreamRender(event.stream_id);
+          this.step = event.step;
+        }
+        break;
+      case "reasoning_delta":
+        // API-level reasoning chunk (v0.18.8 ThinkingDelta from
+        // claude-opus-4.5+ extended-thinking, OpenAI o1/o3, Gemini
+        // 2.5+ thoughts). NOT mixed into the per-stream_id content
+        // buffer — accumulated separately into reasoningBuffers and
+        // rendered into a side panel via addReasoningBlock at
+        // thinking_stream_end. We also append a dim placeholder live
+        // so the user knows reasoning is happening.
+        {
+          if (isInternalComposeStream(event.stream_id)) break;
+          const prev = this.reasoningBuffers.get(event.stream_id) ?? "";
+          this.reasoningBuffers.set(event.stream_id, prev + event.text_delta);
           this.step = event.step;
         }
         break;
@@ -1805,6 +1879,16 @@ export class AgentUI {
         const row = this.streamRows.get(event.stream_id);
         if (row) this.history.removeChild(row);
         this.clearPendingStreamRender(event.stream_id);
+        // Flush API-level reasoning into a side panel (v0.18.8). Native
+        // reasoning from claude-opus-4.5+/o1/o3/gemini-2.5+ accumulates in
+        // reasoningBuffers separately from content; render here as a
+        // [reason] block alongside any [think] block from <thinking>
+        // tag-convention content.
+        const reasoningText = this.reasoningBuffers.get(event.stream_id);
+        if (reasoningText) {
+          this.addReasoningBlock(event.step, reasoningText);
+        }
+        this.reasoningBuffers.delete(event.stream_id);
         this.streamBuffers.delete(event.stream_id);
         this.streamRows.delete(event.stream_id);
         this.tui.requestRender(true);
@@ -2159,13 +2243,23 @@ export class AgentUI {
   private collapseThinkBlock(block: ThinkBlock): void {
     block.expanded = false;
     block.bodyRow.setText("");
-    block.headerRow.setText(this.renderThinkHeader(block.step, block.charCount, false));
+    // Route to the right header renderer based on block kind so a
+    // [reason] block doesn't get re-labelled as [think] on collapse.
+    block.headerRow.setText(
+      block.kind === "reason"
+        ? this.renderReasoningHeader(block.step, block.charCount, false)
+        : this.renderThinkHeader(block.step, block.charCount, false),
+    );
   }
 
   private expandThinkBlock(block: ThinkBlock): void {
     block.expanded = true;
     block.bodyRow.setText(this.renderThinkContent(block.content));
-    block.headerRow.setText(this.renderThinkHeader(block.step, block.charCount, true));
+    block.headerRow.setText(
+      block.kind === "reason"
+        ? this.renderReasoningHeader(block.step, block.charCount, true)
+        : this.renderThinkHeader(block.step, block.charCount, true),
+    );
   }
 
   /** Collapse the previously selected block, expand the one at idx, update selection. */
@@ -2545,8 +2639,47 @@ export class AgentUI {
     const bodyRow = styledText("", chalk.reset);
     this.history.addChild(headerRow);
     this.history.addChild(bodyRow);
-    this.thinkBlocks.set(step, { step, content: thinkContent, charCount, headerRow, bodyRow, expanded: false });
+    this.thinkBlocks.set(step, { step, content: thinkContent, charCount, headerRow, bodyRow, expanded: false, kind: "think" });
     this.thinkStepOrder.push(step);
+  }
+
+  // addReasoningBlock renders a side-panel block for API-level reasoning
+  // (M-AI-STEP-STREAMING-THINKING v0.18.8). Distinguished visually from
+  // addThinkBlock by a [reason] label so users can tell tag-convention
+  // reasoning (parsed from <thinking>...</thinking> in content) apart
+  // from native API thinking surfaced via the new ThinkingDelta variant.
+  // Both flow into the same expandable-row UI pattern; reuses the
+  // think-block infrastructure but namespaces by step+suffix.
+  private addReasoningBlock(step: number, rawContent: string): void {
+    const reasoningContent = rawContent.trim();
+    if (!reasoningContent) return;
+    // Use a distinct map key (step + 0.5 offset) so addReasoningBlock and
+    // addThinkBlock can both fire for the same step without colliding.
+    // Step values from AILANG are integers, so non-integer keys are safe.
+    const key = step + 0.5;
+    if (this.thinkBlocks.has(key)) return;
+    const charCount = reasoningContent.length;
+    const headerRow = styledText(
+      this.renderReasoningHeader(step, charCount, false),
+      chalk.reset,
+    );
+    const bodyRow = styledText("", chalk.reset);
+    this.history.addChild(headerRow);
+    this.history.addChild(bodyRow);
+    this.thinkBlocks.set(key, { step: key, content: reasoningContent, charCount, headerRow, bodyRow, expanded: false, kind: "reason" });
+    this.thinkStepOrder.push(key);
+  }
+
+  private renderReasoningHeader(step: number, charCount: number, expanded: boolean): string {
+    const marker = expanded ? "▾" : "▸";
+    return [
+      chalk.dim(`[${formatTimestamp()}]   `),
+      chalk.cyan("[reason]"),
+      // Display the integer step (the .5 offset is internal to thinkBlocks
+      // map keying — exposing it would confuse users). ^t is the cycle key
+      // for BOTH [think] and [reason] blocks (they share thinkStepOrder).
+      chalk.dim(` step ${Math.floor(step)} · ${charCount} chars  ${marker}  ^t`),
+    ].join("");
   }
 
   private renderThinkHeader(step: number, charCount: number, expanded: boolean): string {
@@ -2567,7 +2700,13 @@ export class AgentUI {
   }
 
   private renderStreamingVisibleText(raw: string): string {
-    return this.renderThinkingSegments(stripThinkTags(raw), true);
+    // Live render: hide the BODY of any <thinking>...</thinking> block
+    // (closed or open). The full content stays in the underlying
+    // streamBuffer for the thinking_stream_end final-render path which
+    // splits via extractTaggedThinkAnswer. Without this, thinking-mode
+    // models like glm-5 leak reasoning into the visible stream until
+    // </thinking> closes.
+    return this.renderThinkingSegments(stripThinkBlocksForLive(raw), true);
   }
 
   private renderThinkingSegments(raw: string, trimForLive: boolean): string {

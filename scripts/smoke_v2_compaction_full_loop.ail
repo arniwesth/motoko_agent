@@ -1,0 +1,150 @@
+-- scripts/smoke_v2_compaction_full_loop.ail
+--
+-- Layer-2 integration smoke for compaction (DP0) using the stub_step
+-- fixture. Complements the existing layer-1 smokes (smoke_v2_compaction*,
+-- 10/10) and integration_tests#test_compaction_fires_above_70pct (which
+-- exercises compact_step in isolation) by running compaction as part of
+-- the live loop_v2 path via run_v2_with_stub.
+--
+-- Verifies:
+--   1. Light history (~10% usage) → no elision, loop completes Ok.
+--   2. Moderate history (~75% usage, tier 1) → loop still completes Ok;
+--      compaction's elision is silent to the caller.
+--   3. Extreme history (~96% usage, tier 3) → loop returns Err with
+--      "compaction_exhausted" propagated from DP0 refusing the step.
+--
+-- Run:
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --net-allow-http --net-allow-localhost \
+--     --entry main scripts/smoke_v2_compaction_full_loop.ail
+
+module scripts/smoke_v2_compaction_full_loop
+
+import std/io (println)
+import std/result (Result, Ok, Err)
+import std/string (repeat, contains)
+import std/ai (Message, AIError)
+import src/core/config (CostRates)
+import src/core/ext/types (BudgetPlan)
+import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/stub_step (
+  ScriptedStep,
+  empty_rt,
+  prose_step
+)
+
+-- test/tiny model has context_limit_for = 100 tokens = ~400 chars
+-- under the (length+3)/4 token estimator. Crossing thresholds:
+--   < 70% : <  280 chars total content
+--   70-85%:  280-340 chars
+--   85-95%:  340-380 chars
+--   ≥ 95% :  ≥380 chars
+--
+-- Per-message format: { role, content, tool_calls, tool_call_id }.
+-- Only `content` length feeds estimate_tokens_messages.
+
+func mk_user(content: string) -> Message {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func mk_tool(id: string, content: string) -> Message {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func mk_history(content_chars: int) -> [Message] {
+  -- One user msg ("hi", 2 chars) + one tool msg (content_chars - 2).
+  let payload = repeat("x", content_chars - 2);
+  [mk_user("hi"), mk_tool("t1", payload)]
+}
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 4, solver: 4, verifier: 0 }
+}
+
+-- 1. Light history (10 chars total = ~2% usage). Compaction passthrough.
+func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let history = mk_history(10);
+  let script: [ScriptedStep] = [prose_step("ok")];
+  let result = run_v2_with_stub(
+    empty_rt(), "stub-test", "", false, mk_budget(),
+    "test/tiny", history, "/tmp", 4, false,
+    0, no_rates(), script
+  );
+  match result {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+-- 2. Moderate history (300 chars total = ~75% usage, tier 1). Elision
+-- fires; the loop should still complete because tier 1 just trims old
+-- tool_results, doesn't refuse the step.
+func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let history = mk_history(300);
+  let script: [ScriptedStep] = [prose_step("ok")];
+  let result = run_v2_with_stub(
+    empty_rt(), "stub-test", "", false, mk_budget(),
+    "test/tiny", history, "/tmp", 4, false,
+    0, no_rates(), script
+  );
+  match result {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+-- 3. Extreme history (385 chars total = ~96.5% usage, tier 3). DP0 refuses
+-- the step; run_v2_with_stub returns Err with the compaction_exhausted
+-- reason propagated through the loop.
+func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let history = mk_history(385);
+  let script: [ScriptedStep] = [prose_step("ok")];
+  let result = run_v2_with_stub(
+    empty_rt(), "stub-test", "", false, mk_budget(),
+    "test/tiny", history, "/tmp", 4, false,
+    0, no_rates(), script
+  );
+  match result {
+    Ok(_) => false,
+    Err(_) => true
+  }
+}
+
+-- 4. Extreme history but cap is disabled by using a model with no entry
+-- in context_limit_for. Should fail-open: compaction skips entirely, loop
+-- completes Ok because no threshold check fires for unknown models.
+func test_unknown_model_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let history = mk_history(1000);
+  let script: [ScriptedStep] = [prose_step("ok")];
+  let result = run_v2_with_stub(
+    empty_rt(), "stub-test", "", false, mk_budget(),
+    "totally-unknown-model", history, "/tmp", 4, false,
+    0, no_rates(), script
+  );
+  match result {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+func report(name: string, ok: bool) -> () ! {IO} {
+  if ok then println("  ✓ ${name}")
+  else println("  ✗ ${name}")
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} = {
+  println("=== smoke_v2_compaction_full_loop ===");
+  let r1 = test_light_history_completes();
+  report("light history (~2% usage) → Ok",            r1);
+  let r2 = test_tier1_history_completes();
+  report("tier 1 history (~75% usage) → Ok with elision", r2);
+  let r3 = test_tier3_history_refused();
+  report("tier 3 history (~96% usage) → Err refused",   r3);
+  let r4 = test_unknown_model_fail_open();
+  report("unknown model fail-open (no compaction)",     r4);
+  println("done")
+}

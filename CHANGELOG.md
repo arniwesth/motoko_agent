@@ -6,6 +6,57 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased]
 
+### Fixed (M-MOTOKO-OHMY-PI-DEFAULT-FLIP — 2026-05-08)
+
+Flip `tools.ohmy_pi` from `true` to `false` in all 4 shipped config profiles (`default`, `dogfood`, `local`, `openrouter`). The env-server inbox-based delegation pipeline was deleted at M10b and the proper wire-up (M-MOTOKO-M6.5-OHMY-PI-DELEGATION) hasn't landed yet, so `ohmy_pi: true` was structurally a no-op that wasted **25-33% of every BashExec call** and triggered 10-13 wasted agent turns per task. Surfaced by motoko_explore agent (msg `7a95e4e8`) with A/B repro showing 15× faster runs and 6× fewer output tokens after the flip.
+
+**Direct evidence** (cross-checked against 90+ session JSONLs in `.motoko/logfile/`):
+- Same model + same task → with `ohmy_pi: true`: 15+ steps, 90s, gives up; with `ohmy_pi: false`: 3 steps, 6s, completes
+- Storm rate consistent across `adt_option`, `balanced_parens`, `canonical_normalization` benchmark families: 23-33% wasted tool calls in sessions where BashExec was attempted
+- Under the AILANG eval-harness (with ~21K-token teaching prompt), each wasted step costs ~32K input tokens — accounting for most of the 70× input-cost gap motoko had vs claude-code in the v0.18.3 3-harness comparison
+
+**Defense-in-depth — fail-fast at startup** (`src/core/rpc.ail`): `run_with_config` now rejects `ohmy_pi: true` with a structured `session_start_error` event + exit 2, naming the config profile dir + the M6.5 design doc. Silent token waste is worse than a clear startup error; users explicitly setting `ohmy_pi: true` deserve to know it's broken until M6.5 ships.
+
+**Regression smoke** (`make smoke_no_delegated_storm`): asserts all 4 profiles have `tools.ohmy_pi: false` via `jq`. Fast, deterministic, catches any future profile edit that re-enables the storm. Verified on dirty + clean state.
+
+`tools.hybrid: true` is **preserved** (no change). Hybrid mode (synthesizing `BashExec` from fenced bash in prose) is genuinely useful for cheap models. With `ohmy_pi: false`, hybrid bash routes through Native and works correctly post-AILANG-v0.18.3 hybrid-tool correlation fix.
+
+**Out of scope** (deferred to M-MOTOKO-M6.5): actually wiring the env-server inbox-based delegation pipeline. When that lands, the M2 fail-fast guard in this sprint must be removed.
+
+(`.motoko/config/{default,dogfood,local,openrouter}/config.json`, `src/core/rpc.ail`, `Makefile`, `design_docs/planned/m-motoko-ohmy-pi-default-flip.md`)
+
+### Added (M-MOTOKO-EVAL-INSTRUMENTATION — 2026-05-07)
+
+Session JSONL gains schema-v1 instrumentation so downstream eval harnesses (AILANG `internal/executor/motoko/`, post-run analysis) can extract per-step token + cost data without needing a separate metrics endpoint. Strictly additive — existing consumers ignore new fields and keep working.
+
+**Schema v1 surface** (per-event metadata):
+- `schema_version: "1"` on every event — forward-compat marker
+- `session_id` top-level field — derived from `MOTOKO_SESSION_ID` env var (preferred, matches filename) or fallback `session_${now()}`
+- Per-step `thinking` events gain `input_tokens`, `output_tokens`, `cost_usd`
+- `cost_warning` events gain `total_cost_usd` (alongside existing `_millicents`)
+- `cost_exhausted` events gain `total_cost_usd`
+- `session_start` gains top-level `motoko_commit` (build-time const, "dev" fallback)
+
+**New `run_summary` terminal event** — always emitted on every termination path (success, Err, cost_exhausted, compaction_exhausted, max_steps, streaming-error). Carries: `model`, `motoko_commit`, `finish_reason` (`stop` | `cost_exhausted` | `dp7_rejected` | `compaction_exhausted` | `max_steps` | `error`), `steps_executed`, `usage: { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, total_tokens }` (cache fields omitted when upstream provider doesn't surface them), `total_cost_usd` (float, derived from millicents) + `total_cost_millicents` (int), `duration_ms` (wall-clock from `started_at_ms` to terminal), `error` (empty string on success; failure message otherwise).
+
+**Implementation** (`src/core/agent_loop_v2.ail`, +~250 LOC):
+- New helpers: `schema_version`, `motoko_commit`, `millicents_to_usd`, `emit_event`, `emit_run_summary`, `derive_session_id`, `per_step_usage_kvs`, `finish_reason_str`, `zero_totals`
+- New `LoopTotals` record bundles cumulative token/cost state — threaded through `loop_v2` recursion (replaces 2 scalar params, prepares for future totals additions without param churn)
+- `loop_v2` signature gains `session_id`, `started_at_ms`, `totals` (now passes `LoopTotals` instead of scalar `total_cost_millicents` + `cost_warned_pct`)
+- `dispatch_calls` and `dp7_gate` gain `session_id` so all event emissions thread through the same envelope helper
+- All 30+ `emit_json(jo([...]))` sites migrated to `emit_event(session_id, "type", [...])`
+- 6 inline pure tests (`test_schema_version_is_one`, `test_millicents_to_usd_*`, `test_finish_reason_str_table`, `test_zero_totals_initializes_clean`)
+
+**Snapshot fixture**: `examples/fixtures/eval_session_v1.jsonl` — canonical 15-event session demonstrating the schema. Future schema changes must update the fixture in the same PR.
+
+**Deferred to v1.1**:
+- Cache token plumbing (`cache_read_input_tokens` / `cache_creation_input_tokens`) — `std/ai.step` doesn't surface upstream cache-token data today; will land when AILANG-side support arrives
+- Build-time `motoko_commit` injection via Makefile `-ldflags` — currently hardcoded to `"dev"`; trivial to wire up but not blocking
+
+**Why now**: AILANG's planned [M-MOTOKO-EXECUTOR-ADAPTER](https://github.com/sunholo-data/ailang/blob/dev/design_docs/planned/v0_18_0/m-motoko-executor-adapter.md) needs structured token/cost data to populate `Result.CostUSD` / `Result.InputTokens`. Without this work, motoko on the eval leaderboard would appear "free" and "tokenless" — making the threshold-measurement experiment that is the strategic point of the adapter useless.
+
+Design doc: [`design_docs/planned/m-motoko-eval-instrumentation.md`](design_docs/planned/m-motoko-eval-instrumentation.md).
+
 ### Fixed (M-MOTOKO-WORKDIR-CWD-RESOLUTION — 2026-05-06)
 
 Dispatcher `workdir` argument is now correctly applied to all filesystem

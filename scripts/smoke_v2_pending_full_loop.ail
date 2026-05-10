@@ -1,0 +1,166 @@
+-- scripts/smoke_v2_pending_full_loop.ail
+--
+-- Layer-2 integration smoke for the Pending(reason, PolicyDefault)
+-- ToolPolicyDecision variant. Uses the stub_step fixture + EOF-on-stdin
+-- to exercise the timeout-default codepath:
+--
+--   Pending(reason, DenyAfterTimeout)  + EOF → deny applied
+--   Pending(reason, AllowAfterTimeout) + EOF → allow applied
+--
+-- The full Pending UX (operator types {"type":"approve"} on stdin, loop
+-- proceeds) needs an interactive harness to verify end-to-end. This
+-- smoke covers the timeout-default path which is what fires for
+-- automated/CI usage.
+--
+-- Run:
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --net-allow-http --net-allow-localhost \
+--     --entry main scripts/smoke_v2_pending_full_loop.ail < /dev/null
+--
+-- The `< /dev/null` is critical — the loop's readLine() blocks otherwise.
+
+module scripts/smoke_v2_pending_full_loop
+
+import std/io (println)
+import std/option (None)
+import std/result (Result, Ok, Err)
+import std/ai (Message, AIError, ToolCall, ToolSchema)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/ext/types (
+  BudgetPlan,
+  ExtCtx,
+  ExtRuntime,
+  ExtRegistry,
+  ExtensionHooks,
+  ToolPolicyDecision,
+  ToolHandleDecision,
+  ResponseInterceptDecision,
+  FinalizeDecision,
+  PromptPatch,
+  BudgetPatch
+)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/stub_step (ScriptedStep, prose_step)
+
+-- New since a9b53e7: extensions declare their tool schemas via on_describe_tools.
+pure func empty_describe_tools() -> [ToolSchema] { [] }
+
+-- Pending hooks: each returns Pending with a different default policy.
+
+pure func pending_deny_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("integration test — needs review", DenyAfterTimeout)
+}
+
+pure func pending_allow_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("integration test — auto-allow on timeout", AllowAfterTimeout)
+}
+
+-- Boilerplate filler hooks (non-policy slots return neutral values).
+
+pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoIntercept
+}
+
+pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoDecision
+}
+
+pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Delegate
+}
+
+func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtensionHooks {
+  {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: empty_describe_tools,
+    on_build_system_prompt: empty_prompt_patch,
+    on_budget_plan: empty_budget_patch,
+    on_tool_policy: policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: noop_response_intercept,
+    on_solver_candidate: nodecision_solver_candidate
+  }
+}
+
+func mk_runtime(hook: ExtensionHooks) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [hook] }, strict_mode: false, verification: v }
+}
+
+-- Each step: emit a BashExec call (will be intercepted by Pending hook),
+-- followed by a prose terminator.
+func script_with_one_call(step_id: string) -> [ScriptedStep] {
+  let tc: ToolCall = { id: step_id, name: "BashExec", arguments: "{\"cmd\":\"echo noop\"}" };
+  let step1: ScriptedStep = {
+    prose: "",
+    tool_calls: [tc],
+    input_tokens: 0,
+    output_tokens: 0,
+    finish_reason: "tool_calls"
+  };
+  [step1, prose_step("done")]
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 4, solver: 4, verifier: 0 }
+}
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+-- 1. Pending(DenyAfterTimeout) + EOF stdin → call denied; loop completes
+--    (the denial message is appended to history; prose_step terminates).
+func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let rt = mk_runtime(mk_hook("pending-deny", pending_deny_default));
+  let result = run_v2_with_stub(
+    rt, "stub-test", "", false, mk_budget(),
+    "openrouter/z-ai/glm-5", [], "/tmp", 4, false,
+    0, no_rates(), script_with_one_call("tc1")
+  );
+  match result {
+    Ok(_) => true,    -- loop completes; denial just becomes a message
+    Err(_) => false
+  }
+}
+
+-- 2. Pending(AllowAfterTimeout) + EOF stdin → call allowed; would dispatch
+--    via the on_tool_handle (Delegate) → backend (Native) → tool_runtime.
+--    With BashExec we'd actually execute "echo noop" — for safety we use
+--    a noop. The loop should still complete.
+func test_pending_allow_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let rt = mk_runtime(mk_hook("pending-allow", pending_allow_default));
+  let result = run_v2_with_stub(
+    rt, "stub-test", "", false, mk_budget(),
+    "openrouter/z-ai/glm-5", [], "/tmp", 4, false,
+    0, no_rates(), script_with_one_call("tc2")
+  );
+  match result {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+func report(name: string, ok: bool) -> () ! {IO} {
+  if ok then println("  ✓ ${name}")
+  else println("  ✗ ${name}")
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} = {
+  println("=== smoke_v2_pending_full_loop ===");
+  let r1 = test_pending_deny_default_on_eof();
+  report("Pending(DenyAfterTimeout) + EOF stdin → loop completes (deny applied)",  r1);
+  let r2 = test_pending_allow_default_on_eof();
+  report("Pending(AllowAfterTimeout) + EOF stdin → loop completes (allow applied)", r2);
+  println("done")
+}

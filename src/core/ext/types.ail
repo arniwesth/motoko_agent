@@ -1,8 +1,10 @@
 module src/core/ext/types
 
 import std/option (Option)
+import std/ai (ToolSchema)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
+import src/core/config (VerificationConfig)
 
 export type BudgetPlan = { total: int, solver: int, verifier: int }
 
@@ -32,10 +34,16 @@ export type BudgetPatch = {
   requested_verifier: Option[int]
 }
 
+export type PolicyDefault
+  = AllowAfterTimeout
+  | DenyAfterTimeout
+  deriving (Eq)
+
 export type ToolPolicyDecision
   = Allow
   | Deny(string)
   | NoOpinion
+  | Pending(string, PolicyDefault)
   deriving (Eq)
 
 export type ToolHandleDecision
@@ -55,6 +63,7 @@ export type FinalizeDecision
 export type ExtensionHooks = {
   id: string,
   provided_tools: [string],
+  on_describe_tools: () -> [ToolSchema],
   on_build_system_prompt: (ExtCtx) -> PromptPatch,
   on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
@@ -72,7 +81,8 @@ export type ExtRegistry = {
 
 export type ExtRuntime = {
   registry: ExtRegistry,
-  strict_mode: bool
+  strict_mode: bool,
+  verification: VerificationConfig
 }
 
 export type ToolDecisionEnvelope = {

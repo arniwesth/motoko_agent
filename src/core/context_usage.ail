@@ -16,16 +16,11 @@ pure func est0(system: string) -> int
   ]
   { estimate_tokens([], system) }
 
-export pure func context_limit_for(model: string) -> int
-  tests [
-    ("anthropic/claude-sonnet-4-6",                 200000),
-    ("google/gemini-2.5-pro",                       2000000),
-    ("openrouter/anthropic/claude-sonnet-4-5",      200000),
-    ("openrouter/z-ai/glm-5",                       128000),
-    ("openrouter/openai/gpt-5",                     400000),
-    ("openrouter/whatever",                         0),
-    ("totally-unknown",                             0)
-  ]
+-- Flat dispatch without the "openrouter/" prefix. All branches return >= 0.
+-- Split from context_limit_for to eliminate the recursive openrouter/ case
+-- so Z3 can verify the non-negativity contract.
+pure func context_limit_base(model: string) -> int
+  ensures { result >= 0 }
   {
     if model == "anthropic/claude-sonnet-4-6" then 200000
     else if model == "anthropic/claude-sonnet-4-5" then 200000
@@ -40,10 +35,27 @@ export pure func context_limit_for(model: string) -> int
     else if model == "z-ai/glm-5" then 128000
     else if model == "minimax/minimax-m2.7" then 256000
     else if model == "x-ai/grok-3" then 131072
-    else if startsWith(model, "openrouter/") then
-      context_limit_for(substring(model, length("openrouter/"), length(model)))
     else if startsWith(model, "anthropic/") then 200000
     else if startsWith(model, "openai/") then 128000
     else if startsWith(model, "google/") then 1000000
+    else if model == "test/tiny" then 100
     else 0
+  }
+
+export pure func context_limit_for(model: string) -> int
+  ensures { result >= 0 }
+  tests [
+    ("anthropic/claude-sonnet-4-6",                 200000),
+    ("google/gemini-2.5-pro",                       2000000),
+    ("openrouter/anthropic/claude-sonnet-4-5",      200000),
+    ("openrouter/z-ai/glm-5",                       128000),
+    ("openrouter/openai/gpt-5",                     400000),
+    ("openrouter/whatever",                         0),
+    ("totally-unknown",                             0)
+  ]
+  {
+    if startsWith(model, "openrouter/") then
+      context_limit_base(substring(model, length("openrouter/"), length(model)))
+    else
+      context_limit_base(model)
   }

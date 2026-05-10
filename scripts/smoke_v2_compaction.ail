@@ -1,0 +1,79 @@
+-- scripts/smoke_v2_compaction.ail
+--
+-- Direct integration smoke for compaction.ail — bypasses the inline test
+-- harness (which is currently failing with cluster-evaluation errors) and
+-- exercises the runtime path that DP0 actually calls.
+--
+-- Run:
+--   ailang run --caps IO --entry main scripts/smoke_v2_compaction.ail
+--
+-- Pass = prints all 4 ✓ lines and exits 0.
+
+module scripts/smoke_v2_compaction
+
+import std/io (println)
+import std/result (Result, Ok, Err)
+import std/ai (Message)
+import src/core/compaction (
+  estimate_tokens_messages,
+  usage_percent,
+  elide_old_tool_results,
+  compact_step
+)
+
+func mk_user(content: string) -> Message {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func mk_tool(id: string, content: string) -> Message {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+-- 1. Unknown model → usage_percent returns 0 (fail-open).
+func test_unknown_model_zero() -> bool {
+  let msgs = [mk_user("hi")];
+  usage_percent(msgs, "totally-unknown-model") == 0
+}
+
+-- 2. Sonnet 4.6 (200k window) with a tiny message → usage well under threshold.
+func test_below_threshold() -> bool {
+  let msgs = [mk_user("hi")];
+  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
+  pct < 70
+}
+
+-- 3. elide_old_tool_results preserves list length.
+func test_elide_preserves_length() -> bool {
+  let msgs = [
+    mk_tool("t1", "first tool result text here"),
+    mk_tool("t2", "second tool result text here"),
+    mk_tool("t3", "third tool result text here"),
+    mk_tool("t4", "fourth tool result text here"),
+    mk_tool("t5", "fifth tool result text here")
+  ];
+  let elided = elide_old_tool_results(msgs, 2);
+  _list_length(elided) == 5
+}
+
+-- 4. compact_step on a small input passes through (Ok variant).
+func test_compact_step_passthrough() -> bool {
+  let msgs = [mk_user("hi")];
+  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+func report(name: string, ok: bool) -> () ! {IO} {
+  if ok then println("  ✓ ${name}")
+  else println("  ✗ ${name}")
+}
+
+export func main() -> () ! {IO} = {
+  println("=== smoke_v2_compaction ===");
+  report("unknown_model_returns_zero_usage", test_unknown_model_zero());
+  report("below_threshold_under_70pct",       test_below_threshold());
+  report("elide_preserves_length",            test_elide_preserves_length());
+  report("compact_step_ok_below_threshold",   test_compact_step_passthrough());
+  println("done")
+}

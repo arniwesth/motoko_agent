@@ -1,0 +1,219 @@
+-- Stub step fixture for loop_v2 integration testing without real LLM calls.
+--
+-- Step constructors split into terminators and continuers:
+--
+--   prose_step(text)                          finish_reason="stop"        (terminates loop)
+--   token_step(prose, input, output)          finish_reason="stop"        (terminates loop)
+--   tool_step(tool, args, id)                 finish_reason="tool_calls"  (loop continues)
+--   continuing_token_step(input, output, id)  finish_reason="tool_calls"  (loop continues, with token counts)
+--
+-- For multi-step accumulation tests (cost-budget across N steps,
+-- compaction firing on growing history), use the continuers and pair
+-- with deny_all_rt() so the tool calls don't actually run.
+module src/core/test/stub_step
+
+import std/ai (step, stepWithCache, stepWithStream, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk)
+import std/list as List (length)
+import std/option (Option, None)
+import std/result (Result, Ok, Err)
+import src/core/tool_catalog (tools_with_extensions)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/config (VerificationConfig)
+import src/core/ext/types (
+  ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
+  BudgetPlan, PromptPatch, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision,
+  ResponseInterceptDecision, FinalizeDecision
+)
+
+-- A scripted LLM turn: what the "model" returns for one step() call.
+export type ScriptedStep = {
+  prose: string,
+  tool_calls: [ToolCall],
+  input_tokens: int,
+  output_tokens: int,
+  finish_reason: string
+}
+
+-- Step provider: either the live AI or a scripted sequence.
+-- Scripted([]) emits a terminal "stop" result so the loop exits cleanly.
+export type StepProvider = LiveAI | Scripted([ScriptedStep])
+
+-- Convert a ScriptedStep to the StepResult shape loop_v2 expects.
+export pure func scripted_to_step_result(s: ScriptedStep) -> StepResult {
+  let finish =
+    if s.finish_reason != "" then s.finish_reason
+    else if List.length(s.tool_calls) > 0 then "tool_calls"
+    else "stop";
+  {
+    message: {
+      role: "assistant",
+      content: s.prose,
+      tool_calls: [],
+      tool_call_id: ""
+    },
+    tool_calls: s.tool_calls,
+    finish_reason: finish,
+    input_tokens: s.input_tokens,
+    output_tokens: s.output_tokens,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0
+  }
+}
+
+-- Terminal step: emitted when Scripted([]) is reached mid-loop.
+export pure func terminal_step() -> StepResult {
+  {
+    message: {
+      role: "assistant",
+      content: "stub: script exhausted",
+      tool_calls: [],
+      tool_call_id: ""
+    },
+    tool_calls: [],
+    finish_reason: "stop",
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0
+  }
+}
+
+-- M-AI-PROMPT-CACHING opt-in (AILANG v0.18.4): cache the stable system prompt
+-- across turns. Routes per provider:
+--   - anthropic/* (incl. via openrouter/anthropic/*): stamps
+--     cache_control:{type:"ephemeral"} on system content block. ~90% off
+--     cached reads after the first turn warms the cache.
+--   - openai/* / google/*: NO-OP + once-per-session warning (their caching
+--     models don't accept this hint shape).
+--   - ollama/unknown: silent NO-OP.
+-- Empty list ([]) would behave bit-for-bit like the legacy step() — we
+-- deliberately set the system breakpoint here because motoko's system prompt
+-- is large (~21K tokens for the AILANG eval-harness teaching prompt) and
+-- stable across all turns of a session.
+pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
+  [{ position: "system", ttl: "ephemeral" }]
+}
+
+-- Dispatch one step call through the provider.
+-- Returns both the step result and the updated provider (tail of script for Scripted).
+-- Loop callers thread next_provider into their recursive call.
+-- rt is forwarded to tools_with_extensions so extension tools appear in the LLM catalog.
+--
+-- on_chunk fires per StreamChunk during the SSE drain (M-AI-STEP-STREAMING,
+-- AILANG v0.18.7). Live providers (Anthropic / OpenAI / OpenRouter / Gemini)
+-- stream content deltas natively; Ollama and config-driven providers fire
+-- one synthetic ContentDelta(full_text) + one Usage at end-of-call. The
+-- callback is wired by agent_loop_v2 to emit thinking_delta events.
+export func dispatch_step(
+  provider: StepProvider,
+  model: string,
+  msgs: [Message],
+  rt: ExtRuntime,
+  on_chunk: (StreamChunk) -> () ! {IO}
+) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO} {
+  match provider {
+    LiveAI => {
+      { result: stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk), next_provider: LiveAI }
+    },
+    Scripted(script) => {
+      match script {
+        [] => {
+          { result: Ok(terminal_step()), next_provider: Scripted([]) }
+        },
+        s :: rest => {
+          { result: Ok(scripted_to_step_result(s)), next_provider: Scripted(rest) }
+        }
+      }
+    }
+  }
+}
+
+-- Constructor helpers for test scripts
+
+export pure func prose_step(text: string) -> ScriptedStep {
+  {
+    prose: text,
+    tool_calls: [],
+    input_tokens: 100,
+    output_tokens: 50,
+    finish_reason: "stop"
+  }
+}
+
+export pure func tool_step(tool: string, args_json: string, step_id: string) -> ScriptedStep {
+  {
+    prose: "",
+    tool_calls: [{ id: step_id, name: tool, arguments: args_json }],
+    input_tokens: 200,
+    output_tokens: 100,
+    finish_reason: "tool_calls"
+  }
+}
+
+export pure func token_step(prose: string, input_tok: int, output_tok: int) -> ScriptedStep {
+  {
+    prose: prose,
+    tool_calls: [],
+    input_tokens: input_tok,
+    output_tokens: output_tok,
+    finish_reason: "stop"
+  }
+}
+
+-- A continuing step: emits a tool call so finish_reason="tool_calls" and
+-- the loop iterates, while recording token usage for cost-accumulation tests.
+-- The tool call is a benign no-op suitable for use with deny_all_rt().
+export pure func continuing_token_step(input_tok: int, output_tok: int, step_id: string) -> ScriptedStep {
+  let tc: ToolCall = { id: step_id, name: "BashExec", arguments: "{\"cmd\":\"true\"}" };
+  {
+    prose: "",
+    tool_calls: [tc],
+    input_tokens: input_tok,
+    output_tokens: output_tok,
+    finish_reason: "tool_calls"
+  }
+}
+
+-- No-op ExtRuntime for integration tests.
+-- Returns an empty extension registry with no hooks.
+export pure func empty_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { hooks: [] }, strict_mode: false, verification: v }
+}
+
+-- ExtRuntime for integration tests that denies all tool calls.
+-- Use this when your scripted steps contain tool_calls — the deny policy
+-- prevents real tool execution while allowing the loop to recurse.
+export func deny_all_rt() -> ExtRuntime {
+  let deny_policy = func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+    Deny("test: all tools denied")
+  };
+  let no_handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope)
+    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    Delegate
+  };
+  let no_intercept = func(_ctx: ExtCtx, _text: string)
+    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoIntercept
+  };
+  let no_solver = func(_ctx: ExtCtx, _text: string)
+    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoDecision
+  };
+  let hooks: ExtensionHooks = {
+    id: "test_deny_all",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    on_tool_policy: deny_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  };
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}

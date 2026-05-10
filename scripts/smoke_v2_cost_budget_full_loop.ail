@@ -1,0 +1,208 @@
+-- scripts/smoke_v2_cost_budget_full_loop.ail
+--
+-- Layer-2 integration smoke for M-MOTOKO-COST-BUDGET using the new
+-- stub_step fixture from M-MOTOKO-STUB-STEP. Closes the gap noted in
+-- src/core/test/integration_tests.ail Test 1 ("The full-loop test
+-- (run_v2_with_stub + deny_all_rt + cap=50000) exercises this path
+-- end-to-end").
+--
+-- What this verifies (over and above the algebraic Test 1):
+--   1. The cost accumulator actually accrues per scripted step.
+--   2. cost_exhausted event fires at the correct step boundary.
+--   3. run_v2_with_stub returns Err(BudgetExceeded) when the cap is hit.
+--   4. The 4-step boundary holds — exactly 3 steps stay under the cap,
+--      the 4th tips it over (3*16400=49200 < 50000 ; 4*16400=65600 >= 50000).
+--
+-- Run:
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --net-allow-http --net-allow-localhost \
+--     --entry main scripts/smoke_v2_cost_budget_full_loop.ail
+
+module scripts/smoke_v2_cost_budget_full_loop
+
+import std/io (println)
+import std/result (Result, Ok, Err)
+import std/ai (Message, AIError)
+import src/core/config (CostRates)
+import src/core/ext/types (BudgetPlan)
+import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/stub_step (
+  ScriptedStep,
+  empty_rt,
+  deny_all_rt,
+  prose_step,
+  continuing_token_step
+)
+
+-- GLM-5-shaped rates: $0.60/M input, $2.08/M output (in millicents).
+func glm5_rates() -> CostRates {
+  { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000 }
+}
+
+-- Each step reports 100k input + 50k output tokens via the new
+-- continuing_token_step helper (commit 9531dae addressing motoko-explore
+-- feedback msg 39904980). step_cost = (100000*60000 + 50000*208000) /
+-- 1_000_000 = 16400 mc. continuing_token_step sets finish_reason=
+-- "tool_calls" so the loop iterates rather than terminating.
+func steps_at_16400(count: int) -> [ScriptedStep] {
+  let mk = func(idx: int) -> ScriptedStep {
+    continuing_token_step(100000, 50000, "tc${show(idx)}")
+  };
+  match count {
+    0 => [],
+    1 => [mk(1)],
+    2 => [mk(1), mk(2)],
+    3 => [mk(1), mk(2), mk(3)],
+    4 => [mk(1), mk(2), mk(3), mk(4)],
+    5 => [mk(1), mk(2), mk(3), mk(4), mk(5)],
+    _ => [mk(1), mk(2), mk(3), mk(4), mk(5), mk(6)]
+  }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 10, solver: 10, verifier: 0 }
+}
+
+-- Smoke 1: cap=50000 mc, script of 6 token_steps. Expect Err(BudgetExceeded)
+-- at step 4 (4*16400=65600 ≥ 50000). The 5th and 6th steps should never run.
+func test_cap_50k_trips_at_step_4() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  -- 6 continuing_steps (BashExec tool_calls), denied by deny_all_rt so they
+  -- don't actually run. Loop iterates accumulating cost until cap breach.
+  -- After step 4: 4*16400=65600 ≥ 50000 → expected Err(BudgetExceeded).
+  let script = steps_at_16400(6);
+  let result = run_v2_with_stub(
+    deny_all_rt(),
+    "stub-test",
+    "",
+    false,
+    mk_budget(),
+    "openrouter/z-ai/glm-5",
+    [],
+    "/tmp",
+    10,
+    false,
+    50000,
+    glm5_rates(),
+    script
+  );
+  match result {
+    Err(_)  => true,
+    Ok(_)   => false
+  }
+}
+
+-- Smoke 2: cap=100000 mc with 5 token_steps + a final prose_step. Expect
+-- Ok (5*16400=82000 < 100000; the prose_step ends the loop normally).
+func test_cap_100k_completes_normally() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  -- 5 continuing_steps (5*16400=82000 < 100000) + prose terminator.
+  let script: [ScriptedStep] = [
+    continuing_token_step(100000, 50000, "tc1"),
+    continuing_token_step(100000, 50000, "tc2"),
+    continuing_token_step(100000, 50000, "tc3"),
+    continuing_token_step(100000, 50000, "tc4"),
+    continuing_token_step(100000, 50000, "tc5"),
+    prose_step("done")
+  ];
+  let result = run_v2_with_stub(
+    deny_all_rt(),
+    "stub-test",
+    "",
+    false,
+    mk_budget(),
+    "openrouter/z-ai/glm-5",
+    [],
+    "/tmp",
+    10,
+    false,
+    100000,    -- generous cap
+    glm5_rates(),
+    script
+  );
+  match result {
+    Ok(_)   => true,
+    Err(_)  => false
+  }
+}
+
+-- Smoke 3: cap=0 (disabled) with 6 continuing_steps + prose terminator.
+-- Cumulative cost would be 6*16400=98400 mc, but cap=0 disables the check.
+func test_cap_zero_disables_check() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let script: [ScriptedStep] = [
+    continuing_token_step(100000, 50000, "tc1"),
+    continuing_token_step(100000, 50000, "tc2"),
+    continuing_token_step(100000, 50000, "tc3"),
+    continuing_token_step(100000, 50000, "tc4"),
+    continuing_token_step(100000, 50000, "tc5"),
+    continuing_token_step(100000, 50000, "tc6"),
+    prose_step("done")
+  ];
+  let result = run_v2_with_stub(
+    deny_all_rt(),
+    "stub-test",
+    "",
+    false,
+    mk_budget(),
+    "openrouter/z-ai/glm-5",
+    [],
+    "/tmp",
+    10,
+    false,
+    0,         -- disabled
+    glm5_rates(),
+    script
+  );
+  match result {
+    Ok(_)   => true,
+    Err(_)  => false
+  }
+}
+
+-- Smoke 4: rates=zero (unmetered/Ollama) → cost check skipped even with cap set.
+func test_zero_rates_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+  let script: [ScriptedStep] = [
+    continuing_token_step(100000, 50000, "tc1"),
+    continuing_token_step(100000, 50000, "tc2"),
+    continuing_token_step(100000, 50000, "tc3"),
+    continuing_token_step(100000, 50000, "tc4"),
+    continuing_token_step(100000, 50000, "tc5"),
+    prose_step("done")
+  ];
+  let zero_rates: CostRates = { input_per_1m_millicents: 0, output_per_1m_millicents: 0 };
+  let result = run_v2_with_stub(
+    deny_all_rt(),
+    "stub-test",
+    "",
+    false,
+    mk_budget(),
+    "openrouter/z-ai/glm-5",
+    [],
+    "/tmp",
+    10,
+    false,
+    1,           -- 1mc cap, but rates are 0 so cost stays 0
+    zero_rates,
+    script
+  );
+  match result {
+    Ok(_)   => true,
+    Err(_)  => false
+  }
+}
+
+func report(name: string, ok: bool) -> () ! {IO} {
+  if ok then println("  ✓ ${name}")
+  else println("  ✗ ${name}")
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} = {
+  println("=== smoke_v2_cost_budget_full_loop ===");
+  let r1 = test_cap_50k_trips_at_step_4();
+  report("cap=50k trips at step 4 (BudgetExceeded)", r1);
+  let r2 = test_cap_100k_completes_normally();
+  report("cap=100k completes normally (5*16400 < 100000)", r2);
+  let r3 = test_cap_zero_disables_check();
+  report("cap=0 disables check (6*16400 OK)", r3);
+  let r4 = test_zero_rates_fail_open();
+  report("rates=0 fail-open (1mc cap, rates skip check)", r4);
+  println("done")
+}

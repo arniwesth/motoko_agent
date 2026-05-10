@@ -1,0 +1,67 @@
+-- examples/smoke_a2a_delegate.ail
+-- Smoke test for motoko-ext-a2a: verifies pure logic (config parsing,
+-- tool name derivation, response extraction) without requiring a live
+-- A2A endpoint.
+--
+-- Run:
+--   ailang test examples/smoke_a2a_delegate.ail
+
+module examples/smoke_a2a_delegate
+
+import std/json (jo, kv, js, ja, encode, decode)
+import pkg/sunholo/motoko_ext_a2a/types (A2AAgent, A2AConfig)
+import pkg/sunholo/motoko_ext_a2a/a2a (make_hooks)
+import pkg/sunholo/motoko_ext_a2a/config (read_a2a_config)
+
+-- Tool names derive from agent names
+
+pure func tool_names_are_prefixed() -> bool
+  tests [((), true)]
+  {
+    let agents: [A2AAgent] = [
+      { name: "hello", url: "http://localhost:8080", description: "Hello agent", skill_id: "main.handle_hello" },
+      { name: "summarizer", url: "http://localhost:9090", description: "Summarizer", skill_id: "main.handle_summary" }
+    ];
+    let cfg: A2AConfig = { agents: agents };
+    let hooks = make_hooks(cfg);
+    match hooks.provided_tools {
+      t1 :: t2 :: [] => t1 == "delegate_to_hello" && t2 == "delegate_to_summarizer",
+      _ => false
+    }
+  }
+
+-- on_describe_tools returns ToolSchema entries for each agent
+
+pure func describe_tools_returns_schemas() -> bool
+  tests [((), true)]
+  {
+    let agents: [A2AAgent] = [
+      { name: "planner", url: "http://localhost:7070", description: "Planning agent", skill_id: "main.handle_plan" }
+    ];
+    let cfg: A2AConfig = { agents: agents };
+    let hooks = make_hooks(cfg);
+    let schemas = (hooks.on_describe_tools)();
+    match schemas {
+      s :: [] => s.name == "delegate_to_planner",
+      _ => false
+    }
+  }
+
+-- Empty config produces no tools
+
+pure func empty_config_no_tools() -> bool
+  tests [((), true)]
+  {
+    let cfg: A2AConfig = { agents: [] };
+    let hooks = make_hooks(cfg);
+    match hooks.provided_tools {
+      [] => true,
+      _ => false
+    }
+  }
+
+-- Exported main for ailang run
+
+export func main() -> () ! {IO} {
+  ()
+}

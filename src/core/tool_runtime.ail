@@ -20,12 +20,14 @@ export pure func needs_delegation_for_process(req: ProcessExecReq) -> bool {
     || shell_tokens_in_process(req)
 }
 
-func isSome(opt: Option[string]) -> bool {
-  match opt {
-    Some(_) => true,
-    None => false
+pure func isSome(opt: Option[string]) -> bool
+  ensures { result == true || result == false }
+  {
+    match opt {
+      Some(_) => true,
+      None => false
+    }
   }
-}
 
 func has_shell_tokens(s: string) -> bool {
   contains(s, "|")
@@ -190,11 +192,13 @@ func mk_meta(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta 
   }
 }
 
-func normalize_range(start: int, end: int) -> { start: int, end: int } {
-  let s = if start <= 0 then 1 else start;
-  let e = if end < s then s else end;
-  { start: s, end: e }
-}
+pure func normalize_range(start: int, end: int) -> { start: int, end: int }
+  ensures { result.start >= 1 && result.end >= result.start }
+  {
+    let s = if start <= 0 then 1 else start;
+    let e = if end < s then s else end;
+    { start: s, end: e }
+  }
 
 func line_count_of(content: string) -> int {
   if content == "" then 0 else list_len(split(content, "\n"))
@@ -269,42 +273,152 @@ func has_parent_traversal_segment_rec(parts: [string]) -> bool {
   }
 }
 
-func is_absolute_path(path: string) -> bool {
-  startsWith(path, "/")
+pure func is_absolute_path(path: string) -> bool
+  ensures { result == startsWith(path, "/") }
+  {
+    startsWith(path, "/")
+  }
+
+-- Detects bare-absolute paths whose first segment is a well-known OS root
+-- directory (e.g. "Users/mark/..." on macOS, "home/user/..." on Linux).
+-- This catches the cross-workdir case that the wd_bare check misses: when
+-- the agent is running in a clone but the model emits the original project's
+-- absolute path without the leading slash.
+pure func starts_with_root_dir(path: string) -> bool {
+  startsWith(path, "Users/")   ||
+  startsWith(path, "home/")    ||
+  startsWith(path, "tmp/")     ||
+  startsWith(path, "private/") ||
+  startsWith(path, "var/")     ||
+  startsWith(path, "etc/")     ||
+  startsWith(path, "usr/")     ||
+  startsWith(path, "opt/")     ||
+  startsWith(path, "root/")
 }
+
+pure func root_dir_check_blocks_bare_abs() -> bool
+  tests [((), true)]
+  {
+    starts_with_root_dir("Users/mark/dev/project/foo.ts")
+      && starts_with_root_dir("home/user/repo/src/main.go")
+      && starts_with_root_dir("tmp/scratch/file.txt")
+      && starts_with_root_dir("private/var/folders/x/foo")
+      && not starts_with_root_dir("src/foo.ts")
+      && not starts_with_root_dir("README.md")
+      && not starts_with_root_dir("Users")
+  }
 
 func path_error(id: string, tool: string, message: string) -> ToolResultItem {
   ToolErrorResult({ id: id, tool: tool, message: message })
 }
 
+-- Strip "${workdir}/" prefix from path if path lives genuinely under workdir.
+-- This unblocks evaluator/benchmark contexts (executor adapter, M-MOTOKO-EVAL-
+-- INSTRUMENTATION) that set WORKDIR to an absolute path like
+-- /var/folders/.../ailang_eval/<task>/ and the agent naturally constructs
+-- absolute paths under it. Without this, validate_path_common's
+-- is_absolute_path branch rejects every legitimate write before any
+-- workdir-containment check runs.
+--
+-- Crucially uses "${workdir}/" (with trailing slash) for the prefix test, so
+-- paths like /tmp/foobar do NOT silently match WORKDIR=/tmp/foo. The
+-- exact-equality branch returns "." (the workdir itself, expressed as a
+-- relative path).
+pure func strip_workdir_prefix(workdir: string, path: string) -> string {
+  if workdir == "" || workdir == "." then path
+  else if path == workdir then "."
+  else {
+    let wd_with_slash = if endsWith(workdir, "/") then workdir else "${workdir}/";
+    if startsWith(path, wd_with_slash) then
+      substring(path, length(wd_with_slash), length(path))
+    else path
+  }
+}
+
+pure func strip_under_workdir() -> bool
+  tests [((), true)]
+  {
+    strip_workdir_prefix("/tmp/foo", "/tmp/foo/bar.ail")     == "bar.ail"
+      && strip_workdir_prefix("/tmp/foo/", "/tmp/foo/bar.ail")  == "bar.ail"
+      && strip_workdir_prefix("/tmp/foo", "/tmp/foo")           == "."
+      && strip_workdir_prefix("/tmp/foo", "/tmp/foobar/x.ail")  == "/tmp/foobar/x.ail"
+      && strip_workdir_prefix("/tmp/foo", "/other/x.ail")       == "/other/x.ail"
+      && strip_workdir_prefix("",         "/tmp/foo/bar.ail")   == "/tmp/foo/bar.ail"
+      && strip_workdir_prefix(".",        "/tmp/foo/bar.ail")   == "/tmp/foo/bar.ail"
+      && strip_workdir_prefix("/tmp/foo", "src/main.ail")       == "src/main.ail"
+  }
+
 func validate_path_common(tool: string, id: string, path: string, workdir: string) -> Result[(), ToolResultItem] ! {Process} {
   if path == "" then Err(path_error(id, tool, "missing path"))
-  else if is_absolute_path(path) then Err(path_error(id, tool, "absolute paths are not allowed: ${path}"))
-  else if has_parent_traversal_segment(path) then Err(path_error(id, tool, "path traversal is not allowed: ${path}"))
   else {
-    -- Detect when model emits an absolute path without the leading "/" (e.g.
-    -- "Users/mark/.../project/foo.txt" instead of "/Users/mark/.../project/foo.txt").
-    -- resolve_workdir_path would otherwise silently double the workdir.
-    let wd_bare = if workdir == "" || workdir == "." || endsWith(workdir, "/") then "" else substring(workdir, 1, length(workdir));
-    if wd_bare != "" && startsWith(path, "${wd_bare}/") then
-      Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
+    -- Strip workdir+/ if path is a legitimate absolute-under-WORKDIR (executor-
+    -- adapter / benchmark case). After this, "stripped" is relative if and
+    -- only if path was either already relative, or was an absolute path that
+    -- lived under WORKDIR. Plain-absolute paths outside WORKDIR fall through
+    -- and get rejected by the is_absolute_path check below as before.
+    let stripped = strip_workdir_prefix(workdir, path);
+    if is_absolute_path(stripped) then Err(path_error(id, tool, "absolute paths are not allowed: ${path}"))
+    else if has_parent_traversal_segment(stripped) then Err(path_error(id, tool, "path traversal is not allowed: ${path}"))
     else {
-      let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
-      match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, path]) {
-        Ok(_) => Ok(()),
-        Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+      -- Detect when model emits an absolute path without the leading "/" (e.g.
+      -- "Users/mark/.../project/foo.txt" instead of "/Users/mark/.../project/foo.txt").
+      -- resolve_workdir_path would otherwise silently double the workdir.
+      -- Same-workdir bare-absolute check: catches "Users/mark/.../workdir/foo"
+      -- when the model drops the leading "/" from the current workdir path.
+      let wd_bare = if workdir == "" || workdir == "." || endsWith(workdir, "/") then "" else substring(workdir, 1, length(workdir));
+      if wd_bare != "" && startsWith(stripped, "${wd_bare}/") then
+        Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
+      -- Cross-workdir bare-absolute check: catches "Users/mark/.../other-project/foo"
+      -- when the model emits an original project path while running in a clone.
+      else if starts_with_root_dir(stripped) then
+        Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
+      else {
+        let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
+        match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, stripped]) {
+          Ok(_) => Ok(()),
+          Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+        }
       }
     }
   }
 }
 
--- Join workdir and a validated-relative path so leaf fs calls operate on the
--- correct absolute location, not relative to the AILANG runtime's process cwd.
-func resolve_workdir_path(workdir: string, path: string) -> string {
+-- Join workdir and a validated path so leaf fs calls operate on the correct
+-- absolute location, not relative to the AILANG runtime's process cwd.
+--
+-- Three cases:
+--   1. workdir empty or "." — pass path through verbatim.
+--   2. path already absolute-and-under-workdir (executor-adapter / benchmark
+--      case where validate_path_common accepted /var/folders/.../wd/foo.ail
+--      because it lives genuinely under WORKDIR=/var/folders/.../wd) — return
+--      path as-is. Otherwise we'd produce /var/folders/.../wd/var/folders/...
+--      which is broken.
+--   3. path is relative — join workdir + "/" + path with slash deduplication.
+pure func resolve_workdir_path(workdir: string, path: string) -> string {
   if workdir == "" || workdir == "." then path
-  else if endsWith(workdir, "/") then "${workdir}${path}"
-  else "${workdir}/${path}"
+  else if path == workdir then workdir
+  else {
+    let wd_with_slash = if endsWith(workdir, "/") then workdir else "${workdir}/";
+    if startsWith(path, wd_with_slash) then path
+    else if endsWith(workdir, "/") then "${workdir}${path}"
+    else "${workdir}/${path}"
+  }
 }
+
+pure func resolve_workdir_path_handles_under_wd_abs() -> bool
+  tests [((), true)]
+  {
+    -- Case 1: empty/dot workdir — passthrough.
+    resolve_workdir_path("",  "src/foo.ail") == "src/foo.ail"
+      && resolve_workdir_path(".", "src/foo.ail") == "src/foo.ail"
+    -- Case 2: absolute-under-workdir — return as-is (do NOT double).
+      && resolve_workdir_path("/tmp/wd",  "/tmp/wd/foo.ail")  == "/tmp/wd/foo.ail"
+      && resolve_workdir_path("/tmp/wd/", "/tmp/wd/foo.ail")  == "/tmp/wd/foo.ail"
+      && resolve_workdir_path("/tmp/wd",  "/tmp/wd")          == "/tmp/wd"
+    -- Case 3: relative — join.
+      && resolve_workdir_path("/tmp/wd",  "src/foo.ail")      == "/tmp/wd/src/foo.ail"
+      && resolve_workdir_path("/tmp/wd/", "src/foo.ail")      == "/tmp/wd/src/foo.ail"
+  }
 
 func run_read_file(id: string, path: string, start: int, end: int, workdir: string) -> ToolResultItem ! {FS, Process} {
   match validate_path_common("ReadFile", id, path, workdir) {
@@ -872,16 +986,31 @@ func t_normalize_relative_path() -> bool
       && normalize_relative_path("src/core/rpc.ail") == "src/core/rpc.ail"
   }
 
+-- v2-loop variant: file tools always route Native regardless of ohmy_pi config.
+-- The ohMyPi TS dispatcher lacks the wd_bare path guard from f16421c; routing
+-- WriteFile/ReadFile/EditFile through it causes path doubling when the model
+-- emits an absolute path without the leading slash. BashExec/RunTests still
+-- use the normal delegation check (streaming/hard-cancel requirements).
+-- See: design_docs/planned/m-motoko-path-doubling-v2.md
+export pure func backend_for_v2(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBackend {
+  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" then
+    Native
+  else
+    backend_for(call, ohmy_pi)
+}
+
 export func split_by_backend(calls: [ToolCallEnvelope], ohmy_pi: bool) -> { native: [ToolCallEnvelope], delegated: [ToolCallEnvelope] } {
   split_by_backend_rec(calls, [], [], ohmy_pi)
 }
 
-func is_native_backend(b: ToolBackend) -> bool {
-  match b {
-    Native => true,
-    Delegated => false
+pure func is_native_backend(b: ToolBackend) -> bool
+  ensures { result == true || result == false }
+  {
+    match b {
+      Native => true,
+      Delegated => false
+    }
   }
-}
 
 func split_by_backend_rec(
   calls: [ToolCallEnvelope],

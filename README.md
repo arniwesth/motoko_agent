@@ -124,6 +124,25 @@ Precedence: hardcoded defaults < profile JSON < CLI args. API keys are always en
 
 Enable by listing in `extensions.order` in your profile's `config.json`.
 
+### Adding a new extension
+
+The fastest path (AILANG ≥ 0.18.5) — scaffold a working extension package in one command:
+
+```bash
+cd ../ailang-packages
+ailang init motoko-extension \
+  --name <yourorg>/motoko_ext_<name> \
+  --tools "Tool1,Tool2" \
+  --effects "FS,Process,Env"
+# → packages/motoko-ext-<name>/ ready to type-check, all 8 hooks no-op'd
+```
+
+Then edit `<name>.ail` to fill in the real tool logic, wire the package into `motoko_agent/ailang.toml` (`[dependencies]` + `[extensions].packages`), and run `ailang generate-extension-registry`.
+
+Full walkthrough (incl. file-by-file content + common pitfalls): [Build Your First motoko Extension](https://ailang.sunholo.com/docs/guides/build-a-motoko-extension).
+
+For publishing your extension to the AILANG package registry: [Publishing Your Package](https://ailang.sunholo.com/docs/guides/package-publishing).
+
 ## Development
 
 ```bash

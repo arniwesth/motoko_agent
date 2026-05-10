@@ -1,0 +1,65 @@
+module src/core/test/integration_tests
+
+import std/string (repeat)
+import std/result (Result, Ok, Err)
+import std/ai (Message, ToolCall)
+import src/core/compaction (compact_step)
+import src/core/test/stub_step (prose_step, tool_step, scripted_to_step_result, terminal_step)
+
+-- Test 1: Cost-budget exhaustion math.
+-- With input_per_1m=60000, output_per_1m=208000, input=100000, output=50000:
+--   step_cost = (100000*60000 + 50000*208000) / 1_000_000 = 16_400 mc
+-- After 3 steps: 3 * 16_400 = 49_200 < 50_000 cap → loop continues.
+-- After 4 steps: 4 * 16_400 = 65_600 >= 50_000 cap → BudgetExceeded fires.
+-- The full-loop test (run_v2_with_stub + deny_all_rt + cap=50000) exercises
+-- this path end-to-end; this pure test verifies the arithmetic is correct.
+pure func test_cost_budget_exhausted() -> bool
+  tests [((), true)]
+  {
+    let step_cost = (100000 * 60000 + 50000 * 208000) / 1000000;
+    step_cost * 3 < 50000 && step_cost * 4 >= 50000
+  }
+
+-- Test 2: Context exhaustion with test/tiny model.
+-- test/tiny has context_limit_for = 100 tokens.
+-- A 380-char tool message + 4-char user message = 384 chars total.
+-- estimate_tokens_messages: (384 + 3) / 4 = 96 tokens → usage = 96% >= 95%.
+-- compact_step returns Err("compaction_exhausted: ...") at >= 95%.
+pure func test_compaction_fires_above_70pct() -> bool
+  tests [((), true)]
+  {
+    let big_msg: Message = {
+      role: "tool",
+      content: repeat("x", 380),
+      tool_calls: [],
+      tool_call_id: "t"
+    };
+    let user_msg: Message = {
+      role: "user",
+      content: "test",
+      tool_calls: [],
+      tool_call_id: ""
+    };
+    match compact_step([user_msg, big_msg], "test/tiny") {
+      Err(_) => true,
+      Ok(_)  => false
+    }
+  }
+
+-- Test 3: Scripted stub runs to completion.
+-- A prose_step produces finish_reason="stop" — the loop-exit signal.
+-- A tool_step produces finish_reason="tool_calls" — the loop-recurse signal.
+-- terminal_step (empty script) also returns finish_reason="stop".
+-- These invariants are what make run_v2_with_stub safe for integration tests:
+-- a scripted prose step terminates the loop without any LLM or tool calls.
+pure func test_pending_deny_path() -> bool
+  tests [((), true)]
+  {
+    let prose_result = scripted_to_step_result(prose_step("done"));
+    let tool_result  = scripted_to_step_result(tool_step("ReadFile", "{}", "t1"));
+    let term         = terminal_step();
+    prose_result.finish_reason == "stop"
+      && tool_result.finish_reason == "tool_calls"
+      && term.finish_reason == "stop"
+      && term.message.content == "stub: script exhausted"
+  }

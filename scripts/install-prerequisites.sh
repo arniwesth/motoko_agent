@@ -7,7 +7,7 @@
 #   - Bun 1.x
 #   - Node.js 18+ and npm
 #   - context-mode CLI
-#   - AILANG runtime (cloned from github.com/sunholo-data/ailang at v0.16.2 tag)
+#   - AILANG runtime (cloned from github.com/sunholo-data/ailang at pinned tag)
 #   - bun dependencies for the TypeScript frontend (src/tui/)
 #   - Optional: Omnigraph CLI/server (with --with-omnigraph)
 # Usage:
@@ -30,6 +30,8 @@ GO_MIN_MINOR=22
 BUN_MIN_MAJOR=1
 NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
+AILANG_REF="v0.18.9"
+AILANG_MIN_VERSION="0.18.9"
 INSTALL_OMNIGRAPH=0
 
 # ---------------------------------------------------------------------------
@@ -342,36 +344,55 @@ install_bun_deps() {
 # ---------------------------------------------------------------------------
 # AILANG runtime — clone from public fork, build, install
 # ---------------------------------------------------------------------------
+ailang_version_ok() {
+  if ! command -v ailang &>/dev/null; then return 1; fi
+  local ver
+  ver="$(ailang --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  [[ -n "$ver" ]] && version_ge "$ver" "$AILANG_MIN_VERSION"
+}
+
 install_ailang() {
   log_header "AILANG runtime"
-  if command -v ailang &>/dev/null; then
-    log_ok "ailang found: $(ailang version 2>/dev/null || ailang --version 2>/dev/null || echo "(version unknown)")"
+  if ailang_version_ok; then
+    log_ok "ailang $(ailang --version 2>/dev/null | head -1) already installed (>= ${AILANG_MIN_VERSION})"
     return
+  fi
+
+  if command -v ailang &>/dev/null; then
+    local cur_ver
+    cur_ver="$(ailang --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "unknown")"
+    log_warn "ailang ${cur_ver} found but < ${AILANG_MIN_VERSION} required — upgrading..."
   fi
 
   ensure_user_local_bin_on_path
 
   local ailang_src="$HOME/.local/share/ailang"
-  local ailang_ref="v0.16.2"
-  log_info "Cloning AILANG ($ailang_ref) from github.com/sunholo-data/ailang..."
+  log_info "Cloning AILANG ($AILANG_REF) from github.com/sunholo-data/ailang..."
   if [[ -d "$ailang_src/.git" ]]; then
     log_info "Updating existing clone at $ailang_src..."
     git -C "$ailang_src" fetch --tags --all
-    git -C "$ailang_src" checkout "$ailang_ref"
+    git -C "$ailang_src" checkout "$AILANG_REF"
   else
     rm -rf "$ailang_src"
-    git clone --branch "$ailang_ref" https://github.com/sunholo-data/ailang "$ailang_src"
+    git clone --branch "$AILANG_REF" https://github.com/sunholo-data/ailang "$ailang_src"
   fi
 
   log_info "Building ailang..."
-  (cd "$ailang_src" && go build ./cmd/ailang)
+  local _ver _commit _build_time _ldflags
+  _ver="$(git -C "$ailang_src" describe --tags --always --dirty 2>/dev/null || echo "$AILANG_REF")"
+  _commit="$(git -C "$ailang_src" rev-parse HEAD 2>/dev/null || echo "unknown")"
+  _build_time="$(date -u '+%Y-%m-%d_%H:%M:%S')"
+  _ldflags="-X github.com/sunholo-data/ailang/internal/version.Version=${_ver}"
+  _ldflags="${_ldflags} -X github.com/sunholo-data/ailang/internal/version.Commit=${_commit}"
+  _ldflags="${_ldflags} -X github.com/sunholo-data/ailang/internal/version.BuildTime=${_build_time}"
+  (cd "$ailang_src" && go build -ldflags "$_ldflags" ./cmd/ailang)
   cp "$ailang_src/ailang" "$HOME/.local/bin/ailang"
   chmod +x "$HOME/.local/bin/ailang"
 
-  if command -v ailang &>/dev/null && ailang --version &>/dev/null; then
+  if ailang_version_ok; then
     log_ok "ailang installed: $(ailang --version 2>/dev/null | head -1)"
   else
-    die "ailang build completed but binary is not on PATH or version check failed"
+    die "ailang build completed but version check failed (need >= ${AILANG_MIN_VERSION})"
   fi
 }
 

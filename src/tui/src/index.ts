@@ -374,7 +374,76 @@ class JsonlLogger {
 // main
 // ---------------------------------------------------------------------------
 
+// M-MOTOKO-EVAL-HARNESS-HARDENING M2b + M2c (gaps #7, #8): parse motoko-
+// specific CLI flags before treating argv[2] as task text.
+//   --headless       — force MOTOKO_HEADLESS=1 (more discoverable than env var)
+//   --version, -v    — print structured version info to stdout and exit 0
+// Recognized flags are removed from process.argv so downstream argv[2] reads
+// still work for the task text. Unknown flags pass through to the task text
+// (so "motoko --whatever ..." doesn't break).
+function parseMotokoFlags(): { headless: boolean; printVersion: boolean } {
+  const flags = { headless: false, printVersion: false };
+  const remaining: string[] = [process.argv[0], process.argv[1]];
+  for (let i = 2; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg === "--headless") {
+      flags.headless = true;
+    } else if (arg === "--version" || arg === "-v") {
+      flags.printVersion = true;
+    } else {
+      remaining.push(arg);
+    }
+  }
+  process.argv = remaining;
+  return flags;
+}
+
+// printVersionInfo writes structured version info to stdout then exits 0.
+// Format: line-oriented `key=value` pairs for easy parsing by the AILANG
+// adapter's HealthCheck (M-MOTOKO-EXECUTOR-ADAPTER) and other tooling.
+function printVersionInfo(pkgVersion: string, projectRoot: string): void {
+  let gitRev = "unknown";
+  try {
+    gitRev = execSync("git rev-parse --short HEAD", {
+      cwd: projectRoot,
+      timeout: 2000,
+    }).toString().trim();
+  } catch {}
+  let ailangBuilt = "unknown";
+  try {
+    const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
+      ? process.env.AILANG_BIN
+      : "ailang";
+    const raw = execSync(`${ailangBin} --version`, { timeout: 5000 }).toString().trim();
+    const m = raw.match(/^Built:\s+(.*)$/m);
+    if (m) ailangBuilt = m[1].trim();
+  } catch {}
+  process.stdout.write(`motoko ${pkgVersion}\n`);
+  process.stdout.write(`tui_version=${pkgVersion}\n`);
+  process.stdout.write(`git_rev=${gitRev}\n`);
+  process.stdout.write(`ailang_built=${ailangBuilt}\n`);
+  process.stdout.write(`motoko_repo=${projectRoot}\n`);
+  process.exit(0);
+}
+
 async function main(): Promise<void> {
+  const motokoFlags = parseMotokoFlags();
+  if (motokoFlags.headless) {
+    process.env.MOTOKO_HEADLESS = "1";
+  }
+  if (motokoFlags.printVersion) {
+    const pkgPath = path.join(
+      path.resolve(import.meta.dirname, ".."),
+      "package.json",
+    );
+    const { version: pv } = JSON.parse(
+      fs.readFileSync(pkgPath, "utf8"),
+    ) as { version: string };
+    const projectRoot = path.resolve(import.meta.dirname, "../../..");
+    printVersionInfo(pv, projectRoot);
+    return;
+  }
+
   // Set the terminal/tab title to "motoko" so VS Code, iTerm2, etc. show
   // the agent name instead of the underlying runtime ("bun.exe" /
   // "node"). OSC 0 sets both icon and window title; ST is BEL (\x07) for
@@ -399,7 +468,18 @@ async function main(): Promise<void> {
   ) as { version: string };
   const projectRoot = path.resolve(import.meta.dirname, "../../..");
   const workdir = process.env.WORKDIR ?? process.cwd();
-  const envPort = Number(process.env.ENV_PORT ?? 8080);
+  // M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): default
+  // ENV_PORT to 0 = let the kernel pick a free port atomically when
+  // startEnvServer binds. The wrapper used to do its own pick_free_port
+  // probe via lsof, which raced when --agent-parallel >= 2 spawned
+  // concurrent motoko sessions (both probes saw the same port free,
+  // both tried to bind, second crashed). Setting 0 here means the bind
+  // itself is the race-resolver — kernel returns EADDRINUSE only if
+  // it actually IS in use right now, and with port=0 it picks one that
+  // ISN'T. The actual port comes back from startEnvServer() below.
+  // Operator override: explicit ENV_PORT=18080 still works for legacy
+  // setups that need a fixed port (e.g. Docker port-forwarding).
+  const envPort = Number(process.env.ENV_PORT ?? 0);
   const profile = activeProfile();
   const profileAgent = resolveProfileAgentConfig(workdir, profile);
   const model =
@@ -448,8 +528,11 @@ async function main(): Promise<void> {
   }
 
   // Start environment server first; runtime process will call /exec against it.
-  startEnvServer(envPort, workdir);
-  const envUrl = `http://localhost:${envPort}`;
+  // CRITICAL: use the RETURNED port (not the requested envPort) — when
+  // envPort=0, the kernel picks a port and we won't know it until bind
+  // completes. boundPort == envPort when envPort > 0 (operator override).
+  const boundPort = await startEnvServer(envPort, workdir);
+  const envUrl = `http://localhost:${boundPort}`;
 
   // Determine whether we have a real terminal available for the TUI.
   // process.stdout.isTTY can be undefined in piped subprocess contexts
@@ -498,17 +581,27 @@ async function main(): Promise<void> {
       model,
       workdir,
       profile,
-      envPort,
+      boundPort,
       systemPrompt,
       openaiBaseUrl,
       aiOptionsJson,
       (event) => {
         logger.log(event);
-        if (event.type === "done" || event.type === "error") logger.close();
+        // For terminal events, drain the JSONL stream BEFORE letting the UI
+        // handler call process.exit. Otherwise process.exit drops the
+        // WriteStream's pending buffer — losing run_summary, done, and any
+        // events emitted in the same flush window. See M-MOTOKO-EVAL-HARNESS-
+        // HARDENING gap #1 / gap #10 for the bisection.
+        if (event.type === "done" || event.type === "error") {
+          void logger.close().then(() => {
+            ui.handleEvent(event);
+          });
+          return;
+        }
         ui.handleEvent(event);
       },
       () => {
-        logger.close();
+        void logger.close();
         sessionLogger = undefined;
         ui.stop();
       },
@@ -534,7 +627,7 @@ async function main(): Promise<void> {
       model,
       workdir,
       profile,
-      envPort,
+      boundPort,
       systemPrompt,
       openaiBaseUrl,
       aiOptionsJson,
@@ -544,7 +637,9 @@ async function main(): Promise<void> {
         ui.handleEvent(event);
       },
       () => {
-        logger.close();
+        // Drain JSONL stream BEFORE process.exit so the tail (run_summary,
+        // done) reaches disk. See M-MOTOKO-EVAL-HARNESS-HARDENING gap #1.
+        const closing = logger.close();
         sessionLogger = undefined;
         ui.runtimeProcess = undefined;
         if (interrupted) {
@@ -557,8 +652,10 @@ async function main(): Promise<void> {
           errorOccurred = false;
           ui.setAwaitingTask(true);
         } else {
-          ui.stop();
-          process.exit(0);
+          void closing.then(() => {
+            ui.stop();
+            process.exit(0);
+          });
         }
       },
     );

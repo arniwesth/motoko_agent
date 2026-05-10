@@ -1,0 +1,236 @@
+-- scripts/smoke_v2_pending.ail
+-- Layer-1 smoke for the Pending(reason, PolicyDefault) ToolPolicyDecision
+-- variant added in commit 61af8be.
+--
+-- Verifies the merge-priority claim from the commit body:
+--   "priority: Deny > Pending > Allow > NoOpinion"
+--
+-- Approach: mirrors smoke_v2_policy_denial.ail. We build synthetic
+-- registries with multiple hooks each returning a different policy
+-- decision, then call dispatch_tool_policy and assert the merged
+-- result matches the priority claim.
+--
+-- This is the algebraic gate. The integration round-trip (extension
+-- issues Pending → tool_pending event → stdin approve/deny → outcome)
+-- requires a separate fixture and is filed as a follow-up sprint.
+--
+-- Setup:
+--   ailang run --caps IO,Env,Clock --entry main scripts/smoke_v2_pending.ail
+
+module scripts/smoke_v2_pending
+
+import std/io (println)
+import std/option (None)
+import src/core/ext/types (
+  BudgetPlan,
+  ExtCtx,
+  ExtRuntime,
+  ExtRegistry,
+  ExtensionHooks,
+  ToolPolicyDecision,
+  ToolHandleDecision,
+  ResponseInterceptDecision,
+  FinalizeDecision,
+  PromptPatch,
+  BudgetPatch,
+  PolicyDefault
+)
+import src/core/ext/runtime (dispatch_tool_policy)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/config (VerificationConfig)
+import std/ai (ToolSchema)
+import std/json (jo)
+
+-- New since a9b53e7: extensions declare their tool schemas via on_describe_tools.
+-- Test hooks return empty list (the canonical "extension provides no tools" answer).
+pure func empty_describe_tools() -> [ToolSchema] { [] }
+
+-- Policy-decision producers.
+pure func always_allow(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Allow
+}
+
+pure func always_deny(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Deny("synthetic-deny: blocked for smoke")
+}
+
+pure func always_noopinion(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+pure func always_pending_allow_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("synthetic-pending-A: needs operator review", AllowAfterTimeout)
+}
+
+pure func always_pending_deny_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("synthetic-pending-B: review (deny on timeout)", DenyAfterTimeout)
+}
+
+-- Boilerplate hook fillers (non-policy hooks return neutral values).
+pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoIntercept
+}
+
+pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoDecision
+}
+
+pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Delegate
+}
+
+-- Build an ExtensionHooks record with the given policy fn. All other
+-- hook slots get neutral implementations.
+func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtensionHooks {
+  {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: empty_describe_tools,
+    on_build_system_prompt: empty_prompt_patch,
+    on_budget_plan: empty_budget_patch,
+    on_tool_policy: policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: noop_response_intercept,
+    on_solver_candidate: nodecision_solver_candidate
+  }
+}
+
+func mk_runtime(hooks: [ExtensionHooks]) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  {
+    registry: { hooks: hooks },
+    strict_mode: false,
+    verification: v
+  }
+}
+
+func mk_ctx() -> ExtCtx {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  {
+    task: "test",
+    step: 0,
+    model: "test-model",
+    cwd: "/tmp",
+    hybrid_tools: false,
+    budget: budget,
+    mode: "v2",
+    workdir: "/tmp",
+    env_server_url: "",
+    budget_remaining: 4,
+    history_slice: [],
+    state_key: "test"
+  }
+}
+
+func mk_envelope() -> ToolCallEnvelope {
+  { id: "test-call-1", tool: "BashExec", arguments: jo([]) }
+}
+
+-- Test runner: dispatch policy and assert the variant.
+func run_case(name: string, hooks: [ExtensionHooks], expect: string) -> bool ! {IO} {
+  let rt = mk_runtime(hooks);
+  let ctx = mk_ctx();
+  let env = mk_envelope();
+  let decision = dispatch_tool_policy(rt, ctx, env);
+  let got = match decision {
+    Allow => "Allow",
+    Deny(_) => "Deny",
+    NoOpinion => "NoOpinion",
+    Pending(_, _) => "Pending"
+  };
+  let ok = got == expect;
+  if ok then println("  ✓ ${name} → ${got}")
+  else println("  ✗ ${name} → expected ${expect}, got ${got}");
+  ok
+}
+
+export func main() -> () ! {IO, Clock, Env} {
+  println("=== smoke_v2_pending ===");
+
+  -- 1. Single Pending hook → Pending propagates.
+  let _ = run_case(
+    "single Pending hook",
+    [mk_hook("pending-A", always_pending_allow_default)],
+    "Pending"
+  );
+
+  -- 2. Pending + Allow → Pending wins (priority claim).
+  let _ = run_case(
+    "Pending + Allow → Pending",
+    [mk_hook("pending-A", always_pending_allow_default), mk_hook("allow", always_allow)],
+    "Pending"
+  );
+
+  -- 3. Pending + NoOpinion → Pending wins.
+  let _ = run_case(
+    "Pending + NoOpinion → Pending",
+    [mk_hook("pending-A", always_pending_allow_default), mk_hook("noop", always_noopinion)],
+    "Pending"
+  );
+
+  -- 4. Pending + Deny → Deny wins (priority claim: Deny outranks Pending).
+  let _ = run_case(
+    "Pending + Deny → Deny",
+    [mk_hook("pending-A", always_pending_allow_default), mk_hook("deny", always_deny)],
+    "Deny"
+  );
+
+  -- 5. Order independence: Deny + Pending → still Deny.
+  let _ = run_case(
+    "Deny + Pending → Deny (order-independent)",
+    [mk_hook("deny", always_deny), mk_hook("pending-A", always_pending_allow_default)],
+    "Deny"
+  );
+
+  -- 6. Two Pendings → first wins (or some Pending wins; just check shape).
+  let _ = run_case(
+    "Pending-A + Pending-B → Pending",
+    [mk_hook("pending-A", always_pending_allow_default), mk_hook("pending-B", always_pending_deny_default)],
+    "Pending"
+  );
+
+  -- 7. Empty registry → NoOpinion default.
+  let _ = run_case(
+    "empty registry → NoOpinion",
+    [],
+    "NoOpinion"
+  );
+
+  -- 8. Allow alone → Allow.
+  let _ = run_case(
+    "Allow alone → Allow",
+    [mk_hook("allow", always_allow)],
+    "Allow"
+  );
+
+  -- 9. NoOpinion + Allow → Allow (the fallback path).
+  let _ = run_case(
+    "NoOpinion + Allow → Allow",
+    [mk_hook("noop", always_noopinion), mk_hook("allow", always_allow)],
+    "Allow"
+  );
+
+  -- 10. Pending(AllowAfterTimeout) preserved when only Pending in mix.
+  --     This validates the PolicyDefault payload survives the merge.
+  let rt = mk_runtime([mk_hook("p-allow-default", always_pending_allow_default)]);
+  let decision = dispatch_tool_policy(rt, mk_ctx(), mk_envelope());
+  let p_default_ok = match decision {
+    Pending(_, AllowAfterTimeout) => true,
+    Pending(_, DenyAfterTimeout) => false,
+    Allow => false,
+    Deny(_) => false,
+    NoOpinion => false
+  };
+  if p_default_ok then println("  ✓ Pending(AllowAfterTimeout) default survives merge")
+  else println("  ✗ Pending default mangled by merge");
+
+  println("done")
+}
