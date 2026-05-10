@@ -1,0 +1,122 @@
+-- AI-powered conversation compaction extension.
+-- Uses a cheap model to summarize old turns when context fills up.
+-- Returns Compacted(msgs, note) with the summarized message list.
+
+module src/core/ext/compaction_ai
+
+import std/ai (Message, step)
+import std/string (length, substring, split, join)
+import std/list (length as list_length, take, drop, reverse)
+import src/core/ext/types (ExtCtx, PreStepDecision, PassThrough, Compacted)
+import src/core/types (Msg)
+import src/core/context_usage (context_limit_for)
+import src/core/config (CompactionAiConfig)
+
+-- Token estimate: content length / 4
+func estimate_tokens(content: string) -> int {
+  (length(content) + 3) / 4
+}
+
+-- Estimate total tokens in message list
+func estimate_msgs_tokens(msgs: [Msg]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => estimate_tokens(m.content) + estimate_msgs_tokens(rest)
+  }
+}
+
+-- Context usage as integer percent (0-100)
+func usage_percent(msgs: [Msg], model: string) -> int {
+  let limit = context_limit_for(model);
+  if limit == 0 then 0
+  else (estimate_msgs_tokens(msgs) * 100) / limit
+}
+
+-- Format a message for the summarization prompt
+func format_msg(m: Msg) -> string {
+  "[${m.role}] ${m.content}"
+}
+
+-- Format message list for the summarization prompt
+func format_msgs_for_summary(msgs: [Msg]) -> string {
+  match msgs {
+    [] => "",
+    m :: [] => format_msg(m),
+    m :: rest => "${format_msg(m)}\n${format_msgs_for_summary(rest)}"
+  }
+}
+
+-- The summarization prompt
+func summarization_prompt(old_turns: [Msg], recent_turns: [Msg]) -> string {
+  let old_text = format_msgs_for_summary(old_turns);
+  let recent_count = list_length(recent_turns);
+  "Summarize the following conversation history in 2-3 sentences.
+Preserve:
+- Key decisions made
+- Files modified
+- Errors encountered and how they were resolved
+- Current task state
+
+OLD TURNS (summarize these):
+${old_text}
+
+RECENT TURNS (keep these verbatim - ${show(recent_count)} messages):
+[... see recent context ...]
+
+Provide a concise summary that captures essential context for continuing the task."
+}
+
+-- Call AI to summarize old turns
+func summarize_with_ai(prompt: string, model: string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  let msgs: [Message] = [{ role: "user", content: prompt, tool_calls: [], tool_call_id: "" }];
+  let result = step(model, msgs, []);
+  result.message.content
+}
+
+-- Split result as a record (AILANG doesn't support tuple destructuring)
+type SplitResult = { old: [Msg], recent: [Msg] }
+
+-- Split messages into old and recent, keeping last N turns intact
+func split_msgs(msgs: [Msg], keep_recent: int) -> SplitResult {
+  let n = list_length(msgs);
+  if n <= keep_recent then { old: [], recent: msgs }
+  else {
+    let rev = reverse(msgs);
+    let recent = reverse(take(keep_recent, rev));
+    let old = reverse(drop(keep_recent, rev));
+    { old: old, recent: recent }
+  }
+}
+
+-- Create a summary message
+func summary_msg(summary: string) -> Msg {
+  { role: "assistant", content: "[CONTEXT SUMMARY] ${summary}" }
+}
+
+-- Main compaction logic
+export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  let pct = usage_percent(msgs, ctx.model);
+  
+  -- Don't compact if we have plenty of room (use configured threshold)
+  if pct < cfg.threshold_pct then PassThrough
+  else {
+    -- How many recent turns to keep intact? Use configured value, reduce at 90%+
+    let keep_recent = if pct >= 90 then (cfg.keep_recent / 2) else cfg.keep_recent;
+    let split_result = split_msgs(msgs, keep_recent);
+    let old_turns = split_result.old;
+    let recent_turns = split_result.recent;
+    
+    -- Nothing to compact
+    if list_length(old_turns) == 0 then PassThrough
+    else {
+      -- Summarize old turns using configured model
+      let prompt = summarization_prompt(old_turns, recent_turns);
+      let summary = summarize_with_ai(prompt, cfg.model);
+      
+      -- Build compacted list: summary + recent turns
+      let compacted = [summary_msg(summary)] ++ recent_turns;
+      
+      Compacted(compacted, "AI-summarized ${show(list_length(old_turns))} turns (${show(pct)}% -> ${show(usage_percent(compacted, ctx.model))}%)")
+    }
+  }
+}

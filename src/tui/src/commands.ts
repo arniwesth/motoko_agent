@@ -20,6 +20,10 @@ import type { AgentUI } from "./ui.js";
 import {
   fetchDynamicModelsFromEnv,
 } from "./models.js";
+import {
+  fetchAvailableProfiles,
+  currentProfile,
+} from "./profiles.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -75,10 +79,47 @@ const abortCommand: SlashCommand = {
 };
 
 // ---------------------------------------------------------------------------
+// Command: /restart
+// ---------------------------------------------------------------------------
+
+const restartCommand: SlashCommand = {
+  name: "restart",
+  description: "Restart session (optionally with a different profile)",
+
+  execute(args: string, ctx: SlashCommandHandlerCtx) {
+    const profileName = args.trim();
+    if (profileName.length > 0) {
+      // Restart with specified profile
+      ctx.ui.restartWithProfile(profileName);
+    } else {
+      // Restart with current profile
+      ctx.ui.restartSession();
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Command: /profile
+// ---------------------------------------------------------------------------
+
+const profileCommand: SlashCommand = {
+  name: "profile",
+  description: "Switch profile (opens picker; /profile <name> switches directly)",
+
+  execute(args: string, ctx: SlashCommandHandlerCtx) {
+    if (args.trim().length > 0) {
+      ctx.ui.restartWithProfile(args.trim());
+    } else {
+      ctx.ui.showProfilePicker();
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Public registry
 // ---------------------------------------------------------------------------
 
-export const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [modelCommand, abortCommand];
+export const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [modelCommand, abortCommand, restartCommand, profileCommand];
 
 // ---------------------------------------------------------------------------
 // Parsing helpers
@@ -179,6 +220,23 @@ export function createCommandAutocompleteProvider(): AutocompleteProvider {
             value: m,
             label: m,
             description: m,
+          })),
+        };
+      }
+
+      // Case 2b: filtering profiles for /profile or /restart
+      if (cmdName === "profile" || cmdName === "restart") {
+        const argPrefix = body.slice(spaceIdx + 1);
+        const allProfiles = fetchAvailableProfiles();
+        const lower = argPrefix.toLowerCase();
+        const matches = allProfiles.filter((p) => p.name.toLowerCase().includes(lower));
+        if (matches.length === 0) return null;
+        return {
+          prefix: argPrefix,
+          items: matches.map((p) => ({
+            value: p.name,
+            label: p.name,
+            description: `${p.model} | ext: ${p.extensions.slice(0, 3).join(",")}${p.extensions.length > 3 ? ",…" : ""}`,
           })),
         };
       }

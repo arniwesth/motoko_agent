@@ -55,7 +55,8 @@ import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
 import src/core/compaction (compact_step)
-import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle)
+import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
+import src/core/ext/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
@@ -842,11 +843,29 @@ func loop_v2(
       retryable: false
     })
   }
-  else
-  -- DP0: structural compaction before the LLM call.
+  else {
+  -- Build extension context for this step (needed for dispatch_pre_step)
+  let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs);
+  
+  -- DP0a: let extensions compact first (e.g., AI summarization)
+  let after_ext = match dispatch_pre_step(rt, ctx, messages_to_msgs(msgs)) {
+    Compacted(compacted_msgs, note) => {
+      let _ = emit_event(session_id, "compaction_extension", [
+        kv("step", jnum(_int_to_float(step_idx))),
+        kv("note", js(note))
+      ]);
+      Ok(msgs_to_messages(compacted_msgs))
+    },
+    PassThrough => Ok(msgs)
+  };
+  
+  match after_ext {
+    Err(e) => Err(e),
+    Ok(msgs_after_ext) => {
+  -- DP0b: structural compaction as fallback
   -- compact_step is a no-op below 70% usage; elides old tool_result content
-  -- at 70-85% and 85-95%; refuses the step at ≥95%.
-  match compact_step(msgs, model) {
+  -- at 70-85% and 85-95%; at ≥95% tries emergency compaction.
+  match compact_step(msgs_after_ext, model) {
     Err(compaction_reason) => {
       let _ = emit_event(session_id, "compaction_exhausted", [
         kv("step", jnum(_int_to_float(step_idx))),
@@ -1108,6 +1127,9 @@ func loop_v2(
     }
     } -- Ok(compacted_msgs)
   } -- match compact_step
+    } -- Ok(msgs_after_ext)
+  } -- match after_ext
+  } -- else block
 }
 
 -- Public entry point. Takes motoko's [Msg] (the v1 shape used by rpc.ail)
@@ -1243,6 +1265,15 @@ export func conversation_loop_v2(
         let new_model = msg_get_str(obj, "model");
         let resolved_new = strip_provider_prefix(new_model);
         conversation_loop_v2(rt, env_url, hybrid_tools, budget, resolved_new, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+      }
+      else if cmd_type == "restart" then {
+        -- Emit session_suspend event and exit cleanly; TUI will respawn
+        let target_profile = msg_get_str(obj, "profile");
+        let _ = emit_event(session_id, "session_suspend", [
+          kv("session_id", js(session_id)),
+          kv("target_profile", js(target_profile))
+        ]);
+        ()
       }
       else if cmd_type == "user_message" then {
         let content = msg_get_str(obj, "content");

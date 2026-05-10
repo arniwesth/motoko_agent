@@ -60,12 +60,21 @@ export type FinalizeDecision
   | NoDecision
   deriving (Eq)
 
+-- Decision type for pre-step compaction hooks.
+-- PassThrough: no compaction needed, proceed with original msgs
+-- Compacted: extension has compacted the message list, use the new one
+export type PreStepDecision
+  = PassThrough
+  | Compacted(msgs: [Msg], note: string)
+  deriving (Eq)
+
 export type ExtensionHooks = {
   id: string,
   provided_tools: [string],
   on_describe_tools: () -> [ToolSchema],
   on_build_system_prompt: (ExtCtx) -> PromptPatch,
   on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS},
+  on_pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
   on_tool_handle: (ExtCtx, ToolCallEnvelope)
     -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},

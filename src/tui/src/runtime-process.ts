@@ -506,4 +506,23 @@ export class RuntimeProcess {
   sendUserMessage(content: string): void {
     this.send({ type: "user_message", content });
   }
+
+  /**
+   * Request a session restart with optional profile change.
+   * The AILANG runtime will emit a session_suspend event and exit.
+   * The TUI is expected to respawn the process.
+   */
+  restart(newProfile?: string): void {
+    if (this.dead) return;
+    this.send({ type: "restart", profile: newProfile });
+    // Set a flag so the exit handler knows to respawn
+    this._restartPending = newProfile ?? true;
+  }
+
+  /** Check if restart was requested (string = new profile, true = same profile) */
+  get restartPending(): string | boolean | undefined {
+    return this._restartPending;
+  }
+
+  private _restartPending?: string | boolean;
 }

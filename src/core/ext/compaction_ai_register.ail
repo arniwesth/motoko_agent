@@ -1,0 +1,39 @@
+-- Register the AI compaction extension.
+-- This extension uses AI to summarize old conversation turns when context fills up.
+
+module src/core/ext/compaction_ai_register
+
+import src/core/ext/types (
+  ExtensionHooks, ExtCtx, PreStepDecision,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  Allow, Delegate, NoIntercept, NoDecision
+)
+import src/core/ext/compaction_ai (compact_with_ai)
+import src/core/types (Msg)
+import src/core/config (RuntimeConfig, CompactionAiConfig)
+import std/option (Option, None)
+
+-- Register the AI compaction extension with local hooks (includes on_pre_step)
+export func register_compaction_ai(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  -- Capture config in closure for on_pre_step
+  let compaction_cfg = cfg.compaction_ai;
+  {
+    id: "compaction_ai",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ . { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      compact_with_ai(ctx, msgs, compaction_cfg)
+    },
+    on_tool_policy: \_ _ . Allow,
+    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  }
+}
+
+-- The on_pre_step implementation (now takes config)
+func on_pre_step_impl(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  compact_with_ai(ctx, msgs, cfg)
+}

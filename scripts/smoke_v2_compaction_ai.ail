@@ -1,0 +1,92 @@
+-- scripts/smoke_v2_compaction_ai.ail
+--
+-- Smoke test for the AI compaction extension.
+-- Tests the compact_with_ai function with mock config.
+--
+-- Run:
+--   ailang run --caps IO --entry main scripts/smoke_v2_compaction_ai.ail
+
+module scripts/smoke_v2_compaction_ai
+
+import std/io (println)
+import src/core/ext/compaction_ai (compact_with_ai)
+import src/core/ext/types (ExtCtx, PreStepDecision, PassThrough, Compacted, BudgetPlan)
+import src/core/types (Msg)
+import src/core/config (CompactionAiConfig)
+
+func mk_user(content: string) -> Msg {
+  { role: "user", content: content }
+}
+
+func mk_tool(content: string) -> Msg {
+  { role: "tool", content: content }
+}
+
+-- Default config
+func default_config() -> CompactionAiConfig {
+  {
+    model: "openrouter/auto",
+    threshold_pct: 75,
+    keep_recent: 10
+  }
+}
+
+-- Minimal ExtCtx for testing
+func test_ctx() -> ExtCtx {
+  {
+    task: "test",
+    step: 0,
+    model: "anthropic/claude-sonnet-4-6",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1000000, solver: 500000, verifier: 200000 },
+    mode: "test",
+    workdir: ".",
+    env_server_url: "http://localhost:8080",
+    budget_remaining: 1000000,
+    history_slice: [],
+    state_key: "test"
+  }
+}
+
+-- Test 1: Below threshold returns PassThrough
+func test_below_threshold() -> bool {
+  let msgs = [mk_user("hi")];
+  let cfg = default_config();
+  -- Small message, should be well under 75%
+  match compact_with_ai(test_ctx(), msgs, cfg) {
+    PassThrough => true,
+    Compacted(_, _) => false
+  }
+}
+
+-- Test 2: Config threshold is respected
+func test_custom_threshold() -> bool {
+  let msgs = [mk_user("hello world")];
+  let cfg = { model: "openrouter/auto", threshold_pct: 10, keep_recent: 5 };
+  -- With threshold at 10%, even tiny message should trigger (but won't have old turns)
+  -- So still PassThrough since there's nothing to compact
+  match compact_with_ai(test_ctx(), msgs, cfg) {
+    PassThrough => true,
+    Compacted(_, _) => false
+  }
+}
+
+-- Test 3: Config values are correct
+func test_config_defaults() -> bool {
+  let cfg = default_config();
+  cfg.model == "openrouter/auto" && cfg.threshold_pct == 75 && cfg.keep_recent == 10
+}
+
+func report(name: string, ok: bool) -> () ! {IO} {
+  if ok then println("  ✓ ${name}")
+  else println("  ✗ ${name}")
+}
+
+export func main() -> () ! {IO} = {
+  println("=== smoke_v2_compaction_ai ===");
+  report("below_threshold_returns_passthrough", test_below_threshold());
+  report("custom_threshold_respected", test_custom_threshold());
+  report("config_defaults_correct", test_config_defaults());
+  println("done")
+}

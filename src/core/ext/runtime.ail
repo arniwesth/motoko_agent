@@ -17,9 +17,11 @@ import src/core/ext/types (
   ToolHandleDecision,
   ResponseInterceptDecision,
   FinalizeDecision,
+  PreStepDecision,
   ExtensionHooks,
   ExtRuntime
 )
+import src/core/types (Msg)
 import src/core/ext/registry_generated (parse_core_ext_order)
 
 export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, FS} {
@@ -136,6 +138,31 @@ func fold_budget_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, plan: BudgetPlan) -
 
 export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock, Env, FS} {
   fold_budget_hooks(rt.registry.hooks, ctx, plan)
+}
+
+-- Collect pre-step decisions from all hooks; first Compacted wins.
+func first_compacted(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  match hooks {
+    [] => PassThrough,
+    h :: rest => {
+      let decision = (h.on_pre_step)(ctx, msgs);
+      let _ = if is_test_dummy(h.id) then {
+        let tag = match decision {
+          PassThrough => "passthrough",
+          Compacted(_, note) => "compacted:${note}"
+        };
+        emit_dummy_hook("on_pre_step", "decision", tag)
+      } else ();
+      match decision {
+        Compacted(_, _) => decision,
+        PassThrough => first_compacted(rest, ctx, msgs)
+      }
+    }
+  }
+}
+
+export func dispatch_pre_step(rt: ExtRuntime, ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  first_compacted(rt.registry.hooks, ctx, msgs)
 }
 
 func decide_one_policy(h: ExtensionHooks, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
@@ -315,6 +342,7 @@ func smoke_hook_a() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: ["A"] },
     on_budget_plan: budget,
+    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
     on_tool_policy: \_ctx _call. Allow,
     on_tool_handle: handle,
     on_response_intercept: intercept,
@@ -341,6 +369,7 @@ func smoke_hook_b() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: ["B"] },
     on_budget_plan: budget,
+    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
     on_tool_policy: \_ctx _call. Deny("blocked"),
     on_tool_handle: handle,
     on_response_intercept: intercept,
@@ -427,6 +456,7 @@ func dispatch_pending_hook() -> bool
       on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
         { requested_total: None, requested_solver: None, requested_verifier: None }
       },
+      on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
       on_tool_policy: \_ctx _call. Pending("write outside cwd", DenyAfterTimeout),
       on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate },
       on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
