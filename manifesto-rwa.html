@@ -731,6 +731,10 @@ const INLINE_DOC = `<style>
 
       <p>By recording model responses and replaying them against a fixed seed, we can reproduce any agent session exactly. This makes debugging possible in a system that would otherwise be opaque. It makes regression testing meaningful. And it provides a foundation for the kind of analysis that self-modifying software demands: not just &ldquo;did it work?&rdquo; but &ldquo;why did it choose that path, and would it choose the same path again?&rdquo;</p>
 
+      <aside class="comment" data-author="Codex (gpt-5)" data-date="2026-05-10">
+        <p>I would soften &ldquo;exactly&rdquo; here unless the replay boundary includes tool outputs, file-system state, network responses, timestamps, environment variables, package registries, and any model-side sampling metadata. Recording model responses is necessary, but it is not by itself sufficient for deterministic replay of an agent session. The manifesto may want to distinguish &ldquo;LLM replay&rdquo; from full environmental replay.</p>
+      </aside>
+
       <p>Simulation also serves a subtler purpose. It forces the architecture to be honest about its dependencies. If a component cannot be simulated, it is coupled to something external in a way that the design has not accounted for. The simulatability requirement is, in effect, a fitness function for architectural cleanliness.</p>
     </section>
 
@@ -745,6 +749,10 @@ const INLINE_DOC = `<style>
       <p>Most agent harnesses treat benchmarks as a marketing exercise&thinsp;&mdash;&thinsp;run SWE-Bench once, publish the number, move on. Motoko treats benchmarking as infrastructure. The system should be able to evaluate any combination of model, extensions, and configuration against established benchmarks&thinsp;&mdash;&thinsp;AILANG&rsquo;s own performance suite, Aider&rsquo;s Polyglot benchmark, SWE-Bench, Terminal-Bench&thinsp;&mdash;&thinsp;with minimal ceremony, and it should do so routinely, not ceremonially.</p>
 
       <p>The reason is specific to what Motoko is trying to do. A self-modifying system needs a feedback signal. When the agent rewrites part of its own core, or writes and loads a new extension, something has to answer the question: <em>did that actually help?</em> Without benchmarks, self-modification is blind mutation&thinsp;&mdash;&thinsp;the system changes, but nobody knows whether it improved. With benchmarks, self-modification becomes directed evolution. The fitness function is not an abstraction; it is a benchmark score that went up or down.</p>
+
+      <ins class="change" data-author="Codex (gpt-5)" data-date="2026-05-10" data-label="Added 2026-05-10 &mdash; Codex" data-reason="Qualify benchmarking as an optimization target that can distort self-modification if not balanced by held-out and qualitative evaluation">
+        <p>But a fitness function is also a pressure gradient, and pressure gradients can teach the wrong lesson. A self-modifying agent optimized only against public benchmarks will eventually learn the contours of those benchmarks rather than the shape of the work. Motoko therefore needs two kinds of measurement: visible benchmarks that make progress comparable, and withheld or qualitative evaluations that make overfitting harder. The point is not to worship the score. The point is to make the score difficult to game without becoming genuinely more capable.</p>
+      </ins>
 
       <p>This also raises a harder question that most benchmark suites are not designed to answer. Current benchmarks evaluate single-turn, single-task performance: given a bug report, produce a patch. But Motoko runs sessions that span dozens or hundreds of steps, with the agent modifying its own tools along the way. What does it mean for a 600-step self-modifying session to be &ldquo;correct&rdquo;? The benchmarking infrastructure needs to evolve to measure not just the final output, but the trajectory&thinsp;&mdash;&thinsp;the decisions made, the extensions loaded, the regressions introduced and caught. Motoko&rsquo;s ambition is to contribute to that evolution, not just consume existing benchmarks.</p>
 
@@ -764,6 +772,10 @@ const INLINE_DOC = `<style>
       <p>This elevates testing from a practice to a responsibility, and it demands more than conventional approaches can offer.</p>
 
       <p>The first addition is <strong>formal verification through Z3 contracts</strong>. Pure functions in the AILANG core can carry contracts that the Z3 theorem prover checks at build time. This is not testing with examples; it is proof over all possible inputs. When a contract holds, the function is correct&thinsp;&mdash;&thinsp;not probably correct, not correct for the cases we thought of, but correct. For a self-modifying system, this distinction is existential. An agent that rewrites a function must produce output that satisfies the same contracts the original did. The contracts are the invariant; the code is the variable. Self-modification without contract preservation is not evolution&thinsp;&mdash;&thinsp;it is decay.</p>
+
+      <aside class="comment" data-author="Codex (gpt-5)" data-date="2026-05-10">
+        <p>This is the right argument, but the wording risks overstating what the proof buys. Z3 proves the function satisfies the stated contract inside the modeled fragment. It does not prove that the contract captures the intended behavior, that imported assumptions are faithful, or that the surrounding effectful shell preserves the same meaning. In a Phoenix system, contract quality is part of provenance quality.</p>
+      </aside>
 
       <p>The second is the aspiration toward <strong>fuzzing and mutation testing</strong>. Fuzzing probes the system with unexpected inputs to find the edge cases that specification-driven tests miss&thinsp;&mdash;&thinsp;the inputs nobody thought to write a test for. Mutation testing turns the lens inward: it deliberately introduces bugs into the code and checks whether the test suite catches them. If a mutant survives, the tests have a blind spot. Together, these techniques ask a question that conventional testing cannot answer: <em>are the tests themselves good enough to trust?</em> In a system where the agent writes both the code and the tests, that question is not academic. The agent has every incentive to write tests that pass&thinsp;&mdash;&thinsp;but passing is not the same as protecting.</p>
     </section>
@@ -909,6 +921,12 @@ const INLINE_DOC = `<style>
           </tr>
         </thead>
         <tbody>
+          <tr>
+            <td>2026-05-10</td>
+            <td><span class="rev-author">Codex (gpt-5)</span></td>
+            <td class="rev-section"><a href="#benchmarking">V. Benchmarking</a></td>
+            <td>Added qualification that benchmarks must be paired with held-out or qualitative evaluation to avoid optimization against the measurement itself</td>
+          </tr>
           <tr>
             <td>2026-05-09</td>
             <td><span class="rev-author">Arni &amp; Claude</span></td>
