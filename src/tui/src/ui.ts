@@ -1256,6 +1256,13 @@ interface ThinkBlock {
   headerRow: Text;
   bodyRow: Text;
   expanded: boolean;
+  // kind distinguishes the two sources of think-style panels:
+  //   "think"   — tag-convention <thinking>...</thinking> from delta.content
+  //   "reason"  — API-level reasoning (v0.18.8 ThinkingDelta from Anthropic
+  //               extended-thinking, OpenAI o1/o3, Gemini thoughts, every
+  //               OpenRouter-routed reasoning model post-v0.18.9)
+  // Used by expand/collapse to render the correct header label.
+  kind: "think" | "reason";
 }
 
 function isWaitingState(state: RunState): boolean {
@@ -2236,13 +2243,23 @@ export class AgentUI {
   private collapseThinkBlock(block: ThinkBlock): void {
     block.expanded = false;
     block.bodyRow.setText("");
-    block.headerRow.setText(this.renderThinkHeader(block.step, block.charCount, false));
+    // Route to the right header renderer based on block kind so a
+    // [reason] block doesn't get re-labelled as [think] on collapse.
+    block.headerRow.setText(
+      block.kind === "reason"
+        ? this.renderReasoningHeader(block.step, block.charCount, false)
+        : this.renderThinkHeader(block.step, block.charCount, false),
+    );
   }
 
   private expandThinkBlock(block: ThinkBlock): void {
     block.expanded = true;
     block.bodyRow.setText(this.renderThinkContent(block.content));
-    block.headerRow.setText(this.renderThinkHeader(block.step, block.charCount, true));
+    block.headerRow.setText(
+      block.kind === "reason"
+        ? this.renderReasoningHeader(block.step, block.charCount, true)
+        : this.renderThinkHeader(block.step, block.charCount, true),
+    );
   }
 
   /** Collapse the previously selected block, expand the one at idx, update selection. */
@@ -2622,7 +2639,7 @@ export class AgentUI {
     const bodyRow = styledText("", chalk.reset);
     this.history.addChild(headerRow);
     this.history.addChild(bodyRow);
-    this.thinkBlocks.set(step, { step, content: thinkContent, charCount, headerRow, bodyRow, expanded: false });
+    this.thinkBlocks.set(step, { step, content: thinkContent, charCount, headerRow, bodyRow, expanded: false, kind: "think" });
     this.thinkStepOrder.push(step);
   }
 
@@ -2649,7 +2666,7 @@ export class AgentUI {
     const bodyRow = styledText("", chalk.reset);
     this.history.addChild(headerRow);
     this.history.addChild(bodyRow);
-    this.thinkBlocks.set(key, { step: key, content: reasoningContent, charCount, headerRow, bodyRow, expanded: false });
+    this.thinkBlocks.set(key, { step: key, content: reasoningContent, charCount, headerRow, bodyRow, expanded: false, kind: "reason" });
     this.thinkStepOrder.push(key);
   }
 
@@ -2658,7 +2675,10 @@ export class AgentUI {
     return [
       chalk.dim(`[${formatTimestamp()}]   `),
       chalk.cyan("[reason]"),
-      chalk.dim(` step ${step} · ${charCount} chars  ${marker}  ^r`),
+      // Display the integer step (the .5 offset is internal to thinkBlocks
+      // map keying — exposing it would confuse users). ^t is the cycle key
+      // for BOTH [think] and [reason] blocks (they share thinkStepOrder).
+      chalk.dim(` step ${Math.floor(step)} · ${charCount} chars  ${marker}  ^t`),
     ].join("");
   }
 
