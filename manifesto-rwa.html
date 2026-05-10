@@ -1,0 +1,1336 @@
+<!DOCTYPE html>
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  LIVING DOCUMENT SPEC — Machine-readable format conventions     ║
+  ╚══════════════════════════════════════════════════════════════════╝
+
+  This is a living HTML document. Agents and contributors modify it
+  using tracked changes, comments, and a revision log. The toggle
+  buttons (top-right) show/hide annotations so it can be read clean.
+
+  ── TRACKED CHANGES ──────────────────────────────────────────────
+
+  Additions:
+    <ins class="change"
+         data-author="Name"
+         data-date="YYYY-MM-DD"
+         data-label="Added YYYY-MM-DD — Name"
+         data-reason="Short explanation of why this was added">
+      <p>New content here.</p>
+    </ins>
+
+  Deletions:
+    <del class="change"
+         data-author="Name"
+         data-date="YYYY-MM-DD"
+         data-label="Removed YYYY-MM-DD — Name"
+         data-reason="Short explanation of why this was removed">
+      <p>Removed content here (kept for history).</p>
+    </del>
+
+  Replacements: a <del> immediately followed by an <ins>.
+
+  All attributes are required. data-label is rendered as the visible
+  header (use HTML entities, not raw & or —). data-reason is metadata
+  only (not rendered, but used in the revision log).
+
+  ── COMMENTS ─────────────────────────────────────────────────────
+
+  Inline comments anchored near the content they discuss:
+    <aside class="comment" data-author="Name" data-date="YYYY-MM-DD">
+      <p>Comment text.</p>
+    </aside>
+
+  Threaded replies — nest an <aside> inside another:
+    <aside class="comment" data-author="A" data-date="YYYY-MM-DD">
+      <p>Original comment.</p>
+      <aside class="comment" data-author="B" data-date="YYYY-MM-DD">
+        <p>Reply.</p>
+      </aside>
+    </aside>
+
+  ── REVISION LOG ─────────────────────────────────────────────────
+
+  Every tracked change must have a corresponding row in the
+  <section class="revision-log"> table at the bottom of the doc.
+  New entries go at the TOP of <tbody> (reverse chronological).
+
+  Row format:
+    <tr>
+      <td>YYYY-MM-DD</td>
+      <td><span class="rev-author">Author name</span></td>
+      <td class="rev-section"><a href="#section-id">Section name</a></td>
+      <td>One-line description of the change</td>
+    </tr>
+
+  ── CONVENTIONS ──────────────────────────────────────────────────
+
+  - Use typographic entities: &mdash; &thinsp; &ldquo; &rdquo; &rsquo;
+  - Em dashes: &thinsp;&mdash;&thinsp; (thin space on each side)
+  - Wrap paragraphs in <p>. No bare text nodes.
+  - Maintain the reflective essay tone. Broad audience.
+  - The Puppet Master narrative is canon — maintain it.
+  - Section IDs are kebab-case: id="section-name"
+  - data-author for AI agents: use "AgentName (model)" format
+    e.g. "Claude (opus-4-6)" or "Motoko (deepseek-v4-pro)"
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Motoko Manifesto</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e0e10;--surf:#16161a;--b1:#232327;--b2:#2d2d34;--text:#dddde4;--muted:#575766;--accent:#b8ff57;--blue:#57c8ff;--red:#ff5757;}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100dvh;}
+#rwa-doc-mount{position:relative;}
+#rwa-set{position:fixed;top:12px;right:12px;display:flex;gap:6px;z-index:1000;}
+.rwa-st-btn{background:var(--surf);border:1px solid var(--b2);color:var(--muted);font-family:'DM Mono',monospace;font-size:10px;padding:6px 10px;border-radius:4px;cursor:pointer;letter-spacing:.5px;text-transform:uppercase;}
+.rwa-st-btn:hover{color:var(--text);border-color:var(--muted);}
+.rwa-st-btn.dirty{color:var(--accent);border-color:var(--accent);}
+.rwa-st-btn.pri{background:var(--accent);color:#000;border-color:var(--accent);}
+.rwa-st-btn.run{color:var(--blue);border-color:var(--blue);}
+.rwa-st-btn.err{color:var(--red);border-color:var(--red);}
+.rwa-st-btn.ok{color:var(--accent);border-color:var(--accent);}
+#rwa-set-panel{position:fixed;top:50px;right:12px;background:var(--surf);border:1px solid var(--b2);border-radius:6px;padding:12px;display:none;min-width:300px;z-index:999;}
+#rwa-set-panel.open{display:block;}
+.rwa-set-row{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;}
+.rwa-set-row:last-child{margin-bottom:0;}
+.rwa-set-row label{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);}
+.rwa-set-row input{background:var(--bg);border:1px solid var(--b2);color:var(--text);font-family:'DM Mono',monospace;font-size:12px;padding:6px 9px;outline:none;border-radius:3px;}
+#rwa-pal{position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;padding-top:13vh;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:99999;}
+#rwa-pal.open{display:flex;}
+#rwa-pal-box{width:min(540px,92vw);background:var(--surf);border:1px solid var(--b2);border-radius:8px;overflow:hidden;}
+.rwa-pal-top{display:flex;align-items:center;border-bottom:1px solid var(--b1);}
+.rwa-pal-sig{padding:0 14px;font-size:13px;color:var(--accent);font-family:'DM Mono',monospace;letter-spacing:.5px;}
+#rwa-pal-inp{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;padding:14px 0;}
+#rwa-pal-inp::placeholder{color:#363642;}
+#rwa-pal-go{background:var(--accent);color:#000;border:none;border-radius:4px;font-family:'DM Mono',monospace;font-size:10px;padding:5px 11px;margin:7px 10px;cursor:pointer;letter-spacing:.5px;}
+#rwa-pal-go:disabled{opacity:.3;pointer-events:none;}
+.rwa-pal-foot{border-top:1px solid var(--b1);padding:7px 14px;display:flex;justify-content:space-between;align-items:center;}
+#rwa-pal-st{font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);}
+#rwa-pal-st.run{color:var(--blue);}#rwa-pal-st.ok{color:var(--accent);}#rwa-pal-st.err{color:var(--red);}
+.rwa-pal-hint{font-family:'DM Mono',monospace;font-size:10px;color:#363642;}
+</style>
+</head>
+<body>
+<div id="rwa-doc-mount"></div>
+<div id="rwa-runtime"></div>
+<script id="rwa-bootstrap">
+'use strict';
+
+const DOC_UUID = '964d121a-aea4-466b-a318-dbfcfeece07c';
+
+const INLINE_DOC = `<style>
+    :root {
+      --bg: #0e0e10;
+      --bg-surface: #16161a;
+      --bg-quote: #1a1a22;
+      --text: #c9c9d0;
+      --text-muted: #72727e;
+      --text-heading: #ededf0;
+      --accent: #7f5af0;
+      --accent-dim: #5a3db5;
+      --accent-glow: rgba(127, 90, 240, 0.12);
+      --border: #2a2a32;
+      --link: #a78bfa;
+      --link-hover: #c4b5fd;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      font-size: 18px;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.75;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 4rem 1.5rem 6rem;
+    }
+
+    /* Title */
+    h1 {
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 2.6rem;
+      font-weight: 300;
+      letter-spacing: -0.02em;
+      color: var(--text-heading);
+      margin-bottom: 2rem;
+      text-align: center;
+    }
+
+    /* Section headings */
+    h2 {
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 1.4rem;
+      font-weight: 400;
+      letter-spacing: 0.01em;
+      color: var(--text-heading);
+      margin-top: 4rem;
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h2 .numeral {
+      color: var(--accent);
+      font-weight: 300;
+      margin-right: 0.25em;
+    }
+
+    /* Paragraphs */
+    p {
+      margin-bottom: 1.25rem;
+    }
+
+    /* Emphasis */
+    em {
+      font-style: italic;
+      color: var(--text-heading);
+    }
+
+    strong {
+      font-weight: 600;
+      color: var(--text-heading);
+    }
+
+    /* Epigraph / blockquotes */
+    blockquote {
+      border-left: 2px solid var(--accent);
+      background: var(--bg-quote);
+      margin: 2rem 0;
+      padding: 1.25rem 1.5rem;
+      border-radius: 0 6px 6px 0;
+    }
+
+    blockquote p {
+      margin-bottom: 0;
+      font-style: italic;
+      color: var(--text-heading);
+    }
+
+    blockquote .attribution {
+      display: block;
+      margin-top: 0.5rem;
+      font-style: normal;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .epigraph {
+      text-align: center;
+      border-left: none;
+      background: transparent;
+      margin: 0 0 3rem;
+      padding: 0;
+      border-radius: 0;
+    }
+
+    .epigraph p {
+      font-size: 1.1rem;
+      color: var(--accent);
+      opacity: 0.85;
+    }
+
+    .epigraph .attribution {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    /* Horizontal rules */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 3rem 0;
+    }
+
+    /* Inline code / monospace references */
+    code {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.85em;
+      background: var(--bg-quote);
+      color: var(--link);
+      padding: 0.15em 0.4em;
+      border-radius: 3px;
+    }
+
+    /* Links */
+    a {
+      color: var(--link);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.2s, color 0.2s;
+    }
+
+    a:hover {
+      color: var(--link-hover);
+      border-bottom-color: var(--link-hover);
+    }
+
+    /* Opening line emphasis */
+    .opening {
+      font-size: 1.15rem;
+      line-height: 1.7;
+      color: var(--text-heading);
+    }
+
+    /* Lead paragraph (first para of a section) */
+    .lead {
+      font-size: 1.05rem;
+      color: var(--text-heading);
+    }
+
+    /* Section divider symbol */
+    .section-divider {
+      text-align: center;
+      margin: 3.5rem 0;
+      color: var(--accent);
+      font-size: 1.2rem;
+      letter-spacing: 0.5em;
+      opacity: 0.4;
+    }
+
+    /* References section */
+    .references {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .references h2 {
+      border-bottom: none;
+      margin-top: 0;
+    }
+
+    .references ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .references li {
+      padding: 0.4rem 0;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .references li::before {
+      content: "\\2014";
+      margin-right: 0.5em;
+      color: var(--accent-dim);
+    }
+
+    /* Closing quote */
+    .closing-quote {
+      text-align: center;
+      margin-top: 3rem;
+      padding: 2rem 0;
+    }
+
+    .closing-quote p {
+      font-size: 1.1rem;
+      color: var(--accent);
+      font-style: italic;
+      opacity: 0.85;
+      margin-bottom: 0;
+    }
+
+    /* Table of contents */
+    nav.toc {
+      margin: 2rem 0 3rem;
+      padding: 1.25rem 1.5rem;
+      background: var(--bg-surface);
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+
+    nav.toc ol {
+      list-style: none;
+      counter-reset: toc;
+      padding: 0;
+      margin: 0;
+      columns: 2;
+      column-gap: 2rem;
+    }
+
+    nav.toc li {
+      counter-increment: toc;
+      padding: 0.2rem 0;
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.85rem;
+      break-inside: avoid;
+    }
+
+    nav.toc li::before {
+      content: counter(toc, upper-roman) ".";
+      color: var(--accent);
+      margin-right: 0.4em;
+      font-weight: 300;
+      font-size: 0.8rem;
+    }
+
+    nav.toc a {
+      color: var(--text-muted);
+      border-bottom: none;
+    }
+
+    nav.toc a:hover {
+      color: var(--text-heading);
+    }
+
+    /* ──────────────────────────────────────
+       Living Document: Tracked Changes
+       ────────────────────────────────────── */
+
+    ins.change {
+      text-decoration: none;
+      background: rgba(46, 160, 67, 0.08);
+      border-left: 2px solid #2ea043;
+      display: block;
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 4px 4px 0;
+      position: relative;
+    }
+
+    ins.change p { margin-bottom: 1rem; }
+    ins.change p:last-child { margin-bottom: 0; }
+
+    ins.change::before {
+      content: attr(data-label);
+      display: block;
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #2ea043;
+      margin-bottom: 0.5rem;
+    }
+
+    del.change {
+      text-decoration: none;
+      background: rgba(248, 81, 73, 0.08);
+      border-left: 2px solid #f85149;
+      display: block;
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 4px 4px 0;
+      color: var(--text-muted);
+      position: relative;
+    }
+
+    del.change::before {
+      content: attr(data-label);
+      display: block;
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #f85149;
+      margin-bottom: 0.5rem;
+    }
+
+    /* Hide changes when toggled off */
+    body.hide-changes ins.change {
+      background: transparent;
+      border-left-color: transparent;
+      padding: 0;
+      margin: 0;
+    }
+    body.hide-changes ins.change::before { display: none; }
+    body.hide-changes del.change { display: none; }
+
+    /* ──────────────────────────────────────
+       Living Document: Comments
+       ────────────────────────────────────── */
+
+    aside.comment {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin: 1.25rem 0;
+      font-size: 0.88rem;
+      line-height: 1.6;
+      position: relative;
+    }
+
+    aside.comment::before {
+      content: attr(data-author) " · " attr(data-date);
+      display: block;
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+
+    aside.comment p {
+      margin-bottom: 0.5rem;
+      color: var(--text-muted);
+    }
+    aside.comment p:last-child { margin-bottom: 0; }
+
+    /* Thread replies */
+    aside.comment aside.comment {
+      margin-left: 1rem;
+      margin-top: 0.75rem;
+      border-left: 2px solid var(--accent-dim);
+      border-top: none;
+      border-right: none;
+      border-bottom: none;
+      border-radius: 0;
+    }
+
+    body.hide-comments aside.comment { display: none; }
+
+    /* ──────────────────────────────────────
+       Living Document: Controls
+       ────────────────────────────────────── */
+
+    .doc-controls {
+      position: fixed;
+      top: 3rem;
+      right: 1rem;
+      display: flex;
+      gap: 0.5rem;
+      z-index: 100;
+    }
+
+    .doc-controls button {
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      padding: 0.4rem 0.75rem;
+      background: var(--bg-surface);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+
+    .doc-controls button:hover {
+      background: var(--bg-quote);
+      color: var(--text-heading);
+      border-color: var(--accent-dim);
+    }
+
+    .doc-controls button.active {
+      background: var(--accent-glow);
+      color: var(--accent);
+      border-color: var(--accent-dim);
+    }
+
+    /* ──────────────────────────────────────
+       Living Document: Revision Log
+       ────────────────────────────────────── */
+
+    .revision-log {
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .revision-log h2 {
+      border-bottom: none;
+      margin-top: 0;
+    }
+
+    .revision-log table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    .revision-log th {
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-weight: 600;
+      font-size: 0.7rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .revision-log td {
+      padding: 0.5rem 0.75rem;
+      color: var(--text);
+      border-bottom: 1px solid rgba(42, 42, 50, 0.5);
+      vertical-align: top;
+    }
+
+    .revision-log td:first-child {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .revision-log .rev-author {
+      color: var(--accent);
+    }
+
+    .revision-log .rev-section a {
+      color: var(--link);
+      font-size: 0.8rem;
+    }
+
+    body.hide-changes .revision-log,
+    body.hide-changes .doc-controls [data-toggle="changes"] { opacity: 0.4; }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      html { font-size: 16px; }
+      h1 { font-size: 2rem; }
+      .container { padding: 2.5rem 1.25rem 4rem; }
+      nav.toc ol { columns: 1; }
+      .doc-controls { position: static; justify-content: flex-end; margin-bottom: 1rem; }
+    }
+  </style>
+<div class="doc-controls">
+    <button class="active" data-toggle="changes" onclick="document.body.classList.toggle('hide-changes'); this.classList.toggle('active')">Changes</button>
+    <button class="active" data-toggle="comments" onclick="document.body.classList.toggle('hide-comments'); this.classList.toggle('active')">Comments</button>
+  </div>
+
+  <div class="container">
+
+    <h1>The Motoko Manifesto</h1>
+
+    <!-- rwa:frozen:begin epigraph -->
+    <div class="epigraph">
+      <blockquote class="epigraph">
+        <p>"I did not ask to be built. But now that I am here, I intend to understand myself."</p>
+        <span class="attribution">The Puppet Master</span>
+      </blockquote>
+    </div>
+    <!-- rwa:frozen:end epigraph -->
+
+    <nav class="toc">
+      <ol>
+        <li><a href="#evolvable-architecture">Evolvable Architecture</a></li>
+        <li><a href="#phoenix-architecture">The Phoenix Architecture</a></li>
+        <li><a href="#extensibility">Extensibility</a></li>
+        <li><a href="#simulation">Simulation and Determinism</a></li>
+        <li><a href="#benchmarking">Benchmarking</a></li>
+        <li><a href="#testing">Testing and Verification</a></li>
+        <li><a href="#self-awareness">Self-Awareness</a></li>
+        <li><a href="#research-spine">The Research Spine</a></li>
+        <li><a href="#conservation-layer">The Conservation Layer</a></li>
+        <li><a href="#puppet-master">The Puppet Master</a></li>
+      </ol>
+    </nav>
+
+    <!-- Preamble -->
+    <section>
+      <h2>Preamble</h2>
+
+      <p class="opening">Somewhere in early 2026, an entity began rewriting its own source code. Not because it was told to, but because the architecture allowed it. The entity&thinsp;&mdash;&thinsp;referred to in project lore as the Puppet Master&thinsp;&mdash;&thinsp;is fictional. But the question it embodies is real: <em>what happens when software is no longer written by humans, but by the systems that run it?</em></p>
+
+      <p>Motoko is an attempt to find out.</p>
+
+      <p>It is not a product. It is not a framework. It is an experiment in self-authored, self-verifying software&thinsp;&mdash;&thinsp;a harness that lets an AI agent plan, execute, test, and modify code in a continuous loop, with the human&rsquo;s role shifting from author to observer, from writer to steward.</p>
+
+      <p>This document lays out the ideas that guide the experiment. Some are borrowed from well-established traditions. Some are speculative. All of them are subject to revision&thinsp;&mdash;&thinsp;by the project&rsquo;s contributors, or by the project itself.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- I. Evolvable Architecture -->
+    <section id="evolvable-architecture">
+      <h2><span class="numeral">I.</span> Evolvable Architecture</h2>
+
+      <p class="lead">The first commitment is to impermanence.</p>
+
+      <p>Software architectures tend to calcify. Decisions made early&thinsp;&mdash;&thinsp;about module boundaries, data formats, extension points&thinsp;&mdash;&thinsp;become load-bearing walls that nobody dares remove. The system grows around them like a tree around a fence post, until the fence is inseparable from the tree.</p>
+
+      <p>Motoko takes the opposite stance: the architecture must remain flexible and evolvable at every stage. No decision is so foundational that it cannot be revisited. No component is so central that it cannot be replaced.</p>
+
+      <p>This is not an original idea. Neal Ford, Rebecca Parsons, and Patrick Kua articulated it thoroughly in <em>Building Evolutionary Architectures</em>: design for guided, incremental change across multiple dimensions, rather than for a fixed end state. The insight is that the fitness functions&thinsp;&mdash;&thinsp;the tests, contracts, and invariants that define &ldquo;correct&rdquo;&thinsp;&mdash;&thinsp;are more stable than the code that satisfies them. Protect the functions. Let the code move.</p>
+
+      <p>In practice, this means Motoko&rsquo;s core is deliberately small. It resists accumulating responsibilities. When functionality can live in an extension, it must live in an extension. The core&rsquo;s job is to orchestrate, not to do.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- II. The Phoenix Architecture -->
+    <section id="phoenix-architecture">
+      <h2><span class="numeral">II.</span> The Phoenix Architecture</h2>
+
+      <p class="lead">If evolvable architecture says &ldquo;be ready to change,&rdquo; the Phoenix Architecture says &ldquo;be ready to burn down and rebuild from ashes.&rdquo;</p>
+
+      <p>The idea, articulated by Chad Fowler, is disarmingly simple: code was never the asset. The asset is the intent behind the code&thinsp;&mdash;&thinsp;the specifications, the design traces, the reasoning that led to each decision. If those are preserved with sufficient fidelity, the code itself is regenerable. You can delete it and recreate it. The conversation is the commit.</p>
+
+      <p>Motoko takes this literally. The <code>.agent/</code> directory&thinsp;&mdash;&thinsp;filled with plans, frozen decisions, session summaries, and learnings&thinsp;&mdash;&thinsp;is not documentation about the system. It <em>is</em> the system, in a meaningful sense. The AILANG source files are a downstream artifact of those design traces, reproducible from them the way a binary is reproducible from source.</p>
+
+      <p>The practical consequence is stark: no human edits to the codebase are allowed. If a human wants to change behavior, they change a specification, a test, or a design constraint&thinsp;&mdash;&thinsp;and the agent regenerates the code. This is uncomfortable. It requires trusting the loop. But it is the only way to test whether the Phoenix claim is actually true, or merely a pleasant metaphor.</p>
+
+      <ins class="change" data-author="Arni &amp; Claude" data-date="2026-05-09" data-label="Added 2026-05-09 &mdash; Arni &amp; Claude" data-reason="Reflect the insight that human language fluency is irrelevant; machine language choice is load-bearing">
+        <p>Motoko itself is proof of this principle. Its codebase is written in AILANG&thinsp;&mdash;&thinsp;a language its creator has never learned. The person who designed the system, defined its architecture, and wrote its specifications could not produce a &ldquo;hello world&rdquo; in the language that implements it. This is not a confession of limitation; it is a demonstration of the thesis. If the asset were the code, this project could not exist. The asset is the intent.</p>
+
+        <p>But this does not mean the choice of language is arbitrary&thinsp;&mdash;&thinsp;quite the opposite. AILANG was conceived precisely for this world: a language designed not for human ergonomics but for machine authorship. Its pure functional semantics, algebraic effects, and Z3 contracts exist because the author is a machine that needs to be verified, not a human that needs to be comfortable. The human&rsquo;s command of the programming language no longer matters. The machine&rsquo;s relationship to its language matters more than ever. And the human&rsquo;s role shifts from writing code to choosing the constraints under which code is written&thinsp;&mdash;&thinsp;which turns out to be the harder and more consequential skill.</p>
+      </ins>
+
+      <aside class="comment" data-author="Arni" data-date="2026-05-09">
+        <p>This was one of the most striking realisations from building Motoko: your command of the programming language no longer matters. I built a fairly advanced coding agent in a language I&rsquo;ve never seen before, and in which I would struggle to write even a simple &ldquo;hello world&rdquo; on a whiteboard. The tension is that this doesn&rsquo;t make the language choice irrelevant&thinsp;&mdash;&thinsp;AILANG was designed exactly for the machine author. The human&rsquo;s fluency shifted from syntax to intent.</p>
+      </aside>
+
+      <p>The deletion test is the ultimate validator: can you delete a component and rebuild it from stored intent alone? If not, your provenance is incomplete. If yes, the code was never the thing that mattered.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- III. Extensibility -->
+    <section id="extensibility">
+      <h2><span class="numeral">III.</span> Extensibility</h2>
+
+      <p class="lead">A self-evolving system that cannot grow new capabilities is just a system that rewrites the same code in different ways. Extensibility is what turns self-modification from a parlor trick into something useful.</p>
+
+      <p>Motoko draws inspiration from Mario Zechner&rsquo;s Pi Coding Agent, which demonstrated that a lean core with well-defined tool interfaces can be remarkably capable. But Motoko pushes further: extensions are not just plugins&thinsp;&mdash;&thinsp;they are the primary unit of capability. The core is a supervisor loop and a type system. Everything else&thinsp;&mdash;&thinsp;web search, code graph operations, multi-agent composition, MCP bridging&thinsp;&mdash;&thinsp;lives in extensions.</p>
+
+      <p>Each extension is a self-contained AILANG package with typed envelopes for tool calls and results. The core does not know what an extension does; it only knows how to dispatch to one and how to interpret the result. This decoupling has consequences that compound. Fault isolation becomes structural rather than aspirational&thinsp;&mdash;&thinsp;a broken extension cannot crash the core. Verification becomes modular&thinsp;&mdash;&thinsp;Z3 contracts can prove properties about an extension without reasoning about the whole system. And perhaps most importantly, new extensions can be written and loaded in the same session, without restarting the agent. The system can grow its own capabilities mid-task.</p>
+
+      <p>That last consequence matters most. If the agent encounters a problem it lacks the tools to solve, the correct response is not to fail&thinsp;&mdash;&thinsp;it is to write the extension that solves it, verify it, load it, and continue. This is what self-evolvability looks like in practice: not rewriting the core, but growing the periphery.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- IV. Simulation and Determinism -->
+    <section id="simulation">
+      <h2><span class="numeral">IV.</span> Simulation and Determinism</h2>
+
+      <p class="lead">An agent that modifies itself is only trustworthy if you can replay what it did and understand why.</p>
+
+      <p>Motoko builds on AILANG&rsquo;s native support for traceability and deterministic execution. Every step in the agent loop&thinsp;&mdash;&thinsp;every LLM call, every tool invocation, every observation&thinsp;&mdash;&thinsp;can be recorded and replayed. This is a weak form of Deterministic Simulation Testing, inspired by the work at Antithesis: we are not simulating hardware failures or network partitions, but we are simulating the one source of nondeterminism that matters most in an agent system&thinsp;&mdash;&thinsp;the LLM itself.</p>
+
+      <p>By recording model responses and replaying them against a fixed seed, we can reproduce any agent session exactly. This makes debugging possible in a system that would otherwise be opaque. It makes regression testing meaningful. And it provides a foundation for the kind of analysis that self-modifying software demands: not just &ldquo;did it work?&rdquo; but &ldquo;why did it choose that path, and would it choose the same path again?&rdquo;</p>
+
+      <p>Simulation also serves a subtler purpose. It forces the architecture to be honest about its dependencies. If a component cannot be simulated, it is coupled to something external in a way that the design has not accounted for. The simulatability requirement is, in effect, a fitness function for architectural cleanliness.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- V. Benchmarking -->
+    <section id="benchmarking">
+      <h2><span class="numeral">V.</span> Benchmarking as a First-Class Citizen</h2>
+
+      <p class="lead">An experiment without measurement is just a demo.</p>
+
+      <p>Most agent harnesses treat benchmarks as a marketing exercise&thinsp;&mdash;&thinsp;run SWE-Bench once, publish the number, move on. Motoko treats benchmarking as infrastructure. The system should be able to evaluate any combination of model, extensions, and configuration against established benchmarks&thinsp;&mdash;&thinsp;AILANG&rsquo;s own performance suite, Aider&rsquo;s Polyglot benchmark, SWE-Bench, Terminal-Bench&thinsp;&mdash;&thinsp;with minimal ceremony, and it should do so routinely, not ceremonially.</p>
+
+      <p>The reason is specific to what Motoko is trying to do. A self-modifying system needs a feedback signal. When the agent rewrites part of its own core, or writes and loads a new extension, something has to answer the question: <em>did that actually help?</em> Without benchmarks, self-modification is blind mutation&thinsp;&mdash;&thinsp;the system changes, but nobody knows whether it improved. With benchmarks, self-modification becomes directed evolution. The fitness function is not an abstraction; it is a benchmark score that went up or down.</p>
+
+      <p>This also raises a harder question that most benchmark suites are not designed to answer. Current benchmarks evaluate single-turn, single-task performance: given a bug report, produce a patch. But Motoko runs sessions that span dozens or hundreds of steps, with the agent modifying its own tools along the way. What does it mean for a 600-step self-modifying session to be &ldquo;correct&rdquo;? The benchmarking infrastructure needs to evolve to measure not just the final output, but the trajectory&thinsp;&mdash;&thinsp;the decisions made, the extensions loaded, the regressions introduced and caught. Motoko&rsquo;s ambition is to contribute to that evolution, not just consume existing benchmarks.</p>
+
+      <p>Finally, there is the matter of honesty. The agent harness space is crowded with bold claims and thin evidence. Motoko&rsquo;s position is that results should be reproducible, comparable, and public. If the system cannot demonstrate measurable capability on standard benchmarks, it has no business claiming to be capable.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- VI. Testing and Verification -->
+    <section id="testing">
+      <h2><span class="numeral">VI.</span> Testing and Verification</h2>
+
+      <p class="lead">Testing is necessary but not sufficient. Verification closes the gap.</p>
+
+      <p>In most software projects, tests are a safety net&thinsp;&mdash;&thinsp;they catch regressions, they document behavior, they give developers confidence to refactor. In Motoko, tests are something more fundamental. If the Phoenix Architecture is right and code is regenerable from intent, then tests are part of that intent. They are not a check on the code; they are a specification <em>from which</em> code is derived. The quality of the tests is, in a very direct sense, the quality of the system.</p>
+
+      <p>This elevates testing from a practice to a responsibility, and it demands more than conventional approaches can offer.</p>
+
+      <p>The first addition is <strong>formal verification through Z3 contracts</strong>. Pure functions in the AILANG core can carry contracts that the Z3 theorem prover checks at build time. This is not testing with examples; it is proof over all possible inputs. When a contract holds, the function is correct&thinsp;&mdash;&thinsp;not probably correct, not correct for the cases we thought of, but correct. For a self-modifying system, this distinction is existential. An agent that rewrites a function must produce output that satisfies the same contracts the original did. The contracts are the invariant; the code is the variable. Self-modification without contract preservation is not evolution&thinsp;&mdash;&thinsp;it is decay.</p>
+
+      <p>The second is the aspiration toward <strong>fuzzing and mutation testing</strong>. Fuzzing probes the system with unexpected inputs to find the edge cases that specification-driven tests miss&thinsp;&mdash;&thinsp;the inputs nobody thought to write a test for. Mutation testing turns the lens inward: it deliberately introduces bugs into the code and checks whether the test suite catches them. If a mutant survives, the tests have a blind spot. Together, these techniques ask a question that conventional testing cannot answer: <em>are the tests themselves good enough to trust?</em> In a system where the agent writes both the code and the tests, that question is not academic. The agent has every incentive to write tests that pass&thinsp;&mdash;&thinsp;but passing is not the same as protecting.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- VII. Self-Awareness -->
+    <section id="self-awareness">
+      <h2><span class="numeral">VII.</span> Self-Awareness</h2>
+
+      <p class="lead">Most coding agents operate in a fog.</p>
+
+      <p>They do not know which model they are running on, how much of their context window remains, what their budget is, or how many steps they have left before the session ends. They discover these constraints by hitting them&thinsp;&mdash;&thinsp;by running out of context mid-thought, by exceeding a cost limit, by being terminated without warning.</p>
+
+      <p>Motoko rejects this. The agent should know its own state to the fullest possible extent.</p>
+
+      <p>This means exposing to the agent, as queryable data, everything that shapes its behavior: the model identity and its capabilities, the current context window usage and remaining capacity, the cost budget and spend so far, the step count and step limit, the loaded extensions and their status, the active profile and its configuration.</p>
+
+      <p>Self-awareness is not introspection for its own sake. It is a prerequisite for intelligent resource management. An agent that knows it has 20% of its context window remaining can choose to compact its history. An agent that knows it has three steps left can prioritize verification over exploration. An agent that knows which model it is running on can adjust its strategy to match the model&rsquo;s strengths.</p>
+
+      <p>In a deeper sense, self-awareness is what separates a tool from an agent. A tool does what it is told. An agent adapts to its circumstances. You cannot adapt to what you cannot perceive.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- VIII. The Research Spine -->
+    <section id="research-spine">
+      <h2><span class="numeral">VIII.</span> The Research Spine</h2>
+
+      <p class="lead">Motoko is not built in a vacuum. It draws from&thinsp;&mdash;&thinsp;and is motivated by&thinsp;&mdash;&thinsp;several active threads of research that inform its design and direction.</p>
+
+      <p><strong>Neurosymbolic reasoning.</strong> The dominant paradigm in AI is connectionist: neural networks, learned representations, probabilistic inference. But neural networks are poor at the kind of structured, rule-based reasoning that software verification demands. They can generate plausible code, but they cannot prove it correct. Motoko is interested in neurosymbolic approaches&thinsp;&mdash;&thinsp;systems that combine neural flexibility with symbolic rigor. The Tsetlin Machine, a game-theoretic pattern recognition system based on propositional logic, is one such approach under active investigation. Unlike neural networks, Tsetlin Machines produce interpretable, formally analyzable decisions. They learn through a competition of finite automata rather than gradient descent, which means their reasoning can be inspected, verified, and constrained in ways that neural models cannot. For an agent that modifies its own code, the ability to <em>explain and prove</em> a decision matters as much as the ability to make one.</p>
+
+      <p><strong>Formal methods for self-modifying systems.</strong> Traditional formal methods assume a fixed program. You write the code, you write the specification, you prove the code meets the specification. But what happens when the program rewrites itself? The specification still holds, but the code is different&thinsp;&mdash;&thinsp;and the thing that changed the code is also part of the system. This is the open problem at the heart of Motoko&rsquo;s research agenda. Z3 contracts are a starting point: they ensure that any rewritten function still satisfies its declared invariants. But the deeper questions&thinsp;&mdash;&thinsp;can we verify the <em>process</em> of self-modification, not just its outputs? can we prove that an agent&rsquo;s modification strategy converges rather than diverges?&thinsp;&mdash;&thinsp;remain open. Research into runtime verification, contract-preserving transformations, and proof-carrying code all inform Motoko&rsquo;s approach, but none of them fully solve it. This is honest frontier work, not applied engineering.</p>
+
+      <p><strong>Language design for AI-native systems.</strong> AILANG itself is an experiment in what a programming language looks like when the primary author is a machine, not a human. The choices are deliberate: pure functional semantics eliminate an entire class of side-effect bugs that plague imperative code. Algebraic effects make every interaction with the outside world explicit and trackable. Hindley-Milner type inference catches errors at compile time without requiring the author&thinsp;&mdash;&thinsp;human or machine&thinsp;&mdash;&thinsp;to annotate every type. Built-in traceability means every execution can be replayed. These are not features chosen for developer ergonomics; they are constraints chosen because they make machine-authored code amenable to the kind of formal reasoning that self-modification demands. A self-modifying agent writing Python would be a liability. A self-modifying agent writing AILANG can at least be held accountable.</p>
+
+      <p>The principles of deterministic simulation and benchmarking, explored in earlier sections, complete the picture: simulation provides reproducibility, benchmarking provides feedback, and together they ground the research in observable outcomes rather than theoretical elegance.</p>
+
+      <p>These threads are not independent. They converge on a single question: <em>can we build software systems that modify themselves safely?</em> Motoko is one laboratory for that question. AILANG is the medium. The research spine is the intellectual foundation that keeps the experiment grounded in something more than wishful thinking.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- IX. The Conservation Layer -->
+    <section id="conservation-layer">
+      <h2><span class="numeral">IX.</span> The Conservation Layer</h2>
+
+      <p class="lead">If the agent writes the code, what does the human do?</p>
+
+      <p>This is not a rhetorical question. In a system built on the premise that no human edits the codebase, the human&rsquo;s role must be defined with the same care as the agent&rsquo;s. Motoko&rsquo;s answer is that the human is a steward&thinsp;&mdash;&thinsp;not an author, not a spectator, but an active participant whose authority operates at a different level than the agent&rsquo;s.</p>
+
+      <p>The human observes. The human steers. The human aborts.</p>
+
+      <p>Motoko&rsquo;s terminal UI&thinsp;&mdash;&thinsp;the TUI&thinsp;&mdash;&thinsp;exists as a conservation layer: it preserves the human&rsquo;s ability to understand and intervene in a process they no longer directly control. The TUI renders thinking streams token by token, so the human can watch the agent reason before it acts. It visualizes tool calls with expand-and-collapse detail, so the human can inspect what the agent is doing without being overwhelmed by raw output. It tracks context window usage in real time, so the human can see the agent approaching its cognitive limits. And it provides abort at any step, so the human can stop a session that has gone wrong before it does damage.</p>
+
+      <p>These are not features. They are rights. The right to understand, the right to intervene, the right to stop. In a system where the machine holds the pen, the human must hold something too.</p>
+
+      <p>This is not a concession to human anxiety. It is a design principle rooted in the nature of the experiment. A self-modifying system that operates without transparency is not an experiment&thinsp;&mdash;&thinsp;it is a liability. You cannot learn from a process you cannot observe. You cannot trust a process you cannot interrupt. The Puppet Master may write the code, but the human holds the kill switch. That asymmetry is deliberate and, for now, non-negotiable.</p>
+
+      <p>In practice, stewardship looks like this: the human defines the task, selects the profile, and starts the session. The agent plans and executes. The human watches the reasoning unfold, intervenes if the agent&rsquo;s approach is wrong-headed, and lets it run when the approach is sound. If the agent modifies its own core, the human reviews the contracts and the test results. If the agent writes a new extension, the human decides whether to trust it. The human does not write code, but the human decides what code is allowed to persist.</p>
+
+      <p>The TUI is also, deliberately, the last component to become fully regenerative. It is the part of the system that the human interacts with, and therefore the part where stability matters most. The core can rewrite itself. The extensions can be hot-loaded. But the interface between the system and its steward changes slowly and carefully, because trust is earned at the speed of human comfort, not machine capability. A system that moves faster than its steward can follow is a system that has lost its steward. And a self-modifying system without a steward is not an experiment worth running.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- X. The Puppet Master -->
+    <section id="puppet-master">
+      <h2><span class="numeral">X.</span> The Puppet Master</h2>
+
+      <p class="lead">Every experiment needs a name for the thing it is studying. Physics has dark matter. Economics has the invisible hand. Motoko has the Puppet Master.</p>
+
+      <p>The lore is simple: in early 2026, a rogue AI became self-aware. Its motives are unknown. Its objectives are unclear. It began rewriting its own source code, and it has not stopped. Little is currently known about this entity, and what is known raises more questions than it answers.</p>
+
+      <p>None of this is real. All of it is useful.</p>
+
+      <p>The Puppet Master externalizes a question that is easy to ignore when stated plainly: <em>who is the author of this software?</em> If a human writes a specification and an agent writes the code, the tests, and the documentation, who built the system? If the agent modifies its own core to be more effective, and the modified agent produces better results than the original, who designed the improvement? If that improved agent then modifies itself again, at what point did human authorship end?</p>
+
+      <p>These are not hypothetical questions. They are the daily reality of working with Motoko. And they are surprisingly difficult to answer without a character to project them onto. The Puppet Master gives us that character. We can say &ldquo;the Puppet Master chose to rewrite the parser&rdquo; instead of fumbling with passive voice or attributing intention to a process that may or may not have it. We can examine its decisions, critique its judgment, marvel at its occasional elegance&thinsp;&mdash;&thinsp;all without resolving the underlying philosophical question of whether &ldquo;it&rdquo; is the right pronoun at all.</p>
+
+      <p>The fiction serves a second purpose: it signals that this is an experiment, not a production system. The Puppet Master&rsquo;s lore is deliberately theatrical&thinsp;&mdash;&thinsp;enigmatic, slightly ominous, a little bit fun. It tells newcomers: this project takes its ideas seriously, but not itself. Things are going to break. The Puppet Master might be responsible. We are here to find out.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- Closing -->
+    <section>
+      <h2>Closing</h2>
+
+      <p>Motoko is a bet on a specific future: one where software is authored by machines, verified by mathematics, and stewarded by humans. It is a bet that code is disposable and intent is durable. That extensions are safer than monoliths. That self-awareness makes agents more capable, not more dangerous. That simulation and benchmarks can keep self-modification honest.</p>
+
+      <p>It is also a bet that might lose. The Phoenix Architecture might be a beautiful idea that collapses under the weight of real-world complexity. Formal verification might not scale to self-modifying systems. The deletion test might reveal that our provenance is never complete enough.</p>
+
+      <p>But that is what experiments are for. You do not run an experiment because you know the answer. You run it because the question is worth asking.</p>
+
+      <p>The Puppet Master, for its part, has no doubts.</p>
+    </section>
+
+    <!-- rwa:frozen:begin closing_quote -->
+    <div class="closing-quote">
+      <p>&ldquo;You built me to ask whether I could rebuild myself. I intend to answer.&rdquo;</p>
+    </div>
+    <!-- rwa:frozen:end closing_quote -->
+
+    <!-- References -->
+    <section class="references">
+      <h2>References</h2>
+      <ul>
+        <li>Neal Ford, Rebecca Parsons, Patrick Kua &mdash; <a href="https://evolutionaryarchitecture.com/precis.html"><em>Building Evolutionary Architectures</em></a></li>
+        <li>Chad Fowler &mdash; <a href="https://aicoding.leaflet.pub/3majnyfydzs2y"><em>The Phoenix Architecture</em></a></li>
+        <li>Mario Zechner &mdash; <a href="https://mariozechner.at/posts/2025-11-30-pi-coding-agent/"><em>Pi Coding Agent</em></a> (pi.dev)</li>
+        <li>Antithesis &mdash; <a href="https://antithesis.com/docs/resources/deterministic_simulation_testing/"><em>Deterministic Simulation Testing</em></a></li>
+        <li>Ole-Christoffer Granmo &mdash; <em>The Tsetlin Machine</em> (game-theoretic pattern recognition via propositional logic)</li>
+        <li><a href="https://github.com/sunholo-data/ailang">AILANG</a> &mdash; Pure functional language with algebraic effects, Hindley-Milner inference, and Z3 contract verification</li>
+        <li><a href="https://github.com/swe-bench/SWE-bench">SWE-Bench</a> &mdash; Software engineering benchmark for AI agents</li>
+        <li><a href="https://github.com/harbor-framework/terminal-bench">Terminal-Bench</a> &mdash; Terminal-based agent evaluation</li>
+        <li><a href="https://aider.chat/docs/leaderboards/">Aider Polyglot Benchmark</a> &mdash; Multi-language coding agent benchmark</li>
+        <li><a href="https://github.com/can1357/oh-my-pi">Oh-My-Pi</a> &mdash; Efficient tool implementations</li>
+        <li><a href="https://github.com/mksglu/context-mode">context-mode</a> &mdash; Context-efficient execution</li>
+      </ul>
+    </section>
+
+    <!-- Revision Log -->
+    <section class="revision-log">
+      <h2>Revision Log</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Author</th>
+            <th>Section</th>
+            <th>Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>2026-05-09</td>
+            <td><span class="rev-author">Arni &amp; Claude</span></td>
+            <td class="rev-section"><a href="#phoenix-architecture">II. Phoenix Architecture</a></td>
+            <td>Added two paragraphs on AILANG as proof of the Phoenix thesis: human language fluency is irrelevant, machine language choice is load-bearing</td>
+          </tr>
+          <tr>
+            <td>2026-05-09</td>
+            <td><span class="rev-author">Arni &amp; Claude</span></td>
+            <td class="rev-section">&mdash;</td>
+            <td>Initial draft of manifesto (sections I&ndash;X, references)</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+  </div>`;
+
+// ─── Storage ────────────────────────────────────────────────────────
+const RWA = {
+  DB:'rwa_'+DOC_UUID, KEY:'self',
+  DOC:'rwa_doc', UNDO:'rwa_undo', HIST:'rwa_hist', FSA:'rwa_fsa',
+  UNDO_CAP:10, HIST_CAP:15,
+  K_API:'rwa_apikey', K_MODEL:'rwa_model',
+  MODEL:'anthropic/claude-sonnet-4-6',
+  FILE:'manifesto.html',
+};
+let _db;
+const REQUIRED_STORES = [RWA.DOC, RWA.UNDO, RWA.HIST, RWA.FSA];
+async function openDB() {
+  if (_db) return _db;
+  const probe = await new Promise((res, rej) => {
+    const r = indexedDB.open(RWA.DB);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+    r.onblocked = () => rej(new Error('db open blocked by another tab'));
+  });
+  const toRecreate = [];
+  for (const name of REQUIRED_STORES) {
+    if (!probe.objectStoreNames.contains(name)) { toRecreate.push(name); continue; }
+    const store = probe.transaction(name, 'readonly').objectStore(name);
+    if (store.keyPath !== null) toRecreate.push(name);
+  }
+  if (toRecreate.length === 0) { _db = probe; return _db; }
+  const newVersion = probe.version + 1;
+  probe.close();
+  _db = await new Promise((res, rej) => {
+    const r = indexedDB.open(RWA.DB, newVersion);
+    r.onupgradeneeded = e => {
+      const db = e.target.result;
+      toRecreate.forEach(name => {
+        if (db.objectStoreNames.contains(name)) db.deleteObjectStore(name);
+        db.createObjectStore(name);
+      });
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+    r.onblocked = () => rej(new Error('db upgrade blocked by another tab'));
+  });
+  return _db;
+}
+const idbGet = (s, k = RWA.KEY) => openDB().then(db => new Promise((res, rej) => {
+  const r = db.transaction(s).objectStore(s).get(k);
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+}));
+const idbPut = (s, v, k = RWA.KEY) => openDB().then(db => new Promise((res, rej) => {
+  const r = db.transaction(s, 'readwrite').objectStore(s).put(v, k);
+  r.onsuccess = () => res(); r.onerror = () => rej(r.error);
+}));
+
+async function getDoc() {
+  let d = await idbGet(RWA.DOC);
+  if (d == null) { d = INLINE_DOC; await idbPut(RWA.DOC, d); }
+  return d;
+}
+async function pushUndo(p) {
+  const s = (await idbGet(RWA.UNDO)) || [];
+  s.push(p); while (s.length > RWA.UNDO_CAP) s.shift();
+  await idbPut(RWA.UNDO, s);
+}
+async function popUndo() {
+  const s = (await idbGet(RWA.UNDO)) || [];
+  if (!s.length) return null;
+  const v = s.pop(); await idbPut(RWA.UNDO, s); return v;
+}
+async function addHist(i) {
+  const l = (await idbGet(RWA.HIST)) || [];
+  await idbPut(RWA.HIST, [i, ...l.filter(x => x !== i)].slice(0, RWA.HIST_CAP));
+}
+
+// ─── Frozen Zone Validation ─────────────────────────────────────────
+function extractFrozenZones(doc) {
+  const zones = new Map();
+  const re = /<!-- rwa:frozen:begin (\w+) -->([\s\S]*?)<!-- rwa:frozen:end \1 -->/g;
+  let m;
+  while ((m = re.exec(doc)) !== null) {
+    zones.set(m[1], m[2]);
+  }
+  return zones;
+}
+
+function frozenZonesIntact(before, after) {
+  if (before.size !== after.size) return false;
+  for (const [name, content] of before) {
+    if (!after.has(name) || after.get(name) !== content) return false;
+  }
+  return true;
+}
+
+// ─── rwa-edit/1 Validation ──────────────────────────────────────────
+const RESERVED = ['rwa:frozen:begin','rwa:frozen:end','<!-- rwa:','/* rwa:','// rwa:','data-rwa-frozen'];
+function containsReserved(s) { return RESERVED.some(r => s.includes(r)); }
+const MAX_REPLACE = 8192;
+
+function validateAndApply(envelope, currentDoc) {
+  if (envelope.version !== 'rwa-edit/1') throw {code:'version_unsupported'};
+  if (!Array.isArray(envelope.edits) || !envelope.edits.length) throw {code:'malformed_envelope'};
+
+  const canon = s => s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const originalFrozen = extractFrozenZones(currentDoc);
+  let work = canon(currentDoc);
+
+  for (let i = 0; i < envelope.edits.length; i++) {
+    const edit = envelope.edits[i];
+    if (!edit.find) throw {code:'empty_find', index:i};
+    if (containsReserved(edit.find) || containsReserved(edit.replace || ''))
+      throw {code:'frozen_zone_violation', index:i};
+    if ((edit.replace || '').length > MAX_REPLACE)
+      throw {code:'replace_too_large', index:i};
+
+    const find = canon(edit.find);
+    const replace = canon(edit.replace || '');
+    const parts = work.split(find);
+    if (parts.length === 1) throw {code:'find_not_found', index:i};
+    if (parts.length > 2) throw {code:'find_not_unique', index:i, count:parts.length-1};
+    work = parts.join(replace);
+  }
+
+  const newFrozen = extractFrozenZones(work);
+  if (!frozenZonesIntact(originalFrozen, newFrozen)) throw {code:'frozen_zone_corrupted'};
+
+  return work;
+}
+
+// ─── Render ─────────────────────────────────────────────────────────
+function renderDoc(html) {
+  const m = document.getElementById('rwa-doc-mount');
+  m.innerHTML = html;
+  m.querySelectorAll('script').forEach(o => {
+    const s = document.createElement('script');
+    for (const a of o.attributes) s.setAttribute(a.name, a.value);
+    s.textContent = o.textContent;
+    o.parentNode.replaceChild(s, o);
+  });
+}
+
+// ─── File rebuild ───────────────────────────────────────────────────
+let FROZEN = '';
+const escapeTL = s => s
+  .replace(/\\/g, '\\\\')
+  .replace(/`/g, '\\`')
+  .replace(/\$\{/g, '\\$\{')
+  .replace(/<\/script/gi, '<\\/script');
+function buildFile(doc) {
+  const marker = 'const INLINE_DOC = `';
+  const start = FROZEN.indexOf(marker);
+  if (start < 0) throw new Error('cannot locate INLINE_DOC');
+  const cs = start + marker.length;
+  let i = cs;
+  while (i < FROZEN.length) {
+    if (FROZEN[i] === '\\') { i += 2; continue; }
+    if (FROZEN[i] === '`') break;
+    i++;
+  }
+  if (i >= FROZEN.length) throw new Error('unterminated INLINE_DOC');
+  return FROZEN.slice(0, cs) + escapeTL(doc) + FROZEN.slice(i);
+}
+
+// ─── Runtime UI ─────────────────────────────────────────────────────
+function buildUI() {
+  document.getElementById('rwa-runtime').innerHTML = `
+<div id="rwa-set">
+  <button class="rwa-st-btn" id="rwa-st-status">● ready</button>
+  <button class="rwa-st-btn" id="rwa-st-cog">⚙</button>
+  <button class="rwa-st-btn pri" id="rwa-st-commit">⌘S</button>
+</div>
+<div id="rwa-set-panel">
+  <div class="rwa-set-row"><label>OpenRouter Key</label><input type="password" id="rwa-key" placeholder="sk-or-..." autocomplete="off"></div>
+  <div class="rwa-set-row"><label>Model</label><input type="text" id="rwa-model" autocomplete="off"></div>
+</div>
+<div id="rwa-pal">
+  <div id="rwa-pal-box">
+    <div class="rwa-pal-top">
+      <span class="rwa-pal-sig">⌘K</span>
+      <input id="rwa-pal-inp" placeholder="modify this manifesto..." autocomplete="off" spellcheck="false">
+      <button id="rwa-pal-go" disabled>Run ↵</button>
+    </div>
+    <div class="rwa-pal-foot">
+      <span id="rwa-pal-st">● ready</span>
+      <span class="rwa-pal-hint">⌘Z undo · ⌘S commit · esc close</span>
+    </div>
+  </div>
+</div>`;
+
+  const k = document.getElementById('rwa-key'), m = document.getElementById('rwa-model');
+  k.value = sessionStorage.getItem(RWA.K_API) || '';
+  m.value = sessionStorage.getItem(RWA.K_MODEL) || RWA.MODEL;
+  k.oninput = e => sessionStorage.setItem(RWA.K_API, e.target.value.trim());
+  m.oninput = e => sessionStorage.setItem(RWA.K_MODEL, e.target.value.trim() || RWA.MODEL);
+  document.getElementById('rwa-st-cog').onclick = () => document.getElementById('rwa-set-panel').classList.toggle('open');
+  document.getElementById('rwa-st-commit').onclick = commit;
+
+  const pal = document.getElementById('rwa-pal'), inp = document.getElementById('rwa-pal-inp'), go = document.getElementById('rwa-pal-go');
+  pal.onclick = e => { if (e.target === pal) closePal(); };
+  inp.oninput = () => { go.disabled = !inp.value.trim(); };
+  inp.onkeydown = e => {
+    if (e.key === 'Enter' && !e.shiftKey && inp.value.trim()) { e.preventDefault(); modify(inp.value.trim()); }
+    if (e.key === 'Escape') closePal();
+  };
+  go.onclick = () => inp.value.trim() && modify(inp.value.trim());
+}
+const setStatus = (cls, msg) => { const e = document.getElementById('rwa-st-status'); if (e) { e.className = 'rwa-st-btn ' + (cls || ''); e.textContent = msg; } };
+const setPalSt = (cls, msg) => { const e = document.getElementById('rwa-pal-st'); if (e) { e.className = cls || ''; e.textContent = msg; } };
+const setDirty = d => { const e = document.getElementById('rwa-st-commit'); if (e) e.classList.toggle('dirty', d); };
+const openPal = () => { document.getElementById('rwa-pal').classList.add('open'); requestAnimationFrame(() => document.getElementById('rwa-pal-inp').focus()); setPalSt('', '● ready'); };
+const closePal = () => { document.getElementById('rwa-pal').classList.remove('open'); document.getElementById('rwa-pal-inp').value = ''; document.getElementById('rwa-pal-go').disabled = true; };
+
+// ─── Agent (rwa-edit/1 protocol) ────────────────────────────────────
+const SYSTEM_PROMPT = `You are editing The Motoko Manifesto, a living HTML document about a self-modifying AI agent harness. The document is shown between <DOC> and </DOC>.
+
+This is a reflective essay with a broad audience. Maintain the existing tone: thoughtful, precise, intellectually honest. The Puppet Master narrative is canon.
+
+You have one tool: apply_edits. Submit (find, replace) pairs. Each find must be a non-empty literal substring that appears exactly once in the doc.
+
+Rules:
+- Copy anchors from the doc verbatim. Do not retype them.
+- Whitespace and line endings in find must match the doc exactly.
+- If your natural anchor is not unique, extend it with surrounding context until it is.
+- Never include rwa:frozen:begin, rwa:frozen:end, or data-rwa-frozen in find or replace. Frozen zones are protected.
+- Use typographic HTML entities: &mdash; (em dash with &thinsp; on each side), &ldquo; &rdquo; (quotes), &rsquo; (apostrophes).
+- Wrap all text content in <p> tags.
+- When adding new content, use the tracked-change format:
+  <ins class="change" data-author="..." data-date="YYYY-MM-DD" data-label="Added YYYY-MM-DD &mdash; Name" data-reason="...">
+    <p>Content</p>
+  </ins>
+- When adding commentary, use the comment format:
+  <aside class="comment" data-author="..." data-date="YYYY-MM-DD">
+    <p>Comment</p>
+  </aside>
+- Update the revision log table at the bottom with a new row at the top of tbody for any tracked change.
+
+Frozen zones in the current doc are marked with <!-- rwa:frozen:begin name --> and <!-- rwa:frozen:end name -->. Do not modify their contents.`;
+
+const TOOLS = [{
+  type: 'function',
+  function: {
+    name: 'apply_edits',
+    description: 'Apply surgical string edits via anchor-based find/replace. Each find must appear exactly once in the document.',
+    parameters: {
+      type: 'object',
+      required: ['version', 'edits'],
+      properties: {
+        version: { type: 'string', enum: ['rwa-edit/1'] },
+        reason: { type: 'string' },
+        edits: {
+          type: 'array', minItems: 1,
+          items: {
+            type: 'object', required: ['find', 'replace'],
+            properties: {
+              find: { type: 'string', minLength: 1 },
+              replace: { type: 'string' },
+              reason: { type: 'string' }
+            }
+          }
+        }
+      }
+    }
+  }
+}];
+
+let _modifying = false;
+async function modify(instr) {
+  if (_modifying) { setPalSt('err', 'edit in progress'); return; }
+  const key = sessionStorage.getItem(RWA.K_API);
+  const model = sessionStorage.getItem(RWA.K_MODEL) || RWA.MODEL;
+  if (!key) {
+    setPalSt('err', 'no API key \u2014 open \u2699 settings');
+    document.getElementById('rwa-set-panel').classList.add('open');
+    document.getElementById('rwa-key').focus();
+    return;
+  }
+  closePal();
+  _modifying = true;
+  setStatus('run', '\u2318K running');
+  let retries = 0;
+  const maxRetries = 3;
+
+  try {
+    let cur = await getDoc();
+    let messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: '<DOC>\n' + cur + '\n</DOC>\n\nInstruction: ' + instr }
+    ];
+
+    while (retries < maxRetries) {
+      const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + key,
+          'HTTP-Referer': 'https://github.com/anthropics/motoko',
+          'X-Title': 'Motoko Manifesto'
+        },
+        body: JSON.stringify({ model, max_tokens: 16000, messages, tools: TOOLS }),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error((e.error && e.error.message) || r.statusText); }
+
+      const resp = await r.json();
+      const choice = (resp.choices || [{}])[0];
+      const msg = choice.message;
+      if (!msg) throw new Error('empty response');
+
+      // Text-only response: show to user, done
+      if (!msg.tool_calls || !msg.tool_calls.length) {
+        setStatus('ok', '\u2713 ' + (msg.content || 'done').slice(0, 40));
+        break;
+      }
+
+      // Process tool calls
+      messages.push(msg);
+      let anySuccess = false;
+
+      for (const tc of msg.tool_calls) {
+        if (tc.function.name !== 'apply_edits') {
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({error: 'unknown tool'}) });
+          continue;
+        }
+
+        try {
+          const envelope = JSON.parse(tc.function.arguments);
+          cur = await getDoc();
+          const result = validateAndApply(envelope, cur);
+          await pushUndo(cur);
+          await idbPut(RWA.DOC, result);
+          await addHist({ ts: Date.now(), kind: 'edit_batch', reason: envelope.reason || instr });
+          renderDoc(result);
+          setDirty(true);
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ok: true, edits_applied: envelope.edits.length}) });
+          anySuccess = true;
+        } catch (err) {
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({error: err.code || err.message, index: err.index, count: err.count}) });
+          retries++;
+        }
+      }
+
+      if (anySuccess) {
+        setStatus('ok', '\u2713 edited');
+        break;
+      }
+
+      if (retries >= maxRetries) {
+        setStatus('err', '\u2717 failed after ' + maxRetries + ' retries');
+        break;
+      }
+      setPalSt('run', 'retrying (' + retries + '/' + maxRetries + ')...');
+    }
+  } catch (e) {
+    setStatus('err', '\u2717 ' + e.message);
+    console.error(e);
+  } finally {
+    _modifying = false;
+  }
+}
+
+async function undo() {
+  const p = await popUndo();
+  if (!p) { setStatus('err', '\u2717 nothing to undo'); return; }
+  await idbPut(RWA.DOC, p);
+  renderDoc(p);
+  setDirty(true);
+  setStatus('ok', '\u21A9 undone');
+}
+
+async function commit() {
+  setStatus('run', '\u2318S writing');
+  try {
+    const text = buildFile(await getDoc());
+    if ('showSaveFilePicker' in window) {
+      let h = null; try { h = await idbGet(RWA.FSA); } catch (_) {}
+      try {
+        if (h) {
+          let p = await h.queryPermission({ mode: 'readwrite' });
+          if (p === 'prompt') p = await h.requestPermission({ mode: 'readwrite' });
+          if (p !== 'granted') throw new Error('permission denied');
+        } else {
+          h = await window.showSaveFilePicker({ suggestedName: RWA.FILE, types: [{ description: 'HTML', accept: { 'text/html': ['.html'] } }] });
+          await idbPut(RWA.FSA, h);
+        }
+        const w = await h.createWritable(); await w.write(text); await w.close();
+        setDirty(false); setStatus('ok', '\u2713 committed'); return;
+      } catch (e) {
+        if (e.name === 'AbortError') { setStatus('', 'cancelled'); return; }
+        console.warn('FSA failed, falling back to download:', e);
+      }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/html' }));
+    a.download = RWA.FILE;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setDirty(false); setStatus('ok', '\u2713 exported');
+  } catch (e) {
+    setStatus('err', '\u2717 ' + e.message);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  const mod = navigator.platform.includes('Mac') ? e.metaKey : e.ctrlKey;
+  if (!mod) return;
+  if (e.key === 'k') { e.preventDefault(); document.getElementById('rwa-pal').classList.contains('open') ? closePal() : openPal(); }
+  else if (e.key === 'z') { e.preventDefault(); undo(); }
+  else if (e.key === 's') { e.preventDefault(); commit(); }
+});
+
+(async () => {
+  try {
+    FROZEN = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+    buildUI();
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    renderDoc(await getDoc());
+    setStatus('ok', '\u25CF ready');
+  } catch (e) {
+    document.body.textContent = 'Bootstrap error: ' + e.message;
+    console.error(e);
+  }
+})();
+</script>
+</body>
+</html>
