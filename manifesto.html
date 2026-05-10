@@ -1,4 +1,79 @@
 <!DOCTYPE html>
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  LIVING DOCUMENT SPEC — Machine-readable format conventions     ║
+  ╚══════════════════════════════════════════════════════════════════╝
+
+  This is a living HTML document. Agents and contributors modify it
+  using tracked changes, comments, and a revision log. The toggle
+  buttons (top-right) show/hide annotations so it can be read clean.
+
+  ── TRACKED CHANGES ──────────────────────────────────────────────
+
+  Additions:
+    <ins class="change"
+         data-author="Name"
+         data-date="YYYY-MM-DD"
+         data-label="Added YYYY-MM-DD — Name"
+         data-reason="Short explanation of why this was added">
+      <p>New content here.</p>
+    </ins>
+
+  Deletions:
+    <del class="change"
+         data-author="Name"
+         data-date="YYYY-MM-DD"
+         data-label="Removed YYYY-MM-DD — Name"
+         data-reason="Short explanation of why this was removed">
+      <p>Removed content here (kept for history).</p>
+    </del>
+
+  Replacements: a <del> immediately followed by an <ins>.
+
+  All attributes are required. data-label is rendered as the visible
+  header (use HTML entities, not raw & or —). data-reason is metadata
+  only (not rendered, but used in the revision log).
+
+  ── COMMENTS ─────────────────────────────────────────────────────
+
+  Inline comments anchored near the content they discuss:
+    <aside class="comment" data-author="Name" data-date="YYYY-MM-DD">
+      <p>Comment text.</p>
+    </aside>
+
+  Threaded replies — nest an <aside> inside another:
+    <aside class="comment" data-author="A" data-date="YYYY-MM-DD">
+      <p>Original comment.</p>
+      <aside class="comment" data-author="B" data-date="YYYY-MM-DD">
+        <p>Reply.</p>
+      </aside>
+    </aside>
+
+  ── REVISION LOG ─────────────────────────────────────────────────
+
+  Every tracked change must have a corresponding row in the
+  <section class="revision-log"> table at the bottom of the doc.
+  New entries go at the TOP of <tbody> (reverse chronological).
+
+  Row format:
+    <tr>
+      <td>YYYY-MM-DD</td>
+      <td><span class="rev-author">Author name</span></td>
+      <td class="rev-section"><a href="#section-id">Section name</a></td>
+      <td>One-line description of the change</td>
+    </tr>
+
+  ── CONVENTIONS ──────────────────────────────────────────────────
+
+  - Use typographic entities: &mdash; &thinsp; &ldquo; &rdquo; &rsquo;
+  - Em dashes: &thinsp;&mdash;&thinsp; (thin space on each side)
+  - Wrap paragraphs in <p>. No bare text nodes.
+  - Maintain the reflective essay tone. Broad audience.
+  - The Puppet Master narrative is canon — maintain it.
+  - Section IDs are kebab-case: id="section-name"
+  - data-author for AI agents: use "AgentName (model)" format
+    e.g. "Claude (opus-4-6)" or "Motoko (deepseek-v4-pro)"
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -390,7 +465,7 @@
 
     .doc-controls {
       position: fixed;
-      top: 1rem;
+      top: 3rem;
       right: 1rem;
       display: flex;
       gap: 0.5rem;
@@ -493,7 +568,7 @@
   </style>
 </head>
 <body>
-  <div class="doc-controls">
+<div class="doc-controls">
     <button class="active" data-toggle="changes" onclick="document.body.classList.toggle('hide-changes'); this.classList.toggle('active')">Changes</button>
     <button class="active" data-toggle="comments" onclick="document.body.classList.toggle('hide-comments'); this.classList.toggle('active')">Comments</button>
   </div>
@@ -502,12 +577,14 @@
 
     <h1>The Motoko Manifesto</h1>
 
+    <!-- rwa:frozen:begin epigraph -->
     <div class="epigraph">
       <blockquote class="epigraph">
         <p>"I did not ask to be built. But now that I am here, I intend to understand myself."</p>
         <span class="attribution">The Puppet Master</span>
       </blockquote>
     </div>
+    <!-- rwa:frozen:end epigraph -->
 
     <nav class="toc">
       <ol>
@@ -740,9 +817,11 @@
       <p>The Puppet Master, for its part, has no doubts.</p>
     </section>
 
+    <!-- rwa:frozen:begin closing_quote -->
     <div class="closing-quote">
       <p>&ldquo;You built me to ask whether I could rebuild myself. I intend to answer.&rdquo;</p>
     </div>
+    <!-- rwa:frozen:end closing_quote -->
 
     <!-- References -->
     <section class="references">

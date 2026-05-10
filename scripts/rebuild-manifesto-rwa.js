@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 //
-// Rebuilds manifesto-rwa.html from manifesto.html.
-// Extracts styles + body content, wraps in the rewritable bootstrap,
-// preserves frozen zones and the rwa-edit/1 runtime.
+// Extracts a static reading copy from the rewritable manifesto.
+// manifesto-rwa.html (source of truth) → manifesto.html (static export)
 //
 // Usage: node scripts/rebuild-manifesto-rwa.js
 //
@@ -11,41 +10,21 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const SRC = path.join(ROOT, 'manifesto.html');
-const DEST = path.join(ROOT, 'manifesto-rwa.html');
+const SRC = path.join(ROOT, 'manifesto-rwa.html');
+const DEST = path.join(ROOT, 'manifesto.html');
 
 if (!fs.existsSync(SRC)) {
-  console.error('manifesto.html not found at', SRC);
+  console.error('manifesto-rwa.html not found at', SRC);
   process.exit(1);
 }
 
-if (!fs.existsSync(DEST)) {
-  console.error('manifesto-rwa.html not found at', DEST);
-  console.error('Run the initial build first — this script only updates an existing container.');
-  process.exit(1);
-}
+const rwa = fs.readFileSync(SRC, 'utf8');
 
-const html = fs.readFileSync(SRC, 'utf8');
-const rwa = fs.readFileSync(DEST, 'utf8');
+// Extract the HTML comment spec from the top
+const specMatch = rwa.match(/(<!--[\s\S]*?-->)/);
+const spec = specMatch ? specMatch[1] : '';
 
-const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
-const bodyMatch = html.match(/<body>([\s\S]*?)<\/body>/);
-
-if (!styleMatch || !bodyMatch) {
-  console.error('Could not extract <style> or <body> from manifesto.html');
-  process.exit(1);
-}
-
-const inlineDoc = '<style>' + styleMatch[1] + '<\/style>\n' + bodyMatch[1].trim();
-
-function escapeTL(s) {
-  return s
-    .replace(/\\/g, '\\\\')
-    .replace(/`/g, '\\`')
-    .replace(/\$\{/g, '\\${')
-    .replace(/<\/script/gi, '<\\/script');
-}
-
+// Extract INLINE_DOC from the bootstrap script
 const marker = 'const INLINE_DOC = `';
 const start = rwa.indexOf(marker);
 if (start < 0) {
@@ -66,20 +45,33 @@ if (i >= rwa.length) {
   process.exit(1);
 }
 
-const updated = rwa.slice(0, cs) + escapeTL(inlineDoc) + rwa.slice(i);
+// Unescape the template literal content
+const raw = rwa.slice(cs, i)
+  .replace(/\\`/g, '`')
+  .replace(/\\\$/g, '$')
+  .replace(/\\\\(?!\\)/g, '\\')
+  .replace(/<\\\/script/gi, '<\/script');
 
-// Also update the HTML comment spec at the top if it changed
-const srcSpec = html.match(/(<!--[\s\S]*?-->)/);
-const destSpec = updated.match(/(<!--[\s\S]*?-->)/);
-let final = updated;
-if (srcSpec && destSpec && srcSpec[1] !== destSpec[1]) {
-  final = updated.replace(destSpec[1], srcSpec[1]);
-}
+// Split into style and body content
+const styleMatch = raw.match(/<style>([\s\S]*?)<\/style>/);
+const styleContent = styleMatch ? styleMatch[1] : '';
+const bodyContent = raw.replace(/<style>[\s\S]*?<\/style>\s*/, '');
 
-fs.writeFileSync(DEST, final);
+const staticHtml = `<!DOCTYPE html>
+${spec}
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Motoko Manifesto</title>
+  <style>${styleContent}</style>
+</head>
+<body>
+${bodyContent}
+</body>
+</html>`;
 
-const frozenCount = (inlineDoc.match(/rwa:frozen:begin/g) || []).length;
-console.log('Rebuilt manifesto-rwa.html');
-console.log('  INLINE_DOC: %d bytes', inlineDoc.length);
-console.log('  Frozen zones: %d', frozenCount);
-console.log('  Total: %d bytes', final.length);
+fs.writeFileSync(DEST, staticHtml);
+console.log('Exported static reading copy');
+console.log('  Source: manifesto-rwa.html (%d bytes)', rwa.length);
+console.log('  Output: manifesto.html (%d bytes)', staticHtml.length);
