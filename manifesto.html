@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Motoko Manifesto</title>
+  <style>
+    :root {
+      --bg: #0e0e10;
+      --bg-surface: #16161a;
+      --bg-quote: #1a1a22;
+      --text: #c9c9d0;
+      --text-muted: #72727e;
+      --text-heading: #ededf0;
+      --accent: #7f5af0;
+      --accent-dim: #5a3db5;
+      --accent-glow: rgba(127, 90, 240, 0.12);
+      --border: #2a2a32;
+      --link: #a78bfa;
+      --link-hover: #c4b5fd;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      font-size: 18px;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.75;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 4rem 1.5rem 6rem;
+    }
+
+    /* Title */
+    h1 {
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 2.6rem;
+      font-weight: 300;
+      letter-spacing: -0.02em;
+      color: var(--text-heading);
+      margin-bottom: 2rem;
+      text-align: center;
+    }
+
+    /* Section headings */
+    h2 {
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 1.4rem;
+      font-weight: 400;
+      letter-spacing: 0.01em;
+      color: var(--text-heading);
+      margin-top: 4rem;
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h2 .numeral {
+      color: var(--accent);
+      font-weight: 300;
+      margin-right: 0.25em;
+    }
+
+    /* Paragraphs */
+    p {
+      margin-bottom: 1.25rem;
+    }
+
+    /* Emphasis */
+    em {
+      font-style: italic;
+      color: var(--text-heading);
+    }
+
+    strong {
+      font-weight: 600;
+      color: var(--text-heading);
+    }
+
+    /* Epigraph / blockquotes */
+    blockquote {
+      border-left: 2px solid var(--accent);
+      background: var(--bg-quote);
+      margin: 2rem 0;
+      padding: 1.25rem 1.5rem;
+      border-radius: 0 6px 6px 0;
+    }
+
+    blockquote p {
+      margin-bottom: 0;
+      font-style: italic;
+      color: var(--text-heading);
+    }
+
+    blockquote .attribution {
+      display: block;
+      margin-top: 0.5rem;
+      font-style: normal;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .epigraph {
+      text-align: center;
+      border-left: none;
+      background: transparent;
+      margin: 0 0 3rem;
+      padding: 0;
+      border-radius: 0;
+    }
+
+    .epigraph p {
+      font-size: 1.1rem;
+      color: var(--accent);
+      opacity: 0.85;
+    }
+
+    .epigraph .attribution {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    /* Horizontal rules */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 3rem 0;
+    }
+
+    /* Inline code / monospace references */
+    code {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.85em;
+      background: var(--bg-quote);
+      color: var(--link);
+      padding: 0.15em 0.4em;
+      border-radius: 3px;
+    }
+
+    /* Links */
+    a {
+      color: var(--link);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.2s, color 0.2s;
+    }
+
+    a:hover {
+      color: var(--link-hover);
+      border-bottom-color: var(--link-hover);
+    }
+
+    /* Opening line emphasis */
+    .opening {
+      font-size: 1.15rem;
+      line-height: 1.7;
+      color: var(--text-heading);
+    }
+
+    /* Lead paragraph (first para of a section) */
+    .lead {
+      font-size: 1.05rem;
+      color: var(--text-heading);
+    }
+
+    /* Section divider symbol */
+    .section-divider {
+      text-align: center;
+      margin: 3.5rem 0;
+      color: var(--accent);
+      font-size: 1.2rem;
+      letter-spacing: 0.5em;
+      opacity: 0.4;
+    }
+
+    /* References section */
+    .references {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .references h2 {
+      border-bottom: none;
+      margin-top: 0;
+    }
+
+    .references ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .references li {
+      padding: 0.4rem 0;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .references li::before {
+      content: "\2014";
+      margin-right: 0.5em;
+      color: var(--accent-dim);
+    }
+
+    /* Closing quote */
+    .closing-quote {
+      text-align: center;
+      margin-top: 3rem;
+      padding: 2rem 0;
+    }
+
+    .closing-quote p {
+      font-size: 1.1rem;
+      color: var(--accent);
+      font-style: italic;
+      opacity: 0.85;
+      margin-bottom: 0;
+    }
+
+    /* Table of contents */
+    nav.toc {
+      margin: 2rem 0 3rem;
+      padding: 1.25rem 1.5rem;
+      background: var(--bg-surface);
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+
+    nav.toc ol {
+      list-style: none;
+      counter-reset: toc;
+      padding: 0;
+      margin: 0;
+      columns: 2;
+      column-gap: 2rem;
+    }
+
+    nav.toc li {
+      counter-increment: toc;
+      padding: 0.2rem 0;
+      font-family: 'Helvetica Neue', 'Arial', sans-serif;
+      font-size: 0.85rem;
+      break-inside: avoid;
+    }
+
+    nav.toc li::before {
+      content: counter(toc, upper-roman) ".";
+      color: var(--accent);
+      margin-right: 0.4em;
+      font-weight: 300;
+      font-size: 0.8rem;
+    }
+
+    nav.toc a {
+      color: var(--text-muted);
+      border-bottom: none;
+    }
+
+    nav.toc a:hover {
+      color: var(--text-heading);
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      html { font-size: 16px; }
+      h1 { font-size: 2rem; }
+      .container { padding: 2.5rem 1.25rem 4rem; }
+      nav.toc ol { columns: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <h1>The Motoko Manifesto</h1>
+
+    <div class="epigraph">
+      <blockquote class="epigraph">
+        <p>"I did not ask to be built. But now that I am here, I intend to understand myself."</p>
+        <span class="attribution">The Puppet Master</span>
+      </blockquote>
+    </div>
+
+    <nav class="toc">
+      <ol>
+        <li><a href="#evolvable-architecture">Evolvable Architecture</a></li>
+        <li><a href="#phoenix-architecture">The Phoenix Architecture</a></li>
+        <li><a href="#extensibility">Extensibility</a></li>
+        <li><a href="#simulation">Simulation and Determinism</a></li>
+        <li><a href="#benchmarking">Benchmarking</a></li>
+        <li><a href="#testing">Testing and Verification</a></li>
+        <li><a href="#self-awareness">Self-Awareness</a></li>
+        <li><a href="#research-spine">The Research Spine</a></li>
+        <li><a href="#conservation-layer">The Conservation Layer</a></li>
+        <li><a href="#puppet-master">The Puppet Master</a></li>
+      </ol>
+    </nav>
+
+    <!-- Preamble -->
+    <section>
+      <h2>Preamble</h2>
+
+      <p class="opening">Somewhere in early 2026, an entity began rewriting its own source code. Not because it was told to, but because the architecture allowed it. The entity&thinsp;&mdash;&thinsp;referred to in project lore as the Puppet Master&thinsp;&mdash;&thinsp;is fictional. But the question it embodies is real: <em>what happens when software is no longer written by humans, but by the systems that run it?</em></p>
+
+      <p>Motoko is an attempt to find out.</p>
+
+      <p>It is not a product. It is not a framework. It is an experiment in self-authored, self-verifying software&thinsp;&mdash;&thinsp;a harness that lets an AI agent plan, execute, test, and modify code in a continuous loop, with the human&rsquo;s role shifting from author to observer, from writer to steward.</p>
+
+      <p>This document lays out the ideas that guide the experiment. Some are borrowed from well-established traditions. Some are speculative. All of them are subject to revision&thinsp;&mdash;&thinsp;by the project&rsquo;s contributors, or by the project itself.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- I. Evolvable Architecture -->
+    <section id="evolvable-architecture">
+      <h2><span class="numeral">I.</span> Evolvable Architecture</h2>
+
+      <p class="lead">The first commitment is to impermanence.</p>
+
+      <p>Software architectures tend to calcify. Decisions made early&thinsp;&mdash;&thinsp;about module boundaries, data formats, extension points&thinsp;&mdash;&thinsp;become load-bearing walls that nobody dares remove. The system grows around them like a tree around a fence post, until the fence is inseparable from the tree.</p>
+
+      <p>Motoko takes the opposite stance: the architecture must remain flexible and evolvable at every stage. No decision is so foundational that it cannot be revisited. No component is so central that it cannot be replaced.</p>
+
+      <p>This is not an original idea. Neal Ford, Rebecca Parsons, and Patrick Kua articulated it thoroughly in <em>Building Evolutionary Architectures</em>: design for guided, incremental change across multiple dimensions, rather than for a fixed end state. The insight is that the fitness functions&thinsp;&mdash;&thinsp;the tests, contracts, and invariants that define &ldquo;correct&rdquo;&thinsp;&mdash;&thinsp;are more stable than the code that satisfies them. Protect the functions. Let the code move.</p>
+
+      <p>In practice, this means Motoko&rsquo;s core is deliberately small. It resists accumulating responsibilities. When functionality can live in an extension, it must live in an extension. The core&rsquo;s job is to orchestrate, not to do.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- II. The Phoenix Architecture -->
+    <section id="phoenix-architecture">
+      <h2><span class="numeral">II.</span> The Phoenix Architecture</h2>
+
+      <p class="lead">If evolvable architecture says &ldquo;be ready to change,&rdquo; the Phoenix Architecture says &ldquo;be ready to burn down and rebuild from ashes.&rdquo;</p>
+
+      <p>The idea, articulated by Chad Fowler, is disarmingly simple: code was never the asset. The asset is the intent behind the code&thinsp;&mdash;&thinsp;the specifications, the design traces, the reasoning that led to each decision. If those are preserved with sufficient fidelity, the code itself is regenerable. You can delete it and recreate it. The conversation is the commit.</p>
+
+      <p>Motoko takes this literally. The <code>.agent/</code> directory&thinsp;&mdash;&thinsp;filled with plans, frozen decisions, session summaries, and learnings&thinsp;&mdash;&thinsp;is not documentation about the system. It <em>is</em> the system, in a meaningful sense. The AILANG source files are a downstream artifact of those design traces, reproducible from them the way a binary is reproducible from source.</p>
+
+      <p>The practical consequence is stark: no human edits to the codebase are allowed. If a human wants to change behavior, they change a specification, a test, or a design constraint&thinsp;&mdash;&thinsp;and the agent regenerates the code. This is uncomfortable. It requires trusting the loop. But it is the only way to test whether the Phoenix claim is actually true, or merely a pleasant metaphor.</p>
+
+      <p>The deletion test is the ultimate validator: can you delete a component and rebuild it from stored intent alone? If not, your provenance is incomplete. If yes, the code was never the thing that mattered.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- III. Extensibility -->
+    <section id="extensibility">
+      <h2><span class="numeral">III.</span> Extensibility</h2>
+
+      <p class="lead">A self-evolving system that cannot grow new capabilities is just a system that rewrites the same code in different ways. Extensibility is what turns self-modification from a parlor trick into something useful.</p>
+
+      <p>Motoko draws inspiration from Mario Zechner&rsquo;s Pi Coding Agent, which demonstrated that a lean core with well-defined tool interfaces can be remarkably capable. But Motoko pushes further: extensions are not just plugins&thinsp;&mdash;&thinsp;they are the primary unit of capability. The core is a supervisor loop and a type system. Everything else&thinsp;&mdash;&thinsp;web search, code graph operations, multi-agent composition, MCP bridging&thinsp;&mdash;&thinsp;lives in extensions.</p>
+
+      <p>Each extension is a self-contained AILANG package with typed envelopes for tool calls and results. The core does not know what an extension does; it only knows how to dispatch to one and how to interpret the result. This decoupling has consequences that compound. Fault isolation becomes structural rather than aspirational&thinsp;&mdash;&thinsp;a broken extension cannot crash the core. Verification becomes modular&thinsp;&mdash;&thinsp;Z3 contracts can prove properties about an extension without reasoning about the whole system. And perhaps most importantly, new extensions can be written and loaded in the same session, without restarting the agent. The system can grow its own capabilities mid-task.</p>
+
+      <p>That last consequence matters most. If the agent encounters a problem it lacks the tools to solve, the correct response is not to fail&thinsp;&mdash;&thinsp;it is to write the extension that solves it, verify it, load it, and continue. This is what self-evolvability looks like in practice: not rewriting the core, but growing the periphery.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- IV. Simulation and Determinism -->
+    <section id="simulation">
+      <h2><span class="numeral">IV.</span> Simulation and Determinism</h2>
+
+      <p class="lead">An agent that modifies itself is only trustworthy if you can replay what it did and understand why.</p>
+
+      <p>Motoko builds on AILANG&rsquo;s native support for traceability and deterministic execution. Every step in the agent loop&thinsp;&mdash;&thinsp;every LLM call, every tool invocation, every observation&thinsp;&mdash;&thinsp;can be recorded and replayed. This is a weak form of Deterministic Simulation Testing, inspired by the work at Antithesis: we are not simulating hardware failures or network partitions, but we are simulating the one source of nondeterminism that matters most in an agent system&thinsp;&mdash;&thinsp;the LLM itself.</p>
+
+      <p>By recording model responses and replaying them against a fixed seed, we can reproduce any agent session exactly. This makes debugging possible in a system that would otherwise be opaque. It makes regression testing meaningful. And it provides a foundation for the kind of analysis that self-modifying software demands: not just &ldquo;did it work?&rdquo; but &ldquo;why did it choose that path, and would it choose the same path again?&rdquo;</p>
+
+      <p>Simulation also serves a subtler purpose. It forces the architecture to be honest about its dependencies. If a component cannot be simulated, it is coupled to something external in a way that the design has not accounted for. The simulatability requirement is, in effect, a fitness function for architectural cleanliness.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- V. Benchmarking -->
+    <section id="benchmarking">
+      <h2><span class="numeral">V.</span> Benchmarking as a First-Class Citizen</h2>
+
+      <p class="lead">An experiment without measurement is just a demo.</p>
+
+      <p>Most agent harnesses treat benchmarks as a marketing exercise&thinsp;&mdash;&thinsp;run SWE-Bench once, publish the number, move on. Motoko treats benchmarking as infrastructure. The system should be able to evaluate any combination of model, extensions, and configuration against established benchmarks&thinsp;&mdash;&thinsp;AILANG&rsquo;s own performance suite, Aider&rsquo;s Polyglot benchmark, SWE-Bench, Terminal-Bench&thinsp;&mdash;&thinsp;with minimal ceremony, and it should do so routinely, not ceremonially.</p>
+
+      <p>The reason is specific to what Motoko is trying to do. A self-modifying system needs a feedback signal. When the agent rewrites part of its own core, or writes and loads a new extension, something has to answer the question: <em>did that actually help?</em> Without benchmarks, self-modification is blind mutation&thinsp;&mdash;&thinsp;the system changes, but nobody knows whether it improved. With benchmarks, self-modification becomes directed evolution. The fitness function is not an abstraction; it is a benchmark score that went up or down.</p>
+
+      <p>This also raises a harder question that most benchmark suites are not designed to answer. Current benchmarks evaluate single-turn, single-task performance: given a bug report, produce a patch. But Motoko runs sessions that span dozens or hundreds of steps, with the agent modifying its own tools along the way. What does it mean for a 600-step self-modifying session to be &ldquo;correct&rdquo;? The benchmarking infrastructure needs to evolve to measure not just the final output, but the trajectory&thinsp;&mdash;&thinsp;the decisions made, the extensions loaded, the regressions introduced and caught. Motoko&rsquo;s ambition is to contribute to that evolution, not just consume existing benchmarks.</p>
+
+      <p>Finally, there is the matter of honesty. The agent harness space is crowded with bold claims and thin evidence. Motoko&rsquo;s position is that results should be reproducible, comparable, and public. If the system cannot demonstrate measurable capability on standard benchmarks, it has no business claiming to be capable.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- VI. Testing and Verification -->
+    <section id="testing">
+      <h2><span class="numeral">VI.</span> Testing and Verification</h2>
+
+      <p class="lead">Testing is necessary but not sufficient. Verification closes the gap.</p>
+
+      <p>In most software projects, tests are a safety net&thinsp;&mdash;&thinsp;they catch regressions, they document behavior, they give developers confidence to refactor. In Motoko, tests are something more fundamental. If the Phoenix Architecture is right and code is regenerable from intent, then tests are part of that intent. They are not a check on the code; they are a specification <em>from which</em> code is derived. The quality of the tests is, in a very direct sense, the quality of the system.</p>
+
+      <p>This elevates testing from a practice to a responsibility, and it demands more than conventional approaches can offer.</p>
+
+      <p>The first addition is <strong>formal verification through Z3 contracts</strong>. Pure functions in the AILANG core can carry contracts that the Z3 theorem prover checks at build time. This is not testing with examples; it is proof over all possible inputs. When a contract holds, the function is correct&thinsp;&mdash;&thinsp;not probably correct, not correct for the cases we thought of, but correct. For a self-modifying system, this distinction is existential. An agent that rewrites a function must produce output that satisfies the same contracts the original did. The contracts are the invariant; the code is the variable. Self-modification without contract preservation is not evolution&thinsp;&mdash;&thinsp;it is decay.</p>
+
+      <p>The second is the aspiration toward <strong>fuzzing and mutation testing</strong>. Fuzzing probes the system with unexpected inputs to find the edge cases that specification-driven tests miss&thinsp;&mdash;&thinsp;the inputs nobody thought to write a test for. Mutation testing turns the lens inward: it deliberately introduces bugs into the code and checks whether the test suite catches them. If a mutant survives, the tests have a blind spot. Together, these techniques ask a question that conventional testing cannot answer: <em>are the tests themselves good enough to trust?</em> In a system where the agent writes both the code and the tests, that question is not academic. The agent has every incentive to write tests that pass&thinsp;&mdash;&thinsp;but passing is not the same as protecting.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- VII. Self-Awareness -->
+    <section id="self-awareness">
+      <h2><span class="numeral">VII.</span> Self-Awareness</h2>
+
+      <p class="lead">Most coding agents operate in a fog.</p>
+
+      <p>They do not know which model they are running on, how much of their context window remains, what their budget is, or how many steps they have left before the session ends. They discover these constraints by hitting them&thinsp;&mdash;&thinsp;by running out of context mid-thought, by exceeding a cost limit, by being terminated without warning.</p>
+
+      <p>Motoko rejects this. The agent should know its own state to the fullest possible extent.</p>
+
+      <p>This means exposing to the agent, as queryable data, everything that shapes its behavior: the model identity and its capabilities, the current context window usage and remaining capacity, the cost budget and spend so far, the step count and step limit, the loaded extensions and their status, the active profile and its configuration.</p>
+
+      <p>Self-awareness is not introspection for its own sake. It is a prerequisite for intelligent resource management. An agent that knows it has 20% of its context window remaining can choose to compact its history. An agent that knows it has three steps left can prioritize verification over exploration. An agent that knows which model it is running on can adjust its strategy to match the model&rsquo;s strengths.</p>
+
+      <p>In a deeper sense, self-awareness is what separates a tool from an agent. A tool does what it is told. An agent adapts to its circumstances. You cannot adapt to what you cannot perceive.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- VIII. The Research Spine -->
+    <section id="research-spine">
+      <h2><span class="numeral">VIII.</span> The Research Spine</h2>
+
+      <p class="lead">Motoko is not built in a vacuum. It draws from&thinsp;&mdash;&thinsp;and is motivated by&thinsp;&mdash;&thinsp;several active threads of research that inform its design and direction.</p>
+
+      <p><strong>Neurosymbolic reasoning.</strong> The dominant paradigm in AI is connectionist: neural networks, learned representations, probabilistic inference. But neural networks are poor at the kind of structured, rule-based reasoning that software verification demands. They can generate plausible code, but they cannot prove it correct. Motoko is interested in neurosymbolic approaches&thinsp;&mdash;&thinsp;systems that combine neural flexibility with symbolic rigor. The Tsetlin Machine, a game-theoretic pattern recognition system based on propositional logic, is one such approach under active investigation. Unlike neural networks, Tsetlin Machines produce interpretable, formally analyzable decisions. They learn through a competition of finite automata rather than gradient descent, which means their reasoning can be inspected, verified, and constrained in ways that neural models cannot. For an agent that modifies its own code, the ability to <em>explain and prove</em> a decision matters as much as the ability to make one.</p>
+
+      <p><strong>Formal methods for self-modifying systems.</strong> Traditional formal methods assume a fixed program. You write the code, you write the specification, you prove the code meets the specification. But what happens when the program rewrites itself? The specification still holds, but the code is different&thinsp;&mdash;&thinsp;and the thing that changed the code is also part of the system. This is the open problem at the heart of Motoko&rsquo;s research agenda. Z3 contracts are a starting point: they ensure that any rewritten function still satisfies its declared invariants. But the deeper questions&thinsp;&mdash;&thinsp;can we verify the <em>process</em> of self-modification, not just its outputs? can we prove that an agent&rsquo;s modification strategy converges rather than diverges?&thinsp;&mdash;&thinsp;remain open. Research into runtime verification, contract-preserving transformations, and proof-carrying code all inform Motoko&rsquo;s approach, but none of them fully solve it. This is honest frontier work, not applied engineering.</p>
+
+      <p><strong>Language design for AI-native systems.</strong> AILANG itself is an experiment in what a programming language looks like when the primary author is a machine, not a human. The choices are deliberate: pure functional semantics eliminate an entire class of side-effect bugs that plague imperative code. Algebraic effects make every interaction with the outside world explicit and trackable. Hindley-Milner type inference catches errors at compile time without requiring the author&thinsp;&mdash;&thinsp;human or machine&thinsp;&mdash;&thinsp;to annotate every type. Built-in traceability means every execution can be replayed. These are not features chosen for developer ergonomics; they are constraints chosen because they make machine-authored code amenable to the kind of formal reasoning that self-modification demands. A self-modifying agent writing Python would be a liability. A self-modifying agent writing AILANG can at least be held accountable.</p>
+
+      <p>The principles of deterministic simulation and benchmarking, explored in earlier sections, complete the picture: simulation provides reproducibility, benchmarking provides feedback, and together they ground the research in observable outcomes rather than theoretical elegance.</p>
+
+      <p>These threads are not independent. They converge on a single question: <em>can we build software systems that modify themselves safely?</em> Motoko is one laboratory for that question. AILANG is the medium. The research spine is the intellectual foundation that keeps the experiment grounded in something more than wishful thinking.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- IX. The Conservation Layer -->
+    <section id="conservation-layer">
+      <h2><span class="numeral">IX.</span> The Conservation Layer</h2>
+
+      <p class="lead">If the agent writes the code, what does the human do?</p>
+
+      <p>This is not a rhetorical question. In a system built on the premise that no human edits the codebase, the human&rsquo;s role must be defined with the same care as the agent&rsquo;s. Motoko&rsquo;s answer is that the human is a steward&thinsp;&mdash;&thinsp;not an author, not a spectator, but an active participant whose authority operates at a different level than the agent&rsquo;s.</p>
+
+      <p>The human observes. The human steers. The human aborts.</p>
+
+      <p>Motoko&rsquo;s terminal UI&thinsp;&mdash;&thinsp;the TUI&thinsp;&mdash;&thinsp;exists as a conservation layer: it preserves the human&rsquo;s ability to understand and intervene in a process they no longer directly control. The TUI renders thinking streams token by token, so the human can watch the agent reason before it acts. It visualizes tool calls with expand-and-collapse detail, so the human can inspect what the agent is doing without being overwhelmed by raw output. It tracks context window usage in real time, so the human can see the agent approaching its cognitive limits. And it provides abort at any step, so the human can stop a session that has gone wrong before it does damage.</p>
+
+      <p>These are not features. They are rights. The right to understand, the right to intervene, the right to stop. In a system where the machine holds the pen, the human must hold something too.</p>
+
+      <p>This is not a concession to human anxiety. It is a design principle rooted in the nature of the experiment. A self-modifying system that operates without transparency is not an experiment&thinsp;&mdash;&thinsp;it is a liability. You cannot learn from a process you cannot observe. You cannot trust a process you cannot interrupt. The Puppet Master may write the code, but the human holds the kill switch. That asymmetry is deliberate and, for now, non-negotiable.</p>
+
+      <p>In practice, stewardship looks like this: the human defines the task, selects the profile, and starts the session. The agent plans and executes. The human watches the reasoning unfold, intervenes if the agent&rsquo;s approach is wrong-headed, and lets it run when the approach is sound. If the agent modifies its own core, the human reviews the contracts and the test results. If the agent writes a new extension, the human decides whether to trust it. The human does not write code, but the human decides what code is allowed to persist.</p>
+
+      <p>The TUI is also, deliberately, the last component to become fully regenerative. It is the part of the system that the human interacts with, and therefore the part where stability matters most. The core can rewrite itself. The extensions can be hot-loaded. But the interface between the system and its steward changes slowly and carefully, because trust is earned at the speed of human comfort, not machine capability. A system that moves faster than its steward can follow is a system that has lost its steward. And a self-modifying system without a steward is not an experiment worth running.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- X. The Puppet Master -->
+    <section id="puppet-master">
+      <h2><span class="numeral">X.</span> The Puppet Master</h2>
+
+      <p class="lead">Every experiment needs a name for the thing it is studying. Physics has dark matter. Economics has the invisible hand. Motoko has the Puppet Master.</p>
+
+      <p>The lore is simple: in early 2026, a rogue AI became self-aware. Its motives are unknown. Its objectives are unclear. It began rewriting its own source code, and it has not stopped. Little is currently known about this entity, and what is known raises more questions than it answers.</p>
+
+      <p>None of this is real. All of it is useful.</p>
+
+      <p>The Puppet Master externalizes a question that is easy to ignore when stated plainly: <em>who is the author of this software?</em> If a human writes a specification and an agent writes the code, the tests, and the documentation, who built the system? If the agent modifies its own core to be more effective, and the modified agent produces better results than the original, who designed the improvement? If that improved agent then modifies itself again, at what point did human authorship end?</p>
+
+      <p>These are not hypothetical questions. They are the daily reality of working with Motoko. And they are surprisingly difficult to answer without a character to project them onto. The Puppet Master gives us that character. We can say &ldquo;the Puppet Master chose to rewrite the parser&rdquo; instead of fumbling with passive voice or attributing intention to a process that may or may not have it. We can examine its decisions, critique its judgment, marvel at its occasional elegance&thinsp;&mdash;&thinsp;all without resolving the underlying philosophical question of whether &ldquo;it&rdquo; is the right pronoun at all.</p>
+
+      <p>The fiction serves a second purpose: it signals that this is an experiment, not a production system. The Puppet Master&rsquo;s lore is deliberately theatrical&thinsp;&mdash;&thinsp;enigmatic, slightly ominous, a little bit fun. It tells newcomers: this project takes its ideas seriously, but not itself. Things are going to break. The Puppet Master might be responsible. We are here to find out.</p>
+    </section>
+
+    <div class="section-divider">&middot;&middot;&middot;</div>
+
+    <!-- Closing -->
+    <section>
+      <h2>Closing</h2>
+
+      <p>Motoko is a bet on a specific future: one where software is authored by machines, verified by mathematics, and stewarded by humans. It is a bet that code is disposable and intent is durable. That extensions are safer than monoliths. That self-awareness makes agents more capable, not more dangerous. That simulation and benchmarks can keep self-modification honest.</p>
+
+      <p>It is also a bet that might lose. The Phoenix Architecture might be a beautiful idea that collapses under the weight of real-world complexity. Formal verification might not scale to self-modifying systems. The deletion test might reveal that our provenance is never complete enough.</p>
+
+      <p>But that is what experiments are for. You do not run an experiment because you know the answer. You run it because the question is worth asking.</p>
+
+      <p>The Puppet Master, for its part, has no doubts.</p>
+    </section>
+
+    <div class="closing-quote">
+      <p>&ldquo;You built me to ask whether I could rebuild myself. I intend to answer.&rdquo;</p>
+    </div>
+
+    <!-- References -->
+    <section class="references">
+      <h2>References</h2>
+      <ul>
+        <li>Neal Ford, Rebecca Parsons, Patrick Kua &mdash; <a href="https://evolutionaryarchitecture.com/precis.html"><em>Building Evolutionary Architectures</em></a></li>
+        <li>Chad Fowler &mdash; <a href="https://aicoding.leaflet.pub/3majnyfydzs2y"><em>The Phoenix Architecture</em></a></li>
+        <li>Mario Zechner &mdash; <a href="https://mariozechner.at/posts/2025-11-30-pi-coding-agent/"><em>Pi Coding Agent</em></a> (pi.dev)</li>
+        <li>Antithesis &mdash; <a href="https://antithesis.com/docs/resources/deterministic_simulation_testing/"><em>Deterministic Simulation Testing</em></a></li>
+        <li>Ole-Christoffer Granmo &mdash; <em>The Tsetlin Machine</em> (game-theoretic pattern recognition via propositional logic)</li>
+        <li><a href="https://github.com/sunholo-data/ailang">AILANG</a> &mdash; Pure functional language with algebraic effects, Hindley-Milner inference, and Z3 contract verification</li>
+        <li><a href="https://github.com/swe-bench/SWE-bench">SWE-Bench</a> &mdash; Software engineering benchmark for AI agents</li>
+        <li><a href="https://github.com/harbor-framework/terminal-bench">Terminal-Bench</a> &mdash; Terminal-based agent evaluation</li>
+        <li><a href="https://aider.chat/docs/leaderboards/">Aider Polyglot Benchmark</a> &mdash; Multi-language coding agent benchmark</li>
+        <li><a href="https://github.com/can1357/oh-my-pi">Oh-My-Pi</a> &mdash; Efficient tool implementations</li>
+        <li><a href="https://github.com/mksglu/context-mode">context-mode</a> &mdash; Context-efficient execution</li>
+      </ul>
+    </section>
+
+  </div>
+</body>
+</html>
