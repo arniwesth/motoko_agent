@@ -1,5 +1,11 @@
 PROFILE ?= default
 
+codex:
+	codex --yolo
+
+claude:
+	claude --dangerously-skip-permissions --model claude-opus-4-6
+
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
 	./scripts/sync-extension-packages.sh
