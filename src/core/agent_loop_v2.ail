@@ -258,17 +258,19 @@ func emit_run_summary(
   ])
 }
 
--- Convert motoko's [Msg] (system / user / assistant text-only) to upstream
--- [Message] (which adds tool_calls + tool_call_id fields). For the initial
--- conversation seed, all messages have empty tool_calls and tool_call_id.
+-- Convert motoko's [Msg] to upstream [Message]. Since motoko_ext_abi 2.1.0
+-- (M-ABI-MSG-WIRE-PARITY), Msg carries tool_calls + tool_call_id fields
+-- structurally identical to Message — copy them verbatim so on_pre_step
+-- compaction round-trips losslessly. Without this, OpenRouter / OpenAI /
+-- Anthropic reject tool-role messages with empty tool_call_id (422).
 func msgs_to_messages(msgs: [Msg]) -> [Message] {
   match msgs {
     [] => [],
     m :: rest => ({
       role: m.role,
       content: m.content,
-      tool_calls: [],
-      tool_call_id: ""
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id
     } :: msgs_to_messages(rest))
   }
 }
@@ -342,13 +344,20 @@ func mk_v2_ext_ctx(
   }
 }
 
--- Convert upstream [Message] back to motoko's [Msg] for ExtCtx.history_slice.
--- Extensions inspect role + content for prose-based decisions; tool_calls
--- and tool_call_id aren't part of motoko's Msg shape, so they're dropped.
+-- Convert upstream [Message] to motoko's [Msg] for ExtCtx.history_slice
+-- and on_pre_step. Since motoko_ext_abi 2.1.0 (M-ABI-MSG-WIRE-PARITY),
+-- Msg carries tool_calls + tool_call_id, so copy them verbatim. The
+-- compaction round-trip is now lossless: any extension that returns
+-- Compacted([Msg]) preserves wire-format correlation IDs.
 func messages_to_msgs(msgs: [Message]) -> [Msg] {
   match msgs {
     [] => [],
-    m :: rest => ({ role: m.role, content: m.content } :: messages_to_msgs(rest))
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id
+    } :: messages_to_msgs(rest))
   }
 }
 

@@ -223,8 +223,8 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_hint);
 
   let init: [Msg] = [
-    { role: "system", content: system },
-    { role: "user", content: task }
+    { role: "system", content: system, tool_calls: [], tool_call_id: "" },
+    { role: "user", content: task, tool_calls: [], tool_call_id: "" }
   ];
 
   let _ = emit(encode(jo([
