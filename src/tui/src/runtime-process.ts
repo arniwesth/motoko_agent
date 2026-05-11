@@ -267,6 +267,17 @@ export class RuntimeProcess {
       // this, eval-harness runs see extensions.order=[] and other
       // profile defaults silently mask user-configured behavior.
       MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
+      // MOTOKO_PROFILE_DIR — absolute path to the active profile's config
+      // directory. Standalone AILANG extension packages (motoko-ext-*) read
+      // their own JSON config here (e.g. motoko-ext-compaction-ai reads
+      // ${MOTOKO_PROFILE_DIR}/compaction_ai.json). Without this var, the
+      // packages fall back to "." which resolves to the AILANG runtime's
+      // CWD (motoko_agent root) → "no such file or directory" panics on
+      // first turn. The original src/core/config.ail path-built the same
+      // location internally; the env-var split happened when extensions
+      // moved out into separate packages without a corresponding launcher
+      // wiring.
+      MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
       // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
       // pricing env vars set by the AILANG adapter from Task.Budget. Without
       // this, the AILANG-side fix (load_cost_rates reads these env vars) is
