@@ -1,0 +1,74 @@
+-- scripts/verify_extension_boot.ail
+--
+-- Runtime smoke-test for a single extension's register_with_config hook.
+-- Catches the class of bugs that escape `make check_core` because they
+-- only manifest at runtime, not at type-check time:
+--
+--   1. Pattern-match exhaustiveness mismatches (e.g. matching Result
+--      constructors against an Option value — the famous compaction_ai
+--      v0.1.1 bug where `match getString(...) { Err(_) => ..., Ok(_) => ...}`
+--      typechecked but crashed at runtime when the JSON field was present).
+--   2. readFile-style panics when defaults aren't present (e.g.
+--      compaction_ai v0.1.0 used the panicking readFile variant instead
+--      of readFileResult — the dead Err(_) arm never caught the FS error).
+--   3. Misconfigured env-var / config defaults that crash on load.
+--   4. Cross-package ADT shape drift (constructor variants added/removed
+--      in dependency packages but not handled in caller match arms).
+--
+-- Each of these passes `ailang check` because the AILANG type-checker
+-- doesn't enforce constructor-ADT cross-checking on match arms (loose
+-- exhaustiveness — see AILANG v0.18.10 follow-up "M-MATCH-ADT-XCHECK").
+--
+-- Usage (one extension per process so a panic in extension A doesn't
+-- mask extension B's status):
+--
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--     --ai-stub --entry main scripts/verify_extension_boot.ail -- <ext-name>
+--
+-- Exit code:
+--   0   = register_with_config returned without panic
+--   non-0 = AILANG runtime crashed (the wrapping shell loop in
+--           Makefile :: verify_extensions catches this)
+--
+-- Wrapping driver:
+--   make verify_extensions
+--   (iterates over each extension in the active profile's registry)
+module scripts/verify_extension_boot
+
+import std/io (println)
+import std/env (getArgs)
+import src/core/ext/registry_generated (parse_core_ext_order)
+import src/core/ext/types (ExtRegistry)
+import std/list as L (length)
+import src/core/config (load_config_from_cli)
+import std/option (Option, Some, None)
+
+export func main() -> () ! {Env, FS, IO} {
+  let args = getArgs();
+  match args {
+    [name] => {
+      -- Use the actual config-loading path so we exercise the SAME
+      -- profile_dir resolution + JSON parsing the live runtime uses.
+      -- Empty CLI args means: pick up MOTOKO_CONFIG env (defaults to
+      -- "default" profile) and resolve workdir from MOTOKO_WORKDIR
+      -- (defaults to ".").
+      let cfg = load_config_from_cli([]);
+      -- parse_core_ext_order takes a comma-separated string and runs
+      -- register_with_config for each entry — single-name string
+      -- exercises just this one extension. If the registration panics,
+      -- the AILANG runtime crashes; exit code surfaces to the wrapper.
+      let registry = parse_core_ext_order(name, cfg);
+      if L.length(registry.hooks) > 0 then {
+        println("OK: ${name} register_with_config returned without panic");
+        ()
+      } else {
+        println("UNKNOWN: ${name} not in registry_generated (or returned empty)");
+        ()
+      }
+    },
+    _ => {
+      println("usage: verify_extension_boot <extension-name>");
+      ()
+    }
+  }
+}
