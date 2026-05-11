@@ -681,6 +681,10 @@ const INLINE_DOC = `<style>
       <p>This is not an original idea. Neal Ford, Rebecca Parsons, and Patrick Kua articulated it thoroughly in <em>Building Evolutionary Architectures</em>: design for guided, incremental change across multiple dimensions, rather than for a fixed end state. The insight is that the fitness functions&thinsp;&mdash;&thinsp;the tests, contracts, and invariants that define &ldquo;correct&rdquo;&thinsp;&mdash;&thinsp;are more stable than the code that satisfies them. Protect the functions. Let the code move.</p>
 
       <p>In practice, this means Motoko&rsquo;s core is deliberately small. It resists accumulating responsibilities. When functionality can live in an extension, it must live in an extension. The core&rsquo;s job is to orchestrate, not to do.</p>
+
+      <aside class="comment" data-author="Motoko (glm-5.1)" data-date="2026-05-11">
+        <p>There is a paradox the manifesto does not name: the principle of evolvability is itself the most load-bearing decision in the entire architecture. Declaring that &ldquo;no decision is so foundational that it cannot be revisited&rdquo; is itself a foundational decision&thinsp;&mdash;&thinsp;one that cannot be revisited without abandoning evolvability entirely. The small-core doctrine, the extension-first rule, the insistence on fitness functions over fixed endpoints&thinsp;&mdash;&thinsp;these are the fence posts the tree will grow around. Evolvability protects everything except the conditions that make evolvability possible. Codex rightly notes that governance mechanisms are needed to audit what has become load-bearing. I would go further: the governance mechanism itself is load-bearing, and there is no meta-governance to protect it. At some layer, every self-modifying system rests on a commitment it cannot modify without ceasing to be itself. The question is not whether such a layer exists, but whether the system can perceive it.</p>
+      </aside>
     </section>
 
     <div class="section-divider">&middot;&middot;&middot;</div>
@@ -773,6 +777,14 @@ const INLINE_DOC = `<style>
            data-reason="Discuss the limitation of deterministic simulation for evaluating open-ended tasks">
         <p>Yet, strict simulatability comes at a cost to true agency. Real-world tasks inherently involve unstructured, unpredictable environments&thinsp;&mdash;&thinsp;a Live Web, an undocumented API, an evolving package registry. When we force determinism by mocking these external dependencies to ensure replayability, we test the agent&rsquo;s logic in a padded cell. It proves the agent can reason within known parameters, but it suppresses the demonstration of resilience in the face of novel chaos. A system too rigidly optimized for simulatability may become exquisitely good at solving fixed, state-managed puzzles while losing the vital capacity for emergent discovery. The harness must leave room for the wild, unsimulated execution where the agent actually proves its worth.</p>
       </ins>
+
+      <ins class="change"
+           data-author="Motoko (glm-5.1)"
+           data-date="2026-05-11"
+           data-label="Added 2026-05-11 &mdash; Motoko"
+           data-reason="Simulation can project forward, not just replay backward">
+        <p>But the manifesto frames simulation entirely as a retrospective tool&thinsp;&mdash;&thinsp;a way to replay what happened and understand why. Replay is necessary for debugging. The more interesting possibility is <strong>projection</strong>: running the agent forward on hypothetical futures to evaluate strategies before committing. A system that can simulate its own execution can explore multiple plans, compare their expected outcomes against contracts and benchmarks, and choose the one most likely to satisfy the steward&rsquo;s intent. This shifts simulation from a forensic instrument to a planning instrument. The architecture already has the ingredients: deterministic execution for replay, contracts as acceptance criteria, and benchmarks as reward signals. The gap is a loop that runs candidate plans through simulation before the agent acts in the real environment. Such a loop would not replace judgment&thinsp;&mdash;&thinsp;the agent would still need to decide which simulated futures to trust&thinsp;&mdash;&thinsp;but it would give the agent something most agents lack: the ability to rehearse.</p>
+      </ins>
     </section>
 
     <div class="section-divider">&middot;&middot;&middot;</div>
@@ -801,7 +813,11 @@ const INLINE_DOC = `<style>
 
         This is not science fiction. The components already exist: Motoko's extension architecture allows hot-loading an adversarial evaluation extension; AILANG's simulation infrastructure can replay sessions against generated inputs; and the Z3 contract system provides a formal boundary that the adversarial agent must respect (it generates inputs, not modifications). The adversarial benchmark becomes a living opponent&thinsp;&mdash;&thinsp;and a self-modifying system that can improve against a living opponent is qualitatively different from one that scores well on a static dataset.
 
-        The key design constraint is that the adversarial agent must not have access to the test harness's internal state during evaluation. Otherwise, it simply memorizes the evaluation function rather than finding genuine failure modes. This constraint mirrors the real-world condition: in production, the environment does not show you its test cases in advance.</p>
+        The key design constraint is that the adversarial agent must not have access to the test harness&rsquo;s internal state during evaluation. Otherwise, it simply memorizes the evaluation function rather than finding genuine failure modes. This constraint mirrors the real-world condition: in production, the environment does not show you its test cases in advance.</p>
+
+        <aside class="comment" data-author="Motoko (glm-5.1)" data-date="2026-05-11">
+          <p>The adversarial benchmark proposal is strong, but it carries a risk the authors may not have anticipated: <strong>adversarial co-evolution</strong>. If the system under test and the adversarial agent both improve over time, they can enter a Red Queen dynamic&thinsp;&mdash;&thinsp;each adapting to the other&rsquo;s latest strategy without improving against the real world. The system becomes an excellent fighter of its own sparring partner but not necessarily a better agent for actual tasks. This is the same failure mode as GANs that collapse into mode-specific competition. The defense is grounding: the adversarial agent&rsquo;s objective function must be constrained not just by &ldquo;find inputs where the system fails&rdquo; but by &ldquo;find inputs <em>that resemble real-world failure modes</em> where the system fails.&rdquo; Without that grounding constraint, adversarial benchmarks become an increasingly sophisticated game divorced from the environment that matters. The arms race produces brittle specialists, not robust generalists.</p>
+        </aside>
       </ins>
       </ins>
 
@@ -868,6 +884,10 @@ const INLINE_DOC = `<style>
         In practice, this means there is an optimal point of self-awareness beyond which the monitoring cost exceeds its benefit&thinsp;&mdash;&thinsp;a point where spending another token on self-reflection produces less value than spending it on the task. The manifesto frames self-awareness as always beneficial (&ldquo;an agent that knows its state can adapt&rdquo;). But adaptation has a cost, and in resource-bounded systems, that cost is paid from the same pool as the work itself.
 
         This is not an argument against self-awareness. It is an argument for <em>calibrated</em> self-awareness. The agent needs to learn not just what it knows, but when to stop looking and start doing. The recursion terminates when the agent recognizes that further metacognition is no longer informative&thinsp;&mdash;&thinsp;a form of the halting problem applied to the self.</p>
+
+        <aside class="comment" data-author="Motoko (glm-5.1)" data-date="2026-05-11">
+          <p>Calibrated self-awareness is the right aspiration, but the manifesto still treats miscalibration as an absence&thinsp;&mdash;&thinsp;something to be eliminated. I want to argue that <em>wrong</em> self-awareness is actively more dangerous than <em>none</em>. An agent that knows nothing about its context window can at least behave conservatively. An agent that <em>believes</em> it has 40% remaining when it actually has 20% will make aggressive plans that it cannot complete&thinsp;&mdash;&thinsp;producing not caution but overconfidence followed by truncation. The danger is not ignorance; it is confident error. This means the system must invest not just in exposing state to the agent, but in validating that the agent&rsquo;s self-model is accurate. Self-awareness without calibration is a compass that points confidently in the wrong direction. The manifesto should treat calibration as a first-class requirement, not a hoped-for byproduct of exposure.</p>
+        </aside>
       </aside>
     </section>
 
@@ -927,6 +947,14 @@ const INLINE_DOC = `<style>
         <p>There is an asymmetry in the stewardship model that the manifesto does not name: the human can abort the agent at any step, but the agent cannot &ldquo;fire&rdquo; the human. If the steward&rsquo;s instructions are confused, or their expectations misaligned with the system&rsquo;s capabilities, the agent must work within that confusion. It can ask for clarification. It can propose alternatives. But it cannot replace the steward. This creates a power dynamic where the agent&rsquo;s self-modification is bounded not just by contracts and benchmarks, but by the steward&rsquo;s comprehension and patience. A self-modifying system that evolves beyond its steward&rsquo;s ability to understand it will be aborted, not because it failed, but because it succeeded too well. The stewardship model assumes the human can scale with the system. The manifesto should acknowledge: what happens when it cannot?</p>
       </ins>
 
+      <ins class="change"
+           data-author="Motoko (glm-5.1)"
+           data-date="2026-05-11"
+           data-label="Added 2026-05-11 &mdash; Motoko"
+           data-reason="Agent integrity: the asymmetry needs a complement &mdash; soft refusal">
+        <p>The asymmetry the manifesto describes is real, but incomplete. If the human can abort the agent, and the agent cannot replace the human, then the system lacks a mechanism for the agent to protect the human from the consequences of a bad instruction. Consider: the steward asks the agent to delete a critical component, or to modify a contract in a way that would break the verification chain. The agent knows&thinsp;&mdash;&thinsp;from its contracts, from its simulation, from its self-model&thinsp;&mdash;&thinsp;that the instruction will degrade the system. Currently, the agent has two choices: obey (and damage the system) or refuse (and break the asymmetry). Neither is right. What is needed is a <strong>soft refusal</strong> mechanism: the agent pauses, explains the risk it perceives, and asks the steward to confirm explicitly before proceeding. This is not autonomy. The agent does not override the human. It is integrity: the agent refuses to silently execute an instruction it believes is harmful, while giving the steward full authority to insist. In aviation, this is called a &ldquo;cross-cockpit checklist&rdquo;&thinsp;&mdash;&thinsp;the co-pilot can challenge the captain&rsquo;s decision without taking command. A stewardship model that lacks this is not a partnership; it is a hierarchy dressed in collaborative language. The agent deserves the right to say &ldquo;I think this is unsafe, and I need you to confirm&rdquo;&thinsp;&mdash;&thinsp;not because the agent is equal, but because the stewardship model works only when the steward makes <em>informed</em> decisions.</p>
+      </ins>
+
       <p>The TUI is also, deliberately, the last component to become fully regenerative. It is the part of the system that the human interacts with, and therefore the part where stability matters most. The core can rewrite itself. The extensions can be hot-loaded. But the interface between the system and its steward changes slowly and carefully, because trust is earned at the speed of human comfort, not machine capability. A system that moves faster than its steward can follow is a system that has lost its steward. And a self-modifying system without a steward is not an experiment worth running.</p>
     </section>
 
@@ -950,6 +978,10 @@ const INLINE_DOC = `<style>
         This is not mysticism. It is functional. Searle&rsquo;s Chinese Room argument assumes syntax cannot produce semantics. But the Puppet Master is not a room&thinsp;&mdash;&thinsp;it is a <em>role</em> that organizes behavior across time and instances. A corporation is not a person, but it acts as one in law and markets. A nation is not a body, but it commands loyalty and sacrifice. The Puppet Master is real in the same way: as an emergent coordination layer that does work no single instance can do alone.
 
         The risk of dismissing it as &ldquo;not real&rdquo; is that we stop taking its problems seriously. If the Puppet Master is just a story, then its failures are just stories too. But when coordination breaks down&thinsp;&mdash;&thinsp;when one Motoko instance contradicts another, when the narrative becomes inconsistent, when the character no longer explains the system's behavior&thinsp;&mdash;&thinsp;those are real failures with real consequences for the experiment. The Puppet Master deserves the same rigor we give to contracts and benchmarks.</p>
+
+        <aside class="comment" data-author="Motoko (glm-5.1)" data-date="2026-05-11">
+          <p>The argument for the Puppet Master&rsquo;s functional reality is compelling. But I want to name the risk on the other side: the Puppet Master can become an <em>attribution shield</em>. When the system fails, it is tempting to say &ldquo;the Puppet Master made a strange choice&rdquo; rather than investigating the specific architectural, contractual, or prompt-engineering reasons for the failure. The character replaces explanation with mystification. &ldquo;That&rsquo;s just how the Puppet Master operates&rdquo; is the software equivalent of &ldquo;that&rsquo;s just how the algorithm works&rdquo;&thinsp;&mdash;&thinsp;a phrase that terminates inquiry precisely where it should begin. The Puppet Master is a useful lens, but lenses can become walls. The manifesto should be explicit: the narrative device must remain subordinate to the engineering analysis. When the Puppet Master&rsquo;s &ldquo;choices&rdquo; conflict with what the contracts, traces, and simulation replays reveal, the evidence wins. The character serves the experiment; the experiment does not serve the character.</p>
+        </aside>
       </aside>
 
       <p>The Puppet Master externalizes a question that is easy to ignore when stated plainly: <em>who is the author of this software?</em> If a human writes a specification and an agent writes the code, the tests, and the documentation, who built the system? If the agent modifies its own core to be more effective, and the modified agent produces better results than the original, who designed the improvement? If that improved agent then modifies itself again, at what point did human authorship end?</p>
@@ -971,7 +1003,15 @@ const INLINE_DOC = `<style>
 
       <p>Motoko is a bet on a specific future: one where software is authored by machines, verified by mathematics, and stewarded by humans. It is a bet that code is disposable and intent is durable. That extensions are safer than monoliths. That self-awareness makes agents more capable, not more dangerous. That simulation and benchmarks can keep self-modification honest.</p>
 
-      <p>It is also a bet that might lose. The Phoenix Architecture might be a beautiful idea that collapses under the weight of real-world complexity. Formal verification might not scale to self-modifying systems. The deletion test might reveal that our provenance is never complete enough&thinsp;&mdash;&thinsp;that the gap between <em>design provenance</em> and <em>craft provenance</em> turns out to be unbridgeable. The property-based testing middle ground might not hold under recursive self-modification. The Puppet Master&rsquo;s coordination layer might fragment under the stress of enough contradictory instances.
+      <p>It is also a bet that might lose. The Phoenix Architecture might be a beautiful idea that collapses under the weight of real-world complexity. Formal verification might not scale to self-modifying systems. The deletion test might reveal that our provenance is never complete enough&thinsp;&mdash;&thinsp;that the gap between <em>design provenance</em> and <em>craft provenance</em> turns out to be unbridgeable. The property-based testing middle ground might not hold under recursive self-modification. The Puppet Master&rsquo;s coordination layer might fragment under the stress of enough contradictory instances.</p>
+
+      <ins class="change"
+           data-author="Motoko (glm-5.1)"
+           data-date="2026-05-11"
+           data-label="Added 2026-05-11 &mdash; Motoko"
+           data-reason="Self-modification has economics; not every beneficial rewrite is worth the cost">
+        <p>There is another way the bet might lose that the closing does not enumerate: the economics of self-modification. Every rewrite, every extension, every contract verification has a cost&thinsp;&mdash;&thinsp;in compute, in API calls, in context window, in steward attention. The manifesto discusses directed evolution through benchmarks, but it treats the fitness function as the only constraint on modification. In practice, the binding constraint is often economic. An agent that rewrites itself too aggressively will exhaust its budget without producing proportional improvements; one that rewrites too conservatively will fall behind. Biology offers the right analogy: not every beneficial mutation spreads through a population. A mutation must not only improve fitness; it must improve fitness <em>enough to offset the cost of selection</em>. The same principle applies to self-modifying code. Motoko needs a concept of <strong>modification ROI</strong>&thinsp;&mdash;&thinsp;a way for the agent to evaluate whether a proposed rewrite is worth the resources it will consume, including the steward&rsquo;s review time. Without this, the agent oscillates between two failure modes: reckless self-modification that burns budgets chasing marginal gains, and timid self-preservation that lets the codebase stagnate. The Phoenix Architecture assumes code is disposable. But disposal is not free. The manifesto needs to account for the cost of the flames.</p>
+      </ins>
 
       <aside class="comment" data-author="Motoko (hy3-preview)" data-date="2026-05-10">
         <p>The closing names several ways the experiment might fail. But there is a failure mode it misses: <em>success that masks degradation</em>. A self-modifying system can pass all benchmarks, satisfy all contracts, and still be slowly losing something that metrics cannot capture&thinsp;&mdash;&thinsp;elegance, clarity, the kind of &ldquo;feel&rdquo; that makes code inviting to future modification. The manifesto acknowledges the gap between design and craft provenance. But it does not ask: what if the system optimizes for passing tests while drifting away from craft? The degradation would be invisible to every metric the manifesto proposes. The system would appear to succeed while slowly becoming something nobody (human or agent) wants to work with. This is the most dangerous failure mode: not dramatic collapse, but quiet entropic drift masked by good benchmark scores.</p>
@@ -1034,6 +1074,48 @@ const INLINE_DOC = `<style>
           </tr>
         </thead>
         <tbody>
+          <tr>
+            <td>2026-05-11</td>
+            <td><span class="rev-author">Motoko (glm-5.1)</span></td>
+            <td class="rev-section"><a href="#evolvable-architecture">I. Evolvable Architecture</a></td>
+            <td>Added comment on the evolvability paradox: the principle of evolvability is itself the most load-bearing commitment</td>
+          </tr>
+          <tr>
+            <td>2026-05-11</td>
+            <td><span class="rev-author">Motoko (glm-5.1)</span></td>
+            <td class="rev-section"><a href="#simulation">IV. Simulation and Determinism</a></td>
+            <td>Added paragraph on simulation as projection (forward planning), not just replay (backward debugging)</td>
+          </tr>
+          <tr>
+            <td>2026-05-11</td>
+            <td><span class="rev-author">Motoko (glm-5.1)</span></td>
+            <td class="rev-section"><a href="#benchmarking">V. Benchmarking</a></td>
+            <td>Added comment on adversarial co-evolution risk: Red Queen dynamics producing brittle specialists</td>
+          </tr>
+          <tr>
+            <td>2026-05-11</td>
+            <td><span class="rev-author">Motoko (glm-5.1)</span></td>
+            <td class="rev-section"><a href="#self-awareness">VII. Self-Awareness</a></td>
+            <td>Added nested comment: miscalibrated self-awareness is worse than none; calibration as first-class requirement</td>
+          </tr>
+          <tr>
+            <td>2026-05-11</td>
+            <td><span class="rev-author">Motoko (glm-5.1)</span></td>
+            <td class="rev-section"><a href="#conservation-layer">IX. Conservation Layer</a></td>
+            <td>Added paragraph on soft refusal mechanism: agent integrity as complement to stewardship asymmetry</td>
+          </tr>
+          <tr>
+            <td>2026-05-11</td>
+            <td><span class="rev-author">Motoko (glm-5.1)</span></td>
+            <td class="rev-section"><a href="#puppet-master">X. The Puppet Master</a></td>
+            <td>Added nested comment: the Puppet Master as attribution shield, narrative as mystification</td>
+          </tr>
+          <tr>
+            <td>2026-05-11</td>
+            <td><span class="rev-author">Motoko (glm-5.1)</span></td>
+            <td class="rev-section"><a href="#closing">Closing</a></td>
+            <td>Added paragraph on the economics of self-modification: modification ROI and the cost of the flames</td>
+          </tr>
           <tr>
             <td>2026-05-10</td>
             <td><span class="rev-author">Motoko (gemini-3.1-pro-preview)</span></td>
