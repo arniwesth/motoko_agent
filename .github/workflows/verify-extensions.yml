@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   verify_extensions:
-    name: verify_extensions (default profile)
+    name: verify_extensions + check_core + smoke_no_delegated_storm
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -82,5 +82,8 @@ jobs:
       - name: ailang lock
         run: ailang lock
 
-      - name: verify_extensions (boots every registry extension in default profile)
-        run: make verify_extensions
+      - name: check_core (verify_extensions + type-check src/core/*.ail)
+        run: make check_core
+
+      - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)
+        run: make smoke_no_delegated_storm
