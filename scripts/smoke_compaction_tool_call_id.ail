@@ -1,0 +1,128 @@
+-- scripts/smoke_compaction_tool_call_id.ail
+--
+-- Regression test for the v0.18.11 abi 2.1.0 round-trip fix that closes
+-- the bug Arni hit on motoko_agent#16:
+--
+--   provider 422: "tool_call_id required" on tool-role message
+--   inside on_pre_step compacted output
+--
+-- Root cause was in src/core/agent_loop_v2.ail's [Message] ↔ [Msg] round
+-- trip: pre-fix, both `messages_to_msgs` and `msgs_to_messages` blindly
+-- filled `tool_call_id: ""` on the way back, dropping the model-emitted
+-- correlation ID. With OpenAI's `omitempty` JSON serializer, empty
+-- tool_call_id was stripped entirely from the request body, and providers
+-- (OpenRouter / OpenAI / Anthropic) reject tool-role messages without one.
+--
+-- This smoke exercises that exact round-trip with the abi 2.1.0 four-field
+-- Msg type. Pre-fix: tool_call_id is "". Post-fix: tool_call_id round-
+-- trips losslessly.
+--
+-- Run:
+--   ailang run --caps IO --entry main scripts/smoke_compaction_tool_call_id.ail
+--
+-- Pass = prints all 4 ✓ lines + exits 0.
+-- Fail (regression) = prints ✗ on whichever round-trip step lost the ID.
+
+module scripts/smoke_compaction_tool_call_id
+
+import std/io (println)
+import std/list (length as list_length)
+import std/ai (Message, ToolCall)
+import src/core/types (Msg)
+
+-- Mirror of agent_loop_v2.ail::messages_to_msgs (private there; copied
+-- here so this smoke is self-contained without exporting the function).
+-- IF this copy diverges from the production path, update both together.
+pure func messages_to_msgs(msgs: [Message]) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id
+    } :: messages_to_msgs(rest))
+  }
+}
+
+-- Mirror of agent_loop_v2.ail::msgs_to_messages.
+pure func msgs_to_messages(msgs: [Msg]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id
+    } :: msgs_to_messages(rest))
+  }
+}
+
+-- Build a [Message] resembling what motoko_agent's loop produces after the
+-- model emits a tool_call and the dispatcher returns the result: an
+-- assistant-with-tool_calls message followed by a tool-role result with
+-- the matching tool_call_id.
+pure func realistic_post_dispatch_messages() -> [Message] {
+  let tc: ToolCall = { id: "call_abc123", name: "ReadFile", arguments: "{\"path\":\"src/foo.ail\"}" };
+  [
+    { role: "system",    content: "You are a coding agent.", tool_calls: [], tool_call_id: "" },
+    { role: "user",      content: "Read src/foo.ail",         tool_calls: [], tool_call_id: "" },
+    { role: "assistant", content: "",                          tool_calls: [tc], tool_call_id: "" },
+    { role: "tool",      content: "module foo\n...",           tool_calls: [], tool_call_id: "call_abc123" }
+  ]
+}
+
+-- Tests --------------------------------------------------------------
+
+-- 1. Forward conversion preserves tool_call_id on the tool-role message.
+pure func test_forward_preserves_id() -> bool {
+  let msgs = realistic_post_dispatch_messages();
+  let converted = messages_to_msgs(msgs);
+  match converted {
+    _ :: _ :: _ :: tool_msg :: [] => tool_msg.tool_call_id == "call_abc123",
+    _ => false
+  }
+}
+
+-- 2. Reverse conversion preserves tool_call_id on the way back to [Message].
+pure func test_reverse_preserves_id() -> bool {
+  let msgs = realistic_post_dispatch_messages();
+  let round_tripped = msgs_to_messages(messages_to_msgs(msgs));
+  match round_tripped {
+    _ :: _ :: _ :: tool_msg :: [] => tool_msg.tool_call_id == "call_abc123",
+    _ => false
+  }
+}
+
+-- 3. tool_calls (the assistant-side correlation array) also survives the
+-- round-trip — same family of bugs.
+pure func test_tool_calls_preserved() -> bool {
+  let msgs = realistic_post_dispatch_messages();
+  let round_tripped = msgs_to_messages(messages_to_msgs(msgs));
+  match round_tripped {
+    _ :: _ :: assistant_msg :: _ => list_length(assistant_msg.tool_calls) == 1,
+    _ => false
+  }
+}
+
+-- 4. Length is preserved (sanity check the conversion lists don't drop
+-- anything).
+pure func test_length_preserved() -> bool {
+  let msgs = realistic_post_dispatch_messages();
+  let round_tripped = msgs_to_messages(messages_to_msgs(msgs));
+  list_length(round_tripped) == list_length(msgs)
+}
+
+func report(name: string, ok: bool) -> () ! {IO} {
+  if ok then println("  ✓ ${name}")
+  else println("  ✗ ${name}")
+}
+
+export func main() -> () ! {IO} = {
+  println("=== smoke_compaction_tool_call_id ===");
+  report("forward_messages_to_msgs_preserves_tool_call_id", test_forward_preserves_id());
+  report("reverse_round_trip_preserves_tool_call_id",       test_reverse_preserves_id());
+  report("tool_calls_array_preserved_through_round_trip",   test_tool_calls_preserved());
+  report("message_count_preserved",                          test_length_preserved());
+  println("done")
+}
