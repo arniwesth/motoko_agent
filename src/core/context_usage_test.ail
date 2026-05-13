@@ -10,8 +10,8 @@ func sum_of_two(a: string, b: string) -> int
   ]
   {
     let msgs = [
-      { role: "user", content: a },
-      { role: "assistant", content: b }
+      { role: "user",      content: a, tool_calls: [], tool_call_id: "" },
+      { role: "assistant", content: b, tool_calls: [], tool_call_id: "" }
     ];
     estimate_tokens(msgs, "")
   }
