@@ -362,6 +362,7 @@
 
     <script>
       const status = document.getElementById("status");
+      status.textContent = "loading page shell...";
       window.Module = {
         canvas: document.getElementById("canvas"),
         locateFile(path) {
@@ -410,17 +411,7 @@
         status.dataset.ready = "false";
       });
 
-      fetch("dist/motoko.js", { method: "HEAD", cache: "no-store" })
-        .then((response) => {
-          if (!response.ok) {
-            status.textContent = `failed to load dist/motoko.js: HTTP ${response.status}`;
-            status.dataset.ready = "false";
-          }
-        })
-        .catch((error) => {
-          status.textContent = "failed to load dist/motoko.js: " + (error.message || error);
-          status.dataset.ready = "false";
-        });
+      status.textContent = "loading wasm runtime...";
 
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
       const glitchPatches = Array.from(document.querySelectorAll(".glitch-patch"));
@@ -580,8 +571,8 @@
       }
       scheduleGlitch();
       scheduleGlobalGlitch();
+
     </script>
-    <script defer src="dist/motoko.js"
-      onload="document.getElementById('status').textContent = 'initializing wasm runtime...'"></script>
+    <script src="dist/motoko.js"></script>
   </body>
 </html>

@@ -25,6 +25,7 @@ struct AppState {
     std::size_t current_line = 0;
     uint64_t last_ticks = 0;
     double line_timer = 0.0;
+    double loop_pause_timer = 0.0;
     float lines_per_second = 3.0f;
     bool paused = false;
 };
@@ -37,19 +38,28 @@ static bool contains(const std::string& line, const char* needle) {
 }
 
 static ImVec4 color_for_line(const std::string& line) {
-    if (contains(line, "[ERROR]") || contains(line, "FAILED")) {
-        return ImVec4(1.0f, 0.28f, 0.34f, 1.0f);
+    if (contains(line, "[failed]") || contains(line, "[FAIL]") || contains(line, "[ERROR]") || contains(line, "FAILED")) {
+        return ImVec4(1.0f, 0.22f, 0.26f, 1.0f);
     }
-    if (contains(line, "[PASS]")) {
-        return ImVec4(0.36f, 1.0f, 0.58f, 1.0f);
+    if (contains(line, "[done]") || contains(line, "[PASS]") || contains(line, "[OK]")) {
+        return ImVec4(0.00f, 0.86f, 0.58f, 1.0f);
     }
-    if (contains(line, "> executing") || contains(line, "> planning")) {
-        return ImVec4(0.38f, 0.86f, 1.0f, 1.0f);
+    if (contains(line, "[reason]") || contains(line, "[tools]")) {
+        return ImVec4(0.12f, 0.55f, 1.0f, 1.0f);
     }
-    if (contains(line, "[INFO]")) {
-        return ImVec4(0.26f, 0.95f, 0.75f, 1.0f);
+    if (contains(line, "] >") || contains(line, "> continue") || contains(line, "> test")) {
+        return ImVec4(0.00f, 0.78f, 0.95f, 1.0f);
     }
-    return ImVec4(0.82f, 0.90f, 0.94f, 1.0f);
+    if (contains(line, "Runtime is reasoning") || contains(line, "AILANG built") || contains(line, "Loaded extensions")) {
+        return ImVec4(0.52f, 0.55f, 0.56f, 1.0f);
+    }
+    if (line.rfind("##", 0) == 0 || line.rfind("###", 0) == 0) {
+        return ImVec4(0.86f, 0.88f, 0.86f, 1.0f);
+    }
+    if (line.empty() || line.rfind("---", 0) == 0) {
+        return ImVec4(0.32f, 0.34f, 0.34f, 1.0f);
+    }
+    return ImVec4(0.64f, 0.66f, 0.66f, 1.0f);
 }
 
 static void load_log() {
@@ -80,65 +90,109 @@ static void load_log() {
 static void configure_imgui_style() {
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.ChildRounding = 4.0f;
-    style.FrameRounding = 4.0f;
-    style.ScrollbarRounding = 4.0f;
-    style.GrabRounding = 4.0f;
+    style.WindowRounding = 0.0f;
+    style.ChildRounding = 0.0f;
+    style.FrameRounding = 0.0f;
+    style.ScrollbarRounding = 0.0f;
+    style.GrabRounding = 0.0f;
     style.WindowBorderSize = 1.0f;
-    style.FrameBorderSize = 1.0f;
-    style.WindowPadding = ImVec2(14.0f, 12.0f);
-    style.ItemSpacing = ImVec2(8.0f, 8.0f);
+    style.ChildBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.WindowPadding = ImVec2(10.0f, 8.0f);
+    style.ItemSpacing = ImVec2(7.0f, 5.0f);
 
     ImVec4* colors = style.Colors;
-    colors[ImGuiCol_WindowBg] = ImVec4(0.015f, 0.025f, 0.030f, 0.88f);
-    colors[ImGuiCol_ChildBg] = ImVec4(0.010f, 0.014f, 0.016f, 0.88f);
-    colors[ImGuiCol_Border] = ImVec4(0.18f, 0.85f, 0.68f, 0.34f);
-    colors[ImGuiCol_TitleBg] = ImVec4(0.010f, 0.030f, 0.034f, 0.96f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.020f, 0.120f, 0.105f, 0.96f);
-    colors[ImGuiCol_Button] = ImVec4(0.035f, 0.150f, 0.135f, 0.90f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.060f, 0.270f, 0.230f, 0.95f);
-    colors[ImGuiCol_ButtonActive] = ImVec4(0.050f, 0.360f, 0.300f, 1.00f);
-    colors[ImGuiCol_FrameBg] = ImVec4(0.020f, 0.060f, 0.065f, 0.92f);
-    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.030f, 0.120f, 0.110f, 0.95f);
-    colors[ImGuiCol_FrameBgActive] = ImVec4(0.040f, 0.180f, 0.160f, 1.00f);
-    colors[ImGuiCol_SliderGrab] = ImVec4(0.18f, 0.95f, 0.74f, 0.92f);
-    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.52f, 1.00f, 0.86f, 1.00f);
+    colors[ImGuiCol_Text] = ImVec4(0.64f, 0.66f, 0.66f, 1.0f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.065f, 0.070f, 0.070f, 0.96f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.055f, 0.058f, 0.058f, 0.98f);
+    colors[ImGuiCol_Border] = ImVec4(0.18f, 0.20f, 0.20f, 0.95f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.050f, 0.055f, 0.055f, 0.98f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.070f, 0.078f, 0.078f, 0.98f);
+    colors[ImGuiCol_Button] = ImVec4(0.105f, 0.115f, 0.115f, 0.95f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.145f, 0.165f, 0.165f, 1.00f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.090f, 0.300f, 0.260f, 1.00f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.100f, 0.108f, 0.108f, 0.98f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.130f, 0.150f, 0.150f, 1.00f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.100f, 0.260f, 0.225f, 1.00f);
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.00f, 0.70f, 0.58f, 0.92f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.00f, 0.92f, 0.76f, 1.00f);
+    colors[ImGuiCol_Separator] = ImVec4(0.22f, 0.24f, 0.24f, 1.0f);
 }
 
 static void draw_log_rows(int visible_count) {
-    const float row_height = ImGui::GetTextLineHeightWithSpacing();
-    if (visible_count > 80) {
-        ImGuiListClipper clipper;
-        clipper.Begin(visible_count, row_height);
-        while (clipper.Step()) {
-            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const std::string& line = state.lines[(std::size_t)i];
-                ImGui::TextColored(color_for_line(line), "%s", line.c_str());
+    const int start = std::max(0, visible_count - 90);
+    if (start > 0) {
+        ImGui::TextColored(ImVec4(0.40f, 0.42f, 0.42f, 1.0f), "... %d earlier lines collapsed", start);
+    }
+    for (int i = start; i < visible_count; ++i) {
+        const std::string& line = state.lines[(std::size_t)i];
+        ImGui::PushStyleColor(ImGuiCol_Text, color_for_line(line));
+        bool code = false;
+        std::string segment;
+        for (char ch : line) {
+            if (ch == '`') {
+                if (!segment.empty()) {
+                    if (code) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.86f, 0.72f, 1.0f));
+                    }
+                    ImGui::TextWrapped("%s", segment.c_str());
+                    if (code) {
+                        ImGui::PopStyleColor();
+                    }
+                    segment.clear();
+                    ImGui::SameLine(0.0f, 0.0f);
+                }
+                code = !code;
+            } else {
+                segment.push_back(ch);
             }
         }
-    } else {
-        for (int i = 0; i < visible_count; ++i) {
-            const std::string& line = state.lines[(std::size_t)i];
-            ImGui::TextColored(color_for_line(line), "%s", line.c_str());
+        if (!segment.empty()) {
+            if (code) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.86f, 0.72f, 1.0f));
+            }
+            ImGui::TextWrapped("%s", segment.c_str());
+            if (code) {
+                ImGui::PopStyleColor();
+            }
+        } else {
+            ImGui::NewLine();
         }
+        ImGui::PopStyleColor();
     }
 }
 
 static void draw_terminal_window() {
     const ImGuiIO& io = ImGui::GetIO();
-    const float margin = 18.0f;
-    const float max_width = std::max(280.0f, io.DisplaySize.x - (margin * 2.0f));
-    const float max_height = std::max(260.0f, io.DisplaySize.y - 156.0f);
-    const float width = std::min(860.0f, max_width);
-    const float height = std::min(560.0f, max_height);
-    const float pos_x = std::max(margin, io.DisplaySize.x - width - 48.0f);
-    const float pos_y = std::max(150.0f, io.DisplaySize.y - height - 58.0f);
+    const bool phone = io.DisplaySize.x < 640.0f;
+    const bool tablet = io.DisplaySize.x >= 640.0f && io.DisplaySize.x < 980.0f;
+    const float margin = phone ? 10.0f : 18.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    float pos_x = margin;
+    float pos_y = margin;
+
+    if (phone) {
+        width = std::max(280.0f, io.DisplaySize.x - (margin * 2.0f));
+        height = std::max(230.0f, std::min(io.DisplaySize.y * 0.42f, io.DisplaySize.y - 250.0f));
+        pos_x = margin;
+        pos_y = std::max(210.0f, io.DisplaySize.y - height - 14.0f);
+    } else if (tablet) {
+        width = std::min(720.0f, io.DisplaySize.x - (margin * 2.0f));
+        height = std::min(500.0f, std::max(300.0f, io.DisplaySize.y * 0.50f));
+        pos_x = std::max(margin, io.DisplaySize.x - width - 24.0f);
+        pos_y = std::max(170.0f, io.DisplaySize.y - height - 32.0f);
+    } else {
+        width = std::min(860.0f, std::max(280.0f, io.DisplaySize.x - (margin * 2.0f)));
+        height = std::min(560.0f, std::max(260.0f, io.DisplaySize.y - 156.0f));
+        pos_x = std::max(margin, io.DisplaySize.x - width - 48.0f);
+        pos_y = std::max(150.0f, io.DisplaySize.y - height - 58.0f);
+    }
 
     ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(pos_x, pos_y), ImGuiCond_FirstUseEver);
 
-    ImGui::Begin("motoko_agent // live status");
+    ImGui::Begin("Motoko // TUI session replay");
 
     if (ImGui::Button(state.paused ? "resume" : "pause")) {
         state.paused = !state.paused;
@@ -147,6 +201,7 @@ static void draw_terminal_window() {
     if (ImGui::Button("restart")) {
         state.current_line = 0;
         state.line_timer = 0.0;
+        state.loop_pause_timer = 0.0;
         state.paused = false;
     }
     ImGui::SameLine();
@@ -160,15 +215,15 @@ static void draw_terminal_window() {
     const int visible_count = (int)std::min(state.current_line, state.lines.size());
     const bool complete = state.current_line >= state.lines.size();
     ImGui::TextColored(
-        ImVec4(0.55f, 0.70f, 0.76f, 1.0f),
-        "lines %d/%d%s",
+        ImVec4(0.52f, 0.55f, 0.56f, 1.0f),
+        "[replay] line %d/%d%s",
         visible_count,
         (int)state.lines.size(),
-        complete ? " // idle" : "");
+        complete ? " | state=idle" : " | state=streaming");
 
     ImGui::Separator();
 
-    ImGui::BeginChild("log-scroll", ImVec2(0.0f, 0.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::BeginChild("log-scroll", ImVec2(0.0f, 0.0f), true);
     const float near_bottom_threshold = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
     const bool should_follow =
         ImGui::GetScrollMaxY() <= 0.0f ||
@@ -211,11 +266,20 @@ static void frame(void) {
     const double dt = stm_sec(stm_diff(now, state.last_ticks));
     state.last_ticks = now;
 
-    if (!state.paused && state.current_line < state.lines.size()) {
-        state.line_timer += dt * (double)state.lines_per_second;
-        while (state.line_timer >= 1.0 && state.current_line < state.lines.size()) {
-            state.current_line += 1;
-            state.line_timer -= 1.0;
+    if (!state.paused && !state.lines.empty()) {
+        if (state.current_line >= state.lines.size()) {
+            state.loop_pause_timer += dt;
+            if (state.loop_pause_timer >= 2.4) {
+                state.current_line = 0;
+                state.line_timer = 0.0;
+                state.loop_pause_timer = 0.0;
+            }
+        } else {
+            state.line_timer += dt * (double)state.lines_per_second;
+            while (state.line_timer >= 1.0 && state.current_line < state.lines.size()) {
+                state.current_line += 1;
+                state.line_timer -= 1.0;
+            }
         }
     }
 
