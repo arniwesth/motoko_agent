@@ -12,6 +12,18 @@
         --cyan: #36f2c2;
         --line: rgba(130, 245, 222, 0.22);
         --shadow: rgba(0, 0, 0, 0.62);
+        --glitch-rx: 0px;
+        --glitch-cx: 0px;
+        --slice-a-x: 0px;
+        --slice-b-x: 0px;
+        --slice-c-x: 0px;
+        --glitch-opacity: 0;
+        --slice-opacity: 0;
+        --brand-glitch-opacity: 0;
+        --noise-opacity: 0.08;
+        --scanline-alpha: 0.04;
+        --telemetry-pulse: 0.34;
+        --telemetry-offset: 0px;
       }
 
       * {
@@ -30,26 +42,120 @@
           "Segoe UI", sans-serif;
       }
 
-      body::before {
+      .glitch-stage {
         position: fixed;
         inset: 0;
-        content: "";
+        z-index: 1;
+        overflow: hidden;
+        pointer-events: none;
+        background: #05080b;
+      }
+
+      .bg-base,
+      .rgb-layer,
+      .slice,
+      .scanlines,
+      .noise {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .bg-base,
+      .rgb-layer,
+      .slice {
         background:
           linear-gradient(90deg, rgba(3, 7, 10, 0.91) 0%, rgba(3, 7, 10, 0.47) 52%, rgba(3, 7, 10, 0.74) 100%),
           linear-gradient(180deg, rgba(3, 7, 10, 0.24) 0%, rgba(3, 7, 10, 0.82) 100%),
           url("assets/motoko.png") center / cover no-repeat;
       }
 
-      body::after {
-        position: fixed;
-        inset: 0;
-        content: "";
-        pointer-events: none;
+      .rgb-layer {
+        opacity: var(--glitch-opacity);
+        mix-blend-mode: screen;
+        will-change: transform, opacity;
+      }
+
+      .rgb-red {
+        transform: translate3d(var(--glitch-rx), 0, 0);
+        filter: sepia(1) saturate(5) hue-rotate(305deg);
+      }
+
+      .rgb-cyan {
+        transform: translate3d(var(--glitch-cx), 0, 0);
+        filter: sepia(1) saturate(4) hue-rotate(120deg);
+      }
+
+      .slice {
+        opacity: var(--slice-opacity);
+        mix-blend-mode: screen;
+        will-change: transform, opacity;
+      }
+
+      .slice-a {
+        clip-path: inset(18% 0 75% 0);
+        transform: translate3d(var(--slice-a-x), 0, 0);
+      }
+
+      .slice-b {
+        clip-path: inset(43% 0 50% 0);
+        transform: translate3d(var(--slice-b-x), 0, 0);
+      }
+
+      .slice-c {
+        clip-path: inset(68% 0 24% 0);
+        transform: translate3d(var(--slice-c-x), 0, 0);
+      }
+
+      .scanlines {
         background-image:
-          linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+          linear-gradient(rgba(255, 255, 255, var(--scanline-alpha)) 1px, transparent 1px),
           linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
         background-size: 42px 42px, 42px 42px;
         mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0.22));
+      }
+
+      .noise {
+        opacity: var(--noise-opacity);
+        background:
+          repeating-radial-gradient(circle at 17% 23%, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 5px),
+          repeating-linear-gradient(0deg, transparent 0 2px, rgba(54, 242, 194, 0.035) 2px 3px, transparent 3px 7px);
+        mix-blend-mode: soft-light;
+      }
+
+      .telemetry {
+        position: fixed;
+        z-index: 2;
+        inset: 0;
+        pointer-events: none;
+        color: rgba(137, 255, 226, 0.68);
+        font: 11px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        text-transform: uppercase;
+      }
+
+      .telemetry span {
+        position: absolute;
+        display: block;
+        max-width: min(360px, 45vw);
+        padding: 2px 0;
+        opacity: var(--telemetry-pulse);
+        text-shadow: 0 0 14px rgba(54, 242, 194, 0.32);
+        transform: translate3d(var(--telemetry-offset), 0, 0);
+      }
+
+      .telemetry .t-a {
+        top: 18px;
+        right: clamp(18px, 4vw, 58px);
+      }
+
+      .telemetry .t-b {
+        right: clamp(18px, 4vw, 58px);
+        bottom: 92px;
+      }
+
+      .telemetry .t-c {
+        left: clamp(18px, 4vw, 58px);
+        bottom: 34px;
       }
 
       .brand {
@@ -61,6 +167,33 @@
         color: var(--ink);
         pointer-events: none;
         text-shadow: 0 22px 56px var(--shadow);
+      }
+
+      .brand-title {
+        position: relative;
+        display: inline-block;
+      }
+
+      .brand-title::before,
+      .brand-title::after {
+        position: absolute;
+        inset: 0;
+        content: attr(data-text);
+        opacity: var(--brand-glitch-opacity);
+        pointer-events: none;
+        will-change: transform, opacity;
+      }
+
+      .brand-title::before {
+        color: rgba(255, 64, 112, 0.78);
+        transform: translate3d(var(--glitch-rx), -1px, 0);
+        clip-path: inset(0 0 52% 0);
+      }
+
+      .brand-title::after {
+        color: rgba(54, 242, 194, 0.78);
+        transform: translate3d(var(--glitch-cx), 1px, 0);
+        clip-path: inset(46% 0 0 0);
       }
 
       h1 {
@@ -146,12 +279,63 @@
         .repo-link {
           margin-top: 16px;
         }
+
+        .slice-c,
+        .telemetry .t-b {
+          display: none;
+        }
+
+        .telemetry span {
+          max-width: 60vw;
+          font-size: 10px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        :root {
+          --glitch-rx: 0px;
+          --glitch-cx: 0px;
+          --slice-a-x: 0px;
+          --slice-b-x: 0px;
+          --slice-c-x: 0px;
+          --glitch-opacity: 0;
+          --slice-opacity: 0;
+          --brand-glitch-opacity: 0;
+          --noise-opacity: 0.08;
+          --scanline-alpha: 0.035;
+          --telemetry-pulse: 0.34;
+          --telemetry-offset: 0px;
+        }
+
+        .rgb-layer,
+        .slice,
+        .brand-title::before,
+        .brand-title::after {
+          display: none;
+        }
       }
     </style>
   </head>
   <body>
+    <div class="glitch-stage" aria-hidden="true">
+      <div class="bg-base"></div>
+      <div class="rgb-layer rgb-red"></div>
+      <div class="rgb-layer rgb-cyan"></div>
+      <div class="slice slice-a"></div>
+      <div class="slice slice-b"></div>
+      <div class="slice slice-c"></div>
+      <div class="scanlines"></div>
+      <div class="noise"></div>
+    </div>
+
+    <div class="telemetry" aria-hidden="true">
+      <span class="t-a" data-telemetry>model.openai/google/gemma-4-26b-A4B-it</span>
+      <span class="t-b" data-telemetry>ext.context_mode // ext.exa_search // ext.omnigraph</span>
+      <span class="t-c" data-telemetry>runtime.step=0007 // hash: 7f3a:motoko:self-verify</span>
+    </div>
+
     <main class="brand" aria-label="Motoko Agent">
-      <h1>Motoko</h1>
+      <h1><span class="brand-title" data-text="Motoko">Motoko</span></h1>
       <p class="tagline">self-verifying agent harness // AILANG runtime // autonomous execution lab</p>
       <a class="repo-link" href="https://github.com/sunholo-data/motoko_agent" rel="noreferrer">github / motoko_agent</a>
     </main>
@@ -207,9 +391,89 @@
         status.textContent = "failed to initialize: " + (reason || "unhandled promise rejection");
         status.dataset.ready = "false";
       });
+
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      let glitchTimer = 0;
+      let glitchOffTimer = 0;
+
+      function randomBetween(min, max) {
+        return Math.random() * (max - min) + min;
+      }
+
+      function setGlitchVars() {
+        const root = document.documentElement;
+        const direction = Math.random() > 0.5 ? 1 : -1;
+        root.style.setProperty("--glitch-rx", `${direction * randomBetween(3, 9).toFixed(2)}px`);
+        root.style.setProperty("--glitch-cx", `${direction * -randomBetween(3, 9).toFixed(2)}px`);
+        root.style.setProperty("--slice-a-x", `${randomBetween(-38, 34).toFixed(2)}px`);
+        root.style.setProperty("--slice-b-x", `${randomBetween(-28, 42).toFixed(2)}px`);
+        root.style.setProperty("--slice-c-x", `${randomBetween(-46, 24).toFixed(2)}px`);
+        const intensity = randomBetween(0.35, 0.72);
+        root.style.setProperty("--glitch-opacity", intensity.toFixed(2));
+        root.style.setProperty("--slice-opacity", (intensity * 0.92).toFixed(2));
+        root.style.setProperty("--brand-glitch-opacity", (intensity * 0.72).toFixed(2));
+        root.style.setProperty("--noise-opacity", (0.08 + intensity * 0.18).toFixed(2));
+        root.style.setProperty("--scanline-alpha", randomBetween(0.07, 0.14).toFixed(3));
+        root.style.setProperty("--telemetry-pulse", randomBetween(0.34, 0.8).toFixed(2));
+        root.style.setProperty("--telemetry-offset", `${randomBetween(0, 2).toFixed(2)}px`);
+      }
+
+      function clearGlitchVars() {
+        const root = document.documentElement;
+        root.style.setProperty("--glitch-rx", "0px");
+        root.style.setProperty("--glitch-cx", "0px");
+        root.style.setProperty("--slice-a-x", "0px");
+        root.style.setProperty("--slice-b-x", "0px");
+        root.style.setProperty("--slice-c-x", "0px");
+        root.style.setProperty("--glitch-opacity", "0");
+        root.style.setProperty("--slice-opacity", "0");
+        root.style.setProperty("--brand-glitch-opacity", "0");
+        root.style.setProperty("--noise-opacity", "0.08");
+        root.style.setProperty("--scanline-alpha", "0.04");
+        root.style.setProperty("--telemetry-pulse", "0.34");
+        root.style.setProperty("--telemetry-offset", "0px");
+        document.body.dataset.glitch = "off";
+      }
+
+      function scheduleGlitch() {
+        clearTimeout(glitchTimer);
+        clearTimeout(glitchOffTimer);
+        if (reduceMotion.matches) {
+          clearGlitchVars();
+          return;
+        }
+
+        glitchTimer = window.setTimeout(() => {
+          document.body.dataset.glitch = "on";
+          setGlitchVars();
+
+          const substeps = Math.floor(randomBetween(2, 5));
+          let step = 1;
+          const stepper = window.setInterval(() => {
+            setGlitchVars();
+            step += 1;
+            if (step >= substeps) {
+              window.clearInterval(stepper);
+            }
+          }, randomBetween(36, 64));
+
+          glitchOffTimer = window.setTimeout(() => {
+            window.clearInterval(stepper);
+            clearGlitchVars();
+            scheduleGlitch();
+          }, randomBetween(120, 300));
+        }, randomBetween(2000, 5000));
+      }
+
+      if (typeof reduceMotion.addEventListener === "function") {
+        reduceMotion.addEventListener("change", scheduleGlitch);
+      } else if (typeof reduceMotion.addListener === "function") {
+        reduceMotion.addListener(scheduleGlitch);
+      }
+      scheduleGlitch();
     </script>
-    <script async src="dist/motoko.js?v=20260514-1532"
+    <script async src="dist/motoko.js"
       onload="document.getElementById('status').textContent = 'initializing wasm runtime...'"
-      onerror="document.getElementById('status').textContent = 'failed to load dist/motoko.js'"></script>
+      onerror="document.getElementById('status').textContent = 'failed to load ' + new URL('dist/motoko.js', window.location.href).href"></script>
   </body>
 </html>
