@@ -9,6 +9,7 @@ The target feel is corrupted AI runtime telemetry: signal instability, chromatic
 First pass only:
 
 * Keep the existing C++/WASM ImGui terminal unchanged unless a visual layering issue requires a small adjustment.
+* Keep the ImGui terminal visually stable. Glitch effects may affect the background and brand overlay, but they should not distort terminal text or controls.
 * Implement the effect in `web/index.html` using CSS and a small JavaScript scheduler.
 * Reuse `web/assets/motoko.png` as the base visual asset.
 * Avoid WebGL shaders, generated video, or large new binary assets in this pass.
@@ -24,11 +25,14 @@ First pass only:
    * Add duplicate pseudo-elements or absolutely positioned layers that reuse the background image.
    * Tint or blend them cyan/red.
    * During glitch bursts, offset them by a few pixels in opposite directions.
+   * Limit animated full-viewport duplicate layers to two.
 
 3. **Horizontal Slice Distortion**
    * Add 3-6 thin horizontal glitch bands.
    * Each band should briefly translate left/right during a burst.
    * Use `clip-path`, `transform`, and opacity rather than canvas drawing.
+   * Keep slice layers behind the canvas so they distort only the background image.
+   * On narrow or low-performance viewports, reduce the number of visible slices.
 
 4. **Scanline / Noise Overlay**
    * Keep scanlines subtle in the normal state.
@@ -39,10 +43,12 @@ First pass only:
    * Add small, sparse HUD text around the edges: model ID fragments, extension names, tick counters, checksum-like strings.
    * Keep this text decorative and non-essential.
    * Do not let it collide with the brand block, GitHub link, loading badge, or ImGui terminal.
+   * Mark decorative telemetry with `aria-hidden="true"`.
 
 6. **Brand Text Distortion**
    * Add a brief flicker/skew to the Motoko title during bursts.
    * Keep the title readable at all times.
+   * Apply brand distortion only to decorative duplicate/shadow layers when possible, leaving the real heading stable for readability.
 
 ## Motion Rules
 * The default state should be mostly stable.
@@ -51,6 +57,7 @@ First pass only:
 * Bursts can contain 2-4 rapid substeps, but avoid constant jitter.
 * Do not animate layout-affecting properties. Prefer `transform`, `opacity`, and CSS variables.
 * Respect `prefers-reduced-motion: reduce` by disabling scheduled bursts and leaving only static overlays.
+* Do not animate filters continuously. If `filter` is used, apply it only during short bursts and test performance on mobile.
 
 ## Implementation Steps
 
@@ -63,6 +70,8 @@ First pass only:
    * canvas;
    * brand/link overlay;
    * loading/status badge.
+5. Keep the canvas and ImGui terminal above all background glitch layers.
+6. Use `pointer-events: none` on all decorative glitch and telemetry layers.
 
 ### Phase 2: Burst Scheduler
 1. Add a small script that toggles a `data-glitch="on"` attribute on `document.body`.
@@ -72,8 +81,16 @@ First pass only:
    * RGB split offset;
    * slice offset values;
    * scanline intensity.
-3. Use `setTimeout`, not a per-frame loop.
-4. Disable the scheduler when `prefers-reduced-motion` is active.
+3. Write randomized values into CSS custom properties, for example:
+   * `--glitch-rx`
+   * `--glitch-cx`
+   * `--slice-a-x`
+   * `--slice-b-x`
+   * `--glitch-opacity`
+   * `--scanline-alpha`
+4. Use `setTimeout`, not a per-frame loop.
+5. Disable the scheduler when `prefers-reduced-motion` is active.
+6. Listen for `prefers-reduced-motion` changes and stop/restart the scheduler accordingly.
 
 ### Phase 3: Telemetry
 1. Add a few absolutely positioned decorative text groups.
@@ -84,12 +101,14 @@ First pass only:
    * `hash: 7f3a:motoko:self-verify`
 3. Randomly pulse one telemetry group during a glitch burst.
 4. Keep font sizes small and clamp them for mobile.
+5. Add `aria-hidden="true"` and avoid focusable elements inside telemetry groups.
 
 ### Phase 4: Responsive Pass
 1. Check desktop, tablet, and mobile widths.
 2. Ensure the ImGui terminal remains visually dominant and draggable.
 3. Ensure the GitHub link is still clickable.
 4. Reduce or hide telemetry on narrow screens if it competes with the main content.
+5. Confirm the terminal text is never distorted by the glitch layers.
 
 ### Phase 5: Verification
 1. Run `make web`.
@@ -101,6 +120,10 @@ First pass only:
    * text remains readable during and after bursts;
    * reduced-motion mode disables bursts;
    * mobile viewport does not overlap important UI.
+4. Verify reduced motion concretely by either:
+   * enabling "prefers-reduced-motion: reduce" in browser devtools rendering settings; or
+   * temporarily forcing `window.matchMedia("(prefers-reduced-motion: reduce)")` behavior during local testing.
+5. Use the performance panel or visual observation to confirm bursts do not cause sustained frame drops on a mid-size laptop viewport.
 
 ## Non-Goals
 * Do not add a full WebGL shader pipeline in this pass.
