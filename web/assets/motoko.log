@@ -1,0 +1,24 @@
+[INFO] profile default loaded from .motoko/config/default/config.json
+[INFO] extension registry hydrated: context_mode, exa_search, omnigraph
+[INFO] model openai/google/gemma-4-26b-A4B-it selected
+> planning task: inspect runtime loop and verify tool dispatch
+[INFO] reading src/core/rpc.ail
+[INFO] reading src/core/parse.ail
+> executing rg "ToolCall|BashExec|ReadFile" src/core
+[INFO] found 14 callsites across 4 modules
+> executing ailang check src/core/rpc.ail
+[PASS] src/core/rpc.ail type-check completed
+> executing ailang test src/core/parse_test.ail
+[PASS] parse_test: 18 passed, 0 failed
+[INFO] composing patch: tighten continuation intent guard
+> executing apply_patch src/core/supervisor.ail
+[INFO] patch accepted; validating extension boot
+> executing make verify_extensions
+[PASS] context_mode register_with_config
+[PASS] exa_search register_with_config
+[PASS] omnigraph register_with_config
+[INFO] evidence: runtime loop preserved, no delegated storm detected
+> executing make test
+[PASS] core runtime module tests passed
+[INFO] writing session summary to .agent/summaries/latest.md
+[INFO] Motoko idle: waiting for next instruction

@@ -20,7 +20,7 @@ The site should use a CSS background image behind a transparent canvas for the f
 ├── web/
 │   ├── index.html          # Clean HTML shell to host the WASM canvas
 │   └── assets/
-│       ├── background.jpg  # Site-only background wallpaper
+│       ├── motoko.png      # Site-only background artwork
 │       └── motoko.log      # Pre-recorded agent execution log
 ├── ext/                    # External dependencies
 │   ├── sokol/              # Sokol headers
@@ -51,7 +51,7 @@ The site should use a CSS background image behind a transparent canvas for the f
 
 ### Phase 3: Web Shell & Visual Base
 1.  Create `web/index.html` with a full-screen `<canvas id="canvas"></canvas>` and the Emscripten module bootstrap.
-2.  Style the page to remove margins, hide scrollbars, set a dark fallback color, and place `web/assets/background.jpg` as a full-viewport CSS background.
+2.  Style the page to remove margins, hide scrollbars, set a dark fallback color, and place `web/assets/motoko.png` as a full-viewport CSS background.
 3.  Add an HTML overlay above the background and below/around the canvas for static promotional content. The visible composition should include:
     *   the Motoko name as the dominant brand signal;
     *   a short supporting line such as "self-verifying agent harness";

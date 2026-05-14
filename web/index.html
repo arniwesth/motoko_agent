@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Motoko Agent</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ink: #eef7ff;
+        --muted: #9fb2bf;
+        --cyan: #36f2c2;
+        --line: rgba(130, 245, 222, 0.22);
+        --shadow: rgba(0, 0, 0, 0.62);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #05080b;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      body::before {
+        position: fixed;
+        inset: 0;
+        content: "";
+        background:
+          linear-gradient(90deg, rgba(3, 7, 10, 0.91) 0%, rgba(3, 7, 10, 0.47) 52%, rgba(3, 7, 10, 0.74) 100%),
+          linear-gradient(180deg, rgba(3, 7, 10, 0.24) 0%, rgba(3, 7, 10, 0.82) 100%),
+          url("assets/motoko.png") center / cover no-repeat;
+      }
+
+      body::after {
+        position: fixed;
+        inset: 0;
+        content: "";
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+        background-size: 42px 42px, 42px 42px;
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0.22));
+      }
+
+      .brand {
+        position: fixed;
+        z-index: 4;
+        top: clamp(24px, 7vh, 76px);
+        left: clamp(18px, 6vw, 72px);
+        max-width: min(620px, calc(100vw - 36px));
+        color: var(--ink);
+        pointer-events: none;
+        text-shadow: 0 22px 56px var(--shadow);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(52px, 10vw, 132px);
+        line-height: 0.84;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .tagline {
+        width: min(520px, 90vw);
+        margin: 18px 0 0;
+        color: var(--muted);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: clamp(14px, 2.2vw, 19px);
+        line-height: 1.5;
+      }
+
+      .repo-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 40px;
+        margin-top: 24px;
+        padding: 0 14px;
+        border: 1px solid var(--line);
+        color: var(--cyan);
+        background: rgba(4, 10, 13, 0.52);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 13px;
+        text-decoration: none;
+        pointer-events: auto;
+        backdrop-filter: blur(10px);
+      }
+
+      .repo-link:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 3px;
+      }
+
+      #canvas {
+        position: fixed;
+        z-index: 3;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        display: block;
+        background: transparent;
+        outline: none;
+      }
+
+      .status {
+        position: fixed;
+        z-index: 5;
+        right: 18px;
+        bottom: 16px;
+        max-width: min(420px, calc(100vw - 36px));
+        padding: 8px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: var(--muted);
+        background: rgba(0, 0, 0, 0.46);
+        font: 12px/1.4 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        backdrop-filter: blur(8px);
+        pointer-events: none;
+      }
+
+      .status[data-ready="true"] {
+        opacity: 0;
+        transform: translateY(8px);
+        transition: opacity 220ms ease, transform 220ms ease;
+      }
+
+      @media (max-width: 720px) {
+        .brand {
+          top: 22px;
+        }
+
+        .tagline {
+          margin-top: 12px;
+        }
+
+        .repo-link {
+          margin-top: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="brand" aria-label="Motoko Agent">
+      <h1>Motoko</h1>
+      <p class="tagline">self-verifying agent harness // AILANG runtime // autonomous execution lab</p>
+      <a class="repo-link" href="https://github.com/sunholo-data/motoko_agent" rel="noreferrer">github / motoko_agent</a>
+    </main>
+
+    <canvas id="canvas" tabindex="-1"></canvas>
+    <div id="status" class="status">loading wasm module...</div>
+
+    <script>
+      const status = document.getElementById("status");
+      window.Module = {
+        canvas: document.getElementById("canvas"),
+        locateFile(path) {
+          if (path.endsWith(".wasm") || path.endsWith(".data")) {
+            return "dist/" + path;
+          }
+          return path;
+        },
+        setStatus(text) {
+          if (text) status.textContent = text;
+        },
+        print(text) {
+          console.log(text);
+        },
+        printErr(text) {
+          console.error(text);
+          status.textContent = text;
+        },
+        onRuntimeInitialized() {
+          status.textContent = "runtime ready";
+          status.dataset.ready = "true";
+        }
+      };
+
+      window.Module.postRun = [() => {
+        status.textContent = "runtime ready";
+        status.dataset.ready = "true";
+      }];
+
+      window.addEventListener("error", (event) => {
+        const target = event.target;
+        if (target && target.tagName === "SCRIPT") {
+          status.textContent = "failed to load " + target.getAttribute("src");
+        } else if (target && target.tagName === "LINK") {
+          status.textContent = "failed to load " + target.getAttribute("href");
+        } else {
+          status.textContent = "failed to initialize: " + (event.message || "unknown error");
+        }
+        status.dataset.ready = "false";
+      }, true);
+
+      window.addEventListener("unhandledrejection", (event) => {
+        const reason = event.reason && (event.reason.message || event.reason);
+        status.textContent = "failed to initialize: " + (reason || "unhandled promise rejection");
+        status.dataset.ready = "false";
+      });
+    </script>
+    <script async src="dist/motoko.js?v=20260514-1532"
+      onload="document.getElementById('status').textContent = 'initializing wasm runtime...'"
+      onerror="document.getElementById('status').textContent = 'failed to load dist/motoko.js'"></script>
+  </body>
+</html>
