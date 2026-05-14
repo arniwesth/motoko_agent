@@ -11,7 +11,7 @@ The first implementation should be a polished static demo, not a live agent. Fut
 *   **UI Framework:** [Dear ImGui](https://github.com/ocornut/imgui) + `sokol_imgui.h`
 *   **Compiler:** [Emscripten](https://emscripten.org/) (`emcc`) to compile C++ to WebAssembly.
 
-The site should use a CSS background image behind the canvas for the first version. This avoids a custom textured-quad shader pipeline and keeps the C++ side focused on the interactive ImGui layer. Add Sokol texture rendering only if the canvas must own the background later.
+The site should use a CSS background image behind a transparent canvas for the first version. This avoids a custom textured-quad shader pipeline and keeps the C++ side focused on the interactive ImGui layer. Add Sokol texture rendering only if the canvas must own the background later.
 
 ## Directory Structure
 ```text
@@ -33,11 +33,9 @@ The site should use a CSS background image behind the canvas for the first versi
 ## Implementation Phases
 
 ### Phase 1: Environment & Dependencies
-1.  Use the Emscripten SDK supplied by the development environment when available. Otherwise install `emsdk` locally and document the exact version in `ext/versions.lock`.
+1.  Use Emscripten 3.1.x or newer. Add `make check_emcc` to print `emcc --version` and fail clearly when `emcc` is missing or below the supported version.
 2.  Vendor Sokol and Dear ImGui into `ext/` at pinned commits/tags. Record each source URL and revision in `ext/versions.lock`.
-3.  Add a repeatable dependency bootstrap path, either:
-    *   `make deps`, which fetches the pinned dependencies into `ext/`; or
-    *   checked-in vendored files plus `make verify_deps`, which confirms the expected files are present.
+3.  Add `make deps`, which fetches the pinned dependencies into `ext/`. Keep generated dependency downloads out of source control unless the project later decides to vendor them permanently.
 4.  Required vendored files:
     *   Sokol headers: `sokol_app.h`, `sokol_gfx.h`, `sokol_glue.h`, `sokol_imgui.h`, `sokol_time.h`
     *   Dear ImGui sources: `imgui.cpp`, `imgui_draw.cpp`, `imgui_tables.cpp`, `imgui_widgets.cpp`, `imgui_demo.cpp` only if the demo window is used during development.
@@ -48,17 +46,20 @@ The site should use a CSS background image behind the canvas for the first versi
 3.  **ImGui Setup:** Initialize `sokol_imgui` to route ImGui rendering through WebGL.
 4.  **App Loop:** Create the `init`, `frame`, `event`, and `cleanup` callbacks required by `sokol_app`.
 5.  **Timing:** Use `sokol_time.h` for frame delta timing instead of hand-rolled wall-clock logic.
-6.  **Canvas Behavior:** Configure the canvas for high-DPI rendering, resize with the viewport, and clear with transparent or near-black alpha so the CSS background remains visible.
+6.  **Canvas Behavior:** Configure the canvas for high-DPI rendering and resize with the viewport.
+7.  **Transparency:** Request an alpha-enabled WebGL canvas and clear with transparent black (`rgba(0, 0, 0, 0)`) so the CSS background remains visible behind ImGui.
 
 ### Phase 3: Web Shell & Visual Base
 1.  Create `web/index.html` with a full-screen `<canvas id="canvas"></canvas>` and the Emscripten module bootstrap.
 2.  Style the page to remove margins, hide scrollbars, set a dark fallback color, and place `web/assets/background.jpg` as a full-viewport CSS background.
-3.  Make the first viewport clearly identify Motoko. The visible composition should include:
+3.  Add an HTML overlay above the background and below/around the canvas for static promotional content. The visible composition should include:
     *   the Motoko name as the dominant brand signal;
     *   a short supporting line such as "self-verifying agent harness";
     *   an unobtrusive GitHub/repo link;
     *   the live-status ImGui window as the primary interactive object.
-4.  Provide loading and failure states in HTML/CSS while the WASM module downloads or fails to initialize.
+4.  Keep static brand text and links in HTML for accessibility and reliable layout. Keep replay controls and the live-status terminal inside ImGui.
+5.  Ensure pointer events are configured so HTML links are clickable and the canvas still receives drag/input events for the ImGui window.
+6.  Provide loading and failure states in HTML/CSS while the WASM module downloads or fails to initialize.
 
 ### Phase 4: The Agent Simulation (Log Replay)
 1.  **File Loading:** In `init`, read `/assets/motoko.log` into memory from the Emscripten preload package.
@@ -66,7 +67,7 @@ The site should use a CSS background image behind the canvas for the first versi
 3.  **ImGui Window:**
     *   Create an ImGui window (`ImGui::Begin("motoko_agent // live status");`).
     *   Set an initial size and position that works on desktop and mobile.
-    *   Render only the currently visible portion of long logs using `ImGuiListClipper` when the log exceeds a small threshold.
+    *   Render fixed-height single-line log rows. If the log grows beyond a small threshold, use `ImGuiListClipper`; otherwise keep the simpler direct rendering path.
     *   Add syntax highlighting / text coloring for specific keywords (e.g., `[INFO]`, `[ERROR]`, `> executing`).
     *   Implement auto-scroll only while the user is already near the bottom, so manual scrolling is not constantly overridden.
     *   Add compact controls for pause/resume, restart, and replay speed.
@@ -92,7 +93,8 @@ The site should use a CSS background image behind the canvas for the first versi
     *   `-sNO_EXIT_RUNTIME=1`
     *   `--preload-file web/assets@/assets`
 5.  Add Make targets:
-    *   `make deps` or `make verify_deps`
+    *   `make check_emcc`
+    *   `make deps`
     *   `make web`
     *   `make web-debug`
     *   `make clean-web`
