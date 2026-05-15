@@ -162,7 +162,7 @@ static void draw_log_rows(int visible_count) {
                     if (code) {
                         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.22f, 0.56f, 0.50f, 1.0f));
                     }
-                    ImGui::TextWrapped("%s", segment.c_str());
+                    ImGui::Text("%s", segment.c_str());
                     if (code) {
                         ImGui::PopStyleColor();
                     }
@@ -178,7 +178,7 @@ static void draw_log_rows(int visible_count) {
             if (code) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.22f, 0.56f, 0.50f, 1.0f));
             }
-            ImGui::TextWrapped("%s", segment.c_str());
+            ImGui::Text("%s", segment.c_str());
             if (code) {
                 ImGui::PopStyleColor();
             }
@@ -301,7 +301,7 @@ static void draw_terminal_window() {
         pos_y = std::max(140.0f, io.DisplaySize.y - height - 110.0f);
     } else {
         width = std::min(860.0f, std::max(280.0f, io.DisplaySize.x - (margin * 2.0f)));
-        height = std::min(440.0f, std::max(240.0f, io.DisplaySize.y - 260.0f));
+        height = std::min(540.0f, std::max(240.0f, io.DisplaySize.y - 260.0f));
         pos_x = std::max(margin, io.DisplaySize.x - width - 48.0f);
         pos_y = std::max(120.0f, io.DisplaySize.y - height - 130.0f);
     }
