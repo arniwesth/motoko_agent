@@ -226,18 +226,29 @@
       .repo-link {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
+        gap: 0;
         min-height: 40px;
         margin-top: 24px;
         padding: 0 14px;
         border: 1px solid var(--line);
-        color: var(--cyan);
-        background: rgba(4, 10, 13, 0.52);
+        color: var(--muted);
+        background: rgba(4, 10, 13, 0.62);
         font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
         font-size: 13px;
         text-decoration: none;
         pointer-events: auto;
         backdrop-filter: blur(10px);
+      }
+
+      .repo-link .prompt {
+        color: var(--cyan);
+        margin-right: 8px;
+        user-select: none;
+      }
+
+      .repo-link:hover {
+        color: var(--cyan);
+        border-color: rgba(54, 242, 194, 0.42);
       }
 
       .repo-link:focus-visible {
@@ -279,19 +290,38 @@
 
       @media (max-width: 720px) {
         .brand {
-          top: 22px;
+          top: 16px;
+          left: 14px;
+        }
+
+        h1 {
+          font-size: clamp(38px, 12vw, 64px);
         }
 
         .tagline {
-          margin-top: 12px;
+          margin-top: 8px;
+          font-size: clamp(11px, 2.8vw, 14px);
         }
 
         .repo-link {
-          margin-top: 16px;
+          margin-top: 12px;
+          font-size: 11px;
+          min-height: 34px;
+          padding: 0 10px;
         }
 
         .telemetry .t-b {
           display: none;
+        }
+
+        .telemetry .t-a {
+          top: 12px;
+          right: 12px;
+        }
+
+        .telemetry .t-c {
+          left: 12px;
+          bottom: 8px;
         }
 
         .patch-6,
@@ -301,8 +331,8 @@
         }
 
         .telemetry span {
-          max-width: 60vw;
-          font-size: 10px;
+          max-width: 55vw;
+          font-size: 9px;
         }
       }
 
@@ -354,7 +384,7 @@
     <main class="brand" aria-label="Motoko Agent">
       <h1><span class="brand-title" data-text="Motoko">Motoko</span></h1>
       <p class="tagline">self-verifying agent harness // AILANG runtime // autonomous execution lab</p>
-      <a class="repo-link" href="https://github.com/sunholo-data/motoko_agent" rel="noreferrer">github / motoko_agent</a>
+      <a class="repo-link" href="https://github.com/arniwesth/motoko_agent" target="_blank" rel="noreferrer"><span class="prompt">$</span> git clone github.com/arniwesth/motoko_agent</a>
     </main>
 
     <canvas id="canvas" tabindex="-1"></canvas>
@@ -394,21 +424,21 @@
 
       window.addEventListener("error", (event) => {
         const target = event.target;
-        if (target && target.tagName === "SCRIPT") {
-          console.warn("script resource event", target.getAttribute("src"));
-        } else if (target && target.tagName === "LINK") {
-          status.textContent = "failed to load " + target.getAttribute("href");
-          status.dataset.ready = "false";
-        } else {
-          status.textContent = "failed to initialize: " + (event.message || "unknown error");
-          status.dataset.ready = "false";
+        if (target && (target.tagName === "SCRIPT" || target.tagName === "LINK") && event.target !== window) {
+          const src = target.getAttribute("src") || target.getAttribute("href") || "unknown";
+          console.warn("resource load error:", src);
+          if (!status.dataset.ready) {
+            status.textContent = "failed to load " + src;
+          }
         }
       }, true);
 
       window.addEventListener("unhandledrejection", (event) => {
-        const reason = event.reason && (event.reason.message || event.reason);
-        status.textContent = "failed to initialize: " + (reason || "unhandled promise rejection");
-        status.dataset.ready = "false";
+        const reason = event.reason && (event.reason.message || String(event.reason));
+        console.error("unhandled rejection:", reason);
+        if (!status.dataset.ready) {
+          status.textContent = "failed to initialize: " + (reason || "unhandled promise rejection");
+        }
       });
 
       status.textContent = "loading wasm runtime...";
