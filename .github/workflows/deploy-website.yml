@@ -35,7 +35,26 @@ jobs:
           version: latest
 
       - name: Fetch web dependencies
-        run: make deps
+        env:
+          SOKOL_REV: 453c71214fbb55d782683d20ea7e6c07314e3e9b
+          IMGUI_REV: 85b2fe8486190fa9326565a2fb5fccb6caea4396
+        run: |
+          mkdir -p ext/sokol ext/imgui
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/sokol_app.h" -o ext/sokol/sokol_app.h
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/sokol_gfx.h" -o ext/sokol/sokol_gfx.h
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/sokol_glue.h" -o ext/sokol/sokol_glue.h
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/sokol_time.h" -o ext/sokol/sokol_time.h
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/util/sokol_imgui.h" -o ext/sokol/sokol_imgui.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imconfig.h" -o ext/imgui/imconfig.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui.h" -o ext/imgui/imgui.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui_internal.h" -o ext/imgui/imgui_internal.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui.cpp" -o ext/imgui/imgui.cpp
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui_draw.cpp" -o ext/imgui/imgui_draw.cpp
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui_tables.cpp" -o ext/imgui/imgui_tables.cpp
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui_widgets.cpp" -o ext/imgui/imgui_widgets.cpp
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imstb_rectpack.h" -o ext/imgui/imstb_rectpack.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imstb_textedit.h" -o ext/imgui/imstb_textedit.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imstb_truetype.h" -o ext/imgui/imstb_truetype.h
 
       - name: Build web artifacts
         run: |
