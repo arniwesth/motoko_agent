@@ -21,7 +21,6 @@
         --scanline-alpha: 0.04;
         --telemetry-pulse: 0.34;
         --telemetry-offset: 0px;
-        --bg-shift-x: -14vw;
       }
 
       * {
@@ -63,8 +62,7 @@
         background:
           linear-gradient(90deg, rgba(3, 7, 10, 0.91) 0%, rgba(3, 7, 10, 0.47) 52%, rgba(3, 7, 10, 0.74) 100%),
           linear-gradient(180deg, rgba(3, 7, 10, 0.24) 0%, rgba(3, 7, 10, 0.82) 100%),
-          url("assets/motoko3.png") center / cover no-repeat;
-        transform: translate3d(var(--bg-shift-x), 0, 0);
+          url("assets/motoko4.png") center / cover no-repeat;
       }
 
       .rgb-layer {
@@ -74,12 +72,12 @@
       }
 
       .rgb-red {
-        transform: translate3d(calc(var(--bg-shift-x) + var(--global-glitch-red-x)), 0, 0);
+        transform: translate3d(var(--global-glitch-red-x), 0, 0);
         filter: sepia(1) saturate(5) hue-rotate(305deg);
       }
 
       .rgb-cyan {
-        transform: translate3d(calc(var(--bg-shift-x) + var(--global-glitch-cyan-x)), 0, 0);
+        transform: translate3d(var(--global-glitch-cyan-x), 0, 0);
         filter: sepia(1) saturate(4) hue-rotate(120deg);
       }
 
@@ -104,7 +102,7 @@
         background:
           linear-gradient(90deg, rgba(3, 7, 10, 0.86) 0%, rgba(3, 7, 10, 0.32) 52%, rgba(3, 7, 10, 0.62) 100%),
           linear-gradient(180deg, rgba(3, 7, 10, 0.10) 0%, rgba(3, 7, 10, 0.42) 100%),
-          url("assets/motoko3.png") var(--patch-bg-x, center) var(--patch-bg-y, center) / 100vw 100vh no-repeat;
+          url("assets/motoko4.png") var(--patch-bg-x, center) var(--patch-bg-y, center) / 100vw 100vh no-repeat;
       }
 
       .glitch-patch::before {
