@@ -17,27 +17,47 @@ Add a single GitHub Actions workflow file: `.github/workflows/deploy-website.yml
   - `.github/workflows/deploy-website.yml`
 - **workflow_dispatch** for manual runs from any branch
 
-### Build steps
+### Job 1: `build`
 
-1. **Checkout** the repo
-2. **Install Emscripten** using `mymindstorm/setup-emsdk` action (version `latest`, matching the Makefile's `EMSDK_VERSION`)
-3. **Fetch dependencies** via `make deps` (downloads pinned Sokol and ImGui headers)
-4. **Compile** the WASM build by running the `emcc` command directly (the action already sets up Emscripten in PATH, so the Makefile's `emsdk` target is unnecessary)
-5. **Upload** `web/` as a GitHub Pages artifact using `actions/upload-pages-artifact`
-6. **Deploy** using `actions/deploy-pages`
+Runs on `ubuntu-latest`.
+
+1. **Checkout** the repo (`actions/checkout@v4`)
+2. **Install Emscripten** using `mymindstorm/setup-emsdk@v14` (version `latest`, matching the Makefile's `EMSDK_VERSION`)
+3. **Fetch dependencies** via `make deps` (downloads pinned Sokol and ImGui headers into `ext/`)
+4. **Compile** the WASM build by running the `emcc` command directly (the action puts `emcc` in PATH, so the Makefile's `emsdk` env sourcing is unnecessary):
+   ```
+   mkdir -p web/dist
+   emcc src/main.cpp \
+     ext/imgui/imgui.cpp ext/imgui/imgui_draw.cpp \
+     ext/imgui/imgui_tables.cpp ext/imgui/imgui_widgets.cpp \
+     -Iext/sokol -Iext/imgui \
+     -std=c++17 -O2 \
+     -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
+     -sALLOW_MEMORY_GROWTH=1 -sNO_EXIT_RUNTIME=1 \
+     --preload-file web/assets@/assets \
+     -o web/dist/motoko.js
+   ```
+5. **Configure Pages** (`actions/configure-pages@v5`) — sets base path metadata
+6. **Upload artifact** (`actions/upload-pages-artifact@v3`) with `path: web/`
+
+### Job 2: `deploy`
+
+Depends on `build`. Runs in the `github-pages` environment.
+
+1. **Deploy** (`actions/deploy-pages@v4`)
 
 ### Deployment artifact
 
 The uploaded directory is `web/`, which contains:
 - `index.html` at root
 - `assets/motoko.png` and `assets/motoko.log`
-- `dist/motoko.js`, `dist/motoko.wasm`, `dist/motoko.data` (built during CI)
+- `dist/motoko.js`, `dist/motoko.wasm`, `dist/motoko.data` (built in job 1)
 
 ### Permissions and environment
 
-- The workflow needs `pages: write` and `id-token: write` permissions
-- The deploy job uses the `github-pages` environment
-- Concurrency group prevents overlapping deployments
+- Top-level permissions: `pages: write` and `id-token: write`
+- The `deploy` job uses the `github-pages` environment
+- Concurrency group `pages` with `cancel-in-progress: false` prevents overlapping deployments
 
 ## Manual repo setup (one-time)
 
