@@ -291,19 +291,19 @@ static void draw_terminal_window() {
 
     if (phone) {
         width = std::max(280.0f, io.DisplaySize.x - (margin * 2.0f));
-        height = std::max(230.0f, std::min(io.DisplaySize.y * 0.42f, io.DisplaySize.y - 250.0f));
+        height = std::max(200.0f, std::min(io.DisplaySize.y * 0.38f, io.DisplaySize.y - 280.0f));
         pos_x = margin;
-        pos_y = std::max(210.0f, io.DisplaySize.y - height - 14.0f);
+        pos_y = std::max(180.0f, io.DisplaySize.y - height - 64.0f);
     } else if (tablet) {
         width = std::min(720.0f, io.DisplaySize.x - (margin * 2.0f));
-        height = std::min(500.0f, std::max(300.0f, io.DisplaySize.y * 0.50f));
+        height = std::min(420.0f, std::max(260.0f, io.DisplaySize.y * 0.45f));
         pos_x = std::max(margin, io.DisplaySize.x - width - 24.0f);
-        pos_y = std::max(170.0f, io.DisplaySize.y - height - 32.0f);
+        pos_y = std::max(140.0f, io.DisplaySize.y - height - 110.0f);
     } else {
         width = std::min(860.0f, std::max(280.0f, io.DisplaySize.x - (margin * 2.0f)));
-        height = std::min(560.0f, std::max(260.0f, io.DisplaySize.y - 156.0f));
+        height = std::min(440.0f, std::max(240.0f, io.DisplaySize.y - 260.0f));
         pos_x = std::max(margin, io.DisplaySize.x - width - 48.0f);
-        pos_y = std::max(150.0f, io.DisplaySize.y - height - 58.0f);
+        pos_y = std::max(120.0f, io.DisplaySize.y - height - 130.0f);
     }
 
     ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_FirstUseEver);
