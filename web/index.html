@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Motoko Agent</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ink: #eef7ff;
+        --muted: #9fb2bf;
+        --cyan: #36f2c2;
+        --line: rgba(130, 245, 222, 0.22);
+        --shadow: rgba(0, 0, 0, 0.62);
+        --glitch-opacity: 0;
+        --global-glitch-opacity: 0;
+        --global-glitch-red-x: 1px;
+        --global-glitch-cyan-x: -1px;
+        --brand-glitch-opacity: 0;
+        --noise-opacity: 0.08;
+        --scanline-alpha: 0.04;
+        --telemetry-pulse: 0.34;
+        --telemetry-offset: 0px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #05080b;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      .glitch-stage {
+        position: fixed;
+        inset: 0;
+        z-index: 1;
+        overflow: hidden;
+        pointer-events: none;
+        background: #05080b;
+      }
+
+      .bg-base,
+      .rgb-layer,
+      .scanlines,
+      .noise {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .bg-base,
+      .rgb-layer {
+        background:
+          linear-gradient(90deg, rgba(3, 7, 10, 0.91) 0%, rgba(3, 7, 10, 0.47) 52%, rgba(3, 7, 10, 0.74) 100%),
+          linear-gradient(180deg, rgba(3, 7, 10, 0.24) 0%, rgba(3, 7, 10, 0.82) 100%),
+          url("assets/motoko4.png") center / cover no-repeat;
+      }
+
+      .rgb-layer {
+        opacity: var(--global-glitch-opacity);
+        mix-blend-mode: screen;
+        will-change: transform, opacity;
+      }
+
+      .rgb-red {
+        transform: translate3d(var(--global-glitch-red-x), 0, 0);
+        filter: sepia(1) saturate(5) hue-rotate(305deg);
+      }
+
+      .rgb-cyan {
+        transform: translate3d(var(--global-glitch-cyan-x), 0, 0);
+        filter: sepia(1) saturate(4) hue-rotate(120deg);
+      }
+
+      .glitch-patch {
+        position: absolute;
+        left: var(--patch-x, -20vw);
+        top: var(--patch-y, -20vh);
+        width: var(--patch-w, 12vw);
+        height: var(--patch-h, 5vh);
+        opacity: var(--patch-opacity, 0);
+        overflow: hidden;
+        pointer-events: none;
+        transform: translate3d(var(--patch-shift, 0px), 0, 0);
+        will-change: transform, opacity, left, top, width, height;
+      }
+
+      .glitch-patch::before,
+      .glitch-patch::after {
+        position: absolute;
+        inset: 0;
+        content: "";
+        background:
+          linear-gradient(90deg, rgba(3, 7, 10, 0.86) 0%, rgba(3, 7, 10, 0.32) 52%, rgba(3, 7, 10, 0.62) 100%),
+          linear-gradient(180deg, rgba(3, 7, 10, 0.10) 0%, rgba(3, 7, 10, 0.42) 100%),
+          url("assets/motoko4.png") var(--patch-bg-x, center) var(--patch-bg-y, center) / 100vw 100vh no-repeat;
+      }
+
+      .glitch-patch::before {
+        transform: translate3d(var(--patch-red, 0px), 0, 0);
+        filter: sepia(1) saturate(5) hue-rotate(305deg);
+        mix-blend-mode: screen;
+      }
+
+      .glitch-patch::after {
+        transform: translate3d(var(--patch-cyan, 0px), 0, 0);
+        filter: sepia(1) saturate(4) hue-rotate(120deg);
+        mix-blend-mode: screen;
+      }
+
+      .scanlines {
+        background-image:
+          linear-gradient(rgba(255, 255, 255, var(--scanline-alpha)) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+        background-size: 42px 42px, 42px 42px;
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0.22));
+      }
+
+      .noise {
+        opacity: var(--noise-opacity);
+        background:
+          repeating-radial-gradient(circle at 17% 23%, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 5px),
+          repeating-linear-gradient(0deg, transparent 0 2px, rgba(54, 242, 194, 0.035) 2px 3px, transparent 3px 7px);
+        mix-blend-mode: soft-light;
+      }
+
+      .telemetry {
+        position: fixed;
+        z-index: 2;
+        inset: 0;
+        pointer-events: none;
+        color: rgba(137, 255, 226, 0.68);
+        font: 11px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        text-transform: uppercase;
+      }
+
+      .telemetry span {
+        position: absolute;
+        display: block;
+        max-width: min(360px, 45vw);
+        padding: 2px 0;
+        opacity: var(--telemetry-pulse);
+        text-shadow: 0 0 14px rgba(54, 242, 194, 0.32);
+        transform: translate3d(var(--telemetry-offset), 0, 0);
+      }
+
+      .telemetry .t-a {
+        top: 18px;
+        right: clamp(18px, 4vw, 58px);
+      }
+
+      .telemetry .t-b {
+        right: clamp(18px, 4vw, 58px);
+        bottom: 92px;
+      }
+
+      .telemetry .t-c {
+        left: clamp(18px, 4vw, 58px);
+        bottom: 34px;
+      }
+
+      .brand {
+        position: fixed;
+        z-index: 4;
+        top: clamp(24px, 7vh, 76px);
+        left: clamp(18px, 6vw, 72px);
+        max-width: min(620px, calc(100vw - 36px));
+        color: var(--ink);
+        pointer-events: none;
+        text-shadow: 0 22px 56px var(--shadow);
+      }
+
+      .brand-title {
+        position: relative;
+        display: inline-block;
+      }
+
+      .brand-title::before,
+      .brand-title::after {
+        position: absolute;
+        inset: 0;
+        content: attr(data-text);
+        opacity: var(--brand-glitch-opacity);
+        pointer-events: none;
+        will-change: transform, opacity;
+      }
+
+      .brand-title::before {
+        color: rgba(255, 64, 112, 0.78);
+        transform: translate3d(4px, -1px, 0);
+        clip-path: inset(0 0 52% 0);
+      }
+
+      .brand-title::after {
+        color: rgba(54, 242, 194, 0.78);
+        transform: translate3d(-4px, 1px, 0);
+        clip-path: inset(46% 0 0 0);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(52px, 10vw, 132px);
+        line-height: 0.84;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .tagline {
+        width: min(520px, 90vw);
+        margin: 18px 0 0;
+        color: var(--muted);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: clamp(14px, 2.2vw, 19px);
+        line-height: 1.5;
+      }
+
+      .repo-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0;
+        min-height: 40px;
+        margin-top: 24px;
+        padding: 0 14px;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        background: rgba(4, 10, 13, 0.62);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 13px;
+        text-decoration: none;
+        pointer-events: auto;
+        backdrop-filter: blur(10px);
+      }
+
+      .repo-link .prompt {
+        color: var(--cyan);
+        margin-right: 8px;
+        user-select: none;
+      }
+
+      .repo-link:hover {
+        color: var(--cyan);
+        border-color: rgba(54, 242, 194, 0.42);
+      }
+
+      .repo-link:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 3px;
+      }
+
+      #canvas {
+        position: fixed;
+        z-index: 3;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        display: block;
+        background: transparent;
+        outline: none;
+      }
+
+      .status {
+        position: fixed;
+        z-index: 5;
+        right: 18px;
+        bottom: 16px;
+        max-width: min(420px, calc(100vw - 36px));
+        padding: 8px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: var(--muted);
+        background: rgba(0, 0, 0, 0.46);
+        font: 12px/1.4 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        backdrop-filter: blur(8px);
+        pointer-events: none;
+      }
+
+      .status[data-ready="true"] {
+        opacity: 0;
+        transform: translateY(8px);
+        transition: opacity 220ms ease, transform 220ms ease;
+      }
+
+      @media (max-width: 720px) {
+        .brand {
+          top: 16px;
+          left: 14px;
+        }
+
+        h1 {
+          font-size: clamp(38px, 12vw, 64px);
+        }
+
+        .tagline {
+          margin-top: 8px;
+          font-size: clamp(11px, 2.8vw, 14px);
+        }
+
+        .repo-link {
+          margin-top: 12px;
+          font-size: 11px;
+          min-height: 34px;
+          padding: 0 10px;
+        }
+
+        .telemetry .t-b {
+          display: none;
+        }
+
+        .telemetry .t-a {
+          top: 12px;
+          right: 12px;
+        }
+
+        .telemetry .t-c {
+          left: 12px;
+          bottom: 8px;
+        }
+
+        .patch-6,
+        .patch-7,
+        .patch-8 {
+          display: none;
+        }
+
+        .telemetry span {
+          max-width: 55vw;
+          font-size: 9px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        :root {
+          --glitch-opacity: 0;
+          --global-glitch-opacity: 0;
+          --global-glitch-red-x: 1px;
+          --global-glitch-cyan-x: -1px;
+          --brand-glitch-opacity: 0;
+          --noise-opacity: 0.08;
+          --scanline-alpha: 0.035;
+          --telemetry-pulse: 0.34;
+          --telemetry-offset: 0px;
+          --bg-shift-x: 0vw;
+        }
+
+        .rgb-layer,
+        .glitch-patch,
+        .brand-title::before,
+        .brand-title::after {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="glitch-stage" aria-hidden="true">
+      <div class="bg-base"></div>
+      <div class="rgb-layer rgb-red"></div>
+      <div class="rgb-layer rgb-cyan"></div>
+      <div class="glitch-patch patch-1"></div>
+      <div class="glitch-patch patch-2"></div>
+      <div class="glitch-patch patch-3"></div>
+      <div class="glitch-patch patch-4"></div>
+      <div class="glitch-patch patch-5"></div>
+      <div class="glitch-patch patch-6"></div>
+      <div class="glitch-patch patch-7"></div>
+      <div class="glitch-patch patch-8"></div>
+      <div class="scanlines"></div>
+      <div class="noise"></div>
+    </div>
+
+    <div class="telemetry" aria-hidden="true">
+      <span class="t-a" data-telemetry>model.openai/google/gemma-4-26b-A4B-it</span>
+      <span class="t-b" data-telemetry>ext.context_mode // ext.exa_search // ext.omnigraph</span>
+      <span class="t-c" data-telemetry>runtime.step=0007 // hash: 7f3a:motoko:self-verify</span>
+    </div>
+
+    <main class="brand" aria-label="Motoko Agent">
+      <h1><span class="brand-title" data-text="Motoko">Motoko</span></h1>
+      <p class="tagline">self-verifying agent harness // AILANG runtime // autonomous execution lab</p>
+      <a class="repo-link" href="https://github.com/arniwesth/motoko_agent" target="_blank" rel="noreferrer"><span class="prompt">$</span> git clone github.com/arniwesth/motoko_agent</a>
+    </main>
+
+    <canvas id="canvas" tabindex="-1"></canvas>
+    <div id="status" class="status">loading wasm module...</div>
+
+    <script>
+      const status = document.getElementById("status");
+      status.textContent = "loading page shell...";
+      window.Module = {
+        canvas: document.getElementById("canvas"),
+        locateFile(path) {
+          if (path.endsWith(".wasm") || path.endsWith(".data")) {
+            return "dist/" + path;
+          }
+          return path;
+        },
+        setStatus(text) {
+          if (text) status.textContent = text;
+        },
+        print(text) {
+          console.log(text);
+        },
+        printErr(text) {
+          console.error(text);
+          status.textContent = text;
+        },
+        onRuntimeInitialized() {
+          status.textContent = "runtime ready";
+          status.dataset.ready = "true";
+        }
+      };
+
+      window.Module.postRun = [() => {
+        status.textContent = "runtime ready";
+        status.dataset.ready = "true";
+      }];
+
+      window.addEventListener("error", (event) => {
+        const target = event.target;
+        if (target && (target.tagName === "SCRIPT" || target.tagName === "LINK") && event.target !== window) {
+          const src = target.getAttribute("src") || target.getAttribute("href") || "unknown";
+          console.warn("resource load error:", src);
+          if (!status.dataset.ready) {
+            status.textContent = "failed to load " + src;
+          }
+        }
+      }, true);
+
+      window.addEventListener("unhandledrejection", (event) => {
+        const reason = event.reason && (event.reason.message || String(event.reason));
+        console.error("unhandled rejection:", reason);
+        if (!status.dataset.ready) {
+          status.textContent = "failed to initialize: " + (reason || "unhandled promise rejection");
+        }
+      });
+
+      status.textContent = "loading wasm runtime...";
+
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const glitchPatches = Array.from(document.querySelectorAll(".glitch-patch"));
+      let glitchTimer = 0;
+      let glitchOffTimer = 0;
+      let globalGlitchTimer = 0;
+      let globalGlitchOffTimer = 0;
+
+      function randomBetween(min, max) {
+        return Math.random() * (max - min) + min;
+      }
+
+      function setGlitchVars() {
+        const root = document.documentElement;
+        const direction = Math.random() > 0.5 ? 1 : -1;
+        const intensity = randomBetween(0.28, 0.58);
+        root.style.setProperty("--glitch-opacity", intensity.toFixed(2));
+        root.style.setProperty("--brand-glitch-opacity", (intensity * 0.58).toFixed(2));
+        root.style.setProperty("--noise-opacity", (0.08 + intensity * 0.18).toFixed(2));
+        root.style.setProperty("--scanline-alpha", randomBetween(0.05, 0.10).toFixed(3));
+        root.style.setProperty("--telemetry-pulse", randomBetween(0.34, 0.8).toFixed(2));
+        root.style.setProperty("--telemetry-offset", `${randomBetween(0, 2).toFixed(2)}px`);
+
+        const shuffled = [...glitchPatches].sort(() => Math.random() - 0.5);
+        glitchPatches.forEach((patch) => {
+          patch.style.setProperty("--patch-opacity", "0");
+        });
+
+        const activeCount = Math.floor(randomBetween(2, 4));
+        const activePatches = shuffled.slice(0, activeCount);
+        activePatches.forEach((patch) => {
+          const x = randomBetween(3, 86);
+          const y = randomBetween(6, 82);
+          const w = randomBetween(18, 42);
+          const h = randomBetween(5, 16);
+          patch.style.setProperty("--patch-x", `${x.toFixed(2)}vw`);
+          patch.style.setProperty("--patch-y", `${y.toFixed(2)}vh`);
+          patch.style.setProperty("--patch-w", `${w.toFixed(2)}vw`);
+          patch.style.setProperty("--patch-h", `${h.toFixed(2)}vh`);
+          patch.style.setProperty("--patch-bg-x", `${(-x).toFixed(2)}vw`);
+          patch.style.setProperty("--patch-bg-y", `${(-y).toFixed(2)}vh`);
+          jitterPatch(patch, direction);
+        });
+        return activePatches;
+      }
+
+      function jitterPatch(patch, direction, forceVisible = false) {
+        const localDirection = Math.random() > 0.5 ? direction : -direction;
+        patch.style.setProperty("--patch-shift", `${(localDirection * randomBetween(10, 64)).toFixed(2)}px`);
+        patch.style.setProperty("--patch-red", `${randomBetween(3, 10).toFixed(2)}px`);
+        patch.style.setProperty("--patch-cyan", `${(-randomBetween(3, 10)).toFixed(2)}px`);
+        const visible = forceVisible || Math.random() > 0.38;
+        patch.style.setProperty("--patch-opacity", visible ? randomBetween(0.48, 0.95).toFixed(2) : randomBetween(0, 0.08).toFixed(2));
+      }
+
+      function clearGlitchVars() {
+        const root = document.documentElement;
+        root.style.setProperty("--glitch-opacity", "0");
+        root.style.setProperty("--brand-glitch-opacity", "0");
+        root.style.setProperty("--noise-opacity", "0.08");
+        root.style.setProperty("--scanline-alpha", "0.04");
+        root.style.setProperty("--telemetry-pulse", "0.34");
+        root.style.setProperty("--telemetry-offset", "0px");
+        glitchPatches.forEach((patch) => {
+          patch.style.setProperty("--patch-opacity", "0");
+        });
+        document.body.dataset.glitch = "off";
+      }
+
+      function setGlobalGlitchVars() {
+        const root = document.documentElement;
+        const direction = Math.random() > 0.5 ? 1 : -1;
+        root.style.setProperty("--global-glitch-opacity", randomBetween(0.16, 0.34).toFixed(2));
+        root.style.setProperty("--global-glitch-red-x", `${(direction * randomBetween(5, 14)).toFixed(2)}px`);
+        root.style.setProperty("--global-glitch-cyan-x", `${(direction * -randomBetween(5, 14)).toFixed(2)}px`);
+        root.style.setProperty("--scanline-alpha", randomBetween(0.10, 0.16).toFixed(3));
+        root.style.setProperty("--noise-opacity", randomBetween(0.18, 0.30).toFixed(2));
+      }
+
+      function clearGlobalGlitchVars() {
+        const root = document.documentElement;
+        root.style.setProperty("--global-glitch-opacity", "0");
+        root.style.setProperty("--global-glitch-red-x", "1px");
+        root.style.setProperty("--global-glitch-cyan-x", "-1px");
+      }
+
+      function scheduleGlitch() {
+        clearTimeout(glitchTimer);
+        clearTimeout(glitchOffTimer);
+        if (reduceMotion.matches) {
+          clearGlitchVars();
+          return;
+        }
+
+        glitchTimer = window.setTimeout(() => {
+          document.body.dataset.glitch = "on";
+          let activePatches = setGlitchVars();
+
+          const substeps = Math.floor(randomBetween(2, 5));
+          let step = 1;
+          const stepper = window.setInterval(() => {
+            activePatches.forEach((patch) => jitterPatch(patch, Math.random() > 0.5 ? 1 : -1));
+            step += 1;
+            if (step >= substeps) {
+              window.clearInterval(stepper);
+            }
+          }, randomBetween(18, 30));
+
+          glitchOffTimer = window.setTimeout(() => {
+            window.clearInterval(stepper);
+            clearGlitchVars();
+            scheduleGlitch();
+          }, randomBetween(360, 760));
+        }, randomBetween(1000, 2500));
+      }
+
+      function scheduleGlobalGlitch() {
+        clearTimeout(globalGlitchTimer);
+        clearTimeout(globalGlitchOffTimer);
+        if (reduceMotion.matches) {
+          clearGlobalGlitchVars();
+          return;
+        }
+
+        globalGlitchTimer = window.setTimeout(() => {
+          document.body.dataset.globalGlitch = "on";
+          setGlobalGlitchVars();
+
+          let step = 0;
+          const globalStepper = window.setInterval(() => {
+            setGlobalGlitchVars();
+            step += 1;
+            if (step >= 3) {
+              window.clearInterval(globalStepper);
+            }
+          }, randomBetween(40, 70));
+
+          globalGlitchOffTimer = window.setTimeout(() => {
+            window.clearInterval(globalStepper);
+            clearGlobalGlitchVars();
+            document.body.dataset.globalGlitch = "off";
+            scheduleGlobalGlitch();
+          }, randomBetween(180, 320));
+        }, randomBetween(8500, 11500));
+      }
+
+      if (typeof reduceMotion.addEventListener === "function") {
+        reduceMotion.addEventListener("change", () => {
+          scheduleGlitch();
+          scheduleGlobalGlitch();
+        });
+      } else if (typeof reduceMotion.addListener === "function") {
+        reduceMotion.addListener(() => {
+          scheduleGlitch();
+          scheduleGlobalGlitch();
+        });
+      }
+      scheduleGlitch();
+      scheduleGlobalGlitch();
+
+    </script>
+    <script src="dist/motoko.js"></script>
+  </body>
+</html>

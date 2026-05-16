@@ -1,0 +1,90 @@
+name: deploy-website
+
+on:
+  push:
+    branches:
+      - main
+      - motoko_website
+    paths:
+      - 'src/main.cpp'
+      - 'web/**'
+      - 'Makefile'
+      - '.github/workflows/deploy-website.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Fetch web dependencies
+        env:
+          SOKOL_REV: 453c71214fbb55d782683d20ea7e6c07314e3e9b
+          IMGUI_REV: 85b2fe8486190fa9326565a2fb5fccb6caea4396
+        run: |
+          mkdir -p ext/sokol ext/imgui
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/sokol_app.h" -o ext/sokol/sokol_app.h
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/sokol_gfx.h" -o ext/sokol/sokol_gfx.h
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/sokol_glue.h" -o ext/sokol/sokol_glue.h
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/sokol_time.h" -o ext/sokol/sokol_time.h
+          curl -fsSL "https://raw.githubusercontent.com/floooh/sokol/${SOKOL_REV}/util/sokol_imgui.h" -o ext/sokol/sokol_imgui.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imconfig.h" -o ext/imgui/imconfig.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui.h" -o ext/imgui/imgui.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui_internal.h" -o ext/imgui/imgui_internal.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui.cpp" -o ext/imgui/imgui.cpp
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui_draw.cpp" -o ext/imgui/imgui_draw.cpp
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui_tables.cpp" -o ext/imgui/imgui_tables.cpp
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imgui_widgets.cpp" -o ext/imgui/imgui_widgets.cpp
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imstb_rectpack.h" -o ext/imgui/imstb_rectpack.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imstb_textedit.h" -o ext/imgui/imstb_textedit.h
+          curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/${IMGUI_REV}/imstb_truetype.h" -o ext/imgui/imstb_truetype.h
+
+      - name: Build web artifacts
+        run: |
+          mkdir -p web/dist
+          emcc src/main.cpp \
+            ext/imgui/imgui.cpp ext/imgui/imgui_draw.cpp \
+            ext/imgui/imgui_tables.cpp ext/imgui/imgui_widgets.cpp \
+            -Iext/sokol -Iext/imgui \
+            -std=c++17 -O2 \
+            -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
+            -sALLOW_MEMORY_GROWTH=1 -sNO_EXIT_RUNTIME=1 \
+            --preload-file web/assets@/assets \
+            -o web/dist/motoko.js
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
