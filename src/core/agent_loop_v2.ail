@@ -41,7 +41,7 @@ import std/env (getEnvOr)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
-import std/string (trim, startsWith, substring, toLower, contains)
+import std/string (trim, startsWith, substring, toLower, contains, find)
 import std/string as Str (length)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
@@ -452,6 +452,71 @@ func synthesize_hybrid_bash_call(cmd: string, step_idx: int) -> ToolCall {
     id: "hybrid-step-${show(step_idx)}",
     name: "BashExec",
     arguments: encode(jo([kv("cmd", js(cmd))]))
+  }
+}
+
+-- POC: Extract a tool call from text-format XML tags emitted by models that
+-- don't use structured API tool_calls (e.g. tencent/hy3-preview on OpenRouter).
+-- Format: <tool_call>ToolName<tool_sep>\n<arg_key>k</arg_key>\n<arg_value>v</arg_value>\n</tool_call>
+-- Returns None if the text doesn't contain a valid <tool_call> block.
+func extract_text_tool_call(text: string) -> Option[ToolCall] {
+  let open_tag = "<tool_call>";
+  let close_tag = "</tool_call>";
+  let sep_tag = "<tool_sep>";
+  let open_idx = find(text, open_tag);
+  if open_idx == -1 then None
+  else {
+    let close_idx = find_from(text, close_tag, open_idx);
+    if close_idx == -1 then None
+    else {
+      let inner_start = open_idx + Str.length(open_tag);
+      let inner = substring(text, inner_start, close_idx);
+      let sep_idx = find(inner, sep_tag);
+      if sep_idx == -1 then None
+      else {
+        let tool_name = trim(substring(inner, 0, sep_idx));
+        let args_text = substring(inner, sep_idx + Str.length(sep_tag), Str.length(inner));
+        let arg_kvs = extract_arg_pairs(args_text, []);
+        Some({
+          id: "text-tool-extracted",
+          name: tool_name,
+          arguments: encode(jo(arg_kvs))
+        })
+      }
+    }
+  }
+}
+
+func find_from(hay: string, needle: string, offset: int) -> int {
+  let sub = substring(hay, offset, Str.length(hay));
+  let idx = find(sub, needle);
+  if idx == -1 then -1 else idx + offset
+}
+
+func extract_arg_pairs(text: string, acc: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  let key_open = "<arg_key>";
+  let key_close = "</arg_key>";
+  let val_open = "<arg_value>";
+  let val_close = "</arg_value>";
+  let ki = find(text, key_open);
+  if ki == -1 then acc
+  else {
+    let kc = find_from(text, key_close, ki);
+    if kc == -1 then acc
+    else {
+      let key = trim(substring(text, ki + Str.length(key_open), kc));
+      let vi = find_from(text, val_open, kc);
+      if vi == -1 then acc
+      else {
+        let vc = find_from(text, val_close, vi);
+        if vc == -1 then acc
+        else {
+          let val = trim(substring(text, vi + Str.length(val_open), vc));
+          let rest = substring(text, vc + Str.length(val_close), Str.length(text));
+          extract_arg_pairs(rest, acc ++ [kv(key, js(val))])
+        }
+      }
+    }
   }
 }
 
@@ -991,7 +1056,27 @@ func loop_v2(
             loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
           },
           NoIntercept => {
-            if result.finish_reason != "tool_calls" then {
+            -- POC: reasoning-model token-limit retry. When the model exhausts
+            -- its output budget on reasoning tokens (finish_reason="length",
+            -- no tool_calls, empty content), inject a continuation prompt and
+            -- recurse rather than terminating. Caps at 5 consecutive retries
+            -- to avoid burning the step budget on a model that can never fit.
+            if result.finish_reason == "length" && n_calls == 0 && result.message.content == "" then {
+              let _ = emit_event(session_id, "length_retry", [
+                kv("step", jnum(_int_to_float(step_idx))),
+                kv("output_tokens", jnum(_int_to_float(result.output_tokens))),
+                kv("note", js("model exhausted output budget on reasoning — sending continuation"))
+              ]);
+              let continue_msg: Message = {
+                role: "user",
+                content: "Your previous response was cut off because you hit the output token limit. You produced only reasoning tokens and no visible output. Please respond more concisely — start with a tool call or a direct answer immediately, minimizing internal reasoning.",
+                tool_calls: [],
+                tool_call_id: ""
+              };
+              let next_msgs = msgs_with_assistant ++ [continue_msg];
+              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+            }
+            else if result.finish_reason != "tool_calls" then {
               -- M7 hybrid mode: when prose contains a fenced shell block
               -- and hybrid_tools=true, synthesize a BashExec ToolCall and
               -- run it through the same M3-M6 dispatch pipeline as a typed
@@ -1031,6 +1116,29 @@ func loop_v2(
                   };
                   let msgs_with_augmented = msgs ++ [augmented_assistant_msg];
                   let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
+                  let next_msgs = msgs_with_augmented ++ tool_msgs;
+                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                },
+                None => {
+              -- POC: text-format tool call extraction. Models that don't
+              -- support structured tool_calls (e.g. tencent/hy3-preview)
+              -- emit <tool_call>Name<tool_sep>...<arg_key>k...<arg_value>v...</tool_call>
+              -- in their prose. Parse and dispatch like hybrid mode.
+              match extract_text_tool_call(result.message.content) {
+                Some(text_call) => {
+                  let _ = emit_event(session_id, "text_tool_extracted", [
+                    kv("step", jnum(_int_to_float(step_idx))),
+                    kv("tool", js(text_call.name)),
+                    kv("arguments", js(text_call.arguments))
+                  ]);
+                  let augmented_assistant_msg: Message = {
+                    role: "assistant",
+                    content: result.message.content,
+                    tool_calls: [text_call],
+                    tool_call_id: ""
+                  };
+                  let msgs_with_augmented = msgs ++ [augmented_assistant_msg];
+                  let tool_msgs = dispatch_calls(rt, ctx, [text_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
                   let next_msgs = msgs_with_augmented ++ tool_msgs;
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
@@ -1100,6 +1208,8 @@ func loop_v2(
               }
                 }
               }
+              }  -- close None => of extract_text_tool_call
+              }  -- close match extract_text_tool_call
             }
             else {
               -- finish_reason = "tool_calls" → run M4 policy gate per-call
