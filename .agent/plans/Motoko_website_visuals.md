@@ -11,7 +11,7 @@ First pass only:
 * Keep the existing C++/WASM ImGui terminal unchanged unless a visual layering issue requires a small adjustment.
 * Keep the ImGui terminal visually stable. Glitch effects may affect the background and brand overlay, but they should not distort terminal text or controls.
 * Implement the effect in `web/index.html` using CSS and a small JavaScript scheduler.
-* Reuse `web/assets/motoko.png` as the base visual asset.
+* Reuse `web/assets/motoko2.png` as the base visual asset.
 * Avoid WebGL shaders, generated video, or large new binary assets in this pass.
 
 ## Visual System
@@ -136,6 +136,6 @@ First pass only:
 If the CSS/JS pass works but needs more depth, evaluate:
 
 * a small WebGL background shader for displacement and chromatic aberration;
-* a pre-rendered looping WebM derived from `motoko.png`;
+* a pre-rendered looping WebM derived from `motoko2.png`;
 * data-driven telemetry sourced from real `.motoko/logfile/` sessions;
 * synchronized glitches when new log lines appear in the ImGui terminal.
