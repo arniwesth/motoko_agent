@@ -106,6 +106,12 @@ export type OmnigraphConfig = {
   timeout_ms: int
 }
 
+export type CompactionAiConfig = {
+  model: string,
+  threshold_pct: int,
+  keep_recent: int
+}
+
 export type VerificationConfig = {
   enabled: bool,
   command: string
@@ -140,6 +146,7 @@ export type RuntimeConfig = {
   context_mode: ContextModeConfig,
   exa_search: ExaSearchConfig,
   omnigraph: OmnigraphConfig,
+  compaction_ai: CompactionAiConfig,
   cost_rates: CostRates,
   verification: VerificationConfig,
   warnings: [string]
@@ -421,6 +428,15 @@ func load_omnigraph(root: Json) -> OmnigraphConfig {
   }
 }
 
+func load_compaction_ai(root: Json) -> CompactionAiConfig {
+  let c = object_at(root, "compaction_ai");
+  {
+    model: json_string(c, "model", "openrouter/auto"),
+    threshold_pct: json_int(c, "threshold_pct", 75),
+    keep_recent: json_int(c, "keep_recent", 10)
+  }
+}
+
 -- Read an int from an env var, falling back to a default. Used for cost
 -- rate overrides (M-MOTOKO-EVAL-HARNESS-HARDENING M5b, gaps #3 + #9):
 -- AILANG eval harness sets MOTOKO_COST_INPUT_PER_1M_MILLICENTS and
@@ -528,6 +544,7 @@ export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO
   let context_mode = read_json_or_empty("${profile_dir}/context_mode.json");
   let exa_search = read_json_or_empty("${profile_dir}/exa_search.json");
   let omnigraph = read_json_or_empty("${profile_dir}/omnigraph.json");
+  let compaction_ai = read_json_or_empty("${profile_dir}/compaction_ai.json");
   let agent = apply_agent_cli(load_agent(core), cli);
   let max_cost_env = match getEnv("AI_MAX_COST_USD_CENTS") {
     Ok(raw) => match _stringToInt(trim(raw)) { Some(n) => if n > 0 then n * 1000 else 0, None => 0 },
@@ -547,6 +564,7 @@ export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO
     context_mode: load_context_mode(context_mode),
     exa_search: load_exa_search(exa_search),
     omnigraph: load_omnigraph(omnigraph),
+    compaction_ai: load_compaction_ai(compaction_ai),
     cost_rates: load_cost_rates(core),
     verification: load_verification(core),
     warnings: warnings_for(profile_dir, workdir)

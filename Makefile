@@ -28,8 +28,13 @@ smoke_no_delegated_storm:
 	[ "$$fail" -eq 0 ] || { echo "smoke_no_delegated_storm FAILED — re-enabling ohmy_pi without M6.5 wired causes BashExec storms"; exit 1; }; \
 	echo "smoke_no_delegated_storm: all 4 profiles have ohmy_pi=false ✓"
 
-# Type-check every AILANG core runtime module in src/core/
-check_core:
+# Type-check every AILANG core runtime module in src/core/, then
+# runtime-boot-probe every extension in the active profile's registry
+# so DP7 can catch the class of bugs that pass type-check but crash
+# at runtime (e.g. matching Result constructors against an Option
+# value — see scripts/verify_extension_boot.ail header for full
+# rationale + history).
+check_core: verify_extensions
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -43,6 +48,48 @@ check_core:
 	done; \
 	echo "src/core/ type-check: $$ok passed, $$fail failed"; \
 	[ "$$fail" -eq 0 ] || exit 1
+
+# Boot each extension in the active profile's [extensions.order] in an
+# ISOLATED ailang process and assert it returns from register_with_config
+# without panic. Catches the class of bugs that escape `ailang check`:
+#   - Pattern matches against the wrong ADT (Result vs Option)
+#   - readFile-style panics when defaults are absent
+#   - Cross-package ADT shape drift (variants added/removed in deps)
+# Process-per-extension isolation means a panic in one extension doesn't
+# mask the status of the others. Set MOTOKO_CONFIG=<profile> to probe a
+# different profile (default: current MOTOKO_CONFIG or "default").
+verify_extensions:
+	@profile=$${MOTOKO_CONFIG:-default}; \
+	cfg=".motoko/config/$$profile/config.json"; \
+	if [ ! -f "$$cfg" ]; then \
+		echo "verify_extensions: no config at $$cfg — skipping"; \
+		exit 0; \
+	fi; \
+	exts=$$(jq -r '.extensions.order[]?' "$$cfg" 2>/dev/null); \
+	if [ -z "$$exts" ]; then \
+		echo "verify_extensions: profile '$$profile' has no extensions — skipping"; \
+		exit 0; \
+	fi; \
+	ok=0; fail=0; failed_names=""; \
+	for ext in $$exts; do \
+		out=$$(MOTOKO_PROFILE_DIR="$$PWD/.motoko/config/$$profile" \
+		      AILANG_RELAX_MODULES=1 \
+		      ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+		        --ai-stub --entry main \
+		        scripts/verify_extension_boot.ail -- "$$ext" 2>&1); \
+		rc=$$?; \
+		if [ $$rc -eq 0 ] && echo "$$out" | grep -q "^OK:"; then \
+			echo "  ✓ $$ext register_with_config"; \
+			ok=$$((ok + 1)); \
+		else \
+			echo "  ✗ $$ext"; \
+			echo "$$out" | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -E "Error|UNKNOWN" | head -3 | sed 's/^/      /'; \
+			fail=$$((fail + 1)); \
+			failed_names="$$failed_names $$ext"; \
+		fi; \
+	done; \
+	echo "verify_extensions ($$profile): $$ok booted, $$fail failed"; \
+	[ "$$fail" -eq 0 ] || { echo "FAILED:$$failed_names"; exit 1; }
 
 # Build the TypeScript frontend
 build_tui:

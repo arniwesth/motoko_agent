@@ -23,8 +23,10 @@ import src/core/ext/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision,
-  ResponseInterceptDecision, FinalizeDecision
+  ResponseInterceptDecision, FinalizeDecision,
+  PreStepDecision, PassThrough
 )
+import src/core/types (Msg)
 
 -- A scripted LLM turn: what the "model" returns for one step() call.
 export type ScriptedStep = {
@@ -208,6 +210,9 @@ export func deny_all_rt() -> ExtRuntime {
     on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
       { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      PassThrough
     },
     on_tool_policy: deny_policy,
     on_tool_handle: no_handle,

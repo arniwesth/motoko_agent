@@ -1,0 +1,89 @@
+name: verify-extensions
+
+# Catches the "AILANG pin drift" class of bug that PR #16 surfaced:
+# install-prerequisites.sh pinned AILANG_REF=v0.18.9 while the registry
+# extensions (compaction_ai, context_mode, exa_search, omnigraph) already
+# require std/extension (added in v0.18.11). Local devs with a newer
+# ailang in PATH never noticed because the prereq script's version_ge
+# gate let them sail past. A fresh runner reproduces what arniwesth saw
+# in his Codespace.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/install-prerequisites.sh'
+      - 'scripts/verify_extension_boot.ail'
+      - 'scripts/sync-extension-packages.sh'
+      - 'ailang.toml'
+      - 'ailang.lock'
+      - '.motoko/config/**/config.json'
+      - 'src/core/ext/**'
+      - 'Makefile'
+      - '.github/workflows/verify-extensions.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: verify-extensions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify_extensions:
+    name: verify_extensions + check_core + smoke_no_delegated_storm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read pinned AILANG_REF from install script
+        id: pin
+        run: |
+          ref=$(grep -E '^AILANG_REF=' scripts/install-prerequisites.sh | head -n1 | cut -d'"' -f2)
+          if [[ -z "$ref" ]]; then
+            echo "::error::Could not read AILANG_REF from scripts/install-prerequisites.sh" >&2
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Pinned AILANG_REF: $ref"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.5'
+          cache: false
+
+      - name: Build AILANG at pinned ref
+        env:
+          AILANG_REF: ${{ steps.pin.outputs.ref }}
+        run: |
+          set -euo pipefail
+          src="$HOME/.local/share/ailang"
+          git clone --depth 1 --branch "$AILANG_REF" \
+            https://github.com/sunholo-data/ailang "$src"
+          commit="$(git -C "$src" rev-parse HEAD)"
+          build_time="$(date -u '+%Y-%m-%d_%H:%M:%S')"
+          ldflags="-X github.com/sunholo-data/ailang/internal/version.Version=${AILANG_REF}"
+          ldflags="${ldflags} -X github.com/sunholo-data/ailang/internal/version.Commit=${commit}"
+          ldflags="${ldflags} -X github.com/sunholo-data/ailang/internal/version.BuildTime=${build_time}"
+          (cd "$src" && go build -ldflags "$ldflags" -o "$HOME/.local/bin/ailang" ./cmd/ailang)
+          mkdir -p "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/ailang"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm ailang version
+        run: ailang --version
+
+      - name: Sync extension packages
+        run: ./scripts/sync-extension-packages.sh
+
+      - name: ailang lock
+        run: ailang lock
+
+      - name: check_core (verify_extensions + type-check src/core/*.ail)
+        run: make check_core
+
+      - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)
+        run: make smoke_no_delegated_storm

@@ -17,7 +17,7 @@
 #   - Debian / Ubuntu (apt)
 #   - macOS (Homebrew)
 #
-# Run as a user with sudo access. Do NOT run as root.
+# Run as a non-root user with sudo access. Root is supported for minimal containers.
 
 set -euo pipefail
 
@@ -30,9 +30,11 @@ GO_MIN_MINOR=22
 BUN_MIN_MAJOR=1
 NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
-AILANG_REF="v0.18.9"
-AILANG_MIN_VERSION="0.18.9"
+AILANG_REF="v0.19.1"
+AILANG_MIN_VERSION="0.19.1"
 INSTALL_OMNIGRAPH=0
+SUDO=()
+SUDO_E=()
 
 # ---------------------------------------------------------------------------
 # Colours
@@ -97,6 +99,22 @@ detect_arch() {
     arm64)   ARCH="arm64" ;;
     *)       die "Unsupported architecture: $machine" ;;
   esac
+}
+
+configure_privilege() {
+  if [[ "$OS" != "debian" ]]; then
+    return
+  fi
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    SUDO=()
+    SUDO_E=()
+  elif command -v sudo &>/dev/null; then
+    SUDO=(sudo)
+    SUDO_E=(sudo -E)
+  else
+    die "This installer needs root privileges for system packages. Run as root or install sudo."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -164,9 +182,9 @@ ensure_user_local_bin_on_path() {
 install_apt_packages() {
   log_header "System packages (apt)"
   log_info "Updating package lists..."
-  sudo apt-get update -qq
+  "${SUDO[@]}" apt-get update -qq
 
-  local pkgs=(git curl build-essential ca-certificates)
+  local pkgs=(git curl build-essential ca-certificates jq rsync)
   local missing=()
   for pkg in "${pkgs[@]}"; do
     dpkg -s "$pkg" &>/dev/null || missing+=("$pkg")
@@ -176,7 +194,7 @@ install_apt_packages() {
     log_ok "All system packages already installed"
   else
     log_info "Installing: ${missing[*]}"
-    sudo apt-get install -y -qq "${missing[@]}"
+    "${SUDO[@]}" apt-get install -y -qq "${missing[@]}"
     log_ok "System packages installed"
   fi
 }
@@ -233,8 +251,8 @@ install_go() {
   curl -fsSL "$url" -o "${tmp}/${tarball}"
 
   log_info "Installing to /usr/local/go..."
-  sudo rm -rf /usr/local/go
-  sudo tar -C /usr/local -xzf "${tmp}/${tarball}"
+  "${SUDO[@]}" rm -rf /usr/local/go
+  "${SUDO[@]}" tar -C /usr/local -xzf "${tmp}/${tarball}"
   rm -rf "$tmp"
 
   # Persist PATH for future shells
@@ -286,8 +304,8 @@ install_node() {
     brew install node
   else
     log_info "Installing Node.js 22.x via NodeSource..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    sudo apt-get install -y -qq nodejs
+    curl -fsSL https://deb.nodesource.com/setup_22.x | "${SUDO_E[@]}" bash -
+    "${SUDO[@]}" apt-get install -y -qq nodejs
   fi
 
   if ! node_version_ok; then
@@ -416,7 +434,7 @@ install_omnigraph() {
     done
     if [[ ${#og_missing[@]} -gt 0 ]]; then
       log_info "Installing Omnigraph apt prerequisites: ${og_missing[*]}"
-      sudo apt-get install -y -qq "${og_missing[@]}"
+      "${SUDO[@]}" apt-get install -y -qq "${og_missing[@]}"
     fi
   else
     for pkg in protobuf; do
@@ -444,15 +462,15 @@ install_omnigraph() {
   local src_dir="/opt/omnigraph-src"
   if [[ ! -d "$src_dir/.git" ]]; then
     log_info "Cloning Omnigraph source to $src_dir..."
-    sudo rm -rf "$src_dir"
-    sudo git clone https://github.com/ModernRelay/omnigraph "$src_dir"
+    "${SUDO[@]}" rm -rf "$src_dir"
+    "${SUDO[@]}" git clone https://github.com/ModernRelay/omnigraph "$src_dir"
   else
     log_info "Updating Omnigraph source at $src_dir..."
-    sudo git -C "$src_dir" fetch --all --tags
-    sudo git -C "$src_dir" pull --ff-only
+    "${SUDO[@]}" git -C "$src_dir" fetch --all --tags
+    "${SUDO[@]}" git -C "$src_dir" pull --ff-only
   fi
 
-  sudo chown -R "$USER":"$USER" "$src_dir"
+  "${SUDO[@]}" chown -R "$USER":"$USER" "$src_dir"
   log_info "Building Omnigraph CLI/server (this may take several minutes on first run)..."
   (cd "$src_dir" && cargo build --release --locked -p omnigraph-cli -p omnigraph-server)
 
@@ -497,6 +515,7 @@ main() {
 
   detect_os
   detect_arch
+  configure_privilege
   log_info "Detected OS: $OS  arch: $ARCH"
 
   case "$OS" in

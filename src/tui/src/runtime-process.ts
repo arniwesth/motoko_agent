@@ -215,6 +215,61 @@ function mirrorProfileFromRepo(
   }
 }
 
+// 2026-05-14: if MOTOKO_CONFIG points to an absolute path OUTSIDE the workdir
+// (e.g. ~/.motoko/config/mark — a personal profile that shouldn't live in
+// motoko_agent's tree), the AILANG runtime can't read it: FS_SANDBOX is
+// pinned to <workdir>, so absolute reads outside that tree silently fail
+// and the agent ships with extensions.order=[].
+//
+// Mirror the absolute profile into <workdir>/.motoko/config/<basename>/
+// and rewrite the supervisor arg to the basename, so config.ail's
+// resolve_profile_dir finds it via the workdir-local branch (sandbox-safe).
+//
+// Returns the (possibly-rewritten) profile string to use as --profile.
+// No-op (returns original) when profile isn't absolute.
+function mirrorAbsoluteProfile(workdir: string, profile: string): string {
+  if (!path.isAbsolute(profile)) return profile;
+  if (!fs.existsSync(path.join(profile, "config.json"))) return profile;
+  const basename = path.basename(profile);
+  if (basename === "") return profile;
+  const absWorkdir = path.resolve(workdir);
+  const dst = path.join(absWorkdir, ".motoko", "config", basename);
+  // Marker file at <dst>/.source records which absolute path this mirror
+  // was made from. Used to detect basename collisions: if two different
+  // absolute MOTOKO_CONFIG paths share a basename (e.g. ~/.motoko/config/mark
+  // vs /opt/shared/mark), the second one should NOT silently overwrite the
+  // first one's mirror.
+  //
+  // No marker present + existing dst → treated as "in-tree default profile
+  // with no ownership claim"; the personal mirror takes over freely. This
+  // lets us keep an in-tree fallback profile checked into git AND have a
+  // personal override mirror into the same name without conflict.
+  const markerPath = path.join(dst, ".source");
+  const currentSource = fs.existsSync(markerPath)
+    ? fs.readFileSync(markerPath, "utf-8").trim()
+    : "";
+  if (
+    fs.existsSync(path.join(dst, "config.json")) &&
+    currentSource !== "" &&
+    currentSource !== profile
+  ) {
+    // Genuine collision: another personal profile already mirrored here.
+    // Fall back to the absolute path — will fail under FS_SANDBOX but
+    // surfaces the conflict rather than corrupting the other user's mirror.
+    return profile;
+  }
+  fs.mkdirSync(dst, { recursive: true });
+  fs.writeFileSync(markerPath, profile + "\n", "utf-8");
+  for (const entry of fs.readdirSync(profile)) {
+    const srcFile = path.join(profile, entry);
+    const dstFile = path.join(dst, entry);
+    if (fs.statSync(srcFile).isFile()) {
+      fs.copyFileSync(srcFile, dstFile);
+    }
+  }
+  return basename;
+}
+
 export class RuntimeProcess {
   private proc: ChildProcess;
   private dead = false;
@@ -267,6 +322,17 @@ export class RuntimeProcess {
       // this, eval-harness runs see extensions.order=[] and other
       // profile defaults silently mask user-configured behavior.
       MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
+      // MOTOKO_PROFILE_DIR — absolute path to the active profile's config
+      // directory. Standalone AILANG extension packages (motoko-ext-*) read
+      // their own JSON config here (e.g. motoko-ext-compaction-ai reads
+      // ${MOTOKO_PROFILE_DIR}/compaction_ai.json). Without this var, the
+      // packages fall back to "." which resolves to the AILANG runtime's
+      // CWD (motoko_agent root) → "no such file or directory" panics on
+      // first turn. The original src/core/config.ail path-built the same
+      // location internally; the env-var split happened when extensions
+      // moved out into separate packages without a corresponding launcher
+      // wiring.
+      MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
       // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
       // pricing env vars set by the AILANG adapter from Task.Budget. Without
       // this, the AILANG-side fix (load_cost_rates reads these env vars) is
@@ -306,9 +372,26 @@ export class RuntimeProcess {
      // workdir is already the fork itself.
     mirrorProfileFromRepo(workdir, profile, childEnv.MOTOKO_REPO ?? "");
 
+    // 2026-05-14: If MOTOKO_CONFIG was an absolute out-of-tree path
+    // (e.g. ~/.motoko/config/mark), mirror it into workdir and use the
+    // basename so the AILANG runtime can read it through FS_SANDBOX.
+    // Returns the original profile unchanged when not applicable.
+    const resolvedProfile = mirrorAbsoluteProfile(workdir, profile);
+    // Update MOTOKO_PROFILE_DIR to the mirrored location too, so
+    // standalone extension packages reading ${MOTOKO_PROFILE_DIR}/<ext>.json
+    // find the right files.
+    if (resolvedProfile !== profile) {
+      childEnv.MOTOKO_PROFILE_DIR = path.resolve(
+        workdir,
+        ".motoko",
+        "config",
+        resolvedProfile,
+      );
+    }
+
     const supervisorArgs = [
       "--profile",
-      profile,
+      resolvedProfile,
       "--model",
       model,
       "--workdir",
@@ -506,4 +589,23 @@ export class RuntimeProcess {
   sendUserMessage(content: string): void {
     this.send({ type: "user_message", content });
   }
+
+  /**
+   * Request a session restart with optional profile change.
+   * The AILANG runtime will emit a session_suspend event and exit.
+   * The TUI is expected to respawn the process.
+   */
+  restart(newProfile?: string): void {
+    if (this.dead) return;
+    this.send({ type: "restart", profile: newProfile });
+    // Set a flag so the exit handler knows to respawn
+    this._restartPending = newProfile ?? true;
+  }
+
+  /** Check if restart was requested (string = new profile, true = same profile) */
+  get restartPending(): string | boolean | undefined {
+    return this._restartPending;
+  }
+
+  private _restartPending?: string | boolean;
 }

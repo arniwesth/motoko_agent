@@ -480,7 +480,7 @@ async function main(): Promise<void> {
   // Operator override: explicit ENV_PORT=18080 still works for legacy
   // setups that need a fixed port (e.g. Docker port-forwarding).
   const envPort = Number(process.env.ENV_PORT ?? 0);
-  const profile = activeProfile();
+  let profile = activeProfile();
   const profileAgent = resolveProfileAgentConfig(workdir, profile);
   const model =
     process.env.MODEL ??
@@ -642,7 +642,18 @@ async function main(): Promise<void> {
         const closing = logger.close();
         sessionLogger = undefined;
         ui.runtimeProcess = undefined;
-        if (interrupted) {
+        const pendingRestart = runtimeProcess?.restartPending;
+        if (pendingRestart) {
+          // Restart requested — respawn with optional new profile
+          if (typeof pendingRestart === "string") {
+            profile = pendingRestart;
+          }
+          // Reset interrupted flag for clean restart
+          interrupted = false;
+          errorOccurred = false;
+          // Small delay before respawn
+          setTimeout(() => spawnRuntimeProcess("", false), 100);
+        } else if (interrupted) {
           // ESC was pressed — don't exit; let the user submit a new task.
           interrupted = false;
           ui.setAwaitingTask(true);
@@ -669,6 +680,17 @@ async function main(): Promise<void> {
   };
   ui.onAbort = () => { if (runtimeProcess) { runtimeProcess.abort(); } else { ui.stop(); process.exit(0); } };
   ui.onInterrupt = () => { interrupted = true; runtimeProcess?.kill(); };
+
+  // Restart handler — respawn the runtime process with optional new profile
+  ui.onRestart = (newProfile) => {
+    if (runtimeProcess) {
+      runtimeProcess.restart(newProfile);
+    } else {
+      // No running process — start fresh
+      profile = newProfile ?? profile;
+      spawnRuntimeProcess("", false);
+    }
+  };
 
   const taskFromArgs = process.argv[2] ?? process.env.TASK;
   if (taskFromArgs) {

@@ -1426,6 +1426,7 @@ export class AgentUI {
   private cmdInput:  Editor;
   private step  = 0;
   private model = "";
+  private profile = "default";
   private branch = "";
   private loadedExtensions = "";
   private latestContextUsage?: { tokensEst: number; limit: number };
@@ -1486,6 +1487,12 @@ export class AgentUI {
   /** Called when the user presses ESC to interrupt a running task. */
   onInterrupt?: () => void;
 
+  /** Called when the user requests a session restart (with optional new profile). */
+  onRestart?: (profile?: string) => void;
+
+  /** Called when the user wants to see available profiles. */
+  onShowProfiles?: () => void;
+
   /**
    * Called when the user submits a plain-text follow-up after task completion.
    * index.ts wires this to RuntimeProcess.sendUserMessage().
@@ -1532,10 +1539,11 @@ export class AgentUI {
     return v === "1" || v === "true" || v === "yes";
   })();
 
-  constructor({ version, model, ailangVersion, extensions }: { version?: string; model?: string; ailangVersion?: string; extensions?: string[] } = {}) {
+  constructor({ version, model, profile, ailangVersion, extensions }: { version?: string; model?: string; profile?: string; ailangVersion?: string; extensions?: string[] } = {}) {
     this.version = version ?? "0.0.0";
     this.ailangVersion = ailangVersion ?? "unknown";
     this.model = model ?? "";
+    this.profile = profile ?? "default";
     this.loadedExtensions = extensions && extensions.length > 0
       ? extensions.join(", ")
       : initialExtensionsFromEnv();
@@ -3380,6 +3388,78 @@ export class AgentUI {
     this.updateStatus();
     this.tui.requestRender();
   }
+
+  /** Set the current profile name (called on restart). */
+  setProfile(profile: string): void {
+    this.profile = profile;
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
+  /**
+   * Restart the session with the current profile.
+   * Fires onRestart callback (no profile = current).
+   */
+  restartSession(): void {
+    this.appendHistoryStyled("Restarting session...", chalk.yellow.dim);
+    this.onRestart?.();
+  }
+
+  /**
+   * Restart the session with a different profile.
+   * Fires onRestart callback with the new profile name.
+   */
+  restartWithProfile(profile: string): void {
+    this.appendHistoryStyled(`Profile → ${profile}`, chalk.cyan.dim);
+    this.onRestart?.(profile);
+  }
+
+  /**
+   * Open a profile-picker SelectList overlay.
+   * Shows all available profiles with model and extension info.
+   */
+  showProfilePicker(): void {
+    this.overlayHandle?.hide();
+    this.overlayHandle = null;
+
+    // Import dynamically to avoid circular dependency
+    import("./profiles.js").then(({ fetchAvailableProfiles, currentProfile }) => {
+      const profiles = fetchAvailableProfiles();
+      if (profiles.length === 0) {
+        this.appendHistoryStyled("No profiles found in .motoko/config/", chalk.yellow);
+        this.tui.requestRender();
+        return;
+      }
+
+      const cur = currentProfile();
+      const items: SelectItem[] = profiles.map((p) => ({
+        value: p.name,
+        label: p.name === cur ? `${p.name} (current)` : p.name,
+        description: `${p.model} | ext: ${p.extensions.slice(0, 3).join(",")}${p.extensions.length > 3 ? ",…" : ""}`,
+      }));
+
+      const list = new SelectList(items, 10, SELECT_THEME);
+
+      list.onSelect = (item: SelectItem) => {
+        this.overlayHandle?.hide();
+        this.overlayHandle = null;
+        if (item.value !== cur) {
+          this.restartWithProfile(item.value);
+        }
+      };
+
+      list.onCancel = () => {
+        this.overlayHandle?.hide();
+        this.overlayHandle = null;
+        this.tui.requestRender();
+      };
+
+      this.overlayHandle = this.tui.showOverlay(list, {
+        width: "60%",
+        maxHeight: "50%",
+      });
+    });
+  }
   private openPickerWithModels(models: string[]): void {
     const items: SelectItem[] = models.map((m) => ({
       value: m,
@@ -3446,7 +3526,7 @@ export class AgentUI {
     const composeText = this.composeFooterStatus !== "" ? ` | ${this.composeFooterStatus}` : "";
     const line1 = `[λ] ${spinnerPrefix}state: ${this.waitState.state} | step ${this.step} | elapsed: ${elapsedSec}s | last update: ${sinceUpdateSec}s ago | at: ${lastUpdateTs}${toolsText}${composeText}`;
     const extPart = this.loadedExtensions !== "" ? ` | ext: ${this.loadedExtensions}` : "";
-    const line2Base = `    model: ${this.model || "—"}${this.branch ? ` | branch: ${this.branch}` : ""}${extPart}`;
+    const line2Base = `    profile: ${this.profile} | model: ${this.model || "—"}${this.branch ? ` | branch: ${this.branch}` : ""}${extPart}`;
     const stateColor =
       this.waitState.state === "thinking" ? ((s: string) => chalk.blueBright.bold(s)) :
       (this.waitState.state === "tools_wait" || this.waitState.state === "tools_run") ? chalk.yellow :

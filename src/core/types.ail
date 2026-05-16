@@ -1,11 +1,23 @@
 module src/core/types
 
 import std/option (Option)
+import std/ai (ToolCall)
 import src/core/tool_contract (ToolCallEnvelope)
 
 export func version() -> string = "0.2.0"
 
-export type Msg = { role: string, content: string }
+-- Msg is structurally identical to std/ai.Message and motoko_ext_abi.Msg
+-- (post v2.1.0). The four-field shape is required so on_pre_step compaction
+-- can round-trip tool-role messages without dropping tool_call_id (which
+-- providers correlate tool_use → tool_result by). Pre-2.1.0 the shape was
+-- { role, content } only — this caused 422s under compaction (M-ABI-MSG-
+-- WIRE-PARITY).
+export type Msg = {
+  role: string,
+  content: string,
+  tool_calls: [ToolCall],
+  tool_call_id: string
+}
 
 export type ExecResult = {
   stdout:    string,
