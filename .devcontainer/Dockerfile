@@ -1,31 +1,28 @@
 FROM ubuntu:24.04
 
+ARG USERNAME=motoko
+ARG USER_UID=1001
+ARG USER_GID=$USER_UID
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl build-essential ca-certificates rsync \
+    ca-certificates curl git sudo sudo unzip\
     && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd --gid "$USER_GID" "$USERNAME" && \
+    useradd --uid "$USER_UID" --gid "$USER_GID" -m -s /bin/bash "$USERNAME" && \
+    echo "$USERNAME ALL=(root) NOPASSWD:ALL" > "/etc/sudoers.d/$USERNAME" && \
+    chmod 0440 "/etc/sudoers.d/$USERNAME"
 
-# Go
-ENV GO_VERSION=1.22.5
-RUN ARCH=$(uname -m | sed 's/aarch64/arm64/; s/x86_64/amd64/') && \
-    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz && \
-    tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz
-ENV PATH="/usr/local/go/bin:$PATH"
+ENV PATH="/home/${USERNAME}/.local/bin:/home/${USERNAME}/.bun/bin:/usr/local/go/bin:${PATH}"
 
-# Bun
-COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+WORKDIR /tmp/motoko_agent
+COPY --chown=${USERNAME}:${USERNAME} . /tmp/motoko_agent
 
-# Node.js 22.x
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+USER ${USERNAME}
+RUN ./scripts/install-prerequisites.sh
 
-# context-mode CLI
-RUN npm install -g context-mode
+USER root
+RUN rm -rf /tmp/motoko_agent /var/lib/apt/lists/*
 
-# AILANG runtime (clone + build from public fork)
-RUN git clone --branch motoko https://github.com/arniwesth/ailang /opt/ailang && \
-     cd /opt/ailang && go build ./cmd/ailang && \
-     cp ailang /usr/local/bin/ailang
-
-# Set up workspace
+USER ${USERNAME}
 WORKDIR /workspaces/motoko_agent

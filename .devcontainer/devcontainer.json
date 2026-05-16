@@ -1,8 +1,10 @@
 {
   "name": "Motoko Agent",
   "build": {
+    "context": "..",
     "dockerfile": "Dockerfile"
   },
+  "remoteUser": "motoko",
   "forwardPorts": [8080],
   "containerEnv": {
     "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
