@@ -2,7 +2,7 @@
 
 **Status**: RFC — for discussion  
 **Scope**: Motoko agent loop, extension hooks, self-modification  
-**Related**: [ericjang/autogo](https://github.com/ericjang/autogo), [.agent/research/Auto-research/](./)
+**Related**: [ericjang/autogo](https://github.com/ericjang/autogo), [.agent/research/Motoko-auto-research/](./)
 
 ---
 
