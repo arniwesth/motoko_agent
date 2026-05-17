@@ -54,7 +54,7 @@ The Motoko repo should not carry long-lived extension implementations under `src
 
 ### 2. Use Local Path Dependencies During Development
 
-When testing an unpublished package change from Motoko, use a path dependency in `motoko_agent/ailang.toml`:
+Desired workflow to confirm with the AILANG maintainer: when testing an unpublished package change from Motoko, use a path dependency in `motoko_agent/ailang.toml`:
 
 ```toml
 [dependencies]
@@ -76,9 +76,11 @@ import pkg/sunholo/motoko_ext_context_mode/register (...)
 
 This avoids hand-editing generated code and exercises the same package import mechanism used after publishing.
 
+If this does not currently work with `ailang generate-extension-registry`, that is the gap to fix: the generator should resolve package identity through `[dependencies]` even when the dependency source is a local path. The fallback should not be a mergeable hand-edit to `registry_generated.ail`; at most, a temporary local override can be used for debugging and then removed before review.
+
 ### 3. Keep `[extensions].packages` Aligned With Package Identity
 
-The extension package list should keep using the package identity:
+If path dependencies are supported as proposed above, the extension package list should keep using the package identity:
 
 ```toml
 [extensions]
@@ -120,14 +122,26 @@ ailang lock
 AILANG_RELAX_MODULES=1 ailang check register.ail
 ```
 
+For packages with behavior split across sibling modules, check those modules too. For context mode that means at least:
+
+```bash
+AILANG_RELAX_MODULES=1 ailang check context_mode.ail
+AILANG_RELAX_MODULES=1 ailang check exec.ail
+AILANG_RELAX_MODULES=1 ailang check prompts.ail
+AILANG_RELAX_MODULES=1 ailang check compress.ail
+```
+
+If `ailang check --package .` is available and reliable for package workspaces, prefer that as the package-level gate.
+
 Motoko-side validation should then run from `motoko_agent`:
 
 ```bash
 ailang lock
 ailang generate-extension-registry
-make verify_extensions
 make check_core
 ```
+
+In this branch, `make check_core` already depends on `verify_extensions`, so it covers extension registration boot checks as well as core type-checking.
 
 For context mode specifically, keep a host-level smoke test:
 
@@ -144,6 +158,7 @@ That test should verify:
 - unsafe `BashExec` context-mode calls are denied,
 - core tools such as `CtxDoctor` / `CtxStats` dispatch,
 - `on_describe_tools` returns useful schemas, not empty `{}` parameter objects.
+- after regeneration, `src/core/ext/registry_generated.ail` imports `pkg/sunholo/motoko_ext_context_mode/register`, not a local `src/core/ext/context_mode/register` override.
 
 ## Publishing Workflow
 
@@ -190,9 +205,10 @@ Then run:
 ```bash
 ailang lock
 ailang generate-extension-registry
-make verify_extensions
 make check_core
 ```
+
+In this branch, `make check_core` includes `make verify_extensions`.
 
 The generated registry should still import:
 
