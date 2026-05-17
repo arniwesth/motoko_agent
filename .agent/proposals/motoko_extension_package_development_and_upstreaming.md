@@ -85,16 +85,18 @@ If path dependencies are supported as proposed above, the extension package list
 ```toml
 [extensions]
 packages = [
-  "sunholo/motoko_ext_context_mode@0.2.1",
+  "sunholo/motoko_ext_context_mode@<local-package-version>",
 ]
 ```
+
+The version suffix should match the local package's `[package].version`.
 
 During local path testing, the package's own `ailang.toml` still defines:
 
 ```toml
 [package]
 name = "sunholo/motoko_ext_context_mode"
-version = "0.2.1"
+version = "<local-package-version>"
 ```
 
 If the version is being prepared for publish, bump the package version in `ailang-packages`, then update the Motoko manifest accordingly.
@@ -157,7 +159,7 @@ That test should verify:
 - expected tools are advertised,
 - unsafe `BashExec` context-mode calls are denied,
 - core tools such as `CtxDoctor` / `CtxStats` dispatch,
-- `on_describe_tools` returns useful schemas, not empty `{}` parameter objects.
+- `on_describe_tools` returns useful schemas, not empty `{}` parameter objects
 - after regeneration, `src/core/ext/registry_generated.ail` imports `pkg/sunholo/motoko_ext_context_mode/register`, not a local `src/core/ext/context_mode/register` override.
 
 ## Publishing Workflow
@@ -248,14 +250,12 @@ The local fix showed the behavior Motoko needs:
 
 For extension development:
 
-```text
-implement in ailang-packages
--> consume via path dependency in motoko_agent
--> regenerate registry
--> run Motoko smoke tests
--> publish package
--> switch Motoko back to registry version
--> regenerate registry again
-```
+- implement in `ailang-packages`,
+- consume via path dependency in `motoko_agent`,
+- regenerate registry,
+- run Motoko smoke tests,
+- publish package,
+- switch Motoko back to registry version,
+- regenerate registry again.
 
 No hand-edited generated files. No long-lived local extension forks. The published package remains the source of truth.
