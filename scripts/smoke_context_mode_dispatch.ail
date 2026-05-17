@@ -1,0 +1,137 @@
+module scripts/smoke_context_mode_dispatch
+
+import std/ai (ToolSchema)
+import std/io (println, exit)
+import std/json (jo, kv, js)
+import std/option (None)
+import std/string (contains)
+
+import src/core/config (load_runtime_config)
+import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, dispatch_tool_policy, dispatch_tool_handle)
+import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision)
+import src/core/tool_catalog (tools_with_extensions)
+import src/core/tool_contract (ToolCallEnvelope)
+
+func join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${join(rest)}"
+  }
+}
+
+func mk_ctx(workdir: string, model: string) -> ExtCtx {
+  let budget: BudgetPlan = { total: 8, solver: 8, verifier: 0 };
+  {
+    task: "smoke context_mode dispatch",
+    step: 0,
+    model: model,
+    cwd: workdir,
+    hybrid_tools: true,
+    budget: budget,
+    mode: "v2",
+    workdir: workdir,
+    env_server_url: "",
+    budget_remaining: 8,
+    history_slice: [],
+    state_key: "smoke:context-mode"
+  }
+}
+
+func call(tool: string) -> ToolCallEnvelope {
+  { id: "smoke-${tool}", tool: tool, arguments: jo([]) }
+}
+
+func bash_call(cmd: string) -> ToolCallEnvelope {
+  { id: "smoke-bash", tool: "BashExec", arguments: jo([kv("cmd", js(cmd))]) }
+}
+
+func policy_tag(decision: ToolPolicyDecision) -> string {
+  match decision {
+    Allow => "Allow",
+    Deny(msg) => "Deny:${msg}",
+    NoOpinion => "NoOpinion",
+    Pending(reason, _) => "Pending:${reason}"
+  }
+}
+
+func expect_deny(decision: ToolPolicyDecision) -> bool {
+  match decision {
+    Deny(_) => true,
+    _ => false
+  }
+}
+
+func handle_tag(decision: ToolHandleDecision) -> string {
+  match decision {
+    Delegate => "Delegate",
+    Handled(env) => "Handled:${env.tool}:exit=${show(env.exit_code)}"
+  }
+}
+
+func is_handled(decision: ToolHandleDecision) -> bool {
+  match decision {
+    Handled(_) => true,
+    Delegate => false
+  }
+}
+
+func schema_params(name: string, schemas: [ToolSchema]) -> string {
+  match schemas {
+    [] => "",
+    s :: rest => if s.name == name then s.parameters else schema_params(name, rest)
+  }
+}
+
+func schema_has_context_mode_args(rt: ExtRuntime) -> bool {
+  let schemas = tools_with_extensions(rt);
+  let execute_params = schema_params("ctx_execute", schemas);
+  let index_params = schema_params("ctx_index", schemas);
+  contains(execute_params, "\"language\"")
+    && contains(execute_params, "\"code\"")
+    && contains(index_params, "\"content\"")
+    && contains(index_params, "\"path\"")
+}
+
+func describe_hooks(hooks: [ExtensionHooks]) -> () ! {IO} {
+  match hooks {
+    [] => (),
+    h :: rest => {
+      let _ = println("hook ${h.id} tools=${join(h.provided_tools)}");
+      describe_hooks(rest)
+    }
+  }
+}
+
+func describe_runtime(rt: ExtRuntime) -> () ! {IO} {
+  describe_hooks(rt.registry.hooks)
+}
+
+export func main() -> () ! {IO, Env, FS, Process, SharedMem, Clock} {
+  let cfg = load_runtime_config();
+  let rt = init_runtime_with_config(cfg);
+  let ctx = mk_ctx(cfg.agent.workdir, cfg.agent.model);
+
+  let _ = println("profile=${cfg.profile}");
+  let _ = println("extensions=${join(loaded_extension_names(rt))}");
+  let _ = describe_runtime(rt);
+
+  let policy = dispatch_tool_policy(rt, ctx, bash_call("context-mode --help"));
+  let _ = println("policy BashExec(context-mode --help)=${policy_tag(policy)}");
+
+  let doctor = dispatch_tool_handle(rt, ctx, call("CtxDoctor"));
+  let _ = println("handle CtxDoctor=${handle_tag(doctor)}");
+
+  let stats = dispatch_tool_handle(rt, ctx, call("CtxStats"));
+  let _ = println("handle CtxStats=${handle_tag(stats)}");
+
+  let schema_ok = schema_has_context_mode_args(rt);
+  let _ = println("schemas context_mode args=${show(schema_ok)}");
+
+  if expect_deny(policy) && is_handled(doctor) && is_handled(stats) && schema_ok then
+    println("smoke_context_mode_dispatch: PASS")
+  else {
+    let _ = println("smoke_context_mode_dispatch: FAIL");
+    exit(1)
+  }
+}

@@ -1,0 +1,314 @@
+module src/core/ext/context_mode/register
+
+import std/ai (ToolSchema)
+import std/bytes (toString)
+import std/fs (fileExists, readFile)
+import std/json (Json, decode, encode, jo, kv, js, get, asString)
+import std/option (Option, Some, None)
+import std/process (exec, ProcessError)
+import std/string (trim, toLower, contains, startsWith)
+
+import src/core/config (RuntimeConfig)
+import src/core/ext/types (
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  ExtensionHooks,
+  FinalizeDecision,
+  PassThrough,
+  PreStepDecision,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolHandleDecision,
+  ToolPolicyDecision
+)
+import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
+import src/core/types (Msg)
+
+type CtxConfig = {
+  bin: string,
+  timeout_ms: int,
+  max_output_chars: int
+}
+
+func provided_tools() -> [string] {
+  [
+    "CtxExecute", "ctx_execute",
+    "CtxBatchExecute", "ctx_batch_execute",
+    "CtxExecuteFile", "ctx_execute_file",
+    "CtxIndex", "ctx_index",
+    "CtxSearch", "ctx_search",
+    "CtxFetchAndIndex", "ctx_fetch_and_index",
+    "CtxStats", "ctx_stats",
+    "CtxDoctor", "ctx_doctor",
+    "CtxPurge", "ctx_purge"
+  ]
+}
+
+func ext_tool_schema(name: string) -> ToolSchema {
+  let canonical = canonical_tool_name(name);
+  {
+    name: name,
+    description: context_tool_description(canonical),
+    parameters: context_tool_parameters(canonical)
+  }
+}
+
+func describe_tool_schemas(names: [string]) -> [ToolSchema] {
+  match names {
+    [] => [],
+    n :: rest => ext_tool_schema(n) :: describe_tool_schemas(rest)
+  }
+}
+
+func context_tool_description(canonical: string) -> string {
+  if canonical == "CtxExecute" then "Execute a small code or shell snippet through context-mode. Use for analysis, command output summarization, and token-saving probes."
+  else if canonical == "CtxBatchExecute" then "Run multiple shell commands through context-mode, index their output, and return targeted search results."
+  else if canonical == "CtxExecuteFile" then "Read and process a file inside context-mode without loading the full file into model context."
+  else if canonical == "CtxIndex" then "Index text content or a file path into context-mode's searchable knowledge base."
+  else if canonical == "CtxSearch" then "Search content previously indexed by context-mode."
+  else if canonical == "CtxFetchAndIndex" then "Fetch URL content, index it in context-mode, and return a short preview."
+  else if canonical == "CtxStats" then "Return context-mode session statistics."
+  else if canonical == "CtxDoctor" then "Run context-mode diagnostics."
+  else if canonical == "CtxPurge" then "Delete context-mode indexed content for a session or project."
+  else "Context-mode extension tool: ${canonical}"
+}
+
+func language_enum_schema() -> string {
+  "\"enum\":[\"javascript\",\"typescript\",\"python\",\"shell\",\"ruby\",\"go\",\"rust\",\"php\",\"perl\",\"r\",\"elixir\",\"csharp\"]"
+}
+
+func ctx_execute_parameters() -> string {
+  "{\"type\":\"object\",\"properties\":{\"language\":{\"type\":\"string\",${language_enum_schema()},\"description\":\"Runtime language.\"},\"code\":{\"type\":\"string\",\"description\":\"Code or shell command to execute. Print only the relevant summary.\"},\"timeout\":{\"type\":\"number\",\"description\":\"Maximum execution time in milliseconds.\"},\"background\":{\"type\":\"boolean\",\"description\":\"Keep the process running after timeout for servers or daemons.\"},\"intent\":{\"type\":\"string\",\"description\":\"What to extract when output is large.\"}},\"required\":[\"language\",\"code\"],\"additionalProperties\":false}"
+}
+
+func ctx_execute_file_parameters() -> string {
+  "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path or path relative to the project root.\"},\"language\":{\"type\":\"string\",${language_enum_schema()},\"description\":\"Runtime language.\"},\"code\":{\"type\":\"string\",\"description\":\"Code that processes FILE_CONTENT and prints only the relevant summary.\"},\"timeout\":{\"type\":\"number\",\"description\":\"Maximum execution time in milliseconds.\"},\"intent\":{\"type\":\"string\",\"description\":\"What to extract when output is large.\"}},\"required\":[\"path\",\"language\",\"code\"],\"additionalProperties\":false}"
+}
+
+func ctx_index_parameters() -> string {
+  "{\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\",\"description\":\"Raw text or markdown to index. Provide this or path.\"},\"path\":{\"type\":\"string\",\"description\":\"File path to read and index. Provide this or content.\"},\"source\":{\"type\":\"string\",\"description\":\"Label for the indexed content.\"}},\"anyOf\":[{\"required\":[\"content\"]},{\"required\":[\"path\"]}],\"additionalProperties\":false}"
+}
+
+func ctx_search_parameters() -> string {
+  "{\"type\":\"object\",\"properties\":{\"queries\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Search queries. Batch all related questions in one call.\"},\"limit\":{\"type\":\"number\",\"description\":\"Results per query.\"},\"source\":{\"type\":\"string\",\"description\":\"Filter to a specific indexed source.\"},\"contentType\":{\"type\":\"string\",\"enum\":[\"code\",\"prose\"],\"description\":\"Filter results by content type.\"},\"sort\":{\"type\":\"string\",\"enum\":[\"relevance\",\"timeline\"],\"description\":\"Sort mode.\"}},\"required\":[\"queries\"],\"additionalProperties\":false}"
+}
+
+func ctx_fetch_and_index_parameters() -> string {
+  "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\",\"description\":\"Single URL to fetch and index.\"},\"source\":{\"type\":\"string\",\"description\":\"Label for single URL content.\"},\"requests\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"source\":{\"type\":\"string\"}},\"required\":[\"url\"],\"additionalProperties\":false},\"description\":\"Batch of URLs to fetch and index.\"},\"concurrency\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8,\"description\":\"Maximum parallel URL fetches.\"},\"force\":{\"type\":\"boolean\",\"description\":\"Skip cache and re-fetch.\"}},\"anyOf\":[{\"required\":[\"url\"]},{\"required\":[\"requests\"]}],\"additionalProperties\":false}"
+}
+
+func ctx_batch_execute_parameters() -> string {
+  "{\"type\":\"object\",\"properties\":{\"commands\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"description\":\"Section label for this command output.\"},\"command\":{\"type\":\"string\",\"description\":\"Shell command to execute.\"}},\"required\":[\"label\",\"command\"],\"additionalProperties\":false},\"description\":\"Commands to execute and index.\"},\"queries\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Search queries to run over indexed command output.\"},\"timeout\":{\"type\":\"number\",\"description\":\"Maximum execution time in milliseconds.\"},\"concurrency\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8,\"description\":\"Maximum parallel commands.\"}},\"required\":[\"commands\",\"queries\"],\"additionalProperties\":false}"
+}
+
+func ctx_purge_parameters() -> string {
+  "{\"type\":\"object\",\"properties\":{\"confirm\":{\"type\":\"boolean\",\"description\":\"Must be true to purge.\"},\"sessionId\":{\"type\":\"string\",\"description\":\"Specific session to purge.\"},\"scope\":{\"type\":\"string\",\"enum\":[\"project\"],\"description\":\"Use project to purge all indexed content for this project.\"}},\"required\":[\"confirm\"],\"additionalProperties\":false}"
+}
+
+func context_tool_parameters(canonical: string) -> string {
+  if canonical == "CtxExecute" then ctx_execute_parameters()
+  else if canonical == "CtxBatchExecute" then ctx_batch_execute_parameters()
+  else if canonical == "CtxExecuteFile" then ctx_execute_file_parameters()
+  else if canonical == "CtxIndex" then ctx_index_parameters()
+  else if canonical == "CtxSearch" then ctx_search_parameters()
+  else if canonical == "CtxFetchAndIndex" then ctx_fetch_and_index_parameters()
+  else if canonical == "CtxPurge" then ctx_purge_parameters()
+  else "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}"
+}
+
+func no_budget_patch() -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func no_prompt_patch() -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+func arg_string(args: Json, key: string, fallback: string) -> string {
+  match get(args, key) {
+    Some(j) => match asString(j) {
+      Some(v) => v,
+      None => fallback
+    },
+    None => fallback
+  }
+}
+
+func denied_bash_reason(call: ToolCallEnvelope) -> Option[string] {
+  if call.tool != "BashExec" then None
+  else {
+    let cmd = toLower(trim(arg_string(call.arguments, "cmd", "")));
+    let has_url = contains(cmd, "http://") || contains(cmd, "https://");
+    if cmd == "" then None
+    else if has_url then
+      Some("Do not fetch remote URLs via BashExec when context_mode is loaded. Use CtxFetchAndIndex/ctx_fetch_and_index for URL retrieval, then CtxSearch/ctx_search for follow-up queries.")
+    else if contains(cmd, "context-mode")
+      || contains(cmd, "ctx_stats")
+      || contains(cmd, "ctx_doctor")
+      || contains(cmd, "ctx_search")
+      || contains(cmd, "ctxstats")
+      || contains(cmd, "ctxdoctor")
+      || contains(cmd, "ctxsearch")
+      || startsWith(cmd, "ctx_")
+      || startsWith(cmd, "ctx.")
+      then Some("Do not run context-mode or Ctx* probes via BashExec. Call extension tools directly via JSON tool_calls (CtxStats/CtxDoctor/CtxSearch or ctx_stats/ctx_doctor/ctx_search).")
+    else None
+  }
+}
+
+func on_policy(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  match denied_bash_reason(call) {
+    Some(msg) => Deny(msg),
+    None => NoOpinion
+  }
+}
+
+func canonical_tool_name(raw: string) -> string {
+  let t = toLower(trim(raw));
+  if t == "ctxexecute" || t == "ctx_execute" || t == "ctx.execute" || t == "context_mode.execute" then "CtxExecute"
+  else if t == "ctxbatchexecute" || t == "ctx_batch_execute" || t == "ctx.batch_execute" || t == "context_mode.batch_execute" then "CtxBatchExecute"
+  else if t == "ctxexecutefile" || t == "ctx_execute_file" || t == "ctx.execute_file" || t == "context_mode.execute_file" then "CtxExecuteFile"
+  else if t == "ctxindex" || t == "ctx_index" || t == "ctx.index" || t == "context_mode.index" then "CtxIndex"
+  else if t == "ctxsearch" || t == "ctx_search" || t == "ctx.search" || t == "context_mode.search" then "CtxSearch"
+  else if t == "ctxfetchandindex" || t == "ctx_fetch_and_index" || t == "ctx.fetch_and_index" || t == "context_mode.fetch_and_index" then "CtxFetchAndIndex"
+  else if t == "ctxstats" || t == "ctx_stats" || t == "ctx.stats" || t == "context_mode.stats" then "CtxStats"
+  else if t == "ctxdoctor" || t == "ctx_doctor" || t == "ctx.doctor" || t == "context_mode.doctor" then "CtxDoctor"
+  else if t == "ctxpurge" || t == "ctx_purge" || t == "ctx.purge" || t == "context_mode.purge" then "CtxPurge"
+  else ""
+}
+
+func action_name(canonical: string) -> string {
+  if canonical == "CtxExecute" then "ctx_execute"
+  else if canonical == "CtxBatchExecute" then "ctx_batch_execute"
+  else if canonical == "CtxExecuteFile" then "ctx_execute_file"
+  else if canonical == "CtxIndex" then "ctx_index"
+  else if canonical == "CtxSearch" then "ctx_search"
+  else if canonical == "CtxFetchAndIndex" then "ctx_fetch_and_index"
+  else if canonical == "CtxStats" then "ctx_stats"
+  else if canonical == "CtxDoctor" then "ctx_doctor"
+  else if canonical == "CtxPurge" then "ctx_purge"
+  else ""
+}
+
+func timeout_seconds(timeout_ms: int) -> int {
+  if timeout_ms <= 0 then 0
+  else {
+    let secs = timeout_ms / 1000;
+    if (secs * 1000) < timeout_ms then secs + 1 else secs
+  }
+}
+
+func process_error_to_string(err: ProcessError) -> string {
+  match err {
+    NotAllowed(cmd) => "not allowed: ${cmd}",
+    NotFound(cmd) => "not found: ${cmd}",
+    PermissionDenied(cmd) => "permission denied: ${cmd}",
+    Timeout(ms) => "timeout after ${show(ms)}ms",
+    OutputLimitExceeded(n) => "output limit exceeded: ${show(n)} bytes",
+    SpawnFailed(msg) => "spawn failed: ${msg}",
+    AbnormalExit(sig, name) => "abnormal exit signal ${show(sig)} (${name})"
+  }
+}
+
+func parse_output_json(raw_stdout: string) -> Json {
+  let t = trim(raw_stdout);
+  if t == "" then jo([kv("output", js(""))])
+  else match decode(t) {
+    Ok(parsed) => parsed,
+    Err(_) => jo([kv("output", js(t))])
+  }
+}
+
+func error_envelope(id: string, tool: string, message: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: id,
+    tool: tool,
+    stdout: "",
+    stderr: message,
+    exit_code: 1,
+    metadata: jo([kv("json_metadata", js(encode(jo([kv("output", js(message))]))))])
+  }
+}
+
+func result_envelope(id: string, tool: string, stdout: string, stderr: string, exit_code: int) -> ToolResultEnvelope {
+  {
+    tool_call_id: id,
+    tool: tool,
+    stdout: stdout,
+    stderr: stderr,
+    exit_code: exit_code,
+    metadata: jo([kv("json_metadata", js(encode(parse_output_json(stdout))))])
+  }
+}
+
+func bridge_args(cfg: CtxConfig, ctx: ExtCtx, tool_name: string, args: Json) -> [string] {
+  [
+    "${ctx.workdir}/scripts/context-mode-mcp-call.mjs",
+    "--context-mode-bin", cfg.bin,
+    "--tool", tool_name,
+    "--args-json", encode(args),
+    "--timeout-ms", show(cfg.timeout_ms)
+  ]
+}
+
+func shell_argv(cwd: string, timeout_ms: int, args: [string]) -> [string] {
+  let secs = timeout_seconds(timeout_ms);
+  let script = "set -eu\ncd \"$1\"\nPATH=\"$HOME/.local/bin:$PATH\"\nshift\ntimeout \"${show(secs)}s\" node \"$@\"";
+  ["-lc", script, "motoko-context-mode", cwd] ++ args
+}
+
+func run_bridge(id: string, tool: string, cfg: CtxConfig, ctx: ExtCtx, tool_name: string, args: Json) -> ToolResultEnvelope ! {Process} {
+  let argv = shell_argv(ctx.cwd, cfg.timeout_ms, bridge_args(cfg, ctx, tool_name, args));
+  match exec("bash", argv) {
+    Err(e) => error_envelope(id, tool, process_error_to_string(e)),
+    Ok(out) => result_envelope(id, tool, toString(out.stdout), toString(out.stderr), out.exitCode)
+  }
+}
+
+func handle_tool(cfg: CtxConfig, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process} {
+  let canonical = canonical_tool_name(call.tool);
+  if canonical == "" then Delegate
+  else {
+    let tool_name = action_name(canonical);
+    if tool_name == "" then Delegate
+    else Handled(run_bridge(call.id, canonical, cfg, ctx, tool_name, call.arguments))
+  }
+}
+
+func load_context_prompt(workdir: string) -> string ! {FS} {
+  let path = "${workdir}/.packages/motoko_context_mode/AGENT.md";
+  if fileExists(path) then readFile(path) else ""
+}
+
+func build_prompt_patch(cached: string) -> PromptPatch {
+  if trim(cached) == "" then no_prompt_patch()
+  else { prepend: [], append: ["\n${cached}"] }
+}
+
+export func register_with_config(runtime_cfg: RuntimeConfig) -> ExtensionHooks ! {FS} {
+  let cfg: CtxConfig = {
+    bin: runtime_cfg.context_mode.bin,
+    timeout_ms: runtime_cfg.context_mode.timeout_ms,
+    max_output_chars: runtime_cfg.context_mode.max_output_chars
+  };
+  let cached_prompt = load_context_prompt(runtime_cfg.agent.workdir);
+  {
+    id: "context_mode",
+    provided_tools: provided_tools(),
+    on_describe_tools: \_ . describe_tool_schemas(provided_tools()),
+    on_build_system_prompt: \_ctx. build_prompt_patch(cached_prompt),
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} { no_budget_patch() },
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+    on_tool_policy: on_policy,
+    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      handle_tool(cfg, ctx, call)
+    },
+    on_response_intercept: func(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      NoIntercept
+    },
+    on_solver_candidate: func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      NoDecision
+    }
+  }
+}
