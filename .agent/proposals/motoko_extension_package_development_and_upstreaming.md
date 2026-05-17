@@ -245,6 +245,7 @@ The local fix showed the behavior Motoko needs:
    - and a publish checklist?
 4. Should the package registry enforce or warn that advertised tool names match provider-safe patterns?
 5. Should Motoko keep `.packages/` sync tooling, or is that now deprecated in favor of direct `ailang-packages` path deps?
+6. Is `ailang check --package .` the intended package-wide validation command for extension packages, or should package templates provide an explicit module check list?
 
 ## Desired End State
 
