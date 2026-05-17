@@ -20,7 +20,10 @@ export type ExtCtx = {
   env_server_url: string,
   budget_remaining: int,
   history_slice: [Msg],
-  state_key: string
+  state_key: string,
+  -- Mirrors motoko_ext_abi@2.2.0 — context_limit populated by the host
+  -- via context_usage.context_limit_for(model). 0 = unknown.
+  context_limit: int
 }
 
 export type PromptPatch = {
