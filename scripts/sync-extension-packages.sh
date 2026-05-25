@@ -50,7 +50,18 @@ sync_extension() {
   fi
 
   # Generate lock file for the extension package so its dependencies resolve.
-  (cd "$pkg_dir" && ailang lock)
+  # Skip when there's no ailang.toml in the synced dir — this happens when the
+  # extension lives as a local-only override under src/core/ext/<name>/ with
+  # no package manifest (e.g. a quick fork-and-patch of a registry extension
+  # while iterating). In that case the consumer's own ailang.toml (path-dep
+  # or registry-version) covers dependency resolution; nothing to lock here.
+  # Pre-fix this hard-failed CI on PR #22 because src/core/ext/context_mode/
+  # only shipped register.ail with no manifest.
+  if [[ -f "$pkg_dir/ailang.toml" ]]; then
+    (cd "$pkg_dir" && ailang lock)
+  else
+    echo "  (no ailang.toml in $pkg_dir — local-only override, skipping lock)" >&2
+  fi
 
   echo "synced: $ext_name -> .packages/motoko_$ext_name"
 }
