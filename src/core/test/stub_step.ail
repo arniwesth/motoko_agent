@@ -119,6 +119,12 @@ export func dispatch_step(
       { result: stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk), next_provider: LiveAI }
     },
     Scripted(script) => {
+      -- M-MOTOKO-V021-EFFECT-ROW-MIGRATION: reference on_chunk in this branch
+      -- too. Scripted is the test-path (no real streaming) so we don't actually
+      -- invoke it, but AILANG v0.21+ narrows the parameter's effect row to {}
+      -- if neither branch references it, conflicting with the declared {IO}.
+      -- The `let _ = on_chunk in` keeps the parameter's declared row pinned.
+      let _ = on_chunk in
       match script {
         [] => {
           { result: Ok(terminal_step()), next_provider: Scripted([]) }

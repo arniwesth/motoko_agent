@@ -904,7 +904,7 @@ func loop_v2(
     -- (not used for reordering on the consumer side as of v0.18.7).
     -- Match-in-lambda is a known AILANG parser bug, so the match lives in
     -- the top-level emit_stream_chunk helper.
-    let on_chunk = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
+    let on_chunk: (StreamChunk) -> () ! {IO} = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
     let dispatched = dispatch_step(provider, model, compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
