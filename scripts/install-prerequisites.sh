@@ -7,7 +7,7 @@
 #   - Bun 1.x
 #   - Node.js 18+ and npm
 #   - context-mode CLI
-#   - AILANG runtime (cloned from github.com/sunholo-data/ailang at pinned tag)
+#   - AILANG runtime (cloned from github.com/sunholo-data/ailang at latest release)
 #   - bun dependencies for the TypeScript frontend (src/tui/)
 #   - Optional: Omnigraph CLI/server (with --with-omnigraph)
 # Usage:
@@ -30,8 +30,8 @@ GO_MIN_MINOR=22
 BUN_MIN_MAJOR=1
 NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
-AILANG_REF="v0.19.1"
-AILANG_MIN_VERSION="0.19.1"
+AILANG_REF=""
+AILANG_MIN_VERSION=""
 INSTALL_OMNIGRAPH=0
 SUDO=()
 SUDO_E=()
@@ -360,8 +360,21 @@ install_bun_deps() {
 }
 
 # ---------------------------------------------------------------------------
-# AILANG runtime — clone from public fork, build, install
+# AILANG runtime — clone from public repo, build latest release
 # ---------------------------------------------------------------------------
+resolve_latest_ailang() {
+  if [[ -n "$AILANG_REF" ]]; then return; fi
+  log_info "Resolving latest AILANG release..."
+  local tag
+  tag="$(curl -fsSL https://api.github.com/repos/sunholo-data/ailang/releases/latest | jq -r '.tag_name')"
+  if [[ -z "$tag" || "$tag" == "null" ]]; then
+    die "Failed to resolve latest AILANG release from GitHub API"
+  fi
+  AILANG_REF="$tag"
+  AILANG_MIN_VERSION="${tag#v}"
+  log_ok "Latest AILANG release: $AILANG_REF"
+}
+
 ailang_version_ok() {
   if ! command -v ailang &>/dev/null; then return 1; fi
   local ver
@@ -371,6 +384,7 @@ ailang_version_ok() {
 
 install_ailang() {
   log_header "AILANG runtime"
+  resolve_latest_ailang
   if ailang_version_ok; then
     log_ok "ailang $(ailang --version 2>/dev/null | head -1) already installed (>= ${AILANG_MIN_VERSION})"
     return

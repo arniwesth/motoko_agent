@@ -1,6 +1,7 @@
 module src/core/ext/runtime
 
 import std/clock (now)
+import std/math (intToFloat)
 import std/io (println)
 import std/json (encode, jo, kv, js, jnum)
 import std/option (Option, Some, None)
@@ -98,7 +99,7 @@ func apply_budget_patch(plan: BudgetPlan, patch: BudgetPatch) -> BudgetPlan {
 func emit_dummy_hook(hook: string, key: string, val: string) -> () ! {IO, Clock} {
   let _ = println(encode(jo([
     kv("type", js("dummy_hook")),
-    kv("ts", jnum(now())),
+    kv("ts", jnum(intToFloat(now()))),
     kv("hook", js(hook)),
     kv(key, js(val))
   ])));
