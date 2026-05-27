@@ -357,6 +357,84 @@ Since the extension is in-tree (not a package), registration follows the `contex
 3. Optional: `on_budget_plan` to request higher step budgets for optimization sessions
 4. Template `autoresearch.md` with best-practice structure
 
+### Phase 4: End-to-End Validation — "Compact Motoko's Core Runtime"
+
+The acid test. Motoko uses its own autoresearch extension to autonomously compact its own codebase.
+
+**Objective:** Reduce total line count of `src/core/*.ail` while preserving correctness.
+
+**Setup:**
+```
+ar_init({
+  objective: "Reduce total line count of Motoko's core AILANG runtime",
+  metrics: [{ name: "lines", direction: "minimize" }],
+  scope_paths: ["src/core/"],
+  off_limits: [
+    "src/core/ext/registry_generated.ail",
+    "src/core/test/",
+    "src/core/ext/autoresearch/"
+  ],
+  constraints: [
+    "Do not remove public exports",
+    "Do not change function signatures used by the TUI layer",
+    "Do not modify generated files"
+  ],
+  max_iterations: 20
+})
+```
+
+**Benchmark script (`autoresearch.sh`):**
+```bash
+#!/bin/bash
+LINES=$(find src/core -name "*.ail" \
+  ! -name "*_test.ail" \
+  ! -path "*/test/*" \
+  ! -name "registry_generated.ail" \
+  | xargs wc -l | tail -1 | awk '{print $1}')
+echo "METRIC lines=$LINES"
+```
+
+**Correctness checks (`autoresearch.checks.sh`):**
+```bash
+#!/bin/bash
+set -e
+make check_core
+make test_core
+```
+
+**What this validates:**
+
+| Concern | How it's tested |
+|---------|----------------|
+| Full tool lifecycle | ar_init → (ar_run → ar_log) × N → ar_notes |
+| Keep decisions | Agent finds dead code or duplication, line count drops, tests pass |
+| Discard decisions | Agent's refactor breaks type-checker, selective revert fires |
+| Scope enforcement | Agent is tempted to simplify registry_generated.ail or test files — deviation detection blocks it |
+| Selective revert | Only run-modified files revert on discard; pre-existing work survives |
+| Confidence scoring | After 3+ iterations, MAD stabilizes; ratio indicates real vs noise improvements |
+| Solver gate | `on_solver_candidate` blocks premature "done" until confidence ≥ 2.0 or max_iterations reached |
+| Two-phase prompts | Setup prompt guides harness creation; loop prompt drives optimization |
+| Compaction survival | If session exceeds ~20 steps, on_pre_step reconstructs state from DuckDB |
+| Branch management | All work happens on `autoresearch/compact-core-YYYYMMDD` branch |
+| ar_notes | Agent documents patterns found (e.g., "runtime.ail has 3 nearly-identical fold helpers") |
+| DuckDB persistence | Sessions + runs queryable after the session ends |
+
+**Success criteria:**
+1. The loop runs autonomously for at least 5 iterations without human intervention
+2. At least one "keep" decision produces a measurable line reduction
+3. At least one "discard" correctly reverts a broken change
+4. `make check_core && make test_core` passes at every "keep" commit
+5. The `autoresearch/` branch has a clean commit history of incremental improvements
+6. Confidence score is computed and reported after iteration 3+
+7. The DuckDB database is queryable post-session: `SELECT run_number, decision, metrics_json FROM runs`
+
+**What we learn:**
+- Whether the agent makes meaningful simplifications or thrashes
+- Whether the safety rails (scope, checks, selective revert) actually prevent damage
+- Whether confidence converges — does the noise floor get detected?
+- Real-world performance: how many tokens/steps per iteration?
+- Whether the extension is production-ready for other objectives
+
 ---
 
 ## Verification
@@ -366,8 +444,7 @@ Since the extension is in-tree (not a package), registration follows the `contex
 3. Smoke test: scripted session using `StepProvider = Scripted([...])` simulating init → run → log → run → log flow
 4. Scope test: scripted session where the agent modifies an off-limits file, verify ar_log rejects without justification
 5. Selective revert test: verify pre-existing dirty files survive a discard
-6. Manual test: run Motoko with `autoresearch` in `extensions.order`, give it a real objective, verify the loop executes and JSONL accumulates
-7. Compaction test: long session, verify `on_pre_step` reconstructs state correctly after compaction fires
+6. Phase 4 end-to-end: run the "Compact Motoko's Core Runtime" objective live and verify all success criteria
 
 ---
 
