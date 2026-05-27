@@ -16,7 +16,7 @@ A general-purpose **auto-research extension** for Motoko — inspired by [pi-aut
 | Tools | 3 (init, run, log) | 4 (+update_notes) | 4 (+ar_notes) |
 | Prompt phases | Single | Two-phase (setup + loop) | Two-phase (setup + loop) |
 | Branch management | None | Auto `autoresearch/<goal>-<date>` | Auto `autoresearch/<goal>-<date>` |
-| Compaction survival | File reconstruction | DB + prompt injection | JSONL reconstruction via `on_pre_step` |
+| Compaction survival | File reconstruction | DB + prompt injection | DuckDB reconstruction via `on_pre_step` |
 | Solver gate | None | None (uses auto-resume) | `on_solver_candidate` → `ContinueWithFeedback` |
 
 ---
@@ -275,6 +275,8 @@ func confidence(db: DB, segment: int, metric_name: string, baseline: float) -> O
 type ConfidenceResult = { value: float, mad: float, ratio: float, confident: bool }
 ```
 
+**SQL injection caveat**: The duckdb package has no parameterized queries — SQL is constructed via string interpolation. `db.ail` must sanitize all interpolated values (escape single quotes, validate metric names are alphanumeric).
+
 ---
 
 ## Git Integration
@@ -323,27 +325,29 @@ Since the extension is in-tree (not a package), registration follows the `contex
    Or regenerate via `ailang generate-extension-registry` after adding to `ailang.toml` `[extensions]`.
 2. Add `"autoresearch"` to profile's `extensions.order` in `.motoko/config/*/config.json`
 
-**Dependencies**: Requires `sunholo/duckdb@0.1.0` (already installed) and `duckdb` CLI on PATH.
+**Dependencies**: Requires `sunholo/duckdb@0.1.0` (in registry; run `ailang install sunholo/duckdb@0.1.0` to resolve) and `duckdb` CLI on PATH.
 
 ---
 
 ## Implementation Phases
 
 ### Phase 1: Core (skeleton + tools) — ~3 days
-1. Create module structure at `src/core/ext/autoresearch/`
-2. `types.ail` — all domain types (ExperimentConfig, RunEntry, ConfidenceResult, Segment, etc.)
-3. `tools.ail` — 4 tool schemas + argument parsing
-4. `db.ail` — DuckDB schema creation (`sessions` + `runs` tables), insert/query helpers using `sunholo/duckdb`
-5. `notes.ail` — autoresearch.md management
-6. `git_ops.ail` — branch creation, dirty path capture, selective commit/revert
-7. `scope.ail` — scope deviation detection
-8. `register.ail` — hooks wired (`on_tool_handle` + `on_describe_tools`, rest no-op initially)
-9. Implement `ar_init` handler (create session, branch, baseline, DB schema, files)
-10. Implement `ar_run` handler (snapshot dirty, execute benchmark, parse METRIC + ASI)
-11. Implement `ar_log` handler (scope check, INSERT into runs, selective git ops)
-12. Implement `ar_notes` handler (replace/append notes)
-13. Wire into registry, verify with `ailang check`
-14. Add `duckdb` CLI install to `scripts/install-prerequisites.sh` and devcontainer
+1. Resolve `sunholo/duckdb@0.1.0`: run `ailang install sunholo/duckdb@0.1.0` and regenerate lock file
+2. Add `duckdb` CLI install to `scripts/install-prerequisites.sh` and devcontainer; install it now
+3. Create module structure at `src/core/ext/autoresearch/`
+4. `types.ail` — all domain types (ExperimentConfig, RunEntry, ConfidenceResult, Segment, etc.)
+5. `tools.ail` — 4 tool schemas + argument parsing
+6. `db.ail` — DuckDB schema creation (`sessions` + `runs` tables), insert/query helpers using `pkg/sunholo/duckdb/*`. Include a `sanitize_sql_string` helper to escape single quotes in interpolated values.
+7. `notes.ail` — autoresearch.md management
+8. `git_ops.ail` — branch creation, dirty path capture, selective commit/revert
+9. `scope.ail` — scope deviation detection
+10. `register.ail` — hooks wired (`on_tool_handle` + `on_describe_tools`, rest no-op initially)
+11. Implement `ar_init` handler (create session, branch, baseline, DB schema, files)
+12. Implement `ar_run` handler (snapshot dirty, execute benchmark, parse METRIC + ASI)
+13. Implement `ar_log` handler (scope check, INSERT into runs, selective git ops)
+14. Implement `ar_notes` handler (replace/append notes)
+15. Wire into registry, verify with `ailang check` on each new module
+16. Note: `make check_core` only checks `src/core/*.ail` (not subdirs). Use direct `ailang check src/core/ext/autoresearch/*.ail` or add a `check_autoresearch` Makefile target.
 
 ### Phase 2: Intelligence — ~2 days
 1. `metrics.ail` — median, MAD, confidence scoring using DuckDB sorted queries + segment/flagging filters
@@ -439,8 +443,8 @@ make test_core
 
 ## Verification
 
-1. `ailang check` on the new modules — must pass type-checking
-2. `make check_core` — must not break existing modules
+1. `ailang check` on each `src/core/ext/autoresearch/*.ail` module — must pass type-checking
+2. `make check_core` — must not break existing `src/core/*.ail` modules (note: this target doesn't recurse into subdirs, so it won't check autoresearch files directly)
 3. Smoke test: scripted session using `StepProvider = Scripted([...])` simulating init → run → log → run → log flow
 4. Scope test: scripted session where the agent modifies an off-limits file, verify ar_log rejects without justification
 5. Selective revert test: verify pre-existing dirty files survive a discard
@@ -450,7 +454,14 @@ make test_core
 
 ## Persistence: DuckDB
 
-Use `sunholo/duckdb@0.1.0` (already installed) instead of JSONL for session and run persistence. This eliminates the AILANG `appendFile` gap and gives us proper SQL queries for segment filtering, confidence computation, and state reconstruction.
+Use `sunholo/duckdb@0.1.0` (published in the AILANG registry) for session and run persistence. SQL queries are a natural fit for segment filtering, confidence computation (sorted data via `ORDER BY`), and state reconstruction after compaction — all of which would require manual parsing and sorting over flat JSONL.
+
+**Import paths** (consumers use `pkg/` prefix):
+```ailang
+import pkg/sunholo/duckdb/types  (DB, Row, QueryResult, openDB)
+import pkg/sunholo/duckdb/query  (queryAll, queryOne, scalar)
+import pkg/sunholo/duckdb/schema (execScript, tableExists)
+```
 
 **DB file**: `.motoko/autoresearch/autoresearch.db`
 
@@ -475,15 +486,19 @@ CREATE TABLE runs (
 ```
 
 **Advantages over JSONL:**
-- `INSERT INTO runs ...` — native append, no read+concat+write
+- `INSERT INTO runs ...` — atomic append (AILANG does have `std/fs.appendFile`, but SQL INSERT is transactional and avoids partial writes)
 - `SELECT metric FROM runs WHERE segment = ? AND NOT flagged ORDER BY metric` — sorted data for confidence, no AILANG insertion sort needed
 - `SELECT COUNT(*) FROM runs WHERE segment = ?` — iteration count in one query
 - State reconstruction for compaction is a single `SELECT`
+- Segment/flag filtering is native SQL rather than in-memory list filtering
 
 **Requirements:**
 - `duckdb` CLI on PATH (add to `scripts/install-prerequisites.sh` and devcontainer)
-- Effects: `Process, FS` (already available in tool-handling hooks)
-- Package API: `openDB`, `execScript`, `queryAll`, `queryOne`, `scalar`
+- Effects: `Process` for all query/exec functions (already available in `on_tool_handle` hooks)
+- Package API across three modules:
+  - `pkg/sunholo/duckdb/types`: `openDB(path) -> DB`
+  - `pkg/sunholo/duckdb/query`: `query`, `queryAll`, `queryOne`, `scalar` — all `(DB, string) -> Result[_, string] ! {Process}`
+  - `pkg/sunholo/duckdb/schema`: `execScript(DB, string) -> Result[(), string] ! {Process}`, `tableExists(DB, string) -> Result[bool, string] ! {Process}`
 
 **Flat files kept:** `autoresearch.md` (prompt-injected text), `autoresearch.sh` (benchmark script), `autoresearch.checks.sh` (optional), `autoresearch.config.json` (human-readable snapshot). Only structured experiment data moves to DuckDB.
 
