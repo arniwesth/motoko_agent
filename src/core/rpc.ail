@@ -12,6 +12,7 @@ module src/core/rpc
 -- MIGRATION sprint plan + CHANGELOG.md and git log around 2026-05-06.
 
 import src/core/agent_loop_v2 (run_v2_with_conversation)
+import src/core/context_usage (context_limit_for)
 import src/core/test/stub_step (LiveAI)
 import std/io     (println, exit)
 import std/json   (Json, encode, jo, ja, kv, js, jb, jnum)
@@ -114,7 +115,8 @@ func compute_budget_plan(
     env_server_url: "",
     budget_remaining: remaining,
     history_slice: [],
-    state_key: "core:ext:budget"
+    state_key: "core:ext:budget",
+    context_limit: context_limit_for(model)
   };
   let patched = dispatch_budget_plan(ext_runtime, ctx, base);
   clamp_budget_plan(patched, max_steps)
@@ -218,7 +220,8 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     env_server_url: env_url,
     budget_remaining: remaining,
     history_slice: [],
-    state_key: "core:ext:system"
+    state_key: "core:ext:system",
+    context_limit: context_limit_for(model)
   };
   let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_hint);
 
