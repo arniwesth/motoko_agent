@@ -7,7 +7,7 @@ import std/option (Option, Some, None)
 import std/string (startsWith)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (RuntimeConfig, VerificationConfig)
-import src/core/ext/types (
+import pkg/sunholo/motoko_ext_abi/types (
   BudgetPlan,
   ExtCtx,
   PromptPatch,
@@ -317,7 +317,8 @@ func smoke_ctx() -> ExtCtx {
     env_server_url: "",
     budget_remaining: 10,
     history_slice: [],
-    state_key: "k"
+    state_key: "k",
+    context_limit: 0
   }
 }
 

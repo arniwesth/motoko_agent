@@ -24,16 +24,16 @@ sync_extension() {
     "$src_dir/" "$pkg_ext_dir/"
   # Transform local core imports to package imports for extension package resolution.
   # Modules exported by sunholo/motoko_core with module_prefix="src":
-  #   src/core/compress, src/core/config, src/core/tool_contract,
-  #   src/core/types, src/core/ext/types
+  #   src/core/compress, src/core/config, src/core/tool_contract, src/core/types
   # These become: pkg/sunholo/motoko_core/core/<rest>
+  # (Extension types live in pkg/sunholo/motoko_ext_abi/types and are imported
+  # directly by extensions — no rewrite needed for those.)
   find "$pkg_ext_dir" -name '*.ail' -print0 | while IFS= read -r -d '' f; do
     sed -i \
       -e 's|import src/core/compress (|import pkg/sunholo/motoko_core/core/compress (|g' \
       -e 's|import src/core/config (|import pkg/sunholo/motoko_core/core/config (|g' \
       -e 's|import src/core/tool_contract (|import pkg/sunholo/motoko_core/core/tool_contract (|g' \
       -e 's|import src/core/types (|import pkg/sunholo/motoko_core/core/types (|g' \
-      -e 's|import src/core/ext/types (|import pkg/sunholo/motoko_core/core/ext/types (|g' \
       "$f"
   done
   if [[ -f "$src_dir/AGENT.md" ]]; then
