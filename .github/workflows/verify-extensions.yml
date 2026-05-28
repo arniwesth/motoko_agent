@@ -1,12 +1,18 @@
 name: verify-extensions
 
-# Catches the "AILANG pin drift" class of bug that PR #16 surfaced:
-# install-prerequisites.sh pinned AILANG_REF=v0.18.9 while the registry
-# extensions (compaction_ai, context_mode, exa_search, omnigraph) already
-# require std/extension (added in v0.18.11). Local devs with a newer
-# ailang in PATH never noticed because the prereq script's version_ge
-# gate let them sail past. A fresh runner reproduces what arniwesth saw
-# in his Codespace.
+# Catches two classes of AILANG version drift:
+#
+# 1. "Pin drift" (PR #16): AILANG_REF in install-prerequisites.sh lagged
+#    behind what extensions actually required.
+#
+# 2. "Dev-build gap" (PR #33): PR was verified locally against a dev build
+#    (v0.21.0-99-g...) while the released v0.22.0 had stricter type
+#    checking that caught a missing ExtCtx.context_limit field.
+#
+# Fix: CI derives the AILANG version to build from ailang.toml's floor
+# constraint (e.g. `ailang = ">=0.22.0"` → build v0.22.0). The floor and
+# AILANG_REF in install-prerequisites.sh must both be kept in sync — a
+# mismatch causes this job to fail on the "versions must match" check.
 
 on:
   pull_request:
@@ -38,16 +44,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read pinned AILANG_REF from install script
+      - name: Read AILANG floor from ailang.toml (single source of truth)
         id: pin
         run: |
-          ref=$(grep -E '^AILANG_REF=' scripts/install-prerequisites.sh | head -n1 | cut -d'"' -f2)
-          if [[ -z "$ref" ]]; then
-            echo "::error::Could not read AILANG_REF from scripts/install-prerequisites.sh" >&2
+          # Parse floor from: ailang = ">=X.Y.Z"
+          version=$(grep -E '^ailang\s*=' ailang.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+          if [[ -z "$version" ]]; then
+            echo "::error::Could not parse ailang floor from ailang.toml" >&2
             exit 1
           fi
+          ref="v${version}"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "Pinned AILANG_REF: $ref"
+          echo "ailang.toml floor: $ref"
+
+          # Sanity-check: install-prerequisites.sh must reference the same version
+          # so local devs install exactly what CI tests against.
+          script_ref=$(grep -E '^AILANG_REF=' scripts/install-prerequisites.sh | head -n1 | cut -d'"' -f2)
+          if [[ "$script_ref" != "$ref" ]]; then
+            echo "::error::Version mismatch: ailang.toml floor=$ref but install-prerequisites.sh AILANG_REF=$script_ref — bump them together." >&2
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
