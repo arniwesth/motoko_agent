@@ -23,30 +23,39 @@ A general-purpose **auto-research extension** for Motoko — inspired by [pi-aut
 
 ## Architecture Overview
 
-The extension exposes **4 tools** (`ar_init`, `ar_run`, `ar_log`, `ar_notes`) and uses **4 hooks**:
+The extension exposes **4 tools** (`ar_init`, `ar_run`, `ar_log`, `ar_notes`) and uses **5 hooks**:
 
 ```
 Agent loop step
   │
   ├─ on_build_system_prompt → inject phase-appropriate prompt (setup vs loop)
-  ├─ on_pre_step → reconstruct state from JSONL after compaction
+  ├─ on_pre_step → reconstruct state from DuckDB after compaction (incl. current ArState)
   │
-  ├─ [agent builds harness, then calls ar_init]
-  │   └─ on_tool_handle → create session, branch, baseline
+  ├─ on_tool_policy → STATE-MACHINE GUARD (runs before every tool, any tool)
+  │   └─ Deny illegal transitions: e.g. edit/write/bash while AWAITING_LOG,
+  │      ar_run/ar_log before ar_init. Hard Deny, not a nudge.
   │
-  ├─ [agent edits code, then calls ar_run]
-  │   └─ on_tool_handle → snapshot dirty paths, execute benchmark, parse METRIC + ASI lines
+  ├─ [agent builds harness, then calls ar_init]    (legal only in SETUP)
+  │   └─ on_tool_handle → create session, branch, baseline → state becomes READY
   │
-  ├─ [agent calls ar_log with keep/discard]
-  │   └─ on_tool_handle → detect scope deviations, append JSONL, selective git commit or revert
+  ├─ [agent edits code, then calls ar_run]          (legal only in READY)
+  │   └─ on_tool_handle → snapshot dirty paths, persist pending_run, execute benchmark,
+  │      parse METRIC + ASI lines → state becomes AWAITING_LOG
   │
-  ├─ [agent calls ar_notes to update knowledge base]
+  ├─ [agent calls ar_log with keep/discard]         (legal only in AWAITING_LOG)
+  │   └─ on_tool_handle → detect scope deviations, INSERT run, clear pending_run,
+  │      selective git commit or revert → state becomes READY
+  │
+  ├─ [agent calls ar_notes to update knowledge base] (legal in READY/AWAITING_LOG)
   │   └─ on_tool_handle → replace or append to session notes
   │
-  └─ on_solver_candidate → block premature completion if confidence not met
+  └─ on_solver_candidate → block premature completion if confidence not met → DONE
 ```
 
-The agent drives the loop autonomously: edit → benchmark → log → evaluate → repeat.
+The agent drives the loop autonomously: edit → benchmark → log → evaluate → repeat. The
+**state machine** (see "State Machine Enforcement" below) makes that loop *enforceable*
+rather than merely prompt-suggested — illegal tool calls are rejected by `on_tool_policy`
+and `on_tool_handle` before they can corrupt the keep/discard accounting.
 
 ---
 
@@ -64,6 +73,7 @@ src/core/ext/autoresearch/
   metrics.ail        — MAD confidence scoring (uses DuckDB for sorted data)
   git_ops.ail        — branch mgmt, selective commit/revert, dirty path tracking
   scope.ail          — scope deviation detection + run flagging
+  state.ail          — ArState enum, derive_state(db), legal(state, tool) transition guard
   prompts.ail        — two-phase system prompt builder (setup vs loop)
   compaction.ail     — on_pre_step: reconstruct state from DuckDB
 ```
@@ -117,7 +127,9 @@ Snapshots dirty paths, executes `autoresearch.sh`, parses output. Arguments:
 3. Parse `METRIC name=value` lines from stdout
 4. Parse `ASI key=value` lines from stdout (structured metadata)
 5. If `autoresearch.checks.sh` exists and benchmark passed, run it
-6. Store pre-run dirty paths in run result (needed for selective revert)
+6. **Persist a `pending_runs` row** (run_number, pre_run_dirty paths, metrics, asi, checks) → transitions state to `AwaitingLog`. Pre-run dirty paths live in the DB, not just the returned payload, so selective revert and the state machine survive compaction.
+
+(Legal only in `Ready`; `on_tool_policy` denies `ar_run` in `Setup`/`AwaitingLog`/`Done`.)
 
 Returns:
 ```json
@@ -137,8 +149,8 @@ Returns:
 
 ### `ar_log` — Log Result & Git Action
 
-Appends to JSONL, detects scope deviations, triggers selective git commit or revert. Arguments:
-- `run_number` (int, required) — must match the last `ar_run` result
+Appends to JSONL, detects scope deviations, triggers selective git commit or revert. Legal only in `AwaitingLog`. Arguments:
+- `run_number` (int, required) — must match the open `pending_runs` row (mismatch → rejected)
 - `decision` ("keep" | "discard" | "crash" | "checks_failed", required)
 - `metrics` (JSON object, required) — `{metric_name: value}` from the benchmark run
 - `changes_summary` (string, required) — what was changed
@@ -149,14 +161,15 @@ Appends to JSONL, detects scope deviations, triggers selective git commit or rev
 - `asi` (JSON object, optional) — additional structured metadata
 
 **Log lifecycle:**
-1. Compute run-modified paths: `current_dirty - pre_run_dirty`
+0. Read the open `pending_runs` row; verify `run_number` matches (else reject)
+1. Compute run-modified paths: `current_dirty - pre_run_dirty` (pre_run_dirty from the `pending_runs` row)
 2. Detect scope deviations: modified paths outside `scope_paths` or inside `off_limits`
 3. If deviations found and `decision == "keep"` and no `justification` → return error demanding justification
 4. If `decision == "keep"`: stage and commit only run-modified files, not the whole tree
 5. If `decision != "keep"`: revert only run-modified paths via `git checkout HEAD -- <paths>` + remove untracked run-created files
 6. Process `flag_runs` — mark flagged runs so they're excluded from confidence calculations
 7. Compute MAD confidence (excluding flagged runs)
-8. Append run entry to JSONL
+8. `INSERT` run entry into `runs`, then **`DELETE` the `pending_runs` row** → transitions state back to `Ready`
 9. If `learnings` provided, append to autoresearch.md
 
 Returns:
@@ -218,19 +231,83 @@ If `autoresearch.db` exists but last 5 messages lack autoresearch tool calls →
 - `SELECT COUNT(*), MIN(metrics_json), MAX(metrics_json) FROM runs WHERE segment = ?`
 - `SELECT run_number, decision, metrics_json, changes_summary FROM runs WHERE segment = ? ORDER BY run_number DESC LIMIT 5`
 - Flagged/unjustified runs: `SELECT run_number, flagged_reason FROM runs WHERE flagged = TRUE AND segment = ?`
+- **Current state**: `derive_state(db)` (see State Machine Enforcement). If `AWAITING_LOG`, the summary MUST state the pending `run_number` and that the agent owes an `ar_log` before any further edits — otherwise a post-compaction agent will resume editing and corrupt the dirty-path diff.
 
 Inject as `Compacted(msgs ++ [summary_msg], "autoresearch: session state reconstructed from DB")`. Otherwise `PassThrough`.
 
+### `on_tool_policy` — State-Machine Guard
+Runs **before** every tool call (any tool, not just `ar_*`) and is the enforcement floor. Computes `derive_state(db)` then:
+- **`SETUP`** (no session row): `Deny` for `ar_run`, `ar_log`, `ar_notes`. Harness-build tools (edit/write/bash/read) and `ar_init` → `NoOpinion`.
+- **`AWAITING_LOG`** (pending run not yet logged): `Deny` for `edit`/`write`/`bash` and a second `ar_run`. This is the **correctness gate** — it keeps `pre_run_dirty ↔ current_dirty` diffable. `ar_log`, `ar_notes`, read-only tools → `NoOpinion`.
+- **`DONE`**: `Deny` for all `ar_*`.
+- **`READY`** and all other cases → `NoOpinion`.
+
+Every `Deny` message names the current state and the legal next actions (e.g. `Deny("AWAITING_LOG: run #4 must be logged with ar_log(decision=keep|discard) before editing. To abandon it, ar_log(discard) or ar_init(new_segment).")`). Recall the engine merges decisions `Deny > Pending > Allow > NoOpinion`, so this co-exists with other extensions' policies.
+
 ### `on_tool_handle`
-Route `ar_init`/`ar_run`/`ar_log`/`ar_notes` to handlers. Return `Delegate` for all other tools.
+First call `legal(derive_state(db), tool_name)` as a defense-in-depth transition check (mirrors the policy guard; protects against tools that bypass policy). On illegal transition → `Handle({error, current_state, legal_actions})`. Otherwise route `ar_init`/`ar_run`/`ar_log`/`ar_notes` to handlers and return `Delegate` for all other tools.
 
 ### `on_solver_candidate`
-If active session exists and confidence threshold not met → `ContinueWithFeedback("Autoresearch confidence not reached (current: X, need ≥ 2.0). Continue iterating or call ar_notes to record why you're stopping.")`. If max_iterations reached → `NoDecision` (allow completion). Otherwise `NoDecision`.
+If active session exists and confidence threshold not met → `ContinueWithFeedback("Autoresearch confidence not reached (current: X, need ≥ 2.0). Continue iterating or call ar_notes to record why you're stopping.")`. If state is `AWAITING_LOG` → `ContinueWithFeedback("Pending run #N must be logged before completion.")`. If max_iterations reached → `NoDecision` (allow completion → `DONE`). Otherwise `NoDecision`.
 
 ### Other hooks
-`on_tool_policy` → `NoOpinion`, `on_budget_plan` → no-op patch, `on_response_intercept` → `NoIntercept`.
+`on_budget_plan` → no-op patch, `on_response_intercept` → `NoIntercept`.
 
 ---
+
+## State Machine Enforcement
+
+The tool sequence (`ar_init → (ar_run → ar_log)* → done`) is enforced as a state machine, not merely suggested by the prompt. **Why enforcement, not nudging:** the selective commit/revert logic computes `run_modified = current_dirty − pre_run_dirty`. That invariant only holds if *no edits occur between `ar_run` and `ar_log`*. If the agent edits code after benchmarking but before logging, those edits are misattributed to the run, and the selective git op acts on the wrong fileset — silent corruption. A prompt cannot guarantee the run↔log pairing is atomic; a state machine can.
+
+### States
+
+```ailang
+-- state.ail
+type ArState = Setup | Ready | AwaitingLog | Done
+```
+
+| State | Meaning | Legal tools | Illegal calls rejected |
+|-------|---------|-------------|------------------------|
+| `Setup` | No session row in DB | edit/write/bash/read, `ar_init` | `ar_run`, `ar_log`, `ar_notes` |
+| `Ready` | Session exists, no pending run | edit/write, `ar_run`, `ar_notes`, `ar_init(new_segment)` | `ar_log` ("no pending run") |
+| `AwaitingLog` | `ar_run` completed, not yet logged | `ar_log`, `ar_notes`, read-only | **edit/write/bash**, second `ar_run` |
+| `Done` | confidence met + declared, or max_iterations reached | — | all `ar_*` |
+
+### Transitions
+
+```
+   Setup ──ar_init──▶ Ready ──ar_run──▶ AwaitingLog ──ar_log(keep|discard)──▶ Ready  (iteration++)
+                        │  ▲                  │
+                        │  └──────────────────┘  ar_log(discard) / ar_init(new_segment)  [abandon pending run]
+                        └────── on_solver_candidate (confidence ok | max_iter) ──────▶ Done
+```
+
+**Escape hatch:** `AwaitingLog` is never a dead end — `ar_log(decision="discard")` or `ar_init(new_segment=true)` both abandon a bad pending run and return to `Ready`.
+
+### State is derived from persisted data (not the conversation)
+
+For the machine to be enforceable *and* survive compaction, the state must be a pure function of the DB — **not** carried in chat messages. This is a change from the original tool contracts, which returned `run_number` + `pre_run_dirty_paths` to the model and read them back as `ar_log` arguments (that does not survive compaction):
+
+```ailang
+func derive_state(db: DB) -> ArState ! {Process}
+-- Setup       if sessions table empty
+-- AwaitingLog if a pending_runs row exists for the current segment
+-- Ready       if session exists and no pending run
+-- Done        if session marked done OR runs_count >= max_iterations
+
+func legal(state: ArState, tool_name: string) -> Result[(), RejectMsg]
+type RejectMsg = { current_state: string, legal_actions: [string], message: string }
+```
+
+`ar_run` writes a `pending_runs` row (capturing `run_number` + `pre_run_dirty_paths` durably); `ar_log` clears it. So `run_number` and the pre-run dirty snapshot live in the DB, and a post-compaction agent recovers them via `on_pre_step` rather than from chat history.
+
+### Enforcement layers (defense in depth)
+
+1. **`on_tool_policy`** — the guard. Hard-`Deny`s illegal tools (including edit/write/bash) *before* they execute. Primary enforcement.
+2. **`on_tool_handle`** — the transition. Re-checks `legal()` at the top of each `ar_*` handler and returns `Handle({error, current_state, legal_actions})` on violation. Catches anything that bypasses policy and gives actionable errors.
+3. **Prompt** (unchanged) — still the *guide*: the state machine is the floor (can't do wrong), the prompt tells the agent what to do next. Complementary, not redundant.
+
+**Decisions locked in:** edit/write/bash are *hard-denied* in `AwaitingLog` (not soft-warned); `ar_run`/`ar_log` are *denied* before `ar_init` (Setup). `ar_init` itself is allowed in Setup regardless of whether `autoresearch.sh` exists yet — harness-first ordering is steered by the prompt, not blocked by the state machine.
 
 ## Scope Enforcement
 
@@ -337,14 +414,15 @@ Since the extension is in-tree (not a package), registration follows the `contex
 3. Create module structure at `src/core/ext/autoresearch/`
 4. `types.ail` — all domain types (ExperimentConfig, RunEntry, ConfidenceResult, Segment, etc.)
 5. `tools.ail` — 4 tool schemas + argument parsing
-6. `db.ail` — DuckDB schema creation (`sessions` + `runs` tables), insert/query helpers using `pkg/sunholo/duckdb/*`. Include a `sanitize_sql_string` helper to escape single quotes in interpolated values.
+6. `db.ail` — DuckDB schema creation (`sessions` + `runs` + `pending_runs` tables), insert/query helpers using `pkg/sunholo/duckdb/*`. Include a `sanitize_sql_string` helper to escape single quotes in interpolated values.
 7. `notes.ail` — autoresearch.md management
 8. `git_ops.ail` — branch creation, dirty path capture, selective commit/revert
 9. `scope.ail` — scope deviation detection
-10. `register.ail` — hooks wired (`on_tool_handle` + `on_describe_tools`, rest no-op initially)
-11. Implement `ar_init` handler (create session, branch, baseline, DB schema, files)
-12. Implement `ar_run` handler (snapshot dirty, execute benchmark, parse METRIC + ASI)
-13. Implement `ar_log` handler (scope check, INSERT into runs, selective git ops)
+9b. `state.ail` — `ArState` enum, `derive_state(db)`, `legal(state, tool) -> Result[(), RejectMsg]` transition guard
+10. `register.ail` — hooks wired: `on_tool_policy` (state-machine guard), `on_tool_handle` (legal() check + handlers) + `on_describe_tools`, rest no-op initially
+11. Implement `ar_init` handler (create session, branch, baseline, DB schema, files) — Setup→Ready
+12. Implement `ar_run` handler (snapshot dirty, persist pending_runs row, execute benchmark, parse METRIC + ASI) — Ready→AwaitingLog
+13. Implement `ar_log` handler (verify pending run, scope check, INSERT into runs, delete pending_runs, selective git ops) — AwaitingLog→Ready
 14. Implement `ar_notes` handler (replace/append notes)
 15. Wire into registry, verify with `ailang check` on each new module
 16. Note: `make check_core` only checks `src/core/*.ail` (not subdirs). Use direct `ailang check src/core/ext/autoresearch/*.ail` or add a `check_autoresearch` Makefile target.
@@ -448,7 +526,14 @@ make test_core
 3. Smoke test: scripted session using `StepProvider = Scripted([...])` simulating init → run → log → run → log flow
 4. Scope test: scripted session where the agent modifies an off-limits file, verify ar_log rejects without justification
 5. Selective revert test: verify pre-existing dirty files survive a discard
-6. Phase 4 end-to-end: run the "Compact Motoko's Core Runtime" objective live and verify all success criteria
+6. **State-machine tests:**
+   - `ar_run`/`ar_log` before `ar_init` → denied (Setup)
+   - edit/write/bash after `ar_run` but before `ar_log` → denied by `on_tool_policy` (AwaitingLog correctness gate)
+   - second `ar_run` before logging → denied
+   - `ar_log` with wrong `run_number` → rejected
+   - `ar_log(discard)` from AwaitingLog → returns to Ready (escape hatch)
+   - `derive_state(db)` returns `AwaitingLog` after `ar_run` and `Ready` after `ar_log` — verifying state is reconstructable from the DB alone (compaction safety)
+7. Phase 4 end-to-end: run the "Compact Motoko's Core Runtime" objective live and verify all success criteria
 
 ---
 
@@ -482,6 +567,14 @@ CREATE TABLE runs (
   flagged BOOLEAN DEFAULT FALSE, flagged_reason TEXT,
   confidence_json TEXT, git_sha TEXT, checks_passed BOOLEAN,
   duration_ms INTEGER, modified_paths_json TEXT, ts BIGINT
+);
+
+-- Drives the AwaitingLog state; survives compaction. At most one row per segment.
+-- Written by ar_run, deleted by ar_log. Its existence IS the AwaitingLog state.
+CREATE TABLE pending_runs (
+  session_id INTEGER, segment INTEGER, run_number INTEGER,
+  pre_run_dirty_json TEXT, metrics_json TEXT, asi_json TEXT,
+  checks_passed BOOLEAN, exit_code INTEGER, duration_ms INTEGER, ts BIGINT
 );
 ```
 
