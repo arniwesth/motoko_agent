@@ -15,19 +15,18 @@ name: verify-extensions
 # mismatch causes this job to fail on the "versions must match" check.
 
 on:
+  # Run on EVERY PR (no paths filter). check_core type-checks all of src/**
+  # against freshly-resolved registry deps, so a regression can come from a
+  # source-only change OR from an upstream extension bump (e.g. motoko_ext_abi
+  # adding a field to ExtCtx) that changes NO file in the PR. A paths filter
+  # silently skipped those cases, so the maintainer became our smoke test.
   pull_request:
-    paths:
-      - 'scripts/install-prerequisites.sh'
-      - 'scripts/verify_extension_boot.ail'
-      - 'scripts/sync-extension-packages.sh'
-      - 'ailang.toml'
-      - 'ailang.lock'
-      - '.motoko/config/**/config.json'
-      - 'src/core/ext/**'
-      - 'Makefile'
-      - '.github/workflows/verify-extensions.yml'
   push:
     branches: [main]
+  # Nightly: catch upstream registry-dependency drift that breaks check_core
+  # with no commit at all (the abi 2.2.0 / context_limit class of failure).
+  schedule:
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 concurrency:
