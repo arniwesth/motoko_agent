@@ -1,0 +1,459 @@
+module sunholo/motoko_ext_autoresearch/db
+
+import std/bytes (toString)
+import std/clock (now)
+import std/fs (mkdirAll, fileExists)
+import std/json (Json, decode, asArray, get, asString, asNumber, asBool)
+import std/option (Option, Some, None)
+import std/process (exec, ProcessError)
+import std/result (Result, Ok, Err)
+import std/string (trim, replace)
+
+import pkg/sunholo/motoko_ext_autoresearch/types (PendingRun)
+
+export type DB = { path: string }
+export type Row = Json
+
+export pure func db_path(session_dir: string) -> string =
+  "${session_dir}/autoresearch.db"
+
+export pure func open(session_dir: string) -> DB =
+  { path: db_path(session_dir) }
+
+export pure func sanitize_sql_string(s: string) -> string =
+  replace(s, "'", "''")
+
+func process_error_to_string(err: ProcessError) -> string {
+  match err {
+    NotAllowed(cmd) => "not allowed: ${cmd}",
+    NotFound(cmd) => "not found: ${cmd}",
+    PermissionDenied(cmd) => "permission denied: ${cmd}",
+    Timeout(ms) => "timeout after ${show(ms)}ms",
+    OutputLimitExceeded(n) => "output limit exceeded: ${show(n)} bytes",
+    SpawnFailed(msg) => "spawn failed: ${msg}",
+    AbnormalExit(sig, name) => "abnormal exit signal ${show(sig)} (${name})"
+  }
+}
+
+func run_sql(db: DB, sql: string) -> Result[[Row], string] ! {Process} {
+  match exec("duckdb", [db.path, "-json", "-c", sql]) {
+    Err(e) => Err(process_error_to_string(e)),
+    Ok(out) => {
+      if out.exitCode != 0 then Err(trim(toString(out.stderr)))
+      else {
+        let raw = trim(toString(out.stdout));
+        if raw == "" then Ok([])
+        else match decode(raw) {
+          Err(msg) => Err("decode failed: ${msg}"),
+          Ok(j) => match asArray(j) {
+            None => Ok([]),
+            Some(rows) => Ok(rows)
+          }
+        }
+      }
+    }
+  }
+}
+
+func run_exec(db: DB, sql: string) -> Result[(), string] ! {Process} {
+  match run_sql(db, sql) {
+    Err(e) => Err(e),
+    Ok(_) => Ok(())
+  }
+}
+
+func first_row(rows: [Row]) -> Option[Row] {
+  match rows {
+    [] => None,
+    r :: _ => Some(r)
+  }
+}
+
+func safe_i(v: Option[Json], fallback: int) -> int {
+  match v {
+    None => fallback,
+    Some(j) => match asNumber(j) {
+      Some(n) => _float_to_int(n),
+      None => fallback
+    }
+  }
+}
+
+func safe_s(v: Option[Json], fallback: string) -> string {
+  match v {
+    None => fallback,
+    Some(j) => match asString(j) {
+      Some(s) => s,
+      None => fallback
+    }
+  }
+}
+
+func safe_b(v: Option[Json], fallback: bool) -> bool {
+  match v {
+    None => fallback,
+    Some(j) => match asBool(j) {
+      Some(b) => b,
+      None => fallback
+    }
+  }
+}
+
+func row_i(row: Row, key: string, fallback: int) -> int =
+  safe_i(get(row, key), fallback)
+
+func row_s(row: Row, key: string, fallback: string) -> string =
+  safe_s(get(row, key), fallback)
+
+func row_b(row: Row, key: string, fallback: bool) -> bool =
+  safe_b(get(row, key), fallback)
+
+export func ensure_schema(session_dir: string) -> Result[(), string] ! {FS, Process} {
+  let _ = mkdirAll(session_dir);
+  let db = open(session_dir);
+  let schema = "
+CREATE SEQUENCE IF NOT EXISTS seq_sessions START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_runs START 1;
+CREATE TABLE IF NOT EXISTS sessions (
+  id INTEGER DEFAULT nextval('seq_sessions') PRIMARY KEY,
+  segment INTEGER,
+  objective TEXT,
+  metrics_json TEXT,
+  scope_paths_json TEXT,
+  off_limits_json TEXT,
+  constraints_json TEXT,
+  max_iterations INTEGER,
+  patience INTEGER DEFAULT 3,
+  init_dirty_json TEXT,
+  status TEXT DEFAULT 'active',
+  done_reason TEXT,
+  baseline_commit TEXT,
+  branch TEXT,
+  ts BIGINT
+);
+CREATE TABLE IF NOT EXISTS runs (
+  id INTEGER DEFAULT nextval('seq_runs') PRIMARY KEY,
+  session_id INTEGER,
+  segment INTEGER,
+  run_number INTEGER,
+  decision TEXT,
+  metrics_json TEXT,
+  samples_json TEXT,
+  asi_json TEXT,
+  changes_summary TEXT,
+  reasoning TEXT,
+  learnings TEXT,
+  scope_deviations_json TEXT,
+  justification TEXT,
+  flagged BOOLEAN DEFAULT FALSE,
+  flagged_reason TEXT,
+  confidence_json TEXT,
+  git_sha TEXT,
+  checks_passed BOOLEAN,
+  improved BOOLEAN,
+  duration_ms INTEGER,
+  iteration_changes_json TEXT,
+  ts BIGINT
+);
+CREATE TABLE IF NOT EXISTS pending_runs (
+  session_id INTEGER,
+  segment INTEGER,
+  run_number INTEGER,
+  metrics_json TEXT,
+  samples_json TEXT,
+  asi_json TEXT,
+  checks_passed BOOLEAN,
+  exit_code INTEGER,
+  duration_ms INTEGER,
+  ts BIGINT
+);";
+  run_exec(db, schema)
+}
+
+export func has_db(session_dir: string) -> bool =
+  fileExists(db_path(session_dir))
+
+export func current_session_row(session_dir: string) -> Result[Option[Row], string] ! {Process} {
+  let db = open(session_dir);
+  match run_sql(db, "SELECT * FROM sessions ORDER BY id DESC LIMIT 1") {
+    Err(e) => Err(e),
+    Ok(rows) => Ok(first_row(rows))
+  }
+}
+
+export func current_segment(session_dir: string) -> Result[int, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok(0),
+    Ok(Some(row)) => Ok(row_i(row, "segment", 0))
+  }
+}
+
+export func current_status(session_dir: string) -> Result[string, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok(""),
+    Ok(Some(row)) => Ok(row_s(row, "status", ""))
+  }
+}
+
+export func current_max_iterations(session_dir: string) -> Result[int, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok(20),
+    Ok(Some(row)) => Ok(row_i(row, "max_iterations", 20))
+  }
+}
+
+export func current_patience(session_dir: string) -> Result[int, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok(3),
+    Ok(Some(row)) => Ok(row_i(row, "patience", 3))
+  }
+}
+
+export func current_session_id(session_dir: string) -> Result[int, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok(0),
+    Ok(Some(row)) => Ok(row_i(row, "id", 0))
+  }
+}
+
+export func current_init_dirty_json(session_dir: string) -> Result[string, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok("[]"),
+    Ok(Some(row)) => Ok(row_s(row, "init_dirty_json", "[]"))
+  }
+}
+
+export func current_objective(session_dir: string) -> Result[string, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok(""),
+    Ok(Some(row)) => Ok(row_s(row, "objective", ""))
+  }
+}
+
+export func current_metrics_json(session_dir: string) -> Result[string, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok("[]"),
+    Ok(Some(row)) => Ok(row_s(row, "metrics_json", "[]"))
+  }
+}
+
+export func current_scope_paths_json(session_dir: string) -> Result[string, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok("[]"),
+    Ok(Some(row)) => Ok(row_s(row, "scope_paths_json", "[]"))
+  }
+}
+
+export func current_off_limits_json(session_dir: string) -> Result[string, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok("[]"),
+    Ok(Some(row)) => Ok(row_s(row, "off_limits_json", "[]"))
+  }
+}
+
+export func insert_session(
+  session_dir: string,
+  segment: int,
+  objective: string,
+  metrics_json: string,
+  scope_paths_json: string,
+  off_limits_json: string,
+  constraints_json: string,
+  max_iterations: int,
+  patience: int,
+  init_dirty_json: string,
+  baseline_commit: string,
+  branch: string
+) -> Result[(), string] ! {Process} {
+  let db = open(session_dir);
+  let sql = "INSERT INTO sessions (segment, objective, metrics_json, scope_paths_json, off_limits_json, constraints_json, max_iterations, patience, init_dirty_json, status, baseline_commit, branch, ts)
+VALUES (
+${show(segment)},
+'${sanitize_sql_string(objective)}',
+'${sanitize_sql_string(metrics_json)}',
+'${sanitize_sql_string(scope_paths_json)}',
+'${sanitize_sql_string(off_limits_json)}',
+'${sanitize_sql_string(constraints_json)}',
+${show(max_iterations)},
+${show(patience)},
+'${sanitize_sql_string(init_dirty_json)}',
+'active',
+'${sanitize_sql_string(baseline_commit)}',
+'${sanitize_sql_string(branch)}',
+${show(now())}
+)";
+  run_exec(db, sql)
+}
+
+export func mark_current_session(session_dir: string, status: string, done_reason: string) -> Result[(), string] ! {Process} {
+  let db = open(session_dir);
+  run_exec(db, "UPDATE sessions SET status='${sanitize_sql_string(status)}', done_reason='${sanitize_sql_string(done_reason)}' WHERE id = (SELECT id FROM sessions ORDER BY id DESC LIMIT 1)")
+}
+
+export func current_run_number(session_dir: string, segment: int) -> Result[int, string] ! {Process} {
+  let db = open(session_dir);
+  match run_sql(db, "SELECT COALESCE(MAX(run_number), 0) AS n FROM runs WHERE segment = ${show(segment)}") {
+    Err(e) => Err(e),
+    Ok(rows) => match first_row(rows) {
+      None => Ok(0),
+      Some(r) => Ok(row_i(r, "n", 0))
+    }
+  }
+}
+
+export func insert_pending_run(
+  session_dir: string,
+  session_id: int,
+  segment: int,
+  run_number: int,
+  metrics_json: string,
+  samples_json: string,
+  asi_json: string,
+  checks_passed: bool,
+  exit_code: int,
+  duration_ms: int
+) -> Result[(), string] ! {Process} {
+  let db = open(session_dir);
+  let _ = run_exec(db, "DELETE FROM pending_runs WHERE segment = ${show(segment)}");
+  run_exec(
+    db,
+    "INSERT INTO pending_runs (session_id, segment, run_number, metrics_json, samples_json, asi_json, checks_passed, exit_code, duration_ms, ts)
+VALUES (${show(session_id)}, ${show(segment)}, ${show(run_number)}, '${sanitize_sql_string(metrics_json)}', '${sanitize_sql_string(samples_json)}', '${sanitize_sql_string(asi_json)}', ${if checks_passed then "TRUE" else "FALSE"}, ${show(exit_code)}, ${show(duration_ms)}, ${show(now())})"
+  )
+}
+
+export func read_pending_run(session_dir: string, segment: int) -> Result[Option[PendingRun], string] ! {Process} {
+  let db = open(session_dir);
+  match run_sql(db, "SELECT * FROM pending_runs WHERE segment = ${show(segment)} ORDER BY ts DESC LIMIT 1") {
+    Err(e) => Err(e),
+    Ok(rows) => match first_row(rows) {
+      None => Ok(None),
+      Some(row) =>
+        Ok(Some({
+          run_number: row_i(row, "run_number", 0),
+          metrics_json: row_s(row, "metrics_json", "{}"),
+          samples_json: row_s(row, "samples_json", "{}"),
+          asi_json: row_s(row, "asi_json", "{}"),
+          checks_passed: row_b(row, "checks_passed", false),
+          exit_code: row_i(row, "exit_code", 1),
+          duration_ms: row_i(row, "duration_ms", 0)
+        }))
+    }
+  }
+}
+
+export func clear_pending_run(session_dir: string, segment: int) -> Result[(), string] ! {Process} {
+  run_exec(open(session_dir), "DELETE FROM pending_runs WHERE segment = ${show(segment)}")
+}
+
+export func has_pending_run(session_dir: string, segment: int) -> Result[bool, string] ! {Process} {
+  match run_sql(open(session_dir), "SELECT COUNT(*) AS n FROM pending_runs WHERE segment = ${show(segment)}") {
+    Err(e) => Err(e),
+    Ok(rows) => match first_row(rows) {
+      None => Ok(false),
+      Some(row) => Ok(row_i(row, "n", 0) > 0)
+    }
+  }
+}
+
+export func insert_run(
+  session_dir: string,
+  session_id: int,
+  segment: int,
+  run_number: int,
+  decision: string,
+  metrics_json: string,
+  samples_json: string,
+  asi_json: string,
+  changes_summary: string,
+  reasoning: string,
+  learnings: string,
+  scope_deviations_json: string,
+  justification: string,
+  confidence_json: string,
+  git_sha: string,
+  checks_passed: bool,
+  improved: bool,
+  duration_ms: int,
+  iteration_changes_json: string
+) -> Result[(), string] ! {Process} {
+  run_exec(
+    open(session_dir),
+    "INSERT INTO runs (session_id, segment, run_number, decision, metrics_json, samples_json, asi_json, changes_summary, reasoning, learnings, scope_deviations_json, justification, confidence_json, git_sha, checks_passed, improved, duration_ms, iteration_changes_json, ts)
+VALUES (
+${show(session_id)},
+${show(segment)},
+${show(run_number)},
+'${sanitize_sql_string(decision)}',
+'${sanitize_sql_string(metrics_json)}',
+'${sanitize_sql_string(samples_json)}',
+'${sanitize_sql_string(asi_json)}',
+'${sanitize_sql_string(changes_summary)}',
+'${sanitize_sql_string(reasoning)}',
+'${sanitize_sql_string(learnings)}',
+'${sanitize_sql_string(scope_deviations_json)}',
+'${sanitize_sql_string(justification)}',
+'${sanitize_sql_string(confidence_json)}',
+'${sanitize_sql_string(git_sha)}',
+${if checks_passed then "TRUE" else "FALSE"},
+${if improved then "TRUE" else "FALSE"},
+${show(duration_ms)},
+'${sanitize_sql_string(iteration_changes_json)}',
+${show(now())}
+)"
+  )
+}
+
+export func run_count(session_dir: string, segment: int) -> Result[int, string] ! {Process} {
+  match run_sql(open(session_dir), "SELECT COUNT(*) AS n FROM runs WHERE segment = ${show(segment)}") {
+    Err(e) => Err(e),
+    Ok(rows) => match first_row(rows) {
+      None => Ok(0),
+      Some(row) => Ok(row_i(row, "n", 0))
+    }
+  }
+}
+
+export func recent_improved_flags(session_dir: string, segment: int) -> Result[[bool], string] ! {Process} {
+  match run_sql(open(session_dir), "SELECT improved FROM runs WHERE segment = ${show(segment)} ORDER BY run_number DESC") {
+    Err(e) => Err(e),
+    Ok(rows) => Ok(improved_flags_rec(rows))
+  }
+}
+
+func improved_flags_rec(rows: [Row]) -> [bool] {
+  match rows {
+    [] => [],
+    r :: rest =>
+      row_b(r, "improved", false) :: improved_flags_rec(rest)
+  }
+}
+
+export func best_metric_value(session_dir: string, segment: int, metric_name: string, direction: string) -> Result[Option[float], string] ! {Process} {
+  let agg = if direction == "maximize" then "MAX" else "MIN";
+  let key = sanitize_sql_string(metric_name);
+  let sql = "SELECT ${agg}(CAST(json_extract(metrics_json, '$.${key}') AS DOUBLE)) AS v FROM runs WHERE segment = ${show(segment)} AND decision='keep'";
+  match run_sql(open(session_dir), sql) {
+    Err(e) => Err(e),
+    Ok(rows) => match first_row(rows) {
+      None => Ok(None),
+      Some(row) => match get(row, "v") {
+        None => Ok(None),
+        Some(v) => match asNumber(v) {
+          Some(n) => Ok(Some(n)),
+          None => Ok(None)
+        }
+      }
+    }
+  }
+}

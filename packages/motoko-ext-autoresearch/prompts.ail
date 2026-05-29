@@ -1,0 +1,64 @@
+module sunholo/motoko_ext_autoresearch/prompts
+
+import std/result (Ok, Err)
+
+import pkg/sunholo/motoko_ext_abi/types (PromptPatch)
+import pkg/sunholo/motoko_ext_autoresearch/db as DB
+import pkg/sunholo/motoko_ext_autoresearch/types (ArState, Setup, Ready, AwaitingLog, Done)
+import pkg/sunholo/motoko_ext_autoresearch/notes (read_notes)
+import pkg/sunholo/motoko_ext_autoresearch/metrics (stall_count)
+
+export pure func static_protocol_patch() -> PromptPatch {
+  {
+    prepend: [],
+    append: [
+      "Autoresearch protocol: ar_init -> (edit -> ar_run -> ar_log)*.",
+      "Never call ar_run or ar_log before ar_init.",
+      "After ar_run, call ar_log before any further edits.",
+      "Respect scope_paths and off_limits."
+    ]
+  }
+}
+
+func pending_line(state: ArState) -> string {
+  match state {
+    AwaitingLog(n) => "Pending run: #${show(n)}. You must call ar_log(decision=keep|discard) before editing.",
+    _ => ""
+  }
+}
+
+func state_line(state: ArState) -> string {
+  match state {
+    Setup => "state=Setup",
+    Ready => "state=Ready",
+    AwaitingLog(_) => "state=AwaitingLog",
+    Done(reason) => "state=Done (${reason})"
+  }
+}
+
+export func build_state_summary(session_dir: string, state: ArState) -> string ! {Process, FS} {
+  let objective = match DB.current_objective(session_dir) {
+    Ok(s) => s,
+    Err(_) => ""
+  };
+  let segment = match DB.current_segment(session_dir) {
+    Ok(n) => n,
+    Err(_) => 0
+  };
+  let max_it = match DB.current_max_iterations(session_dir) {
+    Ok(n) => n,
+    Err(_) => 20
+  };
+  let runs = match DB.run_count(session_dir, segment) {
+    Ok(n) => n,
+    Err(_) => 0
+  };
+  let patience = match DB.current_patience(session_dir) {
+    Ok(n) => n,
+    Err(_) => 3
+  };
+  let stall = stall_count(session_dir, segment);
+  let notes = read_notes(session_dir);
+  let owed = pending_line(state);
+  "autoresearch summary:\n${state_line(state)}\nobjective=${objective}\nsegment=${show(segment)}\niterations=${show(runs)}/${show(max_it)}\nstall=${show(stall)}/${show(patience)}\n${owed}\nnotes:\n${notes}"
+}

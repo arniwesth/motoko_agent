@@ -1,0 +1,217 @@
+module sunholo/motoko_ext_autoresearch/git_ops
+
+import std/bytes (toString)
+import std/json (Json, encode, ja, js)
+import std/clock (now)
+import std/list (head)
+import std/option (Option, Some, None)
+import std/process (exec, ProcessError)
+import std/result (Result, Ok, Err)
+import std/string (trim, split, startsWith, contains, substring, find, length, toLower, replace, endsWith)
+
+func process_error_to_string(err: ProcessError) -> string {
+  match err {
+    NotAllowed(cmd) => "not allowed: ${cmd}",
+    NotFound(cmd) => "not found: ${cmd}",
+    PermissionDenied(cmd) => "permission denied: ${cmd}",
+    Timeout(ms) => "timeout after ${show(ms)}ms",
+    OutputLimitExceeded(n) => "output limit exceeded: ${show(n)} bytes",
+    SpawnFailed(msg) => "spawn failed: ${msg}",
+    AbnormalExit(sig, name) => "abnormal exit signal ${show(sig)} (${name})"
+  }
+}
+
+func shell(argv: [string], cwd: string) -> Result[{ stdout: string, stderr: string, exit_code: int }, string] ! {Process} {
+  let script = "set -eu\ncd \"$1\"\nshift\n\"$@\"";
+  match exec("bash", ["-lc", script, "motoko-git", cwd] ++ argv) {
+    Err(e) => Err(process_error_to_string(e)),
+    Ok(out) => Ok({ stdout: toString(out.stdout), stderr: toString(out.stderr), exit_code: out.exitCode })
+  }
+}
+
+func collapse_hyphens(s: string) -> string {
+  if contains(s, "--") then collapse_hyphens(replace(s, "--", "-")) else s
+}
+
+export pure func objective_slug(objective: string) -> string {
+  let lowered = toLower(objective);
+  let raw0 = replace(replace(replace(replace(lowered, " ", "-"), "/", "-"), "_", "-"), ".", "-");
+  let raw = collapse_hyphens(raw0);
+  let t = trim(raw);
+  if t == "" then "goal"
+  else {
+    let a = if startsWith(t, "-") then substring(t, 1, length(t)) else t;
+    if endsWith(a, "-") then substring(a, 0, length(a) - 1) else a
+  }
+}
+
+func today_yyyymmdd() -> string ! {Clock} {
+  let ts = _int_to_float(now());
+  let day = _float_to_int(ts / 86400.0);
+  -- deterministic-ish tag without date formatting helpers
+  "d${show(day)}"
+}
+
+export func current_branch(cwd: string) -> Result[string, string] ! {Process} {
+  match shell(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd) {
+    Err(e) => Err(e),
+    Ok(r) =>
+      if r.exit_code != 0 then Err(trim(r.stderr))
+      else Ok(trim(r.stdout))
+  }
+}
+
+func branch_exists(cwd: string, name: string) -> bool ! {Process} {
+  match shell(["git", "show-ref", "--verify", "--quiet", "refs/heads/${name}"], cwd) {
+    Err(_) => false,
+    Ok(r) => r.exit_code == 0
+  }
+}
+
+func choose_branch_name(cwd: string, base: string, i: int) -> string ! {Process} {
+  let candidate = if i <= 1 then base else "${base}-${show(i)}";
+  if branch_exists(cwd, candidate) then choose_branch_name(cwd, base, i + 1)
+  else candidate
+}
+
+export func ensure_autoresearch_branch(cwd: string, objective: string) -> Result[string, string] ! {Process, Clock} {
+  match current_branch(cwd) {
+    Err(e) => Err(e),
+    Ok(current) =>
+      if startsWith(current, "autoresearch/") then Ok(current)
+      else {
+        let slug = objective_slug(objective);
+        let day = today_yyyymmdd();
+        let base = "autoresearch/${slug}-${day}";
+        let target = choose_branch_name(cwd, base, 1);
+        match shell(["git", "checkout", "-b", target], cwd) {
+          Err(e) => Err(e),
+          Ok(r) => if r.exit_code == 0 then Ok(target) else Err(trim(r.stderr))
+        }
+      }
+  }
+}
+
+export func head_sha(cwd: string) -> Result[string, string] ! {Process} {
+  match shell(["git", "rev-parse", "HEAD"], cwd) {
+    Err(e) => Err(e),
+    Ok(r) =>
+      if r.exit_code != 0 then Err(trim(r.stderr))
+      else Ok(trim(r.stdout))
+  }
+}
+
+func normalize_porcelain_path(s: string) -> string {
+  let line = trim(s);
+  if length(line) < 4 then ""
+  else {
+    let raw = trim(substring(line, 3, length(line)));
+    let idx = find(raw, "->");
+    if idx >= 0 then trim(substring(raw, idx + 2, length(raw)))
+    else if startsWith(raw, "\"") && endsWith(raw, "\"") then substring(raw, 1, length(raw) - 1)
+    else raw
+  }
+}
+
+func non_empty(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => if x == "" then non_empty(rest) else x :: non_empty(rest)
+  }
+}
+
+func map_paths(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => normalize_porcelain_path(x) :: map_paths(rest)
+  }
+}
+
+export func dirty_paths(cwd: string) -> Result[[string], string] ! {Process} {
+  match shell(["git", "status", "--porcelain"], cwd) {
+    Err(e) => Err(e),
+    Ok(r) =>
+      if r.exit_code != 0 then Err(trim(r.stderr))
+      else Ok(non_empty(map_paths(split(trim(r.stdout), "\n"))))
+  }
+}
+
+func to_json_string_array(xs: [string]) -> string {
+  encode(ja(to_json_string_array_rec(xs)))
+}
+
+func to_json_string_array_rec(xs: [string]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => js(x) :: to_json_string_array_rec(rest)
+  }
+}
+
+export func capture_init_dirty_json(cwd: string) -> Result[string, string] ! {Process} {
+  match dirty_paths(cwd) {
+    Err(e) => Err(e),
+    Ok(paths) => Ok(to_json_string_array(paths))
+  }
+}
+
+func has(xs: [string], x: string) -> bool {
+  match xs {
+    [] => false,
+    y :: rest => if x == y then true else has(rest, x)
+  }
+}
+
+func diff_rec(cur: [string], init: [string]) -> [string] {
+  match cur {
+    [] => [],
+    x :: rest => if has(init, x) then diff_rec(rest, init) else x :: diff_rec(rest, init)
+  }
+}
+
+export pure func diff_paths(current: [string], init_dirty: [string]) -> [string] {
+  diff_rec(current, init_dirty)
+}
+
+func first_path(xs: [string]) -> string {
+  match head(xs) {
+    None => "",
+    Some(x) => x
+  }
+}
+
+func run_git_add(cwd: string, paths: [string]) -> Result[(), string] ! {Process} {
+  if first_path(paths) == "" then Ok(())
+  else
+    match shell(["git", "add", "--"] ++ paths, cwd) {
+      Err(e) => Err(e),
+      Ok(r) => if r.exit_code == 0 then Ok(()) else Err(trim(r.stderr))
+    }
+}
+
+export func selective_commit(cwd: string, paths: [string], message: string) -> Result[Option[string], string] ! {Process} {
+  if first_path(paths) == "" then Ok(None)
+  else
+    match run_git_add(cwd, paths) {
+      Err(e) => Err(e),
+      Ok(_) =>
+        match shell(["git", "commit", "-m", message], cwd) {
+          Err(e) => Err(e),
+          Ok(r) =>
+            if r.exit_code != 0 then Err(trim(r.stderr))
+            else match head_sha(cwd) {
+              Err(e) => Err(e),
+              Ok(sha) => Ok(Some(sha))
+            }
+        }
+    }
+}
+
+export func selective_revert(cwd: string, paths: [string]) -> Result[(), string] ! {Process} {
+  if first_path(paths) == "" then Ok(())
+  else {
+    let _ = shell(["git", "checkout", "HEAD", "--"] ++ paths, cwd);
+    -- Also remove potential untracked iteration-created files.
+    let _ = shell(["rm", "-f"] ++ paths, cwd);
+    Ok(())
+  }
+}

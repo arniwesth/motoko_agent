@@ -153,6 +153,10 @@ npm_ok() {
   command -v npm &>/dev/null
 }
 
+duckdb_ok() {
+  command -v duckdb &>/dev/null
+}
+
 context_mode_ok() {
   if ! command -v context-mode &>/dev/null; then return 1; fi
   context-mode doctor &>/dev/null
@@ -315,6 +319,34 @@ install_node() {
     die "Node.js install completed but npm is not on PATH."
   fi
   log_ok "Node.js $(node --version) and npm $(npm --version) installed"
+}
+
+# ---------------------------------------------------------------------------
+# DuckDB CLI
+# ---------------------------------------------------------------------------
+install_duckdb() {
+  log_header "DuckDB CLI"
+  if duckdb_ok; then
+    log_ok "duckdb already installed at $(command -v duckdb)"
+    return
+  fi
+
+  if [[ "$OS" == "macos" ]]; then
+    log_info "Installing duckdb via Homebrew..."
+    brew install duckdb
+  else
+    log_info "Installing duckdb via apt..."
+    if ! "${SUDO[@]}" apt-get install -y -qq duckdb; then
+      log_warn "apt duckdb package not available in this environment. Install duckdb CLI manually."
+      return
+    fi
+  fi
+
+  if duckdb_ok; then
+    log_ok "duckdb installed at $(command -v duckdb)"
+  else
+    log_warn "duckdb installation step finished but binary is not on PATH"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -499,6 +531,7 @@ print_summary() {
   echo "  Node.js: $(node --version 2>/dev/null || echo 'not found')"
   echo "  npm:     $(npm --version 2>/dev/null || echo 'not found')"
   echo "  ailang:  $(command -v ailang &>/dev/null && echo 'found' || echo 'not found')"
+  echo "  duckdb:  $(command -v duckdb &>/dev/null && echo 'found' || echo 'not found')"
   echo "  context-mode: $(command -v context-mode &>/dev/null && echo 'found' || echo 'not found')"
   echo "  omnigraph: $(command -v omnigraph &>/dev/null && echo 'found' || echo 'not found')"
   echo ""
@@ -526,6 +559,7 @@ main() {
   install_go
   install_bun
   install_node
+  install_duckdb
   install_context_mode
   install_bun_deps
   install_ailang

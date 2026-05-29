@@ -1,0 +1,750 @@
+module sunholo/motoko_ext_autoresearch/autoresearch
+
+import std/bytes (toString)
+import std/clock (now)
+import std/fs (mkdirAll, writeFile, fileExists)
+import std/json (Json, decode, encode, asArray, asString, asBool, asNumber, get, jo, kv, js, jnum, ja, jb)
+import std/option (Option, Some, None)
+import std/process (exec, ProcessError)
+import std/result (Result, Ok, Err)
+import std/string (startsWith, split, trim, substring, find, length, stringToFloat)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtensionHooks, ExtCtx, Msg, ToolSchema,
+  BudgetPlan, BudgetPatch, PromptPatch,
+  ToolCallEnvelope, ToolResultEnvelope,
+  ToolPolicyDecision, ToolHandleDecision,
+  ResponseInterceptDecision, FinalizeDecision,
+  PreStepDecision,
+  NoOpinion, Delegate, Handled, NoIntercept, NoDecision, ContinueWithFeedback, Accept
+)
+import pkg/sunholo/motoko_ext_autoresearch/tools as Tools
+import pkg/sunholo/motoko_ext_autoresearch/db as DB
+import pkg/sunholo/motoko_ext_autoresearch/notes as Notes
+import pkg/sunholo/motoko_ext_autoresearch/types (Setup, Ready, AwaitingLog, Done, MetricSpec)
+import pkg/sunholo/motoko_ext_autoresearch/state as State
+import pkg/sunholo/motoko_ext_autoresearch/prompts as Prompts
+import pkg/sunholo/motoko_ext_autoresearch/compaction as Compaction
+import pkg/sunholo/motoko_ext_autoresearch/git_ops as Git
+import pkg/sunholo/motoko_ext_autoresearch/scope as Scope
+import pkg/sunholo/motoko_ext_autoresearch/metrics as Metrics
+
+type MetricValue = { name: string, value: float }
+type StringValue = { key: string, value: string }
+type ParsedOutput = { metrics: [MetricValue], asi: [StringValue], warnings: [string] }
+type Sample = { exit_code: int, stdout: string, stderr: string, duration_ms: int, parsed: ParsedOutput }
+type CmdOut = { stdout: string, stderr: string, exit_code: int }
+
+func result(call: ToolCallEnvelope, exit_code: int, stdout: string, stderr: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: call.id,
+    tool: call.tool,
+    exit_code: exit_code,
+    stdout: stdout,
+    stderr: stderr,
+    metadata: jo([])
+  }
+}
+
+func reject(call: ToolCallEnvelope, msg: string) -> ToolHandleDecision {
+  Handled(result(call, 1, "", msg))
+}
+
+func reject_with_meta(call: ToolCallEnvelope, msg: string, meta: Json) -> ToolHandleDecision {
+  Handled({
+    tool_call_id: call.id,
+    tool: call.tool,
+    exit_code: 1,
+    stdout: "",
+    stderr: msg,
+    metadata: meta
+  })
+}
+
+func accept_with_meta(call: ToolCallEnvelope, msg: string, meta: Json) -> ToolHandleDecision {
+  Handled({
+    tool_call_id: call.id,
+    tool: call.tool,
+    exit_code: 0,
+    stdout: msg,
+    stderr: "",
+    metadata: meta
+  })
+}
+
+func resolve_session_dir(ctx: ExtCtx, args: Json) -> string {
+  let raw = Tools.parse_session_dir(args);
+  if raw == "" then "${ctx.workdir}/.motoko/autoresearch"
+  else if startsWith(raw, "/") then raw
+  else "${ctx.workdir}/${raw}"
+}
+
+func process_error_to_string(err: ProcessError) -> string {
+  match err {
+    NotAllowed(cmd) => "not allowed: ${cmd}",
+    NotFound(cmd) => "not found: ${cmd}",
+    PermissionDenied(cmd) => "permission denied: ${cmd}",
+    Timeout(ms) => "timeout after ${show(ms)}ms",
+    OutputLimitExceeded(n) => "output limit exceeded: ${show(n)} bytes",
+    SpawnFailed(msg) => "spawn failed: ${msg}",
+    AbnormalExit(sig, name) => "abnormal exit signal ${show(sig)} (${name})"
+  }
+}
+
+func shell(argv: [string], cwd: string) -> Result[CmdOut, string] ! {Process} {
+  let script = "set +e\ncd \"$1\"\nshift\n\"$@\"";
+  match exec("bash", ["-lc", script, "motoko-autoresearch", cwd] ++ argv) {
+    Err(e) => Err(process_error_to_string(e)),
+    Ok(out) => Ok({ stdout: toString(out.stdout), stderr: toString(out.stderr), exit_code: out.exitCode })
+  }
+}
+
+func list_len[a](xs: [a]) -> int {
+  match xs {
+    [] => 0,
+    _ :: rest => 1 + list_len(rest)
+  }
+}
+
+func non_empty[a](xs: [a]) -> bool {
+  match xs {
+    [] => false,
+    _ => true
+  }
+}
+
+func append_str(xs: [string], s: string) -> [string] {
+  match xs {
+    [] => [s],
+    x :: rest => x :: append_str(rest, s)
+  }
+}
+
+func str_json_array(xs: [string]) -> Json {
+  ja(str_json_array_rec(xs))
+}
+
+func str_json_array_rec(xs: [string]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => js(x) :: str_json_array_rec(rest)
+  }
+}
+
+func metric_spec_json(ms: MetricSpec) -> Json {
+  jo([kv("name", js(ms.name)), kv("direction", js(ms.direction)), kv("noisy", jb(ms.noisy))])
+}
+
+func metric_specs_json(xs: [MetricSpec]) -> Json {
+  ja(metric_specs_json_rec(xs))
+}
+
+func metric_specs_json_rec(xs: [MetricSpec]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => metric_spec_json(x) :: metric_specs_json_rec(rest)
+  }
+}
+
+func parse_metric_specs_json(raw: string) -> [MetricSpec] {
+  match decode(raw) {
+    Err(_) => [],
+    Ok(j) => match asArray(j) {
+      None => [],
+      Some(xs) => parse_metric_specs_rec(xs)
+    }
+  }
+}
+
+func parse_metric_specs_rec(xs: [Json]) -> [MetricSpec] {
+  match xs {
+    [] => [],
+    x :: rest => parse_metric_spec(x) :: parse_metric_specs_rec(rest)
+  }
+}
+
+func parse_metric_spec(j: Json) -> MetricSpec {
+  {
+    name: json_str(j, "name", ""),
+    direction: json_str(j, "direction", "minimize"),
+    noisy: json_bool(j, "noisy", false)
+  }
+}
+
+func json_str(j: Json, key: string, fallback: string) -> string {
+  match get(j, key) {
+    None => fallback,
+    Some(v) => match asString(v) {
+      None => fallback,
+      Some(s) => s
+    }
+  }
+}
+
+func json_bool(j: Json, key: string, fallback: bool) -> bool {
+  match get(j, key) {
+    None => fallback,
+    Some(v) => match asBool(v) {
+      None => fallback,
+      Some(b) => b
+    }
+  }
+}
+
+func config_json(cfg: { objective: string, metrics: [MetricSpec], benchmark_script: string, scope_paths: [string], off_limits: [string], constraints: [string], checks_script: string, max_iterations: int, patience: int, new_segment: bool, session_dir: string }) -> string {
+  encode(jo([
+    kv("objective", js(cfg.objective)),
+    kv("metrics", metric_specs_json(cfg.metrics)),
+    kv("scope_paths", str_json_array(cfg.scope_paths)),
+    kv("off_limits", str_json_array(cfg.off_limits)),
+    kv("constraints", str_json_array(cfg.constraints)),
+    kv("max_iterations", jnum(_int_to_float(cfg.max_iterations))),
+    kv("patience", jnum(_int_to_float(cfg.patience))),
+    kv("new_segment", jb(cfg.new_segment)),
+    kv("session_dir", js(cfg.session_dir))
+  ]))
+}
+
+func upsert_metric(xs: [MetricValue], item: MetricValue) -> [MetricValue] {
+  match xs {
+    [] => [item],
+    x :: rest =>
+      if x.name == item.name then item :: rest
+      else x :: upsert_metric(rest, item)
+  }
+}
+
+func upsert_asi(xs: [StringValue], item: StringValue) -> [StringValue] {
+  match xs {
+    [] => [item],
+    x :: rest =>
+      if x.key == item.key then item :: rest
+      else x :: upsert_asi(rest, item)
+  }
+}
+
+func parse_output(stdout: string) -> ParsedOutput {
+  parse_lines(split(stdout, "\n"), [], [], [])
+}
+
+func parse_lines(lines: [string], metrics: [MetricValue], asi: [StringValue], warnings: [string]) -> ParsedOutput {
+  match lines {
+    [] => { metrics: metrics, asi: asi, warnings: warnings },
+    line :: rest => {
+      let t = trim(line);
+      if startsWith(t, "METRIC ") then {
+        let body = trim(substring(t, 7, length(t)));
+        let idx = find(body, "=");
+        if idx <= 0 then parse_lines(rest, metrics, asi, append_str(warnings, "Invalid METRIC line: ${t}"))
+        else {
+          let name = trim(substring(body, 0, idx));
+          let value_txt = trim(substring(body, idx + 1, length(body)));
+          match stringToFloat(value_txt) {
+            None => parse_lines(rest, metrics, asi, append_str(warnings, "Non-numeric METRIC ignored: ${t}")),
+            Some(v) => parse_lines(rest, upsert_metric(metrics, { name: name, value: v }), asi, warnings)
+          }
+        }
+      } else if startsWith(t, "ASI ") then {
+        let body = trim(substring(t, 4, length(t)));
+        let idx = find(body, "=");
+        if idx <= 0 then parse_lines(rest, metrics, asi, warnings)
+        else {
+          let key = trim(substring(body, 0, idx));
+          let value = trim(substring(body, idx + 1, length(body)));
+          parse_lines(rest, metrics, upsert_asi(asi, { key: key, value: value }), warnings)
+        }
+      } else parse_lines(rest, metrics, asi, warnings)
+    }
+  }
+}
+
+func lookup_metric(xs: [MetricValue], name: string) -> Option[float] {
+  match xs {
+    [] => None,
+    x :: rest => if x.name == name then Some(x.value) else lookup_metric(rest, name)
+  }
+}
+
+func metrics_json(metrics: [MetricValue]) -> Json {
+  jo(metrics_json_pairs(metrics))
+}
+
+func metrics_json_pairs(metrics: [MetricValue]) -> [{ key: string, value: Json }] {
+  match metrics {
+    [] => [],
+    x :: rest => kv(x.name, jnum(x.value)) :: metrics_json_pairs(rest)
+  }
+}
+
+func asi_json(asi: [StringValue]) -> Json {
+  jo(asi_json_pairs(asi))
+}
+
+func asi_json_pairs(asi: [StringValue]) -> [{ key: string, value: Json }] {
+  match asi {
+    [] => [],
+    x :: rest => kv(x.key, js(x.value)) :: asi_json_pairs(rest)
+  }
+}
+
+func metric_names_from_specs(specs: [MetricSpec]) -> [string] {
+  match specs {
+    [] => [],
+    s :: rest => s.name :: metric_names_from_specs(rest)
+  }
+}
+
+func sample_values_for_metric(samples: [Sample], metric_name: string) -> [float] {
+  match samples {
+    [] => [],
+    s :: rest =>
+      match lookup_metric(s.parsed.metrics, metric_name) {
+        None => sample_values_for_metric(rest, metric_name),
+        Some(v) => v :: sample_values_for_metric(rest, metric_name)
+      }
+  }
+}
+
+func aggregate_metrics(metric_names: [string], samples: [Sample]) -> [MetricValue] {
+  match metric_names {
+    [] => [],
+    name :: rest => {
+      let vals = sample_values_for_metric(samples, name);
+      if list_len(vals) == 0 then aggregate_metrics(rest, samples)
+      else { name: name, value: Metrics.median(vals) } :: aggregate_metrics(rest, samples)
+    }
+  }
+}
+
+func samples_json(metric_names: [string], samples: [Sample]) -> Json {
+  jo(samples_json_pairs(metric_names, samples))
+}
+
+func samples_json_pairs(metric_names: [string], samples: [Sample]) -> [{ key: string, value: Json }] {
+  match metric_names {
+    [] => [],
+    name :: rest => kv(name, ja(float_json_list(sample_values_for_metric(samples, name)))) :: samples_json_pairs(rest, samples)
+  }
+}
+
+func float_json_list(xs: [float]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => jnum(x) :: float_json_list(rest)
+  }
+}
+
+func within_run_mad_json(specs: [MetricSpec], samples: [Sample]) -> Json {
+  jo(within_run_mad_pairs(specs, samples))
+}
+
+func within_run_mad_pairs(specs: [MetricSpec], samples: [Sample]) -> [{ key: string, value: Json }] {
+  match specs {
+    [] => [],
+    s :: rest => {
+      let vals = sample_values_for_metric(samples, s.name);
+      let v = if s.noisy && list_len(vals) >= 2 then Metrics.mad(vals) else 0.0;
+      kv(s.name, jnum(v)) :: within_run_mad_pairs(rest, samples)
+    }
+  }
+}
+
+func total_duration_ms(samples: [Sample]) -> int {
+  match samples {
+    [] => 0,
+    s :: rest => s.duration_ms + total_duration_ms(rest)
+  }
+}
+
+func last_sample(samples: [Sample]) -> Option[Sample] {
+  match samples {
+    [] => None,
+    x :: [] => Some(x),
+    _ :: rest => last_sample(rest)
+  }
+}
+
+func run_command_for_sample(cwd: string, script_path: string, timeout_ms: int) -> Result[CmdOut, string] ! {Process} {
+  if timeout_ms <= 0 then shell(["bash", script_path], cwd)
+  else {
+    let secs = _int_to_float(timeout_ms) / 1000.0;
+    shell(["timeout", "${show(secs)}s", "bash", script_path], cwd)
+  }
+}
+
+func run_samples_rec(cwd: string, script_path: string, timeout_ms: int, n: int, acc: [Sample]) -> Result[[Sample], string] ! {Process, Clock} {
+  if n <= 0 then Ok(acc)
+  else {
+    let t0 = now();
+    match run_command_for_sample(cwd, script_path, timeout_ms) {
+      Err(e) => Err(e),
+      Ok(out) => {
+        let t1 = now();
+        let parsed = parse_output(out.stdout);
+        let sample = { exit_code: out.exit_code, stdout: out.stdout, stderr: out.stderr, duration_ms: t1 - t0, parsed: parsed };
+        run_samples_rec(cwd, script_path, timeout_ms, n - 1, acc ++ [sample])
+      }
+    }
+  }
+}
+
+func run_samples(cwd: string, script_path: string, timeout_ms: int, n: int) -> Result[[Sample], string] ! {Process, Clock} {
+  run_samples_rec(cwd, script_path, timeout_ms, n, [])
+}
+
+func benchmark_script_path(session_dir: string) -> string =
+  "${session_dir}/autoresearch.sh"
+
+func checks_script_path(session_dir: string) -> string =
+  "${session_dir}/autoresearch.checks.sh"
+
+func run_checks_if_present(cwd: string, session_dir: string, benchmark_exit: int) -> bool ! {Process} {
+  if benchmark_exit != 0 then false
+  else if not fileExists(checks_script_path(session_dir)) then true
+  else match shell(["bash", checks_script_path(session_dir)], cwd) {
+    Err(_) => false,
+    Ok(out) => out.exit_code == 0
+  }
+}
+
+func write_executable_script(cwd: string, path: string, body: string) -> Result[(), string] ! {FS, Process} {
+  let _ = writeFile(path, body);
+  match shell(["chmod", "+x", path], cwd) {
+    Err(e) => Err(e),
+    Ok(_) => Ok(())
+  }
+}
+
+func first_metric_name(specs: [MetricSpec]) -> string {
+  match specs {
+    [] => "",
+    s :: _ => s.name
+  }
+}
+
+func first_metric_direction(specs: [MetricSpec]) -> string {
+  match specs {
+    [] => "minimize",
+    s :: _ => s.direction
+  }
+}
+
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func pre_step_hook(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Compaction.pre_step("${ctx.workdir}/.motoko/autoresearch", msgs)
+}
+
+func policy_hook(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+func handle_init(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS} {
+  let cfg = Tools.parse_init_args(call.arguments);
+  if cfg.objective == "" || cfg.benchmark_script == "" || list_len(cfg.metrics) == 0 then
+    reject(call, "ar_init requires objective, metrics, and benchmark_script")
+  else {
+    let session_dir = resolve_session_dir(ctx, call.arguments);
+    match DB.ensure_schema(session_dir) {
+      Err(e) => reject(call, e),
+      Ok(_) => {
+        let _ = mkdirAll(session_dir);
+        let _ = write_executable_script(ctx.workdir, benchmark_script_path(session_dir), cfg.benchmark_script);
+        if cfg.checks_script != "" then {
+          let _ = write_executable_script(ctx.workdir, checks_script_path(session_dir), cfg.checks_script);
+          ()
+        } else ();
+        let _ = Notes.ensure_notes(session_dir);
+        let _ = writeFile("${session_dir}/autoresearch.config.json", config_json(cfg));
+
+        let prev_segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 0 };
+        if prev_segment > 0 && not cfg.new_segment then reject(call, "session already exists; use ar_init(new_segment=true)")
+        else {
+          if prev_segment > 0 && cfg.new_segment then {
+            let _ = DB.mark_current_session(session_dir, "abandoned", "superseded by new segment");
+            let _ = DB.clear_pending_run(session_dir, prev_segment);
+            ()
+          } else ();
+
+          let segment = if prev_segment == 0 then 1 else prev_segment + 1;
+          let branch = match Git.ensure_autoresearch_branch(ctx.workdir, cfg.objective) { Ok(b) => b, Err(_) => "" };
+          let baseline = match Git.head_sha(ctx.workdir) { Ok(s) => s, Err(_) => "" };
+          let init_dirty = match Git.capture_init_dirty_json(ctx.workdir) { Ok(s) => s, Err(_) => "[]" };
+          let _ = DB.insert_session(
+            session_dir,
+            segment,
+            cfg.objective,
+            encode(metric_specs_json(cfg.metrics)),
+            encode(str_json_array(cfg.scope_paths)),
+            encode(str_json_array(cfg.off_limits)),
+            encode(str_json_array(cfg.constraints)),
+            cfg.max_iterations,
+            cfg.patience,
+            init_dirty,
+            baseline,
+            branch
+          );
+          let status = if cfg.new_segment then "segment_bumped" else "initialized";
+          accept_with_meta(
+            call,
+            status,
+            jo([
+              kv("status", js(status)),
+              kv("session_dir", js(session_dir)),
+              kv("segment", jnum(_int_to_float(segment))),
+              kv("branch", js(branch)),
+              kv("baseline_commit", js(baseline))
+            ])
+          )
+        }
+      }
+    }
+  }
+}
+
+func handle_run(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS, Clock} {
+  let session_dir = resolve_session_dir(ctx, call.arguments);
+  let timeout_ms = Tools.parse_run_timeout_ms(call.arguments);
+  let samples = Tools.parse_run_samples(call.arguments);
+  let script = benchmark_script_path(session_dir);
+  if not fileExists(script) then reject(call, "benchmark script missing: ${script}")
+  else {
+    let specs = parse_metric_specs_json(match DB.current_metrics_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
+    let metric_names = metric_names_from_specs(specs);
+    let primary = first_metric_name(specs);
+    let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 1 };
+    let run_no = match DB.current_run_number(session_dir, segment) { Ok(n) => n + 1, Err(_) => 1 };
+    let session_id = match DB.current_session_id(session_dir) { Ok(id) => id, Err(_) => 0 };
+    match run_samples(ctx.workdir, script, timeout_ms, samples) {
+      Err(e) => reject(call, e),
+      Ok(rs) =>
+        match rs {
+          [] => reject(call, "no samples executed"),
+          _ => {
+            match last_sample(rs) {
+              None => reject(call, "no samples executed"),
+              Some(last) => {
+                let agg = aggregate_metrics(metric_names, rs);
+                let has_primary = if primary == "" then true else match lookup_metric(agg, primary) { Some(_) => true, None => false };
+                let checks_ok = run_checks_if_present(ctx.workdir, session_dir, last.exit_code);
+                let status =
+                  if last.exit_code == 124 then "timeout"
+                  else if last.exit_code != 0 || not has_primary then "failed"
+                  else "completed";
+                let metrics_raw = encode(metrics_json(agg));
+                let samples_raw = encode(samples_json(metric_names, rs));
+                let asi_raw = encode(asi_json(last.parsed.asi));
+                let duration = total_duration_ms(rs);
+                let _ = DB.insert_pending_run(session_dir, session_id, segment, run_no, metrics_raw, samples_raw, asi_raw, checks_ok, last.exit_code, duration);
+                accept_with_meta(
+                  call,
+                  "run captured",
+                  jo([
+                    kv("status", js(status)),
+                    kv("run_number", jnum(_int_to_float(run_no))),
+                    kv("metrics", metrics_json(agg)),
+                    kv("samples", samples_json(metric_names, rs)),
+                    kv("within_run_mad", within_run_mad_json(specs, rs)),
+                    kv("asi", asi_json(last.parsed.asi)),
+                    kv("checks_passed", jb(checks_ok)),
+                    kv("exit_code", jnum(_int_to_float(last.exit_code))),
+                    kv("duration_ms", jnum(_int_to_float(duration))),
+                    kv("stdout_tail", js(last.stdout)),
+                    kv("stderr_tail", js(last.stderr)),
+                    kv("ar_state", js("AwaitingLog")),
+                    kv("owed_action", js("ar_log(run_number=${show(run_no)}, decision=keep|discard)"))
+                  ])
+                )
+              }
+            }
+          }
+        }
+    }
+  }
+}
+
+func parse_json_float(raw: string, key: string) -> Option[float] {
+  match decode(raw) {
+    Err(_) => None,
+    Ok(j) => match get(j, key) {
+      None => None,
+      Some(v) => asNumber(v)
+    }
+  }
+}
+
+func improved_for_keep(session_dir: string, segment: int, primary: string, direction: string, decision: string, metrics_raw: string) -> bool ! {Process} {
+  if decision != "keep" || primary == "" then false
+  else match parse_json_float(metrics_raw, primary) {
+    None => false,
+    Some(cur) =>
+      match DB.best_metric_value(session_dir, segment, primary, direction) {
+        Err(_) => false,
+        Ok(None) => true,
+        Ok(Some(prev)) => Metrics.improved(direction, prev, cur, 0.0)
+      }
+  }
+}
+
+func commit_or_revert(decision: string, cwd: string, paths: [string], run_no: int) -> { action: string, sha: string } ! {Process} {
+  if decision == "keep" then
+    match Git.selective_commit(cwd, paths, "autoresearch: keep run #${show(run_no)}") {
+      Err(_) => { action: "none", sha: "" },
+      Ok(None) => { action: "none", sha: "" },
+      Ok(Some(sha)) => { action: "committed", sha: sha }
+    }
+  else {
+    let _ = Git.selective_revert(cwd, paths);
+    { action: "reverted", sha: "" }
+  }
+}
+
+func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS, Clock} {
+  let session_dir = resolve_session_dir(ctx, call.arguments);
+  let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 1 };
+  let requested = Tools.parse_run_number(call.arguments);
+  let decision = Tools.parse_decision(call.arguments);
+  let changes_summary = Tools.parse_changes_summary(call.arguments);
+  let reasoning = Tools.parse_reasoning(call.arguments);
+  let learnings = Tools.parse_learnings(call.arguments);
+  let justification = Tools.parse_justification(call.arguments);
+  let specs = parse_metric_specs_json(match DB.current_metrics_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
+  let primary = first_metric_name(specs);
+  let direction = first_metric_direction(specs);
+  match DB.read_pending_run(session_dir, segment) {
+    Err(e) => reject(call, e),
+    Ok(None) => reject(call, "no pending run"),
+    Ok(Some(p)) =>
+      if requested != p.run_number then reject(call, "run_number mismatch")
+      else if decision != "keep" && decision != "discard" then reject(call, "decision must be keep|discard")
+      else if decision == "keep" && (p.exit_code != 0 || not p.checks_passed) then reject(call, "cannot keep: run failed checks or exited nonzero")
+      else {
+        let init_dirty = Scope.parse_json_string_array(match DB.current_init_dirty_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
+        let current_dirty = match Git.dirty_paths(ctx.workdir) { Ok(xs) => xs, Err(_) => [] };
+        let iteration_changes = Scope.compute_iteration_changes(init_dirty, current_dirty);
+        let scope_paths = Scope.parse_json_string_array(match DB.current_scope_paths_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
+        let off_limits = Scope.parse_json_string_array(match DB.current_off_limits_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
+        let deviations = Scope.compute_scope_deviations(iteration_changes, scope_paths, off_limits);
+        if decision == "keep" && non_empty(deviations) && trim(justification) == "" then
+          reject_with_meta(call, "scope deviation requires justification for keep", jo([kv("scope_deviations", str_json_array(deviations))]))
+        else {
+          let git = commit_or_revert(decision, ctx.workdir, iteration_changes, p.run_number);
+          let improved = improved_for_keep(session_dir, segment, primary, direction, decision, p.metrics_json);
+          let session_id = match DB.current_session_id(session_dir) { Ok(id) => id, Err(_) => 0 };
+          let _ = DB.insert_run(
+            session_dir, session_id, segment, p.run_number, decision,
+            p.metrics_json, p.samples_json, p.asi_json, changes_summary, reasoning, learnings,
+            encode(str_json_array(deviations)), justification, "{}", git.sha,
+            p.checks_passed, improved, p.duration_ms, encode(str_json_array(iteration_changes))
+          );
+          let _ = DB.clear_pending_run(session_dir, segment);
+          if learnings != "" then {
+            let _ = Notes.append_idea(session_dir, learnings);
+            ()
+          } else ();
+          let run_count = match DB.run_count(session_dir, segment) { Ok(n) => n, Err(_) => 0 };
+          let max_it = match DB.current_max_iterations(session_dir) { Ok(n) => n, Err(_) => 20 };
+          if run_count >= max_it then {
+            let _ = DB.mark_current_session(session_dir, "exhausted", "max_iterations reached");
+            ()
+          } else ();
+          let stall = Metrics.stall_count(session_dir, segment);
+          accept_with_meta(
+            call,
+            "logged",
+            jo([
+              kv("status", js("logged")),
+              kv("iteration", jnum(_int_to_float(run_count))),
+              kv("segment", jnum(_int_to_float(segment))),
+              kv("git_action", js(git.action)),
+              kv("commit_sha", js(git.sha)),
+              kv("scope_deviations", str_json_array(deviations)),
+              kv("stall", jnum(_int_to_float(stall))),
+              kv("ar_state", js(if run_count >= max_it then "Done" else "Ready"))
+            ])
+          )
+        }
+      }
+  }
+}
+
+func handle_notes(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {FS} {
+  let session_dir = resolve_session_dir(ctx, call.arguments);
+  let body = Tools.parse_notes_body(call.arguments);
+  let idea = Tools.parse_notes_append_idea(call.arguments);
+  if body != "" then {
+    let _ = Notes.replace_notes(session_dir, body);
+    accept_with_meta(call, "notes updated", jo([kv("status", js("updated"))]))
+  } else if idea != "" then {
+    let _ = Notes.append_idea(session_dir, idea);
+    accept_with_meta(call, "idea appended", jo([kv("status", js("updated"))]))
+  } else reject(call, "ar_notes requires body or append_idea")
+}
+
+func tool_hook(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let session_dir = resolve_session_dir(ctx, call.arguments);
+  let s = if call.tool == "ar_init" then Setup else State.derive_state(session_dir);
+  match State.legal(s, call.tool) {
+    Err(rej) => reject(call, rej.message),
+    Ok(_) =>
+      if call.tool == "ar_init" then handle_init(ctx, call)
+      else if call.tool == "ar_run" then handle_run(ctx, call)
+      else if call.tool == "ar_log" then handle_log(ctx, call)
+      else if call.tool == "ar_notes" then handle_notes(ctx, call)
+      else Delegate
+  }
+}
+
+func prompt_hook(_ctx: ExtCtx) -> PromptPatch {
+  Prompts.static_protocol_patch()
+}
+
+func describe_tools() -> [ToolSchema] {
+  Tools.tool_schemas()
+}
+
+func intercept_hook(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoIntercept
+}
+
+func solver_hook(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let session_dir = "${ctx.workdir}/.motoko/autoresearch";
+  if not DB.has_db(session_dir) then NoDecision
+  else {
+    let s = State.derive_state(session_dir);
+    match s {
+      Setup => NoDecision,
+      AwaitingLog(n) => ContinueWithFeedback("Autoresearch pending run #${show(n)} must be logged before completion."),
+      Done(_) => Accept(candidate),
+      Ready => {
+        let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 1 };
+        let stall = Metrics.stall_count(session_dir, segment);
+        let patience = match DB.current_patience(session_dir) { Ok(n) => n, Err(_) => 3 };
+        let runs = match DB.run_count(session_dir, segment) { Ok(n) => n, Err(_) => 0 };
+        let max_it = match DB.current_max_iterations(session_dir) { Ok(n) => n, Err(_) => 20 };
+        if runs >= max_it || stall >= patience then Accept(candidate)
+        else ContinueWithFeedback("Autoresearch still active (stall=${show(stall)}/${show(patience)}, iterations=${show(runs)}/${show(max_it)}).")
+      }
+    }
+  }
+}
+
+export func make_hooks() -> ExtensionHooks ! {Env, FS} {
+  {
+    id: "autoresearch",
+    provided_tools: [
+      "ar_init", "ar_run", "ar_log", "ar_notes",
+      "WriteFile", "EditFile", "BashExec", "ReadFile", "Search", "RunTests"
+    ],
+    on_describe_tools: describe_tools,
+    on_build_system_prompt: prompt_hook,
+    on_budget_plan: budget_hook,
+    on_pre_step: pre_step_hook,
+    on_tool_policy: policy_hook,
+    on_tool_handle: tool_hook,
+    on_response_intercept: intercept_hook,
+    on_solver_candidate: solver_hook
+  }
+}
