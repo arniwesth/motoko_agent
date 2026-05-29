@@ -98,7 +98,7 @@ func apply_budget_patch(plan: BudgetPlan, patch: BudgetPatch) -> BudgetPlan {
 func emit_dummy_hook(hook: string, key: string, val: string) -> () ! {IO, Clock} {
   let _ = println(encode(jo([
     kv("type", js("dummy_hook")),
-    kv("ts", jnum(now())),
+    kv("ts", jnum(_int_to_float(now()))),
     kv("hook", js(hook)),
     kv(key, js(val))
   ])));
