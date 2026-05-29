@@ -23,49 +23,57 @@ A general-purpose **auto-research extension** for Motoko — inspired by [pi-aut
 
 ## Architecture Overview
 
-The extension exposes **4 tools** (`ar_init`, `ar_run`, `ar_log`, `ar_notes`) and uses **5 hooks**:
+The extension exposes **4 tools** (`ar_init`, `ar_run`, `ar_log`, `ar_notes`) and uses **4 hooks**.
+
+> **ABI reality check** (verified against `sunholo/motoko_ext_abi@2.2.0` + AILANG 0.19.1 docs MCP). Two hooks are **pure** (no effect row) and therefore cannot read the DB or filesystem:
+> - `on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision` — pure
+> - `on_build_system_prompt: (ExtCtx) -> PromptPatch` — pure
+>
+> AILANG enforces effect discipline ("every side effect must be declared in the function signature"), so enforcement and dynamic prompt/state injection must live in the **effectful** hooks: `on_pre_step`, `on_tool_handle`, `on_solver_candidate` (all `! {IO, Process, FS, …}`). The state machine is therefore enforced in `on_tool_handle` (which the runtime invokes for *every* tool, returning `Delegate` to pass through), **not** `on_tool_policy`.
 
 ```
 Agent loop step
   │
-  ├─ on_build_system_prompt → inject phase-appropriate prompt (setup vs loop)
-  ├─ on_pre_step → reconstruct state from DuckDB after compaction (incl. current ArState)
+  ├─ on_build_system_prompt (PURE) → inject STATIC protocol text only
+  │     (cannot read files; phase-specific content comes from on_pre_step)
   │
-  ├─ on_tool_policy → STATE-MACHINE GUARD (runs before every tool, any tool)
-  │   └─ Deny illegal transitions: e.g. edit/write/bash while AWAITING_LOG,
-  │      ar_run/ar_log before ar_init. Hard Deny, not a nudge.
+  ├─ on_pre_step (effectful) → after compaction OR when AR state is stale in history,
+  │     read DuckDB and inject a state Msg: objective, segment, baseline/best metric,
+  │     iterations left, current ArState, and any owed ar_log
   │
-  ├─ [agent builds harness, then calls ar_init]    (legal only in SETUP)
-  │   └─ on_tool_handle → create session, branch, baseline → state becomes READY
+  ├─ on_tool_handle (effectful) → STATE-MACHINE GUARD + handlers. Invoked for EVERY tool:
+  │     1. s = derive_state(db)
+  │     2. if not legal(s, call.tool) → Handled(error ToolResultEnvelope, exit_code≠0)
+  │        (this is how edit/write/bash get blocked while AwaitingLog)
+  │     3. else dispatch ar_* handlers, or Delegate for foreign tools
   │
-  ├─ [agent edits code, then calls ar_run]          (legal only in READY)
-  │   └─ on_tool_handle → snapshot dirty paths, persist pending_run, execute benchmark,
-  │      parse METRIC + ASI lines → state becomes AWAITING_LOG
+  │     ar_init  (legal only in Setup)       → create session/branch/baseline → Ready
+  │     ar_run   (legal only in Ready)       → snapshot dirty, persist pending_run,
+  │                                             run benchmark, parse METRIC+ASI → AwaitingLog
+  │     ar_log   (legal only in AwaitingLog) → scope check, INSERT run, clear pending_run,
+  │                                             selective commit/revert → Ready
+  │     ar_notes (legal in Ready/AwaitingLog)→ replace/append session notes
   │
-  ├─ [agent calls ar_log with keep/discard]         (legal only in AWAITING_LOG)
-  │   └─ on_tool_handle → detect scope deviations, INSERT run, clear pending_run,
-  │      selective git commit or revert → state becomes READY
-  │
-  ├─ [agent calls ar_notes to update knowledge base] (legal in READY/AWAITING_LOG)
-  │   └─ on_tool_handle → replace or append to session notes
-  │
-  └─ on_solver_candidate → block premature completion if confidence not met → DONE
+  └─ on_solver_candidate (effectful) → block premature completion until confidence met → Done
 ```
 
 The agent drives the loop autonomously: edit → benchmark → log → evaluate → repeat. The
 **state machine** (see "State Machine Enforcement" below) makes that loop *enforceable*
-rather than merely prompt-suggested — illegal tool calls are rejected by `on_tool_policy`
-and `on_tool_handle` before they can corrupt the keep/discard accounting.
+rather than merely prompt-suggested — illegal tool calls are rejected by `on_tool_handle`
+(returning a failing `ToolResultEnvelope`) before they can corrupt the keep/discard accounting.
 
 ---
 
 ## Package Structure
 
-**In-tree** (like `context_mode`), at `src/core/ext/autoresearch/`. Can be extracted to a package later.
+**In-tree**, at `src/core/ext/autoresearch/`. Can be extracted to a package later.
+
+> Note: `context_mode` is **no longer in-tree** — it was extracted to the registry package `sunholo/motoko_ext_context_mode` (`src/core/ext/context_mode/` now holds only build artifacts; source is in the registry cache at `~/.ailang/cache/registry/sunholo/motoko_ext_context_mode/0.2.2/`). Use the **active, working** extensions as references — those wired in the default profile's `extensions.order` (`compaction_ai`, `context_mode`, `exa_search`, `mcp`, `ailang_docs`): `context_mode.ail` for the `Handled(…)`/`Delegate` tool-handling pattern *and* compaction, and `compaction_ai` for the dedicated `on_pre_step` reconstruction pattern. (Ignore `omnigraph`/`openkb` — not in the active set.) Decide explicitly whether autoresearch ships in-tree or as a package like every other extension; either way registration goes through `registry_generated.ail`.
 
 ```
 src/core/ext/autoresearch/
-  register.ail       — entry point: register_with_config(RuntimeConfig) -> ExtensionHooks
+  register.ail       — entry point: register_with_config(cfg: RuntimeConfig) -> ExtensionHooks ! {FS}
+                       (must also set provided_tools + on_describe_tools)
   types.ail          — ExperimentConfig, RunEntry, ConfidenceResult, Segment types
   tools.ail          — ToolSchema definitions + argument parsing
   db.ail             — DuckDB schema init, session/run insert/query helpers
@@ -74,8 +82,9 @@ src/core/ext/autoresearch/
   git_ops.ail        — branch mgmt, selective commit/revert, dirty path tracking
   scope.ail          — scope deviation detection + run flagging
   state.ail          — ArState enum, derive_state(db), legal(state, tool) transition guard
-  prompts.ail        — two-phase system prompt builder (setup vs loop)
-  compaction.ail     — on_pre_step: reconstruct state from DuckDB
+  prompts.ail        — STATIC protocol text for on_build_system_prompt (pure) + the dynamic
+                       state-summary string builder used by on_pre_step (fed DB/file reads)
+  compaction.ail     — on_pre_step: reconstruct state from DuckDB + inject autoresearch.md content
 ```
 
 Pattern reference: `src/core/ext/context_mode/register.ail` (the most complete in-tree extension example).
@@ -83,6 +92,8 @@ Pattern reference: `src/core/ext/context_mode/register.ail` (the most complete i
 ---
 
 ## Tools
+
+> **Result shape.** Every handler returns `Handled(ToolResultEnvelope)` where `ToolResultEnvelope = {tool_call_id, tool, exit_code, stdout, stderr, metadata: Json}`. The JSON objects shown below are the **`metadata`** payload (with `exit_code = 0`, a human summary in `stdout`). Rejections (illegal transition, scope deviation, run_number mismatch) return the *same* envelope with `exit_code ≠ 0` and the reason in `stderr` + structured detail in `metadata` — they are **not** a separate `{error: …}` type. Tool dispatch keys on `call.tool`; arguments arrive as `call.arguments: Json`.
 
 ### `ar_init` — Initialize or Reconfigure Experiment Session
 
@@ -103,14 +114,14 @@ Arguments:
 **On first call:**
 1. Creates `autoresearch/<objective-slug>-<date>` branch (collision-safe with numeric suffixes)
 2. Commits any pending changes as the baseline
-3. Creates session files: `autoresearch.md`, `autoresearch.sh` (chmod +x), `autoresearch.jsonl`, `autoresearch.config.json`, optionally `autoresearch.checks.sh`
-4. Writes config entry to JSONL
+3. Initializes `autoresearch.db` (creates `sessions`/`runs`/`pending_runs` tables) and writes the flat files: `autoresearch.md`, `autoresearch.sh` (chmod +x), `autoresearch.config.json`, optionally `autoresearch.checks.sh`
+4. `INSERT` the session row (segment 1) into `sessions`
 
 **On `new_segment: true`:**
 1. Increments segment counter
 2. Records new baseline commit at current HEAD
-3. Abandons any pending (unlogged) run
-4. Writes new config entry to JSONL
+3. Abandons any pending (unlogged) run — `DELETE` the open `pending_runs` row
+4. `INSERT` a new `sessions` row for the new segment
 
 Returns: `{status: "initialized"|"segment_bumped", session_dir, branch, baseline_commit, segment, files_created}`
 
@@ -149,7 +160,7 @@ Returns:
 
 ### `ar_log` — Log Result & Git Action
 
-Appends to JSONL, detects scope deviations, triggers selective git commit or revert. Legal only in `AwaitingLog`. Arguments:
+`INSERT`s into the `runs` table, detects scope deviations, triggers selective git commit or revert. Legal only in `AwaitingLog`. Arguments:
 - `run_number` (int, required) — must match the open `pending_runs` row (mismatch → rejected)
 - `decision` ("keep" | "discard" | "crash" | "checks_failed", required)
 - `metrics` (JSON object, required) — `{metric_name: value}` from the benchmark run
@@ -204,7 +215,7 @@ Directory: `.motoko/autoresearch/` (within workdir)
 
 | File | Purpose |
 |------|---------|
-| `autoresearch.db` | DuckDB database — sessions + runs tables (see Persistence section) |
+| `autoresearch.db` | DuckDB database — `sessions` + `runs` + `pending_runs` tables (see Persistence section). **If the DuckDB spike fails, this becomes `autoresearch.jsonl` + an in-memory state derived from it** — see Persistence. |
 | `autoresearch.md` | Objectives, rules, scope, accumulated learnings + ideas. Injected into system prompt. |
 | `autoresearch.sh` | Benchmark script. Outputs `METRIC name=value` and optionally `ASI key=value` lines. |
 | `autoresearch.checks.sh` | Optional pass/fail validation (exit 0 = pass). |
@@ -214,44 +225,39 @@ Directory: `.motoko/autoresearch/` (within workdir)
 
 ## Hook Implementations
 
-### `on_build_system_prompt` — Two-Phase Prompt
+### `on_build_system_prompt` — Static Protocol Text Only (PURE)
+This hook is `(ExtCtx) -> PromptPatch` with **no effect row**, so it **cannot read `autoresearch.sh`, `autoresearch.md`, or the DB**. It therefore injects only *static, file-independent* guidance — the tool protocol and the rules — and may branch only on pure `ExtCtx` fields (`ctx.step`, `ctx.mode`, `ctx.task`, `ctx.state_key`):
+> "This session may run an autoresearch optimization loop. Protocol: build a benchmark harness (`autoresearch.sh` emitting `METRIC name=value`), then `ar_init` → (edit → `ar_run` → `ar_log(keep|discard)`)* . Do NOT call `ar_run`/`ar_log` before `ar_init`. After `ar_run` you MUST `ar_log` before editing again. Do not declare done until confidence ≥ 2.0. Stay within `scope_paths`; never touch `off_limits`."
 
-**Phase 1 (Setup)**: If `autoresearch.sh` does not exist yet, inject setup instructions:
-> "Build the benchmark harness first. Create autoresearch.sh that outputs METRIC lines. Do NOT call ar_run or ar_log before calling ar_init. Optimization starts only after ar_init."
+All **dynamic, file/DB-derived** content (current objective, scope, learnings, segment metrics, owed `ar_log`) is injected by `on_pre_step` instead, because only it can perform `FS`/`Process` effects.
 
-**Phase 2 (Loop)**: If session is active (JSONL exists with config entry), inject:
-- Contents of `autoresearch.md` (objectives, scope, learnings, ideas)
-- Current segment state: baseline metric, best metric, iterations remaining, unjustified/flagged runs
-- Loop protocol: "Edit code → ar_run → ar_log(keep/discard) → repeat. Keep when primary metric improves; discard when it regresses or stays flat. Do NOT declare done until confidence ≥ 2.0."
-- Scope enforcement: "Only modify files in scope_paths. Never touch off_limits files. Out-of-scope changes require justification or the run gets flagged."
-
-### `on_pre_step` (Compaction Survival)
-If `autoresearch.db` exists but last 5 messages lack autoresearch tool calls → reconstruct summary via DuckDB queries:
+### `on_pre_step` (Dynamic State Injection + Compaction Survival) — EFFECTFUL
+Signature carries `! {IO, Process, FS, …}`, so this is where DB/file reads happen. Fires when `autoresearch.db` exists and either (a) the last ~5 messages lack autoresearch tool calls (post-compaction), or (b) the loop-phase state isn't already present in recent history. Reconstruct via DuckDB queries:
 - `SELECT segment, objective, max_iterations FROM sessions ORDER BY id DESC LIMIT 1`
 - `SELECT COUNT(*), MIN(metrics_json), MAX(metrics_json) FROM runs WHERE segment = ?`
 - `SELECT run_number, decision, metrics_json, changes_summary FROM runs WHERE segment = ? ORDER BY run_number DESC LIMIT 5`
 - Flagged/unjustified runs: `SELECT run_number, flagged_reason FROM runs WHERE flagged = TRUE AND segment = ?`
-- **Current state**: `derive_state(db)` (see State Machine Enforcement). If `AWAITING_LOG`, the summary MUST state the pending `run_number` and that the agent owes an `ar_log` before any further edits — otherwise a post-compaction agent will resume editing and corrupt the dirty-path diff.
+- Also read `autoresearch.md` (objectives/scope/learnings) via `std/fs` and fold it in — this replaces the loop-phase content the pure prompt hook can't supply.
+- **Current state**: `derive_state(db)`. If `AwaitingLog`, the summary MUST state the pending `run_number` and that the agent owes an `ar_log` before any further edits — otherwise a post-compaction agent resumes editing and corrupts the dirty-path diff.
 
-Inject as `Compacted(msgs ++ [summary_msg], "autoresearch: session state reconstructed from DB")`. Otherwise `PassThrough`.
+Inject as `Compacted(msgs ++ [summary_msg], "autoresearch: session state reconstructed from DB")`, where `summary_msg` is a fully-populated `Msg` (`{role:"user", content:…, tool_calls:[], tool_call_id:""}` — all four ABI v2.2.0 fields). Otherwise `PassThrough`.
 
-### `on_tool_policy` — State-Machine Guard
-Runs **before** every tool call (any tool, not just `ar_*`) and is the enforcement floor. Computes `derive_state(db)` then:
-- **`SETUP`** (no session row): `Deny` for `ar_run`, `ar_log`, `ar_notes`. Harness-build tools (edit/write/bash/read) and `ar_init` → `NoOpinion`.
-- **`AWAITING_LOG`** (pending run not yet logged): `Deny` for `edit`/`write`/`bash` and a second `ar_run`. This is the **correctness gate** — it keeps `pre_run_dirty ↔ current_dirty` diffable. `ar_log`, `ar_notes`, read-only tools → `NoOpinion`.
-- **`DONE`**: `Deny` for all `ar_*`.
-- **`READY`** and all other cases → `NoOpinion`.
+### `on_tool_handle` — State-Machine Guard + Handlers (EFFECTFUL, PRIMARY ENFORCEMENT)
+Signature carries `! {Process, FS, …}` and the runtime calls it for **every** tool (each extension gets a turn; first to return `Handled` wins, else `Delegate` falls through to the real tool — see `src/core/ext/runtime.ail` `first_handle`, and the `context_mode`/`exa_search` handlers). This is the *only* place the state machine can be enforced, because it can read the DB. Logic:
+1. `s = derive_state(db)`
+2. `legal(s, call.tool)` — if illegal, return `Handled(reject_envelope)` with `exit_code ≠ 0` and the current state + legal actions in `stderr`/`metadata`. This is how `edit`/`write`/`bash` are **blocked** while `AwaitingLog` (intercept a foreign tool → return a failing envelope instead of `Delegate`) and how `ar_run`/`ar_log` are blocked before `ar_init`.
+3. Otherwise: dispatch `ar_init`/`ar_run`/`ar_log`/`ar_notes` to their handlers; `Delegate` for all other tools.
 
-Every `Deny` message names the current state and the legal next actions (e.g. `Deny("AWAITING_LOG: run #4 must be logged with ar_log(decision=keep|discard) before editing. To abandon it, ar_log(discard) or ar_init(new_segment).")`). Recall the engine merges decisions `Deny > Pending > Allow > NoOpinion`, so this co-exists with other extensions' policies.
+Example reject `stderr`: `"AwaitingLog: run #4 must be logged via ar_log(decision=keep|discard) before editing. To abandon it: ar_log(discard) or ar_init(new_segment)."`
 
-### `on_tool_handle`
-First call `legal(derive_state(db), tool_name)` as a defense-in-depth transition check (mirrors the policy guard; protects against tools that bypass policy). On illegal transition → `Handle({error, current_state, legal_actions})`. Otherwise route `ar_init`/`ar_run`/`ar_log`/`ar_notes` to handlers and return `Delegate` for all other tools.
+### `on_tool_policy` — PURE, best-effort only (cannot read DB)
+`(ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision`, no effects. It **cannot** call `derive_state(db)`, so it is **not** the enforcement floor. Default it to `NoOpinion`. (Optional: a purely-`ctx`-based heuristic using `ctx.history_slice` could pre-warn, but it's compaction-fragile and redundant with `on_tool_handle`, so it is not relied upon.) The engine still merges `Deny > Pending > Allow > NoOpinion` across extensions.
 
-### `on_solver_candidate`
-If active session exists and confidence threshold not met → `ContinueWithFeedback("Autoresearch confidence not reached (current: X, need ≥ 2.0). Continue iterating or call ar_notes to record why you're stopping.")`. If state is `AWAITING_LOG` → `ContinueWithFeedback("Pending run #N must be logged before completion.")`. If max_iterations reached → `NoDecision` (allow completion → `DONE`). Otherwise `NoDecision`.
+### `on_solver_candidate` — EFFECTFUL
+If active session exists and confidence threshold not met → `ContinueWithFeedback("Autoresearch confidence not reached (current: X, need ≥ 2.0). Continue iterating or call ar_notes to record why you're stopping.")`. If state is `AwaitingLog` → `ContinueWithFeedback("Pending run #N must be logged before completion.")`. If max_iterations reached → `NoDecision` (allow completion → `Done`); optionally `Accept(...)` to actively approve. Otherwise `NoDecision`.
 
 ### Other hooks
-`on_budget_plan` → no-op patch, `on_response_intercept` → `NoIntercept`.
+`on_budget_plan` → no-op patch, `on_response_intercept` → `NoIntercept`, `on_describe_tools` → the 4 `ToolSchema`s, `provided_tools` → `["ar_init","ar_run","ar_log","ar_notes"]`.
 
 ---
 
@@ -289,25 +295,29 @@ type ArState = Setup | Ready | AwaitingLog | Done
 For the machine to be enforceable *and* survive compaction, the state must be a pure function of the DB — **not** carried in chat messages. This is a change from the original tool contracts, which returned `run_number` + `pre_run_dirty_paths` to the model and read them back as `ar_log` arguments (that does not survive compaction):
 
 ```ailang
-func derive_state(db: DB) -> ArState ! {Process}
+func derive_state(db: DB) -> ArState ! {Process}   -- effectful: shells out to duckdb
 -- Setup       if sessions table empty
 -- AwaitingLog if a pending_runs row exists for the current segment
 -- Ready       if session exists and no pending run
 -- Done        if session marked done OR runs_count >= max_iterations
 
-func legal(state: ArState, tool_name: string) -> Result[(), RejectMsg]
+func legal(state: ArState, tool_name: string) -> Result[(), RejectMsg]   -- pure helper
 type RejectMsg = { current_state: string, legal_actions: [string], message: string }
+-- On violation, on_tool_handle renders RejectMsg into a failing ToolResultEnvelope
+-- (exit_code ≠ 0, message in stderr, fields in metadata) and returns Handled(envelope).
 ```
 
 `ar_run` writes a `pending_runs` row (capturing `run_number` + `pre_run_dirty_paths` durably); `ar_log` clears it. So `run_number` and the pre-run dirty snapshot live in the DB, and a post-compaction agent recovers them via `on_pre_step` rather than from chat history.
 
-### Enforcement layers (defense in depth)
+### Enforcement layers
 
-1. **`on_tool_policy`** — the guard. Hard-`Deny`s illegal tools (including edit/write/bash) *before* they execute. Primary enforcement.
-2. **`on_tool_handle`** — the transition. Re-checks `legal()` at the top of each `ar_*` handler and returns `Handle({error, current_state, legal_actions})` on violation. Catches anything that bypasses policy and gives actionable errors.
-3. **Prompt** (unchanged) — still the *guide*: the state machine is the floor (can't do wrong), the prompt tells the agent what to do next. Complementary, not redundant.
+Because `on_tool_policy` and `on_build_system_prompt` are **pure** (verified against the ABI), the *only* hook that can read DB-derived state and reject a call is `on_tool_handle`. So:
 
-**Decisions locked in:** edit/write/bash are *hard-denied* in `AwaitingLog` (not soft-warned); `ar_run`/`ar_log` are *denied* before `ar_init` (Setup). `ar_init` itself is allowed in Setup regardless of whether `autoresearch.sh` exists yet — harness-first ordering is steered by the prompt, not blocked by the state machine.
+1. **`on_tool_handle`** (EFFECTFUL) — the sole enforcement point. `derive_state(db)` → `legal()` → `Handled(reject_envelope)` on violation, before the tool runs. Blocks both illegal `ar_*` calls *and* edit/write/bash during `AwaitingLog` (by intercepting the foreign tool instead of delegating).
+2. **`on_tool_policy`** (PURE) — `NoOpinion`. Cannot consult the DB, so it is **not** an enforcement layer; do not rely on it for the state machine.
+3. **Prompt** — the *guide* (static text from `on_build_system_prompt` + dynamic state from `on_pre_step`). The state machine is the floor (can't do wrong); the prompt tells the agent what to do next.
+
+**Decisions locked in:** edit/write/bash are *hard-blocked* in `AwaitingLog` — implemented as `on_tool_handle` returning `Handled(failing_envelope)` (since `on_tool_policy.Deny` isn't available without DB access). `ar_run`/`ar_log` are blocked before `ar_init` (Setup) the same way. `ar_init` itself is allowed in Setup regardless of whether `autoresearch.sh` exists — harness-first ordering is steered by the prompt, not blocked by the state machine.
 
 ## Scope Enforcement
 
@@ -402,15 +412,16 @@ Since the extension is in-tree (not a package), registration follows the `contex
    Or regenerate via `ailang generate-extension-registry` after adding to `ailang.toml` `[extensions]`.
 2. Add `"autoresearch"` to profile's `extensions.order` in `.motoko/config/*/config.json`
 
-**Dependencies**: Requires `sunholo/duckdb@0.1.0` (in registry; run `ailang install sunholo/duckdb@0.1.0` to resolve) and `duckdb` CLI on PATH.
+**Dependencies**: `sunholo/motoko_ext_abi@2.2.0` (already in `ailang.toml`/`ailang.lock`) for the hook ABI. Optionally `sunholo/duckdb@0.1.0` + `duckdb` CLI on PATH **if the Phase-1 spike confirms it resolves**; otherwise the `std/fs` fallback (no extra dependency). Target language: AILANG 0.19.1.
 
 ---
 
 ## Implementation Phases
 
 ### Phase 1: Core (skeleton + tools) — ~3 days
-1. Resolve `sunholo/duckdb@0.1.0`: run `ailang install sunholo/duckdb@0.1.0` and regenerate lock file
-2. Add `duckdb` CLI install to `scripts/install-prerequisites.sh` and devcontainer; install it now
+0. **DuckDB spike (gate):** `ailang install sunholo/duckdb@0.1.0`, regenerate the lock, and write a 10-line scratch program that opens a DB, creates a table, inserts, and reads back via the claimed `pkg/sunholo/duckdb/{types,query,schema}` API. **If this fails, switch `db.ail`/`metrics.ail` to the `std/fs` JSONL fallback (Persistence section) and proceed** — the rest of the plan is persistence-agnostic.
+1. Resolve `sunholo/duckdb@0.1.0` and regenerate lock file (only if the spike passed)
+2. Add `duckdb` CLI install to `scripts/install-prerequisites.sh` and devcontainer; install it now (DuckDB path only)
 3. Create module structure at `src/core/ext/autoresearch/`
 4. `types.ail` — all domain types (ExperimentConfig, RunEntry, ConfidenceResult, Segment, etc.)
 5. `tools.ail` — 4 tool schemas + argument parsing
@@ -419,7 +430,7 @@ Since the extension is in-tree (not a package), registration follows the `contex
 8. `git_ops.ail` — branch creation, dirty path capture, selective commit/revert
 9. `scope.ail` — scope deviation detection
 9b. `state.ail` — `ArState` enum, `derive_state(db)`, `legal(state, tool) -> Result[(), RejectMsg]` transition guard
-10. `register.ail` — hooks wired: `on_tool_policy` (state-machine guard), `on_tool_handle` (legal() check + handlers) + `on_describe_tools`, rest no-op initially
+10. `register.ail` — hooks wired: `on_tool_handle` (derive_state → legal() guard + handlers, the enforcement point), `on_describe_tools` + `provided_tools`; `on_tool_policy` → `NoOpinion`, rest no-op initially
 11. Implement `ar_init` handler (create session, branch, baseline, DB schema, files) — Setup→Ready
 12. Implement `ar_run` handler (snapshot dirty, persist pending_runs row, execute benchmark, parse METRIC + ASI) — Ready→AwaitingLog
 13. Implement `ar_log` handler (verify pending run, scope check, INSERT into runs, delete pending_runs, selective git ops) — AwaitingLog→Ready
@@ -429,9 +440,9 @@ Since the extension is in-tree (not a package), registration follows the `contex
 
 ### Phase 2: Intelligence — ~2 days
 1. `metrics.ail` — median, MAD, confidence scoring using DuckDB sorted queries + segment/flagging filters
-2. `on_solver_candidate` — confidence-based completion gating
-3. `prompts.ail` — two-phase system prompt injection (setup vs loop)
-4. `compaction.ail` — `on_pre_step` state reconstruction from DuckDB queries
+2. `on_solver_candidate` — confidence-based completion gating (effectful; reads DB)
+3. `prompts.ail` — static protocol text for `on_build_system_prompt` (pure) + dynamic state-summary builder
+4. `compaction.ail` — `on_pre_step` (effectful): state reconstruction from DuckDB + `autoresearch.md` injection, returning a fully-populated summary `Msg`
 
 ### Phase 3: Polish — ~1-2 days
 1. Smoke tests (following `scripts/smoke_*.ail` pattern)
@@ -528,7 +539,7 @@ make test_core
 5. Selective revert test: verify pre-existing dirty files survive a discard
 6. **State-machine tests:**
    - `ar_run`/`ar_log` before `ar_init` → denied (Setup)
-   - edit/write/bash after `ar_run` but before `ar_log` → denied by `on_tool_policy` (AwaitingLog correctness gate)
+   - edit/write/bash after `ar_run` but before `ar_log` → blocked by `on_tool_handle` returning `Handled(failing_envelope)` (AwaitingLog correctness gate)
    - second `ar_run` before logging → denied
    - `ar_log` with wrong `run_number` → rejected
    - `ar_log(discard)` from AwaitingLog → returns to Ready (escape hatch)
@@ -539,7 +550,11 @@ make test_core
 
 ## Persistence: DuckDB
 
-Use `sunholo/duckdb@0.1.0` (published in the AILANG registry) for session and run persistence. SQL queries are a natural fit for segment filtering, confidence computation (sorted data via `ORDER BY`), and state reconstruction after compaction — all of which would require manual parsing and sorting over flat JSONL.
+> **⚠️ Spike this first — dependency is UNVERIFIED.** `sunholo/duckdb` is **not** in `ailang.toml`, **not** in `ailang.lock`, and **not** in the local registry cache (the cached `sunholo/` registry has 13 packages; duckdb is not among them). The AILANG docs MCP covers only language/stdlib (there is no `std/duckdb`), so it cannot confirm the package either. **Phase 1, step 0** must be: run `ailang install sunholo/duckdb@0.1.0` and confirm the claimed three-module API actually exists. If it does not resolve, fall back to the JSONL design below — do **not** block the extension on an unproven package.
+>
+> **Fallback (verified available): `std/fs` + `std/process`.** Both modules exist in AILANG 0.19.1 (confirmed via docs MCP). The JSONL fallback stores `runs` as append-only lines via `std/fs`, derives state by reading the last line / a `pending` marker file, and does median/MAD sorting in AILANG. The state machine, scope enforcement, and selective git ops are **persistence-agnostic** — only `db.ail` and `metrics.ail` change.
+
+Assuming the spike passes: use `sunholo/duckdb@0.1.0` for session and run persistence. SQL queries are a natural fit for segment filtering, confidence computation (sorted data via `ORDER BY`), and state reconstruction after compaction — all of which would require manual parsing and sorting over flat JSONL.
 
 **Import paths** (consumers use `pkg/` prefix):
 ```ailang
@@ -604,3 +619,10 @@ A ClickHouse AILANG package (`sunholo/clickhouse`) would be a natural follow-on 
 ## Open Questions
 
 1. **Segment UX**: Should `ar_init` with `new_segment: true` auto-commit the current state as the new baseline, or require the user to commit first?
+2. **DuckDB availability** (blocking spike): does `sunholo/duckdb@0.1.0` resolve with the assumed three-module API? If not, commit to the `std/fs` JSONL fallback.
+3. **In-tree vs package**: ship under `src/core/ext/autoresearch/` or as `sunholo/motoko_ext_autoresearch` like every other extension now is?
+4. **Blocking foreign tools**: confirm the host actually surfaces `edit`/`write`/`bash` calls to `on_tool_handle` under the tool names the guard expects (the names may differ by harness/profile). If a tool bypasses extension `on_tool_handle`, the `AwaitingLog` edit-block can't fire — verify during the Phase-1 spike.
+
+## Verification Provenance
+
+Hook contracts verified against `sunholo/motoko_ext_abi@2.2.0` (`~/.ailang/cache/registry/.../types.ail`) and the host dispatch logic in `src/core/ext/runtime.ail` (`first_handle`: per-tool iteration, `Handled` wins / `Delegate` falls through). Reference extensions are the active ones in the default `extensions.order` (`context_mode`, `compaction_ai`, `exa_search`, `mcp`) — not `omnigraph`/`openkb`. Language facts (effect enforcement, `Process`/`FS` effects, `std/fs`/`std/process` availability, latest version 0.19.1) verified live via the `ailang-docs` MCP server (`ailang-api` 0.8.1) — now registered in `.mcp.json` for native use next session.
