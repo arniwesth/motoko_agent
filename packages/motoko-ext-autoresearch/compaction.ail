@@ -1,8 +1,9 @@
 module sunholo/motoko_ext_autoresearch/compaction
 
-import std/string (contains)
+import std/list (reverse, take)
+import std/string (contains, startsWith)
 
-import pkg/sunholo/motoko_ext_abi/types (Msg, PreStepDecision, PassThrough, Compacted)
+import pkg/sunholo/motoko_ext_abi/types (Msg, ToolCall, PreStepDecision, PassThrough, Compacted)
 import pkg/sunholo/motoko_ext_autoresearch/db as DB
 import pkg/sunholo/motoko_ext_autoresearch/state (derive_state)
 import pkg/sunholo/motoko_ext_autoresearch/prompts (build_state_summary)
@@ -13,6 +14,41 @@ func has_summary_msg(msgs: [Msg]) -> bool {
     m :: rest =>
       if contains(m.content, "autoresearch summary:") then true
       else has_summary_msg(rest)
+  }
+}
+
+func has_ar_tool_call_names(names: [string]) -> bool {
+  match names {
+    [] => false,
+    n :: rest =>
+      if startsWith(n, "ar_") then true
+      else has_ar_tool_call_names(rest)
+  }
+}
+
+func tool_names(calls: [ToolCall]) -> [string] {
+  match calls {
+    [] => [],
+    c :: rest => c.name :: tool_names(rest)
+  }
+}
+
+func msg_has_ar_activity(m: Msg) -> bool {
+  contains(m.content, "ar_init")
+  || contains(m.content, "ar_run")
+  || contains(m.content, "ar_log")
+  || contains(m.content, "ar_notes")
+  || has_ar_tool_call_names(tool_names(m.tool_calls))
+}
+
+func has_recent_ar_activity(msgs: [Msg]) -> bool {
+  has_ar_activity_rec(take(6, reverse(msgs)))
+}
+
+func has_ar_activity_rec(msgs: [Msg]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => if msg_has_ar_activity(m) then true else has_ar_activity_rec(rest)
   }
 }
 
@@ -27,7 +63,8 @@ func summary_msg(content: string) -> Msg {
 
 export func pre_step(session_dir: string, msgs: [Msg]) -> PreStepDecision ! {Process, FS} {
   if not DB.has_db(session_dir) then PassThrough
-  else if has_summary_msg(msgs) then PassThrough
+  else if has_summary_msg(take(6, reverse(msgs))) then PassThrough
+  else if has_recent_ar_activity(msgs) then PassThrough
   else {
     let state = derive_state(session_dir);
     let summary = build_state_summary(session_dir, state);

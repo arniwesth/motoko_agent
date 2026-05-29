@@ -1,6 +1,6 @@
 module sunholo/motoko_ext_autoresearch/prompts
 
-import std/result (Ok, Err)
+import std/json (decode, asArray, asString, get)
 
 import pkg/sunholo/motoko_ext_abi/types (PromptPatch)
 import pkg/sunholo/motoko_ext_autoresearch/db as DB
@@ -36,6 +36,21 @@ func state_line(state: ArState) -> string {
   }
 }
 
+func primary_metric(metrics_raw: string) -> { name: string, direction: string } {
+  match decode(metrics_raw) {
+    Err(_) => { name: "", direction: "minimize" },
+    Ok(j) => match asArray(j) {
+      None => { name: "", direction: "minimize" },
+      Some([]) => { name: "", direction: "minimize" },
+      Some(m :: _) => {
+        let name = match get(m, "name") { Some(v) => match asString(v) { Some(s) => s, None => "" }, None => "" };
+        let direction = match get(m, "direction") { Some(v) => match asString(v) { Some(s) => s, None => "minimize" }, None => "minimize" };
+        { name: name, direction: direction }
+      }
+    }
+  }
+}
+
 export func build_state_summary(session_dir: string, state: ArState) -> string ! {Process, FS} {
   let objective = match DB.current_objective(session_dir) {
     Ok(s) => s,
@@ -60,5 +75,12 @@ export func build_state_summary(session_dir: string, state: ArState) -> string !
   let stall = stall_count(session_dir, segment);
   let notes = read_notes(session_dir);
   let owed = pending_line(state);
-  "autoresearch summary:\n${state_line(state)}\nobjective=${objective}\nsegment=${show(segment)}\niterations=${show(runs)}/${show(max_it)}\nstall=${show(stall)}/${show(patience)}\n${owed}\nnotes:\n${notes}"
+  let primary = primary_metric(match DB.current_metrics_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
+  let best_line =
+    if primary.name == "" then ""
+    else match DB.best_metric_value(session_dir, segment, primary.name, primary.direction) {
+      Ok(Some(v)) => "best_${primary.name}=${show(v)}",
+      _ => ""
+    };
+  "autoresearch summary:\n${state_line(state)}\nobjective=${objective}\nsegment=${show(segment)}\niterations=${show(runs)}/${show(max_it)}\nstall=${show(stall)}/${show(patience)}\n${best_line}\n${owed}\nnotes:\n${notes}"
 }

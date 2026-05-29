@@ -382,6 +382,8 @@ export func insert_run(
   justification: string,
   confidence_json: string,
   git_sha: string,
+  flagged: bool,
+  flagged_reason: string,
   checks_passed: bool,
   improved: bool,
   duration_ms: int,
@@ -389,7 +391,7 @@ export func insert_run(
 ) -> Result[(), string] ! {Process} {
   run_exec(
     open(session_dir),
-    "INSERT INTO runs (session_id, segment, run_number, decision, metrics_json, samples_json, asi_json, changes_summary, reasoning, learnings, scope_deviations_json, justification, confidence_json, git_sha, checks_passed, improved, duration_ms, iteration_changes_json, ts)
+    "INSERT INTO runs (session_id, segment, run_number, decision, metrics_json, samples_json, asi_json, changes_summary, reasoning, learnings, scope_deviations_json, justification, confidence_json, git_sha, flagged, flagged_reason, checks_passed, improved, duration_ms, iteration_changes_json, ts)
 VALUES (
 ${show(session_id)},
 ${show(segment)},
@@ -405,6 +407,8 @@ ${show(run_number)},
 '${sanitize_sql_string(justification)}',
 '${sanitize_sql_string(confidence_json)}',
 '${sanitize_sql_string(git_sha)}',
+${if flagged then "TRUE" else "FALSE"},
+'${sanitize_sql_string(flagged_reason)}',
 ${if checks_passed then "TRUE" else "FALSE"},
 ${if improved then "TRUE" else "FALSE"},
 ${show(duration_ms)},
@@ -442,7 +446,7 @@ func improved_flags_rec(rows: [Row]) -> [bool] {
 export func best_metric_value(session_dir: string, segment: int, metric_name: string, direction: string) -> Result[Option[float], string] ! {Process} {
   let agg = if direction == "maximize" then "MAX" else "MIN";
   let key = sanitize_sql_string(metric_name);
-  let sql = "SELECT ${agg}(CAST(json_extract(metrics_json, '$.${key}') AS DOUBLE)) AS v FROM runs WHERE segment = ${show(segment)} AND decision='keep'";
+  let sql = "SELECT ${agg}(CAST(json_extract(metrics_json, '$.${key}') AS DOUBLE)) AS v FROM runs WHERE segment = ${show(segment)} AND decision='keep' AND flagged=FALSE";
   match run_sql(open(session_dir), sql) {
     Err(e) => Err(e),
     Ok(rows) => match first_row(rows) {
@@ -455,5 +459,46 @@ export func best_metric_value(session_dir: string, segment: int, metric_name: st
         }
       }
     }
+  }
+}
+
+export func first_metric_value(session_dir: string, segment: int, metric_name: string) -> Result[Option[float], string] ! {Process} {
+  let key = sanitize_sql_string(metric_name);
+  let sql = "SELECT CAST(json_extract(metrics_json, '$.${key}') AS DOUBLE) AS v FROM runs WHERE segment = ${show(segment)} AND decision='keep' AND flagged=FALSE ORDER BY run_number ASC LIMIT 1";
+  match run_sql(open(session_dir), sql) {
+    Err(e) => Err(e),
+    Ok(rows) => match first_row(rows) {
+      None => Ok(None),
+      Some(row) => match get(row, "v") {
+        None => Ok(None),
+        Some(v) => match asNumber(v) {
+          Some(n) => Ok(Some(n)),
+          None => Ok(None)
+        }
+      }
+    }
+  }
+}
+
+func float_rows_rec(rows: [Row], acc: [float]) -> [float] {
+  match rows {
+    [] => acc,
+    row :: rest =>
+      match get(row, "v") {
+        None => float_rows_rec(rest, acc),
+        Some(v) => match asNumber(v) {
+          None => float_rows_rec(rest, acc),
+          Some(n) => float_rows_rec(rest, acc ++ [n])
+        }
+      }
+  }
+}
+
+export func kept_metric_values(session_dir: string, segment: int, metric_name: string) -> Result[[float], string] ! {Process} {
+  let key = sanitize_sql_string(metric_name);
+  let sql = "SELECT CAST(json_extract(metrics_json, '$.${key}') AS DOUBLE) AS v FROM runs WHERE segment = ${show(segment)} AND decision='keep' AND flagged=FALSE ORDER BY run_number ASC";
+  match run_sql(open(session_dir), sql) {
+    Err(e) => Err(e),
+    Ok(rows) => Ok(float_rows_rec(rows, []))
   }
 }

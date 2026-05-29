@@ -86,18 +86,29 @@ export func confidence_report(
   match DB.best_metric_value(session_dir, segment, metric_name, direction) {
     Err(e) => Err(e),
     Ok(None) => Ok({ kind: if noisy then "noisy" else "deterministic", value: baseline, noise: 0.0, ratio: 0.0, pct: 0.0 }),
-    Ok(Some(best)) => {
-      let delta = absf(best - baseline);
-      let pct = if baseline == 0.0 then 0.0 else (delta / absf(baseline)) * 100.0;
-      let noise = 0.0;
-      let ratio = if noise == 0.0 then 0.0 else delta / noise;
-      Ok({
-        kind: if noisy then "noisy" else "deterministic",
-        value: best,
-        noise: noise,
-        ratio: ratio,
-        pct: pct
-      })
-    }
+    Ok(Some(best)) =>
+      match DB.first_metric_value(session_dir, segment, metric_name) {
+        Err(e) => Err(e),
+        Ok(first_opt) => {
+          let ref0 = if baseline != 0.0 then baseline else match first_opt { Some(v) => v, None => best };
+          let delta = absf(best - ref0);
+          let pct = if ref0 == 0.0 then 0.0 else (delta / absf(ref0)) * 100.0;
+          let noise =
+            if noisy then
+              match DB.kept_metric_values(session_dir, segment, metric_name) {
+                Ok(vals) => if length(vals) >= 2 then mad(vals) else 0.0,
+                Err(_) => 0.0
+              }
+            else 0.0;
+          let ratio = if noise == 0.0 then 0.0 else delta / noise;
+          Ok({
+            kind: if noisy then "noisy" else "deterministic",
+            value: best,
+            noise: noise,
+            ratio: ratio,
+            pct: pct
+          })
+        }
+      }
   }
 }

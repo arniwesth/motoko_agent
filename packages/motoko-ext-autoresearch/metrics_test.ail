@@ -1,0 +1,27 @@
+module sunholo/motoko_ext_autoresearch/metrics_test
+
+import pkg/sunholo/motoko_ext_autoresearch/metrics (median, mad, improved)
+
+func median_cases(xs: [float]) -> float
+  tests [
+    ([1.0, 3.0, 2.0], 2.0),
+    ([1.0, 2.0, 3.0, 4.0], 2.5),
+    ([], 0.0)
+  ]
+  { median(xs) }
+
+func mad_cases(xs: [float]) -> float
+  tests [
+    ([10.0, 10.0, 10.0], 0.0),
+    ([1.0, 1.0, 2.0, 2.0, 100.0], 1.0)
+  ]
+  { mad(xs) }
+
+func improved_cases(args: { direction: string, prev: float, cur: float, noise: float }) -> bool
+  tests [
+    ({ direction: "minimize", prev: 100.0, cur: 95.0, noise: 0.0 }, true),
+    ({ direction: "minimize", prev: 100.0, cur: 99.5, noise: 1.0 }, false),
+    ({ direction: "maximize", prev: 100.0, cur: 105.0, noise: 0.0 }, true),
+    ({ direction: "maximize", prev: 100.0, cur: 100.2, noise: 1.0 }, false)
+  ]
+  { improved(args.direction, args.prev, args.cur, args.noise) }

@@ -141,6 +141,34 @@ export func parse_justification(args: Json) -> string {
   str_field(args, "justification", "")
 }
 
+func flag_reason_rec(xs: [Json], run_number: int) -> string {
+  match xs {
+    [] => "",
+    x :: rest => {
+      let rn =
+        match get(x, "run_number") {
+          None => -1,
+          Some(v) => match asNumber(v) {
+            Some(n) => _float_to_int(n),
+            None => -1
+          }
+        };
+      let reason = str_field(x, "reason", "");
+      if rn == run_number then reason else flag_reason_rec(rest, run_number)
+    }
+  }
+}
+
+export func parse_flag_reason(args: Json, run_number: int) -> string {
+  match get(args, "flag_runs") {
+    None => "",
+    Some(v) => match asArray(v) {
+      None => "",
+      Some(xs) => flag_reason_rec(xs, run_number)
+    }
+  }
+}
+
 export func parse_notes_body(args: Json) -> string {
   str_field(args, "body", "")
 }
@@ -211,6 +239,17 @@ func schema_log() -> string {
       kv("reasoning", jo([kv("type", js("string"))])),
       kv("learnings", jo([kv("type", js("string"))])),
       kv("justification", jo([kv("type", js("string"))])),
+      kv("flag_runs", jo([
+        kv("type", js("array")),
+        kv("items", jo([
+          kv("type", js("object")),
+          kv("required", ja([js("run_number"), js("reason")])),
+          kv("properties", jo([
+            kv("run_number", jo([kv("type", js("integer"))])),
+            kv("reason", jo([kv("type", js("string"))]))
+          ]))
+        ]))
+      ])),
       kv("asi", jo([kv("type", js("object"))]))
     ]))
   ]);

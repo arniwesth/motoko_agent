@@ -429,6 +429,17 @@ func first_metric_direction(specs: [MetricSpec]) -> string {
   }
 }
 
+func first_metric_noisy(specs: [MetricSpec]) -> bool {
+  match specs {
+    [] => false,
+    s :: _ => s.noisy
+  }
+}
+
+func warnings_json(xs: [string]) -> Json {
+  ja(str_json_array_rec(xs))
+}
+
 func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
@@ -553,6 +564,7 @@ func handle_run(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Pr
                     kv("duration_ms", jnum(_int_to_float(duration))),
                     kv("stdout_tail", js(last.stdout)),
                     kv("stderr_tail", js(last.stderr)),
+                    kv("parse_warnings", warnings_json(last.parsed.warnings)),
                     kv("ar_state", js("AwaitingLog")),
                     kv("owed_action", js("ar_log(run_number=${show(run_no)}, decision=keep|discard)"))
                   ])
@@ -610,9 +622,11 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Pr
   let reasoning = Tools.parse_reasoning(call.arguments);
   let learnings = Tools.parse_learnings(call.arguments);
   let justification = Tools.parse_justification(call.arguments);
+  let flagged_reason = Tools.parse_flag_reason(call.arguments, requested);
   let specs = parse_metric_specs_json(match DB.current_metrics_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
   let primary = first_metric_name(specs);
   let direction = first_metric_direction(specs);
+  let primary_noisy = first_metric_noisy(specs);
   match DB.read_pending_run(session_dir, segment) {
     Err(e) => reject(call, e),
     Ok(None) => reject(call, "no pending run"),
@@ -632,12 +646,29 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Pr
         else {
           let git = commit_or_revert(decision, ctx.workdir, iteration_changes, p.run_number);
           let improved = improved_for_keep(session_dir, segment, primary, direction, decision, p.metrics_json);
+          let flagged = flagged_reason != "";
+          let confidence = match Metrics.confidence_report(session_dir, segment, primary, primary_noisy, 0.0, direction) {
+            Ok(c) => jo([
+              kv("kind", js(c.kind)),
+              kv("value", jnum(c.value)),
+              kv("noise", jnum(c.noise)),
+              kv("ratio", jnum(c.ratio)),
+              kv("pct", jnum(c.pct))
+            ]),
+            Err(_) => jo([])
+          };
+          let best_metric =
+            if primary == "" then jo([])
+            else match DB.best_metric_value(session_dir, segment, primary, direction) {
+              Ok(Some(v)) => jo([kv(primary, jnum(v))]),
+              _ => jo([])
+            };
           let session_id = match DB.current_session_id(session_dir) { Ok(id) => id, Err(_) => 0 };
           let _ = DB.insert_run(
             session_dir, session_id, segment, p.run_number, decision,
             p.metrics_json, p.samples_json, p.asi_json, changes_summary, reasoning, learnings,
-            encode(str_json_array(deviations)), justification, "{}", git.sha,
-            p.checks_passed, improved, p.duration_ms, encode(str_json_array(iteration_changes))
+            encode(str_json_array(deviations)), justification, encode(confidence), git.sha,
+            flagged, flagged_reason, p.checks_passed, improved, p.duration_ms, encode(str_json_array(iteration_changes))
           );
           let _ = DB.clear_pending_run(session_dir, segment);
           if learnings != "" then {
@@ -646,6 +677,7 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Pr
           } else ();
           let run_count = match DB.run_count(session_dir, segment) { Ok(n) => n, Err(_) => 0 };
           let max_it = match DB.current_max_iterations(session_dir) { Ok(n) => n, Err(_) => 20 };
+          let patience = match DB.current_patience(session_dir) { Ok(n) => n, Err(_) => 3 };
           if run_count >= max_it then {
             let _ = DB.mark_current_session(session_dir, "exhausted", "max_iterations reached");
             ()
@@ -661,6 +693,11 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Pr
               kv("git_action", js(git.action)),
               kv("commit_sha", js(git.sha)),
               kv("scope_deviations", str_json_array(deviations)),
+              kv("best_metric", best_metric),
+              kv("patience", jnum(_int_to_float(patience))),
+              kv("confidence_report", confidence),
+              kv("flagged", jb(flagged)),
+              kv("flagged_reason", js(flagged_reason)),
               kv("stall", jnum(_int_to_float(stall))),
               kv("ar_state", js(if run_count >= max_it then "Done" else "Ready"))
             ])
