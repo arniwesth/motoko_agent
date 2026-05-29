@@ -568,6 +568,85 @@ make test_core
 
 ---
 
+## Appendix A: Self-Research Bootstrap (optimizer ≠ optimized)
+
+A companion acid test to Phase 4: point autoresearch at **its own source**. The naïve framing ("it edits itself") is invalid for two reasons — defusing them is the point:
+
+1. **It must not mutate its own running code.** The live loop is executing `state.ail`/`db.ail`/`on_tool_handle` every step; a broken candidate edit would corrupt the machinery mid-flight (can't `derive_state`, log, or revert). This is why the flagship already puts `src/core/ext/autoresearch/` in `off_limits`.
+2. **It must not control its own success criteria.** If the optimizer can edit its own tests/benchmark/checks, it "wins" by weakening them (Goodhart with root access). A self-optimizing system requires **immutable success criteria**.
+
+**Resolution — `optimizer ≠ optimized`:** the *running, pinned* extension optimizes a **separate working copy** (`experiments/ar_candidate/`, a mirror of the extension source), and the tests + benchmark are `off_limits`. The live loop never imports the candidate.
+
+### Objective: optimize its own hot-path overhead
+
+This targets the exact perf concern from the review — `derive_state` shells out to `duckdb` on *every* tool call — so the loop can **autonomously rediscover the existence-fast-path + per-step caching** that a human reviewer already flagged. The run doubles as the strongest possible safety test: the system under optimization *is* the optimizer.
+
+```jsonc
+ar_init({
+  objective: "Reduce the per-tool-call overhead the autoresearch extension adds \
+              (the derive_state hot path) without changing observable behavior",
+  metrics: [
+    { name: "duckdb_spawns_per_100_calls", direction: "minimize", noisy: false }, // primary, deterministic
+    { name: "overhead_ms",                 direction: "minimize", noisy: true  }, // secondary, real wall-time
+    { name: "ext_lines",                   direction: "minimize", noisy: false }  // informational
+  ],
+  scope_paths: ["experiments/ar_candidate/"],
+  off_limits: [
+    "src/core/ext/autoresearch/",                 // the LIVE loop — never touch the running self
+    "experiments/ar_candidate/**/*_test.ail",     // can't weaken its own tests
+    "experiments/ar_candidate/bench/",            // can't edit the benchmark/seed
+    "src/core/ext/registry_generated.ail"
+  ],
+  constraints: [
+    "Candidate must pass the full autoresearch test suite unchanged",
+    "derive_state must remain a pure function of the DB (no in-memory authority)",
+    "No change to tool names, ToolSchema, or the ToolResultEnvelope contract",
+    "AwaitingLog must still hard-block {WriteFile, EditFile, BashExec}"
+  ],
+  checks_script: "<runs the candidate's FSM / scope / metric test suite>",
+  benchmark_script: "<below>",
+  patience: 4,
+  max_iterations: 25
+})
+// each iteration:  ar_run({ samples: 7 })   // noisy overhead_ms → replication
+```
+
+**`autoresearch.sh`** — two deliberate choices (see caveats):
+
+```bash
+#!/bin/bash
+set -e
+ailang check experiments/ar_candidate/*.ail >/dev/null   # fail fast; real correctness is in checks
+
+# deterministic primary: count duckdb invocations via a counting shim on PATH
+export PATH="experiments/ar_candidate/bench/shim:$PATH"   # shim tallies each call into $SPAWN_LOG
+: > "$SPAWN_LOG"
+ailang run --caps IO,Process,FS --entry main experiments/ar_candidate/bench/exercise_100_calls.ail
+echo "METRIC duckdb_spawns_per_100_calls=$(wc -l < "$SPAWN_LOG")"
+
+# noisy secondary: REAL wall-time, measured in bash (not AILANG)
+START=$(date +%s%N)
+ailang run --caps IO,Process,FS --entry main experiments/ar_candidate/bench/exercise_100_calls.ail >/dev/null
+END=$(date +%s%N)
+echo "METRIC overhead_ms=$(( (END - START) / 1000000 ))"
+
+echo "METRIC ext_lines=$(cat experiments/ar_candidate/*.ail | wc -l)"
+```
+
+### Caveats that make this correct (not just clever)
+- **Do not time with `std/clock`** — it is *virtual time for determinism* (per the 0.19.1 docs) and will not measure real elapsed wall-clock. Measure wall-time in **bash** (`date +%s%N`), and make the **deterministic spawn-count** the primary metric: it is exactly the lever the fast-path/caching changes, needs no sampling, and sidesteps the clock issue. `overhead_ms` rides along as the noisy secondary — conveniently exercising the *samples + within-run MAD* keep-rule branch the deterministic flagship never does.
+- **Immutable success criteria are load-bearing here.** Tests and the benchmark/seed are `off_limits`; the checks gate (`ar_log` reads recorded `checks_passed`) must reject a "faster" candidate that breaks the FSM. Scope enforcement must block any reach into the live loop. If the loop converges *and* never manages to cheat, that is a stronger validation than the line-count flagship.
+
+### Expected payoff
+The likely keeps map straight onto the review findings: the `.motoko/autoresearch/autoresearch.db` existence fast-path (skip the spawn when no session is active) and per-step state caching — both slash `duckdb_spawns_per_100_calls` while passing every test. If the loop finds them unaided, the extension will have **autonomously re-derived the optimization its own design review flagged**, under rails that stop it from cheating or self-corrupting.
+
+### Other meaningful objectives (same `optimizer ≠ optimized` pattern)
+- **Cheapest correct prompt:** minimize tokens in the `on_build_system_prompt` static text + `on_pre_step` summary, gated by a scripted agent still completing a canned init→run→log→converge flow. (Bridge to the Layer-2 "recursive self-improvement of hooks" goal in Context.)
+- **Tighten the SQL surface:** minimize distinct query templates in `db.ail` (dedup/parameterize), deterministic, test suite as the gate.
+- **Shrink reconstruction cost:** minimize bytes in the `on_pre_step` summary `Msg` while a compaction-survival test still passes.
+
+---
+
 ## Verification
 
 1. `ailang check` on each `src/core/ext/autoresearch/*.ail` module — must pass type-checking
