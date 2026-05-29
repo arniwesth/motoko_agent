@@ -66,14 +66,14 @@ rather than merely prompt-suggested — illegal tool calls are rejected by `on_t
 
 ## Package Structure
 
-**In-tree**, at `src/core/ext/autoresearch/`. Can be extracted to a package later.
-
-> Note: `context_mode` is **no longer in-tree** — it was extracted to the registry package `sunholo/motoko_ext_context_mode` (`src/core/ext/context_mode/` now holds only build artifacts; source is in the registry cache at `~/.ailang/cache/registry/sunholo/motoko_ext_context_mode/0.2.2/`). Use the **active, working** extensions as references — those wired in the default profile's `extensions.order` (`compaction_ai`, `context_mode`, `exa_search`, `mcp`, `ailang_docs`): `context_mode.ail` for the `Handled(…)`/`Delegate` tool-handling pattern *and* compaction, and `compaction_ai` for the dedicated `on_pre_step` reconstruction pattern. (Ignore `omnigraph`/`openkb` — not in the active set.) Decide explicitly whether autoresearch ships in-tree or as a package like every other extension; either way registration goes through `registry_generated.ail`.
+**Package-first (documented flow)** as a separate AILANG package under the sibling `ailang-packages` repo:
+`../ailang-packages/packages/motoko-ext-autoresearch/`
 
 ```
-src/core/ext/autoresearch/
+../ailang-packages/packages/motoko-ext-autoresearch/
+  ailang.toml        — package manifest (`sunholo/motoko_ext_autoresearch`), exports + effects
   register.ail       — entry point: register_with_config(cfg: RuntimeConfig) -> ExtensionHooks ! {FS}
-                       (must also set provided_tools + on_describe_tools)
+  autoresearch.ail   — hook wiring + tool dispatch
   types.ail          — ExperimentConfig, RunEntry, ConfidenceResult, Segment types
   tools.ail          — ToolSchema definitions + argument parsing
   db.ail             — DuckDB schema init, session/run insert/query helpers
@@ -82,12 +82,12 @@ src/core/ext/autoresearch/
   git_ops.ail        — branch mgmt, selective commit/revert, dirty path tracking
   scope.ail          — scope deviation detection + run flagging
   state.ail          — ArState enum, derive_state(db), legal(state, tool) transition guard
-  prompts.ail        — STATIC protocol text for on_build_system_prompt (pure) + the dynamic
-                       state-summary string builder used by on_pre_step (fed DB/file reads)
+  prompts.ail        — STATIC protocol text for on_build_system_prompt (pure) + dynamic
+                       state-summary string builder used by on_pre_step
   compaction.ail     — on_pre_step: reconstruct state from DuckDB + inject autoresearch.md content
 ```
 
-Pattern reference: the active extensions (`context_mode`, `exa_search`, `mcp`) in the registry cache, and the host tool dispatch in `src/core/ext/runtime.ail` (`first_handle`).
+Pattern reference: existing registry packages (`context_mode`, `exa_search`, `mcp`, `compaction_ai`) plus host dispatch in `src/core/ext/runtime.ail` (`first_handle`).
 
 ---
 
@@ -427,16 +427,34 @@ This preserves any pre-existing uncommitted work (`init_dirty`) that wasn't part
 
 ## Wiring into Motoko
 
-Registration goes through `src/core/ext/registry_generated.ail` regardless of the in-tree-vs-package choice (Open Question #3). If in-tree:
+Registration is via the **documented extension package flow** (no hand-edits to generated registry files):
 
-1. Add import + resolve case to `src/core/ext/registry_generated.ail`:
-   ```ailang
-   import src/core/ext/autoresearch/register (register_with_config as register_autoresearch)
-   -- In resolve():
-   else if name == "autoresearch" then Some(register_autoresearch(cfg))
+1. Scaffold package in sibling repo:
+   ```bash
+   cd ../ailang-packages
+   ailang init motoko-extension \
+     --name sunholo/motoko_ext_autoresearch \
+     --tools "ar_init,ar_run,ar_log,ar_notes" \
+     --effects "io,process,fs,env,ai,net,sharedmem,clock,stream"
    ```
-   Or regenerate via `ailang generate-extension-registry` after adding to `ailang.toml` `[extensions]`.
-2. Add `"autoresearch"` to profile's `extensions.order` in `.motoko/config/*/config.json`
+2. Implement modules in `../ailang-packages/packages/motoko-ext-autoresearch/`.
+3. In `motoko_agent/ailang.toml`, add dependency + extension entry during development:
+   ```toml
+   [dependencies]
+   "sunholo/motoko_ext_autoresearch" = { path = "../ailang-packages/packages/motoko-ext-autoresearch" }
+
+   [extensions]
+   packages = [
+     # ...
+     "sunholo/motoko_ext_autoresearch@0.1.0",
+   ]
+   ```
+4. Re-lock and regenerate:
+   ```bash
+   ailang lock
+   ailang generate-extension-registry
+   ```
+5. Add `"autoresearch"` to profile `extensions.order` in `.motoko/config/*/config.json`.
 
 **Dependencies**: `sunholo/motoko_ext_abi@2.2.0` (already in `ailang.toml`/`ailang.lock`) for the hook ABI; `sunholo/duckdb@0.1.0` (**verified resolvable**, 2026-05-29) + the `duckdb` CLI on PATH (the one runtime binary still to be installed in the devcontainer). `std/fs` fallback remains available if a CLI dependency is undesirable. Target language: AILANG 0.19.1.
 
@@ -459,7 +477,7 @@ Registration goes through `src/core/ext/registry_generated.ail` regardless of th
 0. ~~**DuckDB spike (gate)**~~ **DONE (2026-05-29):** package resolves and the `{types,query,schema}` API matches (see Persistence). Decision: **use DuckDB**, not the fallback.
 1. Re-run `ailang install sunholo/duckdb@0.1.0` (re-adds it to `ailang.toml`/`ailang.lock`; reverted after the spike) — and write the 10-line open/create/insert/read scratch program to confirm runtime behavior **once the CLI is installed**.
 2. Add `duckdb` CLI install to `scripts/install-prerequisites.sh` and the devcontainer, then install it (the **only** outstanding runtime prereq; the GitHub release binary couldn't be fetched in the planning sandbox).
-3. Create module structure at `src/core/ext/autoresearch/`
+3. Scaffold package via `ailang init motoko-extension` (see Wiring section), then create module structure in `../ailang-packages/packages/motoko-ext-autoresearch/`
 4. `types.ail` — all domain types (ExperimentConfig, RunEntry, ConfidenceResult, Segment, etc.)
 5. `tools.ail` — 4 tool schemas + argument parsing
 6. `db.ail` — DuckDB schema creation (`sessions` + `runs` + `pending_runs` + sequences; note DuckDB has no autoincrement), insert/query helpers using `pkg/sunholo/duckdb/*`. Include a `sanitize_sql_string` helper to escape single quotes in interpolated values.
@@ -473,7 +491,7 @@ Registration goes through `src/core/ext/registry_generated.ail` regardless of th
 13. Implement `ar_log` handler (verify pending run, checks gate, `iteration_changes` diff, scope check, INSERT into runs, delete pending_runs, selective git ops) — AwaitingLog→Ready
 14. Implement `ar_notes` handler (replace/append notes)
 15. Wire into registry, verify with `ailang check` on each new module
-16. Note: `make check_core` only checks `src/core/*.ail` (not subdirs). Use direct `ailang check src/core/ext/autoresearch/*.ail` or add a `check_autoresearch` Makefile target.
+16. Note: `make check_core` validates `motoko_agent` core, not sibling extension package modules. Run direct checks in the package dir (`ailang check *.ail`) and then `make check_core` in `motoko_agent`.
 
 ### Phase 2: Intelligence — ~2 days
 1. `metrics.ail` — keep rule (deterministic vs noisy), within-run MAD over `samples_json`, `stall_count`, confidence *report*
@@ -502,7 +520,7 @@ ar_init({
   off_limits: [
     "src/core/ext/registry_generated.ail",
     "src/core/test/",
-    "src/core/ext/autoresearch/"
+    "../ailang-packages/packages/motoko-ext-autoresearch/"
   ],
   constraints: [
     "Do not remove public exports",
@@ -572,7 +590,7 @@ make test_core
 
 A companion acid test to Phase 4: point autoresearch at **its own source**. The naïve framing ("it edits itself") is invalid for two reasons — defusing them is the point:
 
-1. **It must not mutate its own running code.** The live loop is executing `state.ail`/`db.ail`/`on_tool_handle` every step; a broken candidate edit would corrupt the machinery mid-flight (can't `derive_state`, log, or revert). This is why the flagship already puts `src/core/ext/autoresearch/` in `off_limits`.
+1. **It must not mutate its own running code.** The live loop is executing `state.ail`/`db.ail`/`on_tool_handle` every step; a broken candidate edit would corrupt the machinery mid-flight (can't `derive_state`, log, or revert). This is why the flagship already puts `../ailang-packages/packages/motoko-ext-autoresearch/` in `off_limits`.
 2. **It must not control its own success criteria.** If the optimizer can edit its own tests/benchmark/checks, it "wins" by weakening them (Goodhart with root access). A self-optimizing system requires **immutable success criteria**.
 
 **Resolution — `optimizer ≠ optimized`:** the *running, pinned* extension optimizes a **separate working copy** (`experiments/ar_candidate/`, a mirror of the extension source), and the tests + benchmark are `off_limits`. The live loop never imports the candidate.
@@ -592,7 +610,7 @@ ar_init({
   ],
   scope_paths: ["experiments/ar_candidate/"],
   off_limits: [
-    "src/core/ext/autoresearch/",                 // the LIVE loop — never touch the running self
+    "../ailang-packages/packages/motoko-ext-autoresearch/", // the LIVE loop — never touch the running self
     "experiments/ar_candidate/**/*_test.ail",     // can't weaken its own tests
     "experiments/ar_candidate/bench/",            // can't edit the benchmark/seed
     "src/core/ext/registry_generated.ail"
@@ -649,7 +667,7 @@ The likely keeps map straight onto the review findings: the `.motoko/autoresearc
 
 ## Verification
 
-1. `ailang check` on each `src/core/ext/autoresearch/*.ail` module — must pass type-checking
+1. `ailang check` on each `../ailang-packages/packages/motoko-ext-autoresearch/*.ail` module — must pass type-checking
 2. `make check_core` — must not break existing `src/core/*.ail` modules (note: this target doesn't recurse into subdirs, so it won't check autoresearch files directly)
 3. Smoke test: scripted session using `StepProvider = Scripted([...])` simulating init → run → log → run → log flow
 4. Scope test: scripted session where the agent modifies an off-limits file, verify ar_log rejects without justification
@@ -750,7 +768,7 @@ A ClickHouse AILANG package (`sunholo/clickhouse`) would be a natural follow-on 
 
 1. ~~**Segment UX**: should `new_segment` auto-commit the new baseline?~~ **Resolved:** never auto-commit; both first-call and `new_segment` set `baseline_commit = HEAD` and capture `init_dirty` without committing.
 2. ~~**DuckDB availability**~~ **Resolved (2026-05-29):** `sunholo/duckdb@0.1.0` resolves from the registry and the three-module API matches exactly. Using DuckDB; only the `duckdb` CLI binary needs installing in the devcontainer.
-3. ~~**In-tree vs package**~~ **Decided: in-tree first.** Ship under `src/core/ext/autoresearch/` for fast iteration (no publish cycle), then extract to `sunholo/motoko_ext_autoresearch` once stable — mirroring how `context_mode` evolved. Easily reversible; registration goes through `registry_generated.ail` either way.
+3. ~~**In-tree vs package**~~ **Decided (2026-05-29): documented package flow.** Build as a separate extension package in `../ailang-packages/packages/motoko-ext-autoresearch/`, wire via `ailang.toml` dependency + `[extensions].packages`, and regenerate `src/core/ext/registry_generated.ail` with `ailang generate-extension-registry` (no manual edits).
 4. ~~**Blocking foreign tools**~~ **Resolved (2026-05-29):** `agent_loop_v2.dispatch_calls` routes every call through `dispatch_tool_policy` → `dispatch_tool_handle`, and `Handled` short-circuits native dispatch — so foreign tools **do** reach the extension's `on_tool_handle`. Canonical names from `tool_catalog.ail`: `ReadFile`/`WriteFile`/`EditFile`/`BashExec`/`RunTests`/`Search`; the `AwaitingLog` gate blocks `{WriteFile, EditFile, BashExec}`.
 
 *(No open questions remain blocking; all were resolved by investigation on 2026-05-29.)*
