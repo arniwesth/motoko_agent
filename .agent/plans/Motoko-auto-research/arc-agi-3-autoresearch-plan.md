@@ -179,6 +179,9 @@ autoresearched against a local model, aimed at an offline submission.** This uni
 8. **Train/test split** anti-cheat: optimize on TRAIN, grade on held-out TEST
    (`off_limits`); the train-vs-test gap is the overfit/discipline measure.
 9. **Phased build**, gated on the Phase-0 go/no-go.
+10. **Literature-grounded ideation** (§8): the optimizer searches the field, adapts
+    published methods, and *validates* them through the keep/discard loop — provenance
+    tracked, reproduction measured. Online ideation, offline experiment.
 
 ---
 
@@ -227,7 +230,103 @@ autoresearched against a local model, aimed at an offline submission.** This uni
 
 ---
 
-## 8. Phasing
+## 8. Literature-grounded ideation (search → reproduce → validate)
+
+The optimizer is not pure self-play: it reads the field, adapts published methods,
+and lets the keep/discard loop decide what survives. This changes how hypotheses are
+*generated*, not how they're *judged* — a method earns its keep on the metric like
+any other change.
+
+> The literature already contains a strong, offline-legal lever: **Rudakov/Shock/
+> Cowley, "Graph-Based Exploration for ARC-AGI-3"** (AAAI-26 ws, arXiv:2512.24156) —
+> *training-free* graph of states/transitions, prioritize untested state-action pairs
+> by shortest path; **median 30/52 levels, 3rd on the private leaderboard, beats LLM
+> agents, code released** (`arc-agi-3-just-explore`). Contrast arXiv:2605.19376
+> (GRAM, Bengio et al.) — strong on ARC-AGI-1 but *training-based* and not a
+> scaffolding lever → **shelve in triage**. Triage is the point: most papers are not
+> reproducible levers for us.
+
+### Pipeline (a funnel feeding the existing loop)
+1. **Scout** — from the objective + what's stalled, search arXiv/web for methods.
+2. **Triage** — score by relevance to our levers, claimed impact, implementation
+   cost, **offline-legality** (training-free / no-API > train-a-model), and **code
+   released?**.
+3. **Extract → method card** — distill into the structured fields below.
+4. **Cache + provenance** — snapshot the paper (PDF/text) and released code into the
+   session; record source + retrieval date + content hash (reproducibility + the
+   prize's open-source credit requirement).
+5. **Implement** — one candidate change, respecting `scope_paths`/`off_limits`.
+6. **Measure + keep/discard** — unchanged discipline; `ar_log.learnings` records
+   *claim vs. measured* (did it reproduce?).
+7. **Backlog** — untried methods → ideas; failed ones recorded with *why* (don't
+   retry).
+
+### The hard boundary: ideation online, experiment offline
+- Fetching happens **only in the optimizer's context** — never inside
+  `benchmark.sh`/`checks.sh`, which stay fully offline (reproducibility + matches
+  Kaggle). `checks.sh` already bars API clients on the play path; any paper method
+  must be re-implemented as **offline-legal** code/local-model.
+- Cached papers/code give reproducible provenance even though retrieval was online.
+
+### Integrity reframe
+Feeding papers shifts objective #2 from *"did the agent invent the lever?"* to
+*"can it search, adapt, and **validate** a literature method?"* — more realistic for
+a real submission. Guards:
+- **Reproduction is measured, not asserted** — a citation never justifies a keep; the
+  metric does. Report a **reproduction success rate** (methods tried vs. methods that
+  beat held-out baseline) as a headline autoresearch result.
+- **Provenance required** on every kept change (paper id in `learnings`/`method_ids`).
+- **Anti-rabbit-hole budget** (see R-scout): cap papers per segment; require the cheap
+  impl sketch before committing an iteration; prefer training-free / code-released
+  methods. Patience already kills dead segments.
+
+### Method card / ledger fields (used by both the markdown convention and the tool)
+`source_id` (arxiv/url), `title`, `lever` (which scaffolding lever it maps to),
+`claim` (claimed result), `hypothesis` (why it'd help us), `impl_sketch`, `est_cost`,
+`code_url`, `offline_legal` (bool), `status` (`backlog`|`tried`|`kept`|`discarded`),
+`cache_path`, `sha256`, `retrieved_at`.
+
+### Two implementations, same fields (start light, promote in Phase 1)
+
+**Now — prompt + convention only (zero extension code):**
+- `papers/` cache under the session (`{arxiv_id}.pdf/.txt/.card.md`).
+- A `papers/ledger.md` table using exactly the fields above (so promotion is
+  mechanical). Agent fetches with `WebSearch`/`WebFetch`/`Bash(curl+pdftotext)`.
+
+**Phase 1 — promote the ledger to a dedicated `ar_scout` tool** (a *recorder*, not a
+fetcher — no network I/O in the extension; it keeps the `{Process}` effect model and
+the online/offline wall intact):
+
+| Tool | Required | Optional |
+|------|----------|----------|
+| `ar_scout` | `source`, `title`, `lever` | `claim`, `hypothesis`, `impl_sketch`, `est_cost`, `cache_path`, `code_url`, `offline_legal`, `status`, `method_id` (update) |
+
+- No-arg form lists the segment's method ledger (like `ar_notes` reading); returns a
+  `method_id`.
+- `ar_log` gains optional **`method_ids: [string]`** to link a run to the method(s) it
+  tested.
+- **DB (`db.ail`):** a `methods` table (the fields above) + run linkage
+  (`run_methods(run_number, method_id)` or a column on `runs`); the extension derives
+  the **reproduction report** (tried/kept/rate) from the join.
+- **FSM (`state.ail`):** add `scout_tool(name)=="ar_scout"`, allowed in **all four
+  states** (read-only ideation; also closes the `Setup`/`Done` `else→reject` gap —
+  see Phase 1). Separately decide whether raw `Web*` tools are allowed in all states
+  or funneled through `ar_scout`+bash.
+- **Prompt (`prompts.ail`):** when a segment starts or patience nears exhaustion,
+  *consult the literature via `ar_scout` before proposing the next change*.
+- **Footprint:** ~6 modules (`tools`, `autoresearch`, `types`, `state`, `db`,
+  `prompts`) + `ar_log` `method_ids` + `_smoke`/tests. ~1 day.
+
+### Seed reading list (start the first run from the known SOTA)
+- arXiv:2512.24156 — Graph-Based Exploration (training-free, code released) — **try first**.
+- arXiv:2603.24621 — "ARC-AGI-3: A New Challenge for Frontier Agentic Intelligence"
+  (the benchmark paper — design intent, splits, baselines).
+- Symbolica Arcgentica (MIT scaffolding; §3) — RLM multi-agent reference.
+- arXiv:2605.19376 — GRAM (ARC-AGI-1, training-based) — triage example, likely shelve.
+
+---
+
+## 9. Phasing
 
 ### Phase 0 — Pure-code headroom spike (GO/NO-GO) — *in progress*
 **Scope: pure code only. No model, no RLM runtime yet.** Cheapest signal first.
@@ -255,8 +354,13 @@ local-vs-online decision.
       outside scoped paths, per `AR_BENCH_SCRATCH` pattern) + `checks.sh` (Section 7).
 - [ ] `immutable.sha256` over benchmark/checks/toolkit/games/TEST.
 - [ ] Verify the autoresearch `maximize` metric path (Section 6 TODO).
+- [ ] **Literature ideation (§8):** verify whether `Web*` tools are gated during an
+      active session; if so, fix `legal()` to allow read-only scout tools in all four
+      states. Set up the `papers/` cache + `ledger.md` convention.
+- [ ] **Promote to `ar_scout`** (recorder, not fetcher): `methods` table + run
+      linkage + reproduction report; `ar_log(method_ids)`; `prompts.ail` nudge (§8).
 **Exit:** both scripts green by hand against the baseline; metrics stable within
-expected MAD across repeats.
+expected MAD across repeats; `ar_scout` records a method card and links it to a run.
 
 ### Phase 2 — Stand up the RLM runtime (local model) + loop validation
 - [ ] Choose a runtime option (Section 4): self-host `agentica-server` w/ local
@@ -280,7 +384,7 @@ held-out TEST score.
 
 ---
 
-## 9. Proposed layout
+## 10. Proposed layout
 
 ```
 benchmarks/
@@ -299,6 +403,8 @@ benchmarks/
 experiments/
   arc_candidate/                        # created per run in the worktree
     agent/                              # THE EDITABLE SCAFFOLDING (scope_paths)
+.motoko/autoresearch/                   # session DB (main checkout, survives worktree)
+  papers/                               # cached papers/code + ledger.md (§8 provenance)
 ```
 
 Run isolation reuses the self-bootstrap **git-worktree** model
@@ -307,7 +413,7 @@ session DB in the main checkout via `ar_init(cwd=...)`.
 
 ---
 
-## 10. Open questions / risks
+## 11. Open questions / risks
 
 - **R1 Headroom (highest):** does a pure-*code* agent score >0 on any easy game?
   Mitigated by Phase 0 + easy subset + deliberately-improvable baseline.
@@ -322,6 +428,11 @@ session DB in the main checkout via `ar_init(cwd=...)`.
   mountain. Synthesize-then-run partly mitigates.
 - **R-runtime:** standing up/reimplementing an RLM runtime (or Motoko-as-RLM) is
   real work. Self-hosting `agentica-server` is the fast path to a working baseline.
+- **R-scout (rabbit-holing):** literature ideation can burn the optimizer's budget
+  reading/implementing complex methods that don't pan out. Guard: cap papers per
+  segment, require a cheap impl sketch before committing an iteration, prefer
+  training-free / code-released methods, and let patience kill dead segments. Keep
+  fetching out of the benchmark sandbox (offline wall).
 - **R3 Noise budget vs cost:** samples × games needed for meaningful MAD without
   making `ar_run` slow.
 - **R4 `maximize` metric path** correctness in `metrics.ail` (Section 6 TODO).
@@ -344,7 +455,7 @@ session DB in the main checkout via `ar_init(cwd=...)`.
 
 ---
 
-## 11. Spike findings (2026-05-30, partial)
+## 12. Spike findings (2026-05-30, partial)
 
 Environment:
 - Python 3.12.3 at `/usr/bin/python3`; **no `pip` module**, but **`uv` 0.11.17**
@@ -368,7 +479,7 @@ Environment:
 
 ---
 
-## 12. Next actions (resume here)
+## 13. Next actions (resume here)
 
 1. Finish **Phase 0 (pure-code)**: `uv sync`; try `uv run main.py --agent=random
    --game=ls20` offline (no key) then online (anon key); record scores + whether
