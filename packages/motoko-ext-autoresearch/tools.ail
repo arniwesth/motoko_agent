@@ -2,11 +2,26 @@ module sunholo/motoko_ext_autoresearch/tools
 
 import std/json (
   Json, get, asString, asNumber, asBool, asArray,
-  jo, kv, js, ja, encode
+  jo, kv, js, ja, encode, decode
 )
 
 import pkg/sunholo/motoko_ext_abi/types (ToolSchema)
 import pkg/sunholo/motoko_ext_autoresearch/types (ExperimentConfig, MetricSpec)
+
+func normalize_args(args: Json) -> Json {
+  let j1 = match decode(encode(args)) {
+    Ok(j) => j,
+    Err(_) => args
+  };
+  match asString(j1) {
+    Some(s) =>
+      match decode(s) {
+        Ok(j2) => j2,
+        Err(_) => j1
+      },
+    None => j1
+  }
+}
 
 func str_field(obj: Json, key: string, fallback: string) -> string {
   match get(obj, key) {
@@ -89,56 +104,57 @@ func metric_specs_field(obj: Json) -> [MetricSpec] {
 }
 
 export func parse_init_args(args: Json) -> ExperimentConfig {
+  let obj = normalize_args(args);
   {
-    objective: str_field(args, "objective", ""),
-    metrics: metric_specs_field(args),
-    benchmark_script: str_field(args, "benchmark_script", ""),
-    scope_paths: list_field(args, "scope_paths"),
-    off_limits: list_field(args, "off_limits"),
-    constraints: list_field(args, "constraints"),
-    checks_script: str_field(args, "checks_script", ""),
-    max_iterations: int_field(args, "max_iterations", 20),
-    patience: int_field(args, "patience", 3),
-    new_segment: bool_field(args, "new_segment", false),
-    session_dir: str_field(args, "session_dir", ".motoko/autoresearch")
+    objective: str_field(obj, "objective", ""),
+    metrics: metric_specs_field(obj),
+    benchmark_script: str_field(obj, "benchmark_script", ""),
+    scope_paths: list_field(obj, "scope_paths"),
+    off_limits: list_field(obj, "off_limits"),
+    constraints: list_field(obj, "constraints"),
+    checks_script: str_field(obj, "checks_script", ""),
+    max_iterations: int_field(obj, "max_iterations", 20),
+    patience: int_field(obj, "patience", 3),
+    new_segment: bool_field(obj, "new_segment", false),
+    session_dir: str_field(obj, "session_dir", ".motoko/autoresearch")
   }
 }
 
 export func parse_run_timeout_ms(args: Json) -> int {
-  int_field(args, "timeout_ms", 60000)
+  int_field(normalize_args(args), "timeout_ms", 60000)
 }
 
 export func parse_run_samples(args: Json) -> int {
-  let n = int_field(args, "samples", 1);
+  let n = int_field(normalize_args(args), "samples", 1);
   if n < 1 then 1 else n
 }
 
 export func parse_run_label(args: Json) -> string {
-  str_field(args, "label", "")
+  str_field(normalize_args(args), "label", "")
 }
 
 export func parse_run_number(args: Json) -> int {
-  int_field(args, "run_number", 0)
+  int_field(normalize_args(args), "run_number", 0)
 }
 
 export func parse_decision(args: Json) -> string {
-  str_field(args, "decision", "")
+  str_field(normalize_args(args), "decision", "")
 }
 
 export func parse_changes_summary(args: Json) -> string {
-  str_field(args, "changes_summary", "")
+  str_field(normalize_args(args), "changes_summary", "")
 }
 
 export func parse_reasoning(args: Json) -> string {
-  str_field(args, "reasoning", "")
+  str_field(normalize_args(args), "reasoning", "")
 }
 
 export func parse_learnings(args: Json) -> string {
-  str_field(args, "learnings", "")
+  str_field(normalize_args(args), "learnings", "")
 }
 
 export func parse_justification(args: Json) -> string {
-  str_field(args, "justification", "")
+  str_field(normalize_args(args), "justification", "")
 }
 
 func flag_reason_rec(xs: [Json], run_number: int) -> string {
@@ -160,7 +176,8 @@ func flag_reason_rec(xs: [Json], run_number: int) -> string {
 }
 
 export func parse_flag_reason(args: Json, run_number: int) -> string {
-  match get(args, "flag_runs") {
+  let obj = normalize_args(args);
+  match get(obj, "flag_runs") {
     None => "",
     Some(v) => match asArray(v) {
       None => "",
@@ -170,15 +187,15 @@ export func parse_flag_reason(args: Json, run_number: int) -> string {
 }
 
 export func parse_notes_body(args: Json) -> string {
-  str_field(args, "body", "")
+  str_field(normalize_args(args), "body", "")
 }
 
 export func parse_notes_append_idea(args: Json) -> string {
-  str_field(args, "append_idea", "")
+  str_field(normalize_args(args), "append_idea", "")
 }
 
 export func parse_session_dir(args: Json) -> string {
-  str_field(args, "session_dir", ".motoko/autoresearch")
+  str_field(normalize_args(args), "session_dir", ".motoko/autoresearch")
 }
 
 func schema_metric_spec() -> Json {
