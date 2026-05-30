@@ -132,6 +132,25 @@ func shell(argv: [string], cwd: string) -> Result[CmdOut, string] ! {Process} {
   }
 }
 
+-- Resolve ctx.workdir to an absolute path. ctx.workdir is "." (relative) under
+-- the default config (agent.workdir="."); `writeFile` resolves relative paths
+-- against the runtime process cwd, but the benchmark/checks scripts are executed
+-- by shell() from effective_cwd (the worktree), so a relative script path is not
+-- found there. Resolving "." via pwd (run from ctx.workdir, i.e. the runtime cwd)
+-- yields that same base, so script paths can be made absolute and found from any
+-- cwd. No-op when ctx.workdir is already absolute.
+func abs_cwd(ctx: ExtCtx) -> string ! {Process} {
+  if startsWith(ctx.workdir, "/") then ctx.workdir
+  else match shell(["pwd"], ctx.workdir) {
+    Ok(r) => { let p = trim(r.stdout); if p == "" then ctx.workdir else p },
+    Err(_) => ctx.workdir
+  }
+}
+
+func absolutize(ctx: ExtCtx, path: string) -> string ! {Process} {
+  if startsWith(path, "/") then path else "${abs_cwd(ctx)}/${path}"
+}
+
 func list_len[a](xs: [a]) -> int {
   match xs {
     [] => 0,
@@ -617,10 +636,10 @@ func benchmark_script_path(session_dir: string) -> string =
 func checks_script_path(session_dir: string) -> string =
   "${session_dir}/autoresearch.checks.sh"
 
-func run_checks_if_present(cwd: string, session_dir: string, benchmark_exit: int) -> bool ! {Process} {
+func run_checks_if_present(ctx: ExtCtx, cwd: string, session_dir: string, benchmark_exit: int) -> bool ! {Process} {
   if benchmark_exit != 0 then false
   else if not fileExists(checks_script_path(session_dir)) then true
-  else match shell(["bash", checks_script_path(session_dir)], cwd) {
+  else match shell(["bash", absolutize(ctx, checks_script_path(session_dir))], cwd) {
     Err(_) => false,
     Ok(out) => out.exit_code == 0
   }
@@ -715,9 +734,11 @@ func handle_init(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConf
           Err(e) => reject(call, e),
           Ok(_) => {
             let _ = mkdirAll(session_dir);
-            let _ = write_executable_script(init_cwd, benchmark_script_path(session_dir), cfg.benchmark_script);
+            -- Absolute path so writeFile and the chmod (run from init_cwd, the
+            -- worktree) agree, and so ar_run finds the script from effective_cwd.
+            let _ = write_executable_script(init_cwd, absolutize(ctx, benchmark_script_path(session_dir)), cfg.benchmark_script);
             if cfg.checks_script != "" then {
-              let _ = write_executable_script(init_cwd, checks_script_path(session_dir), cfg.checks_script);
+              let _ = write_executable_script(init_cwd, absolutize(ctx, checks_script_path(session_dir)), cfg.checks_script);
               ()
             } else ();
             let _ = Notes.ensure_notes(session_dir);
@@ -775,7 +796,9 @@ func handle_run(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
   let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
   let timeout_ms = Tools.parse_run_timeout_ms(call.arguments, defaults.default_timeout_ms);
   let samples = Tools.parse_run_samples(call.arguments, defaults.default_samples);
-  let script = benchmark_script_path(session_dir);
+  -- Absolute so the script is found when executed from effective_cwd (the
+  -- worktree), independent of the relative ctx.workdir the path was written under.
+  let script = absolutize(ctx, benchmark_script_path(session_dir));
   if not fileExists(script) then reject(call, "benchmark script missing: ${script}")
   else {
     let specs = parse_metric_specs_json(match DB.current_metrics_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
@@ -796,7 +819,7 @@ func handle_run(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
               Some(last) => {
                 let agg = aggregate_metrics(metric_names, rs);
                 let has_primary = if primary == "" then true else match lookup_metric(agg, primary) { Some(_) => true, None => false };
-                let checks_ok = run_checks_if_present(cwd, session_dir, last.exit_code);
+                let checks_ok = run_checks_if_present(ctx, cwd, session_dir, last.exit_code);
                 let status =
                   if last.exit_code == 124 then "timeout"
                   else if last.exit_code != 0 || not has_primary then "failed"
