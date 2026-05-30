@@ -641,63 +641,95 @@ func policy_hook(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   NoOpinion
 }
 
+func require_linked_worktree(cwd: string) -> Result[(), string] ! {Process} {
+  let inside = shell(["git", "rev-parse", "--is-inside-work-tree"], cwd);
+  match inside {
+    Err(e) => Err("worktree guard failed: ${e}"),
+    Ok(r0) =>
+      if r0.exit_code != 0 || trim(r0.stdout) != "true" then
+        Err("ar_init requires a git worktree; current cwd is not a git work tree")
+      else {
+        let gd = shell(["git", "rev-parse", "--git-dir"], cwd);
+        let gcd = shell(["git", "rev-parse", "--git-common-dir"], cwd);
+        match gd {
+          Err(e) => Err("worktree guard failed: ${e}"),
+          Ok(r1) =>
+            match gcd {
+              Err(e) => Err("worktree guard failed: ${e}"),
+              Ok(r2) =>
+                if r1.exit_code != 0 || r2.exit_code != 0 then
+                  Err("worktree guard failed: unable to resolve git dirs")
+                else if trim(r1.stdout) == trim(r2.stdout) then
+                  Err("ar_init worktree-first enforced: run from a linked git worktree, not the main checkout")
+                else Ok(())
+            }
+        }
+      }
+  }
+}
+
 func handle_init(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {Process, FS} {
-  let cfg = parse_init_cfg(call, defaults);
-  if cfg.objective == "" || cfg.benchmark_script == "" || list_len(cfg.metrics) == 0 then
-    reject(call, "ar_init requires objective, metrics, and benchmark_script")
-  else {
-    let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
-    match DB.ensure_schema(session_dir) {
-      Err(e) => reject(call, e),
-      Ok(_) => {
-        let _ = mkdirAll(session_dir);
-        let _ = write_executable_script(ctx.workdir, benchmark_script_path(session_dir), cfg.benchmark_script);
-        if cfg.checks_script != "" then {
-          let _ = write_executable_script(ctx.workdir, checks_script_path(session_dir), cfg.checks_script);
-          ()
-        } else ();
-        let _ = Notes.ensure_notes(session_dir);
-        let _ = writeFile("${session_dir}/autoresearch.config.json", config_json(cfg));
+  match require_linked_worktree(ctx.workdir) {
+    Err(msg) => reject(call, msg),
+    Ok(_) => {
+      let cfg = parse_init_cfg(call, defaults);
+      if cfg.objective == "" || cfg.benchmark_script == "" || list_len(cfg.metrics) == 0 then
+        reject(call, "ar_init requires objective, metrics, and benchmark_script")
+      else {
+        let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
+        match DB.ensure_schema(session_dir) {
+          Err(e) => reject(call, e),
+          Ok(_) => {
+            let _ = mkdirAll(session_dir);
+            let _ = write_executable_script(ctx.workdir, benchmark_script_path(session_dir), cfg.benchmark_script);
+            if cfg.checks_script != "" then {
+              let _ = write_executable_script(ctx.workdir, checks_script_path(session_dir), cfg.checks_script);
+              ()
+            } else ();
+            let _ = Notes.ensure_notes(session_dir);
+            let _ = writeFile("${session_dir}/autoresearch.config.json", config_json(cfg));
 
-        let prev_segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 0 };
-        if prev_segment > 0 && not cfg.new_segment then reject(call, "session already exists; use ar_init(new_segment=true)")
-        else {
-          if prev_segment > 0 && cfg.new_segment then {
-            let _ = DB.mark_current_session(session_dir, "abandoned", "superseded by new segment");
-            let _ = DB.clear_pending_run(session_dir, prev_segment);
-            ()
-          } else ();
+            let prev_segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 0 };
+            if prev_segment > 0 && not cfg.new_segment then reject(call, "session already exists; use ar_init(new_segment=true)")
+            else {
+              if prev_segment > 0 && cfg.new_segment then {
+                let _ = DB.mark_current_session(session_dir, "abandoned", "superseded by new segment");
+                let _ = DB.clear_pending_run(session_dir, prev_segment);
+                ()
+              } else ();
 
-          let segment = if prev_segment == 0 then 1 else prev_segment + 1;
-          let branch = match Git.ensure_autoresearch_branch(ctx.workdir, cfg.objective) { Ok(b) => b, Err(_) => "" };
-          let baseline = match Git.head_sha(ctx.workdir) { Ok(s) => s, Err(_) => "" };
-          let init_dirty = match Git.capture_init_dirty_json(ctx.workdir) { Ok(s) => s, Err(_) => "[]" };
-          let _ = DB.insert_session(
-            session_dir,
-            segment,
-            cfg.objective,
-            encode(metric_specs_json(cfg.metrics)),
-            encode(str_json_array(cfg.scope_paths)),
-            encode(str_json_array(cfg.off_limits)),
-            encode(str_json_array(cfg.constraints)),
-            cfg.max_iterations,
-            cfg.patience,
-            init_dirty,
-            baseline,
-            branch
-          );
-          let status = if cfg.new_segment then "segment_bumped" else "initialized";
-          accept_with_meta(
-            call,
-            status,
-            jo([
-              kv("status", js(status)),
-              kv("session_dir", js(session_dir)),
-              kv("segment", jnum(_int_to_float(segment))),
-              kv("branch", js(branch)),
-              kv("baseline_commit", js(baseline))
-            ])
-          )
+              let segment = if prev_segment == 0 then 1 else prev_segment + 1;
+              let branch = match Git.ensure_autoresearch_branch(ctx.workdir, cfg.objective) { Ok(b) => b, Err(_) => "" };
+              let baseline = match Git.head_sha(ctx.workdir) { Ok(s) => s, Err(_) => "" };
+              let init_dirty = match Git.capture_init_dirty_json(ctx.workdir) { Ok(s) => s, Err(_) => "[]" };
+              let _ = DB.insert_session(
+                session_dir,
+                segment,
+                cfg.objective,
+                encode(metric_specs_json(cfg.metrics)),
+                encode(str_json_array(cfg.scope_paths)),
+                encode(str_json_array(cfg.off_limits)),
+                encode(str_json_array(cfg.constraints)),
+                cfg.max_iterations,
+                cfg.patience,
+                init_dirty,
+                baseline,
+                branch
+              );
+              let status = if cfg.new_segment then "segment_bumped" else "initialized";
+              accept_with_meta(
+                call,
+                status,
+                jo([
+                  kv("status", js(status)),
+                  kv("session_dir", js(session_dir)),
+                  kv("segment", jnum(_int_to_float(segment))),
+                  kv("branch", js(branch)),
+                  kv("baseline_commit", js(baseline))
+                ])
+              )
+            }
+          }
         }
       }
     }
