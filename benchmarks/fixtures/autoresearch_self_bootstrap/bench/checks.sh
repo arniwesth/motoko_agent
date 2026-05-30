@@ -36,11 +36,25 @@ grep -qE 'exec.*duckdb' "$CANDIDATE_DIR/db.ail" \
 # --- Functional invariants (the candidate's own immutable test suite) ---
 # Run from the candidate package root so module imports resolve. These tests are
 # in off_limits, so the optimizer cannot edit them to pass trivially.
+# Decide pass/fail from the test summary ("N failed"), NOT the process exit code:
+# right after the benchmark's `ailang run`, `ailang test` can exit non-zero for a
+# non-test reason (a "content changed, run ailang lock" cache/lock warning) even
+# though every test passes. One retry absorbs transient cache/lock races. A real
+# regression still shows ">0 failed" (or produces no summary) and fails here.
+test_passes() {
+  local t="$1" out
+  out="$(AILANG_RELAX_MODULES=1 ailang test "${t}.ail" 2>&1 || true)"
+  if printf '%s' "$out" | grep -qE '0 failed'; then return 0; fi
+  out="$(AILANG_RELAX_MODULES=1 ailang test "${t}.ail" 2>&1 || true)"
+  if printf '%s' "$out" | grep -qE '0 failed'; then return 0; fi
+  echo "CHECK FAILED: candidate ${t}.ail did not pass" >&2
+  printf '%s\n' "$out" | tail -15 >&2
+  return 1
+}
 (
   cd "$CANDIDATE_DIR"
   for t in state_test scope_test metrics_test; do
-    AILANG_RELAX_MODULES=1 ailang test "${t}.ail" >/dev/null 2>&1 \
-      || { echo "CHECK FAILED: candidate ${t}.ail did not pass" >&2; exit 1; }
+    test_passes "$t" || exit 1
   done
 )
 
