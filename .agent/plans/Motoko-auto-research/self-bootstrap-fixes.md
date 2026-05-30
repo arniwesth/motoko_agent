@@ -170,9 +170,15 @@ for i in $(seq 1 100); do
 done
 ```
 
-This spawns 300 duckdb processes for 100 iterations (plus 1 for schema seed) —
-matching the real `derive_state` behavior in the `Ready` state. The seed row
-ensures `current_segment` returns > 0 so we don't short-circuit to `Setup`.
+This spawns 300 duckdb processes for 100 iterations, plus 1 for the schema
+seed — **301 total through the shim** when benchmark.sh prepends the shim to
+PATH before calling this script. The +1 is consistent across runs (always
+exactly 1 seed call) so it does not affect relative comparisons. The baseline
+`duckdb_spawns_per_100_calls` metric will be 301, not 300 — document this in
+the exercise script so the agent doesn't investigate the off-by-one.
+
+The seed row ensures `current_segment` returns > 0 so we don't short-circuit
+to `Setup`.
 
 #### `bench/shim/duckdb` (unchanged from prompt)
 
@@ -228,9 +234,10 @@ benchmark deterministic across runs.
 
 ### Fix 2: Add per-session CWD to the extension (addresses RC4)
 
-**This is a code change to `packages/motoko-ext-autoresearch/`.** All 13
-`ctx.workdir` references need to resolve to the worktree CWD when operating
-on a remote session.
+**This is a code change to `packages/motoko-ext-autoresearch/`.** 11 of the
+13 `ctx.workdir` references need to resolve to the worktree CWD when
+operating on a remote session. The remaining 2 are in `resolve_session_dir`
+and should keep using `ctx.workdir` (see 2g).
 
 **Design:** Add an optional `cwd` field to `ar_init`. When provided, it
 overrides `ctx.workdir` for all operations in that session. Persist it in
@@ -238,8 +245,19 @@ the `sessions` table so `ar_run`/`ar_log` inherit it without re-supplying.
 
 #### 2a. Schema change (`db.ail`)
 
-Add `cwd TEXT` column to the `sessions` table. Add `insert_session` parameter.
-Add `current_cwd(session_dir) -> Result[string, string]` function.
+Add `cwd TEXT` column to the `sessions` table in the `CREATE TABLE IF NOT
+EXISTS` statement. Also add a migration line after the CREATE statements
+for existing DBs:
+
+```sql
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cwd TEXT;
+```
+
+Add `cwd` parameter to `insert_session`. Add the column to the INSERT
+statement's column list and VALUES.
+
+Add `current_cwd(session_dir) -> Result[string, string]` function (reuses
+`current_session_row`).
 
 #### 2b. Tool schema change (`tools.ail`)
 
@@ -303,13 +321,14 @@ exclude_session_paths(..., cwd, session_dir)
 commit_or_revert(decision, cwd, ...)
 ```
 
-#### 2g. `resolve_session_dir` changes
+#### 2g. `resolve_session_dir` — NO change needed
 
-Currently resolves relative paths against `ctx.workdir`. When `cwd` is
-provided in the `ar_init` call, relative `session_dir` should resolve
-against that CWD instead. For `ar_run`/`ar_log`, the session_dir is
-typically passed as an absolute path or uses the default, so this change
-is mainly for consistency.
+`resolve_session_dir` resolves relative `session_dir` paths against
+`ctx.workdir`, placing the session DB in the main checkout
+(`/workspaces/motoko_agent/.motoko/autoresearch`). This is **correct and
+desirable**: the DB survives worktree cleanup, enabling post-mortem
+analysis. The `cwd` override is only for git and script operations, not
+for DB placement. Do not change `resolve_session_dir`.
 
 #### 2h. `tool_hook` change (line 951)
 
@@ -349,8 +368,10 @@ Add to the troubleshooting section:
 |---------|--------|
 | Execution contract | Add "Tool constraints in worktree" note |
 | Step 4 | "Create benchmark harness" → "Copy pre-baked benchmark harness" |
+| Step 5 | `exercise_100_calls.ail` → `exercise_100_calls.sh` in sha256sum |
 | Step 7 (`ar_init`) | Add `"cwd"` field to tool arguments |
 | Troubleshooting | AILANG docs version gap note |
+| Troubleshooting | Update "worktree-first enforced" advice: pass `cwd` argument, not "run from worktree" |
 
 The prompt's 11-step structure and all `ar_*` tool call shapes remain
 unchanged except for the added `cwd` field on `ar_init`.
@@ -375,12 +396,11 @@ step 5 (SHA256 freeze) applies to these fixtures.
 
 | File | Change | Why |
 |------|--------|-----|
-| `db.ail` | Add `cwd TEXT` column to sessions schema; add `current_cwd()` query | Persist per-session CWD |
+| `db.ail` | Add `cwd TEXT` column to sessions schema + ALTER migration; add `current_cwd()` query; add `cwd` param to `insert_session` | Persist per-session CWD |
 | `tools.ail` | Add `parse_cwd(args, fallback)` function; add `cwd` to `ar_init` schema | Accept CWD argument |
 | `autoresearch.ail` `handle_init` | Replace 6x `ctx.workdir` with `init_cwd` from parsed args | All git/script ops use worktree |
 | `autoresearch.ail` `handle_run` | Replace 2x `ctx.workdir` with `effective_cwd(ctx, session_dir)` | Benchmark runs in worktree |
 | `autoresearch.ail` `handle_log` | Replace 3x `ctx.workdir` with `effective_cwd(ctx, session_dir)` | Git ops target worktree |
-| `autoresearch.ail` `resolve_session_dir` | Accept optional `cwd` override for relative path resolution | Session dir in worktree |
 
 ### Files NOT changed
 
