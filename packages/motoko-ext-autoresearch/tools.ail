@@ -6,7 +6,7 @@ import std/json (
 )
 
 import pkg/sunholo/motoko_ext_abi/types (ToolSchema)
-import pkg/sunholo/motoko_ext_autoresearch/types (ExperimentConfig, MetricSpec)
+import pkg/sunholo/motoko_ext_autoresearch/types (ExperimentConfig, MetricSpec, AutoresearchConfig)
 
 func normalize_args(args: Json) -> Json {
   let j1 = match decode(encode(args)) {
@@ -103,7 +103,7 @@ func metric_specs_field(obj: Json) -> [MetricSpec] {
   }
 }
 
-export func parse_init_args(args: Json) -> ExperimentConfig {
+export func parse_init_args(args: Json, defaults: AutoresearchConfig) -> ExperimentConfig {
   let obj = normalize_args(args);
   {
     objective: str_field(obj, "objective", ""),
@@ -113,19 +113,19 @@ export func parse_init_args(args: Json) -> ExperimentConfig {
     off_limits: list_field(obj, "off_limits"),
     constraints: list_field(obj, "constraints"),
     checks_script: str_field(obj, "checks_script", ""),
-    max_iterations: int_field(obj, "max_iterations", 20),
-    patience: int_field(obj, "patience", 3),
+    max_iterations: int_field(obj, "max_iterations", defaults.default_max_iterations),
+    patience: int_field(obj, "patience", defaults.default_patience),
     new_segment: bool_field(obj, "new_segment", false),
-    session_dir: str_field(obj, "session_dir", ".motoko/autoresearch")
+    session_dir: str_field(obj, "session_dir", defaults.default_session_dir)
   }
 }
 
-export func parse_run_timeout_ms(args: Json) -> int {
-  int_field(normalize_args(args), "timeout_ms", 60000)
+export func parse_run_timeout_ms(args: Json, fallback: int) -> int {
+  int_field(normalize_args(args), "timeout_ms", fallback)
 }
 
-export func parse_run_samples(args: Json) -> int {
-  let n = int_field(normalize_args(args), "samples", 1);
+export func parse_run_samples(args: Json, fallback: int) -> int {
+  let n = int_field(normalize_args(args), "samples", fallback);
   if n < 1 then 1 else n
 }
 
@@ -194,8 +194,8 @@ export func parse_notes_append_idea(args: Json) -> string {
   str_field(normalize_args(args), "append_idea", "")
 }
 
-export func parse_session_dir(args: Json) -> string {
-  str_field(normalize_args(args), "session_dir", ".motoko/autoresearch")
+export func parse_session_dir(args: Json, fallback: string) -> string {
+  str_field(normalize_args(args), "session_dir", fallback)
 }
 
 func schema_metric_spec() -> Json {

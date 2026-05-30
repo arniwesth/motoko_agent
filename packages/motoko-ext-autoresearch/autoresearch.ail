@@ -21,7 +21,7 @@ import pkg/sunholo/motoko_ext_abi/types (
 import pkg/sunholo/motoko_ext_autoresearch/tools as Tools
 import pkg/sunholo/motoko_ext_autoresearch/db as DB
 import pkg/sunholo/motoko_ext_autoresearch/notes as Notes
-import pkg/sunholo/motoko_ext_autoresearch/types (Setup, Ready, AwaitingLog, Done, MetricSpec)
+import pkg/sunholo/motoko_ext_autoresearch/types (Setup, Ready, AwaitingLog, Done, MetricSpec, AutoresearchConfig)
 import pkg/sunholo/motoko_ext_autoresearch/state as State
 import pkg/sunholo/motoko_ext_autoresearch/prompts as Prompts
 import pkg/sunholo/motoko_ext_autoresearch/compaction as Compaction
@@ -34,6 +34,32 @@ type StringValue = { key: string, value: string }
 type ParsedOutput = { metrics: [MetricValue], asi: [StringValue], warnings: [string] }
 type Sample = { exit_code: int, stdout: string, stderr: string, duration_ms: int, parsed: ParsedOutput }
 type CmdOut = { stdout: string, stderr: string, exit_code: int }
+
+let builtin_defaults: AutoresearchConfig = {
+  default_session_dir: ".motoko/autoresearch",
+  default_patience: 3,
+  default_max_iterations: 20,
+  default_samples: 1,
+  default_timeout_ms: 60000
+}
+
+func non_empty_or(s: string, fallback: string) -> string {
+  if trim(s) == "" then fallback else s
+}
+
+func positive_or(n: int, fallback: int) -> int {
+  if n > 0 then n else fallback
+}
+
+func normalize_defaults(cfg: AutoresearchConfig) -> AutoresearchConfig {
+  {
+    default_session_dir: non_empty_or(cfg.default_session_dir, builtin_defaults.default_session_dir),
+    default_patience: positive_or(cfg.default_patience, builtin_defaults.default_patience),
+    default_max_iterations: positive_or(cfg.default_max_iterations, builtin_defaults.default_max_iterations),
+    default_samples: positive_or(cfg.default_samples, builtin_defaults.default_samples),
+    default_timeout_ms: positive_or(cfg.default_timeout_ms, builtin_defaults.default_timeout_ms)
+  }
+}
 
 func result(call: ToolCallEnvelope, exit_code: int, stdout: string, stderr: string) -> ToolResultEnvelope {
   {
@@ -72,9 +98,9 @@ func accept_with_meta(call: ToolCallEnvelope, msg: string, meta: Json) -> ToolHa
   })
 }
 
-func resolve_session_dir(ctx: ExtCtx, args: Json) -> string {
-  let raw = Tools.parse_session_dir(args);
-  if raw == "" then "${ctx.workdir}/.motoko/autoresearch"
+func resolve_session_dir(ctx: ExtCtx, args: Json, defaults: AutoresearchConfig) -> string {
+  let raw = Tools.parse_session_dir(args, defaults.default_session_dir);
+  if raw == "" then "${ctx.workdir}/${defaults.default_session_dir}"
   else if startsWith(raw, "/") then raw
   else "${ctx.workdir}/${raw}"
 }
@@ -180,8 +206,8 @@ func raw_payload(args: Json) -> string {
   }
 }
 
-func parse_init_cfg(call: ToolCallEnvelope) -> { objective: string, metrics: [MetricSpec], benchmark_script: string, scope_paths: [string], off_limits: [string], constraints: [string], checks_script: string, max_iterations: int, patience: int, new_segment: bool, session_dir: string } {
-  let cfg0 = Tools.parse_init_args(call.arguments);
+func parse_init_cfg(call: ToolCallEnvelope, defaults: AutoresearchConfig) -> { objective: string, metrics: [MetricSpec], benchmark_script: string, scope_paths: [string], off_limits: [string], constraints: [string], checks_script: string, max_iterations: int, patience: int, new_segment: bool, session_dir: string } {
+  let cfg0 = Tools.parse_init_args(call.arguments, defaults);
   if cfg0.objective != "" && cfg0.benchmark_script != "" && list_len(cfg0.metrics) > 0 then cfg0
   else {
     let raw = raw_payload(call.arguments);
@@ -606,20 +632,21 @@ func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-func pre_step_hook(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  Compaction.pre_step("${ctx.workdir}/.motoko/autoresearch", msgs)
+func pre_step_hook(ctx: ExtCtx, msgs: [Msg], defaults: AutoresearchConfig) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let session_dir = resolve_session_dir(ctx, jo([]), defaults);
+  Compaction.pre_step(session_dir, msgs)
 }
 
 func policy_hook(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   NoOpinion
 }
 
-func handle_init(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS} {
-  let cfg = parse_init_cfg(call);
+func handle_init(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {Process, FS} {
+  let cfg = parse_init_cfg(call, defaults);
   if cfg.objective == "" || cfg.benchmark_script == "" || list_len(cfg.metrics) == 0 then
     reject(call, "ar_init requires objective, metrics, and benchmark_script")
   else {
-    let session_dir = resolve_session_dir(ctx, call.arguments);
+    let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
     match DB.ensure_schema(session_dir) {
       Err(e) => reject(call, e),
       Ok(_) => {
@@ -677,10 +704,10 @@ func handle_init(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {P
   }
 }
 
-func handle_run(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS, Clock} {
-  let session_dir = resolve_session_dir(ctx, call.arguments);
-  let timeout_ms = Tools.parse_run_timeout_ms(call.arguments);
-  let samples = Tools.parse_run_samples(call.arguments);
+func handle_run(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {Process, FS, Clock} {
+  let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
+  let timeout_ms = Tools.parse_run_timeout_ms(call.arguments, defaults.default_timeout_ms);
+  let samples = Tools.parse_run_samples(call.arguments, defaults.default_samples);
   let script = benchmark_script_path(session_dir);
   if not fileExists(script) then reject(call, "benchmark script missing: ${script}")
   else {
@@ -775,8 +802,8 @@ func commit_or_revert(decision: string, cwd: string, paths: [string], run_no: in
   }
 }
 
-func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS, Clock} {
-  let session_dir = resolve_session_dir(ctx, call.arguments);
+func handle_log(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {Process, FS, Clock} {
+  let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
   let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 1 };
   let requested = parse_run_number_arg(call);
   let decision = parse_decision_arg(call);
@@ -874,8 +901,8 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Pr
   }
 }
 
-func handle_notes(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {FS} {
-  let session_dir = resolve_session_dir(ctx, call.arguments);
+func handle_notes(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {FS} {
+  let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
   let body = Tools.parse_notes_body(call.arguments);
   let idea = Tools.parse_notes_append_idea(call.arguments);
   if body != "" then {
@@ -887,16 +914,16 @@ func handle_notes(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {
   } else reject(call, "ar_notes requires body or append_idea")
 }
 
-func tool_hook(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  let session_dir = resolve_session_dir(ctx, call.arguments);
+func tool_hook(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
   let s = if call.tool == "ar_init" then Setup else State.derive_state(session_dir);
   match State.legal(s, call.tool) {
     Err(rej) => reject(call, rej.message),
     Ok(_) =>
-      if call.tool == "ar_init" then handle_init(ctx, call)
-      else if call.tool == "ar_run" then handle_run(ctx, call)
-      else if call.tool == "ar_log" then handle_log(ctx, call)
-      else if call.tool == "ar_notes" then handle_notes(ctx, call)
+      if call.tool == "ar_init" then handle_init(ctx, call, defaults)
+      else if call.tool == "ar_run" then handle_run(ctx, call, defaults)
+      else if call.tool == "ar_log" then handle_log(ctx, call, defaults)
+      else if call.tool == "ar_notes" then handle_notes(ctx, call, defaults)
       else Delegate
   }
 }
@@ -913,8 +940,8 @@ func intercept_hook(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! 
   NoIntercept
 }
 
-func solver_hook(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  let session_dir = "${ctx.workdir}/.motoko/autoresearch";
+func solver_hook(ctx: ExtCtx, candidate: string, defaults: AutoresearchConfig) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let session_dir = resolve_session_dir(ctx, jo([]), defaults);
   if not DB.has_db(session_dir) then NoDecision
   else {
     let s = State.derive_state(session_dir);
@@ -935,7 +962,8 @@ func solver_hook(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Proc
   }
 }
 
-export func make_hooks() -> ExtensionHooks ! {Env, FS} {
+export func make_hooks_with_config(raw_defaults: AutoresearchConfig) -> ExtensionHooks ! {Env, FS} {
+  let defaults = normalize_defaults(raw_defaults);
   {
     id: "autoresearch",
     provided_tools: [
@@ -945,10 +973,20 @@ export func make_hooks() -> ExtensionHooks ! {Env, FS} {
     on_describe_tools: describe_tools,
     on_build_system_prompt: prompt_hook,
     on_budget_plan: budget_hook,
-    on_pre_step: pre_step_hook,
+    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      pre_step_hook(ctx, msgs, defaults)
+    },
     on_tool_policy: policy_hook,
-    on_tool_handle: tool_hook,
+    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      tool_hook(ctx, call, defaults)
+    },
     on_response_intercept: intercept_hook,
-    on_solver_candidate: solver_hook
+    on_solver_candidate: func(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      solver_hook(ctx, candidate, defaults)
+    }
   }
+}
+
+export func make_hooks() -> ExtensionHooks ! {Env, FS} {
+  make_hooks_with_config(builtin_defaults)
 }

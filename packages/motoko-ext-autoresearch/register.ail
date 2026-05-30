@@ -7,11 +7,9 @@
 module sunholo/motoko_ext_autoresearch/register
 
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
-import pkg/sunholo/motoko_ext_autoresearch/autoresearch (make_hooks)
+import pkg/sunholo/motoko_ext_autoresearch/autoresearch (make_hooks_with_config)
+import src/core/config (RuntimeConfig)
 
--- _cfg has type variable 'a' so this extension is host-config-agnostic.
--- The caller (generated registry) passes its host's RuntimeConfig which
--- unifies with 'a' at the call site.
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
-  make_hooks()
+export func register_with_config(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  make_hooks_with_config(cfg.autoresearch)
 }
