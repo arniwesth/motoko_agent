@@ -117,6 +117,13 @@ func process_error_to_string(err: ProcessError) -> string {
   }
 }
 
+func effective_cwd(ctx: ExtCtx, session_dir: string) -> string ! {Process} {
+  match DB.current_cwd(session_dir) {
+    Ok(c) => if c != "" then c else ctx.workdir,
+    Err(_) => ctx.workdir
+  }
+}
+
 func shell(argv: [string], cwd: string) -> Result[CmdOut, string] ! {Process} {
   let script = "set +e\ncd \"$1\"\nshift\n\"$@\"";
   match exec("bash", ["-lc", script, "motoko-autoresearch", cwd] ++ argv) {
@@ -669,7 +676,10 @@ func require_linked_worktree(cwd: string) -> Result[(), string] ! {Process} {
 }
 
 func handle_init(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {Process, FS} {
-  match require_linked_worktree(ctx.workdir) {
+  let init_cwd0 = Tools.parse_cwd(call.arguments, "");
+  let init_cwd_raw = if init_cwd0 != "" then init_cwd0 else raw_str_field(raw_payload(call.arguments), "cwd", "");
+  let init_cwd = if init_cwd_raw != "" then init_cwd_raw else ctx.workdir;
+  match require_linked_worktree(init_cwd) {
     Err(msg) => reject(call, msg),
     Ok(_) => {
       let cfg = parse_init_cfg(call, defaults);
@@ -681,9 +691,9 @@ func handle_init(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConf
           Err(e) => reject(call, e),
           Ok(_) => {
             let _ = mkdirAll(session_dir);
-            let _ = write_executable_script(ctx.workdir, benchmark_script_path(session_dir), cfg.benchmark_script);
+            let _ = write_executable_script(init_cwd, benchmark_script_path(session_dir), cfg.benchmark_script);
             if cfg.checks_script != "" then {
-              let _ = write_executable_script(ctx.workdir, checks_script_path(session_dir), cfg.checks_script);
+              let _ = write_executable_script(init_cwd, checks_script_path(session_dir), cfg.checks_script);
               ()
             } else ();
             let _ = Notes.ensure_notes(session_dir);
@@ -699,9 +709,9 @@ func handle_init(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConf
               } else ();
 
               let segment = if prev_segment == 0 then 1 else prev_segment + 1;
-              let branch = match Git.ensure_autoresearch_branch(ctx.workdir, cfg.objective) { Ok(b) => b, Err(_) => "" };
-              let baseline = match Git.head_sha(ctx.workdir) { Ok(s) => s, Err(_) => "" };
-              let init_dirty = match Git.capture_init_dirty_json(ctx.workdir) { Ok(s) => s, Err(_) => "[]" };
+              let branch = match Git.ensure_autoresearch_branch(init_cwd, cfg.objective) { Ok(b) => b, Err(_) => "" };
+              let baseline = match Git.head_sha(init_cwd) { Ok(s) => s, Err(_) => "" };
+              let init_dirty = match Git.capture_init_dirty_json(init_cwd) { Ok(s) => s, Err(_) => "[]" };
               let _ = DB.insert_session(
                 session_dir,
                 segment,
@@ -714,7 +724,8 @@ func handle_init(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConf
                 cfg.patience,
                 init_dirty,
                 baseline,
-                branch
+                branch,
+                init_cwd
               );
               let status = if cfg.new_segment then "segment_bumped" else "initialized";
               accept_with_meta(
@@ -749,7 +760,8 @@ func handle_run(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
     let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 1 };
     let run_no = match DB.current_run_number(session_dir, segment) { Ok(n) => n + 1, Err(_) => 1 };
     let session_id = match DB.current_session_id(session_dir) { Ok(id) => id, Err(_) => 0 };
-    match run_samples(ctx.workdir, script, timeout_ms, samples) {
+    let cwd = effective_cwd(ctx, session_dir);
+    match run_samples(cwd, script, timeout_ms, samples) {
       Err(e) => reject(call, e),
       Ok(rs) =>
         match rs {
@@ -760,7 +772,7 @@ func handle_run(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
               Some(last) => {
                 let agg = aggregate_metrics(metric_names, rs);
                 let has_primary = if primary == "" then true else match lookup_metric(agg, primary) { Some(_) => true, None => false };
-                let checks_ok = run_checks_if_present(ctx.workdir, session_dir, last.exit_code);
+                let checks_ok = run_checks_if_present(cwd, session_dir, last.exit_code);
                 let status =
                   if last.exit_code == 124 then "timeout"
                   else if last.exit_code != 0 || not has_primary then "failed"
@@ -856,17 +868,18 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
       else if decision != "keep" && decision != "discard" then reject(call, "decision must be keep|discard")
       else if decision == "keep" && (p.exit_code != 0 || not p.checks_passed) then reject(call, "cannot keep: run failed checks or exited nonzero")
       else {
+        let cwd = effective_cwd(ctx, session_dir);
         let init_dirty = Scope.parse_json_string_array(match DB.current_init_dirty_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
-        let current_dirty = match Git.dirty_paths(ctx.workdir) { Ok(xs) => xs, Err(_) => [] };
+        let current_dirty = match Git.dirty_paths(cwd) { Ok(xs) => xs, Err(_) => [] };
         let iteration_changes0 = Scope.compute_iteration_changes(init_dirty, current_dirty);
-        let iteration_changes = exclude_session_paths(iteration_changes0, ctx.workdir, session_dir);
+        let iteration_changes = exclude_session_paths(iteration_changes0, cwd, session_dir);
         let scope_paths = Scope.parse_json_string_array(match DB.current_scope_paths_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
         let off_limits = Scope.parse_json_string_array(match DB.current_off_limits_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
         let deviations = Scope.compute_scope_deviations(iteration_changes, scope_paths, off_limits);
         if decision == "keep" && non_empty(deviations) && trim(justification) == "" then
           reject_with_meta(call, "scope deviation requires justification for keep", jo([kv("scope_deviations", str_json_array(deviations))]))
         else {
-          let git = commit_or_revert(decision, ctx.workdir, iteration_changes, p.run_number);
+          let git = commit_or_revert(decision, cwd, iteration_changes, p.run_number);
           let improved = improved_for_keep(session_dir, segment, primary, direction, decision, p.metrics_json);
           let flagged = flagged_reason != "";
           let confidence = match Metrics.confidence_report(session_dir, segment, primary, primary_noisy, 0.0, direction) {

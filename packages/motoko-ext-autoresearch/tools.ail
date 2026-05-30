@@ -198,6 +198,11 @@ export func parse_session_dir(args: Json, fallback: string) -> string {
   str_field(normalize_args(args), "session_dir", fallback)
 }
 
+export func parse_cwd(args: Json, fallback: string) -> string {
+  let c = str_field(normalize_args(args), "cwd", "");
+  if c == "" then fallback else c
+}
+
 func schema_metric_spec() -> Json {
   jo([
     kv("type", js("object")),
@@ -225,7 +230,8 @@ func schema_init() -> string {
       kv("max_iterations", jo([kv("type", js("integer"))])),
       kv("patience", jo([kv("type", js("integer"))])),
       kv("new_segment", jo([kv("type", js("boolean"))])),
-      kv("session_dir", jo([kv("type", js("string"))]))
+      kv("session_dir", jo([kv("type", js("string"))])),
+      kv("cwd", jo([kv("type", js("string"))]))
     ]))
   ]);
   encode(j)

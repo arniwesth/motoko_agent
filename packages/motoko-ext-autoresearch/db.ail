@@ -129,8 +129,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   done_reason TEXT,
   baseline_commit TEXT,
   branch TEXT,
+  cwd TEXT,
   ts BIGINT
 );
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cwd TEXT;
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER DEFAULT nextval('seq_runs') PRIMARY KEY,
   session_id INTEGER,
@@ -237,6 +239,14 @@ export func current_objective(session_dir: string) -> Result[string, string] ! {
   }
 }
 
+export func current_cwd(session_dir: string) -> Result[string, string] ! {Process} {
+  match current_session_row(session_dir) {
+    Err(e) => Err(e),
+    Ok(None) => Ok(""),
+    Ok(Some(row)) => Ok(row_s(row, "cwd", ""))
+  }
+}
+
 export func current_metrics_json(session_dir: string) -> Result[string, string] ! {Process} {
   match current_session_row(session_dir) {
     Err(e) => Err(e),
@@ -273,10 +283,11 @@ export func insert_session(
   patience: int,
   init_dirty_json: string,
   baseline_commit: string,
-  branch: string
+  branch: string,
+  cwd: string
 ) -> Result[(), string] ! {Process} {
   let db = open(session_dir);
-  let sql = "INSERT INTO sessions (segment, objective, metrics_json, scope_paths_json, off_limits_json, constraints_json, max_iterations, patience, init_dirty_json, status, baseline_commit, branch, ts)
+  let sql = "INSERT INTO sessions (segment, objective, metrics_json, scope_paths_json, off_limits_json, constraints_json, max_iterations, patience, init_dirty_json, status, baseline_commit, branch, cwd, ts)
 VALUES (
 ${show(segment)},
 '${sanitize_sql_string(objective)}',
@@ -290,6 +301,7 @@ ${show(patience)},
 'active',
 '${sanitize_sql_string(baseline_commit)}',
 '${sanitize_sql_string(branch)}',
+'${sanitize_sql_string(cwd)}',
 ${show(now())}
 )";
   run_exec(db, sql)

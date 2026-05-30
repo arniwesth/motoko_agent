@@ -14,6 +14,12 @@ Execution contract:
 - Execute steps in order.
 - Use main repo root (`/workspaces/motoko_agent`) only for preflight and worktree setup.
 - Execute benchmark steps in worktree root (`/workspaces/motoko_agent_autoresearch_wt`).
+- Tool constraints in worktree:
+  - `ReadFile`, `WriteFile`, `EditFile`, `Search` only work with paths relative to
+    the main repo root (`/workspaces/motoko_agent`). They cannot reach the worktree.
+  - Use `BashExec` with `cat`, `tee`, `sed` for reading/writing worktree files.
+  - `ar_init`, `ar_run`, `ar_log`, `ar_notes` operate on the worktree via the `cwd`
+    argument on `ar_init` (persisted for the session; `ar_run`/`ar_log` inherit it).
 - Treat benchmark/check artifacts as immutable once hashed.
 - Do not call `ar_run` again until pending run is logged with `ar_log`.
 - `scope_paths` / `off_limits` matching is prefix-or-exact only in current implementation (no `**` glob semantics).
@@ -63,25 +69,36 @@ Execution plan:
    mkdir -p experiments
    rm -rf experiments/ar_candidate
    cp -R packages/motoko-ext-autoresearch experiments/ar_candidate
-   mkdir -p experiments/ar_candidate/bench/shim
    ```
 
-4. Create benchmark harness in `experiments/ar_candidate/bench/`:
-   - `exercise_100_calls.ail`: deterministic hot-path trigger for exactly 100 extension-relevant calls.
-   - `shim/duckdb`: counting shim that appends one line per invocation to `$SPAWN_LOG`, then `exec "$DUCKDB_REAL" "$@"`.
+4. Copy the pre-baked benchmark harness into the candidate workspace:
+   - Reason: the harness is a checked-in fixture, not authored at runtime. This
+     keeps the benchmark deterministic across runs and avoids spending steps
+     debugging scaffolding.
+   ```bash
+   set -euo pipefail
+   cd /workspaces/motoko_agent_autoresearch_wt
+   rm -rf experiments/ar_candidate/bench
+   cp -R /workspaces/motoko_agent/benchmarks/fixtures/autoresearch_self_bootstrap/bench \
+         experiments/ar_candidate/bench
+   chmod +x experiments/ar_candidate/bench/shim/duckdb
+   chmod +x experiments/ar_candidate/bench/benchmark.sh
+   chmod +x experiments/ar_candidate/bench/checks.sh
+   chmod +x experiments/ar_candidate/bench/exercise_100_calls.sh
+   ```
+
+   The harness consists of (do not edit these — they are off-limits and hashed):
+   - `exercise_100_calls.sh`: replays the `derive_state` Ready-state query pattern
+     100 times (1 seed + 100×3 = 301 duckdb spawns through the shim).
+   - `shim/duckdb`: counting shim that appends one line per invocation to
+     `$SPAWN_LOG`, then `exec "$DUCKDB_REAL" "$@"`.
    - `benchmark.sh`: prints exactly:
-     - `METRIC duckdb_spawns_per_100_calls=<int>`
+     - `METRIC duckdb_spawns_per_100_calls=<int>` (baseline 301; the +1 seed call
+       is constant across runs and does not affect relative comparison)
      - `METRIC overhead_ms=<int>`
      - `METRIC ext_lines=<int>`
-   - `checks.sh`: validates FSM behavior, scope gating, and logging invariants for candidate code; exits non-zero on failure.
-
-   Required `benchmark.sh` behavior:
-   - `set -euo pipefail`
-   - verify `DUCKDB_REAL` is set and executable before PATH rewrite
-   - reset `$SPAWN_LOG` each sample (`: > "$SPAWN_LOG"`)
-   - run benchmark workload from isolated PATH with shim first
-   - wall-time uses bash (`date +%s%N`), not virtual AILANG clock
-   - `ext_lines` counts only candidate source (`*.ail`) excluding `bench/`, tests, and `registry_generated.ail`
+   - `checks.sh`: validates FSM behavior, scope gating, and logging invariants for
+     candidate code; exits non-zero on failure.
 
 5. Freeze benchmark/check artifacts (immutability):
    ```bash
@@ -91,7 +108,7 @@ Execution plan:
    chmod +x experiments/ar_candidate/bench/benchmark.sh
    chmod +x experiments/ar_candidate/bench/checks.sh
    sha256sum \
-     experiments/ar_candidate/bench/exercise_100_calls.ail \
+     experiments/ar_candidate/bench/exercise_100_calls.sh \
      experiments/ar_candidate/bench/shim/duckdb \
      experiments/ar_candidate/bench/benchmark.sh \
      experiments/ar_candidate/bench/checks.sh \
@@ -113,6 +130,7 @@ Execution plan:
    ```json
    ar_init({
      "objective": "Reduce per-tool-call overhead in derive_state hot path without behavior change",
+     "cwd": "/workspaces/motoko_agent_autoresearch_wt",
      "metrics": [
        { "name": "duckdb_spawns_per_100_calls", "direction": "minimize", "noisy": false },
        { "name": "overhead_ms", "direction": "minimize", "noisy": true },
@@ -141,6 +159,12 @@ Execution plan:
      "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent_autoresearch_wt\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=\"$(command -v duckdb)\"\nexport SPAWN_LOG=\"/workspaces/motoko_agent_autoresearch_wt/experiments/ar_candidate/bench/spawn.log\"\nbash experiments/ar_candidate/bench/benchmark.sh"
    })
    ```
+   - The `cwd` field tells the extension to run all git and script operations
+     (worktree guard, branch creation, baseline snapshot, `ar_run` benchmark,
+     `ar_log` commit/revert) from the worktree, not the main checkout. It is
+     persisted for the session, so `ar_run`/`ar_log` inherit it automatically.
+     The session DB still lives under the main checkout's `.motoko/autoresearch`
+     so it survives worktree cleanup.
 
 8. Capture baseline immediately after init (before edits):
    - Call:
@@ -210,7 +234,16 @@ Troubleshooting (quick fixes):
 - `ar_init` fails with `session already exists; use ar_init(new_segment=true)`:
   - Re-run `ar_init` with `"new_segment": true`, or remove `.motoko/autoresearch` in the worktree if starting fresh.
 - `ar_init` fails with `worktree-first enforced`:
-  - You are in the main checkout. Run from a linked worktree (step 2), then retry `ar_init`.
+  - The extension is checking the directory given by the `cwd` argument, not the
+    process CWD. Ensure `ar_init` includes `"cwd": "/workspaces/motoko_agent_autoresearch_wt"`
+    (the linked worktree from step 2). Do not omit it — without `cwd` the guard
+    checks the main checkout and always rejects.
+- AILANG docs version gap:
+  - The `ailang-docs` MCP server covers up to v0.19.1; the installed compiler is
+    v0.22.0. The docs server's `prompt_get` tool returns the latest AILANG teacher
+    prompt (v0.19.1), still useful for syntax and stdlib patterns — use it, but
+    prefer reading existing `.ail` files in the repo for v0.22.0-specific features.
+    The candidate code itself is the best reference for current idioms.
 - Worktree creation fails because path exists:
   - Remove or move `/workspaces/motoko_agent_autoresearch_wt`, or run cleanup step 11 first.
 - Baseline fixture commit fails with `nothing to commit`:

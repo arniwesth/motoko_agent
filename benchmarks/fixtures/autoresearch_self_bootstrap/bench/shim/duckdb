@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Counting shim for duckdb.
+#
+# Appends exactly one line per invocation to $SPAWN_LOG, then delegates to the
+# real duckdb binary via $DUCKDB_REAL. benchmark.sh puts this directory first
+# on PATH so every `duckdb` call made by the exercise is counted here.
+echo "spawn" >> "${SPAWN_LOG:?SPAWN_LOG must be set}"
+exec "${DUCKDB_REAL:?DUCKDB_REAL must be set to the real duckdb binary}" "$@"
