@@ -209,6 +209,8 @@ Execution plan:
 Troubleshooting (quick fixes):
 - `ar_init` fails with `session already exists; use ar_init(new_segment=true)`:
   - Re-run `ar_init` with `"new_segment": true`, or remove `.motoko/autoresearch` in the worktree if starting fresh.
+- `ar_init` fails with `worktree-first enforced`:
+  - You are in the main checkout. Run from a linked worktree (step 2), then retry `ar_init`.
 - Worktree creation fails because path exists:
   - Remove or move `/workspaces/motoko_agent_autoresearch_wt`, or run cleanup step 11 first.
 - Baseline fixture commit fails with `nothing to commit`:
