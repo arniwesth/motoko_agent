@@ -165,4 +165,22 @@ Execution plan:
    - Confirm benchmark/check definitions stayed unchanged (hash match).
    - Report exact file set used for `ext_lines`.
 
+Troubleshooting (quick fixes):
+- `ar_init` fails with `session already exists; use ar_init(new_segment=true)`:
+  - Re-run `ar_init` with `"new_segment": true`, or remove the session dir `.motoko/autoresearch_self_bootstrap` if starting fresh.
+- `ar_log` fails with `run_number mismatch`:
+  - Use the exact `run_number` returned by the most recent `ar_run`; do not guess or increment manually.
+- `ar_log` fails with `cannot keep: run failed checks or exited nonzero`:
+  - Inspect `checks.sh` and benchmark stderr/stdout tails from `ar_run` metadata, fix candidate, then run a new iteration.
+- `ar_log` fails with `scope deviation requires justification for keep`:
+  - Either discard, or provide non-empty `"justification"` that explicitly explains each deviation.
+- Hash check fails (`sha256sum -c ... FAILED`):
+  - Benchmark/check artifacts drifted. Restore canonical files in `experiments/ar_candidate/bench/`, regenerate `immutable.sha256`, and restart the segment.
+- `duckdb` count metric is unexpectedly zero/flat:
+  - Verify `DUCKDB_REAL` is exported, shim is executable, shim is first on PATH inside benchmark script, and `$SPAWN_LOG` is reset per sample.
+- Candidate edits are not being committed/reverted across iterations:
+  - Ensure step 5 baseline commit ran before `ar_init`; if not, restart from a fresh segment after baseline commit.
+- Live extension appears modified:
+  - Stop and inspect `git diff -- packages/motoko-ext-autoresearch/`; any non-empty diff is a hard failure of this benchmark run.
+
 Start now and execute the full loop autonomously.
