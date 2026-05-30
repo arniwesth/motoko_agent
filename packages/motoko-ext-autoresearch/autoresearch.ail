@@ -150,16 +150,40 @@ func extract_between(src: string, start_pat: string, end_pat: string) -> string 
   }
 }
 
-func unescape_json_string(s: string) -> string {
-  let s1 = replace(s, "\\n", "\n");
-  let s2 = replace(s1, "\\t", "\t");
-  let s3 = replace(s2, "\\\"", "\"");
-  replace(s3, "\\\\", "\\")
+func json_unescape_char(c: string) -> string {
+  if c == "n" then "\n"
+  else if c == "t" then "\t"
+  else if c == "r" then "\r"
+  else if c == "\"" then "\""
+  else if c == "\\" then "\\"
+  else if c == "/" then "/"
+  else c
+}
+
+-- Scan a JSON string value starting at index `i` (the first char after the
+-- opening quote) and return the decoded value up to the first UNescaped closing
+-- quote. Unlike a plain `find` for `"`, this respects `\"` and `\\`, so values
+-- containing escaped quotes (e.g. a benchmark_script with `DUCKDB_REAL="$(...)"`)
+-- are not truncated mid-string.
+func scan_json_string_value(s: string, i: int, n: int, acc: string, esc: bool) -> string {
+  if i >= n then acc
+  else {
+    let c = substring(s, i, i + 1);
+    if esc then scan_json_string_value(s, i + 1, n, "${acc}${json_unescape_char(c)}", false)
+    else if c == "\\" then scan_json_string_value(s, i + 1, n, acc, true)
+    else if c == "\"" then acc
+    else scan_json_string_value(s, i + 1, n, "${acc}${c}", false)
+  }
 }
 
 func raw_str_field(raw: string, key: string, fallback: string) -> string {
-  let v = extract_between(raw, "\"${key}\":\"", "\"");
-  if v == "" then fallback else unescape_json_string(v)
+  let pat = "\"${key}\":\"";
+  let i = find(raw, pat);
+  if i < 0 then fallback
+  else {
+    let v = scan_json_string_value(raw, i + length(pat), length(raw), "", false);
+    if v == "" then fallback else v
+  }
 }
 
 func raw_int_field(raw: string, key: string, fallback: int) -> int {
