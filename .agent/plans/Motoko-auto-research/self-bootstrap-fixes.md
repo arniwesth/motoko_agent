@@ -49,48 +49,59 @@ sandbox is rooted at the main checkout, but the experiment runs in a separate
 worktree. `BashExec` can reach both, but `ReadFile`/`WriteFile`/`EditFile`
 cannot.
 
-### RC4: `ar_init` worktree guard checks `ctx.workdir`, not the experiment CWD
+### RC4: Every `ctx.workdir` usage in the extension assumes Motoko runs from the worktree
 
 **Critical blocker the original plan missed.** Even if the agent had gotten
-past step 4, `ar_init` would have rejected the call.
+past step 4, `ar_init` would have rejected the call — and even if that were
+bypassed, `handle_run`, `handle_log`, and all git operations would execute
+in the wrong directory.
 
-`handle_init` (autoresearch.ail:672) calls `require_linked_worktree(ctx.workdir)`.
-`ctx.workdir` is set at agent startup to the process CWD — always
-`/workspaces/motoko_agent` (the main checkout) when launched via `make
-run_autoresearch_self`. The worktree guard compares `git rev-parse --git-dir`
-vs `--git-common-dir` from that path. In the main checkout they're equal
-(both `.git`), so the check rejects with:
+There are **13 references** to `ctx.workdir` across the extension. `ctx.workdir`
+is set at agent startup to the process CWD — always `/workspaces/motoko_agent`
+(the main checkout) when launched via `make run_autoresearch_self`. It cannot be
+changed during the session.
 
-    "ar_init worktree-first enforced: run from a linked git worktree,
-     not the main checkout"
+**Specific failures (all use `ctx.workdir` as CWD for `shell()` calls):**
 
-The agent can `cd` via `BashExec` to the worktree, but that doesn't change
-`ctx.workdir` — it's fixed for the session. So:
+| Call site | What it does with `ctx.workdir` | What breaks |
+|-----------|-------------------------------|-------------|
+| `handle_init:672` `require_linked_worktree` | Checks if CWD is a linked worktree | **Always rejects** — main checkout's `--git-dir` == `--git-common-dir` |
+| `handle_init:684,686` `write_executable_script` | `chmod +x` in CWD | Harmless (absolute path), but runs chmod from wrong dir |
+| `handle_init:702` `Git.ensure_autoresearch_branch` | `git checkout -b autoresearch/...` | **Would switch the main repo's branch** — destructive |
+| `handle_init:703` `Git.head_sha` | Gets baseline commit | Gets main repo's HEAD, not worktree's |
+| `handle_init:704` `Git.capture_init_dirty_json` | Snapshots dirty files | Snapshots main repo's dirty files, not worktree's |
+| `handle_run:752` `run_samples` → `run_command_for_sample` | Runs benchmark script from CWD | **Benchmark script runs from main checkout** — relative paths in script break |
+| `handle_run:763` `run_checks_if_present` | Runs checks script from CWD | Same problem |
+| `handle_log:860` `Git.dirty_paths` | Lists changed files | Lists main repo changes, not worktree's |
+| `handle_log:862` `exclude_session_paths` | Strips session_dir prefix using workdir | Relative path math breaks if workdir != worktree |
+| `handle_log:869` `commit_or_revert` → `Git.selective_commit/revert` | Commits/reverts in CWD | **Commits/reverts in main repo** — destructive, wrong repo |
 
-- `require_linked_worktree(ctx.workdir)` → always fails
-- The `shell()` helper `cd`s to `ctx.workdir` before running git commands
-- No amount of prompt editing can fix this; it's a code bug
+The worktree guard was designed for a scenario where Motoko itself is launched
+from inside a worktree. The self-bootstrap flow is different: Motoko runs from
+the main checkout and the agent creates/uses a worktree via BashExec. The
+extension needs a per-session CWD override for all git and script operations.
 
-**The worktree guard was designed for a scenario where Motoko itself is launched
-from inside a worktree.** The self-bootstrap flow is different: Motoko runs
-from the main checkout and the agent creates/uses a worktree via BashExec.
-The guard needs to check the worktree path (derivable from `session_dir` or
-a new `cwd` argument), not `ctx.workdir`.
+### RC5: Exercise script must seed a session row to hit the real hot path
 
-### RC5: Exercise script measures the wrong thing
+The derive_state hot path has different spawn counts depending on DB state:
 
-The plan's proposed `exercise_100_calls.sh` runs a single `duckdb` SQL query
-100 times. But `derive_state` (the actual hot path) spawns **2-4 duckdb
-processes per call**: `current_segment` → `SELECT * FROM sessions ...`,
-`current_status` → same query, `has_pending_run` → `SELECT COUNT(*) ...`,
-and optionally `read_pending_run`. A shell script that runs one query per
-iteration doesn't exercise the same code path or produce the same spawn
-count.
+| DB state | duckdb spawns per call | ArState returned |
+|----------|----------------------|------------------|
+| No session rows | **1** (current_segment returns 0) | Setup |
+| Active session, no pending | **3** (current_segment + current_status + has_pending_run) | Ready |
+| Active session, with pending | **4** (+ read_pending_run) | AwaitingLog |
+| Non-active session | **2** (current_segment + current_status) | Done |
 
-The implementation plan's Appendix A (line 642) calls for
-`ailang run ... exercise_100_calls.ail` which *would* exercise the real
-`derive_state` — but that requires a valid AILANG file, which loops back
-to RC1.
+The proposed exercise in the previous plan revision ran against an **empty
+database**, so `current_segment` returns 0, `derive_state` returns `Setup`
+after just **1 spawn**, and the loop would report 100 spawns instead of 300.
+The exercise must seed an active session row to hit the 3-spawn `Ready` path.
+
+Additionally, `current_session_row` is called **twice** per `derive_state` in
+the `Ready` path (once by `current_segment`, once by `current_status`) — they
+are separate exported functions that each independently call `run_sql`. This
+redundancy is the exact inefficiency the benchmark should detect and that the
+optimization loop should fix.
 
 ---
 
@@ -104,37 +115,49 @@ prompt's step 4 from "create these files" to "copy these files."
 
 #### `bench/exercise_100_calls.sh` (shell, replaces `.ail`)
 
-The AILANG exercise was the right idea (call `derive_state` 100 times
-via the real candidate code), but authoring it at runtime is fragile.
-Replace with a **shell script that simulates the derive_state query pattern**
-accurately — running the same 3 SQL queries per iteration that the real
-`derive_state` dispatches:
+The AILANG exercise was the right idea (call `derive_state` 100 times via the
+real candidate code), but authoring it at runtime is fragile. Replace with a
+**shell script that simulates the derive_state query pattern** accurately:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 # Simulate the derive_state hot path 100 times.
-# derive_state makes 2-3 duckdb spawns per call:
-#   1. current_segment: SELECT * FROM sessions ORDER BY id DESC LIMIT 1
-#   2. current_status:  (same query, re-executed — separate DB.current_status call)
-#   3. has_pending_run: SELECT COUNT(*) AS n FROM pending_runs WHERE segment = ...
+#
+# derive_state (state.ail) makes 3 duckdb spawns per call in the Ready state:
+#   1. current_segment → current_session_row → SELECT * FROM sessions ORDER BY id DESC LIMIT 1
+#   2. current_status  → current_session_row → (same query, separate spawn)
+#   3. has_pending_run → SELECT COUNT(*) AS n FROM pending_runs WHERE segment = ...
 #
 # We replicate this exact pattern so the shim counts match real behavior.
+# The DB must contain an active session row for the queries to exercise the
+# same code path as the real Ready state.
 
 SD="${SESSION_DIR:-.motoko/autoresearch}"
 DB="$SD/autoresearch.db"
 mkdir -p "$SD"
 
-# Ensure minimal schema exists (matches db.ail ensure_schema)
+# Bootstrap schema + seed an active session so derive_state hits the 3-query
+# Ready path (not the 1-query Setup shortcut for empty DBs).
 duckdb "$DB" "
 CREATE SEQUENCE IF NOT EXISTS seq_sessions START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_runs START 1;
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER DEFAULT nextval('seq_sessions') PRIMARY KEY,
-  segment INTEGER, status TEXT DEFAULT 'active'
+  segment INTEGER, objective TEXT, metrics_json TEXT,
+  scope_paths_json TEXT, off_limits_json TEXT, constraints_json TEXT,
+  max_iterations INTEGER, patience INTEGER DEFAULT 3,
+  init_dirty_json TEXT, status TEXT DEFAULT 'active',
+  done_reason TEXT, baseline_commit TEXT, branch TEXT, ts BIGINT
 );
 CREATE TABLE IF NOT EXISTS pending_runs (
-  session_id INTEGER, segment INTEGER, run_number INTEGER
+  session_id INTEGER, segment INTEGER, run_number INTEGER,
+  metrics_json TEXT, samples_json TEXT, asi_json TEXT,
+  checks_passed BOOLEAN, exit_code INTEGER, duration_ms INTEGER, ts BIGINT
 );
+INSERT INTO sessions (segment, objective, status)
+  SELECT 1, 'bench-seed', 'active'
+  WHERE NOT EXISTS (SELECT 1 FROM sessions);
 " 2>/dev/null
 
 for i in $(seq 1 100); do
@@ -147,16 +170,9 @@ for i in $(seq 1 100); do
 done
 ```
 
-This spawns 300 duckdb processes for 100 iterations — matching the real
-`derive_state` behavior (3 spawns per call: `current_segment` calls
-`current_session_row`, `current_status` calls `current_session_row` again
-separately, then `has_pending_run`).
-
-**Note:** The `current_session_row` function is called twice (once by
-`current_segment`, once by `current_status`) because they are separate
-exported functions that each independently call `run_sql`. This is the
-exact inefficiency the benchmark is designed to detect and that the
-optimization loop should fix.
+This spawns 300 duckdb processes for 100 iterations (plus 1 for schema seed) —
+matching the real `derive_state` behavior in the `Ready` state. The seed row
+ensures `current_segment` returns > 0 so we don't short-circuit to `Setup`.
 
 #### `bench/shim/duckdb` (unchanged from prompt)
 
@@ -166,14 +182,19 @@ The counting shim. Already well-specified; ship it as a fixture.
 
 Update the exercise invocation line to call `exercise_100_calls.sh` instead
 of `ailang run ... exercise_100_calls.ail`. The rest of the script
-(DUCKDB_REAL validation, PATH rewrite, ext_lines counting, wall-time
-measurement) stays as designed.
+(DUCKDB_REAL validation, PATH rewrite, wall-time measurement) stays as
+designed.
+
+For `ext_lines`, use the prompt's more precise counting (excluding `bench/`,
+`*_test.ail`, `_smoke.ail`, `registry_generated.ail`) rather than the
+implementation plan's simpler `cat *.ail | wc -l` which overcounts by
+including test files.
 
 #### `bench/checks.sh`
 
 Ship as fixture. The agent-generated version from the failed run was
-reasonable — use it as the starting point, but verify all grep patterns
-match the actual candidate source. Confirmed matches:
+reasonable — use it as the starting point. All grep patterns verified
+against the current source:
 
 | Pattern | Source file | Matches? |
 |---------|-----------|----------|
@@ -205,40 +226,95 @@ Replace the entire "Create benchmark harness" block with:
 This eliminates the entire AILANG authoring failure mode and makes the
 benchmark deterministic across runs.
 
-### Fix 2: Fix the worktree guard in `ar_init` (addresses RC4)
+### Fix 2: Add per-session CWD to the extension (addresses RC4)
 
-**This is a code change to the autoresearch extension.** The worktree guard
-must check the *experiment's* working directory, not `ctx.workdir`.
+**This is a code change to `packages/motoko-ext-autoresearch/`.** All 13
+`ctx.workdir` references need to resolve to the worktree CWD when operating
+on a remote session.
 
-**Option A (minimal — argument-based):** Add a `cwd` field to the `ar_init`
-tool arguments. When provided, `require_linked_worktree` uses that instead
-of `ctx.workdir`. The prompt passes `"cwd": "/workspaces/motoko_agent_autoresearch_wt"`.
+**Design:** Add an optional `cwd` field to `ar_init`. When provided, it
+overrides `ctx.workdir` for all operations in that session. Persist it in
+the `sessions` table so `ar_run`/`ar_log` inherit it without re-supplying.
+
+#### 2a. Schema change (`db.ail`)
+
+Add `cwd TEXT` column to the `sessions` table. Add `insert_session` parameter.
+Add `current_cwd(session_dir) -> Result[string, string]` function.
+
+#### 2b. Tool schema change (`tools.ail`)
+
+Add `parse_cwd(args, fallback) -> string` function.
+Add `cwd` (optional string) to `ar_init` parameter schema.
+
+#### 2c. Session CWD resolver (`autoresearch.ail`)
+
+Add a helper that resolves the effective CWD for a session:
 
 ```
-# In handle_init, change:
+func effective_cwd(ctx: ExtCtx, session_dir: string) -> string ! {Process} {
+  match DB.current_cwd(session_dir) {
+    Ok(c) => if c != "" then c else ctx.workdir,
+    Err(_) => ctx.workdir
+  }
+}
+```
+
+#### 2d. `handle_init` changes
+
+```
+# Change:
 require_linked_worktree(ctx.workdir)
 # To:
 let init_cwd = Tools.parse_cwd(call.arguments, ctx.workdir);
 require_linked_worktree(init_cwd)
 ```
 
-Also update `resolve_session_dir` to respect this `cwd` when resolving
-relative `session_dir` paths, so that the session DB lands inside the
-worktree.
+Replace all `ctx.workdir` in `handle_init` with `init_cwd`:
+- `write_executable_script(init_cwd, ...)` (lines 684, 686)
+- `Git.ensure_autoresearch_branch(init_cwd, ...)` (line 702)
+- `Git.head_sha(init_cwd)` (line 703)
+- `Git.capture_init_dirty_json(init_cwd)` (line 704)
 
-**Option B (session_dir-based):** Derive the worktree check from
-`session_dir` — if it's an absolute path, check whether it lives inside a
-linked worktree. This is more implicit but doesn't require a new argument.
+Pass `init_cwd` to `DB.insert_session` as the new `cwd` column.
 
-**Recommendation: Option A.** It's explicit, doesn't change existing
-behavior for callers that don't pass `cwd`, and the prompt already knows
-the worktree path.
+#### 2e. `handle_run` changes
 
-**Tool schema change:** Add `cwd` (optional string) to `ar_init`'s
-parameter schema in `tools.ail`.
+```
+# Change:
+run_samples(ctx.workdir, script, ...)
+run_checks_if_present(ctx.workdir, session_dir, ...)
+# To:
+let cwd = effective_cwd(ctx, session_dir);
+run_samples(cwd, script, ...)
+run_checks_if_present(cwd, session_dir, ...)
+```
 
-**Prompt change (step 7):** Add `"cwd": "/workspaces/motoko_agent_autoresearch_wt"`
-to the `ar_init` call.
+#### 2f. `handle_log` changes
+
+```
+# Change all ctx.workdir references:
+Git.dirty_paths(ctx.workdir)
+exclude_session_paths(..., ctx.workdir, session_dir)
+commit_or_revert(decision, ctx.workdir, ...)
+# To:
+let cwd = effective_cwd(ctx, session_dir);
+Git.dirty_paths(cwd)
+exclude_session_paths(..., cwd, session_dir)
+commit_or_revert(decision, cwd, ...)
+```
+
+#### 2g. `resolve_session_dir` changes
+
+Currently resolves relative paths against `ctx.workdir`. When `cwd` is
+provided in the `ar_init` call, relative `session_dir` should resolve
+against that CWD instead. For `ar_run`/`ar_log`, the session_dir is
+typically passed as an absolute path or uses the default, so this change
+is mainly for consistency.
+
+#### 2h. `tool_hook` change (line 951)
+
+`derive_state` is called with `session_dir` (not `ctx.workdir`) and only
+does DB queries, so it doesn't need `cwd`. No change needed here.
 
 ### Fix 3: Add worktree workdir hint to prompt (addresses RC3)
 
@@ -252,7 +328,7 @@ Tool constraints in worktree:
   main repo root (/workspaces/motoko_agent). They cannot reach the worktree.
 - Use BashExec with `cat`, `tee`, `sed` for reading/writing worktree files.
 - ar_init, ar_run, ar_log, ar_notes work in the worktree via the `cwd`
-  argument (see step 7).
+  argument on ar_init (persisted for the session).
 ```
 
 ### Fix 4: Note AILANG docs version gap in prompt (addresses RC2)
@@ -274,7 +350,6 @@ Add to the troubleshooting section:
 | Execution contract | Add "Tool constraints in worktree" note |
 | Step 4 | "Create benchmark harness" → "Copy pre-baked benchmark harness" |
 | Step 7 (`ar_init`) | Add `"cwd"` field to tool arguments |
-| Step 8 (benchmark.sh ref) | Update to reference shell exercise |
 | Troubleshooting | AILANG docs version gap note |
 
 The prompt's 11-step structure and all `ar_*` tool call shapes remain
@@ -285,7 +360,7 @@ unchanged except for the added `cwd` field on `ar_init`.
 ```
 benchmarks/fixtures/autoresearch_self_bootstrap/
   bench/
-    exercise_100_calls.sh    # shell-based hot-path exercise (300 duckdb spawns)
+    exercise_100_calls.sh    # shell-based hot-path exercise (301 duckdb spawns)
     shim/duckdb              # counting shim
     benchmark.sh             # metric emitter
     checks.sh                # FSM/scope/invariant validator
@@ -298,60 +373,54 @@ step 5 (SHA256 freeze) applies to these fixtures.
 
 ### In `packages/motoko-ext-autoresearch/`
 
-1. **`tools.ail`**: Add `parse_cwd(args, fallback) -> string` function.
-   Add `cwd` to `ar_init` tool schema (optional string parameter).
+| File | Change | Why |
+|------|--------|-----|
+| `db.ail` | Add `cwd TEXT` column to sessions schema; add `current_cwd()` query | Persist per-session CWD |
+| `tools.ail` | Add `parse_cwd(args, fallback)` function; add `cwd` to `ar_init` schema | Accept CWD argument |
+| `autoresearch.ail` `handle_init` | Replace 6x `ctx.workdir` with `init_cwd` from parsed args | All git/script ops use worktree |
+| `autoresearch.ail` `handle_run` | Replace 2x `ctx.workdir` with `effective_cwd(ctx, session_dir)` | Benchmark runs in worktree |
+| `autoresearch.ail` `handle_log` | Replace 3x `ctx.workdir` with `effective_cwd(ctx, session_dir)` | Git ops target worktree |
+| `autoresearch.ail` `resolve_session_dir` | Accept optional `cwd` override for relative path resolution | Session dir in worktree |
 
-2. **`autoresearch.ail` `handle_init`** (line 672): Change
-   `require_linked_worktree(ctx.workdir)` to use the parsed `cwd` value.
-   Also propagate `cwd` to `resolve_session_dir` so relative session_dir
-   paths resolve against the worktree, not the main checkout.
+### Files NOT changed
 
-3. **`autoresearch.ail` `tool_hook`** (line 949-961): For non-`ar_init`
-   tools, `resolve_session_dir` already supports absolute `session_dir`
-   arguments, so an absolute `session_dir` passed to `ar_run`/`ar_log`
-   will work. But `shell()` calls in `handle_run` and `handle_log` use
-   `ctx.workdir` as their CWD — verify these also need the `cwd` override
-   for benchmark/checks script execution.
+- `state.ail`: `derive_state` takes `session_dir`, only does DB queries — no CWD needed.
+- `git_ops.ail`: Already takes `cwd` as an argument to all functions — no changes needed (callers pass the corrected CWD).
+- `scope.ail`, `metrics.ail`, `notes.ail`, `compaction.ail`, `prompts.ail`: No `ctx.workdir` references.
 
-4. **`autoresearch.ail` `handle_run`** and **`handle_log`**: Verify that
-   `run_command_for_sample` and `checks_script` execution use the correct
-   CWD. If they use `ctx.workdir`, they'll run benchmark/checks from the
-   wrong directory. May need to propagate `cwd` to these handlers too, or
-   persist it in the session DB at `ar_init` time.
+### Verification
 
-### Ripple effects to check
-
-- `db.ail`: No changes needed — all functions take `session_dir` as an
-  absolute path argument.
-- `state.ail`: No changes needed — `derive_state` takes `session_dir`.
-- `git_ops.ail`: Uses `shell(argv, cwd)` — verify the `cwd` passed to
-  git operations (commit, revert) is the worktree path, not `ctx.workdir`.
-  Currently `handle_log` passes `ctx.workdir` to `Git.selective_commit`
-  and `Git.selective_revert` — these need the worktree CWD.
+After changes:
+```bash
+ailang check --package packages/motoko-ext-autoresearch
+# Existing tests
+ailang test packages/motoko-ext-autoresearch/state_test.ail
+ailang test packages/motoko-ext-autoresearch/scope_test.ail
+ailang test packages/motoko-ext-autoresearch/metrics_test.ail
+```
 
 ## Implementation Order
 
-1. **Fix 2 first** (code change — RC4). This is the only fix that requires
-   code changes to the extension. Without it, `ar_init` always rejects.
-   - Add `parse_cwd` to `tools.ail`
-   - Update `handle_init`, `handle_run`, `handle_log` to use worktree CWD
-   - Add `cwd` to `ar_init` tool schema
-   - Persist `cwd` in session row (or derive from `session_dir`) so
-     `ar_run`/`ar_log` can use it without re-supplying
+1. **Fix 2 first** (code change — RC4). Without it, `ar_init` always rejects.
+   - Add `cwd` column to DB schema
+   - Add `parse_cwd` and `current_cwd` functions
+   - Add `effective_cwd` helper
+   - Update `handle_init` (6 sites), `handle_run` (2 sites), `handle_log` (3 sites)
+   - Update `ar_init` tool schema
    - Run `ailang check --package packages/motoko-ext-autoresearch`
-   - Test manually: create a worktree, call `ar_init` with `cwd` pointing
-     to it, verify it passes the worktree guard
+   - Manual test: create a worktree, call `ar_init` with `cwd` pointing
+     to it, verify the worktree guard passes and session is stored correctly
 
 2. **Fix 1** (create fixture files — RC1, RC5).
    - Write all four bench files
-   - Test `exercise_100_calls.sh` produces 300 lines in `$SPAWN_LOG`
+   - Test `exercise_100_calls.sh` produces 301 lines in `$SPAWN_LOG`
+     (1 seed + 300 loop)
    - Test `benchmark.sh` emits exactly three `METRIC` lines
    - Test `checks.sh` passes against `packages/motoko-ext-autoresearch/`
    - Commit fixtures
 
 3. **Fixes 3 & 4** (prompt updates — RC2, RC3).
    - Update `benchmarks/prompts/autoresearch_self_bootstrap.md`
-   - Update `Makefile` target if needed
 
 4. **Smoke test**: Run `make run_autoresearch_self` and verify the agent
    reaches `ar_init` within the first 8 steps and the init succeeds.
