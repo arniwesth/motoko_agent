@@ -107,6 +107,15 @@ run: build
 	clear
 	MOTOKO_CONFIG=$(PROFILE) ./scripts/run-agent.sh
 
+# Run the Appendix A "autoresearch itself" bootstrap prompt end-to-end.
+# Uses TASK from a checked-in prompt file so the test is reproducible.
+run_autoresearch_self: build
+	clear
+	MOTOKO_CONFIG=$(PROFILE) TASK="$$(cat benchmarks/prompts/autoresearch_self_bootstrap.md)" ./scripts/run-agent.sh
+
+print_autoresearch_self_prompt:
+	@cat benchmarks/prompts/autoresearch_self_bootstrap.md
+
 # Install all prerequisites (Go, Bun, Node, context-mode, AILANG, TUI deps)
 install:
 	./scripts/install-prerequisites.sh --with-omnigraph
