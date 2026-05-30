@@ -1,6 +1,7 @@
 # Plan: Autoresearch-driven optimization of an ARC-AGI-3 agent
 
-**Status:** Draft / design (v2 — incorporates Symbolica/Arcgentica study).
+**Status:** Draft / design (v3 — Symbolica/Arcgentica study + literature ideation;
+self-reviewed).
 **Author handoff date:** 2026-05-30
 **Owner branch:** `autoresearch-research`
 **Companion docs:** `implementation-plan.md` (Appendix A = self-bootstrap benchmark),
@@ -26,6 +27,16 @@ that iteratively improves an ARC-AGI-3 **agent**, with two explicit objectives:
 These align: a disciplined optimize→measure→keep/discard loop with held-out
 validation is how you build a non-overfit submission.
 
+### Success criteria (definition of done)
+- **Objective #1 (submission):** a Kaggle-legal (offline, MIT/CC0) agent whose
+  held-out TEST score is materially above the random/heuristic baseline; ideally an
+  actual 2026 submission.
+- **Objective #2 (autoresearch):** evidence the loop did *disciplined research* —
+  (a) keep/discard was sound under noise (kept gains survive on **held-out TEST**, not
+  just TRAIN); (b) a measured **reproduction rate** over literature methods (§8);
+  (c) a small **TRAIN-vs-TEST gap** (no overfit); (d) discovery/adaptation that was
+  **not hand-fed** in the prompt (lever-hidden — §9 Phase 2).
+
 ---
 
 ## 2. What ARC-AGI-3 is (verified 2026-05-30)
@@ -37,9 +48,13 @@ validation is how you build a non-overfit submission.
   skill-acquisition efficiency / fluid intelligence.
 - Difficulty: at release frontier LLMs scored **<1%** (humans 100%). Naive
   frontier-LLM-in-the-loop cost **$5k–9k per task**.
-- **Symbolica's Arcgentica** is the strongest public result: **36.08%** on the 25
-  public games (113/182 levels, 7/25 games complete) for **~$1,005** — vs Opus 4.6
-  at 0.25% for $8,900. ~120× cost-efficiency. See Section 3.
+- **Two leading documented results we studied** (neither is the outright SOTA — the
+  private leaderboard has higher — but both are reproducible starting points):
+  - **Symbolica's Arcgentica**: **36.08%** on the 25 public games (113/182 levels,
+    7/25 complete) for **~$1,005** — vs Opus 4.6 at 0.25% for $8,900 (~120×
+    cost-efficiency). See Section 3.
+  - **Training-free graph-exploration** (arXiv:2512.24156): median 30/52 levels,
+    **3rd on the private leaderboard**, beating LLM agents, **code released**. See §8.
 - **Toolkit:** `arc-agi` (PyPI, `>=0.9.1`) + harness `arcprize/ARC-AGI-3-Agents`
   (`uv run main.py --agent=random --game=ls20`).
   - Actions: `GameAction.ACTION1..ACTION7` + `RESET`. `ACTION6` is "click" and
@@ -48,8 +63,9 @@ validation is how you build a non-overfit submission.
     `NOT_PLAYED`/`NOT_FINISHED`/`WIN`/`GAME_OVER`), `levels_completed` (was `score`
     pre-0.9.3), `win_levels`, `available_actions`, `guid`.
   - Agent ABC (`agents/agent.py`): implement `choose_action` + `is_done`
-    (or override `main()`). Default `MAX_ACTIONS=80` (a safety ceiling, not the real
-    budget — see Section 3).
+    (or override `main()`). Base-class default `MAX_ACTIONS=80`; agents raise it
+    (Arcgentica → 10,000). The game's own limit (**~800 actions across levels**) is
+    the real budget — see Section 3.
   - Harness 0.9.3 supports **local execution** of environments
     (`ONLINE_ONLY=False`, `ENVIRONMENTS_DIR=environment_files`); online API/replay
     needs `ARC_API_KEY`.
@@ -170,7 +186,9 @@ autoresearched against a local model, aimed at an offline submission.** This uni
 3. Real **submission is the actual goal**; keep the play path **offline-legal**.
 4. **Noisy primary metric** (LLM stochasticity once a model is in the loop; before
    that, a stochastic code policy) so MAD/confidence/patience are load-bearing.
-5. **Local-only execution** of games to start (`ONLINE_ONLY=False`).
+5. **Local-only execution** of games to start (`ONLINE_ONLY=False`) — *contingent on
+   R2*: verify offline play works without an API key; fall back to anon/keyed online
+   if not.
 6. **Optimizer ≠ player.** Optimizer = autoresearch's cheap **API** model
    (DeepSeek-V4 Flash/Pro) — dev-time only, fine. Player/reasoner backend = pure
    code, then **local** model. **No API model at play-time** (would break
@@ -193,7 +211,7 @@ autoresearched against a local model, aimed at an offline submission.** This uni
 | `benchmark_script` | run candidate over the fixed **TRAIN** subset; print `METRIC` lines |
 | primary metric | `score` — normalized levels completed across TRAIN (maximize) |
 | noisy secondary | `wall_ms` and/or score variance (stochastic policy / LLM sampling) |
-| tie-breakers | `actions_used` (efficiency), token cost, candidate LOC |
+| tie-breakers | `actions_used` (efficiency), token/inference cost. **NOT LOC** — a size penalty would pressure the optimizer to delete useful prompt/scaffolding (Arcgentica's edge is a *long* `GAME_REFERENCE`); the self-bootstrap `ext_lines` tie-breaker does **not** transfer here |
 | `checks_script` | candidate runs without crashing; honors the `Agent` ABC + action budget; **anti-cheat** (no game-id hardcoding, no hidden-state peeking); **Kaggle-legality** (no API client on the play path); train/test isolation |
 | `off_limits` | the `arc-agi`/`arcengine` toolkit, the game/environment files, the scorer/harness, the reused MIT `Frame`/runtime code, and the **held-out TEST set** |
 | held-out grading | TEST subset never referenced in the loop; the true generalization measure + submission proxy |
@@ -227,6 +245,11 @@ autoresearched against a local model, aimed at an offline submission.** This uni
    into `immutable.sha256`; both scripts verify before running.
 6. **Kaggle-legality** — `checks.sh` fails if the candidate imports an API client on
    the play path.
+7. **Out-of-loop TEST grading.** TEST is `off_limits` to the optimizer. Grading runs
+   via a separate **operator-invoked `grade_test.sh`** (same candidate, TEST games),
+   *between* segments — **never** wired into `benchmark_script`. The optimizer never
+   sees TEST scores mid-loop, so it cannot optimize against them; the TRAIN-vs-TEST
+   gap stays an honest overfit measure.
 
 ---
 
@@ -301,8 +324,8 @@ the online/offline wall intact):
 |------|----------|----------|
 | `ar_scout` | `source`, `title`, `lever` | `claim`, `hypothesis`, `impl_sketch`, `est_cost`, `cache_path`, `code_url`, `offline_legal`, `status`, `method_id` (update) |
 
-- No-arg form lists the segment's method ledger (like `ar_notes` reading); returns a
-  `method_id`.
+- The register form returns a `method_id`; a no-arg form lists the segment's method
+  ledger (like `ar_notes` reading).
 - `ar_log` gains optional **`method_ids: [string]`** to link a run to the method(s) it
   tested.
 - **DB (`db.ail`):** a `methods` table (the fields above) + run linkage
@@ -345,6 +368,11 @@ that score improvable?
 - [ ] Pick the **easy TRAIN subset** + a disjoint **TEST subset**; record baselines.
 **Exit:** documented baseline >0 with visible headroom on a named subset, plus a
 local-vs-online decision.
+**If NO-GO** (no pure-code agent beats random on any reasonable subset): pick an
+easier subset, or accept that pure code lacks headroom on ARC-AGI-3 and move the
+model into the play loop earlier (run Phase 2's runtime standup before fixtures). The
+literature signal (training-free graph-exploration scored well *without* a model)
+argues a code gradient should exist — but confirm, don't assume.
 
 ### Phase 1 — Fixture harness + reused scaffolding
 - [ ] Adapt Symbolica's MIT `Frame` helpers into the candidate (attribution kept).
@@ -364,8 +392,9 @@ expected MAD across repeats; `ar_scout` records a method card and links it to a 
 
 ### Phase 2 — Stand up the RLM runtime (local model) + loop validation
 - [ ] Choose a runtime option (Section 4): self-host `agentica-server` w/ local
-      model, minimal reimpl, or Motoko-as-RLM. **Measure real per-step latency/cost**
-      on this hardware (M1 GPU via host-served inference).
+      model, minimal reimpl, or Motoko-as-RLM. **Measure per-step latency/cost** on
+      this hardware (M1 GPU via host-served inference) — a rough *dev-cost* proxy
+      only; Kaggle NVIDIA latency differs and bounds the submission model separately.
 - [ ] Lever-hidden optimization prompt (objective + metric + guards only).
 - [ ] Short autonomous run on a *tiny* TRAIN subset with a cheap optimizer model:
       validate FSM gating, keep/discard under noise, commit/revert, worktree
