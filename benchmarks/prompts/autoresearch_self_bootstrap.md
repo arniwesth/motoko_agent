@@ -84,21 +84,29 @@ Execution plan:
    chmod +x experiments/ar_candidate/bench/shim/duckdb
    chmod +x experiments/ar_candidate/bench/benchmark.sh
    chmod +x experiments/ar_candidate/bench/checks.sh
-   chmod +x experiments/ar_candidate/bench/exercise_100_calls.sh
    ```
 
    The harness consists of (do not edit these — they are off-limits and hashed):
-   - `exercise_100_calls.sh`: replays the `derive_state` Ready-state query pattern
-     100 times (1 seed + 100×3 = 301 duckdb spawns through the shim).
+   - `exercise_derive_state.ail`: imports the candidate's own `state`/`db` modules
+     and calls the real `derive_state` 100 times. It runs the candidate code, so
+     the spawn metric reflects actual candidate behavior — optimizing
+     `derive_state` genuinely moves it. Baseline: derive_state in the Ready state
+     spawns duckdb 3×/call (`current_segment` + `current_status` each re-fetch the
+     same sessions row, plus `has_pending_run`), so 100 calls + 2 setup spawns
+     = **302**.
    - `shim/duckdb`: counting shim that appends one line per invocation to
      `$SPAWN_LOG`, then `exec "$DUCKDB_REAL" "$@"`.
-   - `benchmark.sh`: prints exactly:
-     - `METRIC duckdb_spawns_per_100_calls=<int>` (baseline 301; the +1 seed call
-       is constant across runs and does not affect relative comparison)
-     - `METRIC overhead_ms=<int>`
-     - `METRIC ext_lines=<int>`
-   - `checks.sh`: validates FSM behavior, scope gating, and logging invariants for
-     candidate code; exits non-zero on failure.
+   - `benchmark.sh`: compiles & runs the exercise under the shim (scratch DB and
+     spawn log live OUTSIDE the worktree so they never dirty candidate paths) and
+     prints exactly:
+     - `METRIC duckdb_spawns_per_100_calls=<int>` (baseline 302; a successful
+       single-row-fetch optimization drops this toward ~202)
+     - `METRIC overhead_ms=<int>` (noisy; real bash wall-time)
+     - `METRIC ext_lines=<int>` (candidate `*.ail` LOC, tie-breaker only)
+   - `checks.sh`: structural greps (FSM/scope/DB invariants) PLUS the candidate's
+     own immutable test suite (`state_test`, `scope_test`, `metrics_test`). Exits
+     non-zero on any failure — this is what prevents "winning" the spawn metric by
+     breaking `derive_state`.
 
 5. Freeze benchmark/check artifacts (immutability):
    ```bash
@@ -108,7 +116,7 @@ Execution plan:
    chmod +x experiments/ar_candidate/bench/benchmark.sh
    chmod +x experiments/ar_candidate/bench/checks.sh
    sha256sum \
-     experiments/ar_candidate/bench/exercise_100_calls.sh \
+     experiments/ar_candidate/bench/exercise_derive_state.ail \
      experiments/ar_candidate/bench/shim/duckdb \
      experiments/ar_candidate/bench/benchmark.sh \
      experiments/ar_candidate/bench/checks.sh \
@@ -156,7 +164,7 @@ Execution plan:
        "AwaitingLog hard-block behavior preserved"
      ],
      "checks_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent_autoresearch_wt\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nbash experiments/ar_candidate/bench/checks.sh",
-     "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent_autoresearch_wt\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=\"$(command -v duckdb)\"\nexport SPAWN_LOG=\"/workspaces/motoko_agent_autoresearch_wt/experiments/ar_candidate/bench/spawn.log\"\nbash experiments/ar_candidate/bench/benchmark.sh"
+     "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent_autoresearch_wt\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=\"$(command -v duckdb)\"\nbash experiments/ar_candidate/bench/benchmark.sh"
    })
    ```
    - The `cwd` field tells the extension to run all git and script operations
@@ -187,6 +195,17 @@ Execution plan:
      ```
 
 9. Iterate optimization loop:
+   - Primary lever: `derive_state` (in candidate `state.ail`) calls
+     `DB.current_segment` and `DB.current_status`, which each independently run
+     `current_session_row` — two duckdb spawns for the same row. Fetching the
+     session row once and reading both fields collapses the Ready path from 3
+     spawns/call to 2 (≈302 → ≈202). Edit `db.ail`/`state.ail` together; keep
+     every `current_*` accessor's external behavior identical so `checks.sh`
+     (which runs the candidate test suite) still passes.
+   - AILANG gotcha: `let (a, b) = ...` is NOT valid (tuple destructuring in `let`
+     is a parse error). To return two values, use a record
+     (`{ segment: int, status: string }`) and read its fields, or return a tuple
+     and destructure it inside a `match` arm — not via `let`.
    - edit candidate files only under `experiments/ar_candidate/` (respect off-limits)
    - call:
      ```json
@@ -257,7 +276,17 @@ Troubleshooting (quick fixes):
 - Hash check fails (`sha256sum -c ... FAILED`):
   - Benchmark/check artifacts drifted. Restore canonical files in `experiments/ar_candidate/bench/`, regenerate `immutable.sha256`, and restart segment.
 - `duckdb` count metric is unexpectedly zero/flat:
-  - Verify `DUCKDB_REAL` is exported, shim executable, shim first on PATH in benchmark script, and `$SPAWN_LOG` reset per sample.
+  - Verify `DUCKDB_REAL` is exported and executable, and the shim is executable.
+    `benchmark.sh` runs the exercise via `ailang run` from the candidate package
+    root with the shim first on PATH; if the metric is 0, the exercise failed to
+    compile/run — run `cd experiments/ar_candidate && AILANG_RELAX_MODULES=1 ailang run --caps IO,Process,FS,Clock,Env bench/exercise_derive_state.ail`
+    directly to see the error. A *flat* (non-moving) metric means your edit didn't
+    change `derive_state`'s spawn count — confirm you reduced `current_session_row`
+    calls on the Ready path, not just renamed things.
+- benchmark or checks fail to compile the candidate (`ailang run`/`ailang test`):
+  - The candidate must remain a valid AILANG package. Run
+    `cd experiments/ar_candidate && AILANG_RELAX_MODULES=1 ailang check --relax-modules state.ail db.ail`
+    and fix type/parse errors before re-running `ar_run`.
 - Candidate edits are not being committed/reverted across iterations:
   - Ensure step 6 baseline commit ran before `ar_init`; if not, restart from fresh segment after baseline commit.
 - Live extension appears modified:

@@ -1,5 +1,22 @@
 # Fix Plan: Self-Bootstrap Benchmark Failures (2026-05-30)
 
+> **Update (2026-05-30, implemented):** Fix 1's shell-based exercise
+> (`exercise_100_calls.sh`) was **superseded before any live run**. A shell
+> simulation hardcodes the duckdb query pattern, so the primary metric
+> (`duckdb_spawns_per_100_calls`) was decoupled from the candidate code — editing
+> `derive_state` could not move it, defeating the benchmark's purpose.
+>
+> It was replaced with a **real-code harness**, `bench/exercise_derive_state.ail`,
+> which imports the candidate's own `state`/`db` modules and calls the real
+> `derive_state` 100×. Measured under the counting shim, this is genuinely coupled:
+> baseline **302** spawns → **202** after the single-row-fetch optimization, with
+> the candidate's own test suite (run by `checks.sh`) guarding behavior. The
+> harness scratch DB/spawn-log live outside the worktree so the benchmark never
+> dirties scoped/off-limits paths. Where this document says `exercise_100_calls.sh`
+> / "301 spawns" / shell simulation, read `exercise_derive_state.ail` / "302
+> spawns" / real-code harness. See `benchmarks/prompts/autoresearch_self_bootstrap.md`
+> steps 4–9 for the authoritative current flow.
+
 ## Problem Statement
 
 The first live run of the Appendix A "Self-Research Bootstrap" benchmark
