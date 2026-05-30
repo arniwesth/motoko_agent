@@ -164,9 +164,15 @@ Execution plan:
        "AwaitingLog hard-block behavior preserved"
      ],
      "checks_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent_autoresearch_wt\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nbash experiments/ar_candidate/bench/checks.sh",
-     "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent_autoresearch_wt\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=\"$(command -v duckdb)\"\nbash experiments/ar_candidate/bench/benchmark.sh"
+     "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent_autoresearch_wt\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=$(command -v duckdb)\nexport AR_BENCH_SCRATCH=/workspaces/motoko_agent/.motoko/ar_bench_scratch\nbash experiments/ar_candidate/bench/benchmark.sh"
    })
    ```
+   - IMPORTANT — keep `benchmark_script` and `checks_script` free of double-quote
+     characters. The extension's argument parser truncates a string value at the
+     first `"` it contains, so an embedded `\"` (e.g. `DUCKDB_REAL=\"$(...)\"`)
+     silently cuts the script off mid-line, producing empty metrics. Write
+     unquoted shell (`export DUCKDB_REAL=$(command -v duckdb)`); the paths here
+     contain no spaces, so quoting is unnecessary.
    - The `cwd` field tells the extension to run all git and script operations
      (worktree guard, branch creation, baseline snapshot, `ar_run` benchmark,
      `ar_log` commit/revert) from the worktree, not the main checkout. It is
@@ -283,6 +289,12 @@ Troubleshooting (quick fixes):
     directly to see the error. A *flat* (non-moving) metric means your edit didn't
     change `derive_state`'s spawn count — confirm you reduced `current_session_row`
     calls on the Ready path, not just renamed things.
+  - Empty metrics (`metrics_json={}`) usually mean the exercise could not write
+    its scratch DB/spawn-log. Under `ar_run` the benchmark runs in a sandboxed
+    exec that may not permit `/tmp` writes — `AR_BENCH_SCRATCH` must point at a
+    workdir-relative, sandbox-writable dir (the wrapper sets
+    `/workspaces/motoko_agent/.motoko/ar_bench_scratch`). Do not relocate it into
+    the worktree (that would dirty scoped paths).
 - benchmark or checks fail to compile the candidate (`ailang run`/`ailang test`):
   - The candidate must remain a valid AILANG package. Run
     `cd experiments/ar_candidate && AILANG_RELAX_MODULES=1 ailang check --relax-modules state.ail db.ail`

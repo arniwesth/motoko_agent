@@ -5,8 +5,10 @@ set -euo pipefail
 #   METRIC overhead_ms=<int>
 #   METRIC ext_lines=<int>
 #
-# Invoked (indirectly) by ar_run via the benchmark_script wrapper, which sets
-# DUCKDB_REAL and SPAWN_LOG and cd's into the worktree root.
+# Unlike a simulation, this RUNS THE CANDIDATE'S OWN CODE: it compiles and
+# executes `exercise_derive_state.ail`, which imports the candidate `state`/`db`
+# modules and calls the real `derive_state` 100 times. Every duckdb process the
+# candidate spawns is counted by the shim, so candidate edits move the metric.
 
 # Resolve directories relative to this script so it works regardless of CWD.
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,23 +19,40 @@ CANDIDATE_DIR="$(cd "$BENCH_DIR/.." && pwd)"
 : "${DUCKDB_REAL:?DUCKDB_REAL must be set to the real duckdb binary}"
 test -x "$DUCKDB_REAL" || { echo "DUCKDB_REAL not executable: $DUCKDB_REAL" >&2; exit 1; }
 
-: "${SPAWN_LOG:=$BENCH_DIR/spawn.log}"
-export SPAWN_LOG
-
-# Reset the spawn log for this sample.
-: > "$SPAWN_LOG"
+# Ephemeral scratch for the exercise's duckdb DB + the shim's spawn log.
+# It must satisfy two constraints:
+#   1. Sandbox-writable. Under ar_run the benchmark executes inside the runtime's
+#      sandboxed exec, which may NOT permit writes to /tmp (where `mktemp -d`
+#      lands). The caller therefore passes AR_BENCH_SCRATCH pointing at a
+#      workdir-relative, sandbox-writable directory (see the ar_init
+#      benchmark_script wrapper).
+#   2. Outside the worktree's scoped/off-limits candidate paths, so the benchmark
+#      never dirties them (which would trip ar_log's scope-deviation guard).
+# When run standalone (no AR_BENCH_SCRATCH), fall back to mktemp.
+if [ -n "${AR_BENCH_SCRATCH:-}" ]; then
+  WORK="$AR_BENCH_SCRATCH"
+  rm -rf "$WORK"; mkdir -p "$WORK"
+else
+  WORK="$(mktemp -d)"
+fi
+trap 'rm -rf "$WORK"' EXIT
+export SPAWN_LOG="$WORK/spawn.log"; : > "$SPAWN_LOG"
+export SESSION_DIR="$WORK/session"
 
 # Put the counting shim first on PATH so every `duckdb` call is counted.
 export PATH="$BENCH_DIR/shim:$PATH"
 
-# Disposable session dir for the exercise (kept inside bench/).
-export SESSION_DIR="$BENCH_DIR/bench_session"
-rm -rf "$SESSION_DIR"
-
-# --- Metrics 1 + 2: duckdb spawn count and wall-time overhead for 100 calls ---
-# Wall-time uses bash's real clock (date +%s%N), not the virtual AILANG clock.
+# --- Metrics 1 + 2: real duckdb spawn count and wall-time for 100 calls ---
+# Run from the candidate package root so `pkg/sunholo/motoko_ext_autoresearch/*`
+# resolves to the candidate's own modules. AILANG_RELAX_MODULES=1 lets the
+# fixture live at bench/ without a path-matching module name. Wall-time uses
+# bash's real clock (date +%s%N), not the virtual AILANG clock.
 start_ns="$(date +%s%N)"
-bash "$BENCH_DIR/exercise_100_calls.sh"
+(
+  cd "$CANDIDATE_DIR"
+  AILANG_RELAX_MODULES=1 ailang run --caps IO,Process,FS,Clock,Env \
+    bench/exercise_derive_state.ail >/dev/null
+)
 end_ns="$(date +%s%N)"
 
 spawns="$(wc -l < "$SPAWN_LOG" | tr -d ' ')"

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Validates FSM behavior, scope gating, and logging invariants of the candidate
-# extension source. Exits non-zero on any violation. These checks guard the
-# behavior the optimizer must NOT change while it reduces overhead.
+# Behavior-preservation guard for the candidate extension. Exits non-zero on any
+# violation. Combines cheap structural greps with the candidate's OWN test suite
+# (off-limits, so the optimizer cannot weaken it) — this is what stops the
+# optimizer from "winning" the spawn metric by breaking derive_state.
 
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANDIDATE_DIR="$(cd "$BENCH_DIR/.." && pwd)"
 
 fail() { echo "CHECK FAILED: $1" >&2; exit 1; }
+
+# --- Structural invariants (fast, source-level) ---
 
 # derive_state remains exported and DB-authoritative.
 grep -qE 'export func derive_state' "$CANDIDATE_DIR/state.ail" \
@@ -26,8 +29,19 @@ if grep -qE '\*\*' "$CANDIDATE_DIR/scope.ail"; then
   fail "scope.ail must not introduce ** glob semantics"
 fi
 
-# Benchmark hot path still spawns duckdb via exec in db.ail.
+# Hot path still spawns duckdb via exec in db.ail.
 grep -qE 'exec.*duckdb' "$CANDIDATE_DIR/db.ail" \
   || fail "db.ail must spawn duckdb via exec"
+
+# --- Functional invariants (the candidate's own immutable test suite) ---
+# Run from the candidate package root so module imports resolve. These tests are
+# in off_limits, so the optimizer cannot edit them to pass trivially.
+(
+  cd "$CANDIDATE_DIR"
+  for t in state_test scope_test metrics_test; do
+    AILANG_RELAX_MODULES=1 ailang test "${t}.ail" >/dev/null 2>&1 \
+      || { echo "CHECK FAILED: candidate ${t}.ail did not pass" >&2; exit 1; }
+  done
+)
 
 echo "checks: OK"
