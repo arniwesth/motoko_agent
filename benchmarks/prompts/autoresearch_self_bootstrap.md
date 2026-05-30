@@ -17,6 +17,12 @@ Execution contract:
 - Do not call `ar_run` again until pending run is logged with `ar_log`.
 - `scope_paths` / `off_limits` matching is prefix-or-exact only in current implementation (no `**` glob semantics).
 - For this benchmark, any scope or off-limits deviation is a hard failure: discard the run; do not keep via `justification`.
+- Use profile defaults from `.motoko/config/default/autoresearch.json`:
+  - `default_session_dir=.motoko/autoresearch`
+  - `default_patience=3`
+  - `default_max_iterations=20`
+  - `default_samples=1`
+  - `default_timeout_ms=60000`
 
 Execution plan:
 1. Preflight guards (must pass):
@@ -127,19 +133,17 @@ Execution plan:
        "AwaitingLog hard-block behavior preserved"
      ],
      "checks_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nbash experiments/ar_candidate/bench/checks.sh",
-     "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=\"$(command -v duckdb)\"\nexport SPAWN_LOG=\"/workspaces/motoko_agent/experiments/ar_candidate/bench/spawn.log\"\nbash experiments/ar_candidate/bench/benchmark.sh",
-     "patience": 4,
-     "max_iterations": 25,
-     "session_dir": ".motoko/autoresearch_self_bootstrap"
+     "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=\"$(command -v duckdb)\"\nexport SPAWN_LOG=\"/workspaces/motoko_agent/experiments/ar_candidate/bench/spawn.log\"\nbash experiments/ar_candidate/bench/benchmark.sh"
    })
    ```
 
 8. Capture baseline immediately after init (before edits):
    - Call:
      ```json
-     ar_run({ "samples": 7 })
+     ar_run()
      ```
    - Note: this consumes one run slot in the segment (`max_iterations` counts this baseline run).
+   - Run uses profile defaults (`samples=1`, `timeout_ms=60000`) unless overridden.
    - Record run metadata as baseline from returned aggregate metrics.
    - Immediately log it (usually `keep` if checks pass) with all required fields:
      ```json
@@ -157,8 +161,9 @@ Execution plan:
    - edit candidate files only under `experiments/ar_candidate/` (respect off-limits)
    - call:
      ```json
-     ar_run({ "samples": 7 })
+     ar_run()
      ```
+   - Run uses profile defaults (`samples=1`, `timeout_ms=60000`) unless overridden.
    - inspect returned `metrics`, `within_run_mad`, `checks_passed`, and `run_number`
    - call `ar_log` with required fields every iteration:
      ```json
@@ -172,7 +177,7 @@ Execution plan:
      })
      ```
    - stop when one condition is met:
-     - no primary-metric improvement for 4 consecutive kept runs (patience exhausted), or
+     - no primary-metric improvement for 3 consecutive kept runs (patience exhausted), or
      - `max_iterations` reached, or
      - immutable checks/constraints fail and cannot be repaired.
 
