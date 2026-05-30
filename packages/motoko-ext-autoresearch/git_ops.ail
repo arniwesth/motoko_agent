@@ -101,18 +101,6 @@ export func head_sha(cwd: string) -> Result[string, string] ! {Process} {
   }
 }
 
-func normalize_porcelain_path(s: string) -> string {
-  let line = trim(s);
-  if length(line) < 4 then ""
-  else {
-    let raw = trim(substring(line, 3, length(line)));
-    let idx = find(raw, "->");
-    if idx >= 0 then trim(substring(raw, idx + 2, length(raw)))
-    else if startsWith(raw, "\"") && endsWith(raw, "\"") then substring(raw, 1, length(raw) - 1)
-    else raw
-  }
-}
-
 func non_empty(xs: [string]) -> [string] {
   match xs {
     [] => [],
@@ -120,19 +108,37 @@ func non_empty(xs: [string]) -> [string] {
   }
 }
 
-func map_paths(lines: [string]) -> [string] {
-  match lines {
+func has_path(xs: [string], x: string) -> bool {
+  match xs {
+    [] => false,
+    y :: rest => if x == y then true else has_path(rest, x)
+  }
+}
+
+func dedupe_paths_rec(xs: [string], seen: [string]) -> [string] {
+  match xs {
     [] => [],
-    x :: rest => normalize_porcelain_path(x) :: map_paths(rest)
+    x :: rest =>
+      if has_path(seen, x) then dedupe_paths_rec(rest, seen)
+      else x :: dedupe_paths_rec(rest, seen ++ [x])
   }
 }
 
 export func dirty_paths(cwd: string) -> Result[[string], string] ! {Process} {
-  match shell(["git", "status", "--porcelain"], cwd) {
+  match shell(["git", "diff", "--name-only", "HEAD", "--"], cwd) {
     Err(e) => Err(e),
-    Ok(r) =>
-      if r.exit_code != 0 then Err(trim(r.stderr))
-      else Ok(non_empty(map_paths(split(trim(r.stdout), "\n"))))
+    Ok(tracked) =>
+      if tracked.exit_code != 0 then Err(trim(tracked.stderr))
+      else match shell(["git", "ls-files", "--others", "--exclude-standard"], cwd) {
+        Err(e) => Err(e),
+        Ok(untracked) =>
+          if untracked.exit_code != 0 then Err(trim(untracked.stderr))
+          else {
+            let tracked_paths = non_empty(split(trim(tracked.stdout), "\n"));
+            let untracked_paths = non_empty(split(trim(untracked.stdout), "\n"));
+            Ok(dedupe_paths_rec(tracked_paths ++ untracked_paths, []))
+          }
+      }
   }
 }
 
@@ -210,8 +216,18 @@ export func selective_revert(cwd: string, paths: [string]) -> Result[(), string]
   if first_path(paths) == "" then Ok(())
   else {
     let _ = shell(["git", "checkout", "HEAD", "--"] ++ paths, cwd);
-    -- Also remove potential untracked iteration-created files.
-    let _ = shell(["rm", "-f"] ++ paths, cwd);
+    -- Remove only currently-untracked files among the candidate paths.
+    match shell(["git", "ls-files", "--others", "--exclude-standard", "--"] ++ paths, cwd) {
+      Err(_) => (),
+      Ok(r) =>
+        if r.exit_code == 0 then {
+          let untracked = non_empty(split(trim(r.stdout), "\n"));
+          if first_path(untracked) != "" then {
+            let _ = shell(["rm", "-f", "--"] ++ untracked, cwd);
+            ()
+          } else ()
+        } else ()
+    };
     Ok(())
   }
 }
