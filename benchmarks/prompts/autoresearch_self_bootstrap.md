@@ -15,6 +15,7 @@ Execution contract:
 - Use repo root (`/workspaces/motoko_agent`) as cwd.
 - Treat benchmark/check artifacts as immutable once hashed.
 - Do not call `ar_run` again until pending run is logged with `ar_log`.
+- `scope_paths` / `off_limits` matching is prefix-or-exact only in current implementation (no `**` glob semantics).
 
 Execution plan:
 1. Preflight guards (must pass):
@@ -66,7 +67,16 @@ Execution plan:
      > experiments/ar_candidate/bench/immutable.sha256
    ```
 
-5. Initialize autoresearch with exact tool argument shape:
+5. Create a baseline commit for candidate fixtures before `ar_init`:
+   - Reason: `ar_init` snapshots `init_dirty`; any path already dirty at init is excluded from per-iteration changes.
+   - If candidate files are not committed before `ar_init`, later edits to those paths can be silently excluded from keep/discard git actions.
+   ```bash
+   set -euo pipefail
+   git add -- experiments/ar_candidate
+   git commit -m "autoresearch bootstrap: candidate fixture baseline"
+   ```
+
+6. Initialize autoresearch with exact tool argument shape:
    ```json
    ar_init({
      "objective": "Reduce per-tool-call overhead in derive_state hot path without behavior change",
@@ -80,12 +90,12 @@ Execution plan:
      ],
      "off_limits": [
        "packages/motoko-ext-autoresearch/",
-       "experiments/ar_candidate/**/tests/**",
-       "experiments/ar_candidate/**/*_test.ail",
-       "experiments/ar_candidate/**/*.test.ail",
+       "experiments/ar_candidate/state_test.ail",
+       "experiments/ar_candidate/metrics_test.ail",
+       "experiments/ar_candidate/scope_test.ail",
        "experiments/ar_candidate/bench/",
-       "experiments/ar_candidate/**/registry_generated.ail",
-       "packages/**/registry_generated.ail"
+       "src/core/ext/registry_generated.ail",
+       ".packages/motoko_core/src/core/ext/registry_generated.ail"
      ],
      "constraints": [
        "candidate must pass full candidate checks unchanged",
@@ -96,15 +106,17 @@ Execution plan:
      "checks_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nbash experiments/ar_candidate/bench/checks.sh",
      "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=\"$(command -v duckdb)\"\nexport SPAWN_LOG=\"/workspaces/motoko_agent/experiments/ar_candidate/bench/spawn.log\"\nbash experiments/ar_candidate/bench/benchmark.sh",
      "patience": 4,
-     "max_iterations": 25
+     "max_iterations": 25,
+     "session_dir": ".motoko/autoresearch_self_bootstrap"
    })
    ```
 
-6. Capture baseline immediately after init (before edits):
+7. Capture baseline immediately after init (before edits):
    - Call:
      ```json
      ar_run({ "samples": 7 })
      ```
+   - Note: this consumes one run slot in the segment (`max_iterations` counts this baseline run).
    - Record run metadata as baseline from returned aggregate metrics.
    - Immediately log it (usually `keep` if checks pass) with all required fields:
      ```json
@@ -118,7 +130,7 @@ Execution plan:
      })
      ```
 
-7. Iterate optimization loop:
+8. Iterate optimization loop:
    - edit candidate files only under `experiments/ar_candidate/` (respect off-limits)
    - call:
      ```json
@@ -141,7 +153,7 @@ Execution plan:
      - `max_iterations` reached, or
      - immutable checks/constraints fail and cannot be repaired.
 
-8. Final verification and report:
+9. Final verification and report:
    ```bash
    set -euo pipefail
    sha256sum -c experiments/ar_candidate/bench/immutable.sha256
