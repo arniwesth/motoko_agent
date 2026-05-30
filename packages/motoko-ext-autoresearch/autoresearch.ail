@@ -7,7 +7,7 @@ import std/json (Json, decode, encode, asArray, asString, asBool, asNumber, get,
 import std/option (Option, Some, None)
 import std/process (exec, ProcessError)
 import std/result (Result, Ok, Err)
-import std/string (startsWith, split, trim, substring, find, length, stringToFloat)
+import std/string (startsWith, split, trim, substring, find, length, stringToFloat, contains, replace)
 
 import pkg/sunholo/motoko_ext_abi/types (
   ExtensionHooks, ExtCtx, Msg, ToolSchema,
@@ -103,6 +103,168 @@ func list_len[a](xs: [a]) -> int {
   match xs {
     [] => 0,
     _ :: rest => 1 + list_len(rest)
+  }
+}
+
+func extract_between(src: string, start_pat: string, end_pat: string) -> string {
+  let i = find(src, start_pat);
+  if i < 0 then ""
+  else {
+    let s0 = i + length(start_pat);
+    let rest = substring(src, s0, length(src));
+    let j = find(rest, end_pat);
+    if j < 0 then "" else substring(rest, 0, j)
+  }
+}
+
+func unescape_json_string(s: string) -> string {
+  let s1 = replace(s, "\\n", "\n");
+  let s2 = replace(s1, "\\t", "\t");
+  let s3 = replace(s2, "\\\"", "\"");
+  replace(s3, "\\\\", "\\")
+}
+
+func raw_str_field(raw: string, key: string, fallback: string) -> string {
+  let v = extract_between(raw, "\"${key}\":\"", "\"");
+  if v == "" then fallback else unescape_json_string(v)
+}
+
+func raw_int_field(raw: string, key: string, fallback: int) -> int {
+  let t0 = trim(extract_between(raw, "\"${key}\":", ","));
+  let t = if t0 != "" then t0 else trim(extract_between(raw, "\"${key}\":", "}"));
+  if t == "" then fallback
+  else match stringToFloat(t) {
+    Some(n) => _float_to_int(n),
+    None => fallback
+  }
+}
+
+func raw_bool_field(raw: string, key: string, fallback: bool) -> bool {
+  let t0 = trim(extract_between(raw, "\"${key}\":", ","));
+  let t = if t0 != "" then t0 else trim(extract_between(raw, "\"${key}\":", "}"));
+  if t == "true" then true
+  else if t == "false" then false
+  else fallback
+}
+
+func has_metrics(xs: [MetricSpec]) -> bool {
+  match xs {
+    [] => false,
+    _ => true
+  }
+}
+
+func fallback_metric_from_raw(raw: string) -> [MetricSpec] {
+  if not contains(raw, "\"metrics\"") then []
+  else {
+    let name = extract_between(raw, "\"name\":\"", "\"");
+    if name == "" then []
+    else {
+      let direction0 = extract_between(raw, "\"direction\":\"", "\"");
+      let direction = if direction0 == "" then "minimize" else direction0;
+      let noisy = raw_bool_field(raw, "noisy", false);
+      [{ name: name, direction: direction, noisy: noisy }]
+    }
+  }
+}
+
+func raw_payload(args: Json) -> string {
+  let raw0 = encode(args);
+  match decode(raw0) {
+    Ok(j) =>
+      match asString(j) {
+        Some(s) => s,
+        None => raw0
+      },
+    Err(_) => raw0
+  }
+}
+
+func parse_init_cfg(call: ToolCallEnvelope) -> { objective: string, metrics: [MetricSpec], benchmark_script: string, scope_paths: [string], off_limits: [string], constraints: [string], checks_script: string, max_iterations: int, patience: int, new_segment: bool, session_dir: string } {
+  let cfg0 = Tools.parse_init_args(call.arguments);
+  if cfg0.objective != "" && cfg0.benchmark_script != "" && list_len(cfg0.metrics) > 0 then cfg0
+  else {
+    let raw = raw_payload(call.arguments);
+    let objective = raw_str_field(raw, "objective", cfg0.objective);
+    let benchmark_script = raw_str_field(raw, "benchmark_script", cfg0.benchmark_script);
+    let checks_script = raw_str_field(raw, "checks_script", cfg0.checks_script);
+    let session_dir = raw_str_field(raw, "session_dir", cfg0.session_dir);
+    let metrics = if has_metrics(cfg0.metrics) then cfg0.metrics else fallback_metric_from_raw(raw);
+    {
+      objective: objective,
+      metrics: metrics,
+      benchmark_script: benchmark_script,
+      scope_paths: cfg0.scope_paths,
+      off_limits: cfg0.off_limits,
+      constraints: cfg0.constraints,
+      checks_script: checks_script,
+      max_iterations: raw_int_field(raw, "max_iterations", cfg0.max_iterations),
+      patience: raw_int_field(raw, "patience", cfg0.patience),
+      new_segment: raw_bool_field(raw, "new_segment", cfg0.new_segment),
+      session_dir: session_dir
+    }
+  }
+}
+
+func parse_run_number_arg(call: ToolCallEnvelope) -> int {
+  let n0 = Tools.parse_run_number(call.arguments);
+  if n0 > 0 then n0 else raw_int_field(raw_payload(call.arguments), "run_number", 0)
+}
+
+func parse_decision_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_decision(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "decision", "")
+}
+
+func parse_changes_summary_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_changes_summary(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "changes_summary", "")
+}
+
+func parse_reasoning_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_reasoning(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "reasoning", "")
+}
+
+func parse_learnings_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_learnings(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "learnings", "")
+}
+
+func parse_justification_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_justification(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "justification", "")
+}
+
+func path_under_prefix(path: string, prefix: string) -> bool {
+  if prefix == "" then false
+  else if path == prefix then true
+  else startsWith(path, "${prefix}/")
+}
+
+func session_dir_rel(workdir: string, session_dir: string) -> string {
+  let wd = if ends_with_slash(workdir) then substring(workdir, 0, length(workdir) - 1) else workdir;
+  let pref = "${wd}/";
+  if startsWith(session_dir, pref) then substring(session_dir, length(pref), length(session_dir))
+  else session_dir
+}
+
+func ends_with_slash(s: string) -> bool {
+  let n = length(s);
+  if n <= 0 then false else substring(s, n - 1, n) == "/"
+}
+
+func exclude_session_paths(paths: [string], workdir: string, session_dir: string) -> [string] {
+  let rel = session_dir_rel(workdir, session_dir);
+  exclude_session_paths_rec(paths, rel)
+}
+
+func exclude_session_paths_rec(paths: [string], rel: string) -> [string] {
+  match paths {
+    [] => [],
+    p :: rest =>
+      if path_under_prefix(p, rel) then exclude_session_paths_rec(rest, rel)
+      else p :: exclude_session_paths_rec(rest, rel)
   }
 }
 
@@ -453,7 +615,7 @@ func policy_hook(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
 }
 
 func handle_init(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS} {
-  let cfg = Tools.parse_init_args(call.arguments);
+  let cfg = parse_init_cfg(call);
   if cfg.objective == "" || cfg.benchmark_script == "" || list_len(cfg.metrics) == 0 then
     reject(call, "ar_init requires objective, metrics, and benchmark_script")
   else {
@@ -616,12 +778,12 @@ func commit_or_revert(decision: string, cwd: string, paths: [string], run_no: in
 func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS, Clock} {
   let session_dir = resolve_session_dir(ctx, call.arguments);
   let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 1 };
-  let requested = Tools.parse_run_number(call.arguments);
-  let decision = Tools.parse_decision(call.arguments);
-  let changes_summary = Tools.parse_changes_summary(call.arguments);
-  let reasoning = Tools.parse_reasoning(call.arguments);
-  let learnings = Tools.parse_learnings(call.arguments);
-  let justification = Tools.parse_justification(call.arguments);
+  let requested = parse_run_number_arg(call);
+  let decision = parse_decision_arg(call);
+  let changes_summary = parse_changes_summary_arg(call);
+  let reasoning = parse_reasoning_arg(call);
+  let learnings = parse_learnings_arg(call);
+  let justification = parse_justification_arg(call);
   let flagged_reason = Tools.parse_flag_reason(call.arguments, requested);
   let specs = parse_metric_specs_json(match DB.current_metrics_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
   let primary = first_metric_name(specs);
@@ -637,7 +799,8 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Pr
       else {
         let init_dirty = Scope.parse_json_string_array(match DB.current_init_dirty_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
         let current_dirty = match Git.dirty_paths(ctx.workdir) { Ok(xs) => xs, Err(_) => [] };
-        let iteration_changes = Scope.compute_iteration_changes(init_dirty, current_dirty);
+        let iteration_changes0 = Scope.compute_iteration_changes(init_dirty, current_dirty);
+        let iteration_changes = exclude_session_paths(iteration_changes0, ctx.workdir, session_dir);
         let scope_paths = Scope.parse_json_string_array(match DB.current_scope_paths_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
         let off_limits = Scope.parse_json_string_array(match DB.current_off_limits_json(session_dir) { Ok(s) => s, Err(_) => "[]" });
         let deviations = Scope.compute_scope_deviations(iteration_changes, scope_paths, off_limits);
@@ -664,44 +827,48 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Pr
               _ => jo([])
             };
           let session_id = match DB.current_session_id(session_dir) { Ok(id) => id, Err(_) => 0 };
-          let _ = DB.insert_run(
+          match DB.insert_run(
             session_dir, session_id, segment, p.run_number, decision,
             p.metrics_json, p.samples_json, p.asi_json, changes_summary, reasoning, learnings,
             encode(str_json_array(deviations)), justification, encode(confidence), git.sha,
             flagged, flagged_reason, p.checks_passed, improved, p.duration_ms, encode(str_json_array(iteration_changes))
-          );
-          let _ = DB.clear_pending_run(session_dir, segment);
-          if learnings != "" then {
-            let _ = Notes.append_idea(session_dir, learnings);
-            ()
-          } else ();
-          let run_count = match DB.run_count(session_dir, segment) { Ok(n) => n, Err(_) => 0 };
-          let max_it = match DB.current_max_iterations(session_dir) { Ok(n) => n, Err(_) => 20 };
-          let patience = match DB.current_patience(session_dir) { Ok(n) => n, Err(_) => 3 };
-          if run_count >= max_it then {
-            let _ = DB.mark_current_session(session_dir, "exhausted", "max_iterations reached");
-            ()
-          } else ();
-          let stall = Metrics.stall_count(session_dir, segment);
-          accept_with_meta(
-            call,
-            "logged",
-            jo([
-              kv("status", js("logged")),
-              kv("iteration", jnum(_int_to_float(run_count))),
-              kv("segment", jnum(_int_to_float(segment))),
-              kv("git_action", js(git.action)),
-              kv("commit_sha", js(git.sha)),
-              kv("scope_deviations", str_json_array(deviations)),
-              kv("best_metric", best_metric),
-              kv("patience", jnum(_int_to_float(patience))),
-              kv("confidence_report", confidence),
-              kv("flagged", jb(flagged)),
-              kv("flagged_reason", js(flagged_reason)),
-              kv("stall", jnum(_int_to_float(stall))),
-              kv("ar_state", js(if run_count >= max_it then "Done" else "Ready"))
-            ])
-          )
+          ) {
+            Err(e) => reject(call, "insert_run failed: ${e}"),
+            Ok(_) => {
+              let _ = DB.clear_pending_run(session_dir, segment);
+              if learnings != "" then {
+                let _ = Notes.append_idea(session_dir, learnings);
+                ()
+              } else ();
+              let run_count = match DB.run_count(session_dir, segment) { Ok(n) => n, Err(_) => 0 };
+              let max_it = match DB.current_max_iterations(session_dir) { Ok(n) => n, Err(_) => 20 };
+              let patience = match DB.current_patience(session_dir) { Ok(n) => n, Err(_) => 3 };
+              if run_count >= max_it then {
+                let _ = DB.mark_current_session(session_dir, "exhausted", "max_iterations reached");
+                ()
+              } else ();
+              let stall = Metrics.stall_count(session_dir, segment);
+              accept_with_meta(
+                call,
+                "logged",
+                jo([
+                  kv("status", js("logged")),
+                  kv("iteration", jnum(_int_to_float(run_count))),
+                  kv("segment", jnum(_int_to_float(segment))),
+                  kv("git_action", js(git.action)),
+                  kv("commit_sha", js(git.sha)),
+                  kv("scope_deviations", str_json_array(deviations)),
+                  kv("best_metric", best_metric),
+                  kv("patience", jnum(_int_to_float(patience))),
+                  kv("confidence_report", confidence),
+                  kv("flagged", jb(flagged)),
+                  kv("flagged_reason", js(flagged_reason)),
+                  kv("stall", jnum(_int_to_float(stall))),
+                  kv("ar_state", js(if run_count >= max_it then "Done" else "Ready"))
+                ])
+              )
+            }
+          }
         }
       }
   }

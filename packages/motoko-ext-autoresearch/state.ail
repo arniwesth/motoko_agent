@@ -21,20 +21,18 @@ func has_pending(session_dir: string, segment: int) -> bool ! {Process} {
 }
 
 export func derive_state(session_dir: string) -> ArState ! {Process} {
-  match DB.current_session_row(session_dir) {
-    Err(_) => Setup,
-    Ok(None) => Setup,
-    Ok(Some(row)) => {
-      let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 0 };
-      let status = match DB.current_status(session_dir) { Ok(s) => s, Err(_) => "" };
-      if status != "active" then Done(status)
-      else if has_pending(session_dir, segment) then {
-        match DB.read_pending_run(session_dir, segment) {
-          Ok(Some(p)) => AwaitingLog(p.run_number),
-          _ => AwaitingLog(0)
-        }
-      } else Ready
-    }
+  let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 0 };
+  if segment <= 0 then Setup
+  else {
+    let status0 = match DB.current_status(session_dir) { Ok(s) => s, Err(_) => "active" };
+    let status = if status0 == "" then "active" else status0;
+    if status != "active" then Done(status)
+    else if has_pending(session_dir, segment) then {
+      match DB.read_pending_run(session_dir, segment) {
+        Ok(Some(p)) => AwaitingLog(p.run_number),
+        _ => AwaitingLog(0)
+      }
+    } else Ready
   }
 }
 
