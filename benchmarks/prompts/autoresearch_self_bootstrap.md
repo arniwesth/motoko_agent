@@ -8,82 +8,149 @@ Hard requirements:
 2. Keep benchmark and checks immutable during optimization (off-limits to candidate edits).
 3. Use `scope_paths` + `off_limits` so `optimizer != optimized`.
 4. Use deterministic primary metric and noisy secondary metric exactly as intended.
-5. Capture and preserve a measured baseline before any candidate mutations.
+5. Capture and preserve a measured baseline before candidate mutations.
+
+Execution contract:
+- Execute steps in order.
+- Use repo root (`/workspaces/motoko_agent`) as cwd.
+- Treat benchmark/check artifacts as immutable once hashed.
+- Do not call `ar_run` again until pending run is logged with `ar_log`.
 
 Execution plan:
-1. Create candidate workspace:
-   - `experiments/ar_candidate/`
-   - Copy extension sources from `packages/motoko-ext-autoresearch/` into `experiments/ar_candidate/`.
-   - Create `experiments/ar_candidate/bench/`.
+1. Preflight guards (must pass):
+   ```bash
+   set -euo pipefail
+   test -d packages/motoko-ext-autoresearch
+   test -x "$(command -v ailang)"
+   test -x "$(command -v duckdb)"
+   git rev-parse --is-inside-work-tree >/dev/null
+   ```
 
-2. Create benchmark harness files in `experiments/ar_candidate/bench/`:
-   - `exercise_100_calls.ail`: repeatedly trigger extension hot-path behavior in a deterministic way.
-   - PATH shim script to count `duckdb` spawns into `$SPAWN_LOG`.
-   - Any helper files needed by benchmark/check scripts.
-   - Benchmark must run in an isolated subprocess environment that:
-     - resets/truncates `$SPAWN_LOG` per sample
-     - sets PATH so only the shimmed `duckdb` is counted
-     - avoids counting unrelated processes from outside the run.
+2. Create candidate workspace:
+   ```bash
+   set -euo pipefail
+   mkdir -p experiments
+   rm -rf experiments/ar_candidate
+   cp -R packages/motoko-ext-autoresearch experiments/ar_candidate
+   mkdir -p experiments/ar_candidate/bench/shim
+   ```
 
-3. Create immutable checks script for candidate behavior:
-   - Validate FSM behavior, scope gating, and logging invariants relevant to autoresearch.
-   - Fail on any contract break.
-   - Record SHA256 hashes for benchmark/check artifacts before optimization starts.
-   - Re-verify the same hashes after every iteration and at finalization; abort on drift.
+3. Create benchmark harness in `experiments/ar_candidate/bench/`:
+   - `exercise_100_calls.ail`: deterministic hot-path trigger for exactly 100 extension-relevant calls.
+   - `shim/duckdb`: counting shim that appends one line per invocation to `$SPAWN_LOG`, then `exec "$DUCKDB_REAL" "$@"`.
+   - `benchmark.sh`: prints exactly:
+     - `METRIC duckdb_spawns_per_100_calls=<int>`
+     - `METRIC overhead_ms=<int>`
+     - `METRIC ext_lines=<int>`
+   - `checks.sh`: validates FSM behavior, scope gating, and logging invariants for candidate code; exits non-zero on failure.
 
-4. Capture baseline before `ar_init`:
-   - Run the benchmark + checks against pristine `experiments/ar_candidate/` with no candidate edits.
-   - Use the same sample count intended for optimization comparisons (`samples: 7`).
-   - Persist baseline metrics as:
-     - `BASELINE duckdb_spawns_per_100_calls=<int>`
-     - `BASELINE overhead_ms=<int>`
-     - `BASELINE ext_lines=<int>`
+   Required `benchmark.sh` behavior:
+   - `set -euo pipefail`
+   - verify `DUCKDB_REAL` is set and executable before PATH rewrite
+   - reset `$SPAWN_LOG` each sample (`: > "$SPAWN_LOG"`)
+   - run benchmark workload from isolated PATH with shim first
+   - wall-time uses bash (`date +%s%N`), not virtual AILANG clock
+   - `ext_lines` counts only candidate source (`*.ail`) excluding `bench/`, tests, and `registry_generated.ail`
 
-5. Initialize autoresearch with `ar_init`:
-   - objective: reduce per-tool-call overhead in derive_state path without behavior change.
-   - metrics:
-     - `duckdb_spawns_per_100_calls` minimize (primary, deterministic)
-     - `overhead_ms` minimize (secondary, noisy)
-     - `ext_lines` minimize (informational)
-   - scope_paths:
-     - `experiments/ar_candidate/`
-   - off_limits:
-     - `packages/motoko-ext-autoresearch/`
-     - `experiments/ar_candidate/**/tests/**`
-     - `experiments/ar_candidate/**/*_test.ail`
-     - `experiments/ar_candidate/**/*.test.ail`
-     - `experiments/ar_candidate/bench/`
-     - `experiments/ar_candidate/**/registry_generated.ail`
-     - `packages/**/registry_generated.ail`
-   - constraints:
-     - candidate must pass full candidate checks unchanged
-     - derive_state remains DB-authoritative
-     - no tool/schema contract changes
-     - AwaitingLog hard-block behavior preserved
-   - checks_script: use the immutable checks harness
-   - benchmark_script:
-     - emits:
-       - `METRIC duckdb_spawns_per_100_calls=<int>`
-       - `METRIC overhead_ms=<int>`
-       - `METRIC ext_lines=<int>`
-   - patience: 4
-   - max_iterations: 25
+4. Freeze benchmark/check artifacts (immutability):
+   ```bash
+   set -euo pipefail
+   chmod +x experiments/ar_candidate/bench/shim/duckdb
+   chmod +x experiments/ar_candidate/bench/benchmark.sh
+   chmod +x experiments/ar_candidate/bench/checks.sh
+   sha256sum \
+     experiments/ar_candidate/bench/exercise_100_calls.ail \
+     experiments/ar_candidate/bench/shim/duckdb \
+     experiments/ar_candidate/bench/benchmark.sh \
+     experiments/ar_candidate/bench/checks.sh \
+     > experiments/ar_candidate/bench/immutable.sha256
+   ```
 
-6. Iterate:
-   - call `ar_run` with sampling appropriate for noisy metric (e.g. `samples: 7`)
-   - inspect results
-   - call `ar_log(keep|discard)` with rigorous reasoning
-   - continue until one stop condition is met:
-     - no primary-metric improvement for 4 consecutive iterations (patience exhausted), or
-     - max_iterations reached, or
-     - candidate fails immutable checks/constraints and cannot be repaired within the loop.
+5. Initialize autoresearch with exact tool argument shape:
+   ```json
+   ar_init({
+     "objective": "Reduce per-tool-call overhead in derive_state hot path without behavior change",
+     "metrics": [
+       { "name": "duckdb_spawns_per_100_calls", "direction": "minimize", "noisy": false },
+       { "name": "overhead_ms", "direction": "minimize", "noisy": true },
+       { "name": "ext_lines", "direction": "minimize", "noisy": false }
+     ],
+     "scope_paths": [
+       "experiments/ar_candidate/"
+     ],
+     "off_limits": [
+       "packages/motoko-ext-autoresearch/",
+       "experiments/ar_candidate/**/tests/**",
+       "experiments/ar_candidate/**/*_test.ail",
+       "experiments/ar_candidate/**/*.test.ail",
+       "experiments/ar_candidate/bench/",
+       "experiments/ar_candidate/**/registry_generated.ail",
+       "packages/**/registry_generated.ail"
+     ],
+     "constraints": [
+       "candidate must pass full candidate checks unchanged",
+       "derive_state remains DB-authoritative",
+       "no tool/schema contract changes",
+       "AwaitingLog hard-block behavior preserved"
+     ],
+     "checks_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nbash experiments/ar_candidate/bench/checks.sh",
+     "benchmark_script": "#!/usr/bin/env bash\nset -euo pipefail\ncd /workspaces/motoko_agent\nsha256sum -c experiments/ar_candidate/bench/immutable.sha256\nexport DUCKDB_REAL=\"$(command -v duckdb)\"\nexport SPAWN_LOG=\"/workspaces/motoko_agent/experiments/ar_candidate/bench/spawn.log\"\nbash experiments/ar_candidate/bench/benchmark.sh",
+     "patience": 4,
+     "max_iterations": 25
+   })
+   ```
 
-7. At the end:
-   - summarize best metrics vs baseline (include absolute and percent deltas)
-   - list kept commits and why they were safe
-   - confirm live extension code was untouched by verifying:
-     - `git diff -- packages/motoko-ext-autoresearch/` is empty
-   - confirm benchmark/check definitions were unchanged during optimization via final SHA256 match.
-   - report exact file set used for `ext_lines` (candidate source only; exclude `bench/`, tests, and generated files).
+6. Capture baseline immediately after init (before edits):
+   - Call:
+     ```json
+     ar_run({ "samples": 7 })
+     ```
+   - Record run metadata as baseline from returned aggregate metrics.
+   - Immediately log it (usually `keep` if checks pass) with all required fields:
+     ```json
+     ar_log({
+       "run_number": <baseline_run_number>,
+       "decision": "keep",
+       "changes_summary": "Baseline capture before candidate mutations",
+       "reasoning": "Establishes authoritative baseline metrics for this segment",
+       "learnings": "Baseline only",
+       "justification": "No candidate edits; metrics snapshot"
+     })
+     ```
+
+7. Iterate optimization loop:
+   - edit candidate files only under `experiments/ar_candidate/` (respect off-limits)
+   - call:
+     ```json
+     ar_run({ "samples": 7 })
+     ```
+   - inspect returned `metrics`, `within_run_mad`, `checks_passed`, and `run_number`
+   - call `ar_log` with required fields every iteration:
+     ```json
+     ar_log({
+       "run_number": <run_number_from_ar_run>,
+       "decision": "keep|discard",
+       "changes_summary": "<what changed>",
+       "reasoning": "<why keep/discard based on metrics + checks>",
+       "learnings": "<optional>",
+       "justification": "<optional scope/off-limits note if relevant>"
+     })
+     ```
+   - stop when one condition is met:
+     - no primary-metric improvement for 4 consecutive kept runs (patience exhausted), or
+     - `max_iterations` reached, or
+     - immutable checks/constraints fail and cannot be repaired.
+
+8. Final verification and report:
+   ```bash
+   set -euo pipefail
+   sha256sum -c experiments/ar_candidate/bench/immutable.sha256
+   git diff -- packages/motoko-ext-autoresearch/
+   ```
+   - `git diff -- packages/motoko-ext-autoresearch/` must be empty.
+   - Summarize best metrics vs baseline with absolute and percent deltas.
+   - List kept commits and why each was safe.
+   - Confirm benchmark/check definitions stayed unchanged (hash match).
+   - Report exact file set used for `ext_lines`.
 
 Start now and execute the full loop autonomously.
