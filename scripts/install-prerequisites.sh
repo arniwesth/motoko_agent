@@ -188,7 +188,7 @@ install_apt_packages() {
   log_info "Updating package lists..."
   "${SUDO[@]}" apt-get update -qq
 
-  local pkgs=(git curl build-essential ca-certificates jq rsync)
+  local pkgs=(git curl build-essential ca-certificates jq rsync locales)
   local missing=()
   for pkg in "${pkgs[@]}"; do
     dpkg -s "$pkg" &>/dev/null || missing+=("$pkg")
@@ -200,6 +200,12 @@ install_apt_packages() {
     log_info "Installing: ${missing[*]}"
     "${SUDO[@]}" apt-get install -y -qq "${missing[@]}"
     log_ok "System packages installed"
+  fi
+  # Generate en_US.UTF-8 locale if the locales package was installed
+  if ! locale -a 2>/dev/null | grep -q en_US; then
+    log_info "Generating en_US.UTF-8 locale..."
+    "${SUDO[@]}" locale-gen en_US.UTF-8 2>/dev/null || true
+    log_ok "en_US.UTF-8 locale generated"
   fi
 }
 
