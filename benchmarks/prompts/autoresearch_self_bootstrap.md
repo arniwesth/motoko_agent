@@ -16,6 +16,7 @@ Execution contract:
 - Treat benchmark/check artifacts as immutable once hashed.
 - Do not call `ar_run` again until pending run is logged with `ar_log`.
 - `scope_paths` / `off_limits` matching is prefix-or-exact only in current implementation (no `**` glob semantics).
+- For this benchmark, any off-limits deviation is a hard failure: discard the run; do not keep via `justification`.
 
 Execution plan:
 1. Preflight guards (must pass):
@@ -25,9 +26,29 @@ Execution plan:
    test -x "$(command -v ailang)"
    test -x "$(command -v duckdb)"
    git rev-parse --is-inside-work-tree >/dev/null
+   git diff --quiet -- packages/motoko-ext-autoresearch/
+   test -z "$(git ls-files --others --exclude-standard -- packages/motoko-ext-autoresearch/)"
    ```
 
-2. Create candidate workspace:
+2. Ensure run branch before creating candidate fixtures:
+   - Reason: the baseline fixture commit must land on an `autoresearch/*` branch before `ar_init`.
+   - `ar_init` reuses current `autoresearch/*` branch; if you commit first on another branch, you pollute that branch.
+   ```bash
+   set -euo pipefail
+   current="$(git rev-parse --abbrev-ref HEAD)"
+   if [[ "$current" != autoresearch/* ]]; then
+     base="autoresearch/self-bootstrap-$(date -u +%Y%m%d)"
+     target="$base"
+     i=2
+     while git show-ref --verify --quiet "refs/heads/$target"; do
+       target="${base}-${i}"
+       i=$((i + 1))
+     done
+     git switch -c "$target"
+   fi
+   ```
+
+3. Create candidate workspace:
    ```bash
    set -euo pipefail
    mkdir -p experiments
@@ -36,7 +57,7 @@ Execution plan:
    mkdir -p experiments/ar_candidate/bench/shim
    ```
 
-3. Create benchmark harness in `experiments/ar_candidate/bench/`:
+4. Create benchmark harness in `experiments/ar_candidate/bench/`:
    - `exercise_100_calls.ail`: deterministic hot-path trigger for exactly 100 extension-relevant calls.
    - `shim/duckdb`: counting shim that appends one line per invocation to `$SPAWN_LOG`, then `exec "$DUCKDB_REAL" "$@"`.
    - `benchmark.sh`: prints exactly:
@@ -53,7 +74,7 @@ Execution plan:
    - wall-time uses bash (`date +%s%N`), not virtual AILANG clock
    - `ext_lines` counts only candidate source (`*.ail`) excluding `bench/`, tests, and `registry_generated.ail`
 
-4. Freeze benchmark/check artifacts (immutability):
+5. Freeze benchmark/check artifacts (immutability):
    ```bash
    set -euo pipefail
    chmod +x experiments/ar_candidate/bench/shim/duckdb
@@ -67,7 +88,7 @@ Execution plan:
      > experiments/ar_candidate/bench/immutable.sha256
    ```
 
-5. Create a baseline commit for candidate fixtures before `ar_init`:
+6. Create a baseline commit for candidate fixtures before `ar_init`:
    - Reason: `ar_init` snapshots `init_dirty`; any path already dirty at init is excluded from per-iteration changes.
    - If candidate files are not committed before `ar_init`, later edits to those paths can be silently excluded from keep/discard git actions.
    ```bash
@@ -76,7 +97,7 @@ Execution plan:
    git commit -m "autoresearch bootstrap: candidate fixture baseline"
    ```
 
-6. Initialize autoresearch with exact tool argument shape:
+7. Initialize autoresearch with exact tool argument shape:
    ```json
    ar_init({
      "objective": "Reduce per-tool-call overhead in derive_state hot path without behavior change",
@@ -93,6 +114,7 @@ Execution plan:
        "experiments/ar_candidate/state_test.ail",
        "experiments/ar_candidate/metrics_test.ail",
        "experiments/ar_candidate/scope_test.ail",
+       "experiments/ar_candidate/_smoke.ail",
        "experiments/ar_candidate/bench/",
        "src/core/ext/registry_generated.ail",
        ".packages/motoko_core/src/core/ext/registry_generated.ail"
@@ -111,7 +133,7 @@ Execution plan:
    })
    ```
 
-7. Capture baseline immediately after init (before edits):
+8. Capture baseline immediately after init (before edits):
    - Call:
      ```json
      ar_run({ "samples": 7 })
@@ -130,7 +152,7 @@ Execution plan:
      })
      ```
 
-8. Iterate optimization loop:
+9. Iterate optimization loop:
    - edit candidate files only under `experiments/ar_candidate/` (respect off-limits)
    - call:
      ```json
@@ -153,7 +175,7 @@ Execution plan:
      - `max_iterations` reached, or
      - immutable checks/constraints fail and cannot be repaired.
 
-9. Final verification and report:
+10. Final verification and report:
    ```bash
    set -euo pipefail
    sha256sum -c experiments/ar_candidate/bench/immutable.sha256
@@ -168,6 +190,8 @@ Execution plan:
 Troubleshooting (quick fixes):
 - `ar_init` fails with `session already exists; use ar_init(new_segment=true)`:
   - Re-run `ar_init` with `"new_segment": true`, or remove the session dir `.motoko/autoresearch_self_bootstrap` if starting fresh.
+- Baseline fixture commit fails with `nothing to commit`:
+  - Confirm step 3 actually recreated `experiments/ar_candidate/`; if rerunning in-place, remove and recreate candidate workspace first.
 - `ar_log` fails with `run_number mismatch`:
   - Use the exact `run_number` returned by the most recent `ar_run`; do not guess or increment manually.
 - `ar_log` fails with `cannot keep: run failed checks or exited nonzero`:
@@ -179,7 +203,7 @@ Troubleshooting (quick fixes):
 - `duckdb` count metric is unexpectedly zero/flat:
   - Verify `DUCKDB_REAL` is exported, shim is executable, shim is first on PATH inside benchmark script, and `$SPAWN_LOG` is reset per sample.
 - Candidate edits are not being committed/reverted across iterations:
-  - Ensure step 5 baseline commit ran before `ar_init`; if not, restart from a fresh segment after baseline commit.
+  - Ensure step 6 baseline commit ran before `ar_init`; if not, restart from a fresh segment after baseline commit.
 - Live extension appears modified:
   - Stop and inspect `git diff -- packages/motoko-ext-autoresearch/`; any non-empty diff is a hard failure of this benchmark run.
 
