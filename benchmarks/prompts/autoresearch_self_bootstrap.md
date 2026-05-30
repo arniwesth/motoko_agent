@@ -16,7 +16,7 @@ Execution contract:
 - Treat benchmark/check artifacts as immutable once hashed.
 - Do not call `ar_run` again until pending run is logged with `ar_log`.
 - `scope_paths` / `off_limits` matching is prefix-or-exact only in current implementation (no `**` glob semantics).
-- For this benchmark, any off-limits deviation is a hard failure: discard the run; do not keep via `justification`.
+- For this benchmark, any scope or off-limits deviation is a hard failure: discard the run; do not keep via `justification`.
 
 Execution plan:
 1. Preflight guards (must pass):
@@ -91,10 +91,11 @@ Execution plan:
 6. Create a baseline commit for candidate fixtures before `ar_init`:
    - Reason: `ar_init` snapshots `init_dirty`; any path already dirty at init is excluded from per-iteration changes.
    - If candidate files are not committed before `ar_init`, later edits to those paths can be silently excluded from keep/discard git actions.
+   - Commit only the candidate fixture path so unrelated staged files are never captured.
    ```bash
    set -euo pipefail
    git add -- experiments/ar_candidate
-   git commit -m "autoresearch bootstrap: candidate fixture baseline"
+   git commit -m "autoresearch bootstrap: candidate fixture baseline" -- experiments/ar_candidate
    ```
 
 7. Initialize autoresearch with exact tool argument shape:
@@ -180,6 +181,7 @@ Execution plan:
    set -euo pipefail
    sha256sum -c experiments/ar_candidate/bench/immutable.sha256
    git diff -- packages/motoko-ext-autoresearch/
+   test -z "$(git ls-files --others --exclude-standard -- packages/motoko-ext-autoresearch/)"
    ```
    - `git diff -- packages/motoko-ext-autoresearch/` must be empty.
    - Summarize best metrics vs baseline with absolute and percent deltas.
@@ -197,7 +199,7 @@ Troubleshooting (quick fixes):
 - `ar_log` fails with `cannot keep: run failed checks or exited nonzero`:
   - Inspect `checks.sh` and benchmark stderr/stdout tails from `ar_run` metadata, fix candidate, then run a new iteration.
 - `ar_log` fails with `scope deviation requires justification for keep`:
-  - Either discard, or provide non-empty `"justification"` that explicitly explains each deviation.
+  - For this benchmark, treat as hard failure and discard; do not keep runs with scope or off-limits deviations.
 - Hash check fails (`sha256sum -c ... FAILED`):
   - Benchmark/check artifacts drifted. Restore canonical files in `experiments/ar_candidate/bench/`, regenerate `immutable.sha256`, and restart the segment.
 - `duckdb` count metric is unexpectedly zero/flat:
