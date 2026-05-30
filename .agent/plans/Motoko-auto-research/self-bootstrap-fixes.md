@@ -356,8 +356,10 @@ Add to the troubleshooting section:
 
 ```
 - ailang-docs MCP server covers up to v0.19.1; installed compiler is v0.22.0.
-  For syntax questions, read existing .ail files in the repo rather than
-  querying the docs server. The candidate code itself is the best reference.
+  The docs server's `prompt_get` tool returns the latest AILANG teacher prompt
+  (for v0.19.1) which is still useful for syntax and stdlib patterns — use it,
+  but prefer reading existing .ail files in the repo for v0.22.0-specific
+  features. The candidate code itself is the best reference for current idioms.
 ```
 
 ---
