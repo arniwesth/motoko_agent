@@ -281,6 +281,12 @@ the ARC phases depend on.**
   supported for keep/discard discipline**. Per §2/§3.6, do not run the real loop
   until this is fixed, or reframe the primary as a deterministic/minimized fallback
   such as `fail_rate`.
+- Follow-up fix: `packages/motoko-ext-autoresearch/autoresearch.ail` now computes
+  the pending run's primary MAD from `samples_json` when the primary metric is marked
+  noisy and passes that noise into `Metrics.improved`. Focused verification:
+  `AILANG_RELAX_MODULES=1 ailang check packages/motoko-ext-autoresearch/autoresearch.ail`,
+  `ailang test packages/motoko-ext-autoresearch/metrics_test.ail`, and the
+  DeepSeek-locked Polyglot `checks.sh` all pass.
 
 ### 5b — Terminal-Bench (richer second target; needs Docker — R9)
 - [ ] `uv tool install harbor`; **verify Docker** (cheap check). If unavailable, run
@@ -319,11 +325,12 @@ says `/workspaces/ailang_agent/...` from before the repo rename; harmless.)
   methods, let patience kill dead segments. Keep fetching out of the benchmark sandbox.
 - **R-noise (noise budget vs cost):** samples × tasks needed for meaningful MAD without
   making `ar_run` slow.
-- **R-metrics (`metrics.ail` assumptions):** `maximize` is implemented, but the
-  2026-05-31 Polyglot warm-up found that noisy-primary support is incomplete:
-  `ar_run` reports median/MAD, while `ar_log` keep/improvement still compares with
-  `noise=0.0`. This is now the top-priority extension change before the real 0.5a
-  loop. (See §2 TODO and §5a findings.)
+- **R-metrics (`metrics.ail` assumptions):** `maximize` is implemented. The
+  2026-05-31 Polyglot warm-up found that noisy-primary support was incomplete:
+  `ar_run` reported median/MAD, while `ar_log` keep/improvement compared with
+  `noise=0.0`. A local follow-up now applies pending-run primary MAD to the
+  keep/improvement test; the remaining risk is proving it through a live
+  `samples>1` autoresearch run. (See §2 TODO and §5a findings.)
 - **R9 Harbor needs Docker (5b only):** Harbor/TB run tasks in Docker; may be
   unavailable/heavy here. Mitigation: **5a (Polyglot) needs no Docker** and already
   proves the loop; for 5b, run Harbor on the Mac host or skip it.

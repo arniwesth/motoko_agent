@@ -867,7 +867,39 @@ func parse_json_float(raw: string, key: string) -> Option[float] {
   }
 }
 
-func improved_for_keep(session_dir: string, segment: int, primary: string, direction: string, decision: string, metrics_raw: string) -> bool ! {Process} {
+func json_numbers(xs: [Json]) -> [float] {
+  match xs {
+    [] => [],
+    j :: rest =>
+      match asNumber(j) {
+        Some(n) => n :: json_numbers(rest),
+        None => json_numbers(rest)
+      }
+  }
+}
+
+func parse_json_float_array(raw: string, key: string) -> [float] {
+  match decode(raw) {
+    Err(_) => [],
+    Ok(j) => match get(j, key) {
+      None => [],
+      Some(v) => match asArray(v) {
+        None => [],
+        Some(xs) => json_numbers(xs)
+      }
+    }
+  }
+}
+
+func primary_noise_for_run(primary: string, noisy: bool, samples_raw: string) -> float {
+  if not noisy || primary == "" then 0.0
+  else {
+    let vals = parse_json_float_array(samples_raw, primary);
+    if list_len(vals) >= 2 then Metrics.mad(vals) else 0.0
+  }
+}
+
+func improved_for_keep(session_dir: string, segment: int, primary: string, direction: string, noisy: bool, decision: string, metrics_raw: string, samples_raw: string) -> bool ! {Process} {
   if decision != "keep" || primary == "" then false
   else match parse_json_float(metrics_raw, primary) {
     None => false,
@@ -875,7 +907,7 @@ func improved_for_keep(session_dir: string, segment: int, primary: string, direc
       match DB.best_metric_value(session_dir, segment, primary, direction) {
         Err(_) => false,
         Ok(None) => true,
-        Ok(Some(prev)) => Metrics.improved(direction, prev, cur, 0.0)
+        Ok(Some(prev)) => Metrics.improved(direction, prev, cur, primary_noise_for_run(primary, noisy, samples_raw))
       }
   }
 }
@@ -927,7 +959,7 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
           reject_with_meta(call, "scope deviation requires justification for keep", jo([kv("scope_deviations", str_json_array(deviations))]))
         else {
           let git = commit_or_revert(decision, cwd, iteration_changes, p.run_number);
-          let improved = improved_for_keep(session_dir, segment, primary, direction, decision, p.metrics_json);
+          let improved = improved_for_keep(session_dir, segment, primary, direction, primary_noisy, decision, p.metrics_json, p.samples_json);
           let flagged = flagged_reason != "";
           let confidence = match Metrics.confidence_report(session_dir, segment, primary, primary_noisy, 0.0, direction) {
             Ok(c) => jo([
