@@ -99,7 +99,13 @@ func accept_with_meta(call: ToolCallEnvelope, msg: string, meta: Json) -> ToolHa
 }
 
 func resolve_session_dir(ctx: ExtCtx, args: Json, defaults: AutoresearchConfig) -> string {
-  let raw = Tools.parse_session_dir(args, defaults.default_session_dir);
+  -- Typed path first; fall back to the raw JSON payload (same as the ar_log/ar_notes
+  -- field accessors) so an explicitly-passed session_dir is honored whether it
+  -- arrives as a typed tool-call or a raw-object envelope. Only then the default.
+  let typed = Tools.parse_session_dir(args, "");
+  let raw =
+    if typed != "" then typed
+    else raw_str_field(raw_payload(args), "session_dir", defaults.default_session_dir);
   if raw == "" then "${ctx.workdir}/${defaults.default_session_dir}"
   else if startsWith(raw, "/") then raw
   else "${ctx.workdir}/${raw}"
