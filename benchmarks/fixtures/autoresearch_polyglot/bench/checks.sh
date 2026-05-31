@@ -10,7 +10,7 @@ ensure_polyglot_env
 prompt="$REPO_ROOT/benchmarks/prompts/polyglot_system.md"
 test -s "$prompt" || fail "polyglot system prompt must not be empty"
 
-if grep -R -n -E 'AR-POLYGLOT-0_5A|splits/test.txt|grade_test.sh|rna-transcription|reverse-string|resistor-color' \
+if grep -R -n -E 'AR-POLYGLOT-0_5A|splits/test.txt|grade_test.sh|dominoes|ledger|minesweeper|satellite' \
   "$REPO_ROOT/benchmarks/prompts/polyglot_system.md" >/dev/null; then
   fail "candidate prompt appears to reference held-out TEST or the canary"
 fi

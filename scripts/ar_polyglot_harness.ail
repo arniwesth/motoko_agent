@@ -38,7 +38,7 @@ func defaults() -> AutoresearchConfig {
     default_patience: 2,
     default_max_iterations: 3,
     default_samples: 2,
-    default_timeout_ms: 240000
+    default_timeout_ms: 1200000
   }
 }
 
@@ -80,14 +80,14 @@ func init_args() -> Json {
     kv("patience", jnum(2.0)),
     kv("new_segment", jb(true)),
     kv("session_dir", js(session_dir)),
-    kv("cwd", js(worktree))
+    kv("cwd", js(repo))
   ])
 }
 
 func run_args() -> Json {
   jo([
     kv("session_dir", js(session_dir)),
-    kv("timeout_ms", jnum(240000.0)),
+    kv("timeout_ms", jnum(1200000.0)),
     kv("samples", jnum(2.0)),
     kv("label", js("polyglot"))
   ])
