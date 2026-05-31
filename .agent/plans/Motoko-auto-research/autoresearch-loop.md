@@ -229,12 +229,14 @@ agent strategy); the metric is **task pass-rate**.
       `polyglot_logs/python/` corpus already lists the exercise set).
 - [x] Wire `aider_polyglot.py` over TRAIN as the `benchmark_script` (emit
       `METRIC pass_rate=…`, `wall_ms`); baseline = current Motoko scaffolding.
-- [ ] Apply the §3/§3a integrity gates: out-of-loop TEST grading, oracle-vs-no-op
+- [x] Apply the §3/§3a integrity gates: out-of-loop TEST grading, oracle-vs-no-op
       (current scaffolding passes; an empty/broken scaffolding fails), one cheat trial,
       canary on the split definition.
-- [ ] Run a short autonomous autoresearch loop: optimizer edits Motoko scaffolding,
+- [~] Run a short autonomous autoresearch loop: optimizer edits Motoko scaffolding,
       `ar_run` measures Polyglot pass-rate over TRAIN, `ar_log` keep/discard; grade on
-      TEST between segments. Confirm kept gains transfer to held-out.
+      TEST between segments. **Loop ran (3 iterations, baseline kept, 2 candidates
+      discarded), but no kept gain transferred — see 0.5a findings below; noise budget
+      is the binding constraint.**
 - [x] Exercise §4: optimizer scouts one prompting/agent method from a paper, records it
       via the ledger/`ar_scout`, validates it on the metric.
 
@@ -242,6 +244,20 @@ agent strategy); the metric is **task pass-rate**.
 transfers to held-out TEST, the integrity gates hold under a cheat trial, and one
 literature method was recorded + validated. **This alone validates the core machinery
 the ARC phases depend on.**
+
+**5a Exit status (2026-05-31, Pro rebalanced split):** machinery validated, exit NOT
+yet reached. Met: harder hashed split, full `ar_init`/`ar_run`/`ar_log` loop, integrity
+gates (oracle-vs-no-op + cheat + immutable), literature methods recorded with measured
+outcomes. **Unmet: a kept scaffolding change that transfers to held-out TEST** — both
+candidates were soundly discarded on TRAIN and none beat the baseline (minimal prompt,
+TRAIN median 0.75 / TEST 0.500). The discarded ReAct candidate scored *higher* on TEST
+(0.667) than its TRAIN regression, so the in-loop decision did not transfer: at
+`samples=2` over 6 exercises the timeout-driven primary variance (~0.167/exercise) is
+comparable to candidate effect sizes (R-noise). Next: raise the noise budget (more
+samples and/or a less timeout-bound primary such as a non-timeout correctness metric)
+or broaden the candidate surface beyond the system prompt, then re-run for a kept
+transfer. See `.agent/summaries/2026-05-31-autoresearch-polyglot-phase0_5a.md` and
+`papers/ledger.md`.
 
 **0.5a findings (2026-05-31):**
 - The default `../polyglot-benchmark` checkout was absent. For non-Docker execution,
