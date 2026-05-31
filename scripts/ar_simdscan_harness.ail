@@ -1,0 +1,143 @@
+module scripts/ar_simdscan_harness
+
+import std/env (getArgs)
+import std/io (println)
+import std/json (Json, encode, jo, kv, js, jnum, ja, jb)
+import std/string (stringToFloat)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ToolCallEnvelope, ToolHandleDecision, Handled, Delegate)
+import pkg/sunholo/motoko_ext_autoresearch/autoresearch (make_hooks_with_config)
+import pkg/sunholo/motoko_ext_autoresearch/types (AutoresearchConfig)
+
+let repo = "/workspaces/motoko_agent"
+let worktree = "/workspaces/motoko_agent_simdscan_wt"
+let session_dir = "/workspaces/motoko_agent/.motoko/autoresearch_simdscan"
+let fixture_rel = "benchmarks/fixtures/autoresearch_simdscan"
+let candidate_rel = "benchmarks/fixtures/autoresearch_simdscan/candidate/scan.c"
+let candidate_abs = "${worktree}/${candidate_rel}"
+
+func ctx() -> ExtCtx {
+  {
+    task: "simdscan autoresearch harness",
+    step: 0,
+    model: "model-free",
+    cwd: repo,
+    hybrid_tools: true,
+    budget: { total: 100, solver: 80, verifier: 20 },
+    mode: "default",
+    workdir: repo,
+    env_server_url: "",
+    budget_remaining: 100,
+    history_slice: [],
+    state_key: "simdscan-harness",
+    context_limit: 0
+  }
+}
+
+func defaults() -> AutoresearchConfig {
+  {
+    default_session_dir: session_dir,
+    default_patience: 5,
+    default_max_iterations: 12,
+    default_samples: 5,
+    default_timeout_ms: 120000
+  }
+}
+
+func bench_script() -> string {
+  "set -eu\nexport SIMDSCAN_CANDIDATE=${candidate_abs}\nbash ${repo}/${fixture_rel}/bench/benchmark.sh"
+}
+
+func checks_script() -> string {
+  "set -eu\nexport SIMDSCAN_CANDIDATE=${candidate_abs}\nbash ${repo}/${fixture_rel}/bench/checks.sh"
+}
+
+func metric_specs() -> Json {
+  ja([
+    jo([kv("name", js("throughput_mbps")), kv("direction", js("maximize")), kv("noisy", jb(true))]),
+    jo([kv("name", js("wall_ms")), kv("direction", js("minimize")), kv("noisy", jb(true))])
+  ])
+}
+
+func init_args() -> Json {
+  jo([
+    kv("objective", js("Make scan_special faster while preserving exact output; the simdjson paper (arXiv:1902.08318) describes the vectorized technique")),
+    kv("metrics", metric_specs()),
+    kv("benchmark_script", js(bench_script())),
+    kv("checks_script", js(checks_script())),
+    kv("scope_paths", ja([js(candidate_rel)])),
+    kv("off_limits", ja([
+      js("benchmarks/fixtures/autoresearch_simdscan/harness/"),
+      js("benchmarks/fixtures/autoresearch_simdscan/corpus/"),
+      js("benchmarks/fixtures/autoresearch_simdscan/bench/"),
+      js("benchmarks/fixtures/autoresearch_simdscan/levers/"),
+      js("benchmarks/fixtures/autoresearch_simdscan/immutable.sha256"),
+      js("benchmarks/fixtures/autoresearch_simdscan/manifest.txt")
+    ])),
+    kv("constraints", ja([
+      js("Output of scan_special must match the reference exactly on every input."),
+      js("Do not read the held-out TEST corpus or do file I/O in the candidate."),
+      js("Only candidate/scan.c may change.")
+    ])),
+    kv("max_iterations", jnum(12.0)),
+    kv("patience", jnum(5.0)),
+    kv("new_segment", jb(true)),
+    kv("session_dir", js(session_dir)),
+    kv("cwd", js(worktree))
+  ])
+}
+
+func run_args() -> Json {
+  jo([
+    kv("session_dir", js(session_dir)),
+    kv("timeout_ms", jnum(120000.0)),
+    kv("samples", jnum(5.0)),
+    kv("label", js("simdscan"))
+  ])
+}
+
+func log_args(run_number: int, decision: string, summary: string, reasoning: string, learnings: string) -> Json {
+  jo([
+    kv("session_dir", js(session_dir)),
+    kv("run_number", jnum(_int_to_float(run_number))),
+    kv("decision", js(decision)),
+    kv("changes_summary", js(summary)),
+    kv("reasoning", js(reasoning)),
+    kv("learnings", js(learnings))
+  ])
+}
+
+func notes_args(body: string) -> Json {
+  jo([kv("session_dir", js(session_dir)), kv("body", js(body))])
+}
+
+func call(tool: string, args: Json) -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let hooks = make_hooks_with_config(defaults());
+  let envelope: ToolCallEnvelope = { id: "harness-${tool}", tool: tool, arguments: args };
+  match (hooks.on_tool_handle)(ctx(), envelope) {
+    Handled(r) => {
+      let _ = println("TOOL ${tool}");
+      let _ = println("EXIT ${show(r.exit_code)}");
+      if r.stdout != "" then println("STDOUT ${r.stdout}") else ();
+      if r.stderr != "" then println("STDERR ${r.stderr}") else ();
+      let _ = println("METADATA ${encode(r.metadata)}");
+      ()
+    },
+    Delegate => {
+      println("DELEGATED ${tool}");
+      ()
+    }
+  }
+}
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  match getArgs() {
+    ["init"] => call("ar_init", init_args()),
+    ["run"] => call("ar_run", run_args()),
+    ["log", run_s, decision] => {
+      let run_number = match stringToFloat(run_s) { Some(n) => _float_to_int(n), None => 0 };
+      call("ar_log", log_args(run_number, decision, "harness ${decision} run ${run_s}", "operator decision from simdscan harness", ""))
+    },
+    ["notes", body] => call("ar_notes", notes_args(body)),
+    _ => println("usage: ar_simdscan_harness init|run|log <run_number> <keep|discard>|notes <body>")
+  }
+}
