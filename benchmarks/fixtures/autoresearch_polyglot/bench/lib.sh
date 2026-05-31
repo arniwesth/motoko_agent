@@ -15,6 +15,17 @@ verify_immutable() {
   (cd "$FIXTURE_DIR" && sha256sum -c immutable.sha256 >/dev/null)
 }
 
+kill_stray_agent() {
+  local exercise="$1"
+  ps -eo pid=,cmd= | while read -r pid cmd; do
+    case "$cmd" in
+      *"$REPO_ROOT/src/tui/dist/index.js"*"$exercise"*|*"$REPO_ROOT/src/tui/dist/index.js Respond with one short line"*)
+        kill "$pid" 2>/dev/null || true
+        ;;
+    esac
+  done
+}
+
 ensure_polyglot_env() {
   : "${MOTOKO_BENCHMARK_ROOT:=/workspaces/polyglot-benchmark}"
   export MOTOKO_BENCHMARK_ROOT
@@ -52,6 +63,7 @@ run_subset() {
   fi
   local ext_order="${POLYGLOT_CORE_EXT_ORDER:-context_mode,exa_search}"
   local heartbeat="${POLYGLOT_HEARTBEAT_SECS:-0}"
+  local exercise_timeout="${POLYGLOT_EXERCISE_TIMEOUT_SECS:-180}"
   local started_ns
   local ended_ns
   started_ns="$(date +%s%N)"
@@ -60,15 +72,33 @@ run_subset() {
     case "$exercise" in
       ""|\#*) continue ;;
     esac
-    CORE_EXT_ORDER="$ext_order" \
-      python3 "$REPO_ROOT/benchmarks/aider_polyglot.py" \
+    if ! CORE_EXT_ORDER="$ext_order" \
+      timeout "${exercise_timeout}s" \
+        python3 "$REPO_ROOT/benchmarks/aider_polyglot.py" \
         --language python \
         --exercise "$exercise" \
         --model "$model" \
         --results "$scratch/results/${exercise}.json" \
         --heartbeat-secs "$heartbeat" \
+        --skip-preflight \
         "${retry_flag[@]}" \
-        > "$scratch/results/${exercise}.stdout"
+        > "$scratch/results/${exercise}.stdout"; then
+      kill_stray_agent "$exercise"
+      if [ ! -s "$scratch/results/${exercise}.json" ]; then
+        python3 - "$scratch/results/${exercise}.json" "$exercise" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+exercise = sys.argv[2]
+path.write_text(json.dumps({
+    "exercises": {f"python/{exercise}": {"status": "error"}},
+    "meta": {"error": "exercise runner failed or timed out"},
+}, sort_keys=True))
+PY
+      fi
+    fi
   done < "$split_file"
 
   ended_ns="$(date +%s%N)"

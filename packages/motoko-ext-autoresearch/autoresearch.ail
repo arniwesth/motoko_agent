@@ -244,6 +244,43 @@ func fallback_metric_from_raw(raw: string) -> [MetricSpec] {
   }
 }
 
+func raw_json_string_list(raw: string, key: string) -> [string] {
+  match decode(raw) {
+    Err(_) => [],
+    Ok(j) => match get(j, key) {
+      None => [],
+      Some(v) => match asArray(v) {
+        None => [],
+        Some(xs) => raw_json_string_list_rec(xs)
+      }
+    }
+  }
+}
+
+func raw_json_string_list_rec(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      match asString(x) {
+        None => raw_json_string_list_rec(rest),
+        Some(s) => s :: raw_json_string_list_rec(rest)
+      }
+  }
+}
+
+func raw_json_metric_specs(raw: string) -> [MetricSpec] {
+  match decode(raw) {
+    Err(_) => [],
+    Ok(j) => match get(j, "metrics") {
+      None => [],
+      Some(v) => match asArray(v) {
+        None => [],
+        Some(xs) => parse_metric_specs_rec(xs)
+      }
+    }
+  }
+}
+
 func raw_payload(args: Json) -> string {
   let raw0 = encode(args);
   match decode(raw0) {
@@ -265,14 +302,21 @@ func parse_init_cfg(call: ToolCallEnvelope, defaults: AutoresearchConfig) -> { o
     let benchmark_script = raw_str_field(raw, "benchmark_script", cfg0.benchmark_script);
     let checks_script = raw_str_field(raw, "checks_script", cfg0.checks_script);
     let session_dir = raw_str_field(raw, "session_dir", cfg0.session_dir);
-    let metrics = if has_metrics(cfg0.metrics) then cfg0.metrics else fallback_metric_from_raw(raw);
+    let raw_metrics = raw_json_metric_specs(raw);
+    let metrics =
+      if has_metrics(cfg0.metrics) then cfg0.metrics
+      else if has_metrics(raw_metrics) then raw_metrics
+      else fallback_metric_from_raw(raw);
+    let scope_paths = if non_empty(cfg0.scope_paths) then cfg0.scope_paths else raw_json_string_list(raw, "scope_paths");
+    let off_limits = if non_empty(cfg0.off_limits) then cfg0.off_limits else raw_json_string_list(raw, "off_limits");
+    let constraints = if non_empty(cfg0.constraints) then cfg0.constraints else raw_json_string_list(raw, "constraints");
     {
       objective: objective,
       metrics: metrics,
       benchmark_script: benchmark_script,
-      scope_paths: cfg0.scope_paths,
-      off_limits: cfg0.off_limits,
-      constraints: cfg0.constraints,
+      scope_paths: scope_paths,
+      off_limits: off_limits,
+      constraints: constraints,
       checks_script: checks_script,
       max_iterations: raw_int_field(raw, "max_iterations", cfg0.max_iterations),
       patience: raw_int_field(raw, "patience", cfg0.patience),

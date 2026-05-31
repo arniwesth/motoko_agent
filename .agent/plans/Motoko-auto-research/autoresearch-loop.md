@@ -235,7 +235,7 @@ agent strategy); the metric is **task pass-rate**.
 - [ ] Run a short autonomous autoresearch loop: optimizer edits Motoko scaffolding,
       `ar_run` measures Polyglot pass-rate over TRAIN, `ar_log` keep/discard; grade on
       TEST between segments. Confirm kept gains transfer to held-out.
-- [ ] Exercise §4: optimizer scouts one prompting/agent method from a paper, records it
+- [x] Exercise §4: optimizer scouts one prompting/agent method from a paper, records it
       via the ledger/`ar_scout`, validates it on the metric.
 
 **5a Exit:** a clean multi-iteration Polyglot loop where a kept scaffolding change
@@ -287,6 +287,28 @@ the ARC phases depend on.**
   `AILANG_RELAX_MODULES=1 ailang check packages/motoko-ext-autoresearch/autoresearch.ail`,
   `ailang test packages/motoko-ext-autoresearch/metrics_test.ail`, and the
   DeepSeek-locked Polyglot `checks.sh` all pass.
+- The direct DeepSeek optimizer did not reliably call `ar_init`/`ar_run`/`ar_log`
+  even though the autoresearch extension loaded. To prove the extension FSM anyway,
+  `scripts/ar_polyglot_harness.ail` now drives the real hooks directly while the
+  benchmark itself remains locked to `openrouter/deepseek/deepseek-v4-flash`.
+- Segment 2 baseline used `samples=2`: TRAIN median `pass_rate=0.5833335`,
+  samples `[0.666667, 0.5]`, primary MAD `0.0833335`, checks passed, logged keep.
+  This is the live proof that the noisy maximize primary path executes under
+  `samples>1`.
+- Literature trial used ReAct-style reasoning/action prompting
+  (Yao et al., arXiv:2210.03629) and added an explicit inspect→edit→test loop plus
+  a fallback away from `Search` when `rg` is unavailable. The candidate scored TRAIN
+  median `pass_rate=0.75`, samples `[0.666667, 0.833333]`, primary MAD `0.083333`,
+  checks passed, and `ar_log keep` committed `f3efa47446c5af9a7515e7191e0b87d06b90383a`
+  in the linked worktree.
+- Held-out TEST did **not** transfer: `grade_test.sh` on the disjoint TEST split
+  scored `pass_rate=0.000000`, `wall_ms=720385`; all six TEST exercises errored or
+  timed out under the DeepSeek-only route. The 0.5a exit gate therefore remains
+  open despite the kept TRAIN improvement.
+- Benchmark-infra follow-up: the subset fixture now bounds each exercise with
+  `POLYGLOT_EXERCISE_TIMEOUT_SECS` and records timed-out exercises as `error` JSON.
+  `aider_polyglot.py` also has `--skip-preflight` so per-exercise subset loops do not
+  repeatedly burn or hang on the model preflight. This is infra, not candidate scope.
 
 ### 5b — Terminal-Bench (richer second target; needs Docker — R9)
 - [ ] `uv tool install harbor`; **verify Docker** (cheap check). If unavailable, run
