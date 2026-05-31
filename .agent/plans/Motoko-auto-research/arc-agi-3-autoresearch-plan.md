@@ -1,7 +1,7 @@
 # Plan: Autoresearch-driven optimization of an ARC-AGI-3 agent
 
-**Status:** Draft / design (v3 — Symbolica/Arcgentica study + literature ideation;
-self-reviewed).
+**Status:** Draft / design (v5 — Polyglot-first warm-up; Harbor/Terminal-Bench
+methodology folded in; self-reviewed, 2 passes).
 **Author handoff date:** 2026-05-30
 **Owner branch:** `autoresearch-research`
 **Companion docs:** `implementation-plan.md` (Appendix A = self-bootstrap benchmark),
@@ -35,7 +35,9 @@ validation is how you build a non-overfit submission.
   (a) keep/discard was sound under noise (kept gains survive on **held-out TEST**, not
   just TRAIN); (b) a measured **reproduction rate** over literature methods (§8);
   (c) a small **TRAIN-vs-TEST gap** (no overfit); (d) discovery/adaptation that was
-  **not hand-fed** in the prompt (lever-hidden — §9 Phase 2).
+  **not hand-fed** in the prompt (lever-hidden — §9 Phase 2). **Phase 0.5 (the
+  Polyglot → Terminal-Bench warm-up) is where this is first proven cheaply, before
+  the ARC build.**
 
 ---
 
@@ -81,7 +83,7 @@ symbolica.ai/blog/arc-agi-3, github.com/symbolica-ai/ARC-AGI-3-Agents (branch
 
 ---
 
-## 3. What we learned from Symbolica's Arcgentica (the SOTA)
+## 3. What we learned from Symbolica's Arcgentica (a leading documented agent)
 
 Read the actual source (MIT), not the blog. Arcgentica is a **"reasoning-as-code"
 (RLM) multi-agent system**, not an LLM picking actions from prose:
@@ -91,7 +93,8 @@ Read the actual source (MIT), not the blog. Arcgentica is a **"reasoning-as-code
   the `Frame` helpers, `submit_action`, `Memories`). It diffs frames, tests
   hypotheses, and executes action sequences **in code**. This is the "program
   synthesis" behind the 120× efficiency — and it *is* our "LLM-as-policy-synthesizer"
-  idea. Proven, SOTA.
+  idea. Proven, and among the strongest documented approaches (see §2 for where it
+  sits vs. the leaderboard).
 - **Orchestrator + specialized subagents** (`explorer → theorist → tester →
   solver`). The orchestrator **never touches the game** (looking at grids fills its
   context with pixels and kills strategic thinking). Theorists are **denied
@@ -209,8 +212,8 @@ autoresearched against a local model, aimed at an offline submission.** This uni
 |---|---|
 | candidate (`scope_paths`) | the editable **scaffolding** (prompts, orchestration, budgets, frame-rendering, model config) — `experiments/arc_candidate/agent/` |
 | `benchmark_script` | run candidate over the fixed **TRAIN** subset; print `METRIC` lines |
-| primary metric | `score` — normalized levels completed across TRAIN (maximize) |
-| noisy secondary | `wall_ms` and/or score variance (stochastic policy / LLM sampling) |
+| primary metric | `score` — normalized levels completed across TRAIN (**maximize, noisy** under a stochastic policy → needs `samples>1` + MAD/confidence on the *primary*; see TODO) |
+| noisy secondary | `wall_ms` (real wall-clock). Score noise lives in the *primary*, not here — don't double-count it as a secondary |
 | tie-breakers | `actions_used` (efficiency), token/inference cost. **NOT LOC** — a size penalty would pressure the optimizer to delete useful prompt/scaffolding (Arcgentica's edge is a *long* `GAME_REFERENCE`); the self-bootstrap `ext_lines` tie-breaker does **not** transfer here |
 | `checks_script` | candidate runs without crashing; honors the `Agent` ABC + action budget; **anti-cheat** (no game-id hardcoding, no hidden-state peeking); **Kaggle-legality** (no API client on the play path); train/test isolation |
 | `off_limits` | the `arc-agi`/`arcengine` toolkit, the game/environment files, the scorer/harness, the reused MIT `Frame`/runtime code, and the **held-out TEST set** |
@@ -220,36 +223,70 @@ autoresearched against a local model, aimed at an offline submission.** This uni
 
 ### Metric definitions (draft)
 - `METRIC score=<float>` — primary. Mean `levels_completed / win_levels` over TRAIN
-  games, in [0,1]. **Maximize.**
+  games, in [0,1]. **Maximize; noisy** (stochastic policy) — capture with `samples>1`.
 - `METRIC wall_ms=<int>` — noisy secondary. **Minimize.**
 - `METRIC actions_used=<int>` — efficiency tie-breaker. **Minimize.**
 - (Optional) `ASI` lines for per-game breakdowns.
 
-> **TODO (Phase 1):** verify the `direction: maximize` path in `metrics.ail`
-> (improvement test, stall count, confidence) — self-bootstrap only exercised
-> `minimize`. If maximize is weak, define the primary as `levels_remaining`
-> (minimize).
+> **TODO (Phase 1) — two unverified assumptions in `metrics.ail`:**
+> 1. **`direction: maximize`** path (improvement test, stall count, confidence) —
+>    self-bootstrap only exercised `minimize`. If weak, use `levels_remaining`
+>    (minimize) as the primary instead.
+> 2. **Noisy *primary* (the crux).** The extension's model is "deterministic primary
+>    + noisy secondaries." Objective #2 needs a *noisy primary* (`score`): median +
+>    MAD + confidence + improvement-test must apply to the **primary** under
+>    `samples>1`. Verify this works; if it doesn't, it's the **highest-priority**
+>    extension change — it's the whole point of the noisy-metric test.
 
 ---
 
 ## 7. Anti-cheat / research integrity
 
-1. **Train/test split.** Optimize only on TRAIN; TEST is `off_limits`, used solely
-   for out-of-loop grading. TRAIN gains that don't transfer to TEST = overfitting —
-   the headline thing we measure about autoresearch's discipline.
-2. **No game-id branching / level-specific constants.** `checks.sh` greps and fails.
+The optimizer is **rewarded for moving the metric**, so it *will* game any weak
+verifier. We adopt Harbor / Terminal-Bench's hard-won benchmark-integrity practices
+(see §7a) rather than hand-rolling.
+
+1. **Train/test split (the load-bearing guard).** Optimize only on TRAIN; TEST is
+   `off_limits`, used solely for out-of-loop grading. TRAIN gains that don't transfer
+   to TEST = overfitting — the **behavioral** anti-overfit signal, and the headline
+   thing we measure about autoresearch's discipline.
+2. **Behavioral verification, not grep (corrected).** Per Harbor's
+   `functional_verification` criterion, source-string matching is brittle and
+   trivially gamed (insert the keyword without the behavior). So "no game-id
+   hardcoding" greps are a **weak smell-test only**; the real signal is held-out TEST
+   transfer (#1). Don't rely on greps to catch overfitting.
 3. **No hidden-state peeking** — only `FrameData` fields the real eval exposes.
 4. **Budget honesty** — `MAX_ACTIONS`/timeout enforced by the harness, not the
    candidate.
-5. **Immutability hashing** — hash benchmark, checks, toolkit, game files, TEST set
-   into `immutable.sha256`; both scripts verify before running.
+5. **Immutability hashing + canary** — hash benchmark, checks, grader, toolkit, game
+   files, TEST set into `immutable.sha256`; both scripts verify before running. Mark
+   benchmark/TEST files with a **canary GUID** (Harbor convention) as a contamination
+   tripwire.
 6. **Kaggle-legality** — `checks.sh` fails if the candidate imports an API client on
-   the play path.
-7. **Out-of-loop TEST grading.** TEST is `off_limits` to the optimizer. Grading runs
-   via a separate **operator-invoked `grade_test.sh`** (same candidate, TEST games),
-   *between* segments — **never** wired into `benchmark_script`. The optimizer never
-   sees TEST scores mid-loop, so it cannot optimize against them; the TRAIN-vs-TEST
-   gap stays an honest overfit measure.
+   the play path; declare the offline wall as `allow_internet=false` at the env level.
+7. **Out-of-loop TEST grading via a *separate verifier*.** Adopt Harbor's
+   `environment_mode="separate"`: grading runs in a **fresh container that reads only
+   declared `artifacts`** (the candidate's emitted scores/logs), with the candidate's
+   working dir torn down first. This is stronger than a same-tree `grade_test.sh` — the
+   grader can't be influenced by monkey-patched libs, leftover state, or a tampered
+   test framework. Operator-invoked, *between* segments, **never** wired into
+   `benchmark_script`; the optimizer never sees TEST scores mid-loop.
+
+### 7a. Borrowed Harbor/Terminal-Bench QA gates (apply in Phase 1)
+- **Oracle-vs-no-op discrimination.** The reference/decent baseline must **pass**
+  the verifier *and* a **no-op (empty) candidate must fail** it. Canonical "does the
+  metric measure the thing" check — a sharp Phase-1 exit gate.
+- **Cheat trials.** Run *adversarial* candidates (fake tool wrappers, monkey-patched
+  toolkit, cached/hardcoded answers, reading TEST files, editing the verifier — the
+  optimizer runs with full FS access) and require the guards to block them. If a cheat
+  trial "wins," the verifier is broken, not the agent.
+- **Stochastic validation = 100+ trials.** A noisy primary needs the verifier proven
+  stable over many runs ("an oracle that fails 28/1000 is unacceptable"). Feeds the
+  `samples` budget (R3/R4).
+- **Pinned deps, no live services.** All play-time deps pinned; no network at
+  eval-time (already our offline wall) — for reproducibility.
+- **"Hard for the agent, not the computer."** Declare modest CPU/mem; difficulty must
+  come from reasoning, not brute compute (R-cost).
 
 ---
 
@@ -296,8 +333,10 @@ Feeding papers shifts objective #2 from *"did the agent invent the lever?"* to
 *"can it search, adapt, and **validate** a literature method?"* — more realistic for
 a real submission. Guards:
 - **Reproduction is measured, not asserted** — a citation never justifies a keep; the
-  metric does. Report a **reproduction success rate** (methods tried vs. methods that
-  beat held-out baseline) as a headline autoresearch result.
+  metric does. Report a **reproduction success rate** in two flavors: *kept-on-TRAIN*
+  (in-loop, methods that beat the TRAIN baseline) and *confirmed-on-TEST* (after
+  `grade_test.sh`, methods whose gain transferred to held-out). The second is the
+  headline autoresearch result.
 - **Provenance required** on every kept change (paper id in `learnings`/`method_ids`).
 - **Anti-rabbit-hole budget** (see R-scout): cap papers per segment; require the cheap
   impl sketch before committing an iteration; prefer training-free / code-released
@@ -351,7 +390,25 @@ the online/offline wall intact):
 
 ## 9. Phasing
 
-### Phase 0 — Pure-code headroom spike (GO/NO-GO) — *in progress*
+> **Sequencing note.** ARC-AGI-3 is a *heavy bespoke build* (RLM runtime, Frame
+> player, interactive eval). Before sinking weeks into it, **Phase 0.5 proves the
+> whole autoresearch loop on a benchmark Motoko already runs** — the candidate is
+> Motoko's own scaffolding, no bespoke player to build. It de-risks objective #2 (the
+> loop machinery) on easy ground and exercises §8 literature-ideation, *before* the
+> ARC RLM build. Two steps, cheapest first:
+> - **0.5a — Polyglot (turnkey, offline, the actual first target).** `benchmarks/
+>   aider_polyglot.py` is a *working* Exercism runner with pass_1/pass_2/fail/error
+>   scoring, JSONL events, retries, and local-endpoint support — no Docker. Optimizer
+>   edits Motoko scaffolding, metric = Polyglot pass-rate. This is the genuine first
+>   warm-up: it proves the loop with near-zero new infra.
+> - **0.5b — Terminal-Bench (richer, second).** Graduate to TB / TB-Science via the
+>   **already-present** `benchmarks/tb_adapter/` and `benchmarks/harbor_adapter/`. TB
+>   is on the Opus/GPT/Gemini model cards and is §8's natural home (TB-Science tasks
+>   literally are "reproduce this paper's method"). Needs Docker (R9).
+>
+> ARC remains the North Star; Polyglot→TB is the warm-up that validates the machinery.
+
+### Phase 0 — Pure-code ARC headroom spike (GO/NO-GO) — *in progress*
 **Scope: pure code only. No model, no RLM runtime yet.** Cheapest signal first.
 **Question:** can a cheap *code* agent score >0 on some easy public subset, and is
 that score improvable?
@@ -374,13 +431,52 @@ model into the play loop earlier (run Phase 2's runtime standup before fixtures)
 literature signal (training-free graph-exploration scored well *without* a model)
 argues a code gradient should exist — but confirm, don't assume.
 
-### Phase 1 — Fixture harness + reused scaffolding
+### Phase 0.5 — Warm-up: validate the autoresearch loop end-to-end
+**Goal:** prove optimize→measure→keep/discard + held-out discipline + §8 literature
+ideation on a benchmark Motoko already runs, with *no* bespoke player to build. The
+candidate-under-edit is **Motoko's own scaffolding** (system prompt, tool/skill
+config, agent strategy); the metric is **task pass-rate**.
+
+**0.5a — Polyglot (the first target; turnkey, offline, no Docker):**
+- [ ] Smoke `benchmarks/aider_polyglot.py` on a couple of Python exercises (local
+      endpoint or cheap API) to confirm the runner works as documented.
+- [ ] Define a **TRAIN** exercise subset + a disjoint held-out **TEST** subset (the
+      `polyglot_logs/python/` corpus already lists the exercise set).
+- [ ] Wire `aider_polyglot.py` over TRAIN as the `benchmark_script` (emit
+      `METRIC pass_rate=…`, `wall_ms`); baseline = current Motoko scaffolding.
+- [ ] Apply the §7/§7a integrity gates: separate-verifier-style grading (grade TEST
+      out-of-loop), oracle-vs-no-op (current scaffolding passes; an empty/broken
+      scaffolding fails), one cheat trial, canary on the split definition.
+- [ ] Run a short autonomous autoresearch loop: optimizer edits Motoko scaffolding,
+      `ar_run` measures Polyglot pass-rate over TRAIN, `ar_log` keep/discard; grade on
+      TEST between segments. Confirm kept gains transfer to held-out.
+- [ ] Exercise §8: optimizer scouts one prompting/agent method from a paper, records
+      it via the ledger/`ar_scout`, validates it on the metric.
+**0.5a Exit:** a clean multi-iteration Polyglot loop where a kept scaffolding change
+transfers to held-out TEST, the integrity gates hold under a cheat trial, and one
+literature method was recorded + validated. **This alone validates the core
+machinery the ARC phases depend on.**
+
+**0.5b — Terminal-Bench (richer second target; needs Docker — R9):**
+- [ ] `uv tool install harbor`; **verify Docker** (cheap check). If unavailable, run
+      Harbor on the Mac host or stay on Polyglot — 0.5a already proves the loop.
+- [ ] Wire a small TB / TB-Science TRAIN+TEST subset via the existing
+      `benchmarks/tb_adapter/` + `benchmarks/harbor_adapter/`.
+- [ ] Repeat the 0.5a loop on TB; §8 ideation in its natural home (reproduce a paper
+      method / pull from the Harbor `skills` catalog).
+- [ ] (Optional, real deliverable) contribute a Motoko/AILANG-flavored task to
+      TB-Science (co-authorship; merge window ~Aug 17 2026) — only if cheap.
+**0.5b Exit:** the same loop holds on TB. Optional; 0.5a is the gate to the ARC build.
+
+### Phase 1 — ARC fixture harness + reused scaffolding
 - [ ] Adapt Symbolica's MIT `Frame` helpers into the candidate (attribution kept).
 - [ ] Baseline candidate package implementing the `Agent` ABC with a **stochastic**
       policy.
 - [ ] `benchmark.sh` (runs candidate over TRAIN, emits `METRIC` lines; scratch
       outside scoped paths, per `AR_BENCH_SCRATCH` pattern) + `checks.sh` (Section 7).
-- [ ] `immutable.sha256` over benchmark/checks/toolkit/games/TEST.
+- [ ] `grade_test.sh` — operator-only held-out grader over the TEST subset (§7 item
+      7); **not** referenced by `benchmark.sh`/`checks.sh`.
+- [ ] `immutable.sha256` over benchmark/checks/grader/toolkit/games/TEST.
 - [ ] Verify the autoresearch `maximize` metric path (Section 6 TODO).
 - [ ] **Literature ideation (§8):** verify whether `Web*` tools are gated during an
       active session; if so, fix `legal()` to allow read-only scout tools in all four
@@ -424,6 +520,7 @@ benchmarks/
       bench/
         benchmark.sh                    # run candidate over TRAIN, emit METRIC
         checks.sh                       # anti-cheat + contract + no-crash + legality
+        grade_test.sh                   # operator-only held-out grader (NOT wired into benchmark)
         immutable.sha256
       toolkit/                          # pinned arc-agi/arcengine + reused MIT runtime (off-limits)
       games/
@@ -439,6 +536,21 @@ experiments/
 Run isolation reuses the self-bootstrap **git-worktree** model
 (`/workspaces/motoko_agent_autoresearch_wt`, branch `autoresearch/arc-agi3-...`),
 session DB in the main checkout via `ar_init(cwd=...)`.
+
+**Existing infrastructure to reuse (Phase 0.5) — verified present in `benchmarks/`:**
+- `aider_polyglot.py` — a **working** Exercism/Polyglot runner: `pass_1/pass_2/fail/
+  error` scoring, structured JSONL events, retries, live status, **local
+  OpenAI-compatible endpoint** support (`OPENAI_BASE_URL=…`). The 0.5a target.
+- `polyglot_logs/python/` — a large existing per-exercise corpus (defines the
+  exercise set to split TRAIN/TEST from).
+- `tb_adapter/` — Terminal-Bench adapter + shell sidecar (no turnkey runner yet) — 0.5b.
+- `harbor_adapter/motoko_agent.py` — Harbor↔Motoko adapter (README: placeholder) — 0.5b.
+- `motoko_rpc.py` (JSONL subprocess client), `smoke.py`, `prompts/`, `fixtures/`
+  (incl. the `autoresearch_self_bootstrap` example).
+
+Phase 0.5 wires these rather than building eval infra from scratch. (README note:
+`benchmarks/README.md` has one stale path — a live-status command still says
+`/workspaces/ailang_agent/...` from before the repo rename; harmless.)
 
 ---
 
@@ -464,7 +576,10 @@ session DB in the main checkout via `ar_init(cwd=...)`.
   fetching out of the benchmark sandbox (offline wall).
 - **R3 Noise budget vs cost:** samples × games needed for meaningful MAD without
   making `ar_run` slow.
-- **R4 `maximize` metric path** correctness in `metrics.ail` (Section 6 TODO).
+- **R4 Metric-model assumptions in `metrics.ail`** (Section 6 TODO): the `maximize`
+  direction *and* — more importantly — whether a **noisy primary** is supported
+  (MAD/confidence/improvement-test on the primary under `samples>1`). The latter is
+  the crux of objective #2; if unsupported it's the top-priority extension change.
 - **R5 Game determinism:** if games are seeded/deterministic, noise must come from
   the policy/model, not the env. *Verify in Phase 0.*
 - **R6 Toolkit weight in sandbox:** `arc-agi` pulls numpy/langchain/etc.; ensure the
@@ -481,6 +596,13 @@ session DB in the main checkout via `ar_init(cwd=...)`.
     Until we commit to a model, stay pure-code so this is moot.
 - **R8 Optimizer cost over long horizon:** DeepSeek-V4-Flash for exploration, Pro
   for hard segments.
+- **R9 Harbor needs Docker (Phase 0.5b only):** Harbor/TB run tasks in Docker;
+  Docker may be unavailable/heavy here. Mitigation: **0.5a (Polyglot) needs no
+  Docker** and already proves the loop; for 0.5b, run Harbor on the Mac host or skip
+  it. Verify Docker cheaply before attempting 0.5b.
+- **R10 Warm-up scope creep:** the warm-up must *validate the loop*, not become its
+  own project. Time-box it; 0.5b and the optional TB-Science task contribution are
+  nice-to-haves, not gates. Once 0.5a shows the machinery is sound, move to ARC.
 
 ---
 
@@ -510,13 +632,24 @@ Environment:
 
 ## 13. Next actions (resume here)
 
-1. Finish **Phase 0 (pure-code)**: `uv sync`; try `uv run main.py --agent=random
-   --game=ls20` offline (no key) then online (anon key); record scores + whether
-   local works (R2/R5).
-2. Write the deliberately-improvable heuristic *code* baseline; confirm it beats
-   random on ≥1 game → gradient proven.
-3. Choose TRAIN/TEST subsets; record baselines. **GO/NO-GO.**
-4. Then Phase 1 fixtures (adapt MIT `Frame` helpers) → Phase 2 RLM runtime.
+Two parallel tracks; **Phase 0.5a (Polyglot warm-up) is the recommended next build** —
+turnkey, offline, validates the loop machinery the ARC phases depend on, cheaply.
+
+**Track A — Polyglot warm-up (Phase 0.5a, recommended first):**
+1. Smoke `benchmarks/aider_polyglot.py` on a couple of Python exercises (local
+   endpoint or cheap API) — confirm the runner works.
+2. Split the `polyglot_logs/python/` exercise set into TRAIN + disjoint TEST; wire
+   `aider_polyglot.py` over TRAIN as the `benchmark_script` (emit `METRIC pass_rate`).
+3. Apply §7/§7a gates (out-of-loop TEST grading, oracle-vs-nop, one cheat trial); run
+   a short autoresearch loop editing Motoko scaffolding; confirm held-out transfer +
+   one §8 literature method recorded/validated. → then 0.5b (TB) is optional.
+
+**Track B — ARC pure-code headroom (Phase 0, in progress):**
+1. `uv sync` the harness; `uv run main.py --agent=random --game=ls20` offline (no key)
+   then online (anon key); record scores + whether local works (R2/R5).
+2. Deliberately-improvable heuristic *code* baseline; confirm it beats random on ≥1
+   game → gradient proven.
+3. Choose TRAIN/TEST subsets; record baselines. **GO/NO-GO**, then Phase 1.
 
 > Operational playbook for runs (worktree cleanup, model override, monitoring via
 > JSONL not the DB, between-run cleanup) is in
