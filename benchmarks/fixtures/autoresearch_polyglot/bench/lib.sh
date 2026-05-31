@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  echo "CHECK FAILED: $1" >&2
+  exit 1
+}
+
+BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FIXTURE_DIR="$(cd "$BENCH_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$FIXTURE_DIR/../../.." && pwd)"
+
+verify_immutable() {
+  (cd "$FIXTURE_DIR" && sha256sum -c immutable.sha256 >/dev/null)
+}
+
+ensure_polyglot_env() {
+  : "${MOTOKO_BENCHMARK_ROOT:=/workspaces/polyglot-benchmark}"
+  export MOTOKO_BENCHMARK_ROOT
+  test -d "$MOTOKO_BENCHMARK_ROOT/python/exercises/practice" \
+    || fail "MOTOKO_BENCHMARK_ROOT does not contain python/exercises/practice: $MOTOKO_BENCHMARK_ROOT"
+
+  local pyenv="${POLYGLOT_PYENV:-$REPO_ROOT/.motoko/ar_polyglot_py}"
+  test -x "$pyenv/bin/python3" \
+    || fail "pytest venv missing at $pyenv; create it with: uv venv $pyenv && uv pip install --python $pyenv/bin/python pytest"
+  "$pyenv/bin/python3" -m pytest --version >/dev/null \
+    || fail "pytest is not installed in $pyenv"
+  export PATH="$pyenv/bin:$PATH"
+
+  export SYSTEM_MD="${POLYGLOT_SYSTEM_MD:-$REPO_ROOT/benchmarks/prompts/polyglot_system.md}"
+  test -f "$SYSTEM_MD" || fail "SYSTEM_MD prompt missing: $SYSTEM_MD"
+}
+
+run_subset() {
+  local split_file="$1"
+  local label="$2"
+  verify_immutable
+  ensure_polyglot_env
+
+  local scratch="${AR_BENCH_SCRATCH:-$REPO_ROOT/.motoko/ar_bench_scratch/polyglot_${label}}"
+  rm -rf "$scratch"
+  mkdir -p "$scratch/results"
+
+  local model="${POLYGLOT_MODEL:-anthropic/claude-haiku-4-5}"
+  local retry_flag=("--no-retry")
+  if [ "${POLYGLOT_RETRY:-0}" = "1" ]; then
+    retry_flag=()
+  fi
+  local ext_order="${POLYGLOT_CORE_EXT_ORDER:-context_mode,exa_search}"
+  local heartbeat="${POLYGLOT_HEARTBEAT_SECS:-0}"
+  local started_ns
+  local ended_ns
+  started_ns="$(date +%s%N)"
+
+  while IFS= read -r exercise || [ -n "$exercise" ]; do
+    case "$exercise" in
+      ""|\#*) continue ;;
+    esac
+    CORE_EXT_ORDER="$ext_order" \
+      python3 "$REPO_ROOT/benchmarks/aider_polyglot.py" \
+        --language python \
+        --exercise "$exercise" \
+        --model "$model" \
+        --results "$scratch/results/${exercise}.json" \
+        --heartbeat-secs "$heartbeat" \
+        "${retry_flag[@]}" \
+        > "$scratch/results/${exercise}.stdout"
+  done < "$split_file"
+
+  ended_ns="$(date +%s%N)"
+  python3 - "$scratch/results" "$(( (ended_ns - started_ns) / 1000000 ))" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+results_dir = Path(sys.argv[1])
+wall_ms = int(sys.argv[2])
+total = 0
+passed = 0
+statuses = {}
+
+for path in sorted(results_dir.glob("*.json")):
+    data = json.loads(path.read_text())
+    for name, result in sorted(data.get("exercises", {}).items()):
+        status = result.get("status", "error")
+        statuses[name] = status
+        total += 1
+        if status in {"pass_1", "pass_2"}:
+            passed += 1
+
+if total == 0:
+    raise SystemExit("no exercise results aggregated")
+
+print("STATUS_JSON " + json.dumps(statuses, sort_keys=True))
+print(f"METRIC pass_rate={passed / total:.6f}")
+print(f"METRIC wall_ms={wall_ms}")
+PY
+}

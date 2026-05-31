@@ -223,11 +223,11 @@ agent strategy); the metric is **task pass-rate**.
 > ground de-risks Objective #2 cheaply. Two steps, cheapest first.
 
 ### 5a — Polyglot (the first target; turnkey, offline, NO Docker)
-- [ ] Smoke `benchmarks/aider_polyglot.py` on a couple of Python exercises (local
+- [x] Smoke `benchmarks/aider_polyglot.py` on a couple of Python exercises (local
       endpoint or cheap API) to confirm the runner works as documented.
-- [ ] Define a **TRAIN** exercise subset + a disjoint held-out **TEST** subset (the
+- [x] Define a **TRAIN** exercise subset + a disjoint held-out **TEST** subset (the
       `polyglot_logs/python/` corpus already lists the exercise set).
-- [ ] Wire `aider_polyglot.py` over TRAIN as the `benchmark_script` (emit
+- [x] Wire `aider_polyglot.py` over TRAIN as the `benchmark_script` (emit
       `METRIC pass_rate=…`, `wall_ms`); baseline = current Motoko scaffolding.
 - [ ] Apply the §3/§3a integrity gates: out-of-loop TEST grading, oracle-vs-no-op
       (current scaffolding passes; an empty/broken scaffolding fails), one cheat trial,
@@ -242,6 +242,42 @@ agent strategy); the metric is **task pass-rate**.
 transfers to held-out TEST, the integrity gates hold under a cheat trial, and one
 literature method was recorded + validated. **This alone validates the core machinery
 the ARC phases depend on.**
+
+**0.5a findings (2026-05-31):**
+- The default `../polyglot-benchmark` checkout was absent. For non-Docker execution,
+  `/workspaces/polyglot-benchmark/python` was restored from `exercism/python`; the
+  runner now sees 140 Python practice exercises.
+- System Python lacked `pytest`; the non-Docker verifier uses a uv venv at
+  `.motoko/ar_polyglot_py` and prepends it to `PATH`, so the runner's existing
+  `python3 -m pytest -x -q` command works without changing `aider_polyglot.py`.
+- Smoke commands with `POLYGLOT_MODEL=anthropic/claude-haiku-4-5` passed
+  `hello-world` and `two-fer`; stdout ended as flat maps such as
+  `{"python/hello-world": "pass_1"}` and result JSON had the documented
+  `{"exercises": ..., "meta": ...}` shape.
+- Fixture added at `benchmarks/fixtures/autoresearch_polyglot/`: TRAIN/TEST split
+  files, canary manifest, `immutable.sha256`, TRAIN `benchmark.sh`, held-out
+  `grade_test.sh`, `checks.sh`, and a README. The fixture loops `aider_polyglot.py`
+  once per exercise rather than adding a subset flag to the runner. It explicitly
+  sets `SYSTEM_MD=benchmarks/prompts/polyglot_system.md`, making that prompt the live
+  initial candidate surface.
+- Metric definition is documented as
+  `pass_rate = (count(pass_1) + count(pass_2)) / total`, maximize. `wall_ms` is a
+  noisy secondary, minimize.
+- Docker is unavailable. The TEST grader therefore uses a fresh process and clean
+  scratch directory plus immutable hashes and `off_limits`, not a fresh container.
+  This is weaker than Harbor's container separation but preserves the important
+  non-Docker boundary: TEST is never referenced by `benchmark.sh`.
+- First six-exercise TRAIN smoke scored `pass_rate=1.000000`, `wall_ms=117993`, so
+  that initial split is too easy for an improvement loop and should be rebalanced
+  once model access is restored. A harder `forth` probe then hit the external model
+  route's `403 Key limit exceeded`, so further model-backed runs stopped.
+- Load-bearing verdict: `maximize` is implemented and covered by
+  `metrics_test.ail`, and `ar_run` aggregates noisy metrics with median/MAD. However
+  `ar_log` improvement/stall uses `Metrics.improved(direction, prev, cur, 0.0)`,
+  ignoring noisy-primary MAD/confidence. Noisy primary is therefore **not yet
+  supported for keep/discard discipline**. Per §2/§3.6, do not run the real loop
+  until this is fixed, or reframe the primary as a deterministic/minimized fallback
+  such as `fail_rate`.
 
 ### 5b — Terminal-Bench (richer second target; needs Docker — R9)
 - [ ] `uv tool install harbor`; **verify Docker** (cheap check). If unavailable, run
@@ -280,10 +316,11 @@ says `/workspaces/ailang_agent/...` from before the repo rename; harmless.)
   methods, let patience kill dead segments. Keep fetching out of the benchmark sandbox.
 - **R-noise (noise budget vs cost):** samples × tasks needed for meaningful MAD without
   making `ar_run` slow.
-- **R-metrics (`metrics.ail` assumptions):** the `maximize` direction *and* — more
-  importantly — whether a **noisy primary** is supported (MAD/confidence/improvement-
-  test on the primary under `samples>1`). The crux of Objective #2; if unsupported,
-  top-priority extension change. (See §2 TODO.)
+- **R-metrics (`metrics.ail` assumptions):** `maximize` is implemented, but the
+  2026-05-31 Polyglot warm-up found that noisy-primary support is incomplete:
+  `ar_run` reports median/MAD, while `ar_log` keep/improvement still compares with
+  `noise=0.0`. This is now the top-priority extension change before the real 0.5a
+  loop. (See §2 TODO and §5a findings.)
 - **R9 Harbor needs Docker (5b only):** Harbor/TB run tasks in Docker; may be
   unavailable/heavy here. Mitigation: **5a (Polyglot) needs no Docker** and already
   proves the loop; for 5b, run Harbor on the Mac host or skip it.

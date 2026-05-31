@@ -1,0 +1,16 @@
+CANARY_GUID=AR-POLYGLOT-0_5A-20260531-8f9d2e1a-6b68-49fc-a1b4-31c4c98f4a53
+
+Split rationale:
+TRAIN and TEST each contain six short Python Exercism practice exercises. Six keeps
+early loop cost low while reducing the pass-rate quantum from all-or-nothing to
+0.1667. The sets are disjoint and intentionally simple enough for repeated smoke
+runs with a cheap model.
+
+Metric contract:
+pass_rate = (count(status == pass_1) + count(status == pass_2)) / total_exercises.
+wall_ms is elapsed wall-clock time for the whole subset runner.
+
+Subset mechanism:
+The upstream runner has no arbitrary subset flag. The fixture loops
+benchmarks/aider_polyglot.py once per exercise with --exercise <name> and aggregates
+the per-exercise result JSON files.
