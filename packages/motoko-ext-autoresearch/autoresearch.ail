@@ -356,6 +356,16 @@ func parse_justification_arg(call: ToolCallEnvelope) -> string {
   if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "justification", "")
 }
 
+func parse_notes_body_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_notes_body(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "body", "")
+}
+
+func parse_notes_append_idea_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_notes_append_idea(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "append_idea", "")
+}
+
 func path_under_prefix(path: string, prefix: string) -> bool {
   if prefix == "" then false
   else if path == prefix then true
@@ -1071,8 +1081,8 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
 
 func handle_notes(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {FS} {
   let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
-  let body = Tools.parse_notes_body(call.arguments);
-  let idea = Tools.parse_notes_append_idea(call.arguments);
+  let body = parse_notes_body_arg(call);
+  let idea = parse_notes_append_idea_arg(call);
   if body != "" then {
     let _ = Notes.replace_notes(session_dir, body);
     accept_with_meta(call, "notes updated", jo([kv("status", js("updated"))]))
