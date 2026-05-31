@@ -254,6 +254,9 @@ the ARC phases depend on.**
   `hello-world` and `two-fer`; stdout ended as flat maps such as
   `{"python/hello-world": "pass_1"}` and result JSON had the documented
   `{"exercises": ..., "meta": ...}` shape.
+- After the OpenRouter budget concern, the fixture was locked to
+  `POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-flash`; any other model now fails
+  fast in `bench/lib.sh` before runner startup.
 - Fixture added at `benchmarks/fixtures/autoresearch_polyglot/`: TRAIN/TEST split
   files, canary manifest, `immutable.sha256`, TRAIN `benchmark.sh`, held-out
   `grade_test.sh`, `checks.sh`, and a README. The fixture loops `aider_polyglot.py`

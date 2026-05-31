@@ -9,6 +9,7 @@ fail() {
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURE_DIR="$(cd "$BENCH_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$FIXTURE_DIR/../../.." && pwd)"
+POLYGLOT_ALLOWED_MODEL="openrouter/deepseek/deepseek-v4-flash"
 
 verify_immutable() {
   (cd "$FIXTURE_DIR" && sha256sum -c immutable.sha256 >/dev/null)
@@ -41,7 +42,10 @@ run_subset() {
   rm -rf "$scratch"
   mkdir -p "$scratch/results"
 
-  local model="${POLYGLOT_MODEL:-anthropic/claude-haiku-4-5}"
+  local model="${POLYGLOT_MODEL:-$POLYGLOT_ALLOWED_MODEL}"
+  if [ "$model" != "$POLYGLOT_ALLOWED_MODEL" ]; then
+    fail "POLYGLOT_MODEL must be exactly $POLYGLOT_ALLOWED_MODEL for this fixture; got: $model"
+  fi
   local retry_flag=("--no-retry")
   if [ "${POLYGLOT_RETRY:-0}" = "1" ]; then
     retry_flag=()
