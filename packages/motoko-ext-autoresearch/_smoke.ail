@@ -1,0 +1,37 @@
+-- Smoke test for sunholo/motoko_ext_autoresearch.
+--
+-- The publish sandbox runs this file with effects ["IO", "Process", "FS", "Env", "AI", "Net", "SharedMem", "Clock", "Stream"]; a
+-- panic blocks publish. Three assertion patterns are scaffolded — keep the
+-- ones that apply, drop the rest (marked `-- optional`).
+--
+-- Why a smoke? It catches the class of bugs that pass `ailang check` but
+-- crash at runtime:
+--   - register_with_config panics (missing config defaults, wrong ADT pattern)
+--   - provided_tools / on_describe_tools mismatch
+--   - on_tool_handle policy logic raises an exception on a Bedrock-style call
+
+module sunholo/motoko_ext_autoresearch/_smoke
+
+import std/io (println)
+import std/list (length)
+import pkg/sunholo/motoko_ext_autoresearch/register (register_with_config)
+import pkg/sunholo/motoko_ext_autoresearch/autoresearch (make_hooks)
+
+export func main() -> () ! {Env, FS, IO} {
+  -- Assertion 1: register doesn't panic
+  let _ = register_with_config(0);
+  println("OK: register_with_config returned without panic");
+
+  -- optional — assertion 2: provided_tools shape (delete if your
+  -- extension doesn't advertise any tools yet)
+  let hooks = make_hooks();
+  let tool_count = length(hooks.provided_tools);
+  println("OK: provided_tools returned ${show(tool_count)} entries");
+
+  -- optional — assertion 3: on_describe_tools schema parity (delete if
+  -- not advertising tools, or replace with your real schema verification)
+  -- NOTE: when you advertise N tools, on_describe_tools should return N
+  -- schemas with non-empty {"type":"object",...} parameters. Empty {}
+  -- parameters silently degrade against provider-native typed tool use.
+  println("OK: smoke complete")
+}

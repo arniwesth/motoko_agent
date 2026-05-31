@@ -1,0 +1,68 @@
+module sunholo/motoko_ext_autoresearch/types
+
+export type MetricSpec = {
+  name: string,
+  direction: string,
+  noisy: bool
+}
+
+export type AutoresearchConfig = {
+  default_session_dir: string,
+  default_patience: int,
+  default_max_iterations: int,
+  default_samples: int,
+  default_timeout_ms: int
+}
+
+export type ExperimentConfig = {
+  objective: string,
+  metrics: [MetricSpec],
+  benchmark_script: string,
+  scope_paths: [string],
+  off_limits: [string],
+  constraints: [string],
+  checks_script: string,
+  max_iterations: int,
+  patience: int,
+  new_segment: bool,
+  session_dir: string
+}
+
+export type PendingRun = {
+  run_number: int,
+  metrics_json: string,
+  samples_json: string,
+  asi_json: string,
+  checks_passed: bool,
+  exit_code: int,
+  duration_ms: int
+}
+
+export type RejectMsg = {
+  current_state: string,
+  legal_actions: [string],
+  message: string
+}
+
+export type ArState
+  = Setup
+  | Ready
+  | AwaitingLog(int)
+  | Done(string)
+
+export type ConfidenceResult = {
+  kind: string,
+  value: float,
+  noise: float,
+  ratio: float,
+  pct: float
+}
+
+export pure func state_name(s: ArState) -> string {
+  match s {
+    Setup => "Setup",
+    Ready => "Ready",
+    AwaitingLog(_) => "AwaitingLog",
+    Done(_) => "Done"
+  }
+}

@@ -1,0 +1,50 @@
+module sunholo/motoko_ext_autoresearch/notes
+
+import std/fs (fileExists, readFile, writeFile)
+import std/string (contains, split, join, length)
+
+export pure func notes_path(session_dir: string) -> string =
+  "${session_dir}/autoresearch.md"
+
+func default_notes() -> string {
+  "# Autoresearch\n\n## Objective\n\n## Scope\n\n## Constraints\n\n## Learnings\n\n## Ideas\n"
+}
+
+export func ensure_notes(session_dir: string) -> () ! {FS} {
+  let p = notes_path(session_dir);
+  if fileExists(p) then ()
+  else {
+    let _ = writeFile(p, default_notes());
+    ()
+  }
+}
+
+export func read_notes(session_dir: string) -> string ! {FS} {
+  ensure_notes(session_dir);
+  readFile(notes_path(session_dir))
+}
+
+export func replace_notes(session_dir: string, body: string) -> int ! {FS} {
+  let _ = writeFile(notes_path(session_dir), body);
+  length(body)
+}
+
+func append_idea_line(lines: [string], item: string) -> [string] {
+  match lines {
+    [] => ["## Ideas", "- ${item}"],
+    x :: rest =>
+      if x == "## Ideas" then x :: "- ${item}" :: rest
+      else x :: append_idea_line(rest, item)
+  }
+}
+
+export func append_idea(session_dir: string, idea: string) -> int ! {FS} {
+  let body = read_notes(session_dir);
+  let lines = split(body, "\n");
+  let updated =
+    if contains(body, "## Ideas")
+    then join("\n", append_idea_line(lines, idea))
+    else "${body}\n## Ideas\n- ${idea}\n";
+  let _ = writeFile(notes_path(session_dir), updated);
+  length(updated)
+}

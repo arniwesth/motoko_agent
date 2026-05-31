@@ -1,0 +1,35 @@
+module sunholo/motoko_ext_autoresearch/scope_test
+
+import std/list (length)
+import pkg/sunholo/motoko_ext_autoresearch/scope (
+  path_matches_spec,
+  compute_scope_deviations,
+  compute_iteration_changes
+)
+
+func path_match_cases(args: { path: string, spec: string }) -> bool
+  tests [
+    ({ path: "src/core/a.ail", spec: "src/core/" }, true),
+    ({ path: "src/core/a.ail", spec: "src/core/a.ail" }, true),
+    ({ path: "src/ui/a.ts", spec: "src/core/" }, false)
+  ]
+  { path_matches_spec(args.path, args.spec) }
+
+func scope_deviation_count(paths: [string]) -> int
+  tests [
+    (["src/core/a.ail"], 0),
+    (["src/core/a.ail", "README.md"], 1),
+    (["src/core/test.ail"], 1)
+  ]
+  {
+    length(compute_scope_deviations(paths, ["src/core/"], ["src/core/test.ail"]))
+  }
+
+func iteration_change_count(args: { init_dirty: [string], current_dirty: [string] }) -> int
+  tests [
+    ({ init_dirty: ["README.md"], current_dirty: ["README.md", "src/core/a.ail"] }, 1),
+    ({ init_dirty: [], current_dirty: ["src/core/a.ail", "src/core/b.ail"] }, 2)
+  ]
+  {
+    length(compute_iteration_changes(args.init_dirty, args.current_dirty))
+  }

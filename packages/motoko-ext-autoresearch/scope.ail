@@ -1,0 +1,93 @@
+module sunholo/motoko_ext_autoresearch/scope
+
+import std/json (Json, decode, asArray, asString)
+import std/string (startsWith, endsWith)
+
+func has(xs: [string], x: string) -> bool {
+  match xs {
+    [] => false,
+    y :: rest => if x == y then true else has(rest, x)
+  }
+}
+
+func normalize_spec(spec: string) -> string {
+  if spec == "" then ""
+  else if endsWith(spec, "/") then spec
+  else "${spec}/"
+}
+
+func matches_dir(path: string, dir: string) -> bool {
+  startsWith(path, normalize_spec(dir))
+}
+
+export pure func path_matches_spec(path: string, spec: string) -> bool {
+  if spec == "" then false
+  else if endsWith(spec, "/") then matches_dir(path, spec)
+  else path == spec || matches_dir(path, spec)
+}
+
+func any_match(path: string, specs: [string]) -> bool {
+  match specs {
+    [] => false,
+    s :: rest => if path_matches_spec(path, s) then true else any_match(path, rest)
+  }
+}
+
+func outside_scope(path: string, scope_paths: [string]) -> bool {
+  match scope_paths {
+    [] => false,
+    _ => not any_match(path, scope_paths)
+  }
+}
+
+func in_off_limits(path: string, off_limits: [string]) -> bool {
+  any_match(path, off_limits)
+}
+
+func deviations_rec(paths: [string], scope_paths: [string], off_limits: [string]) -> [string] {
+  match paths {
+    [] => [],
+    p :: rest => {
+      let bad = outside_scope(p, scope_paths) || in_off_limits(p, off_limits);
+      if bad then p :: deviations_rec(rest, scope_paths, off_limits)
+      else deviations_rec(rest, scope_paths, off_limits)
+    }
+  }
+}
+
+export pure func compute_scope_deviations(paths: [string], scope_paths: [string], off_limits: [string]) -> [string] {
+  deviations_rec(paths, scope_paths, off_limits)
+}
+
+func parse_string_array_rec(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => match asString(x) {
+      Some(s) => s :: parse_string_array_rec(rest),
+      None => parse_string_array_rec(rest)
+    }
+  }
+}
+
+export pure func parse_json_string_array(raw: string) -> [string] {
+  match decode(raw) {
+    Err(_) => [],
+    Ok(j) => match asArray(j) {
+      None => [],
+      Some(xs) => parse_string_array_rec(xs)
+    }
+  }
+}
+
+func diff_rec(current: [string], init_dirty: [string]) -> [string] {
+  match current {
+    [] => [],
+    x :: rest =>
+      if has(init_dirty, x) then diff_rec(rest, init_dirty)
+      else x :: diff_rec(rest, init_dirty)
+  }
+}
+
+export pure func compute_iteration_changes(init_dirty: [string], current_dirty: [string]) -> [string] {
+  diff_rec(current_dirty, init_dirty)
+}

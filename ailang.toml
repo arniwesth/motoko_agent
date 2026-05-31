@@ -7,9 +7,8 @@ ailang = ">=0.16.1"
 
 [dependencies]
 "sunholo/logging" = "0.4.0"
-# Registry-published versions (ailang-packages 2026-05-08). Local-path overrides
-# removed so external clones / Arni's PR review work without needing
-# ../ailang-packages alongside the checkout.
+# Registry-published versions (ailang-packages 2026-05-08), with
+# autoresearch vendored in-repo for local development and versioning.
 "sunholo/motoko_ext_abi" = "2.2.0"
 "sunholo/motoko_ext_test_dummy" = "0.2.2"
 "sunholo/motoko_ext_omnigraph" = "0.2.3"
@@ -23,6 +22,7 @@ ailang = ">=0.16.1"
 "sunholo/motoko_ext_microrag" = "0.4.2"
 "sunholo/motoko_ext_compaction_ai" = "0.2.0"
 "sunholo/motoko_ext_ailang_docs" = "0.1.4"
+"sunholo/motoko_ext_autoresearch" = { path = "packages/motoko-ext-autoresearch" }
 
 [extensions]
 packages      = [
@@ -37,6 +37,7 @@ packages      = [
   "sunholo/motoko_ext_decision_framework@0.2.2",
   "sunholo/motoko_ext_microrag@0.4.2",
   "sunholo/motoko_ext_compaction_ai@0.2.0",
+  "sunholo/motoko_ext_autoresearch@0.1.0",
 ]
 config_import   = "src/core/config.RuntimeConfig"
 hooks_import    = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"

@@ -1,0 +1,72 @@
+module sunholo/motoko_ext_autoresearch/state
+
+import std/result (Result, Ok, Err)
+
+import pkg/sunholo/motoko_ext_autoresearch/db as DB
+import pkg/sunholo/motoko_ext_autoresearch/types (ArState, Setup, Ready, AwaitingLog, Done, RejectMsg, state_name)
+
+func mutator_tool(name: string) -> bool {
+  name == "WriteFile" || name == "EditFile" || name == "BashExec"
+}
+
+func readonly_tool(name: string) -> bool {
+  name == "ReadFile" || name == "Search"
+}
+
+func has_pending(session_dir: string, segment: int) -> bool ! {Process} {
+  match DB.has_pending_run(session_dir, segment) {
+    Ok(b) => b,
+    Err(_) => false
+  }
+}
+
+export func derive_state(session_dir: string) -> ArState ! {Process} {
+  let segment = match DB.current_segment(session_dir) { Ok(n) => n, Err(_) => 0 };
+  if segment <= 0 then Setup
+  else {
+    let status0 = match DB.current_status(session_dir) { Ok(s) => s, Err(_) => "active" };
+    let status = if status0 == "" then "active" else status0;
+    if status != "active" then Done(status)
+    else if has_pending(session_dir, segment) then {
+      match DB.read_pending_run(session_dir, segment) {
+        Ok(Some(p)) => AwaitingLog(p.run_number),
+        _ => AwaitingLog(0)
+      }
+    } else Ready
+  }
+}
+
+func reject(state: ArState, legal_actions: [string], msg: string) -> Result[(), RejectMsg] {
+  Err({
+    current_state: state_name(state),
+    legal_actions: legal_actions,
+    message: msg
+  })
+}
+
+export pure func legal(state: ArState, tool_name: string) -> Result[(), RejectMsg] {
+  match state {
+    Setup =>
+      if tool_name == "ar_init" || mutator_tool(tool_name) || readonly_tool(tool_name)
+      then Ok(())
+      else reject(state, ["ar_init", "ReadFile", "WriteFile", "EditFile", "BashExec", "Search"], "Initialize a session with ar_init before ar_run/ar_log."),
+    Ready =>
+      if tool_name == "ar_run" || tool_name == "ar_notes" || tool_name == "ar_init" || mutator_tool(tool_name) || readonly_tool(tool_name) || tool_name == "RunTests"
+      then Ok(())
+      else if tool_name == "ar_log"
+      then reject(state, ["ar_run", "ar_notes", "ar_init"], "No pending run to log.")
+      else Ok(()),
+    AwaitingLog(run_no) =>
+      if tool_name == "ar_log" || tool_name == "ar_notes" || readonly_tool(tool_name)
+      then Ok(())
+      else if tool_name == "ar_run"
+      then reject(state, ["ar_log", "ar_notes", "ReadFile", "Search"], "AwaitingLog: run #${show(run_no)} must be logged before another ar_run.")
+      else if mutator_tool(tool_name)
+      then reject(state, ["ar_log", "ar_notes", "ReadFile", "Search"], "AwaitingLog: run #${show(run_no)} must be logged via ar_log(decision=keep|discard) before editing.")
+      else Ok(()),
+    Done(_) =>
+      if tool_name == "ar_init" || tool_name == "ar_notes" || readonly_tool(tool_name)
+      then Ok(())
+      else reject(state, ["ar_init(new_segment=true)", "ar_notes", "ReadFile", "Search"], "Segment is done. Start a new segment with ar_init(new_segment=true).")
+  }
+}

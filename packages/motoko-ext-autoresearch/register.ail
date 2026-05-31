@@ -1,0 +1,15 @@
+-- Canonical entry point for this motoko extension.
+-- The registry generator (`ailang generate-extension-registry`) imports
+-- `register_with_config` from this module and dispatches by short name.
+--
+-- DO NOT rename `register_with_config` — it's the contract.
+
+module sunholo/motoko_ext_autoresearch/register
+
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_autoresearch/autoresearch (make_hooks_with_config)
+import src/core/config (RuntimeConfig)
+
+export func register_with_config(cfg: RuntimeConfig) -> ExtensionHooks ! {Env, FS} {
+  make_hooks_with_config(cfg.autoresearch)
+}
