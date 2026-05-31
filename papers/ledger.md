@@ -1,5 +1,27 @@
 # Autoresearch Method Ledger
 
+## 2026-05-31 - SIMD-scan fixture - SIMD structural-character classification (REPRODUCED + TRANSFERS)
+
+- Paper: "Parsing Gigabytes of JSON per Second", Langdale & Lemire, arXiv:1902.08318
+  (simdjson); applied via the HTML-scan blog post
+  https://lemire.me/blog/2024/07/05/scan-html-faster-with-simd-instructions-net-c-edition/
+- Lever: vectorized classification — load a block of bytes, compare in parallel
+  against the target bytes, reduce to a bitmask, enumerate matches; scalar tail.
+- Fixture: `benchmarks/fixtures/autoresearch_simdscan/` — candidate `scan.c` finds
+  HTML special bytes; primary `throughput_mbps` (maximize, CPU-time, noisy);
+  correctness vs a reference is a hard gate; held-out TEST corpus grades transfer.
+- Measured (DeepSeek V4 Flash optimizer):
+  - Phase 2(b), flash as generator: correct NEON scan first try, TRAIN 7457 / TEST
+    7449 MB/s (~11.7x baseline ~635). Kept, transfers. $0.0013.
+  - Phase 2(a), full autonomy (flash drove ar_init/ar_run/ar_log): kept progressive
+    correct gains 635 -> 3463 -> 7389 -> 9305 MB/s (14.65x); discarded a
+    correctness-failing 4x-unroll and a correct-but-slower fix; best v3 TRAIN 9305
+    / held-out TEST 9225 (~14.4x). Transfers. ~$0.035 total.
+- Verdict: **REPRODUCED and TRANSFERS** — the literature lever was discovered,
+  implemented correctly under the correctness gate, kept by the noisy keep/discard
+  test, and confirmed on held-out. First clean positive in this ledger; contrast
+  with the Polyglot ReAct non-reproduction below (no real lever on a strong model).
+
 ## 2026-05-31 - Polyglot 0.5a (Pro rebalanced split) - segment 1
 
 Model: `openrouter/deepseek/deepseek-v4-pro`. Split rebalanced for Pro (TRAIN:

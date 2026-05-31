@@ -213,6 +213,26 @@ online/offline wall intact):
 
 ## 5. Phase 0.5 — Warm-up: validate the loop end-to-end (before any bespoke build)
 
+> **RESOLVED (2026-05-31): warm-up validated via the SIMD-scan planted-lever fixture.**
+> Optimizing **Motoko's own scaffolding** (§5a, Polyglot) proved a dead end as a
+> *research* test: on a strong model the prompt is flat and the tool/extension
+> surface is deprecated/broken (omnigraph, ohmy_pi), so there is no discoverable
+> lever, and the timeout-driven metric noise is degenerate. Polyglot validated only
+> the loop *plumbing*. We instead built a **controlled planted-lever fixture**
+> (`benchmarks/fixtures/autoresearch_simdscan/`) whose candidate is a self-contained
+> C scan function with a real, literature-discoverable lever (SIMD vectorized
+> classification, simdjson / arXiv:1902.08318), a sharp correctness oracle, and an
+> informative noisy primary (CPU-time throughput). On it the loop was validated
+> end-to-end — model-free (Phase 1: real lever kept+transfers, overfit decoy
+> indistinguishable on TRAIN but exposed on held-out, correctness/cheat gates hold)
+> and with a live cheap model (Phase 2: DeepSeek V4 Flash discovered, implemented,
+> and iteratively refined a correct ~14.6x NEON scan that transfers to held-out, for
+> ~$0.04 — both as a candidate generator and in full autonomy driving
+> ar_init/ar_run/ar_log itself). See
+> `.agent/summaries/2026-05-31-autoresearch-simdscan-validated.md` and `papers/ledger.md`.
+> **Takeaway for ARC:** the candidate must be an artifact with real headroom (the
+> bespoke player), NOT Motoko's scaffolding.
+
 **Goal:** prove optimize→measure→keep/discard + held-out discipline + §4 literature
 ideation on a benchmark Motoko already runs, with *no* bespoke player to build. The
 candidate-under-edit is **Motoko's own scaffolding** (system prompt, tool/skill config,
