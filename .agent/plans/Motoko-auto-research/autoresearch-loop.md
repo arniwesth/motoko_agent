@@ -255,7 +255,8 @@ the ARC phases depend on.**
   `{"python/hello-world": "pass_1"}` and result JSON had the documented
   `{"exercises": ..., "meta": ...}` shape.
 - After the OpenRouter budget concern, the fixture was locked to
-  `POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-flash`; any other model now fails
+  `POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-flash`; the retry is now locked to
+  `POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-pro`, and any other model now fails
   fast in `bench/lib.sh` before runner startup.
 - Fixture added at `benchmarks/fixtures/autoresearch_polyglot/`: TRAIN/TEST split
   files, canary manifest, `immutable.sha256`, TRAIN `benchmark.sh`, held-out
@@ -290,7 +291,7 @@ the ARC phases depend on.**
 - The direct DeepSeek optimizer did not reliably call `ar_init`/`ar_run`/`ar_log`
   even though the autoresearch extension loaded. To prove the extension FSM anyway,
   `scripts/ar_polyglot_harness.ail` now drives the real hooks directly while the
-  benchmark itself remains locked to `openrouter/deepseek/deepseek-v4-flash`.
+  benchmark itself remains locked to the configured DeepSeek-only route.
 - Segment 2 baseline used `samples=2`: TRAIN median `pass_rate=0.5833335`,
   samples `[0.666667, 0.5]`, primary MAD `0.0833335`, checks passed, logged keep.
   This is the live proof that the noisy maximize primary path executes under
@@ -309,6 +310,13 @@ the ARC phases depend on.**
   `POLYGLOT_EXERCISE_TIMEOUT_SECS` and records timed-out exercises as `error` JSON.
   `aider_polyglot.py` also has `--skip-preflight` so per-exercise subset loops do not
   repeatedly burn or hang on the model preflight. This is infra, not candidate scope.
+- DeepSeek V4 Pro retry: the fixture pin was switched to
+  `openrouter/deepseek/deepseek-v4-pro` after verifying the OpenRouter route. With the
+  default Polyglot prompt and bounded subset runner, TRAIN scored `pass_rate=1.000000`
+  (`wall_ms=138656`) and held-out TEST scored `pass_rate=1.000000` (`wall_ms=103285`),
+  all first-try passes. This confirms the Flash failure was model-route/capability
+  limited, but it is not itself a 0.5a exit because no optimizer-kept scaffolding
+  change was tested for transfer in this Pro run.
 
 ### 5b — Terminal-Bench (richer second target; needs Docker — R9)
 - [ ] `uv tool install harbor`; **verify Docker** (cheap check). If unavailable, run

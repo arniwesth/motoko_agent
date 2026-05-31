@@ -9,7 +9,7 @@ fail() {
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURE_DIR="$(cd "$BENCH_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$FIXTURE_DIR/../../.." && pwd)"
-POLYGLOT_ALLOWED_MODEL="openrouter/deepseek/deepseek-v4-flash"
+POLYGLOT_ALLOWED_MODEL="openrouter/deepseek/deepseek-v4-pro"
 
 verify_immutable() {
   (cd "$FIXTURE_DIR" && sha256sum -c immutable.sha256 >/dev/null)

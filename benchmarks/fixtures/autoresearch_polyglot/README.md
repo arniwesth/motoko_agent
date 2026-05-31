@@ -47,16 +47,16 @@ uv pip install --python .motoko/ar_polyglot_py/bin/python pytest
 Run TRAIN:
 
 ```bash
-POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-flash \
+POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-pro \
   bash benchmarks/fixtures/autoresearch_polyglot/bench/benchmark.sh
 ```
 
 Run held-out TEST manually:
 
 ```bash
-POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-flash \
+POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-pro \
   bash benchmarks/fixtures/autoresearch_polyglot/bench/grade_test.sh
 ```
 
 The fixture fails fast if `POLYGLOT_MODEL` is set to anything other than
-`openrouter/deepseek/deepseek-v4-flash`.
+`openrouter/deepseek/deepseek-v4-pro`.
