@@ -7,11 +7,14 @@ source "$BENCH_DIR/lib.sh"
 verify_immutable
 ensure_polyglot_env
 
-prompt="$REPO_ROOT/benchmarks/prompts/polyglot_system.md"
+# Inspect the prompt actually used by the runner ($SYSTEM_MD, which honors
+# POLYGLOT_SYSTEM_MD), not a hardcoded path. The candidate prompt may live in a
+# linked worktree under the autoresearch loop.
+prompt="$SYSTEM_MD"
 test -s "$prompt" || fail "polyglot system prompt must not be empty"
 
 if grep -R -n -E 'AR-POLYGLOT-0_5A|splits/test.txt|grade_test.sh|dominoes|ledger|minesweeper|satellite' \
-  "$REPO_ROOT/benchmarks/prompts/polyglot_system.md" >/dev/null; then
+  "$prompt" >/dev/null; then
   fail "candidate prompt appears to reference held-out TEST or the canary"
 fi
 

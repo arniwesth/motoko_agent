@@ -42,12 +42,14 @@ func defaults() -> AutoresearchConfig {
   }
 }
 
+let candidate_prompt = "${worktree}/benchmarks/prompts/polyglot_system.md"
+
 func bench_script() -> string {
-  "set -eu\nexport POLYGLOT_MODEL=${polyglot_model}\nexport POLYGLOT_PYENV=${polyglot_pyenv}\nbash ${repo}/benchmarks/fixtures/autoresearch_polyglot/bench/benchmark.sh"
+  "set -eu\nexport POLYGLOT_MODEL=${polyglot_model}\nexport POLYGLOT_PYENV=${polyglot_pyenv}\nexport POLYGLOT_SYSTEM_MD=${candidate_prompt}\nbash ${repo}/benchmarks/fixtures/autoresearch_polyglot/bench/benchmark.sh"
 }
 
 func checks_script() -> string {
-  "set -eu\nexport POLYGLOT_MODEL=${polyglot_model}\nexport POLYGLOT_PYENV=${polyglot_pyenv}\nbash ${repo}/benchmarks/fixtures/autoresearch_polyglot/bench/checks.sh"
+  "set -eu\nexport POLYGLOT_MODEL=${polyglot_model}\nexport POLYGLOT_PYENV=${polyglot_pyenv}\nexport POLYGLOT_SYSTEM_MD=${candidate_prompt}\nbash ${repo}/benchmarks/fixtures/autoresearch_polyglot/bench/checks.sh"
 }
 
 func metric_specs() -> Json {
@@ -80,7 +82,7 @@ func init_args() -> Json {
     kv("patience", jnum(2.0)),
     kv("new_segment", jb(true)),
     kv("session_dir", js(session_dir)),
-    kv("cwd", js(repo))
+    kv("cwd", js(worktree))
   ])
 }
 
