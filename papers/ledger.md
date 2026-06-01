@@ -31,19 +31,25 @@
   practice, run multiple seeds and keep the best.
 - **Correction to the prior hypothesis.** The handoff claimed the paper's nibble
   method is "~2x slower for this task." Not so: the two fastest seeds (3,4 at ~40-42x)
-  ADAPTED the paper's `vqtbl` nibble/table classification and won. The original
+  used the simdjson `vqtbl` nibble/table classification and won. The original
   fetch-run's ~6.3x was slow only because it omitted the empty-block short-circuit and
-  unrolling, not because the classification is bad. The dominant optimization (which
+  unrolling, not because the classification is bad. (Note: the seeds did NOT learn this
+  technique from the paper — they recalled it from training. Seed4's own exa_search
+  query was literally "simdjson NEON arm ... structural character classification
+  uint8x16_t", and exa returned a Lemire *blog*, not arXiv:1902.08318, which was never
+  fetched. So this is recall-of-a-known-technique, not literature-grounded discovery.) The dominant optimization (which
   all 4 seeds discovered empirically by characterizing the corpus at ~0.5% match
   density) is the **empty-block early-out** — skip the expensive mask-extraction/ctz on
   the ~99.5% of 16B blocks with no specials. It composes with the paper's efficient
   classification to give the best result. So the real behavior is reproduce -> ADAPT
   (add the workload-specific optimization the paper omits for this regime) -> beat.
-- Caveats (do not over-claim): **Weak literature use** — seeds referenced `exa_search`
-  but never fetched the paper (no curl/arXiv); grounding was their own training
-  knowledge of simdjson/NEON. This *supports* the open hypothesis that the scout phase
-  adds little when the model already knows the literature — worth a direct arm-A
-  (no-scout) ablation. **Budget asymmetry** — arm C had 50-90 steps / up to 10
+- Caveats (do not over-claim): **The scout was near-theater here** — seeds called
+  `exa_search` but the query already named the technique ("simdjson ... uint8x16_t"),
+  the result was a blog snippet, and the paper was never fetched (curl/arXiv=0).
+  Grounding was the model's own training knowledge of simdjson/NEON; the literature
+  step confirmed what it already knew rather than supplying it. This is strong evidence
+  for the open hypothesis that the scout phase adds little when the technique is famous
+  — the **arm-A (no-scout) ablation** is the direct test and is now well-motivated. **Budget asymmetry** — arm C had 50-90 steps / up to 10
   iterations vs the fetch run's 6, so some of the gain is simply more room to
   unroll/tune; not a clean A/B vs the anchoring run.
 
