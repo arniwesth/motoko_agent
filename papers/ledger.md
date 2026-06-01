@@ -56,6 +56,32 @@
   at max_steps=50 — selected because no MOTOKO_CONFIG is set; the openrouter profile
   and the `AI_MAX_STEPS` env do not apply on this run path.)
 
+## 2026-06-01 - SIMD-scan fixture - arm-A no-scout ABLATION (scout adds nothing)
+
+- Setup: control for the arm-C entry above. IDENTICAL prompt/model/fixture/budget
+  (`benchmarks/prompts/simdscan_autonomy_noscout_task.md`, DeepSeek V4 Pro, worktree
+  `default` profile, max_steps=50, N=4 seeds) EXCEPT the `exa_search` extension is
+  not loaded and the prompt never mentions scouting/literature. The agent must derive
+  its approach from its own knowledge. (Mechanics: `exa_search` lives in the worktree
+  `default` profile's `extensions.order`; `CORE_EXT_ORDER` only *adds*, so the driver
+  strips it from that file after each `git reset` — confirmed absent in all 4
+  session_start `loaded_extensions`.)
+- Measured, held-out TEST (logs `.motoko/ar_bench_scratch/noscout_pro_seed{1..4}.jsonl`;
+  all 4 exact on 9 TEST files, no overfit):
+  - seed1 11600 (~19x), seed2 14768 (~24x), seed3 16932 (~27x), seed4 20480 (~33x).
+  - Arm A mean 15945 / median 15850 MB/s; Arm C (scout) mean 18798 / median 18934.
+- Verdict: **scout phase shows NO measurable benefit.** 8/8 seeds across both arms beat
+  the paper (~6.3x) and prior best (~14.65x). Arm A vs Arm C is statistically
+  indistinguishable (Mann-Whitney U=7; critical U at N=4,4,a=0.05 = 0). The ~18% higher
+  arm-C mean is driven by its two top seeds and lies well within the large within-arm
+  variance — noise at N=4, not signal. Decisive: arm-A seed4 hit ~33x with NO scout
+  tool loaded, using `vceqq` compare + block-skip + bitmask/ctz from the model's own
+  knowledge. Confirms the arm-C finding: for a famous technique (simdjson), the
+  literature step is theater — the model already has it.
+- Caveat: N=4 per arm = low power. We can say there is no LARGE effect and no
+  significant difference; we cannot rule out a small real benefit. A bigger run (or a
+  fixture whose technique is NOT in pretraining) would be needed to detect one.
+
 ## 2026-05-31 - SIMD-scan fixture - SIMD structural-character classification (REPRODUCED + TRANSFERS)
 
 - Paper: "Parsing Gigabytes of JSON per Second", Langdale & Lemire, arXiv:1902.08318
