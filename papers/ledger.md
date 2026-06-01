@@ -49,9 +49,12 @@
   Grounding was the model's own training knowledge of simdjson/NEON; the literature
   step confirmed what it already knew rather than supplying it. This is strong evidence
   for the open hypothesis that the scout phase adds little when the technique is famous
-  — the **arm-A (no-scout) ablation** is the direct test and is now well-motivated. **Budget asymmetry** — arm C had 50-90 steps / up to 10
-  iterations vs the fetch run's 6, so some of the gain is simply more room to
-  unroll/tune; not a clean A/B vs the anchoring run.
+  — the **arm-A (no-scout) ablation** is the direct test and is now well-motivated.
+  **Budget asymmetry** — arm C had max_steps=50 / up to 10 iterations vs the fetch
+  run's 6, so some of the gain is simply more room to unroll/tune; not a clean A/B vs
+  the anchoring run. (Note: the governing config is the WORKTREE `default` profile
+  at max_steps=50 — selected because no MOTOKO_CONFIG is set; the openrouter profile
+  and the `AI_MAX_STEPS` env do not apply on this run path.)
 
 ## 2026-05-31 - SIMD-scan fixture - SIMD structural-character classification (REPRODUCED + TRANSFERS)
 
