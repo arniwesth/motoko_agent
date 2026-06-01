@@ -1,5 +1,41 @@
 # Autoresearch Method Ledger
 
+## 2026-06-01 - SIMD-scan fixture - literature-as-starting-point (IMPROVEMENT OVER PAPER, autonomous)
+
+- Setup: "arm C" exploration variant. Unlike the 2026-05-31 fetch run (which was
+  POINTED at arXiv:1902.08318 and told to reproduce it), this prompt
+  (`benchmarks/prompts/simdscan_autonomy_scout_task.md`) gave the agent NEITHER the
+  technique nor the paper — only the objective, an optional `exa_search` scout, and
+  the instruction to treat any published method as evidence and keep whatever the
+  metric says is fastest for THIS workload. Deliberately non-leaky: it never names a
+  technique, never states the workload is sparse, never hints the paper is suboptimal.
+- Model: DeepSeek V4 Pro. (Flash was provider-degraded — empty completion after a
+  tool result; MiniMax-M3 was flaky in this harness — reasoning truncation +
+  malformed tool args. Pro was the only reliable multi-turn tool driver this session.)
+- Measured (TRAIN -> held-out TEST), best-kept = run #7 (worktree branch
+  `autoresearch/simdscan-scout` @ 4ffe26e; log
+  `.motoko/ar_bench_scratch/scout_pro_run1.jsonl`):
+  - baseline scalar 621 MB/s; tried NEON movemask+ctz (the paper-style bitmask /
+    bit-extraction approach) -> ~baseline (614, 0.99x) -> DISCARDED; pivoted to
+    `vmaxvq_u8` empty-block-skip + per-target `vceqq_u8` compare + loop unroll ->
+    6376 (10.3x) -> 9324 (15x, 2x unroll) -> 11147 (17.9x, 4x) -> 11158 (17.9x, 8x,
+    plateau). Reverted 3 candidates (failed checks / slower). Best v7 TRAIN 11158 /
+    held-out TEST 11519 MB/s (~18.5x), correct on all 9 TEST files. No overfit.
+- Verdict: **IMPROVEMENT OVER PAPER via autonomous discovery.** The agent tried the
+  paper-flavored bit-extraction method, measured it at ~baseline for this workload,
+  reasoned about WHY ("multiply-based bit extraction dominates"), and beat it with a
+  simpler compare+skip+unroll variant — surpassing both the paper technique (~6.3x in
+  the 2026-06-01 fetch run) and the prior best autonomy run (14.65x, below). This is
+  the reproduce->then-beat behavior we ultimately want.
+- Caveats (do not over-claim): **N=1 seed** — one trajectory, not yet robust.
+  **Weak literature use** — it referenced `exa_search` but never fetched the paper
+  (no curl/arXiv); grounding was mostly its own training knowledge of simdjson/NEON.
+  This *supports* the open hypothesis that the scout phase adds little when the model
+  already knows the literature — worth a direct arm-A (no-scout) ablation.
+  **Budget asymmetry** — arm C had 50 steps / up to 10 iterations vs the fetch run's
+  6, so some of the gain is simply more room to unroll/tune; not a clean A/B vs the
+  anchoring run.
+
 ## 2026-05-31 - SIMD-scan fixture - SIMD structural-character classification (REPRODUCED + TRANSFERS)
 
 - Paper: "Parsing Gigabytes of JSON per Second", Langdale & Lemire, arXiv:1902.08318

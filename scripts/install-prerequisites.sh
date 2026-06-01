@@ -32,6 +32,7 @@ NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
 AILANG_REF="v0.19.1"
 AILANG_MIN_VERSION="0.19.1"
+DUCKDB_VERSION="1.1.3"
 INSTALL_OMNIGRAPH=0
 SUDO=()
 SUDO_E=()
@@ -188,7 +189,7 @@ install_apt_packages() {
   log_info "Updating package lists..."
   "${SUDO[@]}" apt-get update -qq
 
-  local pkgs=(git curl build-essential ca-certificates jq rsync locales)
+  local pkgs=(git curl build-essential ca-certificates jq rsync locales unzip)
   local missing=()
   for pkg in "${pkgs[@]}"; do
     dpkg -s "$pkg" &>/dev/null || missing+=("$pkg")
@@ -341,11 +342,27 @@ install_duckdb() {
     log_info "Installing duckdb via Homebrew..."
     brew install duckdb
   else
-    log_info "Installing duckdb via apt..."
-    if ! "${SUDO[@]}" apt-get install -y -qq duckdb; then
-      log_warn "apt duckdb package not available in this environment. Install duckdb CLI manually."
-      return
+    # DuckDB is not packaged in Debian/Ubuntu apt repos, so download the
+    # official CLI release binary for this architecture into ~/.local/bin.
+    ensure_user_local_bin_on_path
+    local ddb_arch
+    case "$ARCH" in
+      amd64) ddb_arch="amd64" ;;
+      arm64) ddb_arch="aarch64" ;;
+      *)     log_warn "No DuckDB CLI release for arch '$ARCH'. Install duckdb manually."; return ;;
+    esac
+    local url="https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-${ddb_arch}.zip"
+    local tmp
+    tmp="$(mktemp -d)"
+    log_info "Downloading DuckDB ${DUCKDB_VERSION} CLI (linux/${ddb_arch})..."
+    if ! curl -fsSL "$url" -o "${tmp}/duckdb.zip"; then
+      log_warn "Failed to download DuckDB CLI from ${url}. Install duckdb manually."
+      rm -rf "$tmp"; return
     fi
+    unzip -o -q "${tmp}/duckdb.zip" -d "$tmp"
+    cp "${tmp}/duckdb" "$HOME/.local/bin/duckdb"
+    chmod +x "$HOME/.local/bin/duckdb"
+    rm -rf "$tmp"
   fi
 
   if duckdb_ok; then
