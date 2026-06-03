@@ -92,6 +92,26 @@ Direct evidence from the logs, culminating in the agent's own final account:
 (cold 0/3, arm A 0/1, arm C 50-steps 0/1, arm C 100-steps 0/1). Every run instead
 climbed the slicing-table ladder (8 → 16 → 32 + NEON unroll), ~0.38 → ~5.6 GB/s.
 
+### Was the model under-thinking? (reasoning-level check)
+
+Investigated whether the folding failure was a throttled-reasoning artifact. It was
+not — the model was reasoning at its (heavy) adaptive default:
+- **No reasoning effort is set anywhere** in the stack (Motoko config, env,
+  `run-agent.sh`, ailang model registry). ailang exposes a `think` control
+  ("high"/"medium"/"low"/true/false → OpenRouter `reasoning.effort`) but it was
+  unset → `reasoning.effort` omitted → OpenRouter **provider default**. The harness
+  does send `"include_reasoning":true` (hence the `reasoning_delta` log events).
+- **DeepSeek V4 Pro is an adaptive (o1/o3-style) reasoner** and the effort knob has
+  weak effect: a direct probe gave reasoning_tokens ≈ 322 default / 200 low / 206
+  high — forcing "high" barely changes it; it self-scales by difficulty.
+- **It reasoned hard on the folding work at the default**: cold screens spent
+  11k–42k reasoning tokens (one truncated at the cap); agent runs streamed ~24.5k
+  reasoning deltas. So on the reflected-Barrett problem it was already near maximal
+  adaptive reasoning and still failed → reinforces *capability*, not budget/effort.
+  Forcing `think:"high"` would very likely not change the outcome.
+- (Observability gap: the harness `run_summary` tracks total/output tokens but not
+  `reasoning_tokens` separately.)
+
 ## Thread-level synthesis
 
 Across three fixtures the literature scout never improved the outcome — for three

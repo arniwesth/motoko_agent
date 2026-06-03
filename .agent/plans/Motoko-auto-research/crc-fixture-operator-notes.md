@@ -205,6 +205,29 @@ Every run instead climbed the slicing-table ladder. The scout reliably FOUND the
 technique + a reference and even verified the fold invariant; the residual,
 unbreached wall is the reflected custom-poly Barrett reduction.
 
+### DeepSeek V4 Pro thinking level in this setup (investigated 2026-06-03)
+Confirms the capability-ceiling verdict is not a throttled-reasoning artifact:
+- **No explicit reasoning effort is set anywhere** — not Motoko config
+  (`.motoko/config/**`), not env, not `run-agent.sh`, not the ailang model registry
+  (deepseek-v4-pro isn't even a full registry entry; it's used via the raw
+  `openrouter/deepseek/deepseek-v4-pro` string). ailang exposes a `think` control
+  ("high"/"medium"/"low"/true/false → OpenRouter `reasoning.effort`) but it was
+  unset, so `reasoning.effort` is omitted (omitempty) → **OpenRouter provider
+  default**. The harness does send `"include_reasoning":true` (why logs carry
+  `reasoning_delta`/`thinking_delta`).
+- **DeepSeek V4 Pro uses ADAPTIVE (o1/o3-style) reasoning** — it scales thinking to
+  problem difficulty, and the explicit effort knob has weak effect. Direct probe
+  (same prompt): default reasoning_tokens≈322, effort=low≈200, effort=high≈206 —
+  i.e. forcing "high" barely changes it; the model self-throttles by difficulty.
+- **Empirically it reasoned HARD on the folding work** at the default setting: the
+  cold screens spent 11k–42k reasoning tokens (one even truncated at the cap), and
+  the agent runs streamed ~24.5k reasoning deltas. So on the reflected-Barrett
+  problem the model was already near its maximal adaptive reasoning and STILL failed
+  — reinforcing capability, not budget/effort. Forcing `think:"high"` would very
+  likely not change the outcome (adaptive model, weak knob).
+- Observability gap: the harness `run_summary` does not surface `reasoning_tokens`
+  separately (only total/output) — worth adding if reasoning cost matters.
+
 ## Pre-registered experiment
 
 - **Run arm A first** (`crc_autonomy_noscout_task.md`). Decision rule
