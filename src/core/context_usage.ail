@@ -35,9 +35,13 @@ pure func context_limit_base(model: string) -> int
     else if model == "z-ai/glm-5" then 128000
     else if model == "minimax/minimax-m2.7" then 256000
     else if model == "x-ai/grok-3" then 131072
+    else if model == "deepseek/deepseek-v4-pro" then 1000000
+    else if model == "deepseek/deepseek-v4-flash" then 1000000
+    else if model == "deepseek/deepseek-v4-flash:free" then 1000000
     else if startsWith(model, "anthropic/") then 200000
     else if startsWith(model, "openai/") then 128000
     else if startsWith(model, "google/") then 1000000
+    else if startsWith(model, "deepseek/deepseek-v4") then 1000000
     else if model == "test/tiny" then 100
     else 0
   }

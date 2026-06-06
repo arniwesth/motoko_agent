@@ -53,11 +53,11 @@ import src/core/tool_runtime (backend_for_v2)
 import src/core/types (Msg, ToolBackend)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import src/core/ext/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
 import src/core/compaction (compact_step)
 import src/core/context_usage (context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
-import src/core/ext/types (PreStepDecision, PassThrough, Compacted)
+import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
