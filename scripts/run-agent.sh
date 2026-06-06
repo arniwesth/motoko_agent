@@ -38,4 +38,18 @@ if [[ -x "$LOCAL_AILANG_BIN" ]]; then
   export AILANG_BIN="$LOCAL_AILANG_BIN"
 fi
 
+# cd into PROJECT_ROOT before exec'ing bun. motoko_agent's runtime reads its
+# own `src/core/*.ail` source files via paths relative to CWD (supervisor.ail,
+# agent_loop_v2.ail, ext/*.ail, etc. are loaded dynamically by the TS host).
+# Without this cd, invoking `motoko` from a foreign directory — e.g. the
+# AILANG eval-harness's per-benchmark tmpdir, or a Docker container where the
+# binary is symlinked to /usr/local/bin/motoko — fails on the first runtime
+# file-read with `cannot read file 'src/core/supervisor.ail'`. The motoko TUI
+# silently hangs in that path because the read error isn't surfaced to stderr
+# before the agent loop initialises.
+#
+# The task workspace (where solution.{ail,py} lives) is decoupled via the
+# WORKDIR env var — motoko reads/writes WORKDIR for task I/O, never CWD.
+cd "$PROJECT_ROOT"
+
 exec bun "$ENTRY" "$@"

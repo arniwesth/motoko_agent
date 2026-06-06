@@ -1,0 +1,101 @@
+module src/core/ext/types
+
+import std/option (Option)
+import std/ai (ToolSchema)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
+import src/core/config (VerificationConfig)
+
+export type BudgetPlan = { total: int, solver: int, verifier: int }
+
+export type ExtCtx = {
+  task: string,
+  step: int,
+  model: string,
+  cwd: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  mode: string,
+  workdir: string,
+  env_server_url: string,
+  budget_remaining: int,
+  history_slice: [Msg],
+  state_key: string,
+  context_limit: int
+}
+
+export type PromptPatch = {
+  prepend: [string],
+  append: [string]
+}
+
+export type BudgetPatch = {
+  requested_total: Option[int],
+  requested_solver: Option[int],
+  requested_verifier: Option[int]
+}
+
+export type PolicyDefault
+  = AllowAfterTimeout
+  | DenyAfterTimeout
+  deriving (Eq)
+
+export type ToolPolicyDecision
+  = Allow
+  | Deny(string)
+  | NoOpinion
+  | Pending(string, PolicyDefault)
+  deriving (Eq)
+
+export type ToolHandleDecision
+  = Handled(ToolResultEnvelope)
+  | Delegate
+
+export type ResponseInterceptDecision
+  = InterceptHandled(ToolResultEnvelope)
+  | NoIntercept
+
+export type FinalizeDecision
+  = Accept(string)
+  | ContinueWithFeedback(string)
+  | NoDecision
+  deriving (Eq)
+
+-- Decision type for pre-step compaction hooks.
+-- PassThrough: no compaction needed, proceed with original msgs
+-- Compacted: extension has compacted the message list, use the new one
+export type PreStepDecision
+  = PassThrough
+  | Compacted(msgs: [Msg], note: string)
+  deriving (Eq)
+
+export type ExtensionHooks = {
+  id: string,
+  provided_tools: [string],
+  on_describe_tools: () -> [ToolSchema],
+  on_build_system_prompt: (ExtCtx) -> PromptPatch,
+  on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS},
+  on_pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+  on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
+  on_tool_handle: (ExtCtx, ToolCallEnvelope)
+    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+  on_response_intercept: (ExtCtx, string)
+    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+  on_solver_candidate: (ExtCtx, string)
+    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+}
+
+export type ExtRegistry = {
+  hooks: [ExtensionHooks]
+}
+
+export type ExtRuntime = {
+  registry: ExtRegistry,
+  strict_mode: bool,
+  verification: VerificationConfig
+}
+
+export type ToolDecisionEnvelope = {
+  call: ToolCallEnvelope,
+  decision: ToolPolicyDecision
+}

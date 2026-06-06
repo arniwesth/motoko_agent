@@ -342,10 +342,6 @@ func mk_v2_ext_ctx(
     budget_remaining: remaining,
     history_slice: messages_to_msgs(history),
     state_key: "core:ext:v2",
-    -- abi 2.2.0: surface the host's authoritative context limit so extensions
-    -- (motoko_ext_compaction_ai@0.2.0+) don't need their own duplicate
-    -- heuristic table. 0 means unknown — extensions treat as "skip
-    -- context-aware behaviour" rather than guessing.
     context_limit: context_limit_for(model)
   }
 }
@@ -910,7 +906,7 @@ func loop_v2(
     -- (not used for reordering on the consumer side as of v0.18.7).
     -- Match-in-lambda is a known AILANG parser bug, so the match lives in
     -- the top-level emit_stream_chunk helper.
-    let on_chunk = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
+    let on_chunk: (StreamChunk) -> () ! {IO} = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
     let dispatched = dispatch_step(provider, model, compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {

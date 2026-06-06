@@ -98,7 +98,7 @@ func apply_budget_patch(plan: BudgetPlan, patch: BudgetPatch) -> BudgetPlan {
 func emit_dummy_hook(hook: string, key: string, val: string) -> () ! {IO, Clock} {
   let _ = println(encode(jo([
     kv("type", js("dummy_hook")),
-    kv("ts", jnum(now())),
+    kv("ts", jnum(intToFloat(now()))),
     kv("hook", js(hook)),
     kv(key, js(val))
   ])));
@@ -309,6 +309,7 @@ func smoke_ctx() -> ExtCtx {
     task: "t",
     step: 0,
     model: "m",
+    context_limit: 0,
     cwd: ".",
     hybrid_tools: true,
     budget: { total: 10, solver: 6, verifier: 4 },
