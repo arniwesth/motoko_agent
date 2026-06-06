@@ -65,8 +65,13 @@ services:
       - ..:/workspaces/motoko_agent:cached     # explicit bind-mount (compose does NOT auto-mount)
     command: sleep infinity
     environment:
-      # Wiring handoff to Plan B — see §5
-      MOTOKO_OTEL: "1"
+      # Wiring handoff to Plan B — see §5. The endpoint is stable/harmless to
+      # leave set (compose DNS), but MOTOKO_OTEL stays UNSET by default so motoko
+      # doesn't attempt exports while the opt-in clickstack service is down.
+      # The dev turns it on alongside the sidecar (§6). (AILANG "Silent Failure
+      # Mode" means a down collector is non-fatal even if it is on — but keeping
+      # it off avoids wasted export attempts and noise.)
+      # MOTOKO_OTEL: "1"          # enable per-shell when observability is up
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://clickstack:4318"
       OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
       OTEL_SERVICE_NAME: "motoko-agent"
@@ -114,7 +119,7 @@ volumes:
 Setting OTEL vars on the `app` service is necessary but **not sufficient**. Motoko spawns the AILANG runtime as a child with an **explicit env whitelist** (`src/tui/src/runtime-process.ts` `childEnv`, ~lines 296–346). Vars not in that list are dropped before the child sees them — the same trap already documented there for `MOTOKO_REPO`/cost vars. So the OTEL vars must be:
 
 1. set on the `app` service (here), **and**
-2. added to the `childEnv` whitelist + the `--caps ...,Trace` string (Plan B Phase 0/1, `runtime-process.ts:412`).
+2. added to the `childEnv` whitelist (Plan B Phase 0, `runtime-process.ts` ~296–346), plus any capability grant Plan B's §4.0 spike determines is needed (the `Trace` cap is *not* in AILANG's documented capability list, so it may need no `--caps` edit at all — Plan B owns confirming this).
 
 Both halves are required for an end-to-end trace. This doc owns (1); Plan B owns (2).
 
@@ -123,14 +128,16 @@ Both halves are required for an end-to-end trace. This doc owns (1); Plan B owns
 ## 6. Developer workflow
 
 ```bash
-# default: lightweight devcontainer, no ClickStack
+# default: lightweight devcontainer, no ClickStack, motoko does not export
 # opt in when you want traces:
 docker compose --profile observability up -d clickstack    # from .devcontainer/
+export MOTOKO_OTEL=1                                        # turn on export for this shell
 # open HyperDX:
 #   http://localhost:8081   (first run: create user, see §7 re: ingestion key)
 # run motoko normally — spans flow to http://clickstack:4318
 make run
 # tear down when done (frees the ~2GB):
+unset MOTOKO_OTEL
 docker compose --profile observability stop clickstack
 ```
 

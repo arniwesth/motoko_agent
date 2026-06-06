@@ -10,9 +10,15 @@
 
 ## 1. Goal & scope
 
-Plan B = **Plan A (transport + AILANG's free runtime spans) PLUS Motoko's own agent-loop semantics as first-class spans/events**, all flowing through the *same* OTLP pipe into ClickStack (ClickHouse + OTel collector + HyperDX).
+Plan B = **Plan A (transport + AILANG's free runtime spans) PLUS Motoko's own agent-loop semantics as spans/events** in ClickStack (ClickHouse + OTel collector + HyperDX).
 
-Plan B is a strict superset of Plan A. Plan A is just `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at ClickStack's collector, which makes AILANG's built-in spans (compile / eval / effect / **AI-provider spans carrying token+cost attributes**) land in ClickHouse. Plan B reuses that exact wiring and nests Motoko's spans inside the same traces.
+Plan B is a strict superset of Plan A. Plan A is just `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at ClickStack's collector, which makes AILANG's built-in spans (compile / eval / effect / **AI-provider spans carrying token+cost attributes**) land in ClickHouse — **this auto-export is documented and confirmed**. Plan B adds Motoko's own spans on top.
+
+> ⚠️ **Transport for Motoko's custom spans is NOT yet confirmed and is the #1 thing to verify (Phase 0 spike, §4.0).** The docs confirm AILANG auto-exports its *built-in* spans, but the `guides/traces` "OTEL Forwarding" section describes forwarding *custom* `std/trace` spans as something an application implements via a trace handler (`otelExporter.addSpan()`), **not** a guaranteed automatic ride on `OTEL_EXPORTER_OTLP_ENDPOINT`. Plan B therefore has **two candidate routes for Motoko's spans**, chosen by the spike:
+> - **Route N (native)**: `std/trace` spans auto-forward through the same OTLP exporter → cleanest, used if the spike confirms it.
+> - **Route J (JSONL→collector)**: the existing session JSONL is tailed by the ClickStack collector's `filelog` receiver + a transform that maps it to spans → **zero dependency on `std/trace` forwarding, definitely works**, and needs no AILANG code changes at all.
+>
+> If Route N fails the spike, **Phases 1–3 below (the `std/trace` instrumentation) are replaced wholesale by Route J's collector config.** Do not start them before the spike.
 
 **In scope**: a session becomes one trace tree — `session → step → tool-dispatch` — with agent-loop events (gate decisions, denials, delegation) attached; sub-agent processes nest under the parent trace; a ClickStack deployment + HyperDX dashboards for the eval/autoresearch comparisons.
 
@@ -20,21 +26,26 @@ Plan B is a strict superset of Plan A. Plan A is just `OTEL_EXPORTER_OTLP_ENDPOI
 
 ---
 
-## 2. What AILANG gives us (verified via ailang-docs MCP, latest)
+## 2. What AILANG gives us (from ailang-docs MCP, latest)
 
-- **`std/trace`** — `spanStart(name) ! {Trace}`, `spanEnd(name) ! {Trace}` (name-paired, LIFO), `event(name, data) ! {Trace}` (data is a string payload). This is the custom-span API Plan B is built on.
-- **`std/debug`** — `log(msg) ! {Debug}`, `check(cond, msg) ! {Debug}` (host-collected). Optional, for assertions.
-- **OTLP export**: `OTEL_EXPORTER_OTLP_ENDPOINT` → any OTLP backend; dual export with GCP. `--emit-trace jsonl,otel`.
-- **Tiers**: `AILANG_TRACE=off|standard|deep`; per-trace span budget `AILANG_TRACE_MAX_SPANS` (default 500, overflow → one `trace.truncated` rollup span).
-- **Auto-instrumented**: compiler, eval harness, executors, **AI providers (token/cost span attributes)** — so per-model token/cost querying rides the runtime spans, not our custom ones.
-- **Cross-process trace linking** (v0.6.3+): parent trace context propagates to spawned CLI subprocesses (used today for Claude Code / Gemini CLI) — the mechanism we reuse for Motoko sub-agents.
-- **CLI**: `ailang trace status | list | view <trace-id>` for local verification.
+**Confirmed:**
+- **OTLP auto-export of built-in spans**: `OTEL_EXPORTER_OTLP_ENDPOINT` → any OTLP backend; dual export with GCP. `--emit-trace jsonl,otel`. (This is Plan A and is documented.)
+- **Tiers**: `AILANG_TRACE=off|standard|deep`; per-trace span budget `AILANG_TRACE_MAX_SPANS` (default 500, overflow → one `trace.truncated` rollup span). "Silent Failure Mode" — a missing/down collector does not crash the run.
+- **Auto-instrumented**: compiler, eval harness, executors, **AI providers (token/cost span attributes)** — per-model token/cost querying rides these runtime spans, not our custom ones.
+- **CLI**: `ailang trace status | list | view <trace-id>` (confirmed present in the local v0.19.1 build too).
+- **`std/trace` API exists**: `spanStart(name) ! {Trace}`, `spanEnd(name) ! {Trace}` (name-paired, LIFO), `event(name, data) ! {Trace}` (string payload). `std/debug`: `log`, `check` (host-collected).
 
-> ⚠️ `spanStart` takes **only a name** — no attributes argument. Span attributes are therefore attached via `event()` payloads inside the span (HyperDX indexes event attributes), or come from the auto AI-provider spans. Bake this into the design: structure via spans, attributes via events.
+**⚠️ NOT confirmed — must verify in the Phase 0 spike (§4.0):**
+- That `std/trace` spans **auto-forward over OTLP** (vs. requiring an app-level trace handler / `addSpan`). The traces guide frames custom-span forwarding as application-implemented. **This gates Route N vs Route J.**
+- **How the `Trace`/`Debug` effect is granted.** The `reference/effects` capability list shows only IO/FS/Clock/Net/Env/Process/Stream — **`Trace`/`Debug` are NOT listed and there is no documented `--caps Trace`.** Likely they are ambient/host-collected effects needing no grant, but this is unverified — do **not** assume the caps string needs `,Trace` until confirmed.
+- That AILANG's auto AI-provider span **nests under** a custom `motoko.step` span (requires the runtime to share one span stack between auto + custom spans).
+- **Cross-process trace linking** env var (v0.6.3+, `m-otel-cross-process-linking`): the mechanism exists but the exact propagation var (expected `TRACEPARENT`) is unconfirmed.
+
+> ⚠️ `spanStart` takes **only a name** — no attributes argument. Attributes therefore ride `event()` payloads (HyperDX indexes event attributes) or the auto AI-provider spans. Structure via spans, attributes via events.
 
 ---
 
-## 3. Span / event model
+## 3. Span / event model (target shape — Route N builds it with `std/trace`; Route J's collector transform maps the JSONL onto the same shape)
 
 ```
 trace = one Motoko session  (trace_id correlated to MOTOKO_SESSION_ID / derive_session_id)
@@ -55,14 +66,22 @@ trace = one Motoko session  (trace_id correlated to MOTOKO_SESSION_ID / derive_s
 
 ## 4. Implementation phases
 
-### Phase 0 — Upgrade & transport (this is Plan A; do first, prove it)
-1. Bump AILANG runtime + `ailang.lock` from 0.19.1 → 0.24.2; run existing smoke/inline tests to confirm no migration regressions (check `design_docs/planned/ailang-tool-loop-migration.md` and any 0.20–0.24 changelog breaks via `changelog_for_version`).
-2. Stand up ClickStack locally (§6).
-3. Add OTEL env to the child-process **whitelist** in `src/tui/src/runtime-process.ts` (`childEnv`, ~lines 296–346 — it is an explicit allowlist; unlisted vars are dropped, same gotcha documented there for `MOTOKO_REPO`/cost vars). Gate on `MOTOKO_OTEL`:
-   - `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` (ClickStack ingestion key: `authorization=<key>`), `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, `OTEL_SERVICE_NAME=motoko-agent`, `OTEL_RESOURCE_ATTRIBUTES`, `AILANG_TRACE`, `AILANG_TRACE_MAX_SPANS`.
-4. **Acceptance**: run a session, see AILANG runtime spans (incl. AI-provider token/cost) in HyperDX; `ailang trace list` shows the trace. No Motoko code changed yet.
+### Phase 0 — Upgrade, transport, and the decisive spike
 
-### Phase 1 — Single-chokepoint trace events (low risk, high coverage)
+**0.0 — Custom-span forwarding spike (BLOCKS Phases 1–3; do this before writing any span code).**
+A ~15-line standalone `.ail` program that calls `std/trace.spanStart` / `event` / `spanEnd`, run with `--emit-trace jsonl,otel` and `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at a local collector (Jaeger or the ClickStack sidecar). Determine:
+- Does the custom span arrive at the collector **without** any app-level handler? → if yes, **Route N**; if no, **Route J** (collector tails JSONL; skip Phases 1–3, implement §6 collector transform instead).
+- What capability (if any) must be granted for `! {Trace}` — does `--caps ...` need a `Trace`/`trace` token, or does it run cap-free? Record the exact answer; it dictates the `runtime-process.ts` caps edit (or that no edit is needed).
+- (If Route N) does the auto AI-provider span nest under the custom span?
+
+1. Bump AILANG runtime + `ailang.lock` from 0.19.1 → 0.24.2; run existing smoke/inline tests to confirm no migration regressions (check `design_docs/planned/ailang-tool-loop-migration.md` and 0.20–0.24 changelog breaks via `changelog_for_version`). Confirm `std/trace` resolves (it is absent or different pre-0.24).
+2. Stand up ClickStack locally (see `Design_Devcontainer_ClickStack.md`).
+3. Add OTEL env to the child-process **whitelist** in `src/tui/src/runtime-process.ts` (`childEnv`, ~lines 296–346 — explicit allowlist; unlisted vars are dropped, same gotcha as `MOTOKO_REPO`/cost vars). Gate on `MOTOKO_OTEL`:
+   - `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` (ClickStack ingestion key: `authorization=<key>`), `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, `OTEL_SERVICE_NAME=motoko-agent`, `OTEL_RESOURCE_ATTRIBUTES`, `AILANG_TRACE`, `AILANG_TRACE_MAX_SPANS`.
+4. **Acceptance**: run a session, see AILANG runtime spans (incl. AI-provider token/cost) in HyperDX; `ailang trace list` shows the trace. No Motoko code changed yet. **This alone delivers Plan A**, independent of the spike outcome.
+
+### Phase 1 — Single-chokepoint trace events (Route N only; low risk, high coverage)
+*Skip if the spike selected Route J — there the JSONL already carries everything and the §6 collector transform does the mapping.*
 The whole point: `emit_event` (`src/core/agent_loop_v2.ail:126`) is already the single funnel every JSONL event passes through. Make it dual-emit.
 1. `import std/trace as Trace`.
 2. Change `emit_event(session_id, event_type, extra) -> () ! {IO}` → `! {IO, Trace}`. After the JSONL write, call `Trace.event(event_type, <json of extra>)` reusing the existing `jo/kv/js` encoders.
@@ -70,7 +89,7 @@ The whole point: `emit_event` (`src/core/agent_loop_v2.ail:126`) is already the 
    - DROP `thinking_delta`, `reasoning_delta` (per-token deltas — would blow `AILANG_TRACE_MAX_SPANS` and leak raw model content).
    - For payloads that may carry secrets (prompt/content text), truncate or redact before `Trace.event` (keep full text in JSONL only).
 4. Thread the `Trace` effect up the call chain: `dispatch_calls`, `conversation_loop_v2`, and the top-level entry in `src/core/supervisor.ail` (top-level effect row, currently `! {IO, FS, Env, Process, Net, AI, SharedMem, Clock, Stream}` → add `Trace`).
-5. Add `Trace` to the runtime caps string in `runtime-process.ts:412` (`"Net,AI,...,Stream"` → append `,Trace`), gated so it's only granted when `MOTOKO_OTEL=1` (granting the cap with no endpoint is harmless — spans go to observatory.db — but keep it conditional for cleanliness).
+5. **Grant the `Trace` capability IF the spike (§4.0) showed one is needed** — the caps list in `runtime-process.ts:412` may or may not require a `Trace`/`trace` token (it is *not* in the documented capability list, so it is likely ambient and needs no edit). Apply only the form the spike confirmed; do not guess.
 6. **Acceptance**: every non-excluded JSONL event now also appears as a span event in HyperDX, searchable by `type`, `session_id`.
 
 ### Phase 2 — Span tree (the waterfall)
@@ -100,6 +119,8 @@ Build HyperDX saved searches / ClickHouse views for the comparisons this repo ac
 
 | Risk | Mitigation |
 |---|---|
+| **🔴 Custom spans may not auto-forward to OTLP** (the whole Route N premise) | Phase 0 spike (§4.0) decides before any code is written; **Route J (JSONL→collector) is a complete fallback** that needs no `std/trace` and no AILANG changes. Plan A (built-in spans) is unaffected either way. |
+| **`Trace` capability grant unknown** | Spike records exact form; likely ambient (no `--caps` token). Don't pre-edit the caps string. |
 | **Unbalanced spans** (early return/`Err` skips `spanEnd`) → leaked/never-closed spans | Phase 1 (events-only) carries zero balancing risk and ships value first. In Phase 2 route all spans through `with_span` and assert balance in tests. |
 | **Span-budget blowout / content leak** from per-token deltas | `emit_event` allowlist DROPS `thinking_delta`/`reasoning_delta`; set `AILANG_TRACE_MAX_SPANS` deliberately. |
 | **Secrets to ClickStack** (prompt/thinking text) | Redact/truncate payloads before `Trace.event`; full text stays in JSONL only; default `MOTOKO_OTEL` off (opt-in). |
@@ -117,18 +138,26 @@ Build HyperDX saved searches / ClickHouse views for the comparisons this repo ac
 Add `deploy/clickstack/` with a compose file + README:
 - ClickStack all-in-one (HyperDX + ClickHouse + OTel collector); collector listens OTLP **4317 (gRPC) / 4318 (HTTP)**.
 - Point Motoko at it: `OTEL_EXPORTER_OTLP_ENDPOINT=http://<host>:4318`, `OTEL_EXPORTER_OTLP_HEADERS=authorization=<hyperdx-ingestion-key>`.
-- Fallback for historical data: collector `filelog` receiver tailing `${WORKDIR}/.motoko/logfile/session_*.jsonl` (Plan A's old path A) — keep documented but not primary.
+- **Route J transform** (the fallback selected if the §4.0 spike fails, and also the path for historical logs): a collector `filelog` receiver tailing `${WORKDIR}/.motoko/logfile/session_*.jsonl` + a transform processor mapping `session_id`→trace_id, `type`→span name, token/cost→attributes. This is a real, complete delivery path — not a footnote.
+- The devcontainer sidecar in `Design_Devcontainer_ClickStack.md` is the dev-loop instance of this deployment.
 
 ---
 
 ## 7. File-change checklist
 
+*Always (both routes):*
 - `ailang.lock` + runtime — upgrade to 0.24.2.
-- `src/tui/src/runtime-process.ts` — caps `,Trace` (line ~412); OTEL env in `childEnv` whitelist (~296–346); traceparent into `resolveDelegatedSpawn` (~475), all gated on `MOTOKO_OTEL`.
+- `src/tui/src/runtime-process.ts` — OTEL env in `childEnv` whitelist (~296–346), gated on `MOTOKO_OTEL`.
+- `deploy/clickstack/` + `Design_Devcontainer_ClickStack.md` sidecar.
+
+*Route N only (if §4.0 spike confirms native forwarding):*
+- `src/tui/src/runtime-process.ts` — caps token at line ~412 **only if the spike says one is required**; traceparent into `resolveDelegatedSpawn` (~475).
 - `src/core/agent_loop_v2.ail` — `import std/trace`; `emit_event` dual-emit + allowlist (line 126); session/step/tool spans via `with_span`; thread `Trace` through `dispatch_calls` / `conversation_loop_v2`.
-- `src/core/supervisor.ail` — add `Trace` to top-level effect row + entry chain.
-- Tests — inline tests for `emit_event` dual-emission and span balance (use `std/trace_test`); a local-collector smoke asserting spans arrive (`ailang trace list`).
-- `deploy/clickstack/` — compose + README.
+- `src/core/supervisor.ail` — thread `Trace` through top-level effect row + entry chain (if a grant is required).
+- Tests — inline tests for `emit_event` dual-emission + span balance (`std/trace_test`); local-collector smoke (`ailang trace list`).
+
+*Route J only (if spike fails):*
+- `deploy/clickstack/collector.yaml` — `filelog` receiver + transform; **no AILANG/TS source changes beyond the env whitelist.**
 
 > This plan lives in `.agent/plans/` (the working-plan space). A formal `design_docs/planned/m-motoko-*` entry is **not** created — there is no existing OTEL design doc, and that canon is reserved for docs with cross-repo significance (e.g. `m-motoko-eval-instrumentation.md`, which AILANG core references). Promote this only if AILANG-side work ends up needing to cross-reference it.
 
@@ -136,5 +165,10 @@ Add `deploy/clickstack/` with a compose file + README:
 
 ## 8. Sequencing / definition of done
 
-Phase 0 (Plan A: spans visible in HyperDX) → Phase 1 (all events as trace events) → Phase 2 (waterfall) → Phase 3 (sub-agent linking) → Phase 4 (dashboards). Each phase is independently shippable and has its own acceptance check above. **Done** = a delegating session renders as a single nested trace in HyperDX with per-step token/cost, and the autoresearch token/cost-per-regime dashboard is driven by ClickHouse instead of JSONL grep.
-```
+**Phase 0** (upgrade + transport + the §4.0 spike) → spike picks the route:
+- **Route N**: Phase 1 (events) → Phase 2 (waterfall) → Phase 3 (sub-agent linking) → Phase 4 (dashboards).
+- **Route J**: collector `filelog`+transform (§6) → Phase 4 (dashboards). Phases 1–3 are skipped.
+
+Phase 0 alone delivers Plan A (AILANG built-in spans, incl. token/cost) regardless of route. Each subsequent phase is independently shippable with its own acceptance check above.
+
+**Done** = a delegating session renders as a single nested trace in HyperDX with per-step token/cost, and the autoresearch token/cost-per-regime dashboard is driven by ClickHouse instead of JSONL grep.
