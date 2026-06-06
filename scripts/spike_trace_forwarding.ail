@@ -1,0 +1,10 @@
+module scripts/spike_trace_forwarding
+
+import std/trace (spanStart, spanEnd, event)
+
+export func main() -> () ! {IO, Trace} {
+  spanStart("motoko.spike.custom_span");
+  event("motoko.spike.event", "{\"route\":\"native\",\"status\":\"probe\"}");
+  println("trace forwarding spike emitted");
+  spanEnd("motoko.spike.custom_span")
+}

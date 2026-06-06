@@ -1,0 +1,16 @@
+services:
+  clickstack:
+    image: clickhouse/clickstack-all-in-one:latest
+    ports:
+      - "8081:8080"
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - clickstack-db:/data/db
+      - clickstack-ch:/var/lib/clickhouse
+      - clickstack-logs:/var/log/clickhouse-server
+
+volumes:
+  clickstack-db:
+  clickstack-ch:
+  clickstack-logs:

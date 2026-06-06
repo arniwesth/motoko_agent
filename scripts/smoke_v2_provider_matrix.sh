@@ -197,7 +197,7 @@ for provider in $PROVIDERS; do
     ai_flag=$(ai_flag_for "$provider")
     # MOTOKO_AGENT_V2 is no longer needed (M10 cutover made v2 default).
     if AILANG_SMOKE_MODEL="$model" ailang run \
-         --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+         --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace \
          --ai "$ai_flag" \
          --net-allow-http --net-allow-localhost \
          --entry main "$script" >"$log" 2>&1; then

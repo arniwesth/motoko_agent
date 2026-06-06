@@ -352,6 +352,30 @@ export class RuntimeProcess {
     if (process.env.AILANG_STDLIB_PATH) {
       childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
     }
+    // ClickStack/OTLP handoff: the launcher uses an explicit env whitelist,
+    // so tracing variables must be copied deliberately. Keep export gated so
+    // default dev runs do not attempt OTLP delivery when the opt-in sidecar is
+    // down.
+    if (process.env.MOTOKO_OTEL && process.env.MOTOKO_OTEL.trim() !== "") {
+      childEnv.MOTOKO_OTEL = process.env.MOTOKO_OTEL;
+      childEnv.OTEL_EXPORTER_OTLP_ENDPOINT =
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://clickstack:4318";
+      childEnv.OTEL_EXPORTER_OTLP_PROTOCOL =
+        process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
+      childEnv.OTEL_SERVICE_NAME =
+        process.env.OTEL_SERVICE_NAME ?? "motoko-agent";
+      childEnv.AILANG_TRACE = process.env.AILANG_TRACE ?? "standard";
+      childEnv.AILANG_TRACE_MAX_SPANS =
+        process.env.AILANG_TRACE_MAX_SPANS ?? "500";
+      if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
+        childEnv.OTEL_EXPORTER_OTLP_HEADERS =
+          process.env.OTEL_EXPORTER_OTLP_HEADERS;
+      }
+      if (process.env.OTEL_RESOURCE_ATTRIBUTES) {
+        childEnv.OTEL_RESOURCE_ATTRIBUTES =
+          process.env.OTEL_RESOURCE_ATTRIBUTES;
+      }
+    }
     // M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 cutover (2026-05-06): the
     // upstream std/ai.step() typed-tool-use loop is now the default and
     // only loop. The MOTOKO_AGENT_V2 env var is no longer consulted by
@@ -409,7 +433,7 @@ export class RuntimeProcess {
       [
         "run",
         "--caps",
-        "Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream",
+        "Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace",
         "--ai",
         aiModelArg,
         "--entry",

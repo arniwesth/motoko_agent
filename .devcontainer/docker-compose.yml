@@ -1,0 +1,35 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - ..:/workspaces/motoko_agent:cached
+    command: sleep infinity
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://clickstack:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_SERVICE_NAME: motoko-agent
+      AILANG_TRACE: standard
+
+  clickstack:
+    image: clickhouse/clickstack-all-in-one:latest
+    profiles: ["observability"]
+    ports:
+      - "8081:8080"
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - clickstack-db:/data/db
+      - clickstack-ch:/var/lib/clickhouse
+      - clickstack-logs:/var/log/clickhouse-server
+
+volumes:
+  clickstack-db:
+  clickstack-ch:
+  clickstack-logs:
