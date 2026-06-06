@@ -109,7 +109,7 @@ run: build
 
 # Install all prerequisites (Go, Bun, Node, context-mode, AILANG, TUI deps)
 install:
-	./scripts/install-prerequisites.sh --with-omnigraph
+	./scripts/install-prerequisites.sh	
 
 # Run all core runtime module tests
 test_core:
