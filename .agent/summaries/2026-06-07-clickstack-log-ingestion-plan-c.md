@@ -344,12 +344,91 @@ As of the end of this follow-up, the collector startup issue has a concrete fix
 in the worktree, but it has not been verified through Docker Compose because
 this app container still has neither `docker` nor `/var/run/docker.sock`.
 
+## Follow-up Debugging: Devcontainer Profile Split and Trace Regression
+
+After the prior summary, `.devcontainer` was split into two profiles:
+
+- `.devcontainer/default/devcontainer.json`
+  - Uses only `.devcontainer/docker-compose.yml`.
+  - Starts only the `app` service.
+- `.devcontainer/observability/devcontainer.json`
+  - Uses both `.devcontainer/docker-compose.yml` and
+    `.devcontainer/docker-compose.observability.yml`.
+  - Starts `app`, `clickstack`, and `motoko-log-collector`.
+
+The user reported that logs still worked after rebuilding with the
+observability profile, but traces stopped working.
+
+Root cause found:
+
+- `Makefile` had `PROFILE ?= default`.
+- `make run` executes `MOTOKO_CONFIG=$(PROFILE) ./scripts/run-agent.sh`.
+- Therefore plain `make run` inside the observability devcontainer overrode the
+  container's `MOTOKO_CONFIG=observability` with `MOTOKO_CONFIG=default`.
+- The default Motoko profile does not have `clickstack.enabled=true`, so the TUI
+  never set `MOTOKO_OTEL=1`; the child AILANG runtime did not receive OTEL trace
+  env vars.
+- Log ingestion still worked because it is handled by the separate
+  `motoko-log-collector` sidecar and does not depend on the active Motoko
+  runtime profile.
+
+Applied trace fix:
+
+- `Makefile`
+  - Changed:
+    `PROFILE ?= default`
+  - To:
+    `PROFILE ?= $(if $(MOTOKO_CONFIG),$(MOTOKO_CONFIG),default)`
+  - This preserves `MOTOKO_CONFIG=observability` from the observability
+    devcontainer for plain `make run`, while still defaulting to `default` when
+    no profile is set.
+
+Applied auth hardening:
+
+- `.devcontainer/docker-compose.observability.yml`
+  - Added root `.env` as an optional `env_file` for the `app` service, matching
+    the collector.
+  - Removed blank Compose-injected `CLICKSTACK_INGESTION_KEY` and
+    `OTEL_EXPORTER_OTLP_HEADERS` values from `app.environment`.
+  - This lets the app/TUI receive the same ingestion key source as the log
+    collector and synthesize `OTEL_EXPORTER_OTLP_HEADERS=authorization=<key>`.
+
+Validation performed after the fix:
+
+```bash
+MOTOKO_CONFIG=observability make -n run | tail -5
+```
+
+Confirmed dry-run output ends with:
+
+```text
+MOTOKO_CONFIG=observability ./scripts/run-agent.sh
+```
+
+```bash
+env -u MOTOKO_CONFIG make -n run | tail -5
+```
+
+Confirmed dry-run output still ends with:
+
+```text
+MOTOKO_CONFIG=default ./scripts/run-agent.sh
+```
+
+JSON parse checks passed for:
+
+- `.devcontainer/observability/devcontainer.json`
+- `.devcontainer/default/devcontainer.json`
+- `.motoko/config/observability/config.json`
+
 Current expected modified/untracked files:
 
 - `.agent/summaries/2026-06-07-clickstack-log-ingestion-plan-c.md`
+- `.devcontainer/docker-compose.observability.yml`
 - `.devcontainer/devcontainer.json`
 - `.devcontainer/docker-compose.yml`
 - `.devcontainer/otel/logs-collector.yaml`
+- `Makefile`
 - `.motoko/config/default/config.json`
 - `deploy/clickstack/README.md`
 - `src/tui/src/index.ts`

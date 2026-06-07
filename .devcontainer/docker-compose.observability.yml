@@ -3,12 +3,13 @@ services:
     depends_on:
       - clickstack
       - motoko-log-collector
+    env_file:
+      - path: ../.env
+        required: false
     environment:
       MOTOKO_CONFIG: observability
-      CLICKSTACK_INGESTION_KEY: ${CLICKSTACK_INGESTION_KEY:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://clickstack:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
-      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
       OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
       OTEL_EXPORTER_OTLP_TIMEOUT: ${OTEL_EXPORTER_OTLP_TIMEOUT:-5000}
       OTEL_SERVICE_NAME: motoko-agent

@@ -1,4 +1,4 @@
-PROFILE ?= default
+PROFILE ?= $(if $(MOTOKO_CONFIG),$(MOTOKO_CONFIG),default)
 
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
