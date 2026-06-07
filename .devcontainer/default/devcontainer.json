@@ -1,16 +1,11 @@
 {
   "name": "Motoko Agent",
-  "dockerComposeFile": "docker-compose.yml",
+  "dockerComposeFile": "../docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/motoko_agent",
-  "runServices": ["app", "clickstack", "motoko-log-collector"],
+  "runServices": ["app"],
   "remoteUser": "motoko",
   "forwardPorts": [8080],
-  "portsAttributes": {
-    "8081": {
-      "onAutoForward": "ignore"
-    }
-  },
   "postCreateCommand": "cd src/tui && bun install && bun run build && cd ../.. && echo 'Motoko ready. Run: make run'",
   "customizations": {
     "vscode": {

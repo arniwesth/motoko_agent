@@ -1,0 +1,29 @@
+{
+  "name": "Motoko Agent Observability",
+  "dockerComposeFile": [
+    "../docker-compose.yml",
+    "../docker-compose.observability.yml"
+  ],
+  "service": "app",
+  "workspaceFolder": "/workspaces/motoko_agent",
+  "runServices": ["app", "clickstack", "motoko-log-collector"],
+  "remoteUser": "motoko",
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8081": {
+      "onAutoForward": "ignore"
+    }
+  },
+  "postCreateCommand": "cd src/tui && bun install && bun run build && cd ../.. && echo 'Motoko ready. Run: make run'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ],
+      "settings": {
+        "go.lintTool": "golangci-lint",
+        "go.formatTool": "gofmt"
+      }
+    }
+  }
+}

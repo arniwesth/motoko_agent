@@ -61,8 +61,8 @@ events into spans.
 In the devcontainer, session JSONL logs are tailed by the
 `motoko-log-collector` service from `.motoko/logfile/*.jsonl` and exported to
 ClickStack as OpenTelemetry logs. The source path, starting point, and age
-cutoff are mirrored in `.motoko/config/default/config.json` for documentation;
-changing them also requires updating
+cutoff are mirrored in `.motoko/config/observability/config.json` for
+documentation; changing them also requires updating
 `.devcontainer/otel/logs-collector.yaml` until a generator script exists.
 
 The local AILANG `v0.24.2` spike confirmed that `Trace` is a real capability:

@@ -1,7 +1,17 @@
-# Devcontainer Observability
+# Devcontainer Profiles
 
-The devcontainer runs Motoko in the `app` service and ClickStack as a sibling
-sidecar. Both services must be in the same Compose project for
+This repo provides two VS Code devcontainer profiles:
+
+- `.devcontainer/default/devcontainer.json`: starts only the `app` service.
+- `.devcontainer/observability/devcontainer.json`: starts `app`, ClickStack,
+  and the Motoko log collector sidecar.
+
+The default profile is intentionally lightweight and matches the main branch
+shape. Use the observability profile when you want Motoko logs, traces, or
+metrics shipped to ClickStack/HyperDX.
+
+The observability profile runs Motoko in the `app` service and ClickStack as a
+sibling sidecar. Both services must be in the same Compose project for
 `http://clickstack:4318` to resolve inside the devcontainer.
 
 ## Ports
@@ -14,17 +24,19 @@ sidecar. Both services must be in the same Compose project for
 
 ## Start ClickStack
 
-ClickStack should start when VS Code rebuilds/reopens this devcontainer because
-`.devcontainer/devcontainer.json` includes both services:
+ClickStack starts when VS Code rebuilds/reopens the observability devcontainer
+because `.devcontainer/observability/devcontainer.json` includes all required
+services:
 
 ```json
-"runServices": ["app", "clickstack"]
+"runServices": ["app", "clickstack", "motoko-log-collector"]
 ```
 
-To start it manually from `.devcontainer/`:
+To start it manually from `.devcontainer/` using the same Compose files as the
+observability profile:
 
 ```bash
-docker compose up -d clickstack
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d clickstack motoko-log-collector
 ```
 
 That command must use the same Compose project as the devcontainer `app`
@@ -48,7 +60,7 @@ docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' <app
 Then start ClickStack with that project name from `.devcontainer/`:
 
 ```bash
-docker compose -p <project-name> up -d clickstack
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml up -d clickstack motoko-log-collector
 ```
 
 If startup fails with a port allocation error such as:
@@ -64,7 +76,7 @@ container from the host shell, then start the sidecar again:
 docker ps --format '{{.Names}} {{.Ports}}' | grep '4317'
 docker stop <old-clickstack-container>
 docker rm <old-clickstack-container>
-docker compose -p <project-name> up -d clickstack
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml up -d clickstack motoko-log-collector
 ```
 
 If `docker ps` shows two ClickStack containers, the one with published host
@@ -82,16 +94,17 @@ one:
 ```bash
 docker stop devcontainer-clickstack-1
 docker rm devcontainer-clickstack-1
-docker compose -p <project-name> rm -sf clickstack
-docker compose -p <project-name> up -d clickstack
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml rm -sf clickstack
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml up -d clickstack motoko-log-collector
 ```
 
-The default Motoko profile enables ClickStack export with non-secret defaults
-from `.motoko/config/default/config.json`. Shell environment variables still
-override those defaults for one-off runs.
+The `observability` Motoko config profile enables ClickStack export with
+non-secret defaults from `.motoko/config/observability/config.json`. The
+observability devcontainer sets `MOTOKO_CONFIG=observability`. Shell environment
+variables still override those defaults for one-off runs.
 
 Motoko forwards OTLP environment variables to the AILANG child process only when
-`MOTOKO_OTEL` is set. The default profile sets this when
+`MOTOKO_OTEL` is set. The observability profile sets this when
 `clickstack.enabled=true`.
 
 AILANG `v0.24.2` requires the `Trace` capability for programs that use
@@ -108,8 +121,8 @@ ClickStack requires an ingestion API key for OTLP. Get it from HyperDX
 OTEL_EXPORTER_OTLP_HEADERS='authorization=<hyperdx-ingestion-key>'
 ```
 
-After that, run Motoko normally from the default profile; no per-shell OTEL
-exports are required.
+After that, run Motoko normally from the observability devcontainer profile; no
+per-shell OTEL exports are required.
 
 ## Connectivity Checks
 
@@ -187,17 +200,17 @@ Then retry `curl -i http://clickstack:8123/ping` from inside the devcontainer.
 
 ```bash
 unset MOTOKO_OTEL
-docker compose stop clickstack
+docker compose -f docker-compose.yml -f docker-compose.observability.yml stop clickstack motoko-log-collector
 ```
 
 If ingestion times out or the UI is unhealthy, restart only the ClickStack
 sidecar. This leaves the devcontainer `app` service running:
 
 ```bash
-docker compose -p <project-name> stop clickstack
-docker compose -p <project-name> rm -f clickstack
-docker compose -p <project-name> up -d clickstack
-docker compose -p <project-name> logs -f clickstack
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml stop clickstack motoko-log-collector
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml rm -f clickstack motoko-log-collector
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml up -d clickstack motoko-log-collector
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml logs -f clickstack motoko-log-collector
 ```
 
 `docker compose down` may print:
@@ -214,7 +227,7 @@ To remove persisted ClickStack data, close/stop the devcontainer app first, then
 run:
 
 ```bash
-docker compose down -v
+docker compose -f docker-compose.yml -f docker-compose.observability.yml down -v
 ```
 
 ClickStack can use roughly 1.5-2 GB of memory. Use a Codespaces or local Docker
