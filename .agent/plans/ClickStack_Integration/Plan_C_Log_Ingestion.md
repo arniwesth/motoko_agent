@@ -21,7 +21,8 @@ future requirement says otherwise.
   - `OTEL_EXPORTER_OTLP_HEADERS=authorization=<ingestion-key>`
 - The default Motoko profile now enables ClickStack trace export with
   non-secret defaults in `.motoko/config/default/config.json`.
-- The ingestion key lives in `.env` as `OTEL_EXPORTER_OTLP_HEADERS`.
+- The trace ingestion key currently lives in `.env` as
+  `OTEL_EXPORTER_OTLP_HEADERS=authorization=<ingestion-key>`.
 
 ## Preferred Architecture
 
@@ -55,7 +56,9 @@ In scope:
   - `service.name=motoko-agent`
   - `service.namespace=motoko`
   - `deployment.environment=devcontainer`
-- Use the same ClickStack ingestion key already loaded from `.env`.
+- Use the same ClickStack ingestion key already loaded from `.env`, but store
+  the bare key once as `CLICKSTACK_INGESTION_KEY` and derive the OTEL header
+  form from it when needed.
 - Persist filelog receiver offsets across collector restarts.
 - Configure through `.motoko/config/default/config.json`.
 
@@ -83,17 +86,49 @@ Extend the existing default profile ClickStack block:
     "timeout_ms": 5000,
     "logs_enabled": true,
     "logs_source": ".motoko/logfile/*.jsonl",
-    "logs_start_at": "end"
+    "logs_start_at": "beginning",
+    "logs_exclude_older_than": "24h"
   }
 }
 ```
 
-Default recommendation: `logs_start_at=end`.
+Default recommendation: `logs_start_at=beginning` with
+`logs_exclude_older_than=24h`.
 
-Reason: the repo can already contain many historical session logs. Starting at
-the end avoids a large first-run ingest and duplicate historical noise. For
-debugging old sessions, temporarily switch to `beginning` and clear the
-collector offset volume.
+Reason: Motoko creates a fresh JSONL file for each session and writes important
+early records such as `session_start` immediately. With `start_at=end`, the
+filelog receiver can discover a new file after the first records were written
+and skip those records. Starting at `beginning` makes each newly discovered
+session file complete. `exclude_older_than=24h` prevents an initial devcontainer
+start from ingesting the entire historical `.motoko/logfile` directory. The
+persistent file offset store prevents normal restarts from replaying files that
+were already consumed.
+
+For a deliberate historical backfill, temporarily increase or remove
+`logs_exclude_older_than`, then clear the collector offset volume before
+starting the collector.
+
+Also extend `.env` to use a single source of truth for the ingestion key:
+
+```bash
+CLICKSTACK_INGESTION_KEY=<hyperdx-ingestion-key>
+```
+
+Migration note: if `.env` currently has only
+`OTEL_EXPORTER_OTLP_HEADERS=authorization=<key>`, replace it with
+`CLICKSTACK_INGESTION_KEY=<key>`. The TUI should continue to honor an explicitly
+set `OTEL_EXPORTER_OTLP_HEADERS` for backwards compatibility, but the collector
+sidecar should depend on `CLICKSTACK_INGESTION_KEY`.
+
+Then update the TUI `.env` loader so, after loading `.env`, it synthesizes:
+
+```bash
+OTEL_EXPORTER_OTLP_HEADERS=authorization=$CLICKSTACK_INGESTION_KEY
+```
+
+only when `OTEL_EXPORTER_OTLP_HEADERS` is not already set. This keeps the
+existing trace exporter behavior while avoiding duplicate secrets for the log
+collector.
 
 ## Collector Config
 
@@ -104,17 +139,25 @@ receivers:
   filelog/motoko:
     include:
       - /workspace/.motoko/logfile/*.jsonl
-    start_at: end
+    start_at: beginning
+    exclude_older_than: 24h
+    storage: file_storage/motoko
+    max_log_size: 16MiB
     include_file_path: true
     include_file_name: true
+    retry_on_failure:
+      enabled: true
     operators:
       - type: json_parser
         parse_from: body
 
 processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
   batch:
-    timeout: 5s
-    send_batch_size: 1000
+    timeout: 2s
+    send_batch_size: 100
   resource/motoko:
     attributes:
       - key: service.name
@@ -133,25 +176,40 @@ exporters:
     headers:
       authorization: ${env:CLICKSTACK_INGESTION_KEY}
     compression: gzip
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      storage: file_storage/motoko
+
+extensions:
+  file_storage/motoko:
+    directory: /var/lib/otelcol/file_storage
+    create_directory: true
 
 service:
+  extensions: [file_storage/motoko]
   pipelines:
     logs:
       receivers: [filelog/motoko]
-      processors: [resource/motoko, batch]
+      processors: [memory_limiter, resource/motoko, batch]
       exporters: [otlphttp/clickstack]
 ```
 
-Implementation note: Compose currently has `OTEL_EXPORTER_OTLP_HEADERS` in
-`authorization=<key>` format. The collector config wants the bare header value
-for `authorization`. Either:
+Implementation notes:
 
-1. Add a separate `.env` key such as `CLICKSTACK_INGESTION_KEY=<key>`, or
-2. Generate a collector env var from `OTEL_EXPORTER_OTLP_HEADERS` before
-   starting the collector.
-
-Prefer option 1 for clarity unless duplicate secrets in `.env` becomes a
-problem.
+- The filelog receiver's `storage` field stores file offsets. Without it,
+  offsets are memory-only and collector restarts can duplicate or skip data.
+- The exporter `sending_queue.storage` stores unsent batches while ClickStack is
+  unavailable. This is separate from file offsets.
+- The collector config wants the bare authorization header value. That is why
+  `.env` should expose `CLICKSTACK_INGESTION_KEY=<key>`, while the TUI derives
+  `OTEL_EXPORTER_OTLP_HEADERS=authorization=<key>` for AILANG trace export.
+- Motoko JSONL entries can be much larger than ordinary application logs
+  because tool result events may include file contents or command output.
+  `max_log_size` and `send_batch_size` are deliberately set to avoid silently
+  dropping large single-line JSON records or batching too many large records at
+  once.
 
 ## Compose Changes
 
@@ -159,24 +217,33 @@ Add a service to `.devcontainer/docker-compose.yml`:
 
 ```yaml
   motoko-log-collector:
-    image: otel/opentelemetry-collector-contrib:0.130.0
+    image: otel/opentelemetry-collector-contrib:0.153.0
     command: ["--config=/etc/otelcol-contrib/logs-collector.yaml"]
     depends_on:
       - clickstack
-    environment:
-      CLICKSTACK_INGESTION_KEY: ${CLICKSTACK_INGESTION_KEY:-}
+    env_file:
+      - path: ../.env
+        required: false
     volumes:
       - ..:/workspace:ro
-      - ./.devcontainer/otel/logs-collector.yaml:/etc/otelcol-contrib/logs-collector.yaml:ro
+      - ./otel/logs-collector.yaml:/etc/otelcol-contrib/logs-collector.yaml:ro
       - motoko-log-collector-storage:/var/lib/otelcol
 ```
 
 Also add `motoko-log-collector-storage` to top-level volumes.
 
-If the collector image supports persistent storage extension for filelog
-offsets, configure it explicitly. If not, verify whether the filelog receiver's
-default offset behavior is acceptable. Persistent offsets are preferred to
-avoid re-ingesting logs on every rebuild/restart.
+The `env_file` entry is deliberate. The TUI reads root `.env` itself, but Docker
+Compose will not reliably inject root `.env` into a sibling collector service
+unless the service is explicitly wired to it. If the local Docker Compose
+version does not support `required: false`, either create an empty root `.env`
+for contributors without secrets or use the older short form:
+
+```yaml
+env_file:
+  - ../.env
+```
+
+and document that `.env` must exist.
 
 ## Devcontainer Changes
 
@@ -194,6 +261,10 @@ user wants integrated logs during normal devcontainer runs.
 
 Minimal TUI changes are needed.
 
+- Add `CLICKSTACK_INGESTION_KEY` to the `.env` allowlist.
+- If `CLICKSTACK_INGESTION_KEY` is set and `OTEL_EXPORTER_OTLP_HEADERS` is not,
+  synthesize `OTEL_EXPORTER_OTLP_HEADERS=authorization=<key>` before spawning
+  the AILANG child.
 - Keep reading `clickstack.logs_enabled`, `logs_source`, and `logs_start_at`
   from `.motoko/config/default/config.json` for documentation and future use.
 - The sidecar collector cannot dynamically read Motoko profile config unless
@@ -203,9 +274,11 @@ Pragmatic first implementation:
 
 - Put the actual file path and `start_at` value in
   `.devcontainer/otel/logs-collector.yaml`.
-- Mirror those values in `.motoko/config/default/config.json`.
-- Document that changing `logs_source` / `logs_start_at` currently requires
-  updating the collector config or adding a generator script.
+- Mirror `logs_source`, `logs_start_at`, and `logs_exclude_older_than` in
+  `.motoko/config/default/config.json`.
+- Document that changing `logs_source`, `logs_start_at`, or
+  `logs_exclude_older_than` currently requires updating the collector config or
+  adding a generator script.
 
 Future improvement:
 
@@ -222,7 +295,21 @@ Future improvement:
 docker ps --format '{{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'clickstack|motoko-log-collector'
 ```
 
-3. Confirm ClickStack is reachable inside the app container:
+3. Confirm the collector got the ingestion key:
+
+```bash
+docker inspect <motoko-log-collector-container> \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | awk -F= '$1 == "CLICKSTACK_INGESTION_KEY" && length($2) > 0 { print "key-present" }'
+```
+
+Expected:
+
+```text
+key-present
+```
+
+4. Confirm ClickStack is reachable inside the app container:
 
 ```bash
 curl -i --max-time 5 http://clickstack:4318
@@ -230,13 +317,22 @@ curl -i --max-time 5 http://clickstack:4318
 
 Expected without auth header: `401 Unauthorized`.
 
-4. Run Motoko normally and create a new event:
+5. Run Motoko normally and create a new event:
 
 ```bash
 motoko
 ```
 
-5. In HyperDX Logs, search:
+6. Check collector logs for parser/export errors:
+
+```bash
+docker logs <motoko-log-collector-container> --tail 200
+```
+
+No repeated filelog parser errors or OTLP `401 Unauthorized` errors should
+appear.
+
+7. In HyperDX Logs, search:
 
 ```text
 service.name:motoko-agent
@@ -254,7 +350,7 @@ or by a current session id:
 session_id:<session-id>
 ```
 
-6. Confirm logs and traces can be correlated by:
+8. Confirm logs and traces can be correlated by:
 
 - `service.name`
 - `session_id`
@@ -262,8 +358,8 @@ session_id:<session-id>
 
 ## Risks
 
-- **Backfill volume**: `start_at=beginning` can ingest many historical logs.
-  Keep default at `end`.
+- **Backfill volume**: `start_at=beginning` can ingest historical logs. Keep
+  `exclude_older_than` enabled by default.
 - **Offset duplication**: without persistent receiver offsets, collector
   restarts may duplicate log records.
 - **Collector config drift**: values mirrored in Motoko config and collector
@@ -271,6 +367,10 @@ session_id:<session-id>
 - **Schema shape**: JSON parser behavior may put fields under attributes
   rather than top-level body fields. Validate HyperDX search names after first
   ingest and adjust parser/move operators if needed.
+- **Large records**: some tool-result JSONL lines can be very large. If
+  collector logs show max-size drops or memory limiter pressure, raise
+  `max_log_size`, lower `send_batch_size`, or split large tool payloads in the
+  session logger.
 - **Resource overhead**: another collector sidecar adds memory/CPU overhead to
   the devcontainer.
 
@@ -280,6 +380,9 @@ session_id:<session-id>
 - The collector tails the new JSONL lines.
 - HyperDX Logs shows those events under `service.name=motoko-agent`.
 - Searches by `type`, `session_id`, and `model` work.
+- A large tool-result event is ingested without collector max-size errors.
 - Existing trace ingestion still works.
-- Restarting the collector does not replay the entire historical logfile
-  directory under the default configuration.
+- Restarting the collector does not replay already-consumed files because
+  filelog offsets are persisted.
+- A newly created session includes early records such as `session_start`; these
+  are not skipped by tailing from end-of-file.
