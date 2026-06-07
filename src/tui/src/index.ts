@@ -102,6 +102,7 @@ function loadDotEnv(
     "OPENROUTER_API_KEY",
     "GOOGLE_API_KEY",
     "EXA_API_KEY",
+    "OTEL_EXPORTER_OTLP_HEADERS",
   ]);
   // Look for .env in CWD (where run-agent.sh is invoked from) and, as a
   // fallback, two levels up from this script (project root when running from
@@ -155,7 +156,51 @@ type ProfileAgentConfig = {
   openaiBaseUrl?: string;
   aiOptionsJson?: string;
   extensions?: string[];
+  clickstack?: {
+    enabled?: boolean;
+    endpoint?: string;
+    protocol?: string;
+    serviceName?: string;
+    trace?: string;
+    traceMaxSpans?: number;
+    metricsExporter?: string;
+    timeoutMs?: number;
+  };
 };
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function setFromProfile(
+  protectedKeys: Set<string>,
+  envKey: string,
+  value: string | number | undefined,
+): void {
+  if (value === undefined || protectedKeys.has(envKey)) return;
+  process.env[envKey] = String(value);
+}
+
+function applyClickStackProfileConfig(
+  clickstack: ProfileAgentConfig["clickstack"],
+  protectedKeys: Set<string>,
+): void {
+  if (!clickstack?.enabled) return;
+  setFromProfile(protectedKeys, "MOTOKO_OTEL", "1");
+  setFromProfile(protectedKeys, "OTEL_EXPORTER_OTLP_ENDPOINT", clickstack.endpoint);
+  setFromProfile(protectedKeys, "OTEL_EXPORTER_OTLP_PROTOCOL", clickstack.protocol);
+  setFromProfile(protectedKeys, "OTEL_SERVICE_NAME", clickstack.serviceName);
+  setFromProfile(protectedKeys, "AILANG_TRACE", clickstack.trace);
+  setFromProfile(protectedKeys, "AILANG_TRACE_MAX_SPANS", clickstack.traceMaxSpans);
+  setFromProfile(protectedKeys, "OTEL_METRICS_EXPORTER", clickstack.metricsExporter);
+  setFromProfile(protectedKeys, "OTEL_EXPORTER_OTLP_TIMEOUT", clickstack.timeoutMs);
+}
 
 function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAgentConfig {
   const profileDir = path.isAbsolute(profile)
@@ -173,6 +218,16 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
       extensions?: {
         order?: unknown;
       };
+      clickstack?: {
+        enabled?: unknown;
+        endpoint?: unknown;
+        protocol?: unknown;
+        service_name?: unknown;
+        trace?: unknown;
+        trace_max_spans?: unknown;
+        metrics_exporter?: unknown;
+        timeout_ms?: unknown;
+      };
     };
     const extensions = Array.isArray(parsed.extensions?.order)
       ? parsed.extensions.order.filter((x): x is string => typeof x === "string" && x.trim() !== "")
@@ -188,6 +243,18 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         ? parsed.agent.ai_options_json
         : undefined,
       extensions,
+      clickstack: {
+        enabled: typeof parsed.clickstack?.enabled === "boolean"
+          ? parsed.clickstack.enabled
+          : undefined,
+        endpoint: nonEmptyString(parsed.clickstack?.endpoint),
+        protocol: nonEmptyString(parsed.clickstack?.protocol),
+        serviceName: nonEmptyString(parsed.clickstack?.service_name),
+        trace: nonEmptyString(parsed.clickstack?.trace),
+        traceMaxSpans: positiveNumber(parsed.clickstack?.trace_max_spans),
+        metricsExporter: nonEmptyString(parsed.clickstack?.metrics_exporter),
+        timeoutMs: positiveNumber(parsed.clickstack?.timeout_ms),
+      },
     };
   } catch {
     return {};
@@ -485,6 +552,7 @@ async function main(): Promise<void> {
   const envPort = Number(process.env.ENV_PORT ?? 0);
   let profile = activeProfile();
   const profileAgent = resolveProfileAgentConfig(workdir, profile);
+  applyClickStackProfileConfig(profileAgent.clickstack, shellEnvKeys);
   const model =
     process.env.MODEL ??
     profileAgent.model ??

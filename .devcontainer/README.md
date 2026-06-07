@@ -86,20 +86,13 @@ docker compose -p <project-name> rm -sf clickstack
 docker compose -p <project-name> up -d clickstack
 ```
 
-Then enable export for the shell that starts Motoko:
-
-```bash
-export MOTOKO_OTEL=1
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://clickstack:4318
-export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export OTEL_SERVICE_NAME=motoko-agent
-export AILANG_TRACE=standard
-make run
-```
+The default Motoko profile enables ClickStack export with non-secret defaults
+from `.motoko/config/default/config.json`. Shell environment variables still
+override those defaults for one-off runs.
 
 Motoko forwards OTLP environment variables to the AILANG child process only when
-`MOTOKO_OTEL` is set. This keeps default runs from attempting exports while the
-sidecar is down.
+`MOTOKO_OTEL` is set. The default profile sets this when
+`clickstack.enabled=true`.
 
 AILANG `v0.24.2` requires the `Trace` capability for programs that use
 `std/trace`; the Motoko launcher grants it to the child runtime.
@@ -109,11 +102,14 @@ Open HyperDX at http://localhost:8081. ClickStack's logs may mention
 the host port is `8081` because Motoko's env server uses `8080`.
 
 ClickStack requires an ingestion API key for OTLP. Get it from HyperDX
-`Team Settings -> API Keys`, then set it before starting Motoko:
+`Team Settings -> API Keys`, then store it in `.env`:
 
 ```bash
-export OTEL_EXPORTER_OTLP_HEADERS='authorization=<hyperdx-ingestion-key>'
+OTEL_EXPORTER_OTLP_HEADERS='authorization=<hyperdx-ingestion-key>'
 ```
+
+After that, run Motoko normally from the default profile; no per-shell OTEL
+exports are required.
 
 ## Connectivity Checks
 
