@@ -7,8 +7,8 @@ This repo provides two VS Code devcontainer profiles:
   and the Motoko log collector sidecar.
 
 The default profile is intentionally lightweight and matches the main branch
-shape. Use the observability profile when you want Motoko logs, traces, or
-metrics shipped to ClickStack/HyperDX.
+shape. Use the observability profile when you want Motoko logs or traces shipped
+to ClickStack/HyperDX.
 
 The observability profile runs Motoko in the `app` service and ClickStack as a
 sibling sidecar. Both services must be in the same Compose project for
@@ -22,17 +22,17 @@ sibling sidecar. Both services must be in the same Compose project for
 - `4317`: OTLP gRPC
 - `4318`: OTLP HTTP
 
-## Start ClickStack
+## Start Observability Sidecars
 
-ClickStack starts when VS Code rebuilds/reopens the observability devcontainer
-because `.devcontainer/observability/devcontainer.json` includes all required
-services:
+ClickStack and the Motoko log collector start when VS Code rebuilds/reopens the
+observability devcontainer because
+`.devcontainer/observability/devcontainer.json` includes all required services:
 
 ```json
 "runServices": ["app", "clickstack", "motoko-log-collector"]
 ```
 
-To start it manually from `.devcontainer/` using the same Compose files as the
+To start them manually from `.devcontainer/` using the same Compose files as the
 observability profile:
 
 ```bash
@@ -57,7 +57,7 @@ docker ps --format '{{.Names}}' | grep 'devcontainer-app'
 docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' <app-container-name>
 ```
 
-Then start ClickStack with that project name from `.devcontainer/`:
+Then start the sidecars with that project name from `.devcontainer/`:
 
 ```bash
 docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml up -d clickstack motoko-log-collector
@@ -70,7 +70,7 @@ Bind for 0.0.0.0:4317 failed: port is already allocated
 ```
 
 another ClickStack container is already publishing the OTLP port. Stop the old
-container from the host shell, then start the sidecar again:
+container from the host shell, then start the sidecars again:
 
 ```bash
 docker ps --format '{{.Names}} {{.Ports}}' | grep '4317'
@@ -115,14 +115,47 @@ Open HyperDX at http://localhost:8081. ClickStack's logs may mention
 the host port is `8081` because Motoko's env server uses `8080`.
 
 ClickStack requires an ingestion API key for OTLP. Get it from HyperDX
-`Team Settings -> API Keys`, then store it in `.env`:
+`Team Settings -> API Keys`, then store the bare key in the repo-root `.env`:
 
 ```bash
-OTEL_EXPORTER_OTLP_HEADERS='authorization=<hyperdx-ingestion-key>'
+CLICKSTACK_INGESTION_KEY=<hyperdx-ingestion-key>
 ```
+
+The observability Compose profile passes `.env` to both the app and
+`motoko-log-collector` services. The Motoko launcher derives
+`OTEL_EXPORTER_OTLP_HEADERS=authorization=<key>` for trace export when
+`CLICKSTACK_INGESTION_KEY` is set and `OTEL_EXPORTER_OTLP_HEADERS` is not
+already set. Existing explicit `OTEL_EXPORTER_OTLP_HEADERS` values still take
+precedence for the app process.
 
 After that, run Motoko normally from the observability devcontainer profile; no
 per-shell OTEL exports are required.
+
+## Log Ingestion
+
+The `motoko-log-collector` sidecar tails `.motoko/logfile/*.jsonl` through the
+workspace mount at `/workspace/.motoko/logfile/*.jsonl`, parses each JSON line,
+adds Motoko resource attributes, and exports logs to ClickStack over OTLP HTTP.
+
+Current collector defaults are:
+
+- `start_at: beginning`
+- `exclude_older_than: 24h`
+- `max_log_size: 16MiB`
+- persistent file offsets in the `motoko-log-collector-storage` volume
+- resource attributes:
+  - `service.name=motoko-agent`
+  - `service.namespace=motoko`
+  - `deployment.environment=devcontainer`
+
+The same log source/start/age settings are mirrored in
+`.motoko/config/observability/config.json` for profile visibility. The collector
+currently reads `.devcontainer/otel/logs-collector.yaml` directly, so changing
+those values requires updating both files until a generator exists.
+
+On first startup, the collector backfills matching files from the last 24 hours
+and then tails new records. Normal restarts keep offsets in the persistent
+storage volume, so already-consumed records are not replayed.
 
 ## Connectivity Checks
 
@@ -136,8 +169,9 @@ curl -i http://clickstack:8123/ping
 
 If `clickstack` does not resolve, the current shell is probably in a container
 that was launched before the compose conversion or the sidecar was started under
-a different Compose project. Start ClickStack with the same project name as the
-devcontainer app, or use Docker's host gateway fallback instead:
+a different Compose project. Start the observability sidecars with the same
+project name as the devcontainer app, or use Docker's host gateway fallback
+instead:
 
 ```bash
 curl -i http://host.docker.internal:4318
@@ -149,7 +183,8 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 Expected responses:
 
 - `401 Unauthorized`: collector is reachable, but
-  `OTEL_EXPORTER_OTLP_HEADERS='authorization=<key>'` is missing or wrong.
+  `CLICKSTACK_INGESTION_KEY=<key>` is missing or wrong, or an explicit
+  `OTEL_EXPORTER_OTLP_HEADERS` override is wrong.
 - `404` or `405`: collector is reachable; use the OTLP exporter rather than
   a browser/curl GET for actual ingestion.
 - `Ok.` from `/ping`: ClickHouse inside ClickStack is reachable.
@@ -203,14 +238,24 @@ unset MOTOKO_OTEL
 docker compose -f docker-compose.yml -f docker-compose.observability.yml stop clickstack motoko-log-collector
 ```
 
-If ingestion times out or the UI is unhealthy, restart only the ClickStack
-sidecar. This leaves the devcontainer `app` service running:
+If ingestion times out or the UI is unhealthy, restart only the observability
+sidecars. This leaves the devcontainer `app` service running:
 
 ```bash
 docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml stop clickstack motoko-log-collector
 docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml rm -f clickstack motoko-log-collector
 docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml up -d clickstack motoko-log-collector
 docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml logs -f clickstack motoko-log-collector
+```
+
+To deliberately replay recent JSONL logs, stop the collector, remove its offset
+volume, and start it again:
+
+```bash
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml stop motoko-log-collector
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml rm -f motoko-log-collector
+docker volume rm <project-name>_motoko-log-collector-storage
+docker compose -p <project-name> -f docker-compose.yml -f docker-compose.observability.yml up -d motoko-log-collector
 ```
 
 `docker compose down` may print:
@@ -223,8 +268,8 @@ That is expected while the devcontainer `app` service is still attached to the
 Compose network. It does not prevent restarting ClickStack with the commands
 above.
 
-To remove persisted ClickStack data, close/stop the devcontainer app first, then
-run:
+To remove persisted ClickStack data and collector offsets, close/stop the
+devcontainer app first, then run:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.observability.yml down -v
