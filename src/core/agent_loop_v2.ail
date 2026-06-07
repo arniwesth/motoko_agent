@@ -82,7 +82,7 @@ func emit_json(payload: Json) -> () ! {IO} {
 }
 
 pure func trace_event_enabled(event_type: string) -> bool {
-  event_type != "thinking_delta" && event_type != "reasoning_delta"
+  event_type == "session_start" || event_type == "run_summary"
 }
 
 pure func trace_sensitive_key(key: string) -> bool {
@@ -690,8 +690,6 @@ func dispatch_calls(
                       deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                     },
                     Native => {
-                      let tool_span = "motoko.tool.${call.name}.${show(step_idx)}.${call.id}";
-                      Trace.spanStart(tool_span);
                       let _ = emit_event(session_id, "v2_tool_dispatch_start", [
                         kv("step", jnum(_int_to_float(step_idx))),
                         kv("stream_id", js(stream_id)),
@@ -704,7 +702,6 @@ func dispatch_calls(
                         kv("stream_id", js(stream_id)),
                         kv("id", js(call.id))
                       ]);
-                      Trace.spanEnd(tool_span);
                       let msg = tool_result_message(call, result_content);
                       msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                     }
@@ -767,8 +764,6 @@ func dispatch_calls(
                   deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 },
                 Native => {
-                  let tool_span = "motoko.tool.${call.name}.${show(step_idx)}.${call.id}";
-                  Trace.spanStart(tool_span);
                   -- Per-call trace (uses v2-specific type so the TUI's
                   -- native_tool_calls renderer doesn't try to consume it).
                   -- The batched native_tool_calls / native_tool_results
@@ -785,7 +780,6 @@ func dispatch_calls(
                     kv("stream_id", js(stream_id)),
                     kv("id", js(call.id))
                   ]);
-                  Trace.spanEnd(tool_span);
                   let msg = tool_result_message(call, result_content);
                   msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 }

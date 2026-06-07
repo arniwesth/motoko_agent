@@ -1,14 +1,21 @@
 services:
   clickstack:
-    image: clickhouse/clickstack-all-in-one:latest
+    image: clickhouse/clickstack-all-in-one:2.21.0
     ports:
       - "8081:8080"
+      - "18123:8123"
       - "4317:4317"
       - "4318:4318"
     volumes:
       - clickstack-db:/data/db
       - clickstack-ch:/var/lib/clickhouse
       - clickstack-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
 volumes:
   clickstack-db:

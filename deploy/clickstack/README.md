@@ -13,6 +13,13 @@ Open HyperDX at http://localhost:8081. The collector accepts OTLP on:
 - `http://localhost:4318` for OTLP HTTP
 - `localhost:4317` for OTLP gRPC
 
+ClickHouse's HTTP ping/query endpoint is exposed at http://localhost:18123.
+Check readiness with:
+
+```bash
+curl -i http://localhost:18123/ping
+```
+
 Point Motoko at the collector before starting the TUI:
 
 ```bash
@@ -28,6 +35,17 @@ If HyperDX requires an ingestion key, also set:
 ```bash
 export OTEL_EXPORTER_OTLP_HEADERS='authorization=<hyperdx-ingestion-key>'
 ```
+
+If OTLP HTTP on `4318` returns timeouts from `/v1/traces` or `/v1/metrics`,
+lower trace volume while debugging:
+
+```bash
+export AILANG_TRACE_MAX_SPANS=100
+```
+
+Do not point AILANG at `4317` for this setup. Current exports use OTLP/HTTP
+paths such as `/v1/metrics`, so `4317` will produce HTTP requests against the
+gRPC port.
 
 The Route J fallback in `.agent/plans/ClickStack_Integration/Plan_B_Custom_Spans.md`
 is intentionally not enabled here yet. The custom-span forwarding spike must

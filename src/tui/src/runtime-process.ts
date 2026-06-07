@@ -366,7 +366,7 @@ export class RuntimeProcess {
         process.env.OTEL_SERVICE_NAME ?? "motoko-agent";
       childEnv.AILANG_TRACE = process.env.AILANG_TRACE ?? "standard";
       childEnv.AILANG_TRACE_MAX_SPANS =
-        process.env.AILANG_TRACE_MAX_SPANS ?? "500";
+        process.env.AILANG_TRACE_MAX_SPANS ?? "100";
       if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
         childEnv.OTEL_EXPORTER_OTLP_HEADERS =
           process.env.OTEL_EXPORTER_OTLP_HEADERS;
@@ -374,6 +374,22 @@ export class RuntimeProcess {
       if (process.env.OTEL_RESOURCE_ATTRIBUTES) {
         childEnv.OTEL_RESOURCE_ATTRIBUTES =
           process.env.OTEL_RESOURCE_ATTRIBUTES;
+      }
+      for (const key of [
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_EXPORTER_OTLP_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
+      ]) {
+        const value = process.env[key];
+        if (value && value.trim() !== "") {
+          childEnv[key] = value;
+        }
       }
     }
     // M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 cutover (2026-05-06): the
