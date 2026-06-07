@@ -22,6 +22,10 @@ Then enable export for the shell that starts Motoko:
 
 ```bash
 export MOTOKO_OTEL=1
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://clickstack:4318
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_SERVICE_NAME=motoko-agent
+export AILANG_TRACE=standard
 make run
 ```
 
@@ -32,12 +36,43 @@ sidecar is down.
 AILANG `v0.24.2` requires the `Trace` capability for programs that use
 `std/trace`; the Motoko launcher grants it to the child runtime.
 
-Open HyperDX at http://localhost:8081. If the first-run setup requires an
-ingestion key, set it before starting Motoko:
+Open HyperDX at http://localhost:8081. ClickStack's logs may mention
+`http://localhost:8080`; that is the container's internal UI port. In this repo
+the host port is `8081` because Motoko's env server uses `8080`.
+
+ClickStack requires an ingestion API key for OTLP. Get it from HyperDX
+`Team Settings -> API Keys`, then set it before starting Motoko:
 
 ```bash
 export OTEL_EXPORTER_OTLP_HEADERS='authorization=<hyperdx-ingestion-key>'
 ```
+
+## Connectivity Checks
+
+Inside the devcontainer, the compose-network endpoint should resolve after the
+devcontainer has been rebuilt/reopened from this compose config:
+
+```bash
+curl -i http://clickstack:4318
+```
+
+If `clickstack` does not resolve, the current shell is probably in a container
+that was launched before the compose conversion. Use Docker's host gateway
+fallback instead:
+
+```bash
+curl -i http://host.docker.internal:4318
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318
+```
+
+Expected responses:
+
+- `401 Unauthorized`: collector is reachable, but
+  `OTEL_EXPORTER_OTLP_HEADERS='authorization=<key>'` is missing or wrong.
+- `404` or `405`: collector is reachable; use the OTLP exporter rather than
+  a browser/curl GET for actual ingestion.
+- `Could not resolve host: clickstack`: recreate/reopen the devcontainer, or
+  use `host.docker.internal`.
 
 ## Stop Or Reset
 
