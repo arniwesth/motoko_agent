@@ -5,7 +5,12 @@
   "workspaceFolder": "/workspaces/motoko_agent",
   "runServices": ["app"],
   "remoteUser": "motoko",
-  "forwardPorts": [8080, 8081],
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8081": {
+      "onAutoForward": "ignore"
+    }
+  },
   "postCreateCommand": "cd src/tui && bun install && bun run build && cd ../.. && echo 'Motoko ready. Run: make run'",
   "customizations": {
     "vscode": {

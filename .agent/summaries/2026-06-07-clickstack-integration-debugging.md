@@ -8,9 +8,11 @@ The session implemented the ClickStack integration plan from
 `.agent/plans/ClickStack_Integration/` and then spent significant time debugging
 local devcontainer OTLP ingestion into ClickStack.
 
-The user plans to reboot the machine. If the same ClickStack issues persist
-after reboot, the current likely next decision is to scrap ClickStack rather than
-continue sinking time into the all-in-one collector.
+The user rebooted the machine and then hit a VS Code devcontainer port-forwarding
+issue when opening HyperDX. The current next step is to reopen/rebuild VS Code's
+devcontainer so the updated port-forwarding config takes effect. If ClickStack
+trace ingestion still times out after that, the likely next decision is to scrap
+ClickStack rather than continue sinking time into the all-in-one collector.
 
 ## Implemented Integration
 
@@ -31,6 +33,8 @@ continue sinking time into the all-in-one collector.
 - Added `scripts/spike_trace_forwarding.ail` for minimal OTLP trace testing.
 - Updated `.devcontainer/README.md` heavily with ClickStack start/restart,
   duplicate-container, port, network, and host-gateway troubleshooting.
+- Updated `.devcontainer/devcontainer.json` to stop forwarding `8081` through
+  the app devcontainer and to ignore auto-forwarding for `8081`.
 
 ## Current Code State
 
@@ -61,7 +65,7 @@ Current OTEL defaults:
   - `OTEL_METRICS_EXPORTER=none`
   - `OTEL_EXPORTER_OTLP_TIMEOUT=5000`
   - `AILANG_TRACE_MAX_SPANS=100`
-- User’s unrestarted devcontainer still needs:
+- If `clickstack` DNS does not resolve inside the devcontainer, use:
   - `OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318`
   - `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`
 
@@ -102,6 +106,42 @@ http://localhost:8081
 
 The user confirmed `8081` works.
 
+After rebooting the machine, the user saw VS Code still intercept
+`http://localhost:8081` and try to proxy it into the app devcontainer:
+
+```text
+Error: connect ECONNREFUSED 127.0.0.1:8080
+```
+
+Cause: `.devcontainer/devcontainer.json` had `forwardPorts: [8080, 8081]`.
+ClickStack's HyperDX UI is not running inside the `app` devcontainer; it is a
+sibling container whose internal `8080` is published to host `8081`. VS Code was
+therefore forwarding to the wrong container.
+
+Applied fix:
+
+```json
+"forwardPorts": [8080],
+"portsAttributes": {
+  "8081": {
+    "onAutoForward": "ignore"
+  }
+}
+```
+
+This requires reopening/rebuilding the devcontainer. Then open HyperDX from a
+normal host browser at:
+
+```text
+http://localhost:8081
+```
+
+If VS Code still intercepts `localhost`, try:
+
+```text
+http://127.0.0.1:8081
+```
+
 ### Devcontainer Network Confusion
 
 The user’s devcontainer had not been recreated after the Compose conversion, so
@@ -112,10 +152,11 @@ curl -i http://clickstack:4318
 # curl: (6) Could not resolve host: clickstack
 ```
 
-Using the host gateway worked:
+Using the host gateway worked. Note: current compose maps ClickHouse's HTTP
+port to host `18123`, not `8123`.
 
 ```bash
-curl -i http://host.docker.internal:8123/ping
+curl -i http://host.docker.internal:18123/ping
 # HTTP/1.1 200 OK
 # Ok.
 ```
@@ -218,7 +259,7 @@ Expected: only one ClickStack container owns `4317`, `4318`, and `8081`.
 From the current devcontainer:
 
 ```bash
-curl -i --max-time 5 http://host.docker.internal:8123/ping
+curl -i --max-time 5 http://host.docker.internal:18123/ping
 curl -i --max-time 5 http://host.docker.internal:4318
 ```
 
@@ -269,6 +310,7 @@ As of this summary, `git status --short` included:
 
 ```text
  M .devcontainer/README.md
+ M .devcontainer/devcontainer.json
  M .devcontainer/docker-compose.yml
  M .motoko/config/default/config.json
  M ailang.lock
