@@ -294,3 +294,88 @@ Useful state from before rebuild:
 - `docker` CLI and `/var/run/docker.sock` are not available inside the app
   container, so sibling container logs cannot be inspected from this shell
   unless Docker access is added.
+
+## Follow-up Debugging: Collector Storage Permission Fix
+
+After the rebuild, `getent hosts motoko-log-collector clickstack app` still
+returned only `clickstack` and `app`. Since Docker access was still unavailable
+inside the app container, the collector config was validated by downloading and
+running `otelcol-contrib` v0.153.0 locally.
+
+Findings:
+
+- `otelcol-contrib validate --config .devcontainer/otel/logs-collector.yaml`
+  passed.
+- Running the collector locally with the live config failed before startup with:
+  `failed to create extension "file_storage/motoko": mkdir /var/lib/otelcol: permission denied`
+- This explains why the sidecar could start briefly and then disappear from
+  Compose DNS.
+
+Applied fix:
+
+- `.devcontainer/docker-compose.yml`
+  - Added `user: "0:0"` to `motoko-log-collector` so the collector can write
+    the named volume mounted at `/var/lib/otelcol`.
+- `.devcontainer/otel/logs-collector.yaml`
+  - Renamed deprecated component aliases:
+    - `filelog/motoko` -> `file_log/motoko`
+    - `otlphttp/clickstack` -> `otlp_http/clickstack`
+
+Validation after fix:
+
+- `CLICKSTACK_INGESTION_KEY=dummy /tmp/otelcol-test/otelcol-contrib validate --config .devcontainer/otel/logs-collector.yaml`
+  passed.
+- A smoke run with `/workspace/.motoko` rewritten to the current
+  `/workspaces/motoko_agent/.motoko` path and file storage rewritten to `/tmp`
+  started successfully, initialized the persistent queue, watched Motoko JSONL
+  files, and stayed running until the intentional timeout.
+
+Next check after another devcontainer rebuild/reopen:
+
+```bash
+getent hosts motoko-log-collector clickstack app
+```
+
+Expected: all three services resolve.
+
+## Current Handoff State
+
+As of the end of this follow-up, the collector startup issue has a concrete fix
+in the worktree, but it has not been verified through Docker Compose because
+this app container still has neither `docker` nor `/var/run/docker.sock`.
+
+Current expected modified/untracked files:
+
+- `.agent/summaries/2026-06-07-clickstack-log-ingestion-plan-c.md`
+- `.devcontainer/devcontainer.json`
+- `.devcontainer/docker-compose.yml`
+- `.devcontainer/otel/logs-collector.yaml`
+- `.motoko/config/default/config.json`
+- `deploy/clickstack/README.md`
+- `src/tui/src/index.ts`
+- `src/tui/src/runtime-process.ts`
+- `ailang.lock` remains a pre-existing timestamp-only dirty file.
+
+The next agent should start by checking whether the user has reopened/rebuilt
+the devcontainer after the `user: "0:0"` collector fix. If yes, run:
+
+```bash
+getent hosts motoko-log-collector clickstack app
+curl -i --max-time 5 http://clickstack:4318
+```
+
+Expected:
+
+- `motoko-log-collector`, `clickstack`, and `app` all resolve.
+- `curl` to `clickstack:4318` without auth still returns `401 Unauthorized`.
+
+Then create or wait for a new Motoko session log and search HyperDX Logs for:
+
+```text
+service.name:motoko-agent
+```
+
+If `motoko-log-collector` still does not resolve, inspect the sidecar from the
+host/VS Code Docker view. The prior local smoke test strongly suggests the
+collector config itself is valid after the storage permission fix, so the next
+most useful evidence is the actual sidecar container status and logs.

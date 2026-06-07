@@ -6,12 +6,16 @@ services:
     volumes:
       - ..:/workspaces/motoko_agent:cached
     command: sleep infinity
+    depends_on:
+      - clickstack
+      - motoko-log-collector
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
+      CLICKSTACK_INGESTION_KEY: ${CLICKSTACK_INGESTION_KEY:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://clickstack:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
@@ -38,7 +42,22 @@ services:
       retries: 10
       start_period: 10s
 
+  motoko-log-collector:
+    image: otel/opentelemetry-collector-contrib:0.153.0
+    user: "0:0"
+    command: ["--config=/etc/otelcol-contrib/logs-collector.yaml"]
+    depends_on:
+      - clickstack
+    env_file:
+      - path: ../.env
+        required: false
+    volumes:
+      - ..:/workspace:ro
+      - ./otel/logs-collector.yaml:/etc/otelcol-contrib/logs-collector.yaml:ro
+      - motoko-log-collector-storage:/var/lib/otelcol
+
 volumes:
   clickstack-db:
   clickstack-ch:
   clickstack-logs:
+  motoko-log-collector-storage:

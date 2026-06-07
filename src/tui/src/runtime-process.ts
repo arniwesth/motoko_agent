@@ -303,6 +303,7 @@ export class RuntimeProcess {
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
       EXA_API_KEY: process.env.EXA_API_KEY,
+      CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
       AILANG_FS_SANDBOX: workdir,
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
       // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set

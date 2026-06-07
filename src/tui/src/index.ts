@@ -102,6 +102,7 @@ function loadDotEnv(
     "OPENROUTER_API_KEY",
     "GOOGLE_API_KEY",
     "EXA_API_KEY",
+    "CLICKSTACK_INGESTION_KEY",
     "OTEL_EXPORTER_OTLP_HEADERS",
   ]);
   // Look for .env in CWD (where run-agent.sh is invoked from) and, as a
@@ -151,6 +152,13 @@ function loadDotEnv(
   }
 }
 
+function synthesizeClickStackOtelHeaders(): void {
+  const key = (process.env.CLICKSTACK_INGESTION_KEY ?? "").trim();
+  const headers = (process.env.OTEL_EXPORTER_OTLP_HEADERS ?? "").trim();
+  if (key === "" || headers !== "") return;
+  process.env.OTEL_EXPORTER_OTLP_HEADERS = `authorization=${key}`;
+}
+
 type ProfileAgentConfig = {
   model?: string;
   openaiBaseUrl?: string;
@@ -165,6 +173,10 @@ type ProfileAgentConfig = {
     traceMaxSpans?: number;
     metricsExporter?: string;
     timeoutMs?: number;
+    logsEnabled?: boolean;
+    logsSource?: string;
+    logsStartAt?: string;
+    logsExcludeOlderThan?: string;
   };
 };
 
@@ -227,6 +239,10 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         trace_max_spans?: unknown;
         metrics_exporter?: unknown;
         timeout_ms?: unknown;
+        logs_enabled?: unknown;
+        logs_source?: unknown;
+        logs_start_at?: unknown;
+        logs_exclude_older_than?: unknown;
       };
     };
     const extensions = Array.isArray(parsed.extensions?.order)
@@ -254,6 +270,12 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         traceMaxSpans: positiveNumber(parsed.clickstack?.trace_max_spans),
         metricsExporter: nonEmptyString(parsed.clickstack?.metrics_exporter),
         timeoutMs: positiveNumber(parsed.clickstack?.timeout_ms),
+        logsEnabled: typeof parsed.clickstack?.logs_enabled === "boolean"
+          ? parsed.clickstack.logs_enabled
+          : undefined,
+        logsSource: nonEmptyString(parsed.clickstack?.logs_source),
+        logsStartAt: nonEmptyString(parsed.clickstack?.logs_start_at),
+        logsExcludeOlderThan: nonEmptyString(parsed.clickstack?.logs_exclude_older_than),
       },
     };
   } catch {
@@ -526,6 +548,7 @@ async function main(): Promise<void> {
 
   const shellEnvKeys = new Set(Object.keys(process.env));
   loadDotEnv(shellEnvKeys);
+  synthesizeClickStackOtelHeaders();
 
   const jsonlOutput = process.env.MOTOKO_JSONL_OUTPUT === "1";
   // Read version FIRST so it appears before any other output.

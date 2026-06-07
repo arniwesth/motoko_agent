@@ -33,8 +33,13 @@ export AILANG_TRACE=standard
 If HyperDX requires an ingestion key, also set:
 
 ```bash
-export OTEL_EXPORTER_OTLP_HEADERS='authorization=<hyperdx-ingestion-key>'
+export CLICKSTACK_INGESTION_KEY=<hyperdx-ingestion-key>
 ```
+
+The Motoko launcher derives
+`OTEL_EXPORTER_OTLP_HEADERS=authorization=$CLICKSTACK_INGESTION_KEY` when the
+OTLP headers variable is not already set. Existing explicit
+`OTEL_EXPORTER_OTLP_HEADERS` values still take precedence.
 
 If OTLP HTTP on `4318` returns timeouts from `/v1/traces` or `/v1/metrics`,
 lower trace volume while debugging:
@@ -52,6 +57,13 @@ is intentionally not enabled here yet. The custom-span forwarding spike must
 first decide whether native `std/trace` spans reach OTLP automatically; if not,
 add a collector `filelog` receiver here to map `.motoko/logfile/session_*.jsonl`
 events into spans.
+
+In the devcontainer, session JSONL logs are tailed by the
+`motoko-log-collector` service from `.motoko/logfile/*.jsonl` and exported to
+ClickStack as OpenTelemetry logs. The source path, starting point, and age
+cutoff are mirrored in `.motoko/config/default/config.json` for documentation;
+changing them also requires updating
+`.devcontainer/otel/logs-collector.yaml` until a generator script exists.
 
 The local AILANG `v0.24.2` spike confirmed that `Trace` is a real capability:
 `ailang run --caps IO --entry main scripts/spike_trace_forwarding.ail` fails,
