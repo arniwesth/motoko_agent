@@ -111,6 +111,40 @@ ai.prompt_preview  ai.response_preview ai.finish_reason
 
 **Upshot:** ClickStack is the **only** one of the three that delivers its value with **zero attribute translation**. To unlock the LLM-specific UI in MLflow or Langfuse you must insert an OTel-collector **transform processor** remapping `ai.*` → each tool's expected convention — an extra moving part; without it they are generic-span viewers (and weaker at that than HyperDX). This also tempers MLflow's "lightweight strong middle" position: its run/eval model is still attractive, but its *trace cost/token UI* now carries the same mapping tax as Langfuse.
 
+### ⚠️ Clarification: the transform is collector-side, NOT a change to AILANG
+
+"Needs an `ai.*→gen_ai.*` transform" is a **deployment-side config artifact you own** — it does **not** touch AILANG's source. The remap happens in transit:
+
+```
+AILANG runtime ──OTLP(ai.*)──▶ [ OTel Collector: transform processor ] ──OTLP(gen_ai.*)──▶ MLflow / Langfuse
+```
+
+Three places it *could* live:
+
+| Where | AILANG change? | Notes |
+|---|---|---|
+| **1. OTel Collector `transform` processor (OTTL)** | ❌ none | Recommended. A few lines of YAML in *your* infra (`deploy/clickstack/collector.yaml` or an MLflow/Langfuse-side collector) — same class of artifact as Plan B §6's Route J `filelog` config. Reversible, per-backend. |
+| **2. AILANG emits `gen_ai.*` natively** | ✅ upstream | Feature request to `sunholo-data/ailang` (route via the `ailang-feedback` skill). Cleanest long-term, but out of our control and slower; must be **additive** (keep `ai.*` so existing ClickStack dashboards don't break). See Appendix A draft. Not required for any integration. |
+| **3. Backend-side attribute aliasing** | ❌ none | Limited/version-specific in MLflow & Langfuse; less expressive than OTTL → usually falls back to option 1. |
+
+Illustrative OTTL (option 1):
+
+```yaml
+processors:
+  transform:
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["gen_ai.request.model"],      attributes["ai.model"])
+          - set(attributes["gen_ai.provider.name"],      attributes["ai.provider"])
+          - set(attributes["gen_ai.usage.input_tokens"], attributes["ai.tokens_in"])
+          - set(attributes["gen_ai.usage.output_tokens"],attributes["ai.tokens_out"])
+          # ai.cost_usd has NO standard gen_ai equivalent (semconv expects cost derived
+          # from tokens × pricing) → keep ai.cost_usd as-is or map to a custom cost attr.
+```
+
+**Operational caveat:** option 1 is config, not code — but it is still a collector you run + OTTL you keep current as AILANG's `ai.*` keys evolve. That maintenance cost is exactly what keeps the comparison tilted to ClickStack (no transform at all). And `ai.cost_usd` is awkward on *every* backend except ClickStack, because OTel GenAI semconv has token attributes but **no standard cost attribute** — ClickStack simply stores/sums `ai.cost_usd` verbatim.
+
 ---
 
 ## Note on the existing `Motoko_MLflow_Observability_Plan.md`
@@ -143,3 +177,29 @@ The choice now hinges on **which job is primary**, with weight as a tie-breaker:
 - [ ] Verify cross-process W3C tracecontext nesting works in MLflow and Langfuse (it's free in ClickStack).
 - [ ] If Langfuse considered: enumerate which eval/dashboard features are OSS vs `ee`.
 - [ ] Reconcile / revise `Motoko_MLflow_Observability_Plan.md` to the OTLP-ingest path if MLflow is chosen.
+
+---
+
+## Appendix A — Draft upstream feature request (optional, AILANG-side)
+
+Only relevant if we decide AILANG should speak OTel GenAI semconv natively (option 2 above), avoiding a collector transform for *every* downstream consumer. Route via the `ailang-feedback` skill → `sunholo-data/ailang`. **Not a prerequisite for any backend integration** — ClickStack needs nothing, MLflow/Langfuse can use the collector transform.
+
+> **Title:** Emit OpenTelemetry GenAI semantic-convention attributes on AI-provider spans (additive to existing `ai.*`)
+>
+> **Context:** AILANG's runtime OTLP export is excellent and lands directly in any OTLP backend. AI-provider spans currently carry **custom** attributes (`ai.provider`, `ai.model`, `ai.tokens_in/out/total`, `ai.cost_usd`, `ai.prompt_preview`, `ai.response_preview`, `ai.finish_reason`). General OTLP backends (ClickStack/HyperDX, Jaeger, Grafana) consume these fine via raw queries. But **LLM-specialized backends — MLflow Tracing, Langfuse — key their automatic token/cost/generation UI off the OpenTelemetry GenAI semantic conventions (`gen_ai.*`)**, so AILANG spans currently appear there as untyped generic spans unless each user runs a collector `transform` processor to remap them.
+>
+> **Request:** *additively* emit the standard `gen_ai.*` attributes alongside the existing `ai.*` keys (do **not** rename/remove `ai.*` — that would break dashboards already built on them). Suggested mapping:
+>
+> | existing `ai.*` | add `gen_ai.*` (semconv) |
+> |---|---|
+> | `ai.provider` | `gen_ai.provider.name` |
+> | `ai.model` | `gen_ai.request.model` (and `gen_ai.response.model` if it differs) |
+> | `ai.tokens_in` | `gen_ai.usage.input_tokens` |
+> | `ai.tokens_out` | `gen_ai.usage.output_tokens` |
+> | `ai.finish_reason` | `gen_ai.response.finish_reasons` |
+> | — | `gen_ai.operation.name` = `chat` (span kind CLIENT) |
+> | `ai.cost_usd` | **no standard semconv key** — keep `ai.cost_usd`; semconv expects cost derived from tokens × pricing |
+>
+> **Why additive:** keeps ClickStack/raw-query users unaffected while making MLflow/Langfuse light up out-of-the-box, eliminating a per-user collector transform. Ideally gated/cheap so it adds no overhead when tracing is `off`.
+>
+> **Acceptance:** an AILANG run with `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at MLflow (`/v1/traces`) or Langfuse (`/api/public/otel`) shows populated token/cost/generation panels with **no** intermediary transform.
