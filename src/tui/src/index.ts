@@ -134,9 +134,12 @@ function loadDotEnv(
         ) {
           val = val.slice(1, -1);
         }
-        // Never override a value the shell already provided.
-        if (protectedKeys.has(key)) continue;
-        if (process.env[key] === undefined || overrideableKeys.has(key)) {
+        // Never override a non-empty value the shell already provided. Docker
+        // Compose may inject blank provider keys via ${KEY:-}; those should
+        // still fall back to .env.
+        const existing = process.env[key];
+        if (protectedKeys.has(key) && existing !== "") continue;
+        if (existing === undefined || existing === "" || overrideableKeys.has(key)) {
           process.env[key] = val;
           overrideableKeys.delete(key);
         }

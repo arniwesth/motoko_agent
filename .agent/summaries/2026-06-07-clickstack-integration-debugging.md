@@ -324,3 +324,289 @@ As of this summary, `git status --short` included:
 `.motoko/config/default/config.json`, `ailang.lock`, and `.devcontainer/200`
 may include unrelated or incidental local changes. Do not revert them without
 checking.
+
+## 2026-06-07 Later Update: HyperDX Password, Env Regression, Port Publishing
+
+The user created a new HyperDX password and ClickStack UI became usable briefly.
+After that, a Motoko TUI session failed with:
+
+```text
+Error: OPENROUTER_API_KEY environment variable required
+```
+
+This was diagnosed as a regression from the devcontainer Compose environment:
+`.devcontainer/docker-compose.yml` injects provider keys as `${KEY:-}`, so if
+the host shell does not export `OPENROUTER_API_KEY`, Compose still sets
+`OPENROUTER_API_KEY` to an empty string inside the devcontainer. The TUI
+`.env` loader treated any preexisting key as protected and refused to load the
+real value from `.env`.
+
+Applied fix:
+
+- Updated `src/tui/src/index.ts` so an empty provider key does not block `.env`
+  fallback.
+- Ran `cd src/tui && bun run build`.
+
+Relevant changed file:
+
+```text
+src/tui/src/index.ts
+```
+
+The user then ran a Motoko session successfully with no Motoko-side errors, but
+no traces appeared in ClickStack.
+
+### Current ClickStack Connectivity State
+
+Running the spike from the devcontainer with:
+
+```bash
+ailang run --caps IO,Trace --entry main scripts/spike_trace_forwarding.ail
+```
+
+printed:
+
+```text
+OTLP endpoint http://clickstack:4318 unreachable — telemetry disabled
+```
+
+Switching to `host.docker.internal:4318` resolved DNS and connected TCP, but the
+request hung:
+
+```text
+Connected to host.docker.internal (...) port 4318
+Operation timed out ... with 0 bytes received
+```
+
+From the Mac host, all published ClickStack ports also hung:
+
+```bash
+curl -I --max-time 10 http://127.0.0.1:8081
+curl -i --max-time 5 http://127.0.0.1:18123/ping
+curl -v --max-time 10 http://127.0.0.1:4318/v1/traces
+```
+
+But checks inside the ClickStack container succeeded:
+
+```bash
+docker exec devcontainer-clickstack-1 sh -lc 'wget -qO- -T 5 http://127.0.0.1:8123/ping'
+# Ok.
+
+docker exec devcontainer-clickstack-1 sh -lc 'wget -S -O- -T 5 http://127.0.0.1:8080/'
+# HTTP/1.1 200 OK with HyperDX HTML
+```
+
+Conclusion: ClickStack is alive inside the container; Docker Desktop host port
+publishing is currently wedged. This is not a Motoko trace-generation problem
+yet.
+
+### Immediate Next Step
+
+The user is going to rebuild/reopen the VS Code devcontainer. After rebuild,
+verify that the app container can reach the ClickStack sidecar on the Compose
+network:
+
+```bash
+curl -i --max-time 5 http://clickstack:8123/ping
+```
+
+Expected:
+
+```text
+Ok.
+```
+
+Then test trace forwarding with the Compose-network endpoint:
+
+```bash
+export MOTOKO_OTEL=1
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://clickstack:4318
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_HEADERS='authorization=<real-hyperdx-ingestion-key>'
+export OTEL_SERVICE_NAME=motoko-agent
+export AILANG_TRACE=standard
+export AILANG_TRACE_MAX_SPANS=20
+export OTEL_METRICS_EXPORTER=none
+export OTEL_EXPORTER_OTLP_TIMEOUT=5000
+
+ailang run --caps IO,Trace --entry main scripts/spike_trace_forwarding.ail
+```
+
+The spike must not print `telemetry disabled`. If it succeeds, run a short
+Motoko session from the same shell and search HyperDX for service
+`motoko-agent`.
+
+If browser access to `http://127.0.0.1:8081` still hangs after the container
+rebuild, restart Docker Desktop because internal container checks prove HyperDX
+itself is serving correctly.
+
+## 2026-06-07 Later Update: Rebuild Still Missed Sidecar, Gateway Works
+
+After the user rebuilt the devcontainer and confirmed HyperDX login worked from
+the browser, tests from inside the devcontainer still showed:
+
+```bash
+curl -i --max-time 5 http://clickstack:8123/ping
+curl -i --max-time 5 http://clickstack:4318
+```
+
+Both failed with:
+
+```text
+curl: (6) Could not resolve host: clickstack
+```
+
+The devcontainer also had no Docker CLI or `/var/run/docker.sock`, so sibling
+containers could not be inspected directly from inside the app container.
+
+### Root Cause Found
+
+`.devcontainer/devcontainer.json` had:
+
+```json
+"runServices": ["app"]
+```
+
+and `.devcontainer/docker-compose.yml` had:
+
+```yaml
+clickstack:
+  profiles: ["observability"]
+```
+
+So a normal VS Code rebuild started only the `app` service and did not start or
+attach the `clickstack` service as a sibling on the same Compose network. This
+explains why `http://clickstack:4318` did not resolve even after rebuilding.
+
+### Applied Config Fix
+
+Updated `.devcontainer/devcontainer.json` to start both services:
+
+```json
+"runServices": ["app", "clickstack"]
+```
+
+Updated `.devcontainer/docker-compose.yml`:
+
+- Removed `profiles: ["observability"]` from the `clickstack` service.
+- Removed the explicit `extra_hosts` entry for
+  `host.docker.internal:host-gateway`.
+
+Updated `.devcontainer/README.md` to remove the old
+`--profile observability` workflow and document that ClickStack should start
+with the devcontainer.
+
+Validation after edits:
+
+```bash
+node -e "JSON.parse(require('fs').readFileSync('.devcontainer/devcontainer.json','utf8')); console.log('devcontainer.json ok')"
+# devcontainer.json ok
+
+grep -nE 'profile|host-gateway|--profile' .devcontainer/devcontainer.json .devcontainer/docker-compose.yml .devcontainer/README.md || true
+# no output
+```
+
+### Gateway Discovery
+
+Inside the current app container, `host.docker.internal` was mapped to:
+
+```text
+0.250.250.254 host.docker.internal
+```
+
+but that address hung for HyperDX, ClickHouse, and OTLP:
+
+```bash
+curl -i --max-time 5 http://host.docker.internal:8081
+curl -i --max-time 5 http://host.docker.internal:18123/ping
+curl -i --max-time 5 http://host.docker.internal:4318
+```
+
+The actual default gateway from `/proc/net/route` was `192.168.107.1`.
+Using that address worked:
+
+```bash
+curl -i --max-time 5 http://192.168.107.1:8081
+# HTTP/1.1 200 OK, HyperDX UI HTML
+
+curl -i --max-time 5 http://192.168.107.1:18123/ping
+# HTTP/1.1 200 OK
+# Ok.
+
+curl -i --max-time 5 http://192.168.107.1:4318
+# HTTP/1.1 401 Unauthorized
+# missing or empty authorization header: Authorization
+```
+
+The AILANG spike against this gateway endpoint reached ClickStack and failed
+only due to the missing ingestion key:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://192.168.107.1:4318 \
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+OTEL_EXPORTER_OTLP_HEADERS= \
+OTEL_METRICS_EXPORTER=none \
+OTEL_EXPORTER_OTLP_TIMEOUT=5000 \
+ailang run --caps IO,Trace --entry main scripts/spike_trace_forwarding.ail
+```
+
+Output included:
+
+```text
+traces export: failed to send to http://192.168.107.1:4318/v1/traces: 401 Unauthorized
+missing or empty authorization header: Authorization
+```
+
+This means the ClickStack OTLP HTTP endpoint is reachable from the devcontainer
+when using the real container gateway. The current remaining blocker is
+authorization, not networking, for the gateway path.
+
+`.env` was checked only for relevant variable names and non-empty status. It has
+provider API keys but no `OTEL_EXPORTER_OTLP_HEADERS` / HyperDX ingestion key.
+The shell env also had `OTEL_EXPORTER_OTLP_HEADERS` set but empty.
+
+### Next Step After Rebuild
+
+The user is going to rebuild/reopen the VS Code devcontainer again so the latest
+devcontainer config takes effect.
+
+After rebuild, first test the intended Compose-network path:
+
+```bash
+curl -i --max-time 5 http://clickstack:8123/ping
+curl -i --max-time 5 http://clickstack:4318
+```
+
+Expected:
+
+- `/ping` returns `Ok.`
+- `:4318` returns `401 Unauthorized` if the collector is reachable but the
+  header is missing.
+
+Then set the real HyperDX ingestion key and run the spike:
+
+```bash
+export MOTOKO_OTEL=1
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://clickstack:4318
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_HEADERS='authorization=<real-hyperdx-ingestion-key>'
+export OTEL_SERVICE_NAME=motoko-agent
+export AILANG_TRACE=standard
+export AILANG_TRACE_MAX_SPANS=20
+export OTEL_METRICS_EXPORTER=none
+export OTEL_EXPORTER_OTLP_TIMEOUT=5000
+
+ailang run --caps IO,Trace --entry main scripts/spike_trace_forwarding.ail
+```
+
+If `clickstack` still does not resolve after this rebuild, use the gateway as a
+temporary fallback:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://192.168.107.1:4318
+export OTEL_EXPORTER_OTLP_HEADERS='authorization=<real-hyperdx-ingestion-key>'
+ailang run --caps IO,Trace --entry main scripts/spike_trace_forwarding.ail
+```
+
+If the spike succeeds with the ingestion key, then run a short Motoko session
+from the same shell and search HyperDX for service `motoko-agent`.

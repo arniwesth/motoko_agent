@@ -20,12 +20,8 @@ services:
       OTEL_SERVICE_NAME: motoko-agent
       AILANG_TRACE: standard
       AILANG_TRACE_MAX_SPANS: ${AILANG_TRACE_MAX_SPANS:-100}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
   clickstack:
     image: clickhouse/clickstack-all-in-one:2.21.0
-    profiles: ["observability"]
     ports:
       - "8081:8080"
       - "18123:8123"

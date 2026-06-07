@@ -1,7 +1,8 @@
 # Devcontainer Observability
 
-The devcontainer runs Motoko in the `app` service by default. ClickStack is
-declared as an opt-in sidecar so normal rebuilds stay lightweight.
+The devcontainer runs Motoko in the `app` service and ClickStack as a sibling
+sidecar. Both services must be in the same Compose project for
+`http://clickstack:4318` to resolve inside the devcontainer.
 
 ## Ports
 
@@ -13,10 +14,17 @@ declared as an opt-in sidecar so normal rebuilds stay lightweight.
 
 ## Start ClickStack
 
-From `.devcontainer/`:
+ClickStack should start when VS Code rebuilds/reopens this devcontainer because
+`.devcontainer/devcontainer.json` includes both services:
+
+```json
+"runServices": ["app", "clickstack"]
+```
+
+To start it manually from `.devcontainer/`:
 
 ```bash
-docker compose --profile observability up -d clickstack
+docker compose up -d clickstack
 ```
 
 That command must use the same Compose project as the devcontainer `app`
@@ -40,7 +48,7 @@ docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' <app
 Then start ClickStack with that project name from `.devcontainer/`:
 
 ```bash
-docker compose -p <project-name> --profile observability up -d clickstack
+docker compose -p <project-name> up -d clickstack
 ```
 
 If startup fails with a port allocation error such as:
@@ -56,7 +64,7 @@ container from the host shell, then start the sidecar again:
 docker ps --format '{{.Names}} {{.Ports}}' | grep '4317'
 docker stop <old-clickstack-container>
 docker rm <old-clickstack-container>
-docker compose -p <project-name> --profile observability up -d clickstack
+docker compose -p <project-name> up -d clickstack
 ```
 
 If `docker ps` shows two ClickStack containers, the one with published host
@@ -74,8 +82,8 @@ one:
 ```bash
 docker stop devcontainer-clickstack-1
 docker rm devcontainer-clickstack-1
-docker compose -p <project-name> --profile observability rm -sf clickstack
-docker compose -p <project-name> --profile observability up -d clickstack
+docker compose -p <project-name> rm -sf clickstack
+docker compose -p <project-name> up -d clickstack
 ```
 
 Then enable export for the shell that starts Motoko:
@@ -183,17 +191,17 @@ Then retry `curl -i http://clickstack:8123/ping` from inside the devcontainer.
 
 ```bash
 unset MOTOKO_OTEL
-docker compose --profile observability stop clickstack
+docker compose stop clickstack
 ```
 
 If ingestion times out or the UI is unhealthy, restart only the ClickStack
 sidecar. This leaves the devcontainer `app` service running:
 
 ```bash
-docker compose -p <project-name> --profile observability stop clickstack
-docker compose -p <project-name> --profile observability rm -f clickstack
-docker compose -p <project-name> --profile observability up -d clickstack
-docker compose -p <project-name> --profile observability logs -f clickstack
+docker compose -p <project-name> stop clickstack
+docker compose -p <project-name> rm -f clickstack
+docker compose -p <project-name> up -d clickstack
+docker compose -p <project-name> logs -f clickstack
 ```
 
 `docker compose down` may print:
@@ -210,7 +218,7 @@ To remove persisted ClickStack data, close/stop the devcontainer app first, then
 run:
 
 ```bash
-docker compose --profile observability down -v
+docker compose down -v
 ```
 
 ClickStack can use roughly 1.5-2 GB of memory. Use a Codespaces or local Docker
