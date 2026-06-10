@@ -581,7 +581,10 @@ async function main(): Promise<void> {
     profileAgent.model ??
     "anthropic/claude-sonnet-4-6";
   const systemPrompt = systemPromptForWorkspace(projectRoot, workdir);
-  const openaiBaseUrl = process.env.OPENAI_BASE_URL ?? profileAgent.openaiBaseUrl ?? "";
+  const openaiBaseUrl =
+    process.env.OPENAI_BASE_URL && process.env.OPENAI_BASE_URL.trim() !== ""
+      ? process.env.OPENAI_BASE_URL
+      : profileAgent.openaiBaseUrl ?? "";
   const aiOptionsJson = process.env.MOTOKO_AI_OPTIONS_JSON ?? profileAgent.aiOptionsJson ?? "";
 
   let brainVersion = "unknown";
@@ -708,7 +711,7 @@ async function main(): Promise<void> {
   // Make ailang build datetime available to the runtime via environment variable.
   process.env.AILANG_BUILT = ailangVersion;
 
-  const ui = new AgentUI({ version: pkgVersion, model, ailangVersion, extensions: profileAgent.extensions });
+  const ui = new AgentUI({ version: pkgVersion, model, profile, ailangVersion, extensions: profileAgent.extensions });
 
   function spawnRuntimeProcess(task: string, logPrompt: boolean): void {
     errorOccurred = false;

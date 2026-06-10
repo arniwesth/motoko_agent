@@ -76,13 +76,16 @@ export type AIStreamResult = {
   error_code: string
 }
 
--- Strip the "openrouter/" prefix from a model string so the upstream
--- OpenRouter API receives the bare model identifier (e.g. "z-ai/glm-5",
--- not "openrouter/z-ai/glm-5"). Non-openrouter prefixes pass through
--- unchanged — they'll route to whichever [[ai_provider]] block matches.
+-- Strip provider-routing prefixes from model strings before forwarding to
+-- upstream APIs. The prefixes select a Motoko/AILANG provider, but OpenAI-
+-- compatible APIs expect the bare model id.
 func model_for_provider(model: string) -> string {
   if startsWith(model, "openrouter/") then
     let prefix_len = length("openrouter/") in
+    let total = length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "openai/") then
+    let prefix_len = length("openai/") in
     let total = length(model) in
     substring(model, prefix_len, total)
   else

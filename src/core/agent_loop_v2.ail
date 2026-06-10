@@ -61,14 +61,16 @@ import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candid
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
 
--- Strip the "openrouter/" model prefix before forwarding to upstream step().
--- OpenRouter's API rejects the prefixed name. The fork's old code stored the
--- prefix as part of the model identifier for routing-style dispatch; with
--- upstream step() the AI handler is configured at --ai time, so the prefix
--- is redundant noise that breaks the upstream API call.
+-- Strip provider-routing prefixes before forwarding to upstream step(). The
+-- prefixed name selects the provider locally; upstream APIs expect bare model
+-- ids such as "z-ai/glm-5" or "gemma-4-26B-A4B-it-qat-4bit".
 func strip_provider_prefix(model: string) -> string {
   if startsWith(model, "openrouter/") then
     let prefix_len = Str.length("openrouter/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "openai/") then
+    let prefix_len = Str.length("openai/") in
     let total = Str.length(model) in
     substring(model, prefix_len, total)
   else

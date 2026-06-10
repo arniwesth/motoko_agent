@@ -291,7 +291,10 @@ export class RuntimeProcess {
   ) {
     this.workdir = workdir;
     this.onEvent = onEvent;
-    const aiModelArg = model;
+    const aiModelArg =
+      openaiBaseUrl.trim() !== "" && model.startsWith("openai/")
+        ? "gpt5"
+        : model;
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
       : "ailang";
