@@ -1,0 +1,12 @@
+module sunholo/motoko_ext_eval/prompts
+
+import pkg/sunholo/motoko_ext_abi/types (PromptPatch)
+
+export func prompt_patch() -> PromptPatch {
+  {
+    prepend: [],
+    append: [
+      "Eval tool: use `eval` for persistent Python or JavaScript cells when small scripts, data inspection, or iterative calculations are useful. Cells keep state for this session. Each cell is `{language:\"py\"|\"js\", code, title?, timeout?, reset?}`. Python and JS cells expose `display(value)`, `tool.read(path)`, `tool.write(path, content)`, `tool.append(path, content)`, `tool.search(pattern, path?)`, and `agent(prompt, model?)`. Eval kernels are native effect hatches: workdir file access is confined, external network is disabled by default, and in-cell tools are a fixed local allowlist."
+    ]
+  }
+}

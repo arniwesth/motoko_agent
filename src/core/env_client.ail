@@ -19,8 +19,8 @@
 module src/core/env_client
 
 import std/net    (httpPost)
-import std/json   (encode, decode, jo, kv, js, jnum, get, asString, asNumber, asBool)
-import src/core/types  (ExecResult, AilangExecResult)
+import std/json   (Json, encode, decode, jo, kv, js, jnum, get, asString, asNumber, asBool)
+import src/core/types  (ExecResult, AilangExecResult, CellExecResult)
 
 -- ---------------------------------------------------------------------------
 -- exec_in : string -> string -> int -> ExecResult ! {Net}
@@ -105,6 +105,43 @@ export func exec_ailang(url: string, code: string, caps: string, timeout_secs: i
         Some(j) => match asString(j) { None => "", Some(s) => s }
       };
       { stdout: stdout, stderr: stderr, exit_code: exit_code, check_passed: check_passed, check_errors: check_errors }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- exec_cell : string -> Json -> string -> int -> CellExecResult ! {Net}
+--
+-- Execute persistent Python/JS cells through the environment server.
+-- `cells` is the JSON array from the eval tool arguments.
+-- ---------------------------------------------------------------------------
+export func exec_cell(url: string, cells: Json, session_id: string, timeout_secs: int) -> CellExecResult ! {Net} {
+  let body = encode(jo([
+    kv("cells",     cells),
+    kv("sessionId", js(session_id)),
+    kv("timeout",   jnum(_int_to_float(timeout_secs)))
+  ]));
+  let raw = httpPost("${url}/exec-cell", body);
+  match decode(raw) {
+    Err(_) =>
+      { stdout: "", stderr: "env-server: malformed exec-cell response: ${raw}", exit_code: 1, metadata: jo([]) },
+    Ok(obj) => {
+      let stdout = match get(obj, "stdout") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      let stderr = match get(obj, "stderr") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      let exit_code = match get(obj, "exit_code") {
+        None    => 0,
+        Some(j) => match asNumber(j) {
+          None    => 0,
+          Some(n) => _float_to_int(n)
+        }
+      };
+      { stdout: stdout, stderr: stderr, exit_code: exit_code, metadata: obj }
     }
   }
 }

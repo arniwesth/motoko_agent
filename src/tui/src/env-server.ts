@@ -9,12 +9,17 @@
 // env_client.ail simple (no HTTP error handling needed).
 
 import express from "express";
-import { execSync, spawn } from "child_process";
+import { execFileSync, execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { mkdirSync, writeFileSync, unlinkSync, rmSync } from "fs";
-import { join, resolve } from "path";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "fs";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { createClaimCheckTelemetry, runClaimCheck } from "./compose-claimcheck.js";
+import type { EvalCell, EvalCellResult } from "./eval/frames.js";
+import { EvalKernelRegistry } from "./eval/registry.js";
+import type { JsLoopback } from "./eval/kernel-js.js";
+import { startLoopbackServer } from "./eval/loopback.js";
+import { buildEvalTranscript, spillImages } from "./eval/transcript.js";
 
 export interface ExecResult {
   stdout: string;
@@ -630,6 +635,89 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }
   }
 
+  const defaultEvalModel = String(process.env.MOTOKO_EVAL_AGENT_MODEL ?? process.env.AILANG_SUBAGENT_MODEL ?? process.env.MODEL ?? "anthropic/claude-sonnet-4-6");
+  const loopback = await startLoopbackServer({
+    workdir,
+    defaultModel: defaultEvalModel,
+    callAgent: (model, prompt) => callSubagentModel(model || defaultEvalModel, prompt),
+  });
+
+  function confinedEvalPath(userPath: string): string {
+    const root = resolve(workdir);
+    const target = resolve(root, userPath || ".");
+    if (target !== root && !target.startsWith(root + "/")) {
+      throw new Error(`path escapes workdir: ${userPath}`);
+    }
+    return target;
+  }
+
+  function makeJsLoopback(): JsLoopback {
+    return {
+      read: (path: string) => readFileSync(confinedEvalPath(path), "utf8"),
+      write: (path: string, content: string) => {
+        const p = confinedEvalPath(path);
+        mkdirSync(dirname(p), { recursive: true });
+        writeFileSync(p, String(content), "utf8");
+        return "";
+      },
+      append: (path: string, content: string) => {
+        const p = confinedEvalPath(path);
+        mkdirSync(dirname(p), { recursive: true });
+        appendFileSync(p, String(content), "utf8");
+        return "";
+      },
+      search: (pattern: string, path = ".") => {
+        const p = confinedEvalPath(path);
+        try {
+          return execFileSync("rg", ["-n", "--no-heading", "--color", "never", String(pattern), p], {
+            cwd: workdir,
+            encoding: "utf8",
+            timeout: 15_000,
+            maxBuffer: 1024 * 1024,
+          }).slice(0, 50 * 1024);
+        } catch (e: any) {
+          if (typeof e.status === "number" && e.status === 1) return String(e.stdout ?? "");
+          throw e;
+        }
+      },
+      agent: (prompt: string, model = "") => callSubagentModel(model || defaultEvalModel, prompt),
+    };
+  }
+
+  const evalRegistry = new EvalKernelRegistry(
+    Math.max(60_000, Number(process.env.MOTOKO_EVAL_IDLE_MS ?? 10 * 60_000)),
+    () => ({
+      MOTOKO_EVAL_LOOPBACK_URL: loopback.url,
+      MOTOKO_EVAL_LOOPBACK_TOKEN: loopback.token,
+      MOTOKO_EVAL_NETWORK: String(process.env.MOTOKO_EVAL_NETWORK ?? "0"),
+    }),
+    makeJsLoopback,
+  );
+
+  function pythonAvailable(): boolean {
+    try {
+      execFileSync("python3", ["-c", "print('ok')"], { timeout: 3000, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function normalizeEvalCells(raw: unknown): EvalCell[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.map((cell) => {
+      const rec = (cell && typeof cell === "object") ? cell as Record<string, unknown> : {};
+      const language: EvalCell["language"] = String(rec.language ?? "py") === "js" ? "js" : "py";
+      return {
+        language,
+        code: String(rec.code ?? ""),
+        title: typeof rec.title === "string" ? rec.title : undefined,
+        timeout: typeof rec.timeout === "number" ? rec.timeout : undefined,
+        reset: rec.reset === true,
+      };
+    }).filter((cell) => cell.code.trim() !== "");
+  }
+
   type StreamAuthorResult = {
     output: string;
     streamed: boolean;
@@ -997,6 +1085,69 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
       };
       res.json(result);
     }
+  });
+
+  // POST /exec-cell — run persistent Python/JS eval cells for a session.
+  // Body: { cells: EvalCell[], sessionId: string, timeout?: number }
+  app.post("/exec-cell", async (req, res) => {
+    const body = req.body as { cells?: unknown; sessionId?: string; timeout?: number };
+    const cells = normalizeEvalCells(body.cells);
+    const sessionId = String(body.sessionId ?? "default");
+    const defaultTimeout = Math.max(1, Number(body.timeout ?? 30));
+    if (cells.length === 0) {
+      res.json({ exit_code: 0, stdout: "", stderr: "", cells: [], images: [], jsonOutputs: [], notice: "no eval cells provided" });
+      return;
+    }
+    if (cells.some((cell) => cell.language === "py") && !pythonAvailable()) {
+      const notice = "python3 unavailable; Python eval cells were skipped";
+      res.json({ exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice });
+      return;
+    }
+
+    const results: EvalCellResult[] = [];
+    const images: Array<{ path: string; mime: string; width?: number; height?: number }> = [];
+    const jsonOutputs: unknown[] = [];
+    let exitCode = 0;
+
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      try {
+        const result = await evalRegistry.runCell(i, sessionId, cell, workdir, defaultTimeout);
+        results.push(result);
+        const spilled = spillImages(workdir, sessionId, i + 1, result.displays.concat(result.result ? [result.result] : []));
+        images.push(...spilled);
+        for (const b of result.displays.concat(result.result ? [result.result] : [])) {
+          if (b.type === "json") jsonOutputs.push(b.data);
+        }
+        if (result.exit_code !== 0 && exitCode === 0) exitCode = result.exit_code;
+      } catch (e: any) {
+        exitCode = 1;
+        results.push({
+          index: i,
+          language: cell.language,
+          title: cell.title ?? `${cell.language} cell ${i + 1}`,
+          exit_code: 1,
+          stdout: "",
+          stderr: String(e?.message ?? e),
+          displays: [],
+          error: { ename: "EvalHostError", evalue: String(e?.message ?? e), traceback: [] },
+          executionCount: 0,
+          cancelled: false,
+          truncated: false,
+        });
+      }
+      if (exitCode !== 0) break;
+    }
+
+    const stdout = buildEvalTranscript(results, images);
+    res.json({
+      exit_code: exitCode,
+      stdout,
+      stderr: "",
+      cells: results,
+      images,
+      jsonOutputs,
+    });
   });
 
   // Persist a snippet and its metadata to the permanent store.
@@ -1607,6 +1758,8 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   // Cleanup .motoko-store on process exit
   const cleanup = () => {
     try { rmSync(motokoStore, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { evalRegistry.close(); } catch { /* ignore */ }
+    try { void loopback.close(); } catch { /* ignore */ }
   };
   process.on("exit", cleanup);
   process.on("SIGINT", () => { cleanup(); process.exit(0); });

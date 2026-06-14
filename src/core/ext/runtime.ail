@@ -24,7 +24,7 @@ import pkg/sunholo/motoko_ext_abi/types (
 import src/core/types (Msg)
 import src/core/ext/registry_generated (parse_core_ext_order)
 
-export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, FS} {
+export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, FS, Net} {
   {
     registry: parse_core_ext_order(join_order(cfg.extensions.order), cfg),
     strict_mode: cfg.extensions.strict,

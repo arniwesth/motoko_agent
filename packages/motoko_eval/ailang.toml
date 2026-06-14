@@ -1,0 +1,18 @@
+[package]
+name = "sunholo/motoko_ext_eval"
+version = "0.1.0"
+edition = "1"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = "2.2.0"
+
+[effects]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream"]
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_eval/register",
+  "sunholo/motoko_ext_eval/eval",
+  "sunholo/motoko_ext_eval/prompts",
+  "sunholo/motoko_ext_eval/types"
+]

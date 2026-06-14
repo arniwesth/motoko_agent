@@ -1,0 +1,94 @@
+module sunholo/motoko_ext_eval/eval
+
+import std/option (Option, Some, None)
+import std/json (Json, jo, kv, js, get, asArray)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtensionHooks, ToolSchema,
+  BudgetPlan, BudgetPatch, PromptPatch,
+  ToolCallEnvelope, ToolResultEnvelope,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision,
+  Allow, Deny, NoOpinion, Delegate, Handled, NoIntercept, NoDecision, PassThrough,
+  Msg
+)
+import pkg/sunholo/motoko_ext_eval/prompts (prompt_patch)
+import pkg/sunholo/motoko_ext_eval/types (tool_name, schema_json)
+import src/core/env_client (exec_cell)
+
+func no_budget_patch() -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  no_budget_patch()
+}
+
+func is_eval_tool(name: string) -> bool {
+  name == "eval" || name == "Eval"
+}
+
+func cells_arg(args: Json) -> Json {
+  match get(args, "cells") {
+    Some(j) => match asArray(j) {
+      Some(_) => j,
+      None => jo([])
+    },
+    None => jo([])
+  }
+}
+
+export func provided_tools() -> [string] {
+  ["eval"]
+}
+
+export func on_describe_tools() -> [ToolSchema] {
+  [{
+    name: "eval",
+    description: "Run persistent Python or JavaScript cells with display capture and local workdir-confined helpers.",
+    parameters: schema_json()
+  }]
+}
+
+export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  if not is_eval_tool(call.tool) then NoOpinion
+  else if ctx.mode == "restricted" || ctx.mode == "read_only" || ctx.mode == "readonly" then Deny("eval is disabled in restricted/read-only mode")
+  else Allow
+}
+
+func result_from_exec(call: ToolCallEnvelope, result: { stdout: string, stderr: string, exit_code: int, metadata: Json }) -> ToolResultEnvelope {
+  {
+    tool_call_id: call.id,
+    tool: "eval",
+    exit_code: result.exit_code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    metadata: result.metadata
+  }
+}
+
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleDecision ! {Net} {
+  if not is_eval_tool(call.tool) then Delegate
+  else {
+    let cells = cells_arg(call.arguments);
+    let result = exec_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs);
+    Handled(result_from_exec(call, result))
+  }
+}
+
+export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net} {
+  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle(ctx, call, timeout_secs)
+  };
+  {
+    id: "eval",
+    provided_tools: provided_tools(),
+    on_describe_tools: \_ . on_describe_tools(),
+    on_build_system_prompt: \_ctx. prompt_patch(),
+    on_budget_plan: budget_hook,
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+    on_tool_policy: on_tool_policy,
+    on_tool_handle: handle,
+    on_response_intercept: func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
+    on_solver_candidate: func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+  }
+}

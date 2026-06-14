@@ -1,0 +1,7 @@
+module sunholo/motoko_ext_eval/types
+
+export func tool_name() -> string = "eval"
+
+export func schema_json() -> string {
+  "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"cells\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"language\": {\"type\": \"string\", \"enum\": [\"py\", \"js\"]},\n          \"code\": {\"type\": \"string\"},\n          \"title\": {\"type\": \"string\"},\n          \"timeout\": {\"type\": \"number\"},\n          \"reset\": {\"type\": \"boolean\"}\n        },\n        \"required\": [\"language\", \"code\"]\n      }\n    }\n  },\n  \"required\": [\"cells\"]\n}"
+}
