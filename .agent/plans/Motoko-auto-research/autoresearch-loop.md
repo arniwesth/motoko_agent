@@ -213,6 +213,26 @@ online/offline wall intact):
 
 ## 5. Phase 0.5 — Warm-up: validate the loop end-to-end (before any bespoke build)
 
+> **RESOLVED (2026-05-31): warm-up validated via the SIMD-scan planted-lever fixture.**
+> Optimizing **Motoko's own scaffolding** (§5a, Polyglot) proved a dead end as a
+> *research* test: on a strong model the prompt is flat and the tool/extension
+> surface is deprecated/broken (omnigraph, ohmy_pi), so there is no discoverable
+> lever, and the timeout-driven metric noise is degenerate. Polyglot validated only
+> the loop *plumbing*. We instead built a **controlled planted-lever fixture**
+> (`benchmarks/fixtures/autoresearch_simdscan/`) whose candidate is a self-contained
+> C scan function with a real, literature-discoverable lever (SIMD vectorized
+> classification, simdjson / arXiv:1902.08318), a sharp correctness oracle, and an
+> informative noisy primary (CPU-time throughput). On it the loop was validated
+> end-to-end — model-free (Phase 1: real lever kept+transfers, overfit decoy
+> indistinguishable on TRAIN but exposed on held-out, correctness/cheat gates hold)
+> and with a live cheap model (Phase 2: DeepSeek V4 Flash discovered, implemented,
+> and iteratively refined a correct ~14.6x NEON scan that transfers to held-out, for
+> ~$0.04 — both as a candidate generator and in full autonomy driving
+> ar_init/ar_run/ar_log itself). See
+> `.agent/summaries/2026-05-31-autoresearch-simdscan-validated.md` and `papers/ledger.md`.
+> **Takeaway for ARC:** the candidate must be an artifact with real headroom (the
+> bespoke player), NOT Motoko's scaffolding.
+
 **Goal:** prove optimize→measure→keep/discard + held-out discipline + §4 literature
 ideation on a benchmark Motoko already runs, with *no* bespoke player to build. The
 candidate-under-edit is **Motoko's own scaffolding** (system prompt, tool/skill config,
@@ -223,25 +243,116 @@ agent strategy); the metric is **task pass-rate**.
 > ground de-risks Objective #2 cheaply. Two steps, cheapest first.
 
 ### 5a — Polyglot (the first target; turnkey, offline, NO Docker)
-- [ ] Smoke `benchmarks/aider_polyglot.py` on a couple of Python exercises (local
+- [x] Smoke `benchmarks/aider_polyglot.py` on a couple of Python exercises (local
       endpoint or cheap API) to confirm the runner works as documented.
-- [ ] Define a **TRAIN** exercise subset + a disjoint held-out **TEST** subset (the
+- [x] Define a **TRAIN** exercise subset + a disjoint held-out **TEST** subset (the
       `polyglot_logs/python/` corpus already lists the exercise set).
-- [ ] Wire `aider_polyglot.py` over TRAIN as the `benchmark_script` (emit
+- [x] Wire `aider_polyglot.py` over TRAIN as the `benchmark_script` (emit
       `METRIC pass_rate=…`, `wall_ms`); baseline = current Motoko scaffolding.
-- [ ] Apply the §3/§3a integrity gates: out-of-loop TEST grading, oracle-vs-no-op
+- [x] Apply the §3/§3a integrity gates: out-of-loop TEST grading, oracle-vs-no-op
       (current scaffolding passes; an empty/broken scaffolding fails), one cheat trial,
       canary on the split definition.
-- [ ] Run a short autonomous autoresearch loop: optimizer edits Motoko scaffolding,
+- [~] Run a short autonomous autoresearch loop: optimizer edits Motoko scaffolding,
       `ar_run` measures Polyglot pass-rate over TRAIN, `ar_log` keep/discard; grade on
-      TEST between segments. Confirm kept gains transfer to held-out.
-- [ ] Exercise §4: optimizer scouts one prompting/agent method from a paper, records it
+      TEST between segments. **Loop ran (3 iterations, baseline kept, 2 candidates
+      discarded), but no kept gain transferred — see 0.5a findings below; noise budget
+      is the binding constraint.**
+- [x] Exercise §4: optimizer scouts one prompting/agent method from a paper, records it
       via the ledger/`ar_scout`, validates it on the metric.
 
 **5a Exit:** a clean multi-iteration Polyglot loop where a kept scaffolding change
 transfers to held-out TEST, the integrity gates hold under a cheat trial, and one
 literature method was recorded + validated. **This alone validates the core machinery
 the ARC phases depend on.**
+
+**5a Exit status (2026-05-31, Pro rebalanced split):** machinery validated, exit NOT
+yet reached. Met: harder hashed split, full `ar_init`/`ar_run`/`ar_log` loop, integrity
+gates (oracle-vs-no-op + cheat + immutable), literature methods recorded with measured
+outcomes. **Unmet: a kept scaffolding change that transfers to held-out TEST** — both
+candidates were soundly discarded on TRAIN and none beat the baseline (minimal prompt,
+TRAIN median 0.75 / TEST 0.500). The discarded ReAct candidate scored *higher* on TEST
+(0.667) than its TRAIN regression, so the in-loop decision did not transfer: at
+`samples=2` over 6 exercises the timeout-driven primary variance (~0.167/exercise) is
+comparable to candidate effect sizes (R-noise). Next: raise the noise budget (more
+samples and/or a less timeout-bound primary such as a non-timeout correctness metric)
+or broaden the candidate surface beyond the system prompt, then re-run for a kept
+transfer. See `.agent/summaries/2026-05-31-autoresearch-polyglot-phase0_5a.md` and
+`papers/ledger.md`.
+
+**0.5a findings (2026-05-31):**
+- The default `../polyglot-benchmark` checkout was absent. For non-Docker execution,
+  `/workspaces/polyglot-benchmark/python` was restored from `exercism/python`; the
+  runner now sees 140 Python practice exercises.
+- System Python lacked `pytest`; the non-Docker verifier uses a uv venv at
+  `.motoko/ar_polyglot_py` and prepends it to `PATH`, so the runner's existing
+  `python3 -m pytest -x -q` command works without changing `aider_polyglot.py`.
+- Smoke commands with `POLYGLOT_MODEL=anthropic/claude-haiku-4-5` passed
+  `hello-world` and `two-fer`; stdout ended as flat maps such as
+  `{"python/hello-world": "pass_1"}` and result JSON had the documented
+  `{"exercises": ..., "meta": ...}` shape.
+- After the OpenRouter budget concern, the fixture was locked to
+  `POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-flash`; the retry is now locked to
+  `POLYGLOT_MODEL=openrouter/deepseek/deepseek-v4-pro`, and any other model now fails
+  fast in `bench/lib.sh` before runner startup.
+- Fixture added at `benchmarks/fixtures/autoresearch_polyglot/`: TRAIN/TEST split
+  files, canary manifest, `immutable.sha256`, TRAIN `benchmark.sh`, held-out
+  `grade_test.sh`, `checks.sh`, and a README. The fixture loops `aider_polyglot.py`
+  once per exercise rather than adding a subset flag to the runner. It explicitly
+  sets `SYSTEM_MD=benchmarks/prompts/polyglot_system.md`, making that prompt the live
+  initial candidate surface.
+- Metric definition is documented as
+  `pass_rate = (count(pass_1) + count(pass_2)) / total`, maximize. `wall_ms` is a
+  noisy secondary, minimize.
+- Docker is unavailable. The TEST grader therefore uses a fresh process and clean
+  scratch directory plus immutable hashes and `off_limits`, not a fresh container.
+  This is weaker than Harbor's container separation but preserves the important
+  non-Docker boundary: TEST is never referenced by `benchmark.sh`.
+- First six-exercise TRAIN smoke scored `pass_rate=1.000000`, `wall_ms=117993`, so
+  that initial split is too easy for an improvement loop and should be rebalanced
+  once model access is restored. A harder `forth` probe then hit the external model
+  route's `403 Key limit exceeded`, so further model-backed runs stopped.
+- Load-bearing verdict: `maximize` is implemented and covered by
+  `metrics_test.ail`, and `ar_run` aggregates noisy metrics with median/MAD. However
+  `ar_log` improvement/stall uses `Metrics.improved(direction, prev, cur, 0.0)`,
+  ignoring noisy-primary MAD/confidence. Noisy primary is therefore **not yet
+  supported for keep/discard discipline**. Per §2/§3.6, do not run the real loop
+  until this is fixed, or reframe the primary as a deterministic/minimized fallback
+  such as `fail_rate`.
+- Follow-up fix: `packages/motoko-ext-autoresearch/autoresearch.ail` now computes
+  the pending run's primary MAD from `samples_json` when the primary metric is marked
+  noisy and passes that noise into `Metrics.improved`. Focused verification:
+  `AILANG_RELAX_MODULES=1 ailang check packages/motoko-ext-autoresearch/autoresearch.ail`,
+  `ailang test packages/motoko-ext-autoresearch/metrics_test.ail`, and the
+  DeepSeek-locked Polyglot `checks.sh` all pass.
+- The direct DeepSeek optimizer did not reliably call `ar_init`/`ar_run`/`ar_log`
+  even though the autoresearch extension loaded. To prove the extension FSM anyway,
+  `scripts/ar_polyglot_harness.ail` now drives the real hooks directly while the
+  benchmark itself remains locked to the configured DeepSeek-only route.
+- Segment 2 baseline used `samples=2`: TRAIN median `pass_rate=0.5833335`,
+  samples `[0.666667, 0.5]`, primary MAD `0.0833335`, checks passed, logged keep.
+  This is the live proof that the noisy maximize primary path executes under
+  `samples>1`.
+- Literature trial used ReAct-style reasoning/action prompting
+  (Yao et al., arXiv:2210.03629) and added an explicit inspect→edit→test loop plus
+  a fallback away from `Search` when `rg` is unavailable. The candidate scored TRAIN
+  median `pass_rate=0.75`, samples `[0.666667, 0.833333]`, primary MAD `0.083333`,
+  checks passed, and `ar_log keep` committed `f3efa47446c5af9a7515e7191e0b87d06b90383a`
+  in the linked worktree.
+- Held-out TEST did **not** transfer: `grade_test.sh` on the disjoint TEST split
+  scored `pass_rate=0.000000`, `wall_ms=720385`; all six TEST exercises errored or
+  timed out under the DeepSeek-only route. The 0.5a exit gate therefore remains
+  open despite the kept TRAIN improvement.
+- Benchmark-infra follow-up: the subset fixture now bounds each exercise with
+  `POLYGLOT_EXERCISE_TIMEOUT_SECS` and records timed-out exercises as `error` JSON.
+  `aider_polyglot.py` also has `--skip-preflight` so per-exercise subset loops do not
+  repeatedly burn or hang on the model preflight. This is infra, not candidate scope.
+- DeepSeek V4 Pro retry: the fixture pin was switched to
+  `openrouter/deepseek/deepseek-v4-pro` after verifying the OpenRouter route. With the
+  default Polyglot prompt and bounded subset runner, TRAIN scored `pass_rate=1.000000`
+  (`wall_ms=138656`) and held-out TEST scored `pass_rate=1.000000` (`wall_ms=103285`),
+  all first-try passes. This confirms the Flash failure was model-route/capability
+  limited, but it is not itself a 0.5a exit because no optimizer-kept scaffolding
+  change was tested for transfer in this Pro run.
 
 ### 5b — Terminal-Bench (richer second target; needs Docker — R9)
 - [ ] `uv tool install harbor`; **verify Docker** (cheap check). If unavailable, run
@@ -280,10 +391,12 @@ says `/workspaces/ailang_agent/...` from before the repo rename; harmless.)
   methods, let patience kill dead segments. Keep fetching out of the benchmark sandbox.
 - **R-noise (noise budget vs cost):** samples × tasks needed for meaningful MAD without
   making `ar_run` slow.
-- **R-metrics (`metrics.ail` assumptions):** the `maximize` direction *and* — more
-  importantly — whether a **noisy primary** is supported (MAD/confidence/improvement-
-  test on the primary under `samples>1`). The crux of Objective #2; if unsupported,
-  top-priority extension change. (See §2 TODO.)
+- **R-metrics (`metrics.ail` assumptions):** `maximize` is implemented. The
+  2026-05-31 Polyglot warm-up found that noisy-primary support was incomplete:
+  `ar_run` reported median/MAD, while `ar_log` keep/improvement compared with
+  `noise=0.0`. A local follow-up now applies pending-run primary MAD to the
+  keep/improvement test; the remaining risk is proving it through a live
+  `samples>1` autoresearch run. (See §2 TODO and §5a findings.)
 - **R9 Harbor needs Docker (5b only):** Harbor/TB run tasks in Docker; may be
   unavailable/heavy here. Mitigation: **5a (Polyglot) needs no Docker** and already
   proves the loop; for 5b, run Harbor on the Mac host or skip it.

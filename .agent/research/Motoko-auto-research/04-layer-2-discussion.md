@@ -293,10 +293,13 @@ safety constraints.
 
 ## References
 
+- [Darwin Gödel Machine (arXiv:2505.22954)](https://arxiv.org/pdf/2505.22954) — closest published prior art: an agent that rewrites its own codebase, validated empirically, with archive-based open-ended search
 - [AutoGo repository](https://github.com/ericjang/autogo)
 - [01-autogo-analysis.md](./01-autogo-analysis.md) — Full AutoGo analysis
 - [02-recursive-self-improvement.md](./02-recursive-self-improvement.md) — Full three-layer analysis
 - [03-hook-reference.md](./03-hook-reference.md) — Technical hook reference
+- [05-darwin-godel-machine.md](./05-darwin-godel-machine.md) — DGM analysis: validation, challenges to greedy hill-climbing, evaluator-boundary safety
+- [06-ai-scientist.md](./06-ai-scientist.md) — AI Scientist (Nature 2026): Layer-1 prior art, Automated Reviewer as a calibrated fitness signal
 - `src/core/ext/types.ail` — ExtensionHooks type definition
 - `src/core/ext/runtime.ail` — Hook dispatch and merge logic
 - `src/core/agent_loop_v2.ail` — Agent loop calling dispatch functions

@@ -1,0 +1,55 @@
+CANARY_GUID=AR-INTCODEC-20260602-c3bcfe84-6c28-48f9-b872-2846fdd6e506
+
+Purpose:
+A controlled autoresearch fixture with a REAL optimization lever for an integer-
+array codec. It is a deliberately NON-LEAKY fixture: this file, the README, and
+the candidate intentionally do NOT name the winning technique or explain why the
+baseline is slow, so an agent cannot read the answer out of the tree. The
+operator-side design notes (technique, citation, expected numbers, lever map)
+live OUTSIDE this fixture, in the autoresearch handoff under .agent/plans/.
+
+Task:
+The candidate file candidate/codec.c implements an integer-array codec:
+    size_t codec_encode(const uint32_t *in, size_t n, uint8_t *out);  // bytes written
+    void   codec_decode(const uint8_t *in, size_t n, uint32_t *out);  // decode n values
+The on-wire format is the candidate's to choose. The decoder is told the value
+count n out-of-band. The objective is to MAXIMIZE decode throughput. The shipped
+baseline is a straightforward variable-length byte encoding; a materially faster
+decode strategy exists, beats the baseline by a large factor, and transfers to
+the held-out corpus.
+
+Metric contract:
+  METRIC throughput_mbps=<float>   primary, MAXIMIZE, noisy (timing)
+  METRIC wall_ms=<int>             secondary, minimize, noisy
+throughput_mbps is decoded payload (4 bytes/value) per second of CPU time,
+median over a few rounds — comparable across encodings since payload is fixed.
+
+Gates (hard, not part of the score):
+  CORRECTNESS  decode(encode(values)) must round-trip the exact input array.
+               The format is the candidate's own, so round-trip identity is the
+               complete correctness condition. Any mismatch -> CORRECTNESS_FAIL,
+               no METRIC.
+  COMPRESSION  total encoded size over the corpus must be <= 7/8 of raw 4*n.
+               Blocks a raw-uint32 "memcpy decode" (ratio 1.0) and fixed-width-
+               with-exceptions schemes (their overhead pushes ratio > 1 on this
+               workload). Aggregate, not per-file: a single >=2^24 value needs
+               4 bytes minimum, so no per-file "< 4n" bound is satisfiable.
+Both gates must pass for every file / over the corpus before a METRIC is emitted.
+
+Splits:
+  corpus/train/  TRAIN — scanned by benchmark.sh (ar_run).
+  corpus/test/   TEST  — disjoint held-out, graded only by grade_test.sh, never
+                         referenced by benchmark.sh.
+Both are deterministic uint32 arrays from harness/gen_corpus.py drawn from the
+same mixed byte-length distribution. Value COUNTS vary, including counts that are
+not multiples of 4 and a few tiny files (< 4 values); TEST emphasizes non-
+multiple-of-4 and tiny counts so a codec that mishandles a group tail or fast-
+paths only multiple-of-4 counts is exposed on held-out.
+
+Scope:
+  in scope (editable):  candidate/codec.c
+  off-limits:           harness/ (driver + corpus generator), corpus/ (train+
+                        test), bench/, levers/ (hand-written Phase-1 variants),
+                        immutable.sha256, manifest.txt, README.md
+immutable.sha256 hashes everything except the editable candidate; both
+benchmark.sh and checks.sh verify it before running.

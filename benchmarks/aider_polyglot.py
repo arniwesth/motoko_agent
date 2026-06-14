@@ -332,6 +332,7 @@ def main() -> None:
     ap.add_argument("--heartbeat-secs", type=int, default=20)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--no-retry", action="store_true")
+    ap.add_argument("--skip-preflight", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--thinking", choices=["on", "off", "auto"], default="auto")
     args = ap.parse_args()
@@ -362,26 +363,27 @@ def main() -> None:
         ai_options_json = json.dumps({"chat_template_kwargs": {"enable_thinking": False}})
 
     # Fail fast on bad model/provider config before burning through exercises.
-    with tempfile.TemporaryDirectory() as tmp:
-        with MotokoRpc(
-            task="Respond with one short line and do not run commands.",
-            model=args.model,
-            workdir=tmp,
-            max_steps=2,
-            benchmark="polyglot",
-            ai_options_json=ai_options_json if ai_options_json else None,
-            env={
-                "MOTOKO_BENCHMARK": "polyglot",
-                **({"OPENAI_BASE_URL": openai_base_url} if openai_base_url else {}),
-            },
-        ) as rpc:
-            preflight = rpc.run_and_collect(timeout=90)
-            preflight_stderr = rpc.stderr()
-    if preflight.terminal_event == "error":
-        detail = preflight.error_message or "unknown startup error"
-        if preflight_stderr.strip():
-            detail = f"{detail}\n{preflight_stderr.strip()}"
-        sys.exit(f"Model preflight failed for '{args.model}': {detail}")
+    if not args.skip_preflight:
+        with tempfile.TemporaryDirectory() as tmp:
+            with MotokoRpc(
+                task="Respond with one short line and do not run commands.",
+                model=args.model,
+                workdir=tmp,
+                max_steps=2,
+                benchmark="polyglot",
+                ai_options_json=ai_options_json if ai_options_json else None,
+                env={
+                    "MOTOKO_BENCHMARK": "polyglot",
+                    **({"OPENAI_BASE_URL": openai_base_url} if openai_base_url else {}),
+                },
+            ) as rpc:
+                preflight = rpc.run_and_collect(timeout=90)
+                preflight_stderr = rpc.stderr()
+        if preflight.terminal_event == "error":
+            detail = preflight.error_message or "unknown startup error"
+            if preflight_stderr.strip():
+                detail = f"{detail}\n{preflight_stderr.strip()}"
+            sys.exit(f"Model preflight failed for '{args.model}': {detail}")
 
     results_path = Path(args.results)
     results = _load_results(results_path) if args.resume else {"exercises": {}, "meta": {}}

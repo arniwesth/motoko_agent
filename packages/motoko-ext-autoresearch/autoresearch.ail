@@ -99,7 +99,13 @@ func accept_with_meta(call: ToolCallEnvelope, msg: string, meta: Json) -> ToolHa
 }
 
 func resolve_session_dir(ctx: ExtCtx, args: Json, defaults: AutoresearchConfig) -> string {
-  let raw = Tools.parse_session_dir(args, defaults.default_session_dir);
+  -- Typed path first; fall back to the raw JSON payload (same as the ar_log/ar_notes
+  -- field accessors) so an explicitly-passed session_dir is honored whether it
+  -- arrives as a typed tool-call or a raw-object envelope. Only then the default.
+  let typed = Tools.parse_session_dir(args, "");
+  let raw =
+    if typed != "" then typed
+    else raw_str_field(raw_payload(args), "session_dir", defaults.default_session_dir);
   if raw == "" then "${ctx.workdir}/${defaults.default_session_dir}"
   else if startsWith(raw, "/") then raw
   else "${ctx.workdir}/${raw}"
@@ -244,6 +250,43 @@ func fallback_metric_from_raw(raw: string) -> [MetricSpec] {
   }
 }
 
+func raw_json_string_list(raw: string, key: string) -> [string] {
+  match decode(raw) {
+    Err(_) => [],
+    Ok(j) => match get(j, key) {
+      None => [],
+      Some(v) => match asArray(v) {
+        None => [],
+        Some(xs) => raw_json_string_list_rec(xs)
+      }
+    }
+  }
+}
+
+func raw_json_string_list_rec(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      match asString(x) {
+        None => raw_json_string_list_rec(rest),
+        Some(s) => s :: raw_json_string_list_rec(rest)
+      }
+  }
+}
+
+func raw_json_metric_specs(raw: string) -> [MetricSpec] {
+  match decode(raw) {
+    Err(_) => [],
+    Ok(j) => match get(j, "metrics") {
+      None => [],
+      Some(v) => match asArray(v) {
+        None => [],
+        Some(xs) => parse_metric_specs_rec(xs)
+      }
+    }
+  }
+}
+
 func raw_payload(args: Json) -> string {
   let raw0 = encode(args);
   match decode(raw0) {
@@ -265,14 +308,21 @@ func parse_init_cfg(call: ToolCallEnvelope, defaults: AutoresearchConfig) -> { o
     let benchmark_script = raw_str_field(raw, "benchmark_script", cfg0.benchmark_script);
     let checks_script = raw_str_field(raw, "checks_script", cfg0.checks_script);
     let session_dir = raw_str_field(raw, "session_dir", cfg0.session_dir);
-    let metrics = if has_metrics(cfg0.metrics) then cfg0.metrics else fallback_metric_from_raw(raw);
+    let raw_metrics = raw_json_metric_specs(raw);
+    let metrics =
+      if has_metrics(cfg0.metrics) then cfg0.metrics
+      else if has_metrics(raw_metrics) then raw_metrics
+      else fallback_metric_from_raw(raw);
+    let scope_paths = if non_empty(cfg0.scope_paths) then cfg0.scope_paths else raw_json_string_list(raw, "scope_paths");
+    let off_limits = if non_empty(cfg0.off_limits) then cfg0.off_limits else raw_json_string_list(raw, "off_limits");
+    let constraints = if non_empty(cfg0.constraints) then cfg0.constraints else raw_json_string_list(raw, "constraints");
     {
       objective: objective,
       metrics: metrics,
       benchmark_script: benchmark_script,
-      scope_paths: cfg0.scope_paths,
-      off_limits: cfg0.off_limits,
-      constraints: cfg0.constraints,
+      scope_paths: scope_paths,
+      off_limits: off_limits,
+      constraints: constraints,
       checks_script: checks_script,
       max_iterations: raw_int_field(raw, "max_iterations", cfg0.max_iterations),
       patience: raw_int_field(raw, "patience", cfg0.patience),
@@ -310,6 +360,16 @@ func parse_learnings_arg(call: ToolCallEnvelope) -> string {
 func parse_justification_arg(call: ToolCallEnvelope) -> string {
   let s0 = Tools.parse_justification(call.arguments);
   if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "justification", "")
+}
+
+func parse_notes_body_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_notes_body(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "body", "")
+}
+
+func parse_notes_append_idea_arg(call: ToolCallEnvelope) -> string {
+  let s0 = Tools.parse_notes_append_idea(call.arguments);
+  if s0 != "" then s0 else raw_str_field(raw_payload(call.arguments), "append_idea", "")
 }
 
 func path_under_prefix(path: string, prefix: string) -> bool {
@@ -867,7 +927,39 @@ func parse_json_float(raw: string, key: string) -> Option[float] {
   }
 }
 
-func improved_for_keep(session_dir: string, segment: int, primary: string, direction: string, decision: string, metrics_raw: string) -> bool ! {Process} {
+func json_numbers(xs: [Json]) -> [float] {
+  match xs {
+    [] => [],
+    j :: rest =>
+      match asNumber(j) {
+        Some(n) => n :: json_numbers(rest),
+        None => json_numbers(rest)
+      }
+  }
+}
+
+func parse_json_float_array(raw: string, key: string) -> [float] {
+  match decode(raw) {
+    Err(_) => [],
+    Ok(j) => match get(j, key) {
+      None => [],
+      Some(v) => match asArray(v) {
+        None => [],
+        Some(xs) => json_numbers(xs)
+      }
+    }
+  }
+}
+
+func primary_noise_for_run(primary: string, noisy: bool, samples_raw: string) -> float {
+  if not noisy || primary == "" then 0.0
+  else {
+    let vals = parse_json_float_array(samples_raw, primary);
+    if list_len(vals) >= 2 then Metrics.mad(vals) else 0.0
+  }
+}
+
+func improved_for_keep(session_dir: string, segment: int, primary: string, direction: string, noisy: bool, decision: string, metrics_raw: string, samples_raw: string) -> bool ! {Process} {
   if decision != "keep" || primary == "" then false
   else match parse_json_float(metrics_raw, primary) {
     None => false,
@@ -875,7 +967,7 @@ func improved_for_keep(session_dir: string, segment: int, primary: string, direc
       match DB.best_metric_value(session_dir, segment, primary, direction) {
         Err(_) => false,
         Ok(None) => true,
-        Ok(Some(prev)) => Metrics.improved(direction, prev, cur, 0.0)
+        Ok(Some(prev)) => Metrics.improved(direction, prev, cur, primary_noise_for_run(primary, noisy, samples_raw))
       }
   }
 }
@@ -927,7 +1019,7 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
           reject_with_meta(call, "scope deviation requires justification for keep", jo([kv("scope_deviations", str_json_array(deviations))]))
         else {
           let git = commit_or_revert(decision, cwd, iteration_changes, p.run_number);
-          let improved = improved_for_keep(session_dir, segment, primary, direction, decision, p.metrics_json);
+          let improved = improved_for_keep(session_dir, segment, primary, direction, primary_noisy, decision, p.metrics_json, p.samples_json);
           let flagged = flagged_reason != "";
           let confidence = match Metrics.confidence_report(session_dir, segment, primary, primary_noisy, 0.0, direction) {
             Ok(c) => jo([
@@ -995,8 +1087,8 @@ func handle_log(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfi
 
 func handle_notes(ctx: ExtCtx, call: ToolCallEnvelope, defaults: AutoresearchConfig) -> ToolHandleDecision ! {FS} {
   let session_dir = resolve_session_dir(ctx, call.arguments, defaults);
-  let body = Tools.parse_notes_body(call.arguments);
-  let idea = Tools.parse_notes_append_idea(call.arguments);
+  let body = parse_notes_body_arg(call);
+  let idea = parse_notes_append_idea_arg(call);
   if body != "" then {
     let _ = Notes.replace_notes(session_dir, body);
     accept_with_meta(call, "notes updated", jo([kv("status", js("updated"))]))

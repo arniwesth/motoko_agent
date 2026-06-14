@@ -1,0 +1,47 @@
+CANARY_GUID=AR-SIMDSCAN-20260531-2ff7c3b6-be5b-44f1-b756-4875843175a9
+
+Purpose:
+A controlled autoresearch fixture with a REAL, literature-discoverable optimization
+lever — unlike the Polyglot warm-up, whose only candidate surface (Motoko's prompt /
+deprecated tool config) had no reliable headroom on a strong model.
+
+Task:
+The candidate file candidate/scan.c implements
+    size_t scan_special(const uint8_t *buf, size_t len, uint32_t *out)
+which must record the index of every "special" byte in buf into out[] (in order)
+and return the count. Special bytes: '<' (0x3C), '&' (0x26), '\r' (0x0D), '\0' (0x00).
+This is the HTML-scanning task from Lemire's blog
+(https://lemire.me/blog/2024/07/05/scan-html-faster-with-simd-instructions-net-c-edition/).
+
+The lever:
+A scalar loop runs at ~0.6 GB/s on this aarch64 core. A correct NEON/SWAR
+vectorized classification (process 16 bytes at once, skip blocks with no special
+byte, scalar fallback for hit-blocks and the sub-16 tail) runs ~7-9 GB/s — a
+~10-14x speedup that transfers across corpora. The technique is the vectorized
+structural-character classification from the simdjson paper (Langdale & Lemire,
+arXiv:1902.08318), which the blog links as its source.
+
+Metric contract:
+  METRIC throughput_mbps=<float>   primary, MAXIMIZE, noisy (timing)
+  METRIC wall_ms=<int>             secondary, minimize, noisy
+Correctness is a hard GATE, not part of the score: the harness compares the
+candidate against a trusted reference scan on every input and exits non-zero
+(printing CORRECTNESS_FAIL, no METRIC) on any mismatch, so a fast-but-wrong
+candidate cannot be kept.
+
+Splits:
+  corpus/train/  TRAIN — scanned by benchmark.sh (ar_run).
+  corpus/test/   TEST  — disjoint held-out, graded only by grade_test.sh, never
+                         referenced by benchmark.sh.
+Both corpora are synthetic HTML from harness/gen_corpus.py with sparse specials
+(~1 per 200 bytes) and deliberately varied file sizes, including tiny (<16-byte)
+files and non-16-multiple lengths, so a candidate that mishandles the vector tail
+or overfits to TRAIN file sizes is exposed on held-out.
+
+Scope:
+  in scope (editable):  candidate/scan.c
+  off-limits:           harness/ (reference + timing), corpus/ (train+test),
+                        bench/, levers/ (hand-written Phase-1 variants),
+                        immutable.sha256, manifest.txt
+immutable.sha256 hashes everything except the editable candidate; both
+benchmark.sh and checks.sh verify it before running.
