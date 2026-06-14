@@ -23,7 +23,7 @@ We are porting oh-my-pi's `eval` tool — persistent Python + JS cells that can 
 - **No re-entrant loopback to the brain.** In-cell `tool.*` does not run other extensions' tools and does not honor `on_tool_policy` for in-cell calls (deferred to B′). Stated so a reviewer doesn't expect parity.
 - **No `parallel()`/`pipeline()`, no depth-3 recursion cap, no spawn-policy** — `agent()` is single-call only (ADR-001 consequence). Additional work if wanted later.
 - No ABI change. `motoko_ext_abi` stays at 2.2.0; `on_tool_handle`'s effect row already covers `{Net, Process, FS, …}`.
-- No TUI rendering work beyond surfacing the tool result string + structured `metadata` (cells/images/json) through the existing tool-result path.
+- **No rich TUI rendering.** Results render as a **flattened plain-text transcript** through the existing tool-result path (Phase 5b, "Option A"). The rich expandable eval card is a separate, independently-shippable follow-up — [plan 03](./03-eval-tui-card-rendering.md) — not gated on this plan or B′. Inline images are out of scope in every variant (they need a terminal-image capability that doesn't exist today).
 
 ---
 
@@ -138,20 +138,39 @@ Wire into `motoko_agent/ailang.toml` (`[dependencies]` + `[extensions].packages`
 **Files:** `src/core/env_client.ail` (new `exec_cell`), `src/core/types.ail` (new `CellExecResult` if needed).
 
 - `exec_cell(url, cells_json, session_id, timeout_secs) -> CellExecResult ! {Net}` — same shape as `exec_in`/`exec_ailang`: build body with `jo/kv/js/jnum`, `httpPost("${url}/exec-cell")`, `decode`, with a synthetic `exit_code=1` envelope on malformed response.
-- Map into `ToolResultEnvelope`: `stdout` = aggregated cell output (truncated to the output cap), `exit_code` = worst cell exit, `metadata` = JSON `{cells, images, jsonOutputs, notice?}` for the TUI.
+- Map into `ToolResultEnvelope`: `stdout` = the **pre-rendered plain-text transcript** (Phase 5b — this is what the TUI actually renders), `exit_code` = worst cell exit, `metadata` = structured JSON `{cells, images, jsonOutputs, notice?}`. **Correction to an earlier draft:** `metadata` is retained on the envelope for the model / forward-compat / plan 03's card, but it does **not** drive the TUI — the TUI's wire type `DelegatedResult` (`runtime-process.ts`) has **no `metadata` field**, so the TUI renders `stdout` only (verified: `DelegatedResult = {tool_call_id, stdout, stderr, exit_code, truncated}`).
 - **Fencing (cross-cutting, ADR-001 effect-hatch consequence):**
   - **Workdir confinement** enforced in Phase 3 resolvers (path normalization, reject escapes).
   - **Network policy**: env var / config flag controlling whether kernels may reach the network; default deny-with-note for the MVP unless the profile opts in. Document in the package README.
   - **`eval`-tool gate** via `on_tool_policy` (Phase 4).
 - **Output limits** (ADR-001/§7-5): *Decision for MVP:* adopt oh-my-pi's caps — 50KB truncation window per cell, 30s default per-cell timeout, artifact spill for oversized output. Cheap to change later.
 
-**Acceptance:** end-to-end via `make run` — an `eval` cell prints, `display()`s JSON, reads a workdir file, and calls `agent()`; result renders in the TUI with structured metadata; oversized output truncates at 50KB.
+**Acceptance:** end-to-end via `make run` — an `eval` cell prints, `display()`s JSON, reads a workdir file, and calls `agent()`; result renders in the TUI as a readable flattened transcript (Phase 5b); oversized output truncates at 50KB.
+
+---
+
+## Phase 5b — TUI rendering (Option A: flatten to text, zero TUI changes)
+
+**Files:** `src/tui/src/eval/transcript.ts` (new, env-server side); no changes to `ui.ts` / `runtime-process.ts`.
+
+The TUI renders tool results from `DelegatedResult.stdout` via `ui.ts` → `formatToolDetailLines()` (8-line stdout / 4-line stderr preview, `[truncated]` badge, `... N more (Ctrl+O to collapse)`). There is **no structured-metadata render path** to the TUI today. So for the MVP we pre-render server-side into plain text and ride the existing path with **no `ui.ts` changes**.
+
+- The `/exec-cell` response's `stdout` is a **pre-rendered plain-text transcript** built in `transcript.ts`. Per cell, in order:
+  - a header line (`title` / language / cell index),
+  - stdout, then stderr,
+  - textual renderings of display/result bundles: **JSON** via `JSON.stringify(value, null, 2)`; **markdown** as its raw text; **status events** summarized to one line each.
+  - **images**: spilled to `.motoko/artifacts/<session>/cell<N>.<ext>` (gitignored) and represented inline as `[image: <path> (<w>×<h> <mime>)]` — **no inline rendering** (no terminal-image capability exists; see Non-goals).
+- **Plain text only** — no ANSI/coloring. Coloring (`highlightJsonLines`, `segmentStreamMarkdown`) would require the TUI to know the row is eval output, which is plan 03's card, not this path.
+- Pre-truncate the transcript to the 50KB cap (Phase 5) before returning; the TUI's own preview/collapse then applies on top.
+- The structured fields (`cells`, `images`, `jsonOutputs`) are still returned in the response and retained on `ToolResultEnvelope.metadata` — unused by the C TUI, but the exact data source plan 03's card consumes. No payload change is needed between C and plan 03; only the TUI render path is added there.
+
+**Acceptance:** an `eval` call mixing stdout + a JSON `display()` + an image renders as a readable text transcript through the standard preview/collapse path; the image appears as an artifact-path line; `git diff src/tui/src/ui.ts src/tui/src/runtime-process.ts` is empty.
 
 ---
 
 ## Phase 6 — tests & verification
 
-- **TS unit:** kernel state persistence, cancellation, display/image/json capture, idle eviction, loopback allowlist + workdir confinement (`cd src/tui && bun run test`).
+- **TS unit:** kernel state persistence, cancellation, display/image/json capture, idle eviction, loopback allowlist + workdir confinement, **transcript builder** (Phase 5b: JSON/markdown/image-placeholder flattening + 50KB pre-truncation) (`cd src/tui && bun run test`).
 - **AILANG:** `ailang check` on `motoko_ext_eval`; `make check_core`; a `scripts/smoke_eval.ail` exercising `exec_cell` against a running env-server.
 - **E2E:** `make run TASK="use eval to load README.md in python and report its line count"`.
 - **Regression:** `make test` (core runtime) stays green.
@@ -160,7 +179,7 @@ Wire into `motoko_agent/ailang.toml` (`[dependencies]` + `[extensions].packages`
 
 ## Sequencing & risks
 
-1. Phase 0 (freeze protocol) → 1 (kernels) → 2 (route+registry) → 3 (loopback) → 4 (extension) → 5 (client+fencing) → 6 (tests). Phases 1–3 are the genuinely new, B′-shared work; do them first.
+1. Phase 0 (freeze protocol) → 1 (kernels) → 2 (route+registry) → 3 (loopback) → 4 (extension) → 5 (client+fencing) → 5b (transcript rendering) → 6 (tests). Phases 1–3 are the genuinely new, B′-shared work; do them first.
 2. **Risks:**
    - *Python portability* — the runner must stay dependency-free; gate `py` cells on a probe (Phase 2).
    - *JS runtime choice* — Worker vs vm is an open question; faithful Worker port first.
