@@ -52,8 +52,8 @@ Two channels, mirroring oh-my-pi exactly:
 
 Define two transport-neutral frame families, decoupled from whether the transport is `httpPost` (C) or WebSocket (B′):
 
-- **Cell-run frames** (env-server ⇄ kernel, NDJSON — port oh-my-pi `runner.py` shapes verbatim):
-  `run {id, language, code, silent?, cwd?, env?}` · `started` · `stdout` · `stderr` · `display {bundle}` · `result {bundle}` · `error {ename, evalue, traceback}` · `done {status, executionCount, cancelled}`.
+- **Cell-run frames** (env-server ⇄ kernel, NDJSON — port oh-my-pi `runner.py` shapes). The kernel subprocess is already language-specific, so `language` is selected at the `/exec-cell` request level (which kernel to route to), **not** carried in the per-kernel frame:
+  `run {id, code, silent?, cwd?, env?}` · `started` · `stdout` · `stderr` · `display {bundle}` · `result {bundle}` · `error {ename, evalue, traceback}` · `done {status, executionCount, cancelled}`.
 - **Loopback frames** (kernel → resolver, transport-neutral — this is the C↔B′ seam):
   `tool-request {reqId, tool, arguments}` → `tool-result {reqId, exit_code, stdout, stderr, metadata}`.
 
@@ -114,8 +114,10 @@ Near-direct port from oh-my-pi:
 ```bash
 cd ../ailang-packages
 ailang init motoko-extension --name sunholo/motoko_ext_eval \
-  --tools "eval" --effects "Net,Process,FS,Env"
+  --tools "eval" --effects "Net,Stream,Process,FS,Env"
 ```
+
+`Stream` is included even though C only needs `Net` (blocking `httpPost`): the **same package** gains the WebSocket loopback in B′ ([plan 02](./02-design-b-prime-reentrant-websocket.md)), `on_tool_handle`'s ABI effect row already declares `Stream`, and scaffolding it now avoids re-touching the effect annotations later. Matches the design §6 / handover recommendation.
 
 Package layout mirrors `motoko_ext_exa_search/` (`eval.ail`, `prompts.ail`, `register.ail`, `types.ail`). Implement the hooks (others no-op):
 

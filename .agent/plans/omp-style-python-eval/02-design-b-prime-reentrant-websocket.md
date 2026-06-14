@@ -10,7 +10,7 @@ Toolchain: AILANG v0.19.1, Bun 1.3.x.
 
 Design C (plan 01) serves the in-cell tool loopback locally in the env-server, so a cell's `tool.*` calls hit a **fork** of the real registry — no other extensions' tools, no `on_tool_policy` on in-cell calls. B′ closes that fork: when a kernel emits a `tool-request` frame, the env-server forwards it **back to the brain** over a WebSocket; the brain dispatches it through the **canonical `tool_runtime`** (real policy + all extensions) and `transmit`s the `tool-result` back. This is the structural mirror of oh-my-pi's in-process loopback — a WebSocket stands in for the in-process call *precisely because* registry and kernels live in different processes here.
 
-**The one-time blocker is already resolved** (ADR-002): `transmit` works inside an `onEvent` handler during a live `runEventLoop`, verified at type-check and runtime via the `smoke/` WS round-trip. No upstream AILANG dependency remains.
+**The headline blocker is resolved, but read its scope precisely.** ADR-002's `smoke/` test proved the *result send-back*: calling `transmit` inside an `onEvent` handler during a live `runEventLoop` (type-checks + runs). That is necessary but **not sufficient** for Phase 3: dispatching the tool itself can require running `AI`/`Net`/`Process` effects *inside* the handler before the `transmit`, and that finer capability is **not yet verified** (Phase 3 ⚠ gates on a dedicated smoke). So this plan **refines ADR-002's "pure engineering swap, no language dependency" claim**: the transport swap has no language dependency, but the in-handler *effectful dispatch* still needs a one-time proof before Phase 3 commits. `IO`/`Process`-in-handler is already shown (`csp_demo`), so this is "very likely, unverified," not "doubtful."
 
 ## Goals
 
@@ -44,6 +44,7 @@ The `tool-request {reqId, tool, arguments}` / `tool-result {reqId, exit_code, st
 **Files:** `src/tui/src/env-server.ts`, `src/tui/src/eval/ws-channel.ts` (new), `src/tui/src/eval/loopback.ts` (modified).
 
 - Add a WebSocket server route (e.g. `/exec-cell-ws`) alongside the existing `/exec-cell` HTTP route. Keep `/exec-cell` so C remains available as a fallback / for environments without the WS loopback.
+  - **Integration reality:** the env-server is **Express** (`app = express()`; `const server = app.listen(port)` at `env-server.ts:1596`), which has **no native WebSocket**. The smoke test's `Bun.serve` WS pattern does **not** transfer to it. Attach a `ws` `WebSocketServer({ server })` (or `express-ws`) to the `http.Server` that `app.listen` returns and handle the upgrade on the `/exec-cell-ws` path. Add `ws` to `src/tui/package.json`.
 - On connection: receive a `run`/`cells` frame, drive the kernels exactly as in C.
 - **Redirect the loopback:** when a kernel emits `tool-request`, instead of calling the local resolver (plan 01 Phase 3), **forward the `tool-request` frame down the WebSocket to the brain** and `await` the matching `tool-result` (correlated by `reqId`). The local resolvers become the *fallback* path (used only if no brain peer is attached — keeps single-process tests working).
 - Stream `started…done` frames back over the same socket.
@@ -81,6 +82,7 @@ Replace the blocking `env_client.exec_cell` call (plan 01 Phase 5) with a WebSoc
 This is the crux: a `tool-request` arriving mid-cell must be dispatched the **same way a top-level tool call is** — through the registry that applies `on_tool_policy` and every extension's `on_tool_handle`.
 
 - Expose / reuse a callable `dispatch_tool(ctx, ToolCallEnvelope) -> ToolResultEnvelope` that the `onEvent` handler can invoke. Confirm the existing dispatcher can be called re-entrantly (the brain is inside `eval`'s own `on_tool_handle` when the loopback fires). The event-loop services the request on the same logical flow — **no deadlock**, since the brain is *in* `runEventLoop`, not blocked on a synchronous call (ADR-002 alternatives §2).
+- **⚠️ Proven vs assumed — the load-bearing gap.** The `smoke/` test proved only that **`transmit` (the `Stream` effect)** works inside an `onEvent` handler; `csp_demo` additionally shows `IO`/`Process` in handlers. What B′ Phase 3 actually needs is stronger: dispatching a **full tool — potentially an `AI`-effect LLM subagent call (`agent()`), plus `Net`/`Process`** — from *inside* the handler mid-`runEventLoop`. That is an **extrapolation, not yet verified.** **Prerequisite before committing Phase 3:** extend `smoke/` to prove an *effectful dispatch* in-handler — e.g. the handler performs an `httpPost`/`callStream`-shaped call (the real `AI`/`Net` effects) and `transmit`s the result — and confirm it both type-checks and runs. If AILANG cannot run an `AI`-effect call inside a live event-loop handler, the in-cell `agent()` must instead be marshaled as a *deferred* request resolved after the loop yields, or routed differently. Resolve this before building Phase 3, not during.
 - **Guard against unbounded re-entrancy:** an `eval` cell could call a tool that itself triggers `eval`. Add a depth counter on `ExtCtx`/the loopback (cap, e.g. 3, matching oh-my-pi's recursion cap) and deny beyond it via `Deny(...)`.
 - **Policy is now canonical:** in-cell `tool.*` goes through `on_tool_policy`. Decide whether the eval-cell context should carry a stricter policy profile than top-level (e.g. still workdir-confined). Keep the workdir-confinement fence from plan 01 as defense-in-depth even though policy now applies.
 
@@ -121,8 +123,10 @@ ailang run --caps IO,Net,Stream --stream-allow-http --stream-allow-localhost smo
 
 ## Sequencing & risks
 
+0. **Gate (do before Phase 3):** the effectful-dispatch-in-handler smoke (Phase 3 ⚠). If it fails, B′'s in-cell `agent()` design changes — surface this before building.
 1. Phase 1 (WS channel + redirect) → 2 (brain WS client) → 3 (re-entrant dispatch) → 4 (abort/teardown) → 5 (tests). Phase 3 is the highest-risk, highest-value step.
 2. **Risks:**
+   - *Effectful dispatch inside the handler (the big one)* — `transmit`-in-handler is proven; an `AI`/`Net`/`Process` tool call inside the handler mid-`runEventLoop` is **not** (Phase 3 ⚠). Gate Phase 3 on the prerequisite smoke; have the deferred-`agent()` fallback ready.
    - *Re-entrancy correctness* — dispatching a tool while inside `eval`'s own `on_tool_handle`. Mitigated by the depth cap (Phase 3) and the fact that `runEventLoop` services it on the same flow (no concurrent mutation of brain state). Validate carefully under DST/trace.
    - *Abort across two processes + a socket* — the trickiest teardown path; port oh-my-pi's resolve-on-abort semantics (Phase 4).
    - *"Swap" underestimation* — ADR-002 consequence: this is a transport **and** dispatch change on both ends, not a one-line substitution. Budget accordingly.
