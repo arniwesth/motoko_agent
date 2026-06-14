@@ -40,7 +40,7 @@ func validate_secrets(model: string, openai_base_url: string) -> [string] ! {Env
   }
 }
 
-export func main() -> () ! {IO, FS, Env, Process, Net, AI, SharedMem, Clock, Stream} {
+export func main() -> () ! {IO, FS, Env, Process, Net, AI, SharedMem, Clock, Stream, Trace} {
   let args = getArgs();
   let cfg = load_config_from_cli(args);
   let inv = load_invocation_from_cli(args);

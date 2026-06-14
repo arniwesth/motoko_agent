@@ -19,7 +19,7 @@
 --
 -- Setup:
 --   export OPENROUTER_API_KEY=...
---   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace \
 --     --ai openrouter/z-ai/glm-5 --entry main --net-allow-http --net-allow-localhost \
 --     scripts/smoke_v2_intercept.ail
 
@@ -32,7 +32,7 @@ import src/core/ext/runtime (init_runtime)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
 import src/core/types (Msg)
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   -- Empty extension registry — all extension hooks fall through to defaults
   -- (NoIntercept / NoDecision). This means:
   --   - dispatch_response_intercept always returns NoIntercept

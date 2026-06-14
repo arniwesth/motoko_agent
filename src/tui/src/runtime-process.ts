@@ -303,6 +303,7 @@ export class RuntimeProcess {
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
       EXA_API_KEY: process.env.EXA_API_KEY,
+      CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
       AILANG_FS_SANDBOX: workdir,
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
       // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
@@ -351,6 +352,46 @@ export class RuntimeProcess {
     // because it falls back to system paths that don't have the new modules.
     if (process.env.AILANG_STDLIB_PATH) {
       childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
+    }
+    // ClickStack/OTLP handoff: the launcher uses an explicit env whitelist,
+    // so tracing variables must be copied deliberately. Keep export gated so
+    // default dev runs do not attempt OTLP delivery when the opt-in sidecar is
+    // down.
+    if (process.env.MOTOKO_OTEL && process.env.MOTOKO_OTEL.trim() !== "") {
+      childEnv.MOTOKO_OTEL = process.env.MOTOKO_OTEL;
+      childEnv.OTEL_EXPORTER_OTLP_ENDPOINT =
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://clickstack:4318";
+      childEnv.OTEL_EXPORTER_OTLP_PROTOCOL =
+        process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
+      childEnv.OTEL_SERVICE_NAME =
+        process.env.OTEL_SERVICE_NAME ?? "motoko-agent";
+      childEnv.AILANG_TRACE = process.env.AILANG_TRACE ?? "standard";
+      childEnv.AILANG_TRACE_MAX_SPANS =
+        process.env.AILANG_TRACE_MAX_SPANS ?? "100";
+      if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
+        childEnv.OTEL_EXPORTER_OTLP_HEADERS =
+          process.env.OTEL_EXPORTER_OTLP_HEADERS;
+      }
+      if (process.env.OTEL_RESOURCE_ATTRIBUTES) {
+        childEnv.OTEL_RESOURCE_ATTRIBUTES =
+          process.env.OTEL_RESOURCE_ATTRIBUTES;
+      }
+      for (const key of [
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_EXPORTER_OTLP_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
+      ]) {
+        const value = process.env[key];
+        if (value && value.trim() !== "") {
+          childEnv[key] = value;
+        }
+      }
     }
     // M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 cutover (2026-05-06): the
     // upstream std/ai.step() typed-tool-use loop is now the default and
@@ -409,7 +450,7 @@ export class RuntimeProcess {
       [
         "run",
         "--caps",
-        "Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream",
+        "Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace",
         "--ai",
         aiModelArg,
         "--entry",

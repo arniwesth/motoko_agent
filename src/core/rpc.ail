@@ -153,7 +153,7 @@ func reject_if_ohmy_pi_unsupported(cfg: RuntimeConfig) -> () ! {IO} {
   }
 }
 
-export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream} {
+export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream, Trace} {
   let _ = reject_if_ohmy_pi_unsupported(cfg);
   let env_url = cfg.backend.url;
   let task = inv.task;
@@ -237,7 +237,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI)
 }
 
-export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream} {
+export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream, Trace} {
   let cfg = load_runtime_config();
   let inv = load_invocation_config();
   run_with_config(cfg, inv)

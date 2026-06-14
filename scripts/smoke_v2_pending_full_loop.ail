@@ -13,7 +13,7 @@
 -- automated/CI usage.
 --
 -- Run:
---   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace \
 --     --net-allow-http --net-allow-localhost \
 --     --entry main scripts/smoke_v2_pending_full_loop.ail < /dev/null
 --
@@ -121,7 +121,7 @@ func no_rates() -> CostRates {
 
 -- 1. Pending(DenyAfterTimeout) + EOF stdin → call denied; loop completes
 --    (the denial message is appended to history; prose_step terminates).
-func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let rt = mk_runtime(mk_hook("pending-deny", pending_deny_default));
   let result = run_v2_with_stub(
     rt, "stub-test", "", false, mk_budget(),
@@ -138,7 +138,7 @@ func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net
 --    via the on_tool_handle (Delegate) → backend (Native) → tool_runtime.
 --    With BashExec we'd actually execute "echo noop" — for safety we use
 --    a noop. The loop should still complete.
-func test_pending_allow_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+func test_pending_allow_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let rt = mk_runtime(mk_hook("pending-allow", pending_allow_default));
   let result = run_v2_with_stub(
     rt, "stub-test", "", false, mk_budget(),
@@ -156,7 +156,7 @@ func report(name: string, ok: bool) -> () ! {IO} {
   else println("  ✗ ${name}")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} = {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} = {
   println("=== smoke_v2_pending_full_loop ===");
   let r1 = test_pending_deny_default_on_eof();
   report("Pending(DenyAfterTimeout) + EOF stdin → loop completes (deny applied)",  r1);
