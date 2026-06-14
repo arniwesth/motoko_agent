@@ -18,7 +18,7 @@ This ADR records the decision for the **first shippable version**. The faithful,
 
 ## Alternatives considered
 
-1. **Kernels in the AILANG brain.** Rejected — not a preference but a capability wall (§2 above). The brain physically cannot read a persistent subprocess's stdout.
+1. **Kernels in the AILANG brain.** Rejected — not a preference but a capability wall (§2 above). No single AILANG mechanism is *both* persistent-bidirectional *and* survives the event loop: `spawnProcess` writes stdin but can't read stdout; `asyncExecProcess` reads stdout but is read-only and dies with the loop.
 2. **Re-entrant WebSocket loopback to the canonical `tool_runtime` (Design B′).** Faithful — in-cell `tool.*` runs the real registry, real `on_tool_policy`, and all other extensions. Deferred, not rejected: it is the planned successor ([ADR-002](./ADR-002-eval-reentrant-websocket-loopback.md)). It shares the entire kernel layer with this design, so C is a strict subset of B′, not throwaway work. Building B′ first would couple the genuinely new kernel-hosting work (persistence, `display()`/image/JSON capture, cancellation, timeouts, idle cleanup) to the more involved transport/re-entrancy work with no MVP in between.
 3. **No loopback at all (plain `eval` with no `tool.*`).** Rejected — the tool-callback bridge is the headline capability we are porting; cells that can read/search/spawn subagents are the 90% use case.
 
@@ -35,6 +35,7 @@ Ship **Design C**:
 ## Consequences
 
 - **The in-cell `tool.*` surface is a fork of the real registry.** It does *not* run other Motoko extensions' tools, and it does *not* honor `on_tool_policy` for in-cell calls. Accepted because the cell's 90% case (read/write/search/agent) is exactly what the env-server can already do natively. True parity is deferred to [ADR-002](./ADR-002-eval-reentrant-websocket-loopback.md).
+- **In-cell `agent()` is the single-call form only.** `callSubagentModel` gives one bounded subagent call with little new code; oh-my-pi's `parallel()` / `pipeline()`, the depth-3 recursion cap, and spawn-policy enforcement are *not* in the MVP and are additional work if wanted (design §6). Scope the cell prelude's `agent()` accordingly so it doesn't imply capabilities we don't ship.
 - **Don't reimplement brain policy in TS.** Gate the env-server loopback to a fixed, workdir-confined tool list rather than porting `on_tool_policy` logic — keep policy canonical and let B′ deliver real parity later.
 - **Effect-system escape hatch.** Native Python/Bun kernels run *outside* AILANG's capability model — a cell can do arbitrary FS/network I/O the effect row would normally gate. This is a deliberate hole in a "self-verifying software" project and must be fenced: workdir confinement, a network policy, and `on_tool_policy` gating of the `eval` tool itself. Call this out explicitly in the extension's README.
 - **C is a strict subset of B′.** The kernel layer is identical; only the channel (`httpPost` vs WebSocket) and where the loopback resolves (env-server TS vs brain `tool_runtime`) differ. Effort is low.

@@ -20,7 +20,7 @@ The open feasibility question was whether AILANG could do this at all: can the b
 
 ## Decision
 
-Adopt **Design B′** as the planned faithful successor to ADR-001, promoting C→B′ as a **transport swap** once the MVP has proven the kernel layer:
+Adopt **Design B′** as the planned faithful successor to ADR-001, promoting C→B′ as a **contained swap of transport + loopback dispatch** (kernel layer and frame protocol untouched — see Consequences) once the MVP has proven the kernel layer:
 
 - The eval channel becomes a **WebSocket** (`std/stream connect` + `runEventLoop`) instead of blocking `httpPost`.
 - The env-server runs the cell; when a kernel emits a `tool-request` frame it forwards it down the socket. The brain's `onEvent` handler dispatches it through the **canonical `tool_runtime`** (real `on_tool_policy` + all extensions) and `transmit`s the `tool-result` back. The loop exits on the `done` frame.
@@ -46,6 +46,7 @@ Implementation notes carried by the smoke test:
 ## Consequences
 
 - **True parity.** In-cell `tool.*` runs the real registry, honors `on_tool_policy`, and reaches every other extension — the fork from ADR-001 is closed.
-- **No deadlock and no remaining language dependency.** The brain's event loop services the re-entrant loopback request; the `transmit`-from-handler capability is proven (above). C→B′ is a pure engineering swap with no upstream AILANG feature request.
+- **No deadlock and no remaining language dependency.** The brain's event loop services the re-entrant loopback request; the `transmit`-from-handler capability is proven (above). C→B′ needs no upstream AILANG feature request.
+- **"Swap" is bounded but not trivial on the brain side.** The kernel layer and frame protocol are untouched, but the brain's `on_tool_handle` changes shape: from a single blocking `httpPost` (ADR-001) to *opening a WebSocket and hosting a `runEventLoop`* that dispatches `tool-request` frames through `tool_runtime` until `done`. The env-server's loopback handlers move from answering locally to forwarding frames. Plan it as a transport+dispatch change on both ends, not a one-line channel substitution.
 - **The effect-system escape hatch from ADR-001 still stands** — native kernels run outside AILANG's capability model regardless of how the loopback resolves; workdir confinement + network policy + `eval`-tool gating remain required.
 - **Sequencing.** Build ADR-001 (Design C) first; it exercises every genuinely new piece shared with B′. Promote to B′ once the kernel layer is proven, swapping `httpPost` for the WebSocket and redirecting `tool-request` frames to the brain — no kernel changes.
