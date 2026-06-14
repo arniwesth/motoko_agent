@@ -14,10 +14,29 @@ This plan adds a **rich, expandable eval card** — the same UX pattern the `com
 
 The card renders the *result payload*; B′ changes only *where in-cell `tool.*` calls resolve*. They touch disjoint code. Coupling the card to B′ would gate a low-risk UX win behind the highest-risk, deferred work (the unproven effectful-dispatch-in-handler gap, plan 02 Phase 3 ⚠). Kept independent, plan 02 and plan 03 are parallel successors to plan 01.
 
+## Reference layout (the oh-my-pi screenshot)
+
+Target = `.agent/research/omp-style-python-eval/Screenshot 2026-06-14 at 20.14.52.png`: two stacked cell cards, each with a `✓ [i/N] title (duration)` header, the cell's **syntax-highlighted source**, an `─ Output` divider, the captured output, and a `… N more lines (ctrl+o to expand)` affordance; then the assistant's narrative summary; an `OMP · EVAL` corner tag.
+
+**Every element maps to a primitive that already exists in Motoko's TUI — this card is wiring, not new infrastructure.** Verified:
+
+| Screenshot element | Motoko TUI primitive | Status |
+|---|---|---|
+| Stacked per-cell cards | `ComposeCardState` pattern (`ui.ts`) | exists |
+| `✓ [i/N] title (duration)` header | status icon + `formatStatusLine`/`formatToolRow` + duration | exists |
+| Syntax-highlighted **Python** source | `highlightCodeLines(code, "python")` → `highlightPyLine` (`ui.ts:603`) | **exists** |
+| Syntax-highlighted **JS** source | `highlightCodeLines(code, "js")` → `highlightTsLine` (`ui.ts:599`) | **exists** |
+| `─ Output` divider | one dim `chalk` line | trivial |
+| Output + `… N more lines (ctrl+o to expand)` | `formatToolDetailLines` preview + `Ctrl+O` collapse (`ui.ts:1129/1139/1159`) | exists |
+| Trailing narrative summary | assistant markdown via `segmentStreamMarkdown` | exists |
+| `OMP · EVAL` corner tag | a small `EVAL` badge label | trivial |
+
+**The screenshot contains no inline images** (the pandas `describe()` is text output), so the one capability Motoko lacks — terminal-image rendering — is **not required** to reproduce this exact layout. That is why inline images stay out of scope (Non-goals) without compromising the target view.
+
 ## Goals
 
-- A per-`eval`-call card: a header (cell count, pass/fail, total duration) + one expandable section per cell.
-- Per cell: code/title, stdout, stderr, and **structured** display rendering — **JSON** via `highlightJsonLines()` (`json-highlight.ts`), **markdown** via `segmentStreamMarkdown()` / `trimSegmentsForLiveRender()` (`stream-markdown.ts`).
+- A per-`eval`-call card: a header (cell count, pass/fail, total duration) + one expandable section per cell, plus an `EVAL` card badge.
+- Per cell, matching the reference layout: a `✓ [i/N] title (duration)` header line; the cell's **syntax-highlighted source** via `highlightCodeLines(cell.code, cell.language)` (maps `"py"→"python"`, `"js"→"js"`); an `─ Output` divider; then stdout, stderr, and **structured** display rendering — **JSON** via `highlightJsonLines()` (`json-highlight.ts`), **markdown** via `segmentStreamMarkdown()` / `trimSegmentsForLiveRender()` (`stream-markdown.ts`).
 - Expand/collapse via the existing `Ctrl+O` pattern (mirrors the diff/output collapse already in `ui.ts`); error cells expanded by default.
 - Graceful fallback: if structured fields are absent (e.g. an older brain, or the transcript-only path), fall back to the plan-01 flat-text rendering — never lose output.
 
@@ -39,7 +58,7 @@ brain (eval on_tool_handle, after exec_cell returns)
    ▼
 runtime-process.ts  (parse + forward the event)
    ▼
-ui.ts  EvalCardState  ── renders header + per-cell sections (json-highlight / stream-markdown / Ctrl+O)
+ui.ts  EvalCardState  ── renders header + per-cell sections (highlightCodeLines / json-highlight / stream-markdown / Ctrl+O)
 ```
 
 The normal `DelegatedResult` (flat transcript from plan 01) **still flows** — the card is an *additive* richer view keyed by `request_id`; if the event is missing, the flat row stands. This is precisely the `compose` model (the flat tool row + the rich `ComposeCardState` coexist).
@@ -64,15 +83,19 @@ The normal `DelegatedResult` (flat transcript from plan 01) **still flows** — 
 **Files:** `src/tui/src/ui.ts`, `src/tui/src/ui.eval-card.test.ts` (new).
 
 - Add `EvalCardState` modeled on `ComposeCardState` (`ui.ts` ~840–880): `requestId`, `cells: EvalCellResult[]`, `expanded` flags, header `Text` row, body `Text` rows.
-- **Header row:** `eval · N cells · ✓P ✗F · {duration}ms` using `formatStatusLine`/`formatToolRow` conventions already in `ui.ts`.
-- **Per-cell body:** title/language line; stdout (preview + collapse); stderr (red, preview); display bundles:
-  - JSON → `highlightJsonLines(JSON.stringify(value, null, 2))`.
-  - markdown → `trimSegmentsForLiveRender(segmentStreamMarkdown(text), cap)`.
-  - status events → one dim line each.
-  - images → `[image: <path> (<w>×<h> <mime>)]` (placeholder; Non-goals).
+- **Card header row:** `EVAL · N cells · ✓P ✗F · {duration}ms` using `formatStatusLine`/`formatToolRow` conventions already in `ui.ts` (the `EVAL` badge is the corner-tag equivalent).
+- **Per-cell section** (matches the reference screenshot, top to bottom):
+  1. **Cell header line:** `✓`/`✗` status icon · `[i/N]` index · `title` · `(duration)ms`.
+  2. **Highlighted source:** `highlightCodeLines(cell.code, langToken(cell.language))` — `langToken` maps the cell's `"py"→"python"` and `"js"→"js"`, which route to `highlightPyLine` (`ui.ts:603`) / `highlightTsLine` (`ui.ts:599`). No new highlighter needed.
+  3. **`─ Output` divider** — one dim `chalk` rule line.
+  4. **Output:** stdout (preview + collapse); stderr (red, preview); display bundles:
+     - JSON → `highlightJsonLines(JSON.stringify(value, null, 2))`.
+     - markdown → `trimSegmentsForLiveRender(segmentStreamMarkdown(text), cap)`.
+     - status events → one dim line each.
+     - images → `[image: <path> (<w>×<h> <mime>)]` (placeholder; Non-goals — not needed for the target layout).
 - Register an `eval` entry in the `TOOL_RENDERERS` registry for the call line, consistent with the existing renderer-fallback pattern (`renderToolCallMetaWithFallback`).
 
-**Acceptance:** a snapshot test renders a 3-cell card (one stdout, one JSON display, one error) with correct header counts, JSON coloring present, and the error cell expanded by default.
+**Acceptance:** a snapshot test renders a 2-cell card mirroring the reference screenshot — a `py` cell (highlighted Python source + `─ Output` + a multi-line table truncated with the `ctrl+o to expand` affordance) and a `js` cell (highlighted JS source + single-line output) — with correct `[i/N]` headers, per-cell durations, language-appropriate code coloring, and the `EVAL` badge.
 
 ---
 
