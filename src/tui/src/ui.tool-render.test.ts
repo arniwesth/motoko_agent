@@ -1,4 +1,4 @@
-import { describe, it, expect, jest } from "@jest/globals";
+import { describe, it, expect, jest, afterEach } from "@jest/globals";
 import type { DelegatedCall } from "./runtime-process.js";
 import {
   formatToolHeaderQueued,
@@ -16,8 +16,11 @@ import {
   formatEvalCardHeader,
   parseEvalCellsJson,
   renderEvalCardLines,
+  evalSegmentsToText,
+  evalCellsHaveImage,
 } from "./ui.js";
 import type { EvalCellResult } from "./eval/frames.js";
+import { __setCapabilitiesForTest } from "./eval/image-segment.js";
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1B\[[0-9;]*m/g, "");
@@ -103,19 +106,103 @@ describe("ui tool rendering helpers", () => {
     ];
 
     expect(formatEvalCardHeader(cells)).toBe("EVAL · 2 cells · ✓2 ✗0 · 20ms");
-    const collapsed = renderEvalCardLines(cells, false, 120).map(stripAnsi);
+    const collapsed = evalSegmentsToText(renderEvalCardLines(cells, false, 120)).map(stripAnsi);
     expect(collapsed[0]).toContain("✓ [1/2] load data (12ms)");
     expect(collapsed.join("\n")).toContain("─ Output");
     expect(collapsed.join("\n")).toContain("2 more lines (Ctrl+O to expand)");
     expect(collapsed.join("\n")).toContain("1 more cells (Ctrl+O to expand)");
 
-    const expanded = renderEvalCardLines(cells, true, 120).map(stripAnsi);
+    const expanded = evalSegmentsToText(renderEvalCardLines(cells, true, 120)).map(stripAnsi);
     const joined = expanded.join("\n");
     expect(joined).toContain("✓ [2/2] summarize (8ms)");
     expect(joined).toContain("console.log");
     expect(joined).toContain("\"rows\"");
     expect(joined).toContain("done");
+    // Record-shaped image data (artifact path reference, no inline base64) keeps
+    // the existing placeholder regardless of terminal capability.
     expect(joined).toContain("[image: .motoko/artifacts/eval/cell2-1.png (2x3 image/png)]");
+  });
+
+  describe("eval card image segments (inline base64)", () => {
+    // Well-formed 4x4 RGB PNG so both the graphics-probe and full-decode (ANSI
+    // art) paths work.
+    const PNG_1x1 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAP0lEQVR4nAE0AMv/AAAAABAgMCBAYDBgkABAgMBQoPBgwCBw4FAAgACAkCCwoEDgsGAQAMCAQNCgcODAoPDg0MHDFgGB5uiKAAAAAElFTkSuQmCC";
+    const imageCell: EvalCellResult = {
+      index: 0,
+      language: "py",
+      title: "plot",
+      code: "plt.plot([1,2,3]); display(fig)",
+      durationMs: 5,
+      exit_code: 0,
+      stdout: "drawing",
+      stderr: "",
+      displays: [{ type: "image", mime: "image/png", data: PNG_1x1 }],
+      executionCount: 1,
+      cancelled: false,
+      truncated: false,
+    };
+
+    afterEach(() => __setCapabilitiesForTest(undefined));
+
+    it("emits [text, image] segments when the terminal supports images", () => {
+      __setCapabilitiesForTest({ images: "kitty", trueColor: true, hyperlinks: true });
+      const segments = renderEvalCardLines([imageCell], true, 80);
+      expect(segments.map((s) => s.kind)).toEqual(["text", "image"]);
+      const imageSeg = segments[1];
+      expect(imageSeg?.kind === "image" && imageSeg.image).not.toBeNull();
+    });
+
+    it("emits a single text segment (placeholder) when neither graphics nor truecolor", () => {
+      __setCapabilitiesForTest({ images: null, trueColor: false, hyperlinks: true });
+      const segments = renderEvalCardLines([imageCell], true, 80);
+      expect(segments.map((s) => s.kind)).toEqual(["text"]);
+      expect(evalSegmentsToText(segments).map(stripAnsi).join("\n")).toContain("image/png");
+    });
+
+    it("inlines half-block art (single text segment) on a truecolor non-graphics terminal", () => {
+      __setCapabilitiesForTest({ images: null, trueColor: true, hyperlinks: true });
+      const segments = renderEvalCardLines([imageCell], true, 80);
+      expect(segments.map((s) => s.kind)).toEqual(["text"]);
+      expect(evalSegmentsToText(segments).join("\n")).toContain("▀");
+    });
+
+    it("shows the collapse placeholder and no Image child when collapsed", () => {
+      __setCapabilitiesForTest({ images: "kitty", trueColor: true, hyperlinks: true });
+      const segments = renderEvalCardLines([imageCell], false, 80);
+      expect(segments.every((s) => s.kind === "text")).toBe(true);
+      expect(evalSegmentsToText(segments).map(stripAnsi).join("\n")).toContain("[image — Ctrl+O to expand]");
+    });
+
+    it("reuses the same Image instance / imageId across re-renders", () => {
+      __setCapabilitiesForTest({ images: "kitty", trueColor: true, hyperlinks: true });
+      const images = new Map();
+      const first = renderEvalCardLines([imageCell], true, 80, images);
+      const firstImg = first.find((s) => s.kind === "image");
+      const id = firstImg?.kind === "image" ? firstImg.image?.getImageId() : undefined;
+      expect(id).toBeGreaterThan(0);
+      const second = renderEvalCardLines([imageCell], true, 80, images);
+      const secondImg = second.find((s) => s.kind === "image");
+      // Same instance reused → same Kitty id (replace, not stack).
+      expect(secondImg?.kind === "image" && secondImg.image).toBe(firstImg?.kind === "image" ? firstImg.image : null);
+      expect(secondImg?.kind === "image" ? secondImg.image?.getImageId() : undefined).toBe(id);
+    });
+
+    it("detects image-bearing cells for default-expand", () => {
+      expect(evalCellsHaveImage([imageCell])).toBe(true);
+      expect(evalCellsHaveImage([{ ...imageCell, displays: [] }])).toBe(false);
+    });
+
+    it("regression: a text-only card collapses to a single text segment (no escape bytes)", () => {
+      __setCapabilitiesForTest({ images: "kitty", trueColor: true, hyperlinks: true });
+      const textCell: EvalCellResult = { ...imageCell, displays: [{ type: "json", data: { ok: 1 } }] };
+      const segments = renderEvalCardLines([textCell], true, 80);
+      expect(segments).toHaveLength(1);
+      expect(segments[0]?.kind).toBe("text");
+      const text = evalSegmentsToText(segments).join("\n");
+      expect(text).not.toContain("\x1b_G"); // no kitty graphics
+      expect(text).not.toContain("\x1b]1337"); // no iTerm2 graphics
+    });
   });
 
   it("normalizes eval_result cells_json with display alias", () => {

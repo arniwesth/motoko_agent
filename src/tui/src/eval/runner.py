@@ -88,6 +88,58 @@ def agent(prompt, model=""):
     return call_loopback("agent", {"prompt": prompt, "model": model})
 
 
+def _rich_image_bytes(value):
+    """Best-effort: turn a rich display object into ``(mime, png/jpeg bytes)``.
+
+    Handles the ergonomic forms agents reach for — a matplotlib ``Figure`` /
+    ``Axes`` / the ``pyplot`` module, a PIL ``Image``, or anything exposing an
+    IPython-style ``_repr_png_`` / ``_repr_jpeg_`` — so ``display(fig)`` and
+    ``display(pil_image)`` just work instead of degrading to a text repr.
+    Returns ``None`` when ``value`` is not a recognizable image object.
+    """
+    # IPython-style rich reprs (PIL Images and many plotting libs expose these).
+    for meth, mime in (("_repr_png_", "image/png"), ("_repr_jpeg_", "image/jpeg")):
+        fn = getattr(value, meth, None)
+        if callable(fn):
+            try:
+                data = fn()
+            except Exception:
+                data = None
+            if isinstance(data, (bytes, bytearray)):
+                return mime, bytes(data)
+            if isinstance(data, str):
+                try:
+                    return mime, base64.b64decode(data)
+                except Exception:
+                    pass
+    # matplotlib: Figure and the pyplot module both expose savefig (pyplot saves
+    # the current figure); an Axes exposes its parent via .figure.
+    target = value
+    if not hasattr(target, "savefig") and hasattr(target, "figure"):
+        target = target.figure
+    savefig = getattr(target, "savefig", None)
+    if callable(savefig):
+        try:
+            buf = io.BytesIO()
+            savefig(buf, format="png", bbox_inches="tight")
+            blob = buf.getvalue()
+            if blob:
+                return "image/png", blob
+        except Exception:
+            pass
+    # PIL Image (duck-typed: save + mode + size).
+    if hasattr(value, "save") and hasattr(value, "mode") and hasattr(value, "size"):
+        try:
+            buf = io.BytesIO()
+            value.save(buf, format="PNG")
+            blob = buf.getvalue()
+            if blob:
+                return "image/png", blob
+        except Exception:
+            pass
+    return None
+
+
 def to_bundle(value):
     if isinstance(value, dict):
         mime = value.get("mime")
@@ -106,8 +158,12 @@ def to_bundle(value):
             return {"type": "status", "mime": "text/plain", "data": value.get("status")}
     if isinstance(value, (dict, list, int, float, bool)) or value is None:
         return {"type": "json", "mime": "application/json", "data": value}
-    if isinstance(value, bytes):
-        return {"type": "image", "mime": "image/png", "data": base64.b64encode(value).decode("ascii")}
+    if isinstance(value, (bytes, bytearray)):
+        return {"type": "image", "mime": "image/png", "data": base64.b64encode(bytes(value)).decode("ascii")}
+    rich = _rich_image_bytes(value)
+    if rich is not None:
+        mime, blob = rich
+        return {"type": "image", "mime": mime, "data": base64.b64encode(blob).decode("ascii")}
     return {"type": "text", "mime": "text/plain", "data": str(value)}
 
 

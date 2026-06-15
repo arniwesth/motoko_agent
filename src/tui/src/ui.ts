@@ -20,7 +20,7 @@
 // picker is shown.
 
 import chalk from "chalk";
-import { TUI, Text, Markdown, Editor, type EditorTheme, Box, SelectList, ProcessTerminal, type OverlayHandle, type SelectItem, type MarkdownTheme, matchesKey } from "@mariozechner/pi-tui";
+import { TUI, Text, Markdown, Editor, type EditorTheme, Box, Image, SelectList, ProcessTerminal, type OverlayHandle, type SelectItem, type MarkdownTheme, matchesKey } from "@mariozechner/pi-tui";
 import type { AgentEvent } from "./runtime-process.js";
 import type { DelegatedCall, DelegatedResult, NativeToolResult } from "./runtime-process.js";
 import type { RuntimeProcess } from "./runtime-process.js";
@@ -31,6 +31,7 @@ import { canonicalToolIdentity, extractToolPlanSnapshot } from "./tool-plan-pars
 import { normalizeJsonLang, segmentStreamMarkdown, trimSegmentsForLiveRender } from "./stream-markdown.js";
 import { highlightJsonLines } from "./json-highlight.js";
 import type { EvalCellResult, EvalDisplayBundle } from "./eval/frames.js";
+import { type EvalSegment, evalImageCapabilityLabel, evalImageExitSequence, makeImageSegment } from "./eval/image-segment.js";
 import { execSync } from "child_process";
 // NOTE: The ASCII-art banner is printed unconditionally in main() before the 
 // TUI starts here — ANSI escapes in Text children corrupt the layout system.
@@ -869,14 +870,38 @@ interface ComposeCardState {
   bodyRow: Text;
 }
 
+/**
+ * Cached render state for one image bundle, keyed by `${cellIndex}:…`. Holds
+ * either a reusable Kitty/iTerm2 `Image` (graphics terminals) or the computed
+ * half-block / text fallback lines (so we don't re-decode the PNG on every
+ * re-render or Ctrl+O toggle).
+ */
+interface EvalCardImageEntry {
+  image: Image | null;
+  base64: string;
+  fallbackWidth?: number;
+  fallbackLines?: string[];
+}
+
 interface EvalCardState {
   toolCallId: string;
   requestId: string;
   step: number;
   cells: EvalCellResult[];
   expanded: boolean;
-  headerRow?: Text;
-  bodyRow?: Text;
+  /**
+   * The card body. Replaces the old single flattened detail `Text`: a `Box`
+   * holding interleaved `Text` and `Image` children. A `Box` never wraps, so it
+   * passes image escape sequences through intact (a `Text` would shred them).
+   */
+  bodyBox?: Box;
+  /**
+   * Live `Image` components keyed by `${cellIndex}:d${i}` / `${cellIndex}:r`, so
+   * the same Kitty `imageId` is reused across re-renders (Kitty replaces rather
+   * than stacks). Cards persist for the session; there is no mid-session
+   * teardown — purge happens only on process exit.
+   */
+  images: Map<string, EvalCardImageEntry>;
 }
 
 interface PlannedToolEntry {
@@ -1358,6 +1383,18 @@ function renderEvalDisplayBundle(bundle: EvalDisplayBundle, maxWidth: number, ex
   return splitOutputLines(String(bundle.data ?? "")).map((line) => hardTruncateLine(line, maxWidth));
 }
 
+/** True when any cell carries an image display/result bundle. */
+export function evalCellsHaveImage(cells: EvalCellResult[]): boolean {
+  return cells.some(
+    (cell) => cell.displays.some((d) => d.type === "image") || cell.result?.type === "image",
+  );
+}
+
+/** A card defaults to expanded when a cell errored or emitted an image. */
+function shouldExpandEvalCard(cells: EvalCellResult[]): boolean {
+  return cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error)) || evalCellsHaveImage(cells);
+}
+
 export function formatEvalCardHeader(cells: EvalCellResult[]): string {
   const passed = cells.filter((cell) => cell.exit_code === 0 && !cell.error).length;
   const failed = Math.max(0, cells.length - passed);
@@ -1366,42 +1403,121 @@ export function formatEvalCardHeader(cells: EvalCellResult[]): string {
   return `EVAL · ${cells.length} cell${cells.length === 1 ? "" : "s"} · ✓${passed} ✗${failed}${duration}`;
 }
 
-export function renderEvalCardLines(cells: EvalCellResult[], expanded: boolean, maxLineWidth: number): string[] {
+/**
+ * Build the ordered segment list for an eval card body (header excluded — the
+ * caller prepends it). Text runs accumulate the existing highlighted/dim lines;
+ * an image bundle becomes an `image` segment (real pixels) when the terminal
+ * supports it, otherwise its text fallback stays inline within a text segment.
+ *
+ * When `images` is provided, `Image` instances are reused by stable id so
+ * redraws replace rather than stack. Tests may omit it.
+ */
+export function renderEvalCardLines(
+  cells: EvalCellResult[],
+  expanded: boolean,
+  maxLineWidth: number,
+  images?: Map<string, EvalCardImageEntry>,
+): EvalSegment[] {
   const maxWidth = Math.max(8, maxLineWidth);
   const visibleCells = expanded ? cells : cells.slice(0, 1);
-  const lines: string[] = [];
+  const segments: EvalSegment[] = [];
+  let buf: string[] = [];
+  const pushLines = (...ls: string[]) => { for (const l of ls) buf.push(l); };
+  const flush = () => {
+    while (buf.length > 0 && buf[buf.length - 1] === "") buf.pop();
+    if (buf.length > 0) segments.push({ kind: "text", lines: buf });
+    buf = [];
+  };
+
+  const emitBundle = (bundle: EvalDisplayBundle, idKey: string) => {
+    if (bundle.type !== "image") {
+      for (const line of renderEvalDisplayBundle(bundle, maxWidth - 2, expanded)) pushLines(`  ${line}`);
+      return;
+    }
+    // Collapsed cards never draw pixels — a compact one-liner stands in. Image
+    // cards default to expanded (see upsertEvalCard), so this is only seen after
+    // a deliberate collapse.
+    if (!expanded) {
+      pushLines(chalk.dim("  [image — Ctrl+O to expand]"));
+      return;
+    }
+    // Inline base64 is the real-image path; a record-shaped `data` (artifact
+    // path reference, no inline bytes) keeps the existing text placeholder.
+    const base64 = typeof bundle.data === "string" ? bundle.data : "";
+    if (!base64) {
+      for (const line of renderEvalDisplayBundle(bundle, maxWidth - 2, expanded)) pushLines(`  ${line}`);
+      return;
+    }
+    const mime = bundle.mime ?? "image/png";
+    const existing = images?.get(idKey);
+    const sameData = existing != null && existing.base64 === base64;
+    // Reuse cached fallback art (non-graphics terminals): re-decoding the PNG on
+    // every render/Ctrl+O would be wasteful, and it's deterministic per width.
+    if (sameData && !existing.image && existing.fallbackLines && existing.fallbackWidth === maxWidth) {
+      for (const line of existing.fallbackLines) pushLines(`  ${line}`);
+      return;
+    }
+    const reuse = sameData && existing.image ? existing.image : null;
+    const seg = makeImageSegment(base64, mime, {
+      cardWidth: maxWidth,
+      imageId: existing?.image?.getImageId(),
+      reuse,
+    });
+    if (seg.kind === "image" && seg.image) {
+      images?.set(idKey, { image: seg.image, base64 });
+      flush();              // close the preceding text run
+      segments.push(seg);   // image is its own atomic segment (never sliced)
+    } else if (seg.kind === "image") {
+      // No graphics protocol → half-block art or a text placeholder, inline as
+      // text. Cache it keyed by width so we don't re-decode next render.
+      images?.set(idKey, { image: null, base64, fallbackWidth: maxWidth, fallbackLines: seg.fallback });
+      for (const line of seg.fallback) pushLines(`  ${line}`);
+    }
+  };
+
   for (const cell of visibleCells) {
     const idx = Math.max(1, cell.index + 1);
     const title = cell.title || `${cell.language} cell ${idx}`;
-    lines.push(`${evalStatusIcon(cell)} [${idx}/${cells.length}] ${title}${evalDurationSuffix(cell)}`);
+    pushLines(`${evalStatusIcon(cell)} [${idx}/${cells.length}] ${title}${evalDurationSuffix(cell)}`);
     const code = cell.code ?? "";
     if (code.trim() !== "") {
-      for (const line of highlightCodeLines(code, cell.language)) lines.push(`  ${line}`);
+      for (const line of highlightCodeLines(code, cell.language)) pushLines(`  ${line}`);
     }
-    lines.push(chalk.dim("  ─ Output"));
-    lines.push(...formatEvalOutputLines(splitOutputLines(cell.stdout), TOOL_STDOUT_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.dim));
-    lines.push(...formatEvalOutputLines(splitOutputLines(cell.stderr), TOOL_STDERR_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.red.dim, "stderr"));
-    for (const display of cell.displays) {
-      for (const line of renderEvalDisplayBundle(display, maxWidth - 2, expanded)) lines.push(`  ${line}`);
-    }
-    if (cell.result) {
-      for (const line of renderEvalDisplayBundle(cell.result, maxWidth - 2, expanded)) lines.push(`  ${line}`);
-    }
+    pushLines(chalk.dim("  ─ Output"));
+    pushLines(...formatEvalOutputLines(splitOutputLines(cell.stdout), TOOL_STDOUT_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.dim));
+    pushLines(...formatEvalOutputLines(splitOutputLines(cell.stderr), TOOL_STDERR_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.red.dim, "stderr"));
+    cell.displays.forEach((display, di) => emitBundle(display, `${cell.index}:d${di}`));
+    if (cell.result) emitBundle(cell.result, `${cell.index}:r`);
     if (cell.error) {
-      lines.push(chalk.red.dim(`  [error] ${cell.error.ename}: ${cell.error.evalue}`));
+      pushLines(chalk.red.dim(`  [error] ${cell.error.ename}: ${cell.error.evalue}`));
       const traceback = expanded ? cell.error.traceback : cell.error.traceback.slice(0, 4);
-      for (const line of traceback) lines.push(chalk.red.dim(`  ${hardTruncateLine(line, maxWidth - 2)}`));
+      for (const line of traceback) pushLines(chalk.red.dim(`  ${hardTruncateLine(line, maxWidth - 2)}`));
       const hidden = Math.max(0, cell.error.traceback.length - traceback.length);
-      if (hidden > 0) lines.push(chalk.dim(`  ... ${hidden} more lines (Ctrl+O to expand)`));
+      if (hidden > 0) pushLines(chalk.dim(`  ... ${hidden} more lines (Ctrl+O to expand)`));
     }
-    if (cell.truncated) lines.push(chalk.dim("  [truncated]"));
-    lines.push("");
+    if (cell.truncated) pushLines(chalk.dim("  [truncated]"));
+    pushLines("");
   }
   if (!expanded && cells.length > visibleCells.length) {
-    lines.push(chalk.dim(`... ${cells.length - visibleCells.length} more cells (Ctrl+O to expand)`));
+    pushLines(chalk.dim(`... ${cells.length - visibleCells.length} more cells (Ctrl+O to expand)`));
   }
-  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  return lines;
+  flush();
+  return segments;
+}
+
+/**
+ * Flatten a segment list back to plain text lines (image segments contribute
+ * their text fallback, real `Image` segments contribute nothing). Used by tests
+ * and the regression assertion that text-only cards are byte-identical to the
+ * old flattened output.
+ */
+export function evalSegmentsToText(segments: EvalSegment[]): string[] {
+  const out: string[] = [];
+  for (const seg of segments) {
+    if (seg.kind === "text") out.push(...seg.lines);
+    else if (!seg.image) out.push(...seg.fallback);
+  }
+  return out;
 }
 
 export function shouldCoalesceToolRowRender(
@@ -1872,6 +1988,12 @@ export class AgentUI {
     // (e.g. external kill -INT or non-raw contexts).
     process.on("SIGINT", () => this.onAbort?.());
 
+    // Purge any eval images from the terminal on exit so Kitty plots don't
+    // linger after Motoko quits. No-op on iTerm2 (repaints inline) and
+    // non-capable terminals. Cards persist for the session, so this is the only
+    // image cleanup point.
+    process.on("exit", () => this.purgeTerminalImages());
+
     // Populate the status bar before start() so the first render includes it.
     this.updateStatus();
     this.statusTick = setInterval(() => {
@@ -1885,6 +2007,9 @@ export class AgentUI {
       this.updateStatus();
     }, 150);
     this.tui.start();
+    // One-line note of the detected inline-image protocol so it's obvious
+    // whether eval plots will render as pixels or the text fallback.
+    this.appendHistoryStyled(`eval images: ${evalImageCapabilityLabel()}`, chalk.dim);
     // Explicit render so children added before start() (e.g. version banner)
     // are visible immediately.
     this.tui.requestRender();
@@ -1902,6 +2027,17 @@ export class AgentUI {
 
   private stamp(message: string): string {
     return `[${formatTimestamp()}] ${message}`;
+  }
+
+  /** Emit a Kitty image-purge sequence (no-op for iTerm2 / non-capable terms). */
+  private purgeTerminalImages(): void {
+    const seq = evalImageExitSequence();
+    if (!seq) return;
+    try {
+      process.stdout.write(seq);
+    } catch {
+      // Best-effort cleanup on exit; ignore write failures (closed stream, etc.).
+    }
   }
 
   private appendHistoryPlain(message: string): void {
@@ -2530,7 +2666,8 @@ export class AgentUI {
         requestId: event.request_id,
         step: event.step,
         cells,
-        expanded: cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error)),
+        expanded: shouldExpandEvalCard(cells),
+        images: new Map(),
       };
       this.evalCards.set(key, card);
       this.evalOrder.push(key);
@@ -2538,7 +2675,7 @@ export class AgentUI {
       this.selectedComposeIdx = -1;
     } else {
       card.cells = cells;
-      if (cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error))) card.expanded = true;
+      if (shouldExpandEvalCard(cells)) card.expanded = true;
       const idx = this.evalOrder.indexOf(key);
       if (idx >= 0) this.selectedEvalIdx = idx;
       this.selectedComposeIdx = -1;
@@ -2546,27 +2683,49 @@ export class AgentUI {
 
     if (!this.toolRows.has(key)) {
       const row = plainText(this.stamp(this.renderToolRowLine(key, "done", `${event.tool_call_id} eval`, undefined, false, "EVAL")));
-      const detailRow = plainText("");
       this.history.addChild(row);
-      this.history.addChild(detailRow);
       this.toolRows.set(key, row);
-      this.toolDetailRows.set(key, detailRow);
       this.toolRowMeta.set(key, `${event.tool_call_id} eval`);
-      this.toolRowToolNames.set(key, "eval");
       this.toolRowKinds.set(key, "default");
-    } else {
-      this.toolRowToolNames.set(key, "eval");
+    }
+    this.toolRowToolNames.set(key, "eval");
+
+    // Ensure the rich card body exists. eval is dispatched as a normal tool, so
+    // the generic tool-result path (applyNativeToolResults) usually creates a
+    // plain detailRow Text under this same key *before* eval_result arrives. A
+    // Text can't carry Image children (it shreds escape sequences), so swap that
+    // detailRow out for the bodyBox Box. The toolRow status line is kept.
+    if (!card.bodyBox) {
+      const staleDetail = this.toolDetailRows.get(key);
+      if (staleDetail) {
+        this.history.removeChild(staleDetail);
+        this.toolDetailRows.delete(key);
+      }
+      const bodyBox = new Box(0, 0);
+      card.bodyBox = bodyBox;
+      this.history.addChild(bodyBox);
     }
 
     this.renderEvalCard(card);
   }
 
   private renderEvalCard(card: EvalCardState): void {
-    const key = this.toolKey(card.requestId, card.toolCallId);
-    const detailRow = this.toolDetailRows.get(key) ?? card.bodyRow;
-    if (!detailRow) return;
-    const lines = [formatEvalCardHeader(card.cells), ...renderEvalCardLines(card.cells, card.expanded, this.toolPreviewWidth())];
-    detailRow.setText(this.stamp(lines.join("\n")));
+    const bodyBox = card.bodyBox;
+    if (!bodyBox) return;
+    const segments = renderEvalCardLines(card.cells, card.expanded, this.toolPreviewWidth(), card.images);
+    // clear() detaches children from layout but the card.images map retains the
+    // Image instances, so re-adding reuses the same Kitty ids (replace, not stack).
+    bodyBox.clear();
+    bodyBox.addChild(plainText(this.stamp(formatEvalCardHeader(card.cells))));
+    for (const seg of segments) {
+      if (seg.kind === "text") {
+        bodyBox.addChild(plainText(seg.lines.join("\n")));
+      } else if (seg.image) {
+        bodyBox.addChild(seg.image);
+      } else {
+        bodyBox.addChild(plainText(seg.fallback.join("\n")));
+      }
+    }
   }
 
   private ensureComposeCard(composeId: string): ComposeCardState | undefined {
@@ -2834,13 +2993,15 @@ export class AgentUI {
   }
 
   private refreshToolDetailRow(key: string): void {
-    const detailRow = this.toolDetailRows.get(key);
-    if (!detailRow) return;
+    // Eval card bodies are a Box (not a Text in toolDetailRows), so resolve them
+    // before the toolDetailRows guard.
     const evalCard = this.evalCards.get(key);
     if (evalCard) {
       this.renderEvalCard(evalCard);
       return;
     }
+    const detailRow = this.toolDetailRows.get(key);
+    if (!detailRow) return;
     const details = this.toolRowDetails.get(key);
     if (!details) {
       detailRow.setText("");
