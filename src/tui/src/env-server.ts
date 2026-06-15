@@ -1126,6 +1126,8 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
           index: i,
           language: cell.language,
           title: cell.title ?? `${cell.language} cell ${i + 1}`,
+          code: cell.code,
+          durationMs: 0,
           exit_code: 1,
           stdout: "",
           stderr: String(e?.message ?? e),

@@ -6,6 +6,7 @@
 #   - Go 1.22+
 #   - Bun 1.x
 #   - Node.js 18+ and npm
+#   - Python data science packages for eval cells (pandas, polars, numpy, SciPy, scikit-learn)
 #   - context-mode CLI
 #   - AILANG runtime (cloned from github.com/sunholo-data/ailang at pinned tag)
 #   - bun dependencies for the TypeScript frontend (src/tui/)
@@ -184,7 +185,19 @@ install_apt_packages() {
   log_info "Updating package lists..."
   "${SUDO[@]}" apt-get update -qq
 
-  local pkgs=(git curl build-essential ca-certificates jq rsync)
+  local pkgs=(
+    git
+    curl
+    build-essential
+    ca-certificates
+    jq
+    rsync
+    python3-pip
+    python3-numpy
+    python3-pandas
+    python3-scipy
+    python3-sklearn
+  )
   local missing=()
   for pkg in "${pkgs[@]}"; do
     dpkg -s "$pkg" &>/dev/null || missing+=("$pkg")
@@ -197,6 +210,22 @@ install_apt_packages() {
     "${SUDO[@]}" apt-get install -y -qq "${missing[@]}"
     log_ok "System packages installed"
   fi
+}
+
+install_python_data_science_packages() {
+  log_header "Python data science packages"
+
+  if python3 - <<'PY' >/dev/null 2>&1
+import polars
+PY
+  then
+    log_ok "polars already installed"
+    return
+  fi
+
+  log_info "Installing polars with pip for the current user..."
+  python3 -m pip install --user --break-system-packages polars
+  log_ok "polars installed"
 }
 
 # ---------------------------------------------------------------------------
@@ -526,6 +555,9 @@ main() {
   install_go
   install_bun
   install_node
+  if [[ "$OS" == "debian" ]]; then
+    install_python_data_science_packages
+  fi
   install_context_mode
   install_bun_deps
   install_ailang

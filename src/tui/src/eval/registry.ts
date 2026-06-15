@@ -59,8 +59,11 @@ export class EvalKernelRegistry {
     const entry = this.get(cell.language, sessionId);
     const timeoutMs = Math.max(1, Number(cell.timeout ?? defaultTimeoutSecs)) * 1000;
     const title = String(cell.title ?? `${cell.language} cell ${index + 1}`);
-    if (entry.language === "py") return entry.kernel.run(index, { code: cell.code, title, cwd: workdir, timeoutMs });
-    return entry.kernel.run(index, { code: cell.code, title, timeoutMs });
+    const started = Date.now();
+    const result = entry.language === "py"
+      ? await entry.kernel.run(index, { code: cell.code, title, cwd: workdir, timeoutMs })
+      : await entry.kernel.run(index, { code: cell.code, title, timeoutMs });
+    return { ...result, code: cell.code, durationMs: Date.now() - started };
   }
 
   close(): void {

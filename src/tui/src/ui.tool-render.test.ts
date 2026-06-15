@@ -13,7 +13,15 @@ import {
   formatReadFileGroupHeader,
   formatGroupedReadFileChildRow,
   describeToolCallMeta,
+  formatEvalCardHeader,
+  parseEvalCellsJson,
+  renderEvalCardLines,
 } from "./ui.js";
+import type { EvalCellResult } from "./eval/frames.js";
+
+function stripAnsi(s: string): string {
+  return s.replace(/\x1B\[[0-9;]*m/g, "");
+}
 
 describe("ui tool rendering helpers", () => {
   it("formats canonical batch headers", () => {
@@ -43,6 +51,90 @@ describe("ui tool rendering helpers", () => {
     expect(rendered).toContain("c1 ReadFile src/ui.ts lines 1-10");
     expect(onDebug).toHaveBeenCalledTimes(1);
     expect(onDebug.mock.calls[0]?.[0]).toContain("tool renderer fallback: ReadFile");
+  });
+
+  it("renders eval call metadata through the registry", () => {
+    const call: DelegatedCall = {
+      id: "eval-1",
+      tool: "eval",
+      arguments: {
+        cells: [
+          { language: "py", code: "print(1)" },
+          { language: "js", code: "console.log(2)" },
+        ],
+      },
+    };
+    expect(renderToolCallMetaWithFallback(call)).toBe("eval-1 eval 2 cells");
+  });
+
+  it("renders rich eval cards with collapse affordances and display placeholders", () => {
+    const cells: EvalCellResult[] = [
+      {
+        index: 0,
+        language: "py",
+        title: "load data",
+        code: "import pandas as pd\nprint('ready')",
+        durationMs: 12,
+        exit_code: 0,
+        stdout: Array.from({ length: 10 }, (_, i) => `row ${i + 1}`).join("\n"),
+        stderr: "",
+        displays: [{ type: "json", data: { rows: 10 } }],
+        executionCount: 1,
+        cancelled: false,
+        truncated: false,
+      },
+      {
+        index: 1,
+        language: "js",
+        title: "summarize",
+        code: "console.log('ok')",
+        durationMs: 8,
+        exit_code: 0,
+        stdout: "ok",
+        stderr: "",
+        displays: [
+          { type: "markdown", data: "**done**" },
+          { type: "image", mime: "image/png", data: { path: ".motoko/artifacts/eval/cell2-1.png" }, width: 2, height: 3 },
+        ],
+        executionCount: 1,
+        cancelled: false,
+        truncated: false,
+      },
+    ];
+
+    expect(formatEvalCardHeader(cells)).toBe("EVAL · 2 cells · ✓2 ✗0 · 20ms");
+    const collapsed = renderEvalCardLines(cells, false, 120).map(stripAnsi);
+    expect(collapsed[0]).toContain("✓ [1/2] load data (12ms)");
+    expect(collapsed.join("\n")).toContain("─ Output");
+    expect(collapsed.join("\n")).toContain("2 more lines (Ctrl+O to expand)");
+    expect(collapsed.join("\n")).toContain("1 more cells (Ctrl+O to expand)");
+
+    const expanded = renderEvalCardLines(cells, true, 120).map(stripAnsi);
+    const joined = expanded.join("\n");
+    expect(joined).toContain("✓ [2/2] summarize (8ms)");
+    expect(joined).toContain("console.log");
+    expect(joined).toContain("\"rows\"");
+    expect(joined).toContain("done");
+    expect(joined).toContain("[image: .motoko/artifacts/eval/cell2-1.png (2x3 image/png)]");
+  });
+
+  it("normalizes eval_result cells_json with display alias", () => {
+    const cells = parseEvalCellsJson(JSON.stringify([
+      {
+        index: 0,
+        language: "py",
+        title: "legacy",
+        code: "print(1)",
+        status: "ok",
+        exitCode: 0,
+        stdout: "1",
+        stderr: "",
+        display: [{ type: "status", data: "ok" }],
+      },
+    ]));
+    expect(cells).toHaveLength(1);
+    expect(cells?.[0]?.exit_code).toBe(0);
+    expect(cells?.[0]?.displays[0]?.type).toBe("status");
   });
 
   it("renders collapsed output-hidden marker when output exists", () => {

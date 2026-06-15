@@ -30,6 +30,7 @@ import { type SlashCommandHandlerCtx, parseSlashCommand, createCommandAutocomple
 import { canonicalToolIdentity, extractToolPlanSnapshot } from "./tool-plan-parser.js";
 import { normalizeJsonLang, segmentStreamMarkdown, trimSegmentsForLiveRender } from "./stream-markdown.js";
 import { highlightJsonLines } from "./json-highlight.js";
+import type { EvalCellResult, EvalDisplayBundle } from "./eval/frames.js";
 import { execSync } from "child_process";
 // NOTE: The ASCII-art banner is printed unconditionally in main() before the 
 // TUI starts here — ANSI escapes in Text children corrupt the layout system.
@@ -868,6 +869,16 @@ interface ComposeCardState {
   bodyRow: Text;
 }
 
+interface EvalCardState {
+  toolCallId: string;
+  requestId: string;
+  step: number;
+  cells: EvalCellResult[];
+  expanded: boolean;
+  headerRow?: Text;
+  bodyRow?: Text;
+}
+
 interface PlannedToolEntry {
   step: number;
   identity: string;
@@ -1034,6 +1045,21 @@ export function renderToolCallMetaWithFallback(
   }
 }
 
+function evalCallCellCount(call: DelegatedCall): number {
+  const args = recordValue(call.arguments);
+  const cells = args?.cells;
+  return Array.isArray(cells) ? cells.length : 0;
+}
+
+TOOL_RENDERERS.eval = {
+  renderCall: (call) => {
+    const id = call.id ?? "unknown";
+    const count = evalCallCellCount(call);
+    return `${id} eval ${count} cell${count === 1 ? "" : "s"}`;
+  },
+};
+TOOL_RENDERERS.Eval = TOOL_RENDERERS.eval;
+
 function splitOutputLines(text: string): string[] {
   if (!text) return [];
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
@@ -1187,6 +1213,195 @@ export function formatToolDetailLines(
     rendered.push(chalk.dim(`  ... ${hiddenCount} more lines (Ctrl+O to collapse)`));
   }
   return rendered;
+}
+
+function recordValue(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function stringValue(v: unknown, fallback = ""): string {
+  return typeof v === "string" ? v : fallback;
+}
+
+function numberValue(v: unknown, fallback = 0): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function boolValue(v: unknown, fallback = false): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
+
+function normalizeEvalDisplayBundle(v: unknown): EvalDisplayBundle | null {
+  const rec = recordValue(v);
+  if (!rec) return null;
+  const rawType = stringValue(rec.type, "text");
+  const type = ["json", "image", "markdown", "status", "text"].includes(rawType) ? rawType as EvalDisplayBundle["type"] : "text";
+  return {
+    type,
+    mime: typeof rec.mime === "string" ? rec.mime : undefined,
+    data: rec.data,
+    width: typeof rec.width === "number" ? rec.width : undefined,
+    height: typeof rec.height === "number" ? rec.height : undefined,
+  };
+}
+
+function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
+  const rec = recordValue(v);
+  if (!rec) return null;
+  const language = stringValue(rec.language, "py");
+  if (language !== "py" && language !== "js") return null;
+  const displaysRaw = Array.isArray(rec.displays)
+    ? rec.displays
+    : Array.isArray(rec.display)
+      ? rec.display
+      : [];
+  const displays = displaysRaw
+    .map(normalizeEvalDisplayBundle)
+    .filter((x): x is EvalDisplayBundle => x !== null);
+  const result = normalizeEvalDisplayBundle(rec.result);
+  const errorRec = recordValue(rec.error);
+  return {
+    index: numberValue(rec.index, 0),
+    language,
+    title: stringValue(rec.title, `${language} cell ${numberValue(rec.index, 0) + 1}`),
+    code: stringValue(rec.code, ""),
+    durationMs: typeof rec.durationMs === "number" ? rec.durationMs : typeof rec.duration_ms === "number" ? rec.duration_ms : undefined,
+    exit_code: numberValue(rec.exit_code ?? rec.exitCode, 0),
+    stdout: stringValue(rec.stdout, ""),
+    stderr: stringValue(rec.stderr, ""),
+    displays,
+    result: result ?? undefined,
+    error: errorRec ? {
+      ename: stringValue(errorRec.ename, "Error"),
+      evalue: stringValue(errorRec.evalue, ""),
+      traceback: Array.isArray(errorRec.traceback) ? errorRec.traceback.filter((x): x is string => typeof x === "string") : [],
+    } : undefined,
+    executionCount: numberValue(rec.executionCount ?? rec.execution_count, 0),
+    cancelled: boolValue(rec.cancelled, false),
+    truncated: boolValue(rec.truncated, false),
+  };
+}
+
+export function parseEvalCellsJson(cellsJson: string): EvalCellResult[] | null {
+  try {
+    const parsed = JSON.parse(cellsJson) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const cells = parsed
+      .map(normalizeEvalCellResult)
+      .filter((x): x is EvalCellResult => x !== null);
+    return cells.length === parsed.length ? cells : null;
+  } catch {
+    return null;
+  }
+}
+
+function evalStatusIcon(cell: EvalCellResult): string {
+  return cell.exit_code === 0 && !cell.error ? "✓" : "✗";
+}
+
+function evalDurationSuffix(cell: EvalCellResult): string {
+  return typeof cell.durationMs === "number" ? ` (${Math.max(0, Math.round(cell.durationMs))}ms)` : "";
+}
+
+function formatEvalOutputLines(
+  lines: string[],
+  maxLines: number,
+  expanded: boolean,
+  indent: string,
+  maxWidth: number,
+  color: (s: string) => string,
+  label?: string,
+): string[] {
+  if (lines.length === 0) return [];
+  const limit = expanded ? lines.length : maxLines;
+  const shown = lines.slice(0, limit);
+  const hidden = Math.max(0, lines.length - shown.length);
+  const labelPrefix = label ? `[${label}] ` : "";
+  const rendered = shown.map((line) => color(`${indent}${labelPrefix}${hardTruncateLine(line, maxWidth - indent.length - labelPrefix.length)}`));
+  if (hidden > 0) rendered.push(chalk.dim(`${indent}... ${hidden} more lines (Ctrl+O to ${expanded ? "collapse" : "expand"})`));
+  return rendered;
+}
+
+function renderEvalMarkdownLines(text: string, maxWidth: number, expanded: boolean): string[] {
+  const trimmed = trimSegmentsForLiveRender(segmentStreamMarkdown(text), expanded ? 80 : 12);
+  const lines: string[] = [];
+  for (const seg of trimmed.segments) {
+    if (seg.kind === "json_bare" || normalizeJsonLang(seg.lang) === "json") {
+      lines.push(...highlightJsonLines(seg.text));
+    } else if (seg.kind === "code_complete" || seg.kind === "code_open") {
+      lines.push(...highlightCodeLines(seg.text, seg.lang));
+    } else {
+      lines.push(...splitOutputLines(seg.text).map((line) => hardTruncateLine(line, maxWidth)));
+    }
+  }
+  if (trimmed.truncated) lines.push(chalk.dim(`... more markdown (Ctrl+O to ${expanded ? "collapse" : "expand"})`));
+  return lines;
+}
+
+function renderEvalDisplayBundle(bundle: EvalDisplayBundle, maxWidth: number, expanded: boolean): string[] {
+  if (bundle.type === "json") {
+    return highlightJsonLines(JSON.stringify(bundle.data, null, 2));
+  }
+  if (bundle.type === "markdown") {
+    return renderEvalMarkdownLines(String(bundle.data ?? ""), maxWidth, expanded);
+  }
+  if (bundle.type === "image") {
+    const rec = recordValue(bundle.data);
+    const path = stringValue(rec?.path, typeof bundle.data === "string" ? bundle.data : "<inline>");
+    const mime = bundle.mime ?? stringValue(rec?.mime, "image/*");
+    const width = bundle.width ?? numberValue(rec?.width, 0);
+    const height = bundle.height ?? numberValue(rec?.height, 0);
+    const dims = width > 0 && height > 0 ? ` (${width}x${height} ${mime})` : ` (${mime})`;
+    return [chalk.dim(`[image: ${path}${dims}]`)];
+  }
+  if (bundle.type === "status") return [chalk.dim(String(bundle.data ?? ""))];
+  return splitOutputLines(String(bundle.data ?? "")).map((line) => hardTruncateLine(line, maxWidth));
+}
+
+export function formatEvalCardHeader(cells: EvalCellResult[]): string {
+  const passed = cells.filter((cell) => cell.exit_code === 0 && !cell.error).length;
+  const failed = Math.max(0, cells.length - passed);
+  const totalDuration = cells.reduce((sum, cell) => sum + (typeof cell.durationMs === "number" ? cell.durationMs : 0), 0);
+  const duration = totalDuration > 0 ? ` · ${Math.round(totalDuration)}ms` : "";
+  return `EVAL · ${cells.length} cell${cells.length === 1 ? "" : "s"} · ✓${passed} ✗${failed}${duration}`;
+}
+
+export function renderEvalCardLines(cells: EvalCellResult[], expanded: boolean, maxLineWidth: number): string[] {
+  const maxWidth = Math.max(8, maxLineWidth);
+  const visibleCells = expanded ? cells : cells.slice(0, 1);
+  const lines: string[] = [];
+  for (const cell of visibleCells) {
+    const idx = Math.max(1, cell.index + 1);
+    const title = cell.title || `${cell.language} cell ${idx}`;
+    lines.push(`${evalStatusIcon(cell)} [${idx}/${cells.length}] ${title}${evalDurationSuffix(cell)}`);
+    const code = cell.code ?? "";
+    if (code.trim() !== "") {
+      for (const line of highlightCodeLines(code, cell.language)) lines.push(`  ${line}`);
+    }
+    lines.push(chalk.dim("  ─ Output"));
+    lines.push(...formatEvalOutputLines(splitOutputLines(cell.stdout), TOOL_STDOUT_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.dim));
+    lines.push(...formatEvalOutputLines(splitOutputLines(cell.stderr), TOOL_STDERR_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.red.dim, "stderr"));
+    for (const display of cell.displays) {
+      for (const line of renderEvalDisplayBundle(display, maxWidth - 2, expanded)) lines.push(`  ${line}`);
+    }
+    if (cell.result) {
+      for (const line of renderEvalDisplayBundle(cell.result, maxWidth - 2, expanded)) lines.push(`  ${line}`);
+    }
+    if (cell.error) {
+      lines.push(chalk.red.dim(`  [error] ${cell.error.ename}: ${cell.error.evalue}`));
+      const traceback = expanded ? cell.error.traceback : cell.error.traceback.slice(0, 4);
+      for (const line of traceback) lines.push(chalk.red.dim(`  ${hardTruncateLine(line, maxWidth - 2)}`));
+      const hidden = Math.max(0, cell.error.traceback.length - traceback.length);
+      if (hidden > 0) lines.push(chalk.dim(`  ... ${hidden} more lines (Ctrl+O to expand)`));
+    }
+    if (cell.truncated) lines.push(chalk.dim("  [truncated]"));
+    lines.push("");
+  }
+  if (!expanded && cells.length > visibleCells.length) {
+    lines.push(chalk.dim(`... ${cells.length - visibleCells.length} more cells (Ctrl+O to expand)`));
+  }
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
 }
 
 export function shouldCoalesceToolRowRender(
@@ -1470,6 +1685,9 @@ export class AgentUI {
   private readonly composeOrder: string[] = [];
   private selectedComposeIdx = -1;
   private composeFooterStatus = "";
+  private readonly evalCards = new Map<string, EvalCardState>();
+  private readonly evalOrder: string[] = [];
+  private selectedEvalIdx = -1;
   private readonly thinkStepOrder: number[] = [];  // insertion order; used for ctrl+t cycling
   private selectedThinkIdx = -1;                   // index into thinkStepOrder, -1 = none selected
   /** True once the first task is complete; enables free-text follow-ups. */
@@ -1615,6 +1833,20 @@ export class AgentUI {
         return { consume: true };
       }
       if (matchesKey(data, "ctrl+o")) {
+        if (this.evalOrder.length > 0 && this.selectedEvalIdx !== -1) {
+          const idx = this.selectedEvalIdx;
+          const key = this.evalOrder[idx];
+          if (key) {
+            const card = this.evalCards.get(key);
+            if (card) {
+              card.expanded = !card.expanded;
+              this.renderEvalCard(card);
+              this.selectedEvalIdx = idx;
+              this.tui.requestRender();
+              return { consume: true };
+            }
+          }
+        }
         if (this.composeOrder.length > 0) {
           const idx = this.selectedComposeIdx === -1 ? this.composeOrder.length - 1 : this.selectedComposeIdx;
           const composeId = this.composeOrder[idx];
@@ -2118,6 +2350,9 @@ export class AgentUI {
           this.renderComposeCard(card);
         }
         break;
+      case "eval_result":
+        this.upsertEvalCard(event);
+        break;
 
       case "obs":
         if (event.stdout) {
@@ -2281,6 +2516,59 @@ export class AgentUI {
     if (block) this.expandThinkBlock(block);
   }
 
+  private upsertEvalCard(event: Extract<AgentEvent, { type: "eval_result" }>): void {
+    const cells = parseEvalCellsJson(event.cells_json);
+    if (!cells || cells.length === 0) {
+      this.addActivity(`eval_result ignored: invalid cells_json for ${event.tool_call_id}`);
+      return;
+    }
+    const key = this.toolKey(event.request_id, event.tool_call_id);
+    let card = this.evalCards.get(key);
+    if (!card) {
+      card = {
+        toolCallId: event.tool_call_id,
+        requestId: event.request_id,
+        step: event.step,
+        cells,
+        expanded: cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error)),
+      };
+      this.evalCards.set(key, card);
+      this.evalOrder.push(key);
+      this.selectedEvalIdx = this.evalOrder.length - 1;
+      this.selectedComposeIdx = -1;
+    } else {
+      card.cells = cells;
+      if (cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error))) card.expanded = true;
+      const idx = this.evalOrder.indexOf(key);
+      if (idx >= 0) this.selectedEvalIdx = idx;
+      this.selectedComposeIdx = -1;
+    }
+
+    if (!this.toolRows.has(key)) {
+      const row = plainText(this.stamp(this.renderToolRowLine(key, "done", `${event.tool_call_id} eval`, undefined, false, "EVAL")));
+      const detailRow = plainText("");
+      this.history.addChild(row);
+      this.history.addChild(detailRow);
+      this.toolRows.set(key, row);
+      this.toolDetailRows.set(key, detailRow);
+      this.toolRowMeta.set(key, `${event.tool_call_id} eval`);
+      this.toolRowToolNames.set(key, "eval");
+      this.toolRowKinds.set(key, "default");
+    } else {
+      this.toolRowToolNames.set(key, "eval");
+    }
+
+    this.renderEvalCard(card);
+  }
+
+  private renderEvalCard(card: EvalCardState): void {
+    const key = this.toolKey(card.requestId, card.toolCallId);
+    const detailRow = this.toolDetailRows.get(key) ?? card.bodyRow;
+    if (!detailRow) return;
+    const lines = [formatEvalCardHeader(card.cells), ...renderEvalCardLines(card.cells, card.expanded, this.toolPreviewWidth())];
+    detailRow.setText(this.stamp(lines.join("\n")));
+  }
+
   private ensureComposeCard(composeId: string): ComposeCardState | undefined {
     return this.composeCards.get(composeId);
   }
@@ -2321,6 +2609,7 @@ export class AgentUI {
     this.composeCards.set(event.compose_id, card);
     this.composeOrder.push(event.compose_id);
     this.selectedComposeIdx = this.composeOrder.length - 1;
+    this.selectedEvalIdx = -1;
     return card;
   }
 
@@ -2547,6 +2836,11 @@ export class AgentUI {
   private refreshToolDetailRow(key: string): void {
     const detailRow = this.toolDetailRows.get(key);
     if (!detailRow) return;
+    const evalCard = this.evalCards.get(key);
+    if (evalCard) {
+      this.renderEvalCard(evalCard);
+      return;
+    }
     const details = this.toolRowDetails.get(key);
     if (!details) {
       detailRow.setText("");

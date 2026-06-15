@@ -46,6 +46,8 @@ export type EvalCellResult = {
   index: number;
   language: EvalLanguage;
   title: string;
+  code?: string;
+  durationMs?: number;
   exit_code: number;
   stdout: string;
   stderr: string;

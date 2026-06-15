@@ -184,6 +184,21 @@ func emit_event(session_id: string, event_type: string, extra: [{key: string, va
   emit_trace_event(session_id, event_type, extra)
 }
 
+func emit_eval_result_if_present(session_id: string, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> () ! {IO, Trace} {
+  if toLower(result_env.tool) == "eval" then
+    match get(result_env.metadata, "cells") {
+      None => (),
+      Some(cells) =>
+        emit_event(session_id, "eval_result", [
+          kv("tool_call_id", js(tool_call_id)),
+          kv("request_id", js(request_id)),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("cells_json", js(encode(cells)))
+        ])
+    }
+  else ()
+}
+
 -- emit_stream_chunk: dispatch one StreamChunk variant to the JSONL event
 -- protocol.
 --
@@ -668,6 +683,7 @@ func dispatch_calls(
                     kv("id", js(call.id)),
                     kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
                   ]);
+                  let _ = emit_eval_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
                   let handled_msg: Message = {
                     role: "tool",
                     content: encode(result_to_json(result_env)),
@@ -724,6 +740,7 @@ func dispatch_calls(
                 kv("id", js(call.id)),
                 kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
               ]);
+              let _ = emit_eval_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
               -- Use the call.id (model's typed tool_call_id) instead of the
               -- envelope's id for the tool-role Message correlation —
               -- providers correlate by the model-emitted id, not the
