@@ -11,7 +11,7 @@ Plans 01–03 all carried **"no inline images"** as an explicit Non-goal, justif
 
 - **pi-tui v0.64.0 ships a complete terminal-image stack** (`@mariozechner/pi-tui/dist/terminal-image.js` + `components/image.js`), re-exported from the package index:
   `detectCapabilities()` / `getCapabilities()` → `"kitty" | "iterm2" | null`; `encodeKitty()`, `encodeITerm2()`, `renderImage()`, `imageFallback()`, `getImageDimensions()`, `allocateImageId()`, `deleteKittyImage()`, `deleteAllKittyImages()`, `isImageLine()`, plus a ready-made `Image` component (`new Image(base64, mime, theme, options)`).
-- **pi-tui's differential renderer is already image-aware.** `tui.js` calls `isImageLine()` (`tui.js:562`, `570`) to skip appending `SEGMENT_RESET` to image lines and to refuse to composite overlays on top of them. So a `Text` whose lines contain raw Kitty/iTerm2 escape sequences renders images correctly through the existing pipeline.
+- **pi-tui's differential renderer is already image-aware.** `tui.js` calls `isImageLine()` (`tui.js:562`, `570`, `839`) to skip appending `SEGMENT_RESET` to image lines, refuse to composite overlays over them, and exempt them from the width-overflow crash check. **But that handling only protects image lines emitted by a non-wrapping component (a `Box` child / the `Image` component) — a `Text` component mangles them first** (see Architecture → "Why a flattened `Text` cannot carry images"). So images must be rendered as `Image` child components, not embedded in the existing flattened card `Text`.
 - **The image data already flows end-to-end to `ui.ts`**, base64 intact, and is dropped only at the final render step. Verified hop-by-hop:
 
   | Hop | File | Carries base64? |
@@ -24,14 +24,15 @@ Plans 01–03 all carried **"no inline images"** as an explicit Non-goal, justif
   | TUI parse | `runtime-process.ts:84` → `ui.ts:2519` `upsertEvalCard` → `parseEvalCellsJson` | ✅ |
   | **TUI render** | `ui.ts:1341` `renderEvalDisplayBundle` — `bundle.type === "image"` → `[image: <path> (<mime>)]` placeholder | ❌ **drops base64 here** |
 
-**This plan closes that one gap.** It removes the inline-image Non-goal and renders eval image bundles as real terminal images, with a graceful text fallback. **No kernel, env-server, `env_client`, brain, or wire changes are required** — the change is localized to `src/tui/src/ui.ts` (the renderer) plus a small shared image-render helper and tests.
+**This plan closes that one gap.** It removes the inline-image Non-goal and renders eval image bundles as real terminal images, with a graceful text fallback. **No kernel, env-server, `env_client`, brain, or wire changes are required** — the change is contained to the TUI (`src/tui/src/ui.ts` + a small shared module and tests). It is *not*, however, a one-line swap of the placeholder: rendering real images requires restructuring the eval card body from a single flattened `Text` into a small component subtree (see Architecture → "Why a flattened `Text` cannot carry images").
 
 ## Goals
 
 - When an `eval` cell emits an image display bundle (`display(pil_image)`, `plt.show()`-captured PNG, raw `bytes`), the eval card renders the **actual pixels** inline via Kitty or iTerm2, sized to the card width.
 - **Graceful degradation:** terminals without image support (and all non-TTY contexts — tests, pipes, CI) fall back to `imageFallback()` / the existing `[image: <path> (<dims> <mime>)]` placeholder. Never crash, never emit raw escape bytes to a terminal that can't decode them.
-- **No image leaks or ghosting** across the card's frequent re-renders (every `eval_result` upsert and every `Ctrl+O` expand/collapse) — Kitty images are reused by stable ID and deleted on teardown.
-- **Truncation-safe:** an image block is atomic — the collapse/preview line-slicing in `renderEvalCardLines` never splits the reserved rows from the cursor-up sequence line.
+- **Images are visible by default** — a card containing an image bundle defaults to expanded (today only error cards do; `ui.ts:2533`), so a successful plot shows pixels without requiring a `Ctrl+O` keystroke.
+- **No image leaks or ghosting** across the card's frequent re-renders (every `eval_result` upsert and every `Ctrl+O` expand/collapse — both call `renderEvalCard`, `ui.ts:1843`, `2561`) — Kitty images are reused by stable ID (replace, not stack), and purged with `deleteAllKittyImages()` on process exit.
+- **Truncation-safe:** each image is rendered by an atomic `Image` child component and is never sliced; the collapse/preview logic operates on whole segments, not into an image.
 
 ## Non-goals
 
@@ -51,141 +52,143 @@ Plans 01 (§Phase 5b, Non-goals), 02 (Non-goals), and 03 (Non-goals, Reference-l
 
 ## Architecture
 
+### Why a flattened `Text` cannot carry images (the load-bearing constraint)
+
+The obvious-but-wrong approach is to keep the card's single flattened `detailRow` (`Text`, set via `detailRow.setText(lines.join("\n"))` at `ui.ts:2569`) and just emit image escape-sequence lines into it. **This does not work and can crash the TUI.** Verified against pi-tui v0.64.0 source:
+
+1. `Text.render()` runs every line through `wrapTextWithAnsi` → `wrapSingleLine` (`components/text.js`, `utils.js`). Wrapping decides whether to break a line using `visibleWidth(line)`.
+2. `visibleWidth` strips escape sequences via `extractAnsiCode` (`utils.js`). But `extractAnsiCode`'s **CSI branch only terminates on `[mGKHJ]`** — and the multi-row image line begins with the cursor-up prefix `\x1b[{rows-1}A`, whose final byte is **`A`**, which it does not recognize. Parsing runs past the `A` into the image payload, so `visibleWidth` mis-measures the line as *thousands of columns wide* instead of ~0.
+3. Because `visibleWidth(line) > width`, `wrapSingleLine` calls `breakLongWord`, **shredding the escape sequence** into multiple lines. The trailing base64-only fragments no longer contain the `\x1b_G` / `\x1b]1337;` prefix, so `isImageLine()` returns false for them.
+4. At the renderer (`tui.js:839`), any non-image line wider than the terminal triggers a **fatal crash** ("Rendered line exceeds terminal width", writes a crash log and calls `this.stop()`). A shredded image fragment hits exactly this path.
+
+The codebase already knows this hazard — `ui.ts:1778` carries the comment *"raw ANSI inside Text children corrupts on re-render"* (the startup banner is printed via stdout for the same reason).
+
+### The supported mechanism: `Image` child components in the Box tree
+
+`Box.render()` (`components/box.js`) is the opposite of `Text`: it **never wraps**. It prepends a `leftPad` and, in `applyBg`, appends trailing pad-spaces *only when* `visibleWidth(line) < width` (`padNeeded = max(0, width - visLen)`). For a mis-measured image line (`visibleWidth ≫ width`), `padNeeded = 0`, so the line passes through **untouched**; `isImageLine()` then spares it the `tui.js:839` crash check. pi-tui's own `Image` component (`components/image.js`) is built to be a direct child of a Box for exactly this reason.
+
+So the card body must change from *one flattened `Text`* to *an ordered component subtree*: `Text` runs for header/code/stdout/stderr/JSON/markdown, interleaved with `Image` components for image bundles, all inside a per-card body `Box`.
+
 ```
-EvalCellResult.displays[*]  ({type:"image", mime, data:<base64>})   ← already arrives in ui.ts, intact
-        │
-        ▼
-ui.ts renderEvalDisplayBundle(bundle)                                ← the ONLY code that changes
-        │   bundle.type === "image" && typeof bundle.data === "string"
-        ├─ detectCapabilities().images != null
-        │      → getImageDimensions(base64, mime)
-        │      → renderImage(base64, dims, {maxWidthCells, maxHeightCells, imageId})
-        │      → emit (rows-1) blank lines + final line `\x1b[{rows-1}A` + sequence   (mirrors pi-tui Image)
-        │      → register imageId for lifecycle cleanup
-        └─ else → imageFallback(mime, dims, path)  /  existing `[image: …]` placeholder
-        │
-        ▼
-renderEvalCardLines → detailRow.setText(lines.join("\n"))            ← unchanged; isImageLine() in the
-                                                                        pi-tui renderer handles the image lines
+history: Box
+  ├─ toolRow:  Text   (the "… eval" status row — unchanged)
+  └─ bodyBox:  Box(0,0)              ← replaces the single flattened detailRow Text
+       ├─ Text   header + code + stdout + stderr + json/markdown for cell 1 (pre-image)
+       ├─ Image  cell-1 image bundle #1     ← real pixels; Box passes its lines through intact
+       ├─ Text   any output after that image
+       ├─ Image  cell-1 image bundle #2
+       ├─ Text   cell 2 header + code + output …
+       └─ …
 ```
 
-**Key mechanism (verified in `components/image.js:27–67`).** To make an image occupy *N* terminal rows inside a line-based `string[]` model, pi-tui pushes `(rows-1)` empty strings then a final line of `"\x1b[{rows-1}A" + sequence` (move cursor up to the first reserved row, then paint). `isImageLine()` (`terminal-image.js:46`) recognizes that final line by its `\x1b_G` (Kitty) / `\x1b]1337;File=` (iTerm2) prefix, and the differential renderer (`tui.js:562`, `570`) treats it atomically. The eval card already deals in `string[]` joined by `\n` (`ui.ts:1369`, `2568`), so **we replicate this exact line pattern** rather than restructuring the card into child components — the minimal, lowest-risk change.
+`EvalCellResult.displays[*]` already arrives in `ui.ts` with base64 intact (see Background table); the only change is **where** the image bundle is rendered — an `Image` child instead of a `chalk.dim("[image: …]")` text line.
 
 ---
 
-## Phase 0 — image-render helper (shared, testable)
+## Phase 0 — prove the mechanism, then build the image-segment helper
 
-**Files (new):** `src/tui/src/eval/image-render.ts`. **Tests:** `src/tui/src/eval/image-render.test.ts`.
+**Files (new):** `src/tui/src/eval/image-segment.ts`. **Tests:** `src/tui/src/eval/image-segment.test.ts`.
 
-Isolate the pi-tui calls behind one pure-ish function so the renderer stays thin and the logic is unit-testable without a TTY:
+**Step 0a — de-risk spike (do first, ~30 min).** Before any card surgery, confirm in a throwaway script on a Kitty/iTerm2 terminal that a pi-tui `Box` containing a `Text` + an `Image` + another `Text` renders the image inline without crashing or shredding. This validates the entire premise of the plan against the real terminal, not just the source reading above. If it fails, stop and reassess (fallback: images as trailing sibling rows — Open Q #1).
+
+**Step 0b — segment model.** The card renderer must stop returning a single `string[]` and instead return an **ordered list of segments**, each either text or image:
 
 ```ts
-// renderImageBundleLines(base64, mime, opts) -> string[]
-//   - caps = detectCapabilities() (cached via getCapabilities)
-//   - if caps.images == null  -> [imageFallback(mime, dims, filename)]  (text)
-//   - dims = getImageDimensions(base64, mime); if null -> fallback
-//   - { sequence, rows, imageId } = renderImage(base64, dims, {maxWidthCells, maxHeightCells, imageId})
-//   - return [...Array(rows-1).fill(""), `\x1b[${rows-1}A` + sequence]   (rows>1)
-//                                or just [sequence]                       (rows==1)
-//   - track/return imageId for the caller's lifecycle map
+type EvalSegment =
+  | { kind: "text"; lines: string[] }              // already-rendered (highlighted/dim) text lines
+  | { kind: "image"; image: Image | null; fallback: string[] };  // Image component, or text fallback lines
 ```
 
-- Import from `@mariozechner/pi-tui` (index re-exports all of these — `index.d.ts` confirms `Image`, `detectCapabilities`, `renderImage`, `imageFallback`, `getImageDimensions`, `allocateImageId`, `deleteKittyImage`, `deleteAllKittyImages`, `isImageLine`).
-- **Capability detection must not run in non-TTY contexts** (tests/pipes return `null`). Wrap so a thrown/`null` capability yields the text fallback path. Add a test-only override hook (inject a fake `caps`) so unit tests can exercise both the Kitty branch (assert the output line passes `isImageLine`) and the fallback branch.
-- **Reuse vs. replicate the `Image` component:** the component's `render(width)` returns exactly the `string[]` shape we need and also caches by width and manages its own `imageId`. *Recommendation:* **wrap the `Image` component** if its caching/imageId lifecycle composes cleanly with the card's per-bundle ID map (Phase 2); otherwise call `renderImage()` directly and own the ID. Decide in Phase 0; either way the helper's signature is stable.
+Provide `makeImageSegment(base64, mime, opts, theme) -> EvalSegment`:
+- `caps = getCapabilities()` (cached; `detectCapabilities()` runs once, lazily). If `caps.images == null` → `{kind:"image", image:null, fallback:[imageFallback(mime, dims, filename)]}` (still a text segment in effect).
+- Else construct/reuse an `Image(base64, mime, theme, {maxWidthCells, imageId})`. The `Image` component already does dimension probing (`getImageDimensions`), capability check, fallback, and the `(rows-1)` blanks + cursor-up packing internally — **prefer reusing it over hand-rolling `renderImage`** (it owns the `rows`/`imageId` bookkeeping we'd otherwise duplicate).
+- **Height is capped via width, not `maxHeightCells`.** ⚠ Verified: both `Image.render()` and `renderImage()` ignore `maxHeightCells` — rows are derived solely from `maxWidthCells` × aspect ratio (`calculateImageRows`, `terminal-image.js`). So to keep a tall plot from flooding scrollback, compute an **effective `maxWidthCells`**: take `dims = getImageDimensions(base64, mime)`, `rows = calculateImageRows(dims, cardWidth, getCellDimensions())`; if `rows > EVAL_IMAGE_MAX_ROWS`, shrink width to `floor(cardWidth * EVAL_IMAGE_MAX_ROWS / rows)` and pass *that* as `maxWidthCells`. This is the one bit of sizing math we own; everything else stays inside `Image`.
+- SVG (`image/svg+xml`) and missing/empty base64 → fallback segment (Non-goals).
+- **Non-TTY safety:** in tests/pipes `detectCapabilities()` returns `null` → fallback path; expose a test seam (`__setCapabilitiesForTest`) so both branches are unit-testable without a real terminal.
 
-**Acceptance:** unit tests — with an injected `kitty` capability, `renderImageBundleLines(pngBase64, "image/png")` returns lines whose last line satisfies `isImageLine()` and whose blank-line count equals `rows-1`; with `null` capability it returns a single non-image fallback line; an unparseable/empty base64 returns the fallback, never throws.
+**Acceptance:** Step 0a spike renders an inline image in a real terminal. Unit tests: with injected `kitty` caps, `makeImageSegment(pngBase64,"image/png")` yields an `image` segment whose `Image.render(w)` last line satisfies `isImageLine()`; with `null` caps it yields a `fallback` segment of plain text; bad/empty base64 and SVG yield fallback, never throw.
 
 ---
 
-## Phase 1 — wire the helper into `renderEvalDisplayBundle`
+## Phase 1 — restructure the eval card body into a component subtree
 
-**Files:** `src/tui/src/ui.ts` (the `bundle.type === "image"` branch, `ui.ts:1348–1356`).
+**Files:** `src/tui/src/ui.ts` — `EvalCardState` (`872`), `upsertEvalCard` (`2519`, the `detailRow` creation at `2549–2553`), `renderEvalCard` (`2564`), `renderEvalCardLines` (`1369`), `renderEvalDisplayBundle` (`1341`).
 
-Replace the placeholder-only branch:
+- **Card state:** replace the single `detailRow: Text` with `bodyBox: Box` (constructed `new Box(0, 0)` so it adds no extra margin/padding, matching the current `plainText` zero-padding). Add `images: Map<string, Image>` keyed by a stable `${cellIndex}:${bundleIndex}` so `Image` instances (and their Kitty `imageId`s) survive re-renders.
+- **Refactor the line builder into a segment builder:** turn `renderEvalCardLines` (and the `renderEvalDisplayBundle` image branch) into a function returning `EvalSegment[]` — text segments accumulate the existing highlighted/dim lines exactly as today; an image bundle becomes an `image` segment via `makeImageSegment`, reusing the cached `Image` from `card.images` (create on first sight, update size on width change via `Image.invalidate()`).
+- **`renderEvalCard` rebuilds the box:** `bodyBox.clear()`, then for each segment add either a `plainText(textLines.join("\n"))` child or the segment's `Image` child (or a `plainText(fallback)` when `image` is null), in order. The header line stays a `Text` segment at the top.
+- **Wiring:** where `upsertEvalCard` currently does `addChild(detailRow)` (`2551`), add `bodyBox` instead. The `toolRow` status line is unchanged.
+- **Default-expand image cards:** `upsertEvalCard` currently sets `expanded` only when a cell errored (`2533`/`2541`). Extend that predicate so a card with **any image bundle** also defaults to expanded — otherwise a successful plot shows only the collapsed placeholder until the user presses `Ctrl+O`, defeating the feature.
 
-```ts
-if (bundle.type === "image") {
-  const base64 = typeof bundle.data === "string" ? bundle.data : stringValue(recordValue(bundle.data)?.data, "");
-  const mime   = bundle.mime ?? stringValue(recordValue(bundle.data)?.mime, "image/png");
-  if (base64 && mime !== "image/svg+xml") {
-    const lines = renderImageBundleLines(base64, mime, { maxWidthCells: maxWidth, maxHeightCells: EVAL_IMAGE_MAX_ROWS, imageId: idFor(bundle) });
-    if (lines) return lines;            // includes the in-terminal fallback line if caps are null
-  }
-  // existing placeholder (no base64, SVG, or render failure)
-  …return [chalk.dim(`[image: ${path}${dims}]`)];
-}
-```
+> Note: this means `renderEvalCardLines`'s current `string[]` return is replaced by the segment list. Any test importing it (plan 03's snapshot) must move to the segment API or a text-only projection of it (Phase 4).
 
-- `EVAL_IMAGE_MAX_ROWS` caps image height (e.g. 24 rows) so a tall plot doesn't flood scrollback; `renderImage` preserves aspect ratio against `maxWidthCells`.
-- **Sizing source:** `maxWidth` already threads in from `toolPreviewWidth()` via `renderEvalCardLines` (`ui.ts:1385/1388`, `2568`). Subtract the 2-space card indent already applied at the call sites.
-- The image branch keeps emitting the existing placeholder as its fallback return, so behavior is identical on non-image terminals and in the transcript path.
-
-**Acceptance:** with an injected image capability, an `eval` card containing one PNG bundle renders the image-sequence line (passes `isImageLine`) sized to the card width; with no capability it renders the existing `[image: …]` placeholder; SVG bundles still render the placeholder.
+**Acceptance:** with injected image caps, a card with one PNG bundle adds an `Image` child to `bodyBox` whose rendered last line passes `isImageLine`; text-only cards render byte-identically to today (the segment list collapses to the same lines); SVG/no-caps cards show the placeholder text segment.
 
 ---
 
 ## Phase 2 — image lifecycle (no leaks, no ghosting)
 
-**Files:** `src/tui/src/ui.ts` (`EvalCardState` at `ui.ts:872`, `upsertEvalCard` at `2519`, `renderEvalCard` at `2564`, plus card-teardown/clear paths).
+**Files:** `src/tui/src/ui.ts` (`EvalCardState`, `upsertEvalCard`, `renderEvalCard`, and the card-removal / `/clear` / session-reset paths — mirror where compose cards are torn down).
 
-The card re-renders on **every** `eval_result` upsert and on **every** `Ctrl+O` toggle (`renderEvalCard` → `setText`). Kitty graphics are stateful: re-emitting a new image each render *stacks* images unless the same `imageId` is reused (which replaces), and images must be explicitly deleted when their card goes away.
+The card re-renders on **every** `eval_result` upsert and on **every** `Ctrl+O` toggle. Kitty graphics are stateful: a fresh `Image` (new `imageId`) on each render *stacks* images, and images are not freed when the card disappears.
 
-- Add a stable per-bundle ID map to `EvalCardState`: `imageIds: Map<string /*cell:bundle key*/, number>`, allocated once via `allocateImageId()` and passed into `renderImageBundleLines` so re-renders **replace** rather than stack.
-- On card removal / history clear / session reset / `/abort`, emit `deleteKittyImage(id)` for each tracked id (or `deleteAllKittyImages()` on a full screen clear). Find the existing clear/reset path the compose cards use and hook the same lifecycle point.
-- **iTerm2** has no persistent image IDs (it re-paints inline each render) — the reuse logic is a Kitty concern; for iTerm2 the helper simply re-emits. Branch on `caps.images`.
+- **Reuse, don't recreate (this is the primary anti-stacking mechanism):** keep `Image` instances in `card.images` across renders so the same Kitty `imageId` is reused — Kitty *replaces* an image drawn with the same id rather than stacking. `bodyBox.clear()` only detaches them from layout; the map retains them and re-adds the same instances. ⚠ **Reality check:** eval/compose cards are **never removed during a session** today — `history` only grows, and the sole `removeChild` (`ui.ts:2120`) is for transient *stream* rows, not cards. There is no `/clear` / session-reset / per-card teardown path to hook. So within a session, **reuse-by-id is the whole story** — there is nothing to dispose mid-session, and that is correct.
+- **Cleanup on process exit only:** the one place stale Kitty images should be purged is when Motoko exits, so they don't linger in the user's terminal. There is a `process.on("SIGINT", …)` at `ui.ts:1873` (→ `onAbort`) but no general shutdown hook — add a single `deleteAllKittyImages()` emit on exit/abort (and on the pi-tui width-crash `stop()` path if reachable). `Image.getImageId()` (`components/image.d.ts:24`) is available if per-id deletion is ever needed, but `deleteAllKittyImages()` on exit is sufficient and simpler.
+- **iTerm2** has no persistent image ids (it repaints inline each render); the reuse/delete logic is Kitty-specific. Branch on `caps.images`; for iTerm2 the `Image` component simply re-emits.
 
-**Acceptance:** toggling `Ctrl+O` repeatedly on an image card does not accumulate stacked/ghost images (manual check on a Kitty terminal); after the card is cleared, `deleteKittyImage` is emitted for each allocated id (unit-assert the teardown calls the delete with the tracked ids).
+**Acceptance:** toggling `Ctrl+O` repeatedly on an image card does not accumulate ghosts (manual, Kitty); a unit test asserts re-rendering a card reuses the same `Image` instance / `imageId` from `card.images` (no new allocation per render); exiting Motoko emits `deleteAllKittyImages()` (unit-assert the exit/abort hook calls it).
 
 ---
 
-## Phase 3 — truncation & collapse safety
+## Phase 3 — truncation & collapse with image segments
 
-**Files:** `src/tui/src/ui.ts` (`renderEvalCardLines` at `1369`, `formatEvalOutputLines` at `1306`).
+**Files:** `src/tui/src/ui.ts` (`renderEvalCardLines`→segment builder, `formatEvalOutputLines` at `1306`, the `visibleCells`/collapse logic at `1369–1404`).
 
-The collapse/preview logic slices line arrays by count (`formatEvalOutputLines`, the `visibleCells`/`... N more` logic). An image block is `(rows-1)` blanks + one sequence line whose `\x1b[{rows-1}A` count **must** match the preceding blanks, or the cursor lands on the wrong row and corrupts the display.
+The existing collapse logic slices flat line arrays and counts `... N more lines`. With segments, truncation must operate on the **segment list**, treating each image as an indivisible unit (an `Image` component renders atomically — we never slice into it).
 
-- Treat each image's `string[]` as an **atomic unit**: never let preview-truncation cut between the reserved blanks and the sequence line. Either render images only as whole blocks within the line budget, or drop the whole image (showing a `[image hidden — Ctrl+O to expand]` one-liner) when it doesn't fit the collapsed budget.
-- **Collapsed cards** currently show only the first cell's preview (`visibleCells = cells.slice(0,1)`, `ui.ts:1371`). *Decision:* render images only when **expanded** (or when the card is the sole/selected one); collapsed shows the atomic one-line image placeholder. Keeps collapsed cards compact and avoids painting large images behind a "collapsed" affordance.
-- Account image rows against the card's line budget so a multi-image cell doesn't blow past the preview window unexpectedly.
+- **Collapsed cards** show only the first cell (`visibleCells = cells.slice(0,1)`, `1371`). *Decision:* in collapsed state, render image segments as a one-line `[image — Ctrl+O to expand]` **text** placeholder (no `Image` child); only the expanded state attaches real `Image` children. This keeps collapsed cards compact and sidesteps drawing large images behind a "collapsed" affordance. **This is reconciled with "images visible by default" (Phase 1) because image cards default to *expanded*** — the placeholder is only seen after a user deliberately collapses a card, or for images in a non-first cell of a manually-collapsed card.
+- **Text segments** keep the current per-section preview caps (8 stdout / 4 stderr lines collapsed) and `... N more lines (Ctrl+O …)` affordance — unchanged logic, now applied within each text segment.
+- A height cap (`EVAL_IMAGE_MAX_ROWS`, e.g. 24) is enforced by **clamping the effective `maxWidthCells`** (Phase 0b), since `maxHeightCells` is ignored by pi-tui. Aspect ratio is preserved automatically because rows track width.
 
-**Acceptance:** a cell with stdout + a tall image, collapsed, shows the `[image hidden …]` one-liner and no partial escape sequence; expanded, shows the full image with its `rows-1` blanks intact; the `... N more lines` math still reflects real rows.
+**Acceptance:** a cell with stdout + a tall image renders, when collapsed, the `[image — Ctrl+O to expand]` one-liner and **no `Image` child / no escape bytes**; expanded, it attaches the `Image` child and renders pixels; the `... N more lines` counts still reflect the text segments.
 
 ---
 
 ## Phase 4 — tests & verification
 
 - **TS unit (`cd src/tui && bun run test`):**
-  - `image-render.test.ts` (Phase 0): Kitty branch line shape + `isImageLine`, null-caps fallback, bad-base64 safety.
-  - `ui.eval-card` image snapshot: with injected caps, a 1-image card emits an image line; without caps, the placeholder — extend the existing eval-card test (`ui.tool-render.test.ts` / the eval-card snapshot from plan 03).
-  - Lifecycle: re-render reuses the same `imageId`; teardown deletes tracked ids.
-  - Truncation atomicity: collapsed image card never splits a sequence from its reserved rows.
-- **Regression:** existing `ui.tool-render` and eval-card tests stay green; non-image bundles (json/markdown/status/text) and non-eval tool rows are unchanged; the plan-01 flat transcript path (`transcript.ts`, no TTY) is untouched and still emits `[image: <path> …]`.
-- **Manual E2E** (needs an image-capable terminal — Kitty, Ghostty, WezTerm, or iTerm2):
+  - `image-segment.test.ts` (Phase 0): injected-caps Kitty branch yields an `Image` segment whose render passes `isImageLine`; `null`-caps and SVG/bad-base64 yield fallback text; never throws.
+  - Card segment builder: a 1-image cell produces `[text, image]` segments with injected caps, and `[text]` (placeholder) without — adapt plan 03's eval-card snapshot to the segment API (or a text projection of it).
+  - Lifecycle: re-render reuses the same `Image`/`imageId` from `card.images` (no per-render allocation); the exit/abort hook calls `deleteAllKittyImages()`.
+  - Collapse: collapsed image card emits the `[image — Ctrl+O …]` placeholder and attaches no `Image` child.
+- **Regression:** non-image bundles (json/markdown/status/text) and non-eval tool rows render unchanged; **text-only eval cards are byte-identical to today** (assert the segment list collapses to the same lines); the plan-01 flat transcript path (`transcript.ts`, no TTY) is untouched and still emits `[image: <path> …]`. Update any test that imported the old `string[]`-returning `renderEvalCardLines`.
+- **Manual E2E** (image-capable terminal — Kitty, Ghostty, WezTerm, iTerm2):
   ```
   make run TASK="use eval to make a matplotlib sine plot and display() it"
   ```
-  Confirm the plot renders inline in the eval card; resize and toggle `Ctrl+O`; confirm no ghosting and a clean teardown. In a non-capable terminal (e.g. plain `xterm`, or piped output) confirm the `[image: …]` placeholder.
-- **Capability assertion at startup (optional):** log the detected protocol once (`kitty`/`iterm2`/`none`) so users understand why images may or may not render.
+  Confirm the plot renders inline; toggle `Ctrl+O` and resize; confirm no ghosting and clean teardown. In a non-capable terminal (plain `xterm`, or piped) confirm the `[image: …]` placeholder.
+- **Capability log at startup (optional):** log the detected protocol once (`kitty`/`iterm2`/`none`).
 
 ---
 
 ## Sequencing & risks
 
-1. Phase 0 (helper + tests) → 1 (wire into renderer) → 2 (lifecycle) → 3 (truncation safety) → 4 (tests + manual E2E). Phase 0 is pure and de-risks the pi-tui API surface before touching `ui.ts`.
+1. **Phase 0a spike first** — prove `Box`+`Image` renders inline on a real terminal before touching the card. Then 0b (segment helper) → 1 (card subtree restructure) → 2 (lifecycle) → 3 (collapse) → 4 (tests + E2E). Phase 1 is the largest change (card body restructure); Phase 2 is the most error-prone (Kitty state).
 2. **Risks:**
-   - *Kitty image lifecycle (the main one)* — stacking/ghosting on re-render and orphaned images on teardown. Mitigated by stable per-bundle `imageId` reuse + explicit `deleteKittyImage` on teardown (Phase 2). This is the one genuinely stateful part; budget for it.
-   - *Truncation splitting an image block* — corrupts the cursor-up math. Mitigated by atomic-block handling (Phase 3); cover with a unit test.
-   - *Capability detection in odd environments* — tmux passthrough, SSH, multiplexers, and non-TTY all vary. `detectCapabilities()` returns `null` → fallback; never emit raw image bytes when unsure. Treat `null` as the safe default everywhere.
-   - *`cells_json` payload size* — a large PNG base64 rides the JSONL `eval_result` event (`agent_loop_v2.ail:197`). Works today (the data already flows), but if event-size limits ever bite, the fallback is to **read the already-spilled artifact from disk** (`.motoko/artifacts/<session>/cellN-*.png`, written by `spillImages`, `transcript.ts:15`) instead of shipping base64 — the file is in the TUI's workdir. Noted as a contingency, not part of this plan's scope.
-   - *Scrollback behavior* — Kitty images are placed at the cursor; how they behave as history scrolls is governed by pi-tui's renderer, which already manages image lines (`tui.js`). By replicating the `Image` component's exact pattern we inherit whatever scroll handling pi-tui's own components get; flagged as the area to watch in manual E2E.
-3. **Keep the text fallback as the universal floor** — the existing `[image: <path> (<dims> <mime>)]` placeholder remains the return value whenever caps are absent, data is missing, or the format is SVG. No environment loses information relative to today.
+   - *Card-body restructure (the biggest)* — moving from one flattened `Text` to a `Box` of interleaved `Text`/`Image` children touches card state, `upsertEvalCard`, `renderEvalCard`, and the line-vs-segment builder, and forces plan 03's snapshot test to migrate. Contained to `ui.ts` + its tests, but not a one-liner. Mitigate by keeping text-only output byte-identical (regression assert).
+   - *Kitty image lifecycle* — stacking/ghosting on re-render, lingering images after exit. Mitigate via `Image`-instance reuse (stable `imageId`, so redraws replace) + `deleteAllKittyImages()` on exit (Phase 2). Note there is no mid-session card-teardown path to worry about (cards persist for the session).
+   - *Mechanism premise* — the whole plan rests on `Box`+`Image` rendering inline without the `tui.js:839` width-crash. Source reading says yes (Box doesn't wrap; `isImageLine` spares image lines); the Phase 0a spike confirms it empirically before commitment.
+   - *Capability detection in odd environments* — tmux/SSH/multiplexers/non-TTY vary; `detectCapabilities()` → `null` → fallback. Treat `null` as the safe default; never emit raw image bytes when unsure.
+   - *`cells_json` payload size* — a large PNG base64 rides the JSONL `eval_result` event (`agent_loop_v2.ail:197`). Works today (the data already flows), but if event-size limits ever bite, the contingency is to **read the already-spilled artifact from disk** (`.motoko/artifacts/<session>/cellN-*.<ext>`, written by `spillImages`, `transcript.ts:15`) — the file is in the TUI's workdir. Out of scope here, noted.
+   - *Scrollback behavior* — Kitty images are placed at the cursor; scroll behavior is governed by pi-tui's renderer, which already manages `Image` children. By using the real `Image` component we inherit whatever support pi-tui's own components get; watch in manual E2E.
+3. **Text fallback is the universal floor** — the `[image: <path> (<dims> <mime>)]` placeholder remains the output whenever caps are absent, data is missing, or the format is SVG. No environment loses information relative to today.
 
 ## Open questions
 
 | # | Question | Recommendation |
 |---|---|---|
-| 1 | Wrap pi-tui's `Image` component, or call `renderImage()` directly? | Decide in Phase 0; wrap if its imageId/caching composes with the card's ID map, else own the id. Helper signature is stable either way. |
-| 2 | Render images when the card is collapsed? | No — show an atomic `[image hidden — Ctrl+O to expand]` one-liner when collapsed; full image when expanded (Phase 3). |
-| 3 | Inline base64 (current flow) vs. read spilled artifact from disk? | Inline base64 — it already arrives intact end-to-end. Disk-read is the contingency if `cells_json` size ever becomes a problem. |
-| 4 | Height cap for tall plots? | `EVAL_IMAGE_MAX_ROWS` (~24); `renderImage` preserves aspect ratio against card width. Tune in manual E2E. |
+| 1 | Inline `Image` children in the card body vs. images as trailing sibling rows? | Inline (the plan) — matches the per-cell layout goal. Trailing sibling rows are the simpler fallback if the Phase 0a spike surfaces a Box/Image layout problem. |
+| 2 | Reuse pi-tui's `Image` component, or call `renderImage()` directly? | Reuse `Image` — it owns dimension probing, capability fallback, the `(rows-1)`+cursor-up packing, and `imageId` bookkeeping; hand-rolling `renderImage` would duplicate all of it. |
+| 3 | Render images when the card is collapsed? | No — collapsed shows a `[image — Ctrl+O to expand]` text placeholder; only expanded attaches real `Image` children (Phase 3). |
+| 4 | Inline base64 (current flow) vs. read spilled artifact from disk? | Inline base64 — it already arrives intact end-to-end. Disk-read is the contingency if `cells_json` size ever bites. |
+| 5 | Height cap for tall plots? | Clamp the effective `maxWidthCells` against `EVAL_IMAGE_MAX_ROWS` (~24) via `calculateImageRows` — `maxHeightCells` is ignored by pi-tui (verified). Aspect ratio is preserved. Tune in manual E2E. |
