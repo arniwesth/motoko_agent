@@ -1,0 +1,126 @@
+-- Smoke test: can a WebSocket request be captured inside onEvent, then
+-- dispatched effectfully after runEventLoop returns, then answered on the
+-- same still-open connection?
+--
+-- Run with:
+--   RESULT_FILE=/tmp/ws_deferred_result.txt PORT=8788 bun run ws_deferred_server.ts
+--   ailang run --caps IO,FS,Process,Stream \
+--     --stream-allow-http --stream-allow-localhost \
+--     --entry main smoke_deferred_dispatch.ail
+
+module smoke_deferred_dispatch
+
+import std/stream (connect, transmit, onEvent, runEventLoop, disconnect, StreamEvent)
+import std/io (println)
+import std/fs (writeFile, readFile, fileExists, removeFileResult)
+import std/json (Json, jo, kv, js, jnum, encode, decode, get, asString)
+import std/process (exec)
+import std/bytes (toString)
+
+func string_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(s) => s }
+  }
+}
+
+func frame_type(raw: string) -> string {
+  match decode(raw) {
+    Err(_) => "",
+    Ok(obj) => string_field(obj, "type", "")
+  }
+}
+
+func req_id(raw: string) -> string {
+  match decode(raw) {
+    Err(_) => "",
+    Ok(obj) => string_field(obj, "reqId", "")
+  }
+}
+
+func tool_result(req: string, stdout: string, stderr: string, exit_code: int) -> string {
+  encode(jo([
+    kv("type", js("tool-result")),
+    kv("reqId", js(req_id(req))),
+    kv("exit_code", jnum(_int_to_float(exit_code))),
+    kv("stdout", js(stdout)),
+    kv("stderr", js(stderr)),
+    kv("metadata", jo([kv("deferred", js("true"))]))
+  ]))
+}
+
+func effectful_dispatch_outside_handler(req: string) -> string ! {Process} {
+  match exec("echo", ["deferred-ok"]) {
+    Ok(out) => tool_result(req, toString(out.stdout), toString(out.stderr), out.exit_code),
+    Err(_) => tool_result(req, "", "exec failed", 1)
+  }
+}
+
+func collect_one(conn, req_path: string, done_path: string) -> () ! {Stream, FS, IO} {
+  onEvent(conn, \event. match event {
+    Message(s) => {
+      let typ = frame_type(s);
+      if typ == "tool-request" then {
+        println("CLIENT: captured tool-request");
+        writeFile(req_path, s);
+        false
+      } else if typ == "exec-result" then {
+        println("CLIENT: captured exec-result");
+        writeFile(done_path, s);
+        false
+      } else {
+        println("CLIENT: ignored ${typ}");
+        true
+      }
+    },
+    _ => true
+  });
+  runEventLoop(conn)
+}
+
+func loop_until_done(conn, req_path: string, done_path: string, remaining: int) -> () ! {Stream, FS, Process, IO} {
+  if remaining <= 0 then println("CLIENT: loop budget exhausted")
+  else if fileExists(done_path) then println("CLIENT: done")
+  else {
+    let _ = removeFileResult(req_path);
+    collect_one(conn, req_path, done_path);
+    if fileExists(done_path) then println("CLIENT: done")
+    else if fileExists(req_path) then {
+      let req = readFile(req_path);
+      let result = effectful_dispatch_outside_handler(req);
+      println("CLIENT: transmitting deferred result");
+      let _ = transmit(conn, result);
+      loop_until_done(conn, req_path, done_path, remaining - 1)
+    } else {
+      println("CLIENT: no request captured")
+    }
+  }
+}
+
+export func main() -> () ! {Stream, FS, Process, IO} {
+  let req_path = "/tmp/ws_deferred_request.txt";
+  let done_path = "/tmp/ws_deferred_done.txt";
+  let _ = removeFileResult(req_path);
+  let _ = removeFileResult(done_path);
+  match connect("ws://127.0.0.1:8788", {headers: []}) {
+    Err(_) => println("CLIENT: connect failed"),
+    Ok(conn) => {
+      collect_one(conn, req_path, done_path);
+      if fileExists(req_path) then {
+        let req = readFile(req_path);
+        let result = effectful_dispatch_outside_handler(req);
+        println("CLIENT: transmitting deferred result");
+        let _ = transmit(conn, result);
+        loop_until_done(conn, req_path, done_path, 3)
+      } else {
+        loop_until_done(conn, req_path, done_path, 3)
+      };
+      disconnect(conn);
+      if fileExists(done_path) then {
+        println("CLIENT_DONE: ${readFile(done_path)}")
+      } else {
+        println("CLIENT_DONE: missing exec-result")
+      }
+    }
+  }
+}

@@ -458,6 +458,8 @@ export class RuntimeProcess {
         "main",
         "--net-allow-http",
         "--net-allow-localhost",
+        "--stream-allow-http",
+        "--stream-allow-localhost",
         "src/core/supervisor.ail",
         "--",
         ...supervisorArgs

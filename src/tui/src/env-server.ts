@@ -15,10 +15,11 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmS
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { createClaimCheckTelemetry, runClaimCheck } from "./compose-claimcheck.js";
-import type { EvalCell, EvalCellResult } from "./eval/frames.js";
+import type { EvalCell, EvalCellResult, ExecCellResponse, LoopbackToolRequest, LoopbackToolResult } from "./eval/frames.js";
 import { EvalKernelRegistry } from "./eval/registry.js";
 import type { JsLoopback } from "./eval/kernel-js.js";
 import { startLoopbackServer } from "./eval/loopback.js";
+import { attachExecCellWebSocketServer } from "./eval/ws-channel.js";
 import { buildEvalTranscript, spillImages } from "./eval/transcript.js";
 
 export interface ExecResult {
@@ -718,6 +719,63 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }).filter((cell) => cell.code.trim() !== "");
   }
 
+  async function runEvalCells(cells: EvalCell[], sessionId: string, defaultTimeout: number): Promise<ExecCellResponse> {
+    if (cells.length === 0) {
+      return { exit_code: 0, stdout: "", stderr: "", cells: [], images: [], jsonOutputs: [], notice: "no eval cells provided" };
+    }
+    if (cells.some((cell) => cell.language === "py") && !pythonAvailable()) {
+      const notice = "python3 unavailable; Python eval cells were skipped";
+      return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
+    }
+
+    const results: EvalCellResult[] = [];
+    const images: Array<{ path: string; mime: string; width?: number; height?: number }> = [];
+    const jsonOutputs: unknown[] = [];
+    let exitCode = 0;
+
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      try {
+        const result = await evalRegistry.runCell(i, sessionId, cell, workdir, defaultTimeout);
+        results.push(result);
+        const spilled = spillImages(workdir, sessionId, i + 1, result.displays.concat(result.result ? [result.result] : []));
+        images.push(...spilled);
+        for (const b of result.displays.concat(result.result ? [result.result] : [])) {
+          if (b.type === "json") jsonOutputs.push(b.data);
+        }
+        if (result.exit_code !== 0 && exitCode === 0) exitCode = result.exit_code;
+      } catch (e: any) {
+        exitCode = 1;
+        results.push({
+          index: i,
+          language: cell.language,
+          title: cell.title ?? `${cell.language} cell ${i + 1}`,
+          code: cell.code,
+          durationMs: 0,
+          exit_code: 1,
+          stdout: "",
+          stderr: String(e?.message ?? e),
+          displays: [],
+          error: { ename: "EvalHostError", evalue: String(e?.message ?? e), traceback: [] },
+          executionCount: 0,
+          cancelled: false,
+          truncated: false,
+        });
+      }
+      if (exitCode !== 0) break;
+    }
+
+    const stdout = buildEvalTranscript(results, images);
+    return {
+      exit_code: exitCode,
+      stdout,
+      stderr: "",
+      cells: results,
+      images,
+      jsonOutputs,
+    };
+  }
+
   type StreamAuthorResult = {
     output: string;
     streamed: boolean;
@@ -1094,62 +1152,7 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     const cells = normalizeEvalCells(body.cells);
     const sessionId = String(body.sessionId ?? "default");
     const defaultTimeout = Math.max(1, Number(body.timeout ?? 30));
-    if (cells.length === 0) {
-      res.json({ exit_code: 0, stdout: "", stderr: "", cells: [], images: [], jsonOutputs: [], notice: "no eval cells provided" });
-      return;
-    }
-    if (cells.some((cell) => cell.language === "py") && !pythonAvailable()) {
-      const notice = "python3 unavailable; Python eval cells were skipped";
-      res.json({ exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice });
-      return;
-    }
-
-    const results: EvalCellResult[] = [];
-    const images: Array<{ path: string; mime: string; width?: number; height?: number }> = [];
-    const jsonOutputs: unknown[] = [];
-    let exitCode = 0;
-
-    for (let i = 0; i < cells.length; i++) {
-      const cell = cells[i];
-      try {
-        const result = await evalRegistry.runCell(i, sessionId, cell, workdir, defaultTimeout);
-        results.push(result);
-        const spilled = spillImages(workdir, sessionId, i + 1, result.displays.concat(result.result ? [result.result] : []));
-        images.push(...spilled);
-        for (const b of result.displays.concat(result.result ? [result.result] : [])) {
-          if (b.type === "json") jsonOutputs.push(b.data);
-        }
-        if (result.exit_code !== 0 && exitCode === 0) exitCode = result.exit_code;
-      } catch (e: any) {
-        exitCode = 1;
-        results.push({
-          index: i,
-          language: cell.language,
-          title: cell.title ?? `${cell.language} cell ${i + 1}`,
-          code: cell.code,
-          durationMs: 0,
-          exit_code: 1,
-          stdout: "",
-          stderr: String(e?.message ?? e),
-          displays: [],
-          error: { ename: "EvalHostError", evalue: String(e?.message ?? e), traceback: [] },
-          executionCount: 0,
-          cancelled: false,
-          truncated: false,
-        });
-      }
-      if (exitCode !== 0) break;
-    }
-
-    const stdout = buildEvalTranscript(results, images);
-    res.json({
-      exit_code: exitCode,
-      stdout,
-      stderr: "",
-      cells: results,
-      images,
-      jsonOutputs,
-    });
+    res.json(await runEvalCells(cells, sessionId, defaultTimeout));
   });
 
   // Persist a snippet and its metadata to the permanent store.
@@ -1747,6 +1750,12 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   });
 
   const server = app.listen(port);
+  const evalWsServer = attachExecCellWebSocketServer(server, {
+    path: "/exec-cell-ws",
+    normalizeCells: normalizeEvalCells,
+    runCells: (cells: EvalCell[], sessionId: string, timeoutSecs: number, resolver: (frame: LoopbackToolRequest) => Promise<LoopbackToolResult>) =>
+      loopback.withBrainResolver(resolver, () => runEvalCells(cells, sessionId, timeoutSecs)),
+  });
   // Wait for the bind to settle so we can return the actual port. With
   // port=0 the kernel allocates lazily — server.address() returns null
   // until the 'listening' event fires.
@@ -1761,6 +1770,7 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   const cleanup = () => {
     try { rmSync(motokoStore, { recursive: true, force: true }); } catch { /* ignore */ }
     try { evalRegistry.close(); } catch { /* ignore */ }
+    try { evalWsServer.close(); } catch { /* ignore */ }
     try { void loopback.close(); } catch { /* ignore */ }
   };
   process.on("exit", cleanup);

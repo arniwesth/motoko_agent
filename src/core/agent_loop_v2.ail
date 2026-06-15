@@ -60,6 +60,7 @@ import src/core/context_usage (context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
+import pkg/sunholo/motoko_ext_eval/ws_loopback (exec_cell_ws)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
 -- OpenRouter's API rejects the prefixed name. The fork's old code stored the
@@ -459,6 +460,17 @@ func json_field_str(obj: Json, key: string, fallback: string) -> string {
   }
 }
 
+func is_eval_tool_name(name: string) -> bool {
+  name == "eval" || name == "Eval"
+}
+
+func eval_cells_arg(args: Json) -> Json {
+  match get(args, "cells") {
+    Some(j) => j,
+    None => jo([])
+  }
+}
+
 -- Helper: detect whether a JSON object has a boolean field set to true.
 -- Used to detect policy_denied_message / delegated_deferred_message
 -- payloads (both flag themselves with `error: true`).
@@ -730,8 +742,34 @@ func dispatch_calls(
         _ => {
           -- M5: ask extensions whether they want to handle this tool directly
           -- (e.g. compose's `Compose` tool dispatches its own pipeline).
-          let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
-          match handle_decision {
+          if is_eval_tool_name(envelope.tool) then {
+            let result_cell = exec_cell_ws(rt, ctx, envelope, eval_cells_arg(envelope.arguments), 30);
+            let result_env: ToolResultEnvelope = {
+              tool_call_id: envelope.id,
+              tool: "eval",
+              exit_code: result_cell.exit_code,
+              stdout: result_cell.stdout,
+              stderr: result_cell.stderr,
+              metadata: result_cell.metadata
+            };
+            let _ = emit_event(session_id, "ext_tool_handled", [
+              kv("step", jnum(_int_to_float(step_idx))),
+              kv("stream_id", js(stream_id)),
+              kv("tool", js(call.name)),
+              kv("id", js(call.id)),
+              kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
+            ]);
+            let _ = emit_eval_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+            let handled_msg: Message = {
+              role: "tool",
+              content: encode(result_to_json(result_env)),
+              tool_calls: [],
+              tool_call_id: call.id
+            };
+            handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
+          } else {
+            let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+            match handle_decision {
             Handled(result_env) => {
               let _ = emit_event(session_id, "ext_tool_handled", [
                 kv("step", jnum(_int_to_float(step_idx))),
@@ -802,6 +840,7 @@ func dispatch_calls(
                 }
               }
             }
+          }
           }
         }
       }

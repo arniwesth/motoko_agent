@@ -16,6 +16,10 @@ export type LoopbackResolverOptions = {
 export type LoopbackServer = {
   url: string;
   token: string;
+  withBrainResolver: <T>(
+    resolver: (frame: LoopbackToolRequest) => Promise<LoopbackToolResult>,
+    fn: () => Promise<T>,
+  ) => Promise<T>;
   close: () => Promise<void>;
 };
 
@@ -36,21 +40,15 @@ export async function startLoopbackServer(opts: LoopbackResolverOptions): Promis
   const app = express();
   app.use(express.json({ limit: "2mb" }));
   const token = randomBytes(24).toString("hex");
+  let brainResolver: ((frame: LoopbackToolRequest) => Promise<LoopbackToolResult>) | null = null;
 
-  app.post("/loopback", (req, res) => {
-    const auth = String(req.headers.authorization ?? "");
-    if (auth !== `Bearer ${token}`) {
-      res.status(401).json(result("", 1, "", "unauthorized"));
-      return;
-    }
-    const frame = req.body as LoopbackToolRequest;
+  async function resolveLocal(frame: LoopbackToolRequest): Promise<LoopbackToolResult> {
     const reqId = String(frame.reqId ?? "");
     const args = frame.arguments ?? {};
     try {
       if (frame.tool === "read") {
         const p = confined(opts.workdir, String(args.path ?? ""));
-        res.json(result(reqId, 0, readFileSync(p, "utf8"), "", { path: p }));
-        return;
+        return result(reqId, 0, readFileSync(p, "utf8"), "", { path: p });
       }
       if (frame.tool === "write" || frame.tool === "append") {
         const p = confined(opts.workdir, String(args.path ?? ""));
@@ -58,16 +56,12 @@ export async function startLoopbackServer(opts: LoopbackResolverOptions): Promis
         const content = String(args.content ?? "");
         if (frame.tool === "write") writeFileSync(p, content, "utf8");
         else appendFileSync(p, content, "utf8");
-        res.json(result(reqId, 0, "", "", { path: p, bytes: Buffer.byteLength(content) }));
-        return;
+        return result(reqId, 0, "", "", { path: p, bytes: Buffer.byteLength(content) });
       }
       if (frame.tool === "search") {
         const p = confined(opts.workdir, String(args.path ?? "."));
         const pattern = String(args.pattern ?? "");
-        if (pattern.trim() === "") {
-          res.json(result(reqId, 1, "", "search pattern is required"));
-          return;
-        }
+        if (pattern.trim() === "") return result(reqId, 1, "", "search pattern is required");
         try {
           const out = execFileSync("rg", ["-n", "--no-heading", "--color", "never", pattern, p], {
             cwd: opts.workdir,
@@ -75,26 +69,36 @@ export async function startLoopbackServer(opts: LoopbackResolverOptions): Promis
             timeout: 15_000,
             maxBuffer: 1024 * 1024,
           });
-          res.json(result(reqId, 0, out.slice(0, 50 * 1024)));
+          return result(reqId, 0, out.slice(0, 50 * 1024));
         } catch (e: any) {
           const code = typeof e.status === "number" ? e.status : 1;
-          res.json(result(reqId, code === 1 ? 0 : code, String(e.stdout ?? "").slice(0, 50 * 1024), String(e.stderr ?? "").slice(0, 4000)));
+          return result(reqId, code === 1 ? 0 : code, String(e.stdout ?? "").slice(0, 50 * 1024), String(e.stderr ?? "").slice(0, 4000));
         }
-        return;
       }
       if (frame.tool === "agent") {
         const prompt = String(args.prompt ?? "");
         const model = String(args.model ?? "") || opts.defaultModel;
-        if (prompt.trim() === "") {
-          res.json(result(reqId, 1, "", "agent prompt is required"));
-          return;
-        }
-        res.json(result(reqId, 0, opts.callAgent(model, prompt)));
-        return;
+        if (prompt.trim() === "") return result(reqId, 1, "", "agent prompt is required");
+        return result(reqId, 0, opts.callAgent(model, prompt));
       }
-      res.json(result(reqId, 1, "", `loopback tool not allowed: ${frame.tool}`));
+      return result(reqId, 1, "", `loopback tool not allowed: ${frame.tool}`);
     } catch (e: any) {
-      res.json(result(reqId, 1, "", String(e?.message ?? e)));
+      return result(reqId, 1, "", String(e?.message ?? e));
+    }
+  }
+
+  app.post("/loopback", async (req, res) => {
+    const auth = String(req.headers.authorization ?? "");
+    if (auth !== `Bearer ${token}`) {
+      res.status(401).json(result("", 1, "", "unauthorized"));
+      return;
+    }
+    const frame = req.body as LoopbackToolRequest;
+    try {
+      const active = brainResolver;
+      res.json(active ? await active(frame) : await resolveLocal(frame));
+    } catch (e: any) {
+      res.json(result(String(frame.reqId ?? ""), 1, "", String(e?.message ?? e)));
     }
   });
 
@@ -105,6 +109,15 @@ export async function startLoopbackServer(opts: LoopbackResolverOptions): Promis
   return {
     url: `http://127.0.0.1:${address.port}/loopback`,
     token,
+    withBrainResolver: async <T>(resolver: (frame: LoopbackToolRequest) => Promise<LoopbackToolResult>, fn: () => Promise<T>): Promise<T> => {
+      if (brainResolver) throw new Error("eval loopback brain resolver is already active");
+      brainResolver = resolver;
+      try {
+        return await fn();
+      } finally {
+        if (brainResolver === resolver) brainResolver = null;
+      }
+    },
     close: () => new Promise<void>((resolveClose) => server.close(() => resolveClose())),
   };
 }
