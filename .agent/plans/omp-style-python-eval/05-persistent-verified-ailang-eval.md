@@ -2,11 +2,11 @@
 
 Feature context: **[plan 01](./01-design-c-mvp-local-loopback.md)** (persistent Python/JS eval), **[plan 03](./03-eval-tui-card-rendering.md)** (rich eval card), **[plan 04](./04-eval-inline-image-rendering.md)** (current eval card segment renderer), and the existing stateless `/exec-ailang` route.
 Independent of [plan 02 (B′)](./02-design-b-prime-reentrant-websocket.md).
-Toolchain: AILANG v0.19.1 (`ailang.lock`), Bun 1.3.x, Z3 if the pinned AILANG verifier requires the external binary.
+Toolchain: AILANG latest stable, **`>=0.25.0`** (verified latest docs catalog: `0.25.0` on 2026-06-17), Bun 1.3.x, Z3 if the current AILANG verifier requires the external binary. The local workspace binary may lag the target version; Phase 0 must upgrade/verify the CLI before implementation.
 
 ## TL;DR
 
-Add `language:"ail"` to the existing `eval` tool as a persistent, source-backed AILANG scratchpad. Unlike Python/JS kernels, AILANG persistence is an accumulated session module: accepted imports/declarations survive across cells, failed candidates do not mutate state, and every update is gated by `ailang check` plus optional `ailang verify` / Z3 contract verification. The main implementation hazards are current Python/JS-only eval plumbing, correct source composition, preserving per-cell check/verify metadata through the eval card wire, and avoiding proof overclaims when verification is skipped, unknown, or timed out.
+Add `language:"ail"` to the existing `eval` tool as a persistent, source-backed AILANG scratchpad. Unlike Python/JS kernels, AILANG persistence is an accumulated session module: accepted imports/declarations survive across cells, failed candidates do not mutate state, and every update is gated by `ailang check` plus optional `ailang verify` / Z3 contract verification. Before the model writes any AILANG in a session, inject/load the AILANG teaching prompt once and cache that fact for the session. The main implementation hazards are current Python/JS-only eval plumbing, correct source composition, preserving per-cell check/verify metadata through the eval card wire, one-time teach-prompt hydration, and avoiding proof overclaims when verification is skipped, unknown, or timed out.
 
 ## Background
 
@@ -34,13 +34,14 @@ This gives a different value proposition from Python:
 - Preserve AILANG effect discipline: cells declare requested caps, but the env-server and extension policy decide what can actually run.
 - Keep workdir / filesystem confinement aligned with the current `/exec-ailang` behavior (`AILANG_FS_SANDBOX=workdir`).
 - Update every current Python/JS-only branch (`frames.ts`, env-server normalization, eval registry, WebSocket eval path, TUI parsing/rendering, and package schema) so `ail` is not silently coerced to Python or dropped from the rich card.
+- Ensure the model receives the AILANG teaching prompt once per session before it is expected to author `ail` cells, without re-injecting the full prompt on every eval call.
 
 ## Non-goals
 
 - **No live AILANG REPL process.** Persistence is source/module persistence, not a mutable interpreter heap. AILANG remains compile/check/run oriented.
 - **No guarantee that every calculation is formally proved.** Z3 can prove stated properties for supported pure fragments. Unannotated code, effectful code, floating-point-heavy work, solver timeouts, and complex string/list recursion may be checked or executed but not formally proven.
 - **No kernel loopback in AILANG cells for MVP.** AILANG code should not call `tool.*` from inside the cell in this plan. If needed later, route it through plan 02's canonical WebSocket loopback rather than creating another local fork.
-- **No verifier ABI invention.** Use the pinned AILANG CLI's existing verification command shape. If v0.19.1 differs from current docs or plans (`ailang verify`, `ailang ai-check --verify`, or `@verify` handling), spike and codify the exact command first.
+- **No verifier ABI invention.** Use the current AILANG CLI's existing verification command shape. If the installed CLI differs from the latest docs or plans (`ailang verify`, `ailang ai-check --verify`, or `@verify` handling), upgrade to the latest stable CLI first, then spike and codify the exact command.
 - **No rich proof UI beyond structured diagnostics.** The eval card can show "checked", "verified", "unknown", or "failed" plus diagnostics; proof-object browsing is a separate feature.
 
 ---
@@ -74,6 +75,26 @@ For convenience, a later enhancement can add expression cells (`expr: "abs_diff(
 
 The JSON schema must model `verify` as either a boolean or the string `"auto"`; if the AILANG schema helper cannot conveniently express a union, use a string enum (`"auto" | "required" | "skip"`) instead of a mixed-type field.
 
+## Teaching prompt contract
+
+AILANG is niche enough that the model should not be expected to write correct syntax from memory. The latest AILANG docs expose a teaching prompt (`prompt_get(forVersion:"0.25.0", kind:"agent")`, verified on 2026-06-17) and the CLI advertises the equivalent `ailang prompt --kind agent`. The eval extension must make that reference available **once per session before the first `ail` cell is authored or repaired**.
+
+Recommended behavior:
+
+- `on_build_system_prompt()` keeps a short standing instruction, not the full teaching prompt: "Before writing `language:\"ail\"` eval cells, load/read the AILANG agent teaching prompt once for this session; do not guess AILANG syntax."
+- The runtime tracks a session flag such as `ctx.state_key -> ailang_teach_prompt_loaded`.
+- On the first observed intent to use AILANG eval, inject the teach prompt into context or trigger a lightweight helper/tool result that contains it, then set the session flag.
+- Later AILANG eval calls in the same session receive only a compact reminder plus links/tool names (`ailang.prompt_get(kind:"agent")`, `ailang prompt --kind agent`, `ailang docs`, `ailang examples`), not the full prompt again.
+- If the context is compacted or the session is resumed without the flag, rehydrate with a compact "AILANG reference already used; reload if uncertain" reminder, and only re-inject the full teaching prompt if the model starts producing AILANG errors that indicate syntax drift.
+
+Implementation options:
+
+1. **Extension-state flag (preferred):** store a session-scoped marker in the same state mechanism used by eval session IDs / context state, and have `motoko_eval` emit a one-time prompt patch or synthetic observation when `ail` cells first appear.
+2. **Env-server flag (fallback):** the env-server records `AilangSession.teachPromptSeen`; if the first `ail` cell arrives without the flag, it returns a structured notice asking the model to load the teaching prompt before retrying. This is safer than accepting likely-invalid code, but it costs an extra turn.
+3. **Always-on short prompt only (minimum):** acceptable only if the agent loop already has MCP/CLI access and reliably follows the short instruction. Do not paste the full teach prompt into every system prompt.
+
+**Acceptance:** in an end-to-end session, the full AILANG teaching prompt is surfaced at most once before the first `ail` cell; subsequent `ail` cells in the same session do not duplicate it; after compaction/resume the model still has enough reminder context to reload the prompt if needed.
+
 ## Architecture
 
 ```
@@ -96,6 +117,7 @@ LLM ── "eval" tool ──▶ motoko_ext_eval
 type AilangSession = {
   sessionId: string;
   moduleName: string;
+  teachPromptSeen: boolean;
   imports: string[];
   acceptedDecls: AilangAcceptedDecl[];
   lastGoodSource: string;
@@ -119,11 +141,14 @@ This is the key semantic difference from Python: a failed AILANG cell does **not
 
 ---
 
-## Phase 0 — verify the pinned CLI contract
+## Phase 0 — verify the latest CLI contract
 
 **Files:** no product files required; add notes to this plan or a tiny smoke under `.agent/research/omp-style-python-eval/ailang-verify-smoke/` if useful.
 
-Before implementation, prove the exact commands supported by the pinned runtime:
+Before implementation, install or select the latest stable AILANG CLI (`>=0.25.0`; docs catalog latest verified as `0.25.0` on 2026-06-17) and prove the exact commands supported by that runtime:
+
+- `ailang --version` reports `0.25.0` or newer.
+- `ailang.lock` / package constraints do not force the eval implementation back to an older language surface.
 
 - `ailang check <file>`
 - `ailang run --caps <caps> --entry main <file>`
@@ -142,7 +167,7 @@ Also confirm whether Z3 must be installed separately or is bundled / optional. I
 ## Phase 1 — env-server persistent AILANG session registry
 
 **Files (new):** `src/tui/src/eval/kernel-ailang.ts`, `src/tui/src/eval/ailang-session.ts`.
-**Files (modified):** `src/tui/src/eval/frames.ts`, `src/tui/src/eval/registry.ts`, `src/tui/src/eval/ws-channel.ts`, `src/tui/src/env-server.ts`.
+**Files (modified):** `src/tui/src/eval/frames.ts`, `src/tui/src/eval/registry.ts`, `src/tui/src/eval/ws-channel.ts`, `src/tui/src/env-server.ts`, plus the core/session state location chosen for the teaching-prompt flag.
 
 Implement a source-backed session registry:
 
@@ -151,6 +176,7 @@ Implement a source-backed session registry:
 - Add idle eviction and explicit `reset:true`, mirroring Python/JS eval.
 - Use a per-session temp directory under the existing snippet area, not the repo tree.
 - Preserve accepted source for diagnostics / snippets, but avoid writing failed candidates to permanent training stores unless explicitly wanted.
+- Track whether the AILANG teaching prompt has been surfaced for this session (`teachPromptSeen` or equivalent). Prefer a core/session flag so the model sees the prompt before authoring code; mirror it in `AilangSession` for env-server notices and diagnostics.
 - Extend `EvalLanguage` to `"py" | "js" | "ail"`.
 - Change `normalizeEvalCells()` to preserve `"ail"` and reject unknown languages with an explicit per-cell error; do **not** default unknown languages to Python.
 - Update `EvalRegistry` so `"ail"` routes to the source-backed runner instead of trying to allocate a Python/JS kernel.
@@ -164,6 +190,8 @@ Candidate handling:
 - Failed candidates return diagnostics and do not update `lastGoodSource`.
 
 **Acceptance:** two separate `ail` cells can define a pure helper in the first cell and use it from `main` in the second; a later cell can add an `import` without producing an invalid mid-module import; a third invalid cell fails without removing the previous definitions; `reset:true` clears the session.
+
+**Teaching-prompt acceptance:** the first AILANG eval attempt in a fresh session records that the teaching prompt was loaded/surfaced; the second AILANG eval attempt in that same session does not inject the full prompt again.
 
 ---
 
@@ -260,6 +288,7 @@ Update tool schema and prompt guidance:
 - Add `"ail"` to `language` enum.
 - Add optional AILANG fields: `verify`, `run`, `entry`, `caps`.
 - Explain that AILANG state is source-persistent: declarations persist only after check/verify gates pass.
+- Add a one-time teaching-prompt instruction: AILANG syntax must be learned from the AILANG agent prompt before writing `ail` cells, but the full prompt should be loaded/injected only once per session.
 - Teach the model when to choose AILANG over Python:
   - use AILANG for typed helper functions, integer/string/list invariants, effect-checking, and proof obligations;
   - use Python for data science libraries, plotting, floating point exploration, and quick ad hoc numeric work.
@@ -300,6 +329,7 @@ Current blocker: `normalizeEvalCellResult()` in `ui.ts` currently returns `null`
 - **Normalization regression:** unknown eval languages produce explicit errors; `language:"ail"` is preserved through HTTP `/exec-cell`, WebSocket `/exec-cell-ws`, `eval_result` JSON, and TUI parsing.
 - **AILANG smoke:** one checked-only cell, one verified pure function, one false contract, one run cell using a previously accepted declaration.
 - **Policy smoke:** restricted profile permits check-only if configured and denies run/effectful caps.
+- **Teach-prompt smoke:** fresh session surfaces the AILANG teaching prompt before first `ail` authoring attempt; same session does not repeat it on later `ail` cells; resumed/compacted session gets at least a compact reload reminder.
 - **TUI test:** card renders check/verify statuses and diagnostics.
 - **Wire metadata test:** `cell.metadata.ailang` survives env-server response → `ToolResultEnvelope.metadata.cells` → `eval_result.cells_json` → `parseEvalCellsJson`.
 - **Regression:** existing Python/JS eval tests stay green; existing `/exec-ailang` stateless route remains available unless deliberately deprecated.
@@ -330,13 +360,14 @@ Expected transcript:
 
 Risks:
 
-- *Verifier command drift* — plans and research mention `ailang verify`, `ai-check --verify`, `@verify`, `requires`, and `ensures`. The pinned CLI must be treated as source of truth.
+- *Verifier command drift* — plans and research mention `ailang verify`, `ai-check --verify`, `@verify`, `requires`, and `ensures`. The latest installed CLI (`>=0.25.0`) must be treated as source of truth.
 - *Overclaiming proofs* — "Z3 verified" only means the stated contract discharged in the supported fragment. The transcript and prompt must preserve `unknown` / `skipped` states.
 - *Persistent source composition* — concatenating arbitrary fragments can create duplicate exports, shadowing, stale `main` functions, or invalid import placement. Mitigate by storing imports/declarations/wrappers separately and rendering the module deterministically.
 - *Performance* — check/verify on the full accumulated module may get slow. MVP accepts this; later optimize by splitting stable accepted declarations from generated run wrappers or caching verified snapshots.
 - *Effect policy confusion* — AILANG caps are safer than Python, but still execute effects through the runtime. The extension policy must intersect requested caps with the active profile.
 - *Z3 limits* — string/list reasoning and recursion can time out or return unknown. Treat unknown as a first-class result, not a failure of the tool.
 - *Runtime-path drift* — v2's direct `exec_cell_ws` eval path can bypass package `on_tool_handle`. Keep HTTP, WS, and extension dispatch behavior covered by the same tests.
+- *Teaching prompt duplication vs omission* — injecting the full AILANG prompt every turn wastes context, but omitting it causes predictable syntax failures. Mitigate with a session-scoped "teach prompt loaded" flag plus a compact reminder after compaction/resume.
 
 ## Open questions
 
@@ -347,3 +378,4 @@ Risks:
 | 3 | What is the default verification policy? | `auto`: verify annotated cells, report unknown honestly, require pass only when `verify:true` or strict profile says so. |
 | 4 | Should failed candidate source be saved for training? | Not by default. Save only redacted diagnostics unless the snippet store explicitly opts into failed verified-eval examples. |
 | 5 | Can AILANG cells call tools / agents? | Not in this MVP. If needed, use plan 02's canonical loopback so policy remains centralized. |
+| 6 | Where should the one-time teaching-prompt flag live? | Prefer core/session state keyed by `ctx.state_key`; mirror in the env-server session only for diagnostics. |
