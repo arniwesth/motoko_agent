@@ -13,14 +13,23 @@ module smoke_deferred_dispatch
 import std/stream (connect, transmit, onEvent, runEventLoop, disconnect, StreamEvent)
 import std/io (println)
 import std/fs (writeFile, readFile, fileExists, removeFileResult)
-import std/json (Json, jo, kv, js, jnum, encode, decode, get, asString)
+import std/json (Json, jo, kv, js, jnum, encode, decode, asString)
 import std/process (exec)
 import std/bytes (toString)
 
 func string_field(obj: Json, key: string, fallback: string) -> string {
-  match get(obj, key) {
-    None => fallback,
-    Some(j) => match asString(j) { None => fallback, Some(s) => s }
+  match obj {
+    JObject(kvs) => string_field_rec(kvs, key, fallback),
+    _ => fallback
+  }
+}
+
+func string_field_rec(kvs: [{key: string, value: Json}], key: string, fallback: string) -> string {
+  match kvs {
+    [] => fallback,
+    x :: rest =>
+      if x.key == key then match asString(x.value) { Some(s) => s, None => fallback }
+      else string_field_rec(rest, key, fallback)
   }
 }
 
@@ -51,7 +60,7 @@ func tool_result(req: string, stdout: string, stderr: string, exit_code: int) ->
 
 func effectful_dispatch_outside_handler(req: string) -> string ! {Process} {
   match exec("echo", ["deferred-ok"]) {
-    Ok(out) => tool_result(req, toString(out.stdout), toString(out.stderr), out.exit_code),
+    Ok(out) => tool_result(req, toString(out.stdout), toString(out.stderr), out.exitCode),
     Err(_) => tool_result(req, "", "exec failed", 1)
   }
 }
@@ -59,6 +68,7 @@ func effectful_dispatch_outside_handler(req: string) -> string ! {Process} {
 func collect_one(conn, req_path: string, done_path: string) -> () ! {Stream, FS, IO} {
   onEvent(conn, \event. match event {
     Message(s) => {
+      println("CLIENT_RAW: ${s}");
       let typ = frame_type(s);
       if typ == "tool-request" then {
         println("CLIENT: captured tool-request");
