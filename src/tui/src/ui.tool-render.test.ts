@@ -18,6 +18,7 @@ import {
   renderEvalCardLines,
   evalSegmentsToText,
   evalCellsHaveImage,
+  shouldExpandEvalCard,
 } from "./ui.js";
 import type { EvalCellResult } from "./eval/frames.js";
 import { __setCapabilitiesForTest } from "./eval/image-segment.js";
@@ -121,6 +122,27 @@ describe("ui tool rendering helpers", () => {
     // Record-shaped image data (artifact path reference, no inline base64) keeps
     // the existing placeholder regardless of terminal capability.
     expect(joined).toContain("[image: .motoko/artifacts/eval/cell2-1.png (2x3 image/png)]");
+  });
+
+  it("defaults small multi-cell eval cards to expanded", () => {
+    const cell = (index: number): EvalCellResult => ({
+      index,
+      language: "py",
+      title: `cell ${index + 1}`,
+      code: "print('ok')",
+      durationMs: 1,
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      displays: [],
+      executionCount: 1,
+      cancelled: false,
+      truncated: false,
+    });
+
+    expect(shouldExpandEvalCard([cell(0)])).toBe(true);
+    expect(shouldExpandEvalCard([cell(0), cell(1)])).toBe(true);
+    expect(shouldExpandEvalCard([cell(0), cell(1), cell(2)])).toBe(false);
   });
 
   describe("eval card image segments (inline base64)", () => {

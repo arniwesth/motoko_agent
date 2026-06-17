@@ -1390,9 +1390,15 @@ export function evalCellsHaveImage(cells: EvalCellResult[]): boolean {
   );
 }
 
-/** A card defaults to expanded when a cell errored or emitted an image. */
-function shouldExpandEvalCard(cells: EvalCellResult[]): boolean {
-  return cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error)) || evalCellsHaveImage(cells);
+const EVAL_DEFAULT_EXPANDED_CELL_LIMIT = 2;
+
+/** A card defaults to expanded when it is small, errored, or emitted an image. */
+export function shouldExpandEvalCard(cells: EvalCellResult[]): boolean {
+  return (
+    cells.length <= EVAL_DEFAULT_EXPANDED_CELL_LIMIT ||
+    cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error)) ||
+    evalCellsHaveImage(cells)
+  );
 }
 
 export function formatEvalCardHeader(cells: EvalCellResult[]): string {
