@@ -33,6 +33,7 @@ export const CORE_MAP: ConfigMap = {
   "server.port": { env: "ENV_PORT" },
   "tools.hybrid": { env: "HYBRID_TOOLS", serialize: boolTo01 },
   "tools.ohmy_pi": { env: "OHMY_PI_TOOLS", serialize: boolTo01 },
+  "tools.eval_ws_loopback": { env: "MOTOKO_EVAL_WS_LOOPBACK", serialize: boolTo01 },
   "tools.snippet_caps": { env: "AILANG_SNIPPET_CAPS", serialize: CSV },
   "tools.delegated_timeout_ms": { env: "DELEGATED_TOOL_TIMEOUT_MS" },
   "tools.delegated_poll_ms": { env: "DELEGATED_TOOL_POLL_MS" },
@@ -107,6 +108,7 @@ port = 8080                              # ENV_PORT
 [tools]
 hybrid = true                            # HYBRID_TOOLS
 ohmy_pi = false                          # OHMY_PI_TOOLS
+eval_ws_loopback = false                 # MOTOKO_EVAL_WS_LOOPBACK
 snippet_caps = ["IO", "FS", "Process"]   # AILANG_SNIPPET_CAPS
 delegated_timeout_ms = 30000             # DELEGATED_TOOL_TIMEOUT_MS
 delegated_poll_ms = 100                  # DELEGATED_TOOL_POLL_MS
@@ -164,6 +166,7 @@ export const CORE_CONFIG_JSON_TEMPLATE = JSON.stringify(
     tools: {
       hybrid: true,
       ohmy_pi: false,
+      eval_ws_loopback: false,
       snippet_caps: ["IO", "FS", "Process"],
       delegated_timeout_ms: 30000,
       delegated_poll_ms: 100,

@@ -164,6 +164,7 @@ type ProfileAgentConfig = {
   openaiBaseUrl?: string;
   aiOptionsJson?: string;
   extensions?: string[];
+  evalWsLoopback?: boolean;
   clickstack?: {
     enabled?: boolean;
     endpoint?: string;
@@ -214,6 +215,17 @@ function applyClickStackProfileConfig(
   setFromProfile(protectedKeys, "OTEL_EXPORTER_OTLP_TIMEOUT", clickstack.timeoutMs);
 }
 
+function applyToolProfileConfig(
+  profile: ProfileAgentConfig,
+  protectedKeys: Set<string>,
+): void {
+  setFromProfile(
+    protectedKeys,
+    "MOTOKO_EVAL_WS_LOOPBACK",
+    profile.evalWsLoopback === undefined ? undefined : profile.evalWsLoopback ? "1" : "0",
+  );
+}
+
 function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAgentConfig {
   const profileDir = path.isAbsolute(profile)
     ? profile
@@ -229,6 +241,9 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
       };
       extensions?: {
         order?: unknown;
+      };
+      tools?: {
+        eval_ws_loopback?: unknown;
       };
       clickstack?: {
         enabled?: unknown;
@@ -259,6 +274,9 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         ? parsed.agent.ai_options_json
         : undefined,
       extensions,
+      evalWsLoopback: typeof parsed.tools?.eval_ws_loopback === "boolean"
+        ? parsed.tools.eval_ws_loopback
+        : undefined,
       clickstack: {
         enabled: typeof parsed.clickstack?.enabled === "boolean"
           ? parsed.clickstack.enabled
@@ -575,6 +593,7 @@ async function main(): Promise<void> {
   const envPort = Number(process.env.ENV_PORT ?? 0);
   let profile = activeProfile();
   const profileAgent = resolveProfileAgentConfig(workdir, profile);
+  applyToolProfileConfig(profileAgent, shellEnvKeys);
   applyClickStackProfileConfig(profileAgent.clickstack, shellEnvKeys);
   const model =
     process.env.MODEL ??

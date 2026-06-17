@@ -2,7 +2,7 @@ import express from "express";
 import { appendFileSync, readFileSync, writeFileSync } from "fs";
 import { createServer, type Server } from "http";
 import { randomBytes } from "crypto";
-import { dirname, resolve } from "path";
+import { dirname, relative, resolve } from "path";
 import { mkdirSync } from "fs";
 import { execFileSync } from "child_process";
 import type { LoopbackToolRequest, LoopbackToolResult } from "./frames.js";
@@ -25,6 +25,28 @@ export type LoopbackServer = {
 
 function result(reqId: string, exit_code: number, stdout: string, stderr = "", metadata: Record<string, unknown> = {}): LoopbackToolResult {
   return { type: "tool-result", reqId, exit_code, stdout, stderr, metadata };
+}
+
+function parseRipgrepMatches(workdir: string, pattern: string, stdout: string): string {
+  const matches = stdout
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => {
+      const first = line.indexOf(":");
+      const second = first < 0 ? -1 : line.indexOf(":", first + 1);
+      if (first < 0 || second < 0) return undefined;
+      const rawPath = line.slice(0, first);
+      const lineNo = Number(line.slice(first + 1, second));
+      const path = relative(workdir, rawPath);
+      return {
+        path: path.startsWith("..") ? rawPath : path,
+        line_number: Number.isFinite(lineNo) ? lineNo : 0,
+        line_text: line.slice(second + 1),
+        context: [],
+      };
+    })
+    .filter((match): match is { path: string; line_number: number; line_text: string; context: never[] } => match !== undefined);
+  return JSON.stringify({ tool: "Search", pattern, matches, exit_code: 0 });
 }
 
 function confined(workdir: string, userPath: string): string {
@@ -69,10 +91,16 @@ export async function startLoopbackServer(opts: LoopbackResolverOptions): Promis
             timeout: 15_000,
             maxBuffer: 1024 * 1024,
           });
-          return result(reqId, 0, out.slice(0, 50 * 1024));
+          return result(reqId, 0, parseRipgrepMatches(opts.workdir, pattern, out).slice(0, 50 * 1024));
         } catch (e: any) {
           const code = typeof e.status === "number" ? e.status : 1;
-          return result(reqId, code === 1 ? 0 : code, String(e.stdout ?? "").slice(0, 50 * 1024), String(e.stderr ?? "").slice(0, 4000));
+          const stdout = String(e.stdout ?? "");
+          return result(
+            reqId,
+            code === 1 ? 0 : code,
+            code === 1 ? parseRipgrepMatches(opts.workdir, pattern, stdout).slice(0, 50 * 1024) : stdout.slice(0, 50 * 1024),
+            String(e.stderr ?? "").slice(0, 4000),
+          );
         }
       }
       if (frame.tool === "agent") {

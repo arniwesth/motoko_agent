@@ -2,7 +2,7 @@ module sunholo/motoko_ext_eval/ws_loopback
 
 import std/fs (writeFile, readFile, removeFileResult, fileExists)
 import std/env (getEnvOr)
-import std/json (Json, jo, kv, js, jnum, encode, decode, get, asString, asNumber)
+import std/json (Json, jo, kv, js, jnum, encode, decode, asString, asNumber, get)
 import std/result (Ok, Err)
 import std/string (replace)
 import std/stream (connect, transmit, onEvent, runEventLoop, disconnect, StreamEvent)
@@ -13,23 +13,48 @@ import src/core/tool_envelope_dispatch (dispatch_tool_envelope)
 import src/core/env_client (exec_cell)
 
 func string_field(obj: Json, key: string, fallback: string) -> string {
-  match get(obj, key) {
-    None => fallback,
-    Some(j) => match asString(j) { None => fallback, Some(s) => s }
+  match obj {
+    JObject(kvs) => string_field_rec(kvs, key, fallback),
+    _ => fallback
+  }
+}
+
+func string_field_rec(kvs: [{key: string, value: Json}], key: string, fallback: string) -> string {
+  match kvs {
+    [] => fallback,
+    x :: rest =>
+      if x.key == key then match asString(x.value) { Some(s) => s, None => fallback }
+      else string_field_rec(rest, key, fallback)
   }
 }
 
 func number_field(obj: Json, key: string, fallback: int) -> int {
-  match get(obj, key) {
-    None => fallback,
-    Some(j) => match asNumber(j) { None => fallback, Some(n) => _float_to_int(n) }
+  match obj {
+    JObject(kvs) => number_field_rec(kvs, key, fallback),
+    _ => fallback
+  }
+}
+
+func number_field_rec(kvs: [{key: string, value: Json}], key: string, fallback: int) -> int {
+  match kvs {
+    [] => fallback,
+    x :: rest =>
+      if x.key == key then match asNumber(x.value) { Some(n) => _float_to_int(n), None => fallback }
+      else number_field_rec(rest, key, fallback)
   }
 }
 
 func args_field(obj: Json) -> Json {
-  match get(obj, "arguments") {
-    None => jo([]),
-    Some(j) => j
+  match obj {
+    JObject(kvs) => args_field_rec(kvs),
+    _ => jo([])
+  }
+}
+
+func args_field_rec(kvs: [{key: string, value: Json}]) -> Json {
+  match kvs {
+    [] => jo([]),
+    x :: rest => if x.key == "arguments" then x.value else args_field_rec(rest)
   }
 }
 
@@ -43,8 +68,8 @@ func canonical_tool_name(tool: string) -> string {
 func canonical_args(tool: string, args: Json) -> Json {
   if tool == "search" then
     jo([
-      kv("pattern", match get(args, "pattern") { Some(v) => v, None => js("") }),
-      kv("dir", match get(args, "path") { Some(v) => v, None => js(".") })
+      kv("pattern", js(string_field(args, "pattern", ""))),
+      kv("dir", js(string_field(args, "path", ".")))
     ])
   else args
 }
@@ -61,14 +86,34 @@ func call_from_loopback_frame(obj: Json) -> ToolCallEnvelope {
 }
 
 func tool_result_frame(req_id: string, result: ToolResultEnvelope) -> string {
+  let stdout = stdout_for_loopback(result.tool, result.stdout, result.metadata);
   encode(jo([
     kv("type", js("tool-result")),
     kv("reqId", js(req_id)),
     kv("exit_code", jnum(_int_to_float(result.exit_code))),
-    kv("stdout", js(result.stdout)),
+    kv("stdout", js(stdout)),
     kv("stderr", js(result.stderr)),
     kv("metadata", result.metadata)
   ]))
+}
+
+func json_string_field(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    Some(j) => match asString(j) { Some(s) => s, None => "" },
+    None => ""
+  }
+}
+
+func stdout_for_loopback(tool: string, stdout: string, metadata: Json) -> string {
+  if tool == "ReadFile" then {
+    let content = json_string_field(metadata, "content");
+    if content == "" then stdout else content
+  } else if tool == "Search" then {
+    match metadata {
+      JObject(_) => encode(metadata),
+      _ => stdout
+    }
+  } else stdout
 }
 
 func error_tool_result(req_id: string, message: string) -> string {
@@ -90,6 +135,10 @@ func state_path(call_id: string) -> string {
   "/tmp/motoko-eval-ws-${replace(replace(call_id, "/", "_"), ":", "_")}.json"
 }
 
+func request_path(call_id: string) -> string {
+  "/tmp/motoko-eval-ws-${replace(replace(call_id, "/", "_"), ":", "_")}.request.json"
+}
+
 func result_from_json(raw: string) -> CellExecResult {
   match decode(raw) {
     Err(_) => { stdout: "", stderr: "env-server: malformed exec-cell-ws response: ${raw}", exit_code: 1, metadata: jo([]) },
@@ -102,12 +151,70 @@ func result_from_json(raw: string) -> CellExecResult {
   }
 }
 
+func collect_one(conn, req_path: string, done_path: string) -> () ! {Stream, FS} {
+  onEvent(conn, \event. match event {
+    Message(s) => {
+      match decode(s) {
+        Err(_) => true,
+        Ok(obj) => {
+          let typ = string_field(obj, "type", "");
+          if typ == "tool-request" then {
+            writeFile(req_path, s);
+            false
+          } else if typ == "exec-result" then {
+            writeFile(done_path, s);
+            false
+          } else if typ == "error" then {
+            writeFile(done_path, encode(jo([
+              kv("exit_code", jnum(1.0)),
+              kv("stdout", js("")),
+              kv("stderr", js(string_field(obj, "message", "exec-cell-ws error")))
+            ])));
+            false
+          } else true
+        }
+      }
+    },
+    _ => true
+  });
+  runEventLoop(conn)
+}
+
+func dispatch_deferred_request(rt: ExtRuntime, ctx: ExtCtx, raw_req: string) -> string ! {IO, Clock, FS, Process, AI, Env, Net, SharedMem, Stream} {
+  match decode(raw_req) {
+    Err(_) => error_tool_result("", "invalid tool-request frame"),
+    Ok(obj) => {
+      let req_id = string_field(obj, "reqId", "");
+      let dispatch_result = dispatch_tool_envelope(rt, ctx, call_from_loopback_frame(obj));
+      tool_result_frame(req_id, dispatch_result)
+    }
+  }
+}
+
+func loop_until_done(rt: ExtRuntime, ctx: ExtCtx, conn, req_path: string, done_path: string, remaining: int) -> () ! {Stream, FS, IO, Clock, Process, AI, Env, Net, SharedMem} {
+  if remaining <= 0 then ()
+  else if fileExists(done_path) then ()
+  else {
+    let _ = removeFileResult(req_path);
+    collect_one(conn, req_path, done_path);
+    if fileExists(done_path) then ()
+    else if fileExists(req_path) then {
+      let raw_req = readFile(req_path);
+      let result_frame = dispatch_deferred_request(rt, ctx, raw_req);
+      let _ = transmit(conn, result_frame);
+      loop_until_done(rt, ctx, conn, req_path, done_path, remaining - 1)
+    } else ()
+  }
+}
+
 export func exec_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, cells: Json, timeout_secs: int) -> CellExecResult ! {Stream, FS, IO, Clock, Process, AI, Env, Net, SharedMem} {
   if getEnvOr("MOTOKO_EVAL_WS_LOOPBACK", "0") != "1" then
     exec_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs)
   else {
     let path = state_path(call.id);
+    let req_path = request_path(call.id);
     let _ = removeFileResult(path);
+    let _ = removeFileResult(req_path);
     let url = "${ws_url(ctx.env_server_url)}/exec-cell-ws";
     match connect(url, {headers: []}) {
       Err(_) => exec_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs),
@@ -119,34 +226,7 @@ export func exec_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, ce
           kv("timeout", jnum(_int_to_float(timeout_secs)))
         ]));
         let _ = transmit(conn, run_frame);
-        onEvent(conn, \event. match event {
-          Message(s) => {
-            match decode(s) {
-              Err(_) => true,
-              Ok(obj) => {
-                let typ = string_field(obj, "type", "");
-                if typ == "tool-request" then {
-                  let req_id = string_field(obj, "reqId", "");
-                  let dispatch_result = dispatch_tool_envelope(rt, ctx, call_from_loopback_frame(obj));
-                  let _ = transmit(conn, tool_result_frame(req_id, dispatch_result));
-                  true
-                } else if typ == "exec-result" then {
-                  writeFile(path, s);
-                  false
-                } else if typ == "error" then {
-                  writeFile(path, encode(jo([
-                    kv("exit_code", jnum(1.0)),
-                    kv("stdout", js("")),
-                    kv("stderr", js(string_field(obj, "message", "exec-cell-ws error")))
-                  ])));
-                  false
-                } else true
-              }
-            }
-          },
-          _ => true
-        });
-        runEventLoop(conn);
+        loop_until_done(rt, ctx, conn, req_path, path, 32);
         disconnect(conn);
         if fileExists(path) then
           result_from_json(readFile(path))
