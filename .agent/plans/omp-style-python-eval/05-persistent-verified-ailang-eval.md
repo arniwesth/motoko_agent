@@ -1,6 +1,6 @@
 # Plan: `eval` persistent verified AILANG scratchpad
 
-Feature context: **[plan 01](./01-design-c-mvp-local-loopback.md)** (persistent Python/JS eval), **[plan 03](./03-eval-tui-card-rendering.md)** (rich eval card), and the existing stateless `/exec-ailang` route.
+Feature context: **[plan 01](./01-design-c-mvp-local-loopback.md)** (persistent Python/JS eval), **[plan 03](./03-eval-tui-card-rendering.md)** (rich eval card), **[plan 04](./04-eval-inline-image-rendering.md)** (current eval card segment renderer), and the existing stateless `/exec-ailang` route.
 Independent of [plan 02 (B′)](./02-design-b-prime-reentrant-websocket.md).
 Toolchain: AILANG v0.19.1 (`ailang.lock`), Bun 1.3.x, Z3 if the pinned AILANG verifier requires the external binary.
 
@@ -10,6 +10,7 @@ The Python/JS eval design gives the model a persistent execution scratchpad: sta
 
 - `src/core/env_client.ail` exposes `exec_ailang(...)`.
 - `src/tui/src/env-server.ts` exposes `POST /exec-ailang`, which writes a temporary module, runs `ailang check`, then runs `ailang run`.
+- The current eval implementation is already present on this branch, but its type surface is Python/JS-only: `EvalLanguage = "py" | "js"` in `src/tui/src/eval/frames.ts`, `normalizeEvalCells()` coerces any non-`"js"` language to `"py"`, `EvalRegistry` only routes `"py" | "js"`, and `ui.ts` rejects structured eval cells whose language is not `"py"` or `"js"`.
 
 That route is useful, but it is not a persistent scratchpad and it does not surface AILANG's strongest advantage: the compiler and verifier can reject bad code before execution. A persistent AILANG eval should therefore **not** mimic a Python REPL heap. It should persist **source context**: imports, types, constants, pure functions, verified lemmas, and named executable entries. Each new cell updates an accumulated session module, then the env-server gates it through `ailang check` and, when requested, `ailang verify` / verifier-enabled `ai-check` before execution.
 
@@ -20,7 +21,7 @@ This gives a different value proposition from Python:
 
 ## Goals
 
-- Add persistent `ail` cells to eval, either as `language: "ail"` in the existing `eval` tool or as a narrow `ailang_eval` tool that reuses the eval result/card pipeline.
+- Add persistent `ail` cells to the existing `eval` tool as `language: "ail"`.
 - Maintain a per-session accumulated AILANG module so declarations survive across cells.
 - Run `ailang check` on every proposed session update before accepting it.
 - Support an explicit verification gate for cells containing `@verify`, `requires`, `ensures`, or a cell-level `verify: true` option.
@@ -28,6 +29,7 @@ This gives a different value proposition from Python:
 - Return structured per-cell results compatible with plan 03's eval card: source, check status, verify status, stdout/stderr, diagnostics, and duration.
 - Preserve AILANG effect discipline: cells declare requested caps, but the env-server and extension policy decide what can actually run.
 - Keep workdir / filesystem confinement aligned with the current `/exec-ailang` behavior (`AILANG_FS_SANDBOX=workdir`).
+- Update every current Python/JS-only branch (`frames.ts`, env-server normalization, eval registry, WebSocket eval path, TUI parsing/rendering, and package schema) so `ail` is not silently coerced to Python or dropped from the rich card.
 
 ## Non-goals
 
@@ -58,7 +60,7 @@ Executable cells can either define declarations or request an entry call:
 {
   "language": "ail",
   "title": "run checked helper",
-  "code": "export func main() -> unit ! {IO} { println(_int_to_string(abs_diff(10, 3))) }",
+  "code": "export func main() -> unit ! {IO} { println(show(abs_diff(10, 3))) }",
   "caps": "IO",
   "run": true
 }
@@ -66,11 +68,13 @@ Executable cells can either define declarations or request an entry call:
 
 For convenience, a later enhancement can add expression cells (`expr: "abs_diff(10, 3)"`) that the env-server lowers into a generated `main`. The MVP can require users / the model to write `main` explicitly.
 
+The JSON schema must model `verify` as either a boolean or the string `"auto"`; if the AILANG schema helper cannot conveniently express a union, use a string enum (`"auto" | "required" | "skip"`) instead of a mixed-type field.
+
 ## Architecture
 
 ```
-LLM ── "eval" tool / "ailang_eval" ──▶ motoko_ext_eval
-                                          │ httpPost POST /exec-cell or /exec-ailang-cell
+LLM ── "eval" tool ──▶ motoko_ext_eval
+                          │ httpPost POST /exec-cell
                                           ▼
                                    env-server (Bun)
                                           │ session→AilangSession registry
@@ -88,7 +92,8 @@ LLM ── "eval" tool / "ailang_eval" ──▶ motoko_ext_eval
 type AilangSession = {
   sessionId: string;
   moduleName: string;
-  acceptedCells: AilangAcceptedCell[];
+  imports: string[];
+  acceptedDecls: AilangAcceptedDecl[];
   lastGoodSource: string;
   capsDefault: string;
   createdAt: number;
@@ -99,11 +104,12 @@ type AilangSession = {
 Each new cell is compiled into a candidate module:
 
 1. Strip any user-supplied `module ...` declaration.
-2. Concatenate prior accepted cells and the new cell in order.
-3. Prepend the generated module declaration.
-4. Write to a stable temp path for the session.
-5. Run the check / verification / run pipeline.
-6. Commit the new cell to `acceptedCells` only if the configured acceptance policy passes.
+2. Classify top-level `import` lines separately from declarations. Imports must be rendered immediately after the generated module declaration; raw cell-order concatenation will eventually produce invalid modules if a later cell introduces an import.
+3. Keep persistent declarations separate from ephemeral run wrappers. A cell that defines `main` for execution should not permanently shadow future generated entries unless the user explicitly marks it as a declaration.
+4. Render the candidate module as: generated module declaration, deduplicated imports, accepted declarations, candidate declaration(s), optional generated run wrapper.
+5. Write to a stable temp path for the session.
+6. Run the check / verification / run pipeline.
+7. Commit the candidate declarations/imports only if the configured acceptance policy passes.
 
 This is the key semantic difference from Python: a failed AILANG cell does **not** mutate session state.
 
@@ -119,6 +125,7 @@ Before implementation, prove the exact commands supported by the pinned runtime:
 - `ailang run --caps <caps> --entry main <file>`
 - verifier command:
   - preferred if present: `ailang verify <file>`
+  - preferred machine-readable form if present: `ailang verify --json <file>`
   - alternate if that is the real interface: `ailang ai-check --verify <file>`
   - document how `@verify(depth: N)`, `requires`, and `ensures` are discovered and reported.
 
@@ -131,7 +138,7 @@ Also confirm whether Z3 must be installed separately or is bundled / optional. I
 ## Phase 1 — env-server persistent AILANG session registry
 
 **Files (new):** `src/tui/src/eval/kernel-ailang.ts`, `src/tui/src/eval/ailang-session.ts`.
-**Files (modified):** `src/tui/src/env-server.ts`.
+**Files (modified):** `src/tui/src/eval/frames.ts`, `src/tui/src/eval/registry.ts`, `src/tui/src/eval/ws-channel.ts`, `src/tui/src/env-server.ts`.
 
 Implement a source-backed session registry:
 
@@ -140,21 +147,25 @@ Implement a source-backed session registry:
 - Add idle eviction and explicit `reset:true`, mirroring Python/JS eval.
 - Use a per-session temp directory under the existing snippet area, not the repo tree.
 - Preserve accepted source for diagnostics / snippets, but avoid writing failed candidates to permanent training stores unless explicitly wanted.
+- Extend `EvalLanguage` to `"py" | "js" | "ail"`.
+- Change `normalizeEvalCells()` to preserve `"ail"` and reject unknown languages with an explicit per-cell error; do **not** default unknown languages to Python.
+- Update `EvalRegistry` so `"ail"` routes to the source-backed runner instead of trying to allocate a Python/JS kernel.
+- Update the WebSocket eval channel's cell normalization path so B′ and v2 eval dispatch see the same cell language semantics as HTTP `/exec-cell`.
 
 Candidate handling:
 
-- `reset:true` clears accepted cells before applying the current cell.
+- `reset:true` clears accepted imports/declarations before applying the current cell.
 - A declaration-only cell runs `check` and optional `verify`, then commits if gates pass.
 - A run cell runs `check`, optional `verify`, then `ailang run --entry main` or the requested entry.
 - Failed candidates return diagnostics and do not update `lastGoodSource`.
 
-**Acceptance:** two separate `ail` cells can define `x` / `helper` in the first cell and use it in the second; a third invalid cell fails without removing the previous definitions; `reset:true` clears the session.
+**Acceptance:** two separate `ail` cells can define a pure helper in the first cell and use it from `main` in the second; a later cell can add an `import` without producing an invalid mid-module import; a third invalid cell fails without removing the previous definitions; `reset:true` clears the session.
 
 ---
 
 ## Phase 2 — verification gate and result model
 
-**Files:** `src/tui/src/eval/types.ts`, `src/tui/src/eval/kernel-ailang.ts`, `src/tui/src/eval/transcript.ts`.
+**Files:** `src/tui/src/eval/frames.ts`, `src/tui/src/eval/kernel-ailang.ts`, `src/tui/src/eval/transcript.ts`, `src/tui/src/ui.ts`.
 
 Extend eval cell/result types for AILANG-specific statuses without disrupting Python/JS:
 
@@ -166,10 +177,22 @@ type AilangCellMetadata = {
   check: { status: AilangCheckStatus; diagnostics: string };
   verify: { status: AilangVerifyStatus; diagnostics: string; command?: string };
   committed: boolean;
+  proofClaim: "proved" | "not_proved";
   entry?: string;
   caps?: string;
 };
 ```
+
+Add this as an optional per-cell metadata field on `EvalCellResult`, not only as top-level response metadata:
+
+```ts
+type EvalCellResult = {
+  // existing fields...
+  metadata?: { ailang?: AilangCellMetadata };
+};
+```
+
+The plain transcript should also receive human-readable status lines (either rendered from metadata or emitted as `display {type:"status"}` bundles) so the fallback stdout path remains useful. The structured `metadata.ailang` field is the source of truth for the TUI card and tests.
 
 Verification policy:
 
@@ -185,20 +208,17 @@ Status semantics:
 - `verify unknown/timeout` with optional verification ⇒ commit can proceed, but transcript must say it is not proved.
 - `run failed` after check/verify ⇒ commit policy is configurable. Recommendation: declaration cells commit before run; generated `main` wrappers do not become persistent session source.
 
-**Acceptance:** the response distinguishes type errors from verification failures, and the transcript never claims "verified" for skipped / unknown / timed-out proof attempts.
+**Acceptance:** the response distinguishes type errors from verification failures, `cells_json` preserves `cell.metadata.ailang` through `emit_eval_result_if_present`, and the transcript never claims "verified" for skipped / unknown / timed-out proof attempts.
 
 ---
 
 ## Phase 3 — route integration
 
-**Files:** `src/tui/src/env-server.ts`, `src/core/env_client.ail`, `src/core/types.ail`.
+**Files:** `src/tui/src/env-server.ts`, `src/tui/src/eval/ws-channel.ts`, `src/core/env_client.ail`, `src/core/types.ail`, `src/core/agent_loop_v2.ail`, `packages/motoko_eval/eval.ail`.
 
-Two implementation options are viable:
+Extend `/exec-cell` to accept `language: "ail"` alongside `"py"` and `"js"`. Do not add a separate `/exec-ailang-cell` route for the MVP; a second route would duplicate the eval-card metadata path and the v2/WebSocket dispatch path.
 
-1. Extend `/exec-cell` to accept `language: "ail"` alongside `"py"` and `"js"`.
-2. Add `/exec-ailang-cell` and let the Motoko extension normalize both into one eval-card payload.
-
-Recommendation: extend `/exec-cell`. It keeps the `eval` card path, metadata shape, timeout handling, and future streaming path unified.
+Current-branch integration detail: `src/core/agent_loop_v2.ail` special-cases `eval` and calls `exec_cell_ws(...)` directly before the normal extension `dispatch_tool_handle` path. AILANG cells must work through this direct v2/WebSocket path as well as through the extension's HTTP fallback path, or behavior will diverge by runtime mode.
 
 Request shape:
 
@@ -229,7 +249,7 @@ Response remains the plan-01/03 `CellExecResult` shape, with AILANG check/verify
 
 ## Phase 4 — extension schema and prompt
 
-**Files:** `motoko_ext_eval/types.ail`, `motoko_ext_eval/eval.ail`, `motoko_ext_eval/prompts.ail` (or the current package paths if plan 01 has already landed).
+**Files:** `packages/motoko_eval/types.ail`, `packages/motoko_eval/eval.ail`, `packages/motoko_eval/prompts.ail`.
 
 Update tool schema and prompt guidance:
 
@@ -244,8 +264,8 @@ Update tool schema and prompt guidance:
 Policy:
 
 - `on_tool_policy` should treat AILANG eval at least as strictly as Python/JS eval.
-- In restricted modes, allow `check`-only / `verify`-only cells if that profile wants pure static analysis, but deny `run` and effectful caps.
-- Cap strings are intersected with policy; user/model requested caps are not authoritative.
+- In restricted modes, allow `check`-only / `verify`-only AILANG cells only if that profile explicitly wants pure static analysis. This requires inspecting the `cells` argument in `on_tool_policy`; the current package denies all `eval` in restricted/read-only modes.
+- Cap strings are intersected with policy before the cells are sent to the env-server; user/model requested caps are not authoritative. Also enforce the same cap ceiling in the env-server as defense in depth, because the v2 WebSocket path can bypass package-level `on_tool_handle`.
 
 **Acceptance:** the tool description makes it hard for the model to overclaim proof strength, and restricted policy can permit static checking without permitting arbitrary execution.
 
@@ -253,18 +273,18 @@ Policy:
 
 ## Phase 5 — TUI rendering
 
-**Files:** `src/tui/src/ui.ts`, `src/tui/src/ui.eval-card.test.ts` if the rich card is present.
+**Files:** `src/tui/src/ui.ts`, `src/tui/src/ui.tool-render.test.ts`, `src/tui/src/eval/frames.ts`.
 
-Reuse plan 03's eval card. AILANG cells render like normal cells with extra status lines:
+Reuse the current eval card/segment renderer from plans 03–04. AILANG cells render like normal cells with extra status lines:
 
 - Header: `✓ [i/N] title (check passed · verified · 123ms)` or `✗ ... (verify failed)`.
-- Source: syntax-highlighted as AILANG if a highlighter exists; otherwise plain code block until one is added.
+- Source: syntax-highlighted with the existing `highlightCodeLines(code, "ail")` / `"ailang"` path.
 - Output divider sections:
   - `Check` diagnostics.
   - `Verify` diagnostics.
   - `Run` stdout/stderr.
 
-If plan 03 is unavailable, `transcript.ts` should flatten the same fields into plain text through plan 01's existing stdout path.
+Current blocker: `normalizeEvalCellResult()` in `ui.ts` currently returns `null` unless `language` is `"py"` or `"js"`, causing an `eval_result` with `ail` cells to be ignored. This parser must accept `"ail"` and preserve `metadata.ailang`; the highlighter path for `"ail"` / `"ailang"` already exists.
 
 **Acceptance:** a failed verification is visible in the collapsed preview; a successful verified helper shows a concise "verified" status without drowning the user in raw solver output.
 
@@ -273,9 +293,11 @@ If plan 03 is unavailable, `transcript.ts` should flatten the same fields into p
 ## Phase 6 — tests & verification
 
 - **TS unit:** source accumulation, reset, failed-cell non-commit, check failure mapping, verify success/failure/unknown mapping, timeout handling.
+- **Normalization regression:** unknown eval languages produce explicit errors; `language:"ail"` is preserved through HTTP `/exec-cell`, WebSocket `/exec-cell-ws`, `eval_result` JSON, and TUI parsing.
 - **AILANG smoke:** one checked-only cell, one verified pure function, one false contract, one run cell using a previously accepted declaration.
 - **Policy smoke:** restricted profile permits check-only if configured and denies run/effectful caps.
 - **TUI test:** card renders check/verify statuses and diagnostics.
+- **Wire metadata test:** `cell.metadata.ailang` survives env-server response → `ToolResultEnvelope.metadata.cells` → `eval_result.cells_json` → `parseEvalCellsJson`.
 - **Regression:** existing Python/JS eval tests stay green; existing `/exec-ailang` stateless route remains available unless deliberately deprecated.
 
 Manual E2E:
@@ -306,16 +328,17 @@ Risks:
 
 - *Verifier command drift* — plans and research mention `ailang verify`, `ai-check --verify`, `@verify`, `requires`, and `ensures`. The pinned CLI must be treated as source of truth.
 - *Overclaiming proofs* — "Z3 verified" only means the stated contract discharged in the supported fragment. The transcript and prompt must preserve `unknown` / `skipped` states.
-- *Persistent source composition* — concatenating arbitrary fragments can create duplicate exports, shadowing, or stale `main` functions. Mitigate by keeping generated run wrappers separate from persistent declarations, or by requiring named cells to replace earlier definitions in a later phase.
+- *Persistent source composition* — concatenating arbitrary fragments can create duplicate exports, shadowing, stale `main` functions, or invalid import placement. Mitigate by storing imports/declarations/wrappers separately and rendering the module deterministically.
 - *Performance* — check/verify on the full accumulated module may get slow. MVP accepts this; later optimize by splitting stable accepted declarations from generated run wrappers or caching verified snapshots.
 - *Effect policy confusion* — AILANG caps are safer than Python, but still execute effects through the runtime. The extension policy must intersect requested caps with the active profile.
 - *Z3 limits* — string/list reasoning and recursion can time out or return unknown. Treat unknown as a first-class result, not a failure of the tool.
+- *Runtime-path drift* — v2's direct `exec_cell_ws` eval path can bypass package `on_tool_handle`. Keep HTTP, WS, and extension dispatch behavior covered by the same tests.
 
 ## Open questions
 
 | # | Question | Recommendation |
 |---|---|---|
-| 1 | Add `language:"ail"` to `eval` or make `ailang_eval` separate? | Add `language:"ail"` if plan 03 card is present; otherwise start with `ailang_eval` and merge later. |
+| 1 | Add `language:"ail"` to `eval` or make `ailang_eval` separate? | Add `language:"ail"` to existing `eval`; the current branch already has the eval card and WebSocket path that should be reused. |
 | 2 | Should declaration cells with `run` failure commit? | Commit checked declarations; keep generated `main` wrappers ephemeral so run failures do not poison session state. |
 | 3 | What is the default verification policy? | `auto`: verify annotated cells, report unknown honestly, require pass only when `verify:true` or strict profile says so. |
 | 4 | Should failed candidate source be saved for training? | Not by default. Save only redacted diagnostics unless the snippet store explicitly opts into failed verified-eval examples. |
