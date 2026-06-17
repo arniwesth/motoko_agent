@@ -4,6 +4,10 @@ Feature context: **[plan 01](./01-design-c-mvp-local-loopback.md)** (persistent 
 Independent of [plan 02 (B′)](./02-design-b-prime-reentrant-websocket.md).
 Toolchain: AILANG v0.19.1 (`ailang.lock`), Bun 1.3.x, Z3 if the pinned AILANG verifier requires the external binary.
 
+## TL;DR
+
+Add `language:"ail"` to the existing `eval` tool as a persistent, source-backed AILANG scratchpad. Unlike Python/JS kernels, AILANG persistence is an accumulated session module: accepted imports/declarations survive across cells, failed candidates do not mutate state, and every update is gated by `ailang check` plus optional `ailang verify` / Z3 contract verification. The main implementation hazards are current Python/JS-only eval plumbing, correct source composition, preserving per-cell check/verify metadata through the eval card wire, and avoiding proof overclaims when verification is skipped, unknown, or timed out.
+
 ## Background
 
 The Python/JS eval design gives the model a persistent execution scratchpad: state survives across cells and across separate tool calls. AILANG already has a stateless eval-like path in the env-server:
