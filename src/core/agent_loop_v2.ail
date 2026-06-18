@@ -872,6 +872,59 @@ func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string
   }
 }
 
+-- M-MOTOKO-PERSIST-NUDGE: bounded loop-persistence at the NoDecision boundary.
+-- Root cause (2026-06-18 A/B transcripts): on local models the agent often
+-- DISENGAGES after 0–1 tool calls WITHOUT writing a solution — either answering
+-- in prose (0 tool calls) or making one inspect call (e.g. `cat solution.ail`)
+-- and stopping. The loop then finalizes at NoDecision. These helpers let the loop
+-- inject a bounded nudge to keep going instead. Off by default (MOTOKO_PERSIST_
+-- RETRIES=0); opt-in for A/B so the rotation is unchanged until validated.
+
+-- Marker embedded in injected nudges so we can count them from history alone
+-- (no new loop_v2 state to thread through its 16 recursive call sites).
+func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
+
+-- How many persistence nudges are allowed this run (MOTOKO_PERSIST_RETRIES,
+-- default 0 = feature off).
+func persist_retries_budget() -> int ! {Env} {
+  match _stringToInt(trim(getEnvOr("MOTOKO_PERSIST_RETRIES", "0"))) {
+    Some(n) => if n > 0 then n else 0,
+    None => 0
+  }
+}
+
+-- Count nudges already injected (user messages carrying the marker) so we never
+-- exceed the budget — the count IS the persistence state, read from history.
+func count_persist_nudges(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "user" && contains(m.content, persist_nudge_marker()) then 1 else 0;
+      here + count_persist_nudges(rest)
+    }
+  }
+}
+
+func tool_calls_have_writefile(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.name == "WriteFile" then true else tool_calls_have_writefile(rest)
+  }
+}
+
+-- True once the model has attempted ANY WriteFile this run — if so it is engaged
+-- with producing a solution, so we let it finalize/fail on its own (don't nudge).
+-- Both disengagement modes (0 calls / 1 inspect call) have zero WriteFile, so
+-- this gates the nudge precisely to the premature-stop case.
+func any_writefile_attempt(msgs: [Message]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if tool_calls_have_writefile(m.tool_calls) then true
+      else any_writefile_attempt(rest)
+  }
+}
+
 func loop_v2(
   rt: ExtRuntime,
   task: string,
@@ -1140,6 +1193,28 @@ func loop_v2(
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
                 NoDecision => {
+                  -- M-MOTOKO-PERSIST-NUDGE: the model stopped (finish_reason !=
+                  -- tool_calls) and no extension claimed the prose. If it never
+                  -- wrote a solution and we have nudge budget left, keep the loop
+                  -- ALIVE with a bounded nudge instead of finalizing — this is the
+                  -- backlog-#1 disengagement fix (off unless MOTOKO_PERSIST_RETRIES>0).
+                  let persist_budget = persist_retries_budget();
+                  let nudges_used = count_persist_nudges(msgs_with_assistant);
+                  if persist_budget > 0 && nudges_used < persist_budget && not any_writefile_attempt(msgs_with_assistant) then {
+                    let _ = emit_event(session_id, "persist_nudge", [
+                      kv("step", jnum(_int_to_float(step_idx))),
+                      kv("nudge_num", jnum(_int_to_float(nudges_used + 1))),
+                      kv("budget", jnum(_int_to_float(persist_budget)))
+                    ]);
+                    let nudge_msg: Message = {
+                      role: "user",
+                      content: "${persist_nudge_marker()} You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs.",
+                      tool_calls: [],
+                      tool_call_id: ""
+                    };
+                    let next_msgs = msgs_with_assistant ++ [nudge_msg];
+                    loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                  } else {
                   match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
                       -- IMPORTANT: run_summary BEFORE done — see Accept branch
@@ -1156,6 +1231,7 @@ func loop_v2(
                       let next_msgs = msgs_with_assistant ++ [retry_msg];
                       loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                     }
+                  }
                   }
                 }
               }
