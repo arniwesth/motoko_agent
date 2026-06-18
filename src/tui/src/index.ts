@@ -297,6 +297,34 @@ function systemPromptForWorkspace(projectRoot: string, workdir: string): string 
   return rel;
 }
 
+// materializeSystemPromptArg copies the CONTENT of an external --system-prompt
+// file into a managed in-workspace file and returns its absolute path. This lets
+// a headless caller inject a system prompt from ANY path (absolute or outside the
+// workspace) — motoko copies it in, so systemPromptForWorkspace's workdir-relative
+// contract (the supervisor reads the prompt via a path relative to workdir) stays
+// intact. Returns null if the source path is empty, missing, or unreadable, in
+// which case the caller falls back to SYSTEM_MD / the default SYSTEM.md.
+function materializeSystemPromptArg(flagValue: string, workdir: string): string | null {
+  const src = flagValue.trim();
+  if (src === "") return null;
+  const srcAbs = path.isAbsolute(src) ? src : path.resolve(process.cwd(), src);
+  let content: string;
+  try {
+    content = fs.readFileSync(srcAbs, "utf8");
+  } catch (err) {
+    console.error(`[motoko] --system-prompt: cannot read ${srcAbs}: ${String(err)}`);
+    return null;
+  }
+  const dest = path.join(path.resolve(workdir), ".motoko-system-prompt.md");
+  try {
+    fs.writeFileSync(dest, content, "utf8");
+  } catch (err) {
+    console.error(`[motoko] --system-prompt: cannot write ${dest}: ${String(err)}`);
+    return null;
+  }
+  return dest;
+}
+
 // ---------------------------------------------------------------------------
 // PlainLogger — used when stdout is not a TTY (CI, pipes, devcontainers).
 // Writes human-readable lines; no ANSI, no stdin manipulation.
@@ -473,8 +501,16 @@ class JsonlLogger {
 // Recognized flags are removed from process.argv so downstream argv[2] reads
 // still work for the task text. Unknown flags pass through to the task text
 // (so "motoko --whatever ..." doesn't break).
-function parseMotokoFlags(): { headless: boolean; printVersion: boolean } {
-  const flags = { headless: false, printVersion: false };
+function parseMotokoFlags(): {
+  headless: boolean;
+  printVersion: boolean;
+  systemPrompt: string | null;
+} {
+  const flags: {
+    headless: boolean;
+    printVersion: boolean;
+    systemPrompt: string | null;
+  } = { headless: false, printVersion: false, systemPrompt: null };
   const remaining: string[] = [process.argv[0], process.argv[1]];
   for (let i = 2; i < process.argv.length; i++) {
     const arg = process.argv[i];
@@ -482,6 +518,15 @@ function parseMotokoFlags(): { headless: boolean; printVersion: boolean } {
       flags.headless = true;
     } else if (arg === "--version" || arg === "-v") {
       flags.printVersion = true;
+    } else if (arg === "--system-prompt") {
+      // --system-prompt <path>: let an external harness (e.g. the AILANG eval
+      // adapter) inject a system-role prompt WITHOUT having to place a file
+      // inside the workspace or set SYSTEM_MD. The value is a path (absolute or
+      // relative to cwd); its CONTENT is materialized into a managed in-workspace
+      // file in main() so the workdir-relative SYSTEM_MD contract is preserved.
+      // Takes precedence over the SYSTEM_MD env var.
+      flags.systemPrompt = process.argv[i + 1] ?? "";
+      i++; // consume the value
     } else {
       remaining.push(arg);
     }
@@ -561,6 +606,16 @@ async function main(): Promise<void> {
   ) as { version: string };
   const projectRoot = path.resolve(import.meta.dirname, "../../..");
   const workdir = process.env.WORKDIR ?? process.cwd();
+  // --system-prompt <path> (flag) takes precedence over the SYSTEM_MD env var.
+  // Materialize the flag's file content into an in-workspace file and point
+  // SYSTEM_MD at it so the existing systemPromptForWorkspace resolution delivers
+  // it in the system role (the supervisor reads it via a workdir-relative path).
+  if (motokoFlags.systemPrompt !== null) {
+    const materialized = materializeSystemPromptArg(motokoFlags.systemPrompt, workdir);
+    if (materialized !== null) {
+      process.env.SYSTEM_MD = materialized;
+    }
+  }
   // M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): default
   // ENV_PORT to 0 = let the kernel pick a free port atomically when
   // startEnvServer binds. The wrapper used to do its own pick_free_port
