@@ -316,6 +316,11 @@ export class RuntimeProcess {
       MOTOKO_HEADLESS:
         process.env.MOTOKO_HEADLESS ??
         (process.stdin.isTTY ? "" : "1"),
+      // M-MOTOKO-PERSIST-NUDGE: forward the loop-persistence retry budget so
+      // agent_loop_v2.ail's NoDecision branch can read it. Without this the
+      // explicit env allowlist scrubs it and the feature is silently off —
+      // same gotcha as MOTOKO_REPO / the pricing vars below. Empty = off.
+      MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
       // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): forward
       // MOTOKO_REPO so the AILANG runtime can fall back to the fork's
       // bundled profile (.motoko/config/<profile>) when WORKDIR is a
