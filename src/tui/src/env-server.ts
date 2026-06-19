@@ -417,6 +417,43 @@ type ComposeRequest = {
 // spawns would both pick the same port, second's bind failed → wrapper
 // exited before AILANG runtime started → 0-byte JSONL → adapter reported
 // "motoko terminated without emitting run_summary (likely crash)".
+export function normalizeAilangVerify(v: unknown): EvalCell["verify"] {
+  if (v === true || v === "true") return true;
+  if (v === false || v === "false" || v === "off") return false;
+  if (v === "required") return "required";
+  if (v === "auto") return "auto";
+  return "auto"; // default: verify when requires/ensures annotations are present
+}
+
+// Normalize raw eval-cell JSON into typed EvalCell[]. Unknown languages are an
+// explicit error (never silently coerced to Python — see plan 05). A missing
+// language defaults to "py" for backward compatibility.
+export function normalizeEvalCells(raw: unknown): EvalCell[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((cell, i) => {
+    const rec = (cell && typeof cell === "object") ? cell as Record<string, unknown> : {};
+    const langRaw = (rec.language === undefined || rec.language === null) ? "py" : String(rec.language);
+    if (langRaw !== "py" && langRaw !== "js" && langRaw !== "ail") {
+      throw new Error(`unsupported eval language "${langRaw}" in cell ${i + 1}; expected "py", "js", or "ail"`);
+    }
+    const language = langRaw as EvalCell["language"];
+    const base: EvalCell = {
+      language,
+      code: String(rec.code ?? ""),
+      title: typeof rec.title === "string" ? rec.title : undefined,
+      timeout: typeof rec.timeout === "number" ? rec.timeout : undefined,
+      reset: rec.reset === true,
+    };
+    if (language === "ail") {
+      base.verify = normalizeAilangVerify(rec.verify);
+      base.run = rec.run === true;
+      base.entry = typeof rec.entry === "string" ? rec.entry : undefined;
+      base.caps = typeof rec.caps === "string" ? rec.caps : undefined;
+    }
+    return base;
+  }).filter((cell) => cell.code.trim() !== "");
+}
+
 export async function startEnvServer(port: number, workdir: string): Promise<number> {
   const app = express();
   app.use(express.json({ limit: "2mb" }));
@@ -685,6 +722,34 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     };
   }
 
+  // Host capability ceiling for AILANG eval `run`. Requested caps are
+  // intersected with this in the kernel; the .ail on_tool_policy layer does the
+  // mode-based gating (restricted/read-only deny eval entirely). Process and Net
+  // are off unless explicitly enabled for this host.
+  function ailangCapsCeiling(): string[] {
+    const base = ["IO", "FS", "Clock", "Env"];
+    if (process.env.MOTOKO_EVAL_NETWORK === "1") base.push("Net");
+    if (process.env.MOTOKO_EVAL_AILANG_PROCESS === "1") base.push("Process");
+    return base;
+  }
+
+  // One-time AILANG teaching prompt, cached for the env-server process lifetime.
+  // `null` = not yet attempted; "" = attempted and unavailable.
+  let ailangAgentPromptCache: string | null = null;
+  function ailangAgentPrompt(): string {
+    if (ailangAgentPromptCache !== null) return ailangAgentPromptCache;
+    try {
+      ailangAgentPromptCache = execFileSync("ailang", ["agent-prompt"], {
+        timeout: 5000,
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+      });
+    } catch {
+      ailangAgentPromptCache = "";
+    }
+    return ailangAgentPromptCache;
+  }
+
   const evalRegistry = new EvalKernelRegistry(
     Math.max(60_000, Number(process.env.MOTOKO_EVAL_IDLE_MS ?? 10 * 60_000)),
     () => ({
@@ -693,6 +758,11 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
       MOTOKO_EVAL_NETWORK: String(process.env.MOTOKO_EVAL_NETWORK ?? "0"),
     }),
     makeJsLoopback,
+    () => ({
+      tmpDir: "/tmp/motoko-ailang-eval",
+      capsCeiling: ailangCapsCeiling(),
+      agentPrompt: ailangAgentPrompt,
+    }),
   );
 
   function pythonAvailable(): boolean {
@@ -704,19 +774,13 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }
   }
 
-  function normalizeEvalCells(raw: unknown): EvalCell[] {
-    if (!Array.isArray(raw)) return [];
-    return raw.map((cell) => {
-      const rec = (cell && typeof cell === "object") ? cell as Record<string, unknown> : {};
-      const language: EvalCell["language"] = String(rec.language ?? "py") === "js" ? "js" : "py";
-      return {
-        language,
-        code: String(rec.code ?? ""),
-        title: typeof rec.title === "string" ? rec.title : undefined,
-        timeout: typeof rec.timeout === "number" ? rec.timeout : undefined,
-        reset: rec.reset === true,
-      };
-    }).filter((cell) => cell.code.trim() !== "");
+  function ailangAvailable(): boolean {
+    try {
+      execFileSync("ailang", ["--version"], { timeout: 3000, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function runEvalCells(cells: EvalCell[], sessionId: string, defaultTimeout: number): Promise<ExecCellResponse> {
@@ -725,6 +789,10 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }
     if (cells.some((cell) => cell.language === "py") && !pythonAvailable()) {
       const notice = "python3 unavailable; Python eval cells were skipped";
+      return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
+    }
+    if (cells.some((cell) => cell.language === "ail") && !ailangAvailable()) {
+      const notice = "ailang CLI unavailable; AILANG eval cells were skipped";
       return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
     }
 
@@ -1149,9 +1217,17 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   // Body: { cells: EvalCell[], sessionId: string, timeout?: number }
   app.post("/exec-cell", async (req, res) => {
     const body = req.body as { cells?: unknown; sessionId?: string; timeout?: number };
-    const cells = normalizeEvalCells(body.cells);
     const sessionId = String(body.sessionId ?? "default");
     const defaultTimeout = Math.max(1, Number(body.timeout ?? 30));
+    let cells: EvalCell[];
+    try {
+      cells = normalizeEvalCells(body.cells);
+    } catch (e: any) {
+      // The env-server contract is "always HTTP 200; exit_code signals failure".
+      const msg = String(e?.message ?? e);
+      res.json({ exit_code: 1, stdout: "", stderr: msg, cells: [], images: [], jsonOutputs: [], notice: msg });
+      return;
+    }
     res.json(await runEvalCells(cells, sessionId, defaultTimeout));
   });
 

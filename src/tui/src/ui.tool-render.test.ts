@@ -246,6 +246,61 @@ describe("ui tool rendering helpers", () => {
     expect(cells?.[0]?.displays[0]?.type).toBe("status");
   });
 
+  it("parseEvalCellsJson accepts language:'ail' and preserves metadata.ailang through cells_json", () => {
+    const cells = parseEvalCellsJson(JSON.stringify([
+      {
+        index: 0,
+        language: "ail",
+        title: "abs_diff",
+        code: "export func abs_diff(a: int, b: int) -> int ! {} { 0 }",
+        exit_code: 0,
+        stdout: "",
+        stderr: "",
+        metadata: {
+          ailang: {
+            check: "passed",
+            verify: "verified",
+            verifyAvailable: true,
+            committed: true,
+            ran: false,
+            functions: [{ function: "abs_diff", status: "verified" }],
+            teachPrompt: "TEACH",
+            notice: "all good",
+          },
+        },
+      },
+    ]));
+    expect(cells).toHaveLength(1);
+    const m = cells?.[0]?.metadata?.ailang;
+    expect(cells?.[0]?.language).toBe("ail");
+    expect(m?.check).toBe("passed");
+    expect(m?.verify).toBe("verified");
+    expect(m?.committed).toBe(true);
+    expect(m?.functions?.[0]).toEqual({ function: "abs_diff", status: "verified" });
+    expect(m?.teachPrompt).toBe("TEACH");
+  });
+
+  it("does not coerce an unproven verify status to 'verified' in the parser", () => {
+    const cells = parseEvalCellsJson(JSON.stringify([
+      { index: 0, language: "ail", title: "t", exit_code: 1, stdout: "", stderr: "",
+        metadata: { ailang: { check: "passed", verify: "unknown", verifyAvailable: true, committed: true, ran: false } } },
+    ]));
+    expect(cells?.[0]?.metadata?.ailang?.verify).toBe("unknown");
+  });
+
+  it("renders the AILANG check/verify status in the eval card", () => {
+    const cells = parseEvalCellsJson(JSON.stringify([
+      { index: 0, language: "ail", title: "abs_diff", code: "export func f() -> int ! {} { 1 }",
+        exit_code: 0, stdout: "7", stderr: "",
+        metadata: { ailang: { check: "passed", verify: "verified", verifyAvailable: true, committed: true, ran: true } } },
+    ]))!;
+    const plain = evalSegmentsToText(renderEvalCardLines(cells, true, 100)).map(stripAnsi).join("\n");
+    expect(plain).toContain("ailang:");
+    expect(plain).toContain("check passed");
+    expect(plain).toContain("verify verified");
+    expect(plain).toContain("committed yes");
+  });
+
   it("renders collapsed output-hidden marker when output exists", () => {
     const details: ToolRowDetails = {
       status: "done",

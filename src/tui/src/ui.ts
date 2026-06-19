@@ -30,7 +30,14 @@ import { type SlashCommandHandlerCtx, parseSlashCommand, createCommandAutocomple
 import { canonicalToolIdentity, extractToolPlanSnapshot } from "./tool-plan-parser.js";
 import { normalizeJsonLang, segmentStreamMarkdown, trimSegmentsForLiveRender } from "./stream-markdown.js";
 import { highlightJsonLines } from "./json-highlight.js";
-import type { EvalCellResult, EvalDisplayBundle } from "./eval/frames.js";
+import type {
+  AilangCellMetadata,
+  AilangCheckStatus,
+  AilangFnVerify,
+  AilangVerifyStatus,
+  EvalCellResult,
+  EvalDisplayBundle,
+} from "./eval/frames.js";
 import { type EvalSegment, evalImageCapabilityLabel, evalImageExitSequence, makeImageSegment } from "./eval/image-segment.js";
 import { execSync } from "child_process";
 // NOTE: The ASCII-art banner is printed unconditionally in main() before the 
@@ -1270,11 +1277,46 @@ function normalizeEvalDisplayBundle(v: unknown): EvalDisplayBundle | null {
   };
 }
 
+function normalizeAilangMetadata(v: unknown): AilangCellMetadata | undefined {
+  const rec = recordValue(v);
+  if (!rec) return undefined;
+  const ail = recordValue(rec.ailang);
+  if (!ail) return undefined;
+  const checkRaw = stringValue(ail.check, "skipped");
+  const check: AilangCheckStatus =
+    checkRaw === "passed" || checkRaw === "failed" ? checkRaw : "skipped";
+  const verifyRaw = stringValue(ail.verify, "skipped");
+  const verify: AilangVerifyStatus =
+    (["verified", "failed", "unknown", "timeout", "skipped"] as const).includes(verifyRaw as AilangVerifyStatus)
+      ? (verifyRaw as AilangVerifyStatus)
+      : "skipped";
+  const functions: AilangFnVerify[] | undefined = Array.isArray(ail.functions)
+    ? ail.functions
+        .map((f) => recordValue(f))
+        .filter((f): f is Record<string, unknown> => f !== null)
+        .map((f) => ({
+          function: stringValue(f.function, "<anon>"),
+          status: stringValue(f.status, "unknown") as AilangVerifyStatus,
+        }))
+    : undefined;
+  return {
+    check,
+    verify,
+    verifyAvailable: boolValue(ail.verifyAvailable, false),
+    committed: boolValue(ail.committed, false),
+    ran: boolValue(ail.ran, false),
+    functions: functions && functions.length > 0 ? functions : undefined,
+    teachPrompt: typeof ail.teachPrompt === "string" ? ail.teachPrompt : undefined,
+    notice: typeof ail.notice === "string" ? ail.notice : undefined,
+  };
+}
+
 function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
   const rec = recordValue(v);
   if (!rec) return null;
   const language = stringValue(rec.language, "py");
-  if (language !== "py" && language !== "js") return null;
+  if (language !== "py" && language !== "js" && language !== "ail") return null;
+  const ailang = normalizeAilangMetadata(rec.metadata);
   const displaysRaw = Array.isArray(rec.displays)
     ? rec.displays
     : Array.isArray(rec.display)
@@ -1287,7 +1329,7 @@ function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
   const errorRec = recordValue(rec.error);
   return {
     index: numberValue(rec.index, 0),
-    language,
+    language: language as EvalCellResult["language"],
     title: stringValue(rec.title, `${language} cell ${numberValue(rec.index, 0) + 1}`),
     code: stringValue(rec.code, ""),
     durationMs: typeof rec.durationMs === "number" ? rec.durationMs : typeof rec.duration_ms === "number" ? rec.duration_ms : undefined,
@@ -1304,6 +1346,7 @@ function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
     executionCount: numberValue(rec.executionCount ?? rec.execution_count, 0),
     cancelled: boolValue(rec.cancelled, false),
     truncated: boolValue(rec.truncated, false),
+    metadata: ailang ? { ailang } : undefined,
   };
 }
 
@@ -1318,6 +1361,38 @@ export function parseEvalCellsJson(cellsJson: string): EvalCellResult[] | null {
   } catch {
     return null;
   }
+}
+
+// Color a check/verify status word: green for the "good" outcome, red for a
+// definitive failure, yellow for inconclusive (unknown/timeout/skipped).
+function colorAilangStatus(status: string): string {
+  if (status === "passed" || status === "verified") return chalk.green(status);
+  if (status === "failed") return chalk.red(status);
+  return chalk.yellow(status);
+}
+
+function ailangStatusLines(meta: AilangCellMetadata): string[] {
+  // Only blame Z3 when the check passed — when check fails, ai-check never runs
+  // the verifier, so "Z3 unavailable" would be misleading.
+  const z3Unavailable = !meta.verifyAvailable && meta.check === "passed";
+  const verifyCell = z3Unavailable
+    ? chalk.yellow(`${meta.verify} (Z3 unavailable)`)
+    : colorAilangStatus(meta.verify);
+  const parts = [
+    `check ${colorAilangStatus(meta.check)}`,
+    `verify ${verifyCell}`,
+    `committed ${meta.committed ? chalk.green("yes") : chalk.dim("no")}`,
+  ];
+  if (meta.ran) parts.push(`ran ${chalk.green("yes")}`);
+  const lines = [chalk.dim("ailang: ") + parts.join(chalk.dim(" · "))];
+  if (meta.functions && meta.functions.length > 0) {
+    for (const f of meta.functions) {
+      lines.push(chalk.dim(`  ${f.function}: `) + colorAilangStatus(f.status));
+    }
+  }
+  if (meta.notice) lines.push(chalk.yellow(`  ${meta.notice}`));
+  if (meta.teachPrompt) lines.push(chalk.dim("  (AILANG teaching guide loaded — see output)"));
+  return lines;
 }
 
 function evalStatusIcon(cell: EvalCellResult): string {
@@ -1485,6 +1560,10 @@ export function renderEvalCardLines(
     const idx = Math.max(1, cell.index + 1);
     const title = cell.title || `${cell.language} cell ${idx}`;
     pushLines(`${evalStatusIcon(cell)} [${idx}/${cells.length}] ${title}${evalDurationSuffix(cell)}`);
+    const ailMeta = cell.metadata?.ailang;
+    if (ailMeta) {
+      for (const line of ailangStatusLines(ailMeta)) pushLines(`  ${line}`);
+    }
     const code = cell.code ?? "";
     if (code.trim() !== "") {
       for (const line of highlightCodeLines(code, cell.language)) pushLines(`  ${line}`);

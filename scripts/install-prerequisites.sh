@@ -9,6 +9,8 @@
 #   - Python data science packages for eval cells (pandas, polars, numpy, SciPy, scikit-learn)
 #   - context-mode CLI
 #   - AILANG runtime (cloned from github.com/sunholo-data/ailang at pinned tag)
+#   - Z3 solver (required by AILANG `verify` / `ai-check` for contract proofs,
+#     used by the AILANG eval kernel)
 #   - bun dependencies for the TypeScript frontend (src/tui/)
 #   - Optional: Omnigraph CLI/server (with --with-omnigraph)
 # Usage:
@@ -197,6 +199,7 @@ install_apt_packages() {
     python3-pandas
     python3-scipy
     python3-sklearn
+    z3
   )
   local missing=()
   for pkg in "${pkgs[@]}"; do
@@ -242,7 +245,7 @@ install_brew_packages() {
     log_ok "Homebrew already installed"
   fi
 
-  for pkg in git curl; do
+  for pkg in git curl z3; do
     if brew list "$pkg" &>/dev/null; then
       log_ok "$pkg already installed"
     else

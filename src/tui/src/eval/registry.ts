@@ -1,10 +1,12 @@
-import type { EvalCell, EvalCellResult } from "./frames.js";
+import type { EvalCell, EvalCellResult, EvalLanguage } from "./frames.js";
 import { PythonKernel } from "./kernel-py.js";
 import { JsKernel, type JsLoopback } from "./kernel-js.js";
+import { AilangKernel, type AilangKernelConfig } from "./kernel-ailang.js";
 
 type RegistryEntry =
   | { language: "py"; kernel: PythonKernel; lastUsed: number }
-  | { language: "js"; kernel: JsKernel; lastUsed: number };
+  | { language: "js"; kernel: JsKernel; lastUsed: number }
+  | { language: "ail"; kernel: AilangKernel; lastUsed: number };
 
 export class EvalKernelRegistry {
   private entries = new Map<string, RegistryEntry>();
@@ -14,12 +16,13 @@ export class EvalKernelRegistry {
     private readonly idleMs: number,
     private readonly makePythonEnv: () => Record<string, string>,
     private readonly makeJsLoopback: () => JsLoopback,
+    private readonly makeAilangConfig: () => AilangKernelConfig = () => ({}),
   ) {
     this.cleanupTimer = setInterval(() => this.evictIdle(), Math.max(30_000, Math.min(idleMs, 60_000)));
     this.cleanupTimer.unref();
   }
 
-  private key(language: "py" | "js", sessionId: string): string {
+  private key(language: EvalLanguage, sessionId: string): string {
     return `${language}:${sessionId}`;
   }
 
@@ -33,36 +36,49 @@ export class EvalKernelRegistry {
     }
   }
 
-  reset(language: "py" | "js", sessionId: string): void {
+  reset(language: EvalLanguage, sessionId: string): void {
     const key = this.key(language, sessionId);
     const existing = this.entries.get(key);
     if (existing) existing.kernel.close();
     this.entries.delete(key);
   }
 
-  private get(language: "py" | "js", sessionId: string): RegistryEntry {
+  private get(language: EvalLanguage, sessionId: string): RegistryEntry {
     const key = this.key(language, sessionId);
     const existing = this.entries.get(key);
     if (existing) {
       existing.lastUsed = Date.now();
       return existing;
     }
-    const entry: RegistryEntry = language === "py"
-      ? { language, kernel: new PythonKernel(this.makePythonEnv()), lastUsed: Date.now() }
-      : { language, kernel: new JsKernel(this.makeJsLoopback()), lastUsed: Date.now() };
+    let entry: RegistryEntry;
+    if (language === "py") {
+      entry = { language, kernel: new PythonKernel(this.makePythonEnv()), lastUsed: Date.now() };
+    } else if (language === "js") {
+      entry = { language, kernel: new JsKernel(this.makeJsLoopback()), lastUsed: Date.now() };
+    } else {
+      entry = { language, kernel: new AilangKernel(this.makeAilangConfig()), lastUsed: Date.now() };
+    }
     this.entries.set(key, entry);
     return entry;
   }
 
   async runCell(index: number, sessionId: string, cell: EvalCell, workdir: string, defaultTimeoutSecs: number): Promise<EvalCellResult> {
-    if (cell.reset) this.reset(cell.language, sessionId);
+    // AILANG reset is handled inside the kernel (session.reset) so that the
+    // one-time teach-prompt marker survives a source reset; py/js reset
+    // destroys the kernel process.
+    if (cell.reset && cell.language !== "ail") this.reset(cell.language, sessionId);
     const entry = this.get(cell.language, sessionId);
     const timeoutMs = Math.max(1, Number(cell.timeout ?? defaultTimeoutSecs)) * 1000;
     const title = String(cell.title ?? `${cell.language} cell ${index + 1}`);
     const started = Date.now();
-    const result = entry.language === "py"
-      ? await entry.kernel.run(index, { code: cell.code, title, cwd: workdir, timeoutMs })
-      : await entry.kernel.run(index, { code: cell.code, title, timeoutMs });
+    let result: EvalCellResult;
+    if (entry.language === "py") {
+      result = await entry.kernel.run(index, { code: cell.code, title, cwd: workdir, timeoutMs });
+    } else if (entry.language === "js") {
+      result = await entry.kernel.run(index, { code: cell.code, title, timeoutMs });
+    } else {
+      result = entry.kernel.run(index, { cell, timeoutMs });
+    }
     return { ...result, code: cell.code, durationMs: Date.now() - started };
   }
 

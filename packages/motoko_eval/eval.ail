@@ -44,7 +44,7 @@ export func provided_tools() -> [string] {
 export func on_describe_tools() -> [ToolSchema] {
   [{
     name: "eval",
-    description: "Run persistent Python or JavaScript cells with display capture and local workdir-confined helpers.",
+    description: "Run persistent eval cells: Python/JavaScript (mutable REPL kernels with display capture and workdir-confined helpers) or AILANG (language:\"ail\" — a persistent source-backed scratchpad gated by `ailang check`, with optional Z3 contract verification).",
     parameters: schema_json()
   }]
 }

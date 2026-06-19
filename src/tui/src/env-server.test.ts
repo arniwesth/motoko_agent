@@ -14,6 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import http from "http";
 import express from "express";
 import { execSync } from "child_process";
+import { normalizeEvalCells, normalizeAilangVerify } from "./env-server.js";
 
 // ---------------------------------------------------------------------------
 // Minimal inline env-server — mirrors env-server.ts so tests don't depend on
@@ -152,5 +153,58 @@ describe("env-server", () => {
       status: string;
     };
     expect(r.status).toBe("ok");
+  });
+});
+
+// normalizeEvalCells is the single shared normalization used by BOTH the HTTP
+// /exec-cell route and the WS /exec-cell-ws handler (wired identically), so
+// testing it covers the language-survival requirements on both transports.
+describe("normalizeEvalCells", () => {
+  it("accepts language:'ail' and parses the AILANG-only fields", () => {
+    const cells = normalizeEvalCells([
+      { language: "ail", code: "export func f() -> int ! {} { 1 }", run: true, entry: "f", caps: "IO,FS", verify: "required" },
+    ]);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].language).toBe("ail");
+    expect(cells[0].run).toBe(true);
+    expect(cells[0].entry).toBe("f");
+    expect(cells[0].caps).toBe("IO,FS");
+    expect(cells[0].verify).toBe("required");
+  });
+
+  it("defaults AILANG verify to 'auto' and run to false", () => {
+    const cells = normalizeEvalCells([{ language: "ail", code: "export func f() -> int ! {} { 1 }" }]);
+    expect(cells[0].verify).toBe("auto");
+    expect(cells[0].run).toBe(false);
+  });
+
+  it("throws an explicit error for an unknown language (never coerces to py)", () => {
+    expect(() => normalizeEvalCells([{ language: "ruby", code: "puts 1" }])).toThrow(/unsupported eval language "ruby"/);
+  });
+
+  it("still accepts py and js, and a missing language defaults to py", () => {
+    const cells = normalizeEvalCells([
+      { language: "py", code: "print(1)" },
+      { language: "js", code: "1" },
+      { code: "print(2)" },
+    ]);
+    expect(cells.map((c) => c.language)).toEqual(["py", "js", "py"]);
+  });
+
+  it("does not attach AILANG fields to py/js cells", () => {
+    const cells = normalizeEvalCells([{ language: "py", code: "print(1)", verify: "required" } as any]);
+    expect(cells[0].verify).toBeUndefined();
+  });
+
+  it("filters out empty-code cells", () => {
+    expect(normalizeEvalCells([{ language: "ail", code: "   " }])).toHaveLength(0);
+  });
+
+  it("normalizeAilangVerify maps modes (string and boolean forms)", () => {
+    expect(normalizeAilangVerify(true)).toBe(true);
+    expect(normalizeAilangVerify(false)).toBe(false);
+    expect(normalizeAilangVerify("required")).toBe("required");
+    expect(normalizeAilangVerify("auto")).toBe("auto");
+    expect(normalizeAilangVerify(undefined)).toBe("auto");
   });
 });
