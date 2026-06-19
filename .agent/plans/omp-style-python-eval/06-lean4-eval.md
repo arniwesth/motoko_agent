@@ -1,7 +1,7 @@
 # Plan: `eval` persistent verified Lean 4 scratchpad
 
 Feature context: **[plan 05](./05-persistent-verified-ailang-eval.md)** (persistent verified AILANG eval — the kernel pattern this reuses), **[plan 01](./01-design-c-mvp-local-loopback.md)** (persistent Python/JS eval), **[plan 03](./03-eval-tui-card-rendering.md)** / **[plan 04](./04-eval-inline-image-rendering.md)** (eval card renderer), and the research note **[02-additional-evaluators](../../research/omp-style-python-eval/02-additional-evaluators.md)** that proposed Lean 4 as the headline next backend.
-Toolchain: Lean 4 via the **`leanprover-community/repl`** (JSON-over-stdio), installed through `elan` → `lake`. Bun 1.3.x. **Ship Lean-without-Mathlib first**; Mathlib is an opt-in, pre-warmed flag. Phase 0 must measure the exact repl JSON + install path before any product code.
+Toolchain: Lean 4 via the **`leanprover-community/repl`** (JSON-over-stdio), installed through `elan` → `lake`. Bun 1.3.x. **Ship Lean-without-Mathlib first**; Mathlib is an opt-in, pre-warmed *toolchain/project* (a `mathlib:true` cell field selects it — it is a separate pre-built Lake project, not a runtime flag toggled per command). Phase 0 must measure the exact repl JSON + install path before any product code.
 
 ## TL;DR
 
@@ -33,13 +33,13 @@ So Lean is a genuine hybrid: **live process (py/js) + verified-commit gate (ail)
 - Surface a **Lean-4-specific teaching guide once per session** (models reflexively write Lean 3 tactics), reusing the plan-05 `teachPromptSeen` mechanism and visible-stdout surfacing.
 - Ship **Lean-without-Mathlib** as the default; make Mathlib an explicit opt-in (`mathlib:true`) that selects a heavier, pre-warmed toolchain.
 - Update every `EvalLanguage`-bearing branch (`frames.ts`, `normalizeEvalCells`, `registry.ts`, env-server config, the v2/WebSocket eval path, `ui.ts` parsing + highlighter, and `packages/motoko_eval` schema/prompt) so `lean` is neither dropped nor coerced.
-- Manage the `repl` child process safely: spawn lazily, enforce per-cell timeouts with hard kill, evict on idle, and tear down on `close()` (the registry already calls this).
+- Manage the `repl` child process safely: spawn lazily under the existing workdir/network confinement (because `#eval` can perform IO), enforce per-cell timeouts with hard kill, evict on idle, and tear down on `close()` (the registry already calls this).
 
 ## Non-goals
 
 - **No Mathlib in the MVP default.** Mathlib means multi-GB caches and seconds-plus per-cell latency; it is opt-in and pre-warmed only.
 - **No claim that every cell is proved.** A `def`/`#eval` cell with no theorem proves nothing (`proof:"skipped"`). `sorry`, `admit`, custom `axiom`, and compiler-trust axioms (`Lean.ofReduceBool` via `native_decide`) are reported honestly, never as `verified`.
-- **No general code execution / effects.** Lean is for proving, not running effectful programs. `#eval` output (captured from repl `messages`) is allowed; there is no caps/FS/Process surface like `ail run`. No capability ceiling is needed for Lean.
+- **No effectful `#eval` treated as pure.** Lean's primary use here is proving, but `#eval` is a real execution hatch — `#eval (e : IO α)` runs actual IO (file reads, even `IO.Process.run`). So the `repl` child is an **effect hatch like the py/js kernels and must get the same confinement** (confined workdir via the existing `AILANG_FS_SANDBOX=workdir` posture, network off by default). `#eval` output is captured from repl `messages`; there is no separate run/entry/caps surface, but Lean is **not** a no-effect pure prover and the process sandbox is mandatory, not optional.
 - **No tool/agent loopback from inside Lean cells.**
 - **No proof-object / tactic-state browsing UI** beyond structured diagnostics and the repl's `goals`/`messages`. (The repl's `sorries` carry proof states; surfacing them richly is a later feature.)
 - **No env pickling to disk** (the repl's `pickleTo`/`unpickleEnvFrom`) in the MVP — env lives in process memory; process death = session loss (see Open questions).
@@ -94,7 +94,7 @@ Models reflexively emit **Lean 3** tactics and syntax, so a Lean-4-specific refe
 Reuse plan 05's proven path verbatim:
 
 - The `LeanKernel` (mirroring `AilangKernel`) holds `session.teachPromptSeen`; the **first** `lean` authoring attempt in a session attaches the guide via `metadata.lean.teachPrompt` **and** prepends it to the visible `stdout` (the model reads stdout back, not nested metadata — this is why plan 05 surfaces it in `stdout`, see `kernel-ailang.ts:170`). Subsequent cells omit it. `teachPromptSeen` survives `reset()` (don't re-burn tokens on a source reset).
-- The env-server caches the guide for the process lifetime via a `leanAgentPrompt()` provider passed in `makeLeanConfig()` — the direct analogue of `ailangAgentPrompt()` / `ailangCapsCeiling()` wiring in `env-server.ts`. Source: a static `lean4-teach.md` asset shipped in the repo (concise: tactic-mode basics, `by`/`:=`, common tactics `omega`/`simp`/`decide`/`rfl`/`induction`, "Lean 4 not Lean 3" pitfalls, and the honesty note that `sorry`/`native_decide` are not real proofs).
+- The env-server caches the guide for the process lifetime via a `leanAgentPrompt()` provider passed in `makeLeanConfig()` — the direct analogue of `ailangAgentPrompt()` / `ailangCapsCeiling()` wiring in `env-server.ts`. Source: a static `lean4-teach.md` asset shipped in the repo (concise: tactic-mode basics, `by`/`:=`, common tactics `omega`/`simp`/`decide`/`rfl`/`induction`, "Lean 4 not Lean 3" pitfalls, the instruction to **use named `theorem`/`lemma` rather than anonymous `example`** when a machine-checkable proof is wanted, and the honesty note that `sorry`/`native_decide` are not real proofs).
 - `prompts.ail` keeps a short standing instruction: "Before writing `language:\"lean\"` cells, read the one-time Lean 4 guide attached to your first `lean` cell result; do not guess Lean syntax, and never call a result 'proved' unless `metadata.lean.proof` is exactly `verified`."
 
 **Acceptance:** in an end-to-end session the full Lean guide appears at most once before the first `lean` cell; later `lean` cells in the same session do not duplicate it; after compaction/resume the model still has the short reminder and can ask for the guide again.
@@ -133,13 +133,16 @@ type LeanSession = {
 Per-cell flow (the gate logic lives in `lean-session.ts`; process I/O in `kernel-lean.ts`):
 
 1. If `reset` (or `mathlib` changed), reset the session and respawn the repl on the right toolchain.
-2. Send `{ "cmd": <cell.code>, "env": session.committedEnv ?? <base> }` to the repl with a per-cell timeout (hard-kill the child on timeout).
-3. Read the reply `{ messages, sorries, env }`. **Elaboration status** from `messages` severity: any `error` → `failed`; otherwise `passed` (warnings, incl. `sorry`, are not elaboration failures).
-4. **Proof verdict** per theorem declared in the cell: for each theorem name, send `{ "cmd": "#print axioms <name>", "env": <new env> }` and parse the axiom list. Map (see Status mapping below).
-5. `decideCommit(...)` (port of `ailang-session.ts:decideCommit`) decides whether to advance `session.committedEnv` to the new env, given elaboration status, proof verdict, and `prove` mode.
-6. On commit, advance `committedEnv`, record new decl names. On non-commit, leave `committedEnv` untouched (the freshly-minted env is simply abandoned in repl memory).
+2. Parse the cell source for top-level declaration **names + kinds** (`theorem`/`lemma` = provable, `def`/`abbrev`/`instance` = not a proof, anonymous `example` = provable-but-unnameable) via a `parseLeanCell` helper modeled on `ailang-session.ts:parseCell`/`declName`. These names drive the axiom check in step 4. Note: we do **not** need `ail`'s `duplicateNames` pre-check — the threaded env already contains accepted names, so a redeclared name fails elaboration *in the repl* with a native `'foo' has already been declared` error; that surfaces as an elaboration failure with no commit.
+3. Send `{ "cmd": <cell.code>, "env": session.committedEnv }` (omit the `env` field entirely when `committedEnv` is `null` — the first command *creates* env 0; there is no pre-existing base env) with a per-cell timeout (hard-kill the child on timeout).
+4. Read the reply `{ messages, sorries, env }`. **Elaboration status** from `messages` severity: any `error` → `failed`; otherwise `passed` (warnings, incl. `sorry`, are not elaboration failures).
+5. **Proof verdict** for the cell's named theorems: send one batched `{ "cmd": "#print axioms a\n#print axioms b\n...", "env": <new env> }` (info-only; does not meaningfully advance the env) and parse the per-name axiom lists from the resulting `info` messages. Anonymous `example`s cannot be `#print axioms`-targeted (no name) — for those, rely on `sorries`/`uses 'sorry'` only and never grade them above `verified`-by-sorry-absence (see honesty note below). Map per Status mapping.
+6. `decideCommit(...)` (port of `ailang-session.ts:decideCommit`) decides whether to advance `session.committedEnv` to the cell's env (step 3's, not step 5's), given elaboration status, proof verdict, and `prove` mode.
+7. On commit, advance `committedEnv`, record new decl names. On non-commit, leave `committedEnv` untouched (the freshly-minted env is simply abandoned in repl memory).
 
 Key semantic match to plan 05: **a failed Lean cell does not mutate committed session state** — here that means the committed env pointer does not advance.
+
+**Anonymous `example` honesty gap:** because `#print axioms` needs a name, an `example : P := by sorry` can only be caught via `sorries`/`uses 'sorry'`, not via axiom audit — and an `example` that sneaks in a custom `axiom` cannot be axiom-audited at all. Therefore a *named* `theorem`/`lemma` is required for a full `verified` verdict; the teach guide must tell the model to use named theorems (not `example`) when it wants a machine-checkable proof, and the verdict for an unnameable `example` caps at "no sorry detected," surfaced honestly rather than as `verified`.
 
 ### Status mapping (the only genuinely Lean-specific part)
 
@@ -154,7 +157,7 @@ type LeanProofStatus =
   | "error";          // repl/process error, unparseable reply
 ```
 
-Standard allowed axiom set: `{ propext, Classical.choice, Quot.sound }`. Flag and surface anything else (notably `sorryAx`, `Lean.ofReduceBool` / `Lean.trustCompiler` from `native_decide` / `#eval`-backed proofs). A cell with no theorem is `proof:"skipped"`, exactly like `ail` `verify:"skipped"` when no `requires`/`ensures` are present. Conservative default: anything we are not certain proves the theorem is **not** `verified` (port the spirit of `mapFnVerify` / `aggregateVerify`).
+Standard allowed axiom set: `{ propext, Classical.choice, Quot.sound }`. Flag and surface anything else (notably `sorryAx`, and `Lean.ofReduceBool` from `native_decide`). Phase 0 must capture the *exact* axiom names for the `sorry` and `native_decide` cases rather than trusting this list. A cell with no provable declaration is `proof:"skipped"`, exactly like `ail` `verify:"skipped"` when no `requires`/`ensures` are present. Conservative default: anything we are not certain proves the theorem is **not** `verified` (port the spirit of `mapFnVerify` / `aggregateVerify`).
 
 ---
 
@@ -168,9 +171,11 @@ Spike, mirroring the plan-05 AILANG smoke:
 2. **JSON shapes:** capture a real `{ "cmd": "..." }` request and the `{ messages, sorries, env }` reply. Note message `severity` values (`error`/`warning`/`info`) and the precise text Lean prints for `sorry` (`declaration uses 'sorry'`).
 3. **Env-threading:** prove a `theorem` in command 1 (capture its `env`), then *use* it in command 2 via `{"cmd": "...", "env": <id>}`. Confirm a deliberately broken command 3 returns an `error` message and whether it still mints an env id (decides exactly what the commit gate abandons).
 4. **Honesty signals:** confirm `sorries[]` is populated for a `sorry` proof; capture `#print axioms <thm>` output for (a) a clean `omega`/`decide` proof, (b) a `sorry` proof (expect `sorryAx`), and (c) a `native_decide` proof (expect `Lean.ofReduceBool`/trust axiom). This is what makes `verified` honest.
-5. **Latency:** cold vs warm, with and without Mathlib.
+5. **Toolchain/project layout:** confirm the repl must be launched from inside a Lake project whose `lakefile` pins the toolchain — and that **Mathlib is not a runtime flag** but a project dependency: the Mathlib-enabled session needs a *separate* pre-built Lake project (with Mathlib fetched via `lake exe cache get`) and the repl launched against it. Record both project layouts (bare vs Mathlib) so Phase 1's `mathlibToolchain` resolver is concrete.
+6. **`#eval` effect surface:** confirm whether `#eval (e : IO α)` actually performs IO inside the repl (it does) and that the spawned child respects the workdir/network sandbox — this decides the confinement posture in Phase 1/4.
+7. **Latency:** cold vs warm, with and without Mathlib.
 
-**Acceptance:** a clean `theorem ... := by omega` reports zero sorries and standard-only axioms; a `:= by sorry` proof is detectable from *both* `sorries[]` and `#print axioms`; env-threading lets cell 2 reference cell 1's theorem; commands run deterministically with captured JSON.
+**Acceptance:** a clean `theorem ... := by omega` reports zero sorries and standard-only axioms; a `:= by sorry` proof is detectable from *both* `sorries[]` and `#print axioms`; env-threading lets cell 2 reference cell 1's theorem; an `#eval` IO action is observed running under the sandbox; commands run deterministically with captured JSON.
 
 ---
 
@@ -182,8 +187,8 @@ Spike, mirroring the plan-05 AILANG smoke:
 - Extend `EvalLanguage` in `frames.ts:1` to `"py" | "js" | "ail" | "lean"`.
 - `normalizeEvalCells` (`env-server.ts:431`): accept `"lean"` in the language guard at `:436` (the error string at `:437` becomes `expected "py", "js", "ail", or "lean"`); in a `language === "lean"` branch set `prove` (via a `normalizeLeanProve` helper modeled on `normalizeAilangVerify`, `env-server.ts:420`) and `mathlib`. Never coerce unknowns to Python.
 - `registry.ts`: add a `{ language: "lean"; kernel: LeanKernel; lastUsed }` `RegistryEntry`; add a `makeLeanConfig` constructor arg; route `"lean"` to `new LeanKernel(...)` in `get()`; in `runCell` call the lean kernel. **Reuse the existing idle eviction and `close()` path** — unlike `AilangKernel.close()` (a no-op), `LeanKernel.close()` **must kill the repl child**. Like `ail`, handle `reset` inside the kernel (so `teachPromptSeen` survives), so add `"lean"` to the `cell.reset && cell.language !== "ail"` guard at `registry.ts:69` (i.e. `!== "ail" && !== "lean"`).
-- `env-server.ts`: add a `makeLeanConfig()` to the `new EvalKernelRegistry(...)` call (`env-server.ts:753`), supplying the repl launch command/toolchain path, the `leanAgentPrompt()` provider (cached like `ailangAgentPrompt()` at `:739`), and a `mathlibToolchain` resolver. No caps ceiling needed (Lean doesn't execute effects).
-- **Process management:** the repl is one child per session. Send newline-delimited JSON; read replies with a length/heuristic framing confirmed in Phase 0. Enforce the per-cell timeout with a hard `kill`; on death, mark the cell `proof:"error"` and reset the session so the next cell respawns. Optionally keep a `lastGoodReplay` (concatenated accepted source) so a crashed session can be rebuilt — or just reset (Open question).
+- `env-server.ts`: add a `makeLeanConfig()` to the `new EvalKernelRegistry(...)` call (`env-server.ts:753`), supplying the repl launch command/toolchain path, the `leanAgentPrompt()` provider (cached like `ailangAgentPrompt()` at `:739`), and a `mathlibToolchain` resolver. Because `#eval` can perform IO, the repl child must be spawned under the **same workdir/network confinement** the existing kernels use (`AILANG_FS_SANDBOX=workdir`, network off) — this is sandboxing, not a caps ceiling (Lean has no per-cap grant surface like `ail run`).
+- **Process management:** the repl is one child per session. Send newline-delimited JSON; read replies with a length/heuristic framing confirmed in Phase 0. Enforce the per-cell timeout with a hard `kill`; on death, mark the cell `proof:"error"` and reset the session so the next cell respawns. Optionally keep a `lastGoodReplay` (the concatenated accepted-cell source — note this means retaining accepted source alongside the env id, a small addition to the otherwise source-free env-threading model) so a crashed session can be rebuilt — or just reset (Open question).
 
 **Acceptance:** cell 1 proves a theorem and commits; cell 2 references it through the threaded env and elaborates; a broken cell 3 fails without advancing the committed env or losing cells 1–2; `reset:true` clears the session and respawns the repl; `close()` leaves no zombie repl process.
 
@@ -251,7 +256,7 @@ Response stays the plan-01/03 `CellExecResult` shape with `metadata.lean` per ce
 
 - `types.ail`: add `"lean"` to the `language` enum; add `prove` (`enum ["auto","required","off"]`) and `mathlib` (boolean) with descriptions, mirroring how `verify`/`run`/`entry`/`caps` were added for `ail`.
 - `prompts.ail`: add guidance distinguishing the three verified-ish lanes — **use `ail`** for typed pure functions + SMT contracts (decidable arithmetic), **use `lean`** for arbitrary theorems / inductive proofs / mathematical propositions, **use py/js** for scripting and data work. Include the **proof caveat**: a Lean result is proved **only** when `metadata.lean.proof` is exactly `verified`; `sorry`, `axiom_tainted`, `skipped`, `failed`, `error` are not proofs. Add the one-time Lean-4 teaching-guide instruction.
-- `on_tool_policy`: Lean cells **execute no effects** (no caps/FS/Process), so they are pure static reasoning. This means restricted/read-only profiles can permit `lean` (and check-only `ail`) more liberally than py/js — gate on inspecting the `cells` argument, as plan 05's Phase 4 already requires for `ail`. Keep Lean at least as strict as py/js by default, but allow profiles to opt into "proving allowed, execution denied."
+- `on_tool_policy`: a *proof-only* Lean cell is pure static reasoning, but a cell containing `#eval` of an `IO` action is an execution hatch (file IO, process spawn). The policy therefore cannot blanket-permit `lean` in read-only modes the way it might a check-only `ail` cell. Default: treat Lean at least as strictly as py/js. A profile may opt into "proving allowed, execution denied" **only** with a best-effort source guard that rejects cells containing `#eval`/`#exit`/`run_cmd` (acknowledged as heuristic, not a security boundary — the repl sandbox is the real boundary). Gate on inspecting the `cells` argument, as plan 05's Phase 4 already does for `ail`.
 
 **Acceptance:** the tool description makes proof-overclaim hard; a read-only profile can allow Lean proving while denying py/js execution.
 
@@ -278,7 +283,9 @@ Reuse the plan-03/04 eval card. Lean cells render with extra status lines:
 - **Normalization regression:** unknown languages still error; `language:"lean"` survives `/exec-cell`, the WebSocket path, `eval_result` JSON, and TUI parsing; `prove`/`mathlib` normalize correctly.
 - **Lean smoke (gated on Lean installed):** a clean `omega` theorem (`verified`, committed), a `sorry` theorem (`sorry`, not committed under `required`), a `native_decide` theorem (`axiom_tainted`), a second cell using the first cell's theorem, a `#eval` cell.
 - **Process-management test:** per-cell timeout hard-kills the repl; `close()` leaves no zombie; a crashed repl resets cleanly.
-- **Policy smoke:** a read-only profile allows Lean proving and denies py/js execution.
+- **Anonymous-`example` honesty test:** an `example := by sorry` is caught via `sorries`/`uses 'sorry'` and never graded `verified`; a named `theorem := by sorry` is caught additionally via `#print axioms` (`sorryAx`).
+- **Effect-confinement test:** an `#eval` IO action (file read/write) is confined to the workdir sandbox; a network `#eval` is blocked by default.
+- **Policy smoke:** in the "proving allowed, execution denied" profile, a proof-only cell is permitted while a cell containing `#eval` is rejected by the best-effort source guard; default profiles treat `lean` at least as strictly as py/js.
 - **Teach-prompt smoke:** fresh session surfaces the Lean guide once before the first `lean` cell; same session does not repeat it.
 - **Wire metadata test:** `metadata.lean` survives env-server response → `ToolResultEnvelope.metadata.cells` → `eval_result.cells_json` → `parseEvalCellsJson` (mirror the plan-05 `ailang` wire test).
 - **TUI test:** card renders elaboration/proof statuses and unexpected axioms.
@@ -320,7 +327,8 @@ The TUI status lines, env-server normalization, teach-prompt surfacing, idle evi
 
 Risks:
 
-- **Proof dishonesty** — the central risk. `sorry`/`admit` "succeed," custom `axiom`s assume anything, and `native_decide`/`#eval`-backed proofs add compiler-trust axioms (`Lean.ofReduceBool`). Mitigate with the two-signal rule (`sorries[]` **and** `#print axioms`) and a conservative default (`verified` only when proven clean).
+- **Proof dishonesty** — the central risk. `sorry`/`admit` "succeed," custom `axiom`s assume anything, and `native_decide` proofs add the `Lean.ofReduceBool` compiler-trust axiom. Anonymous `example`s evade name-based axiom audit entirely. Mitigate with the two-signal rule (`sorries[]` **and** `#print axioms`), requiring named theorems for a full `verified` verdict, and a conservative default (`verified` only when proven clean).
+- **`#eval` is an effect hatch** — `#eval (e : IO α)` performs real IO (file, process). The repl child is therefore a privileged effect surface, not a pure prover. Mitigate: run the child under the same workdir/network confinement as py/js (`AILANG_FS_SANDBOX=workdir`), and gate read-only profiles with a best-effort `#eval` source guard (the sandbox, not the guard, is the real boundary).
 - **Repl process management** — hangs on malformed input, zombie children, memory growth (the repl retains every env in memory over a long session). Mitigate: per-cell timeout + hard kill, `close()` teardown via the registry, idle eviction, and `reset` to drop accumulated envs.
 - **Mathlib weight/latency** — multi-GB caches, seconds-plus elaboration. Mitigate: Lean-without-Mathlib default; Mathlib opt-in and pre-warmed.
 - **Lean 3 vs 4 drift** — models emit Lean 3 tactics/syntax. Mitigate: the one-time Lean-4 teaching guide + honest error surfacing.
@@ -340,3 +348,5 @@ Risks:
 | 6 | Where does the teach prompt come from (no upstream CLI prompt)? | Ship a static `lean4-teach.md` asset; surface once via the plan-05 mechanism. |
 | 7 | Install Lean by default? | No — Lean (`elan`/`lake`/`repl`) is heavy; gate behind a flag in `scripts/install-prerequisites.sh`, like Rust/omnigraph. |
 | 8 | Extract the shared `VerifiedSession`/`VerifierKernel` now? | After both backends are green (Phase 7), not before. |
+| 9 | How to handle effectful `#eval` (IO/process)? | Run the repl child under the existing workdir/network sandbox; do **not** try to statically forbid all effects. In read-only profiles, additionally reject cells containing `#eval` via a best-effort source guard (the sandbox is the real boundary). |
+| 10 | Named `theorem` vs anonymous `example`? | A full `verified` verdict requires a *named* theorem (so `#print axioms` can audit it); anonymous `example`s cap at "no sorry detected." Teach the model to prefer named theorems. |
