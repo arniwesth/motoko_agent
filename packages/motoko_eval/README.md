@@ -24,6 +24,10 @@ Mathlib is opt-in and heavier:
 ./scripts/install-prerequisites.sh --with-lean-mathlib
 ```
 
+## Known Issues
+
+- AILANG eval may repeat the AILANG teaching guide even if the same guide was already loaded earlier in the agent session outside eval. Verified by code inspection: `AilangKernel` only tracks `teachPromptSeen` on its own per-eval `AilangSession`, and does not know whether the wider conversation has already received `ailang agent-prompt` content. The repeat is limited to the first `language:"ail"` eval authoring attempt for that eval session.
+
 ## Mixed Lean + AILANG Test Prompt
 
 Use this prompt to verify that Lean and AILANG eval work in the same session:
