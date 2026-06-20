@@ -41,6 +41,31 @@ The Motoko launcher derives
 OTLP headers variable is not already set. Existing explicit
 `OTEL_EXPORTER_OTLP_HEADERS` values still take precedence.
 
+## Trace tiers (`standard` vs `deep`)
+
+`AILANG_TRACE` selects how much detail the emitter writes. On startup AILANG
+prints e.g. `Trace: standard (set AILANG_TRACE=deep or --trace-tier deep for
+per-call spans)`. There are three tiers — `off`, `standard` (default), and
+`deep`:
+
+| Tier | Spans emitted | Use for |
+|---|---|---|
+| `off` | None. | Disabling tracing (also `AILANG_NO_TRACE=1`). |
+| `standard` (default) | Coarse, structural spans only: module, top-level effect, coordinator, executor, compile, and task/chain-linked spans. **Skips** per-call function spans and nested effect spans (only top-level effects, `depth <= 1`). | Normal runs — a high-level skeleton of what happened. |
+| `deep` | Everything `standard` emits **plus** one `eval.function.*` span per call (with name, depth, args, result, duration) and one `eval.effect.<Effect>.<Op>` span per effect op at any depth. | Profiling or capturing detailed training data. ~2× overhead. |
+
+Precedence: `--trace-tier` flag > `AILANG_TRACE` env > legacy `AILANG_NO_TRACE=1`
+> default (`standard`). Aliases: `deep`/`full`/`all`, `standard`/`default`/`""`,
+`off`/`none`/`disabled`.
+
+```bash
+export AILANG_TRACE=deep   # per-call function + effect spans
+```
+
+Because `deep` can emit a span per function call, it is most likely to hit the
+per-trace span budget (`AILANG_TRACE_MAX_SPANS`, default 500); overflow is
+truncated.
+
 If OTLP HTTP on `4318` returns timeouts from `/v1/traces` or `/v1/metrics`,
 lower trace volume while debugging:
 

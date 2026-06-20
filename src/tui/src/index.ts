@@ -257,6 +257,18 @@ function applyClickStackProfileConfig(
   protectedKeys: Set<string>,
 ): void {
   if (!clickstack?.enabled) return;
+  // ClickStack/HyperDX rejects OTLP ingestion without an authorization header,
+  // so without a key the AILANG runtime would emit `traces export: failed to
+  // send ... 401 (missing or empty authorization header)` on every span. The
+  // header is derived from CLICKSTACK_INGESTION_KEY by
+  // synthesizeClickStackOtelHeaders() (already run by this point). If no key is
+  // available we know export is doomed, so we skip it entirely and print a
+  // single actionable hint instead of letting the runtime spam 401s.
+  if (!clickStackAuthHeaderPresent()) {
+    disableOtelExport();
+    warnClickStackTracingDisabled(clickstack.endpoint);
+    return;
+  }
   setFromProfile(protectedKeys, "MOTOKO_OTEL", "1");
   setFromProfile(protectedKeys, "OTEL_EXPORTER_OTLP_ENDPOINT", clickstack.endpoint);
   setFromProfile(protectedKeys, "OTEL_EXPORTER_OTLP_PROTOCOL", clickstack.protocol);
@@ -265,6 +277,40 @@ function applyClickStackProfileConfig(
   setFromProfile(protectedKeys, "AILANG_TRACE_MAX_SPANS", clickstack.traceMaxSpans);
   setFromProfile(protectedKeys, "OTEL_METRICS_EXPORTER", clickstack.metricsExporter);
   setFromProfile(protectedKeys, "OTEL_EXPORTER_OTLP_TIMEOUT", clickstack.timeoutMs);
+}
+
+// True when an OTLP authorization header is configured (directly, or
+// synthesized from CLICKSTACK_INGESTION_KEY by synthesizeClickStackOtelHeaders).
+function clickStackAuthHeaderPresent(): boolean {
+  const headers =
+    process.env.OTEL_EXPORTER_OTLP_HEADERS ??
+    process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS ??
+    "";
+  return /authorization\s*=/i.test(headers);
+}
+
+// Prevent every AILANG child (the version probe and the agent runtime) from
+// attempting trace export. AILANG only initializes its OTLP exporter when
+// OTEL_EXPORTER_OTLP_ENDPOINT is set — and crucially AILANG_TRACE=off does NOT
+// stop it, only removing the endpoint does. The endpoint is injected into the
+// process env by docker-compose (observability stack), so deleting it here is
+// the only reliable way to silence export. The version probe inherits
+// process.env directly; the runtime is additionally gated on MOTOKO_OTEL.
+function disableOtelExport(): void {
+  delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+  delete process.env.MOTOKO_OTEL;
+}
+
+// Emit a single, actionable line explaining that tracing is off for this run
+// because no ingestion key was found — replacing the runtime's raw 401 spam.
+function warnClickStackTracingDisabled(endpoint: string | undefined): void {
+  const target = nonEmptyString(endpoint) ?? "the OTLP endpoint";
+  process.stderr.write(
+    `Motoko: ClickStack tracing is enabled but no ingestion key is set — tracing is disabled for this run (${target} would reject it with 401).\n` +
+      `  Fix: add CLICKSTACK_INGESTION_KEY=<key> to .env (find it in the ClickStack UI → Team Settings → API Keys),\n` +
+      `       or set OTEL_EXPORTER_OTLP_HEADERS='authorization=<key>' directly, or set clickstack.enabled=false to silence this.\n`,
+  );
 }
 
 function applyToolProfileConfig(
@@ -717,7 +763,13 @@ async function main(): Promise<void> {
   try {
     brainVersion = execSync(
       "ailang run --entry print_version --caps IO src/core/version.ail | tail -1",
-      { cwd: projectRoot, timeout: 15000 },
+      // env: process.env is REQUIRED — bun's execSync does not propagate
+      // runtime-mutated process.env to children, only the snapshot captured at
+      // process start. synthesizeClickStackOtelHeaders() sets
+      // OTEL_EXPORTER_OTLP_HEADERS at runtime, so without this the probe runs
+      // the AILANG trace exporter with no auth header and ClickStack rejects it
+      // with `401 ... missing or empty authorization header` on every launch.
+      { cwd: projectRoot, timeout: 15000, env: process.env },
     ).toString().trim();
   } catch {
     // Runtime not available (ailang not on PATH, etc.) — banner shows "unknown".
