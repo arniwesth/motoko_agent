@@ -20,7 +20,7 @@
 // picker is shown.
 
 import chalk from "chalk";
-import { TUI, Text, Markdown, Editor, type EditorTheme, Box, SelectList, ProcessTerminal, type OverlayHandle, type SelectItem, type MarkdownTheme, matchesKey } from "@mariozechner/pi-tui";
+import { TUI, Text, Markdown, Editor, type EditorTheme, Box, Image, SelectList, ProcessTerminal, type OverlayHandle, type SelectItem, type MarkdownTheme, matchesKey } from "@mariozechner/pi-tui";
 import type { AgentEvent } from "./runtime-process.js";
 import type { DelegatedCall, DelegatedResult, NativeToolResult } from "./runtime-process.js";
 import type { RuntimeProcess } from "./runtime-process.js";
@@ -30,6 +30,18 @@ import { type SlashCommandHandlerCtx, parseSlashCommand, createCommandAutocomple
 import { canonicalToolIdentity, extractToolPlanSnapshot } from "./tool-plan-parser.js";
 import { normalizeJsonLang, segmentStreamMarkdown, trimSegmentsForLiveRender } from "./stream-markdown.js";
 import { highlightJsonLines } from "./json-highlight.js";
+import type {
+  AilangCellMetadata,
+  AilangCheckStatus,
+  AilangFnVerify,
+  AilangVerifyStatus,
+  ScratchpadCellResult,
+  ScratchpadDisplayBundle,
+  LeanCellMetadata,
+  LeanProofStatus,
+  LeanTheoremProof,
+} from "./scratchpad/frames.js";
+import { type ScratchpadSegment, scratchpadImageCapabilityLabel, scratchpadImageExitSequence, makeImageSegment } from "./scratchpad/image-segment.js";
 import { execSync } from "child_process";
 // NOTE: The ASCII-art banner is printed unconditionally in main() before the 
 // TUI starts here — ANSI escapes in Text children corrupt the layout system.
@@ -47,7 +59,7 @@ type AilangState = {
   awaitEffectBrace: boolean;
 };
 
-type DiffInnerLang = "ts" | "py" | "ail" | "sh" | null;
+type DiffInnerLang = "ts" | "py" | "ail" | "lean" | "sh" | null;
 
 type DiffState = {
   innerLang: DiffInnerLang;
@@ -118,6 +130,7 @@ const EXT_TO_LANG: Record<string, DiffInnerLang> = {
   cjs: "ts",
   py: "py",
   ail: "ail",
+  lean: "lean",
   sh: "sh",
   bash: "sh",
   zsh: "sh",
@@ -516,6 +529,8 @@ function highlightInnerDiffLine(content: string, state: DiffState): string {
       return highlightPyLine(content, state.pyState);
     case "ail":
       return highlightAilangLine(content, state.ailangState);
+    case "lean":
+      return content.replace(/\b(theorem|lemma|def|abbrev|instance|example|axiom|import|by|where|match|with|if|then|else|let|have|show|calc|induction|cases|constructor|exact|apply|intro|intros|simp|omega|decide|rfl|native_decide)\b/g, (m) => chalk.cyan(m));
     case "sh":
       return highlightShellLine(content);
     default:
@@ -607,6 +622,16 @@ export function highlightCodeLines(code: string, lang?: string): string[] {
   if (["ail", "ailang"].includes(normalized)) {
     const state: AilangState = { inEffectBlock: false, awaitEffectBrace: false };
     return lines.map((line) => highlightAilangLine(line, state));
+  }
+  if (["lean", "lean4"].includes(normalized)) {
+    const kw = /\b(theorem|lemma|def|abbrev|instance|example|axiom|import|by|where|match|with|if|then|else|let|have|show|calc|induction|cases|constructor|exact|apply|intro|intros|simp|omega|decide|rfl|native_decide)\b/g;
+    return lines.map((line) => {
+      const commentAt = line.indexOf("--");
+      const codePart = commentAt >= 0 ? line.slice(0, commentAt) : line;
+      const comment = commentAt >= 0 ? line.slice(commentAt) : "";
+      const str = codePart.replace(/"([^"\\]|\\.)*"/g, (m) => chalk.green(m));
+      return str.replace(kw, (m) => chalk.cyan(m)) + (comment ? chalk.dim(comment) : "");
+    });
   }
   if (["bash", "sh", "zsh", "shell"].includes(normalized)) {
     return lines.map((line) => highlightShellLine(line));
@@ -868,6 +893,41 @@ interface ComposeCardState {
   bodyRow: Text;
 }
 
+/**
+ * Cached render state for one image bundle, keyed by `${cellIndex}:…`. Holds
+ * either a reusable Kitty/iTerm2 `Image` (graphics terminals) or the computed
+ * half-block / text fallback lines (so we don't re-decode the PNG on every
+ * re-render or Ctrl+O toggle).
+ */
+interface ScratchpadCardImageEntry {
+  image: Image | null;
+  base64: string;
+  fallbackWidth?: number;
+  fallbackMaxRows?: number;
+  fallbackLines?: string[];
+}
+
+interface ScratchpadCardState {
+  toolCallId: string;
+  requestId: string;
+  step: number;
+  cells: ScratchpadCellResult[];
+  expanded: boolean;
+  /**
+   * The card body. Replaces the old single flattened detail `Text`: a `Box`
+   * holding interleaved `Text` and `Image` children. A `Box` never wraps, so it
+   * passes image escape sequences through intact (a `Text` would shred them).
+   */
+  bodyBox?: Box;
+  /**
+   * Live `Image` components keyed by `${cellIndex}:d${i}` / `${cellIndex}:r`, so
+   * the same Kitty `imageId` is reused across re-renders (Kitty replaces rather
+   * than stacks). Cards persist for the session; there is no mid-session
+   * teardown — purge happens only on process exit.
+   */
+  images: Map<string, ScratchpadCardImageEntry>;
+}
+
 interface PlannedToolEntry {
   step: number;
   identity: string;
@@ -1034,6 +1094,21 @@ export function renderToolCallMetaWithFallback(
   }
 }
 
+function scratchpadCallCellCount(call: DelegatedCall): number {
+  const args = recordValue(call.arguments);
+  const cells = args?.cells;
+  return Array.isArray(cells) ? cells.length : 0;
+}
+
+TOOL_RENDERERS.scratchpad = {
+  renderCall: (call) => {
+    const id = call.id ?? "unknown";
+    const count = scratchpadCallCellCount(call);
+    return `${id} scratchpad ${count} cell${count === 1 ? "" : "s"}`;
+  },
+};
+TOOL_RENDERERS.Scratchpad = TOOL_RENDERERS.scratchpad;
+
 function splitOutputLines(text: string): string[] {
   if (!text) return [];
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
@@ -1189,6 +1264,448 @@ export function formatToolDetailLines(
   return rendered;
 }
 
+function recordValue(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function stringValue(v: unknown, fallback = ""): string {
+  return typeof v === "string" ? v : fallback;
+}
+
+function numberValue(v: unknown, fallback = 0): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function boolValue(v: unknown, fallback = false): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
+
+function normalizeScratchpadDisplayBundle(v: unknown): ScratchpadDisplayBundle | null {
+  const rec = recordValue(v);
+  if (!rec) return null;
+  const rawType = stringValue(rec.type, "text");
+  const type = ["json", "image", "markdown", "status", "text"].includes(rawType) ? rawType as ScratchpadDisplayBundle["type"] : "text";
+  return {
+    type,
+    mime: typeof rec.mime === "string" ? rec.mime : undefined,
+    data: rec.data,
+    width: typeof rec.width === "number" ? rec.width : undefined,
+    height: typeof rec.height === "number" ? rec.height : undefined,
+  };
+}
+
+function normalizeAilangMetadata(v: unknown): AilangCellMetadata | undefined {
+  const rec = recordValue(v);
+  if (!rec) return undefined;
+  const ail = recordValue(rec.ailang);
+  if (!ail) return undefined;
+  const checkRaw = stringValue(ail.check, "skipped");
+  const check: AilangCheckStatus =
+    checkRaw === "passed" || checkRaw === "failed" ? checkRaw : "skipped";
+  const verifyRaw = stringValue(ail.verify, "skipped");
+  const verify: AilangVerifyStatus =
+    (["verified", "failed", "unknown", "timeout", "skipped"] as const).includes(verifyRaw as AilangVerifyStatus)
+      ? (verifyRaw as AilangVerifyStatus)
+      : "skipped";
+  const functions: AilangFnVerify[] | undefined = Array.isArray(ail.functions)
+    ? ail.functions
+        .map((f) => recordValue(f))
+        .filter((f): f is Record<string, unknown> => f !== null)
+        .map((f) => ({
+          function: stringValue(f.function, "<anon>"),
+          status: stringValue(f.status, "unknown") as AilangVerifyStatus,
+        }))
+    : undefined;
+  return {
+    check,
+    verify,
+    verifyAvailable: boolValue(ail.verifyAvailable, false),
+    committed: boolValue(ail.committed, false),
+    ran: boolValue(ail.ran, false),
+    functions: functions && functions.length > 0 ? functions : undefined,
+    teachPrompt: typeof ail.teachPrompt === "string" ? ail.teachPrompt : undefined,
+    notice: typeof ail.notice === "string" ? ail.notice : undefined,
+  };
+}
+
+function normalizeLeanMetadata(v: unknown): LeanCellMetadata | undefined {
+  const rec = recordValue(v);
+  if (!rec) return undefined;
+  const lean = recordValue(rec.lean);
+  if (!lean) return undefined;
+  const elaboratedRaw = stringValue(lean.elaborated, "error");
+  const elaborated: LeanCellMetadata["elaborated"] =
+    elaboratedRaw === "passed" || elaboratedRaw === "failed" || elaboratedRaw === "error" ? elaboratedRaw : "error";
+  const proofRaw = stringValue(lean.proof, "error");
+  const proof: LeanProofStatus =
+    (["verified", "sorry", "axiom_tainted", "failed", "skipped", "error"] as const).includes(proofRaw as LeanProofStatus)
+      ? (proofRaw as LeanProofStatus)
+      : "error";
+  const theorems: LeanTheoremProof[] | undefined = Array.isArray(lean.theorems)
+    ? lean.theorems
+        .map((t) => recordValue(t))
+        .filter((t): t is Record<string, unknown> => t !== null)
+        .map((t) => ({
+          name: stringValue(t.name, "<anon>"),
+          status: stringValue(t.status, "error") as LeanProofStatus,
+          axioms: Array.isArray(t.axioms) ? t.axioms.filter((x): x is string => typeof x === "string") : undefined,
+        }))
+    : undefined;
+  return {
+    elaborated,
+    proof,
+    committed: boolValue(lean.committed, false),
+    theorems: theorems && theorems.length > 0 ? theorems : undefined,
+    sorries: typeof lean.sorries === "number" ? lean.sorries : undefined,
+    unexpectedAxioms: Array.isArray(lean.unexpectedAxioms)
+      ? lean.unexpectedAxioms.filter((x): x is string => typeof x === "string")
+      : undefined,
+    teachPrompt: typeof lean.teachPrompt === "string" ? lean.teachPrompt : undefined,
+    notice: typeof lean.notice === "string" ? lean.notice : undefined,
+  };
+}
+
+function normalizeScratchpadCellResult(v: unknown): ScratchpadCellResult | null {
+  const rec = recordValue(v);
+  if (!rec) return null;
+  const language = stringValue(rec.language, "py");
+  if (language !== "py" && language !== "js" && language !== "ail" && language !== "lean") return null;
+  const ailang = normalizeAilangMetadata(rec.metadata);
+  const lean = normalizeLeanMetadata(rec.metadata);
+  const displaysRaw = Array.isArray(rec.displays)
+    ? rec.displays
+    : Array.isArray(rec.display)
+      ? rec.display
+      : [];
+  const displays = displaysRaw
+    .map(normalizeScratchpadDisplayBundle)
+    .filter((x): x is ScratchpadDisplayBundle => x !== null);
+  const result = normalizeScratchpadDisplayBundle(rec.result);
+  const errorRec = recordValue(rec.error);
+  return {
+    index: numberValue(rec.index, 0),
+    language: language as ScratchpadCellResult["language"],
+    title: stringValue(rec.title, `${language} cell ${numberValue(rec.index, 0) + 1}`),
+    code: stringValue(rec.code, ""),
+    durationMs: typeof rec.durationMs === "number" ? rec.durationMs : typeof rec.duration_ms === "number" ? rec.duration_ms : undefined,
+    exit_code: numberValue(rec.exit_code ?? rec.exitCode, 0),
+    stdout: stringValue(rec.stdout, ""),
+    stderr: stringValue(rec.stderr, ""),
+    displays,
+    result: result ?? undefined,
+    error: errorRec ? {
+      ename: stringValue(errorRec.ename, "Error"),
+      evalue: stringValue(errorRec.evalue, ""),
+      traceback: Array.isArray(errorRec.traceback) ? errorRec.traceback.filter((x): x is string => typeof x === "string") : [],
+    } : undefined,
+    executionCount: numberValue(rec.executionCount ?? rec.execution_count, 0),
+    cancelled: boolValue(rec.cancelled, false),
+    truncated: boolValue(rec.truncated, false),
+    metadata: ailang || lean ? { ...(ailang ? { ailang } : {}), ...(lean ? { lean } : {}) } : undefined,
+  };
+}
+
+export function parseScratchpadCellsJson(cellsJson: string): ScratchpadCellResult[] | null {
+  try {
+    const parsed = JSON.parse(cellsJson) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const cells = parsed
+      .map(normalizeScratchpadCellResult)
+      .filter((x): x is ScratchpadCellResult => x !== null);
+    return cells.length === parsed.length ? cells : null;
+  } catch {
+    return null;
+  }
+}
+
+// Color a check/verify status word: green for the "good" outcome, red for a
+// definitive failure, yellow for inconclusive (unknown/timeout/skipped).
+function colorAilangStatus(status: string): string {
+  if (status === "passed" || status === "verified") return chalk.green(status);
+  if (status === "failed") return chalk.red(status);
+  return chalk.yellow(status);
+}
+
+function ailangStatusLines(meta: AilangCellMetadata): string[] {
+  // Only blame Z3 when the check passed — when check fails, ai-check never runs
+  // the verifier, so "Z3 unavailable" would be misleading.
+  const z3Unavailable = !meta.verifyAvailable && meta.check === "passed";
+  const verifyCell = z3Unavailable
+    ? chalk.yellow(`${meta.verify} (Z3 unavailable)`)
+    : colorAilangStatus(meta.verify);
+  const parts = [
+    `check ${colorAilangStatus(meta.check)}`,
+    `verify ${verifyCell}`,
+    `committed ${meta.committed ? chalk.green("yes") : chalk.dim("no")}`,
+  ];
+  if (meta.ran) parts.push(`ran ${chalk.green("yes")}`);
+  const lines = [chalk.dim("ailang: ") + parts.join(chalk.dim(" · "))];
+  if (meta.functions && meta.functions.length > 0) {
+    for (const f of meta.functions) {
+      lines.push(chalk.dim(`  ${f.function}: `) + colorAilangStatus(f.status));
+    }
+  }
+  if (meta.notice) lines.push(chalk.yellow(`  ${meta.notice}`));
+  if (meta.teachPrompt) lines.push(chalk.dim("  (AILANG teaching guide loaded — see output)"));
+  return lines;
+}
+
+function colorLeanStatus(status: string): string {
+  if (status === "passed" || status === "verified") return chalk.green(status);
+  if (status === "failed" || status === "error" || status === "sorry") return chalk.red(status);
+  return chalk.yellow(status);
+}
+
+function leanStatusLines(meta: LeanCellMetadata): string[] {
+  const parts = [
+    `elaboration ${colorLeanStatus(meta.elaborated)}`,
+    `proof ${colorLeanStatus(meta.proof)}`,
+    `committed ${meta.committed ? chalk.green("yes") : chalk.dim("no")}`,
+  ];
+  const lines = [chalk.dim("lean: ") + parts.join(chalk.dim(" · "))];
+  if (meta.theorems && meta.theorems.length > 0) {
+    for (const t of meta.theorems) {
+      const ax = t.axioms && t.axioms.length > 0 ? chalk.dim(` axioms=[${t.axioms.join(", ")}]`) : "";
+      lines.push(chalk.dim(`  ${t.name}: `) + colorLeanStatus(t.status) + ax);
+    }
+  }
+  if (meta.unexpectedAxioms && meta.unexpectedAxioms.length > 0) {
+    lines.push(chalk.yellow(`  unexpected axioms: ${meta.unexpectedAxioms.join(", ")}`));
+  }
+  if (typeof meta.sorries === "number" && meta.sorries > 0) lines.push(chalk.red(`  sorries: ${meta.sorries}`));
+  if (meta.notice) lines.push(chalk.yellow(`  ${meta.notice}`));
+  if (meta.teachPrompt) lines.push(chalk.dim("  (Lean 4 teaching guide loaded - see output)"));
+  return lines;
+}
+
+function scratchpadStatusIcon(cell: ScratchpadCellResult): string {
+  return cell.exit_code === 0 && !cell.error ? "✓" : "✗";
+}
+
+function scratchpadDurationSuffix(cell: ScratchpadCellResult): string {
+  return typeof cell.durationMs === "number" ? ` (${Math.max(0, Math.round(cell.durationMs))}ms)` : "";
+}
+
+function formatScratchpadOutputLines(
+  lines: string[],
+  maxLines: number,
+  expanded: boolean,
+  indent: string,
+  maxWidth: number,
+  color: (s: string) => string,
+  label?: string,
+): string[] {
+  if (lines.length === 0) return [];
+  const limit = expanded ? lines.length : maxLines;
+  const shown = lines.slice(0, limit);
+  const hidden = Math.max(0, lines.length - shown.length);
+  const labelPrefix = label ? `[${label}] ` : "";
+  const rendered = shown.map((line) => color(`${indent}${labelPrefix}${hardTruncateLine(line, maxWidth - indent.length - labelPrefix.length)}`));
+  if (hidden > 0) rendered.push(chalk.dim(`${indent}... ${hidden} more lines (Ctrl+O to ${expanded ? "collapse" : "expand"})`));
+  return rendered;
+}
+
+function renderScratchpadMarkdownLines(text: string, maxWidth: number, expanded: boolean): string[] {
+  const trimmed = trimSegmentsForLiveRender(segmentStreamMarkdown(text), expanded ? 80 : 12);
+  const lines: string[] = [];
+  for (const seg of trimmed.segments) {
+    if (seg.kind === "json_bare" || normalizeJsonLang(seg.lang) === "json") {
+      lines.push(...highlightJsonLines(seg.text));
+    } else if (seg.kind === "code_complete" || seg.kind === "code_open") {
+      lines.push(...highlightCodeLines(seg.text, seg.lang));
+    } else {
+      lines.push(...splitOutputLines(seg.text).map((line) => hardTruncateLine(line, maxWidth)));
+    }
+  }
+  if (trimmed.truncated) lines.push(chalk.dim(`... more markdown (Ctrl+O to ${expanded ? "collapse" : "expand"})`));
+  return lines;
+}
+
+function renderScratchpadDisplayBundle(bundle: ScratchpadDisplayBundle, maxWidth: number, expanded: boolean): string[] {
+  if (bundle.type === "json") {
+    return highlightJsonLines(JSON.stringify(bundle.data, null, 2));
+  }
+  if (bundle.type === "markdown") {
+    return renderScratchpadMarkdownLines(String(bundle.data ?? ""), maxWidth, expanded);
+  }
+  if (bundle.type === "image") {
+    const rec = recordValue(bundle.data);
+    const path = stringValue(rec?.path, typeof bundle.data === "string" ? bundle.data : "<inline>");
+    const mime = bundle.mime ?? stringValue(rec?.mime, "image/*");
+    const width = bundle.width ?? numberValue(rec?.width, 0);
+    const height = bundle.height ?? numberValue(rec?.height, 0);
+    const dims = width > 0 && height > 0 ? ` (${width}x${height} ${mime})` : ` (${mime})`;
+    return [chalk.dim(`[image: ${path}${dims}]`)];
+  }
+  if (bundle.type === "status") return [chalk.dim(String(bundle.data ?? ""))];
+  return splitOutputLines(String(bundle.data ?? "")).map((line) => hardTruncateLine(line, maxWidth));
+}
+
+/** True when any cell carries an image display/result bundle. */
+export function scratchpadCellsHaveImage(cells: ScratchpadCellResult[]): boolean {
+  return cells.some(
+    (cell) => cell.displays.some((d) => d.type === "image") || cell.result?.type === "image",
+  );
+}
+
+const SCRATCHPAD_DEFAULT_EXPANDED_CELL_LIMIT = 2;
+
+/** A card defaults to expanded when it is small, errored, or emitted an image. */
+export function shouldExpandScratchpadCard(cells: ScratchpadCellResult[]): boolean {
+  return (
+    cells.length <= SCRATCHPAD_DEFAULT_EXPANDED_CELL_LIMIT ||
+    cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error)) ||
+    scratchpadCellsHaveImage(cells)
+  );
+}
+
+export function formatScratchpadCardHeader(cells: ScratchpadCellResult[]): string {
+  const passed = cells.filter((cell) => cell.exit_code === 0 && !cell.error).length;
+  const failed = Math.max(0, cells.length - passed);
+  const totalDuration = cells.reduce((sum, cell) => sum + (typeof cell.durationMs === "number" ? cell.durationMs : 0), 0);
+  const duration = totalDuration > 0 ? ` · ${Math.round(totalDuration)}ms` : "";
+  return `SCRATCHPAD · ${cells.length} cell${cells.length === 1 ? "" : "s"} · ✓${passed} ✗${failed}${duration}`;
+}
+
+export function scratchpadImageMaxRowsForTerminal(terminalRows: number | undefined): number | undefined {
+  if (!Number.isFinite(terminalRows) || !terminalRows || terminalRows <= 0) return undefined;
+  return Math.max(1, terminalRows - 8);
+}
+
+/**
+ * Build the ordered segment list for a scratchpad card body (header excluded — the
+ * caller prepends it). Text runs accumulate the existing highlighted/dim lines;
+ * an image bundle becomes an `image` segment (real pixels) when the terminal
+ * supports it, otherwise its text fallback stays inline within a text segment.
+ *
+ * When `images` is provided, `Image` instances are reused by stable id so
+ * redraws replace rather than stack. Tests may omit it.
+ */
+export function renderScratchpadCardLines(
+  cells: ScratchpadCellResult[],
+  expanded: boolean,
+  maxLineWidth: number,
+  images?: Map<string, ScratchpadCardImageEntry>,
+  maxImageRows?: number,
+): ScratchpadSegment[] {
+  const maxWidth = Math.max(8, maxLineWidth);
+  const imageRows = maxImageRows && maxImageRows > 0 ? Math.floor(maxImageRows) : undefined;
+  const visibleCells = expanded ? cells : cells.slice(0, 1);
+  const segments: ScratchpadSegment[] = [];
+  let buf: string[] = [];
+  const pushLines = (...ls: string[]) => { for (const l of ls) buf.push(l); };
+  const flush = () => {
+    while (buf.length > 0 && buf[buf.length - 1] === "") buf.pop();
+    if (buf.length > 0) segments.push({ kind: "text", lines: buf });
+    buf = [];
+  };
+
+  const emitBundle = (bundle: ScratchpadDisplayBundle, idKey: string) => {
+    if (bundle.type !== "image") {
+      for (const line of renderScratchpadDisplayBundle(bundle, maxWidth - 2, expanded)) pushLines(`  ${line}`);
+      return;
+    }
+    // Collapsed cards never draw pixels — a compact one-liner stands in. Image
+    // cards default to expanded (see upsertScratchpadCard), so this is only seen after
+    // a deliberate collapse.
+    if (!expanded) {
+      pushLines(chalk.dim("  [image — Ctrl+O to expand]"));
+      return;
+    }
+    // Inline base64 is the real-image path; a record-shaped `data` (artifact
+    // path reference, no inline bytes) keeps the existing text placeholder.
+    const base64 = typeof bundle.data === "string" ? bundle.data : "";
+    if (!base64) {
+      for (const line of renderScratchpadDisplayBundle(bundle, maxWidth - 2, expanded)) pushLines(`  ${line}`);
+      return;
+    }
+    const mime = bundle.mime ?? "image/png";
+    const existing = images?.get(idKey);
+    const sameData = existing != null && existing.base64 === base64;
+    // Reuse cached fallback art (non-graphics terminals): re-decoding the PNG on
+    // every render/Ctrl+O would be wasteful, and it's deterministic per width.
+    if (
+      sameData &&
+      !existing.image &&
+      existing.fallbackLines &&
+      existing.fallbackWidth === maxWidth &&
+      existing.fallbackMaxRows === imageRows
+    ) {
+      for (const line of existing.fallbackLines) pushLines(`  ${line}`);
+      return;
+    }
+    const reuse = sameData && existing.image ? existing.image : null;
+    const seg = makeImageSegment(base64, mime, {
+      cardWidth: maxWidth,
+      maxRows: imageRows,
+      imageId: existing?.image?.getImageId(),
+      reuse,
+    });
+    if (seg.kind === "image" && seg.image) {
+      images?.set(idKey, { image: seg.image, base64 });
+      flush();              // close the preceding text run
+      segments.push(seg);   // image is its own atomic segment (never sliced)
+    } else if (seg.kind === "image") {
+      // No graphics protocol → half-block art or a text placeholder, inline as
+      // text. Cache it keyed by width so we don't re-decode next render.
+      images?.set(idKey, { image: null, base64, fallbackWidth: maxWidth, fallbackMaxRows: imageRows, fallbackLines: seg.fallback });
+      for (const line of seg.fallback) pushLines(`  ${line}`);
+    }
+  };
+
+  for (const cell of visibleCells) {
+    const idx = Math.max(1, cell.index + 1);
+    const title = cell.title || `${cell.language} cell ${idx}`;
+    pushLines(`${scratchpadStatusIcon(cell)} [${idx}/${cells.length}] ${title}${scratchpadDurationSuffix(cell)}`);
+    const ailMeta = cell.metadata?.ailang;
+    if (ailMeta) {
+      for (const line of ailangStatusLines(ailMeta)) pushLines(`  ${line}`);
+    }
+    const leanMeta = cell.metadata?.lean;
+    if (leanMeta) {
+      for (const line of leanStatusLines(leanMeta)) pushLines(`  ${line}`);
+    }
+    const code = cell.code ?? "";
+    if (code.trim() !== "") {
+      for (const line of highlightCodeLines(code, cell.language)) pushLines(`  ${line}`);
+    }
+    pushLines(chalk.dim("  ─ Output"));
+    pushLines(...formatScratchpadOutputLines(splitOutputLines(cell.stdout), TOOL_STDOUT_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.dim));
+    pushLines(...formatScratchpadOutputLines(splitOutputLines(cell.stderr), TOOL_STDERR_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.red.dim, "stderr"));
+    cell.displays.forEach((display, di) => emitBundle(display, `${cell.index}:d${di}`));
+    if (cell.result) emitBundle(cell.result, `${cell.index}:r`);
+    if (cell.error) {
+      pushLines(chalk.red.dim(`  [error] ${cell.error.ename}: ${cell.error.evalue}`));
+      const traceback = expanded ? cell.error.traceback : cell.error.traceback.slice(0, 4);
+      for (const line of traceback) pushLines(chalk.red.dim(`  ${hardTruncateLine(line, maxWidth - 2)}`));
+      const hidden = Math.max(0, cell.error.traceback.length - traceback.length);
+      if (hidden > 0) pushLines(chalk.dim(`  ... ${hidden} more lines (Ctrl+O to expand)`));
+    }
+    if (cell.truncated) pushLines(chalk.dim("  [truncated]"));
+    pushLines("");
+  }
+  if (!expanded && cells.length > visibleCells.length) {
+    pushLines(chalk.dim(`... ${cells.length - visibleCells.length} more cells (Ctrl+O to expand)`));
+  }
+  flush();
+  return segments;
+}
+
+/**
+ * Flatten a segment list back to plain text lines (image segments contribute
+ * their text fallback, real `Image` segments contribute nothing). Used by tests
+ * and the regression assertion that text-only cards are byte-identical to the
+ * old flattened output.
+ */
+export function scratchpadSegmentsToText(segments: ScratchpadSegment[]): string[] {
+  const out: string[] = [];
+  for (const seg of segments) {
+    if (seg.kind === "text") out.push(...seg.lines);
+    else if (!seg.image) out.push(...seg.fallback);
+  }
+  return out;
+}
+
 export function shouldCoalesceToolRowRender(
   lastRenderMs: number | undefined,
   nowMs: number,
@@ -1286,6 +1803,23 @@ function initialExtensionsFromEnv(): string {
     .filter((x) => x.length > 0);
   if (names.length === 0) return "";
   return names.join(", ");
+}
+
+function extensionNamesFromEnv(): string[] {
+  const raw = (process.env.CORE_EXT_ORDER ?? "").trim();
+  if (raw === "") return [];
+  return raw
+    .split(",")
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+}
+
+export function hasScratchpadExtension(extensions?: string[]): boolean {
+  const names = extensions ?? extensionNamesFromEnv();
+  return names.some((name) => {
+    const clean = name.trim();
+    return clean === "scratchpad" || clean.startsWith("scratchpad#");
+  });
 }
 
 export function shouldRenderThinkingAfterStream(streamedSteps: Set<number>, step: number): boolean {
@@ -1470,6 +2004,9 @@ export class AgentUI {
   private readonly composeOrder: string[] = [];
   private selectedComposeIdx = -1;
   private composeFooterStatus = "";
+  private readonly scratchpadCards = new Map<string, ScratchpadCardState>();
+  private readonly scratchpadOrder: string[] = [];
+  private selectedScratchpadIdx = -1;
   private readonly thinkStepOrder: number[] = [];  // insertion order; used for ctrl+t cycling
   private selectedThinkIdx = -1;                   // index into thinkStepOrder, -1 = none selected
   /** True once the first task is complete; enables free-text follow-ups. */
@@ -1538,6 +2075,7 @@ export class AgentUI {
     const v = (process.env.MOTOKO_FINAL_ONLY ?? process.env.MOTOKO_HEURISTIC_FINAL_ONLY ?? "").trim().toLowerCase();
     return v === "1" || v === "true" || v === "yes";
   })();
+  private scratchpadExtensionActive: boolean;
 
   constructor({ version, model, profile, ailangVersion, extensions }: { version?: string; model?: string; profile?: string; ailangVersion?: string; extensions?: string[] } = {}) {
     this.version = version ?? "0.0.0";
@@ -1547,6 +2085,7 @@ export class AgentUI {
     this.loadedExtensions = extensions && extensions.length > 0
       ? extensions.join(", ")
       : initialExtensionsFromEnv();
+    this.scratchpadExtensionActive = hasScratchpadExtension(extensions);
     try { this.branch = execSync("git rev-parse --abbrev-ref HEAD").toString().trim(); } catch {}
     const terminal = new ProcessTerminal();
 
@@ -1615,6 +2154,20 @@ export class AgentUI {
         return { consume: true };
       }
       if (matchesKey(data, "ctrl+o")) {
+        if (this.scratchpadOrder.length > 0 && this.selectedScratchpadIdx !== -1) {
+          const idx = this.selectedScratchpadIdx;
+          const key = this.scratchpadOrder[idx];
+          if (key) {
+            const card = this.scratchpadCards.get(key);
+            if (card) {
+              card.expanded = !card.expanded;
+              this.renderScratchpadCard(card);
+              this.selectedScratchpadIdx = idx;
+              this.tui.requestRender();
+              return { consume: true };
+            }
+          }
+        }
         if (this.composeOrder.length > 0) {
           const idx = this.selectedComposeIdx === -1 ? this.composeOrder.length - 1 : this.selectedComposeIdx;
           const composeId = this.composeOrder[idx];
@@ -1640,6 +2193,12 @@ export class AgentUI {
     // (e.g. external kill -INT or non-raw contexts).
     process.on("SIGINT", () => this.onAbort?.());
 
+    // Purge any scratchpad images from the terminal on exit so Kitty plots don't
+    // linger after Motoko quits. No-op on iTerm2 (repaints inline) and
+    // non-capable terminals. Cards persist for the session, so this is the only
+    // image cleanup point.
+    process.on("exit", () => this.purgeTerminalImages());
+
     // Populate the status bar before start() so the first render includes it.
     this.updateStatus();
     this.statusTick = setInterval(() => {
@@ -1653,6 +2212,11 @@ export class AgentUI {
       this.updateStatus();
     }, 150);
     this.tui.start();
+    // One-line note of the detected inline-image protocol so it's obvious
+    // whether scratchpad plots will render as pixels or the text fallback.
+    if (this.scratchpadExtensionActive) {
+      this.appendHistoryStyled(`scratchpad images: ${scratchpadImageCapabilityLabel()}`, chalk.dim);
+    }
     // Explicit render so children added before start() (e.g. version banner)
     // are visible immediately.
     this.tui.requestRender();
@@ -1670,6 +2234,17 @@ export class AgentUI {
 
   private stamp(message: string): string {
     return `[${formatTimestamp()}] ${message}`;
+  }
+
+  /** Emit a Kitty image-purge sequence (no-op for iTerm2 / non-capable terms). */
+  private purgeTerminalImages(): void {
+    const seq = scratchpadImageExitSequence();
+    if (!seq) return;
+    try {
+      process.stdout.write(seq);
+    } catch {
+      // Best-effort cleanup on exit; ignore write failures (closed stream, etc.).
+    }
   }
 
   private appendHistoryPlain(message: string): void {
@@ -1727,6 +2302,9 @@ export class AgentUI {
           this.setRunState("idle");
         }
         this.model = event.model;
+        if (typeof event.config_profile === "string" && event.config_profile.trim() !== "") {
+          this.profile = event.config_profile;
+        }
         // Conversational re-emits of session_start (one per user turn in
         // agent_loop_v2.conversation_loop_v2) omit the version fields,
         // which would render as "AILANG built undefined | Core Runtime
@@ -1740,6 +2318,7 @@ export class AgentUI {
           const names = event.loaded_extensions;
           const extText = names.length === 0 ? "(none)" : names.join(", ");
           this.loadedExtensions = extText;
+          this.scratchpadExtensionActive = hasScratchpadExtension(names);
           this.appendHistoryStyled(`Loaded extensions: ${extText}`, chalk.dim);
         }
         break;
@@ -2118,6 +2697,10 @@ export class AgentUI {
           this.renderComposeCard(card);
         }
         break;
+      case "scratchpad_result":
+        if (!this.scratchpadExtensionActive) break;
+        this.upsertScratchpadCard(event);
+        break;
 
       case "obs":
         if (event.stdout) {
@@ -2281,6 +2864,88 @@ export class AgentUI {
     if (block) this.expandThinkBlock(block);
   }
 
+  private upsertScratchpadCard(event: Extract<AgentEvent, { type: "scratchpad_result" }>): void {
+    const cells = parseScratchpadCellsJson(event.cells_json);
+    if (!cells || cells.length === 0) {
+      this.addActivity(`scratchpad_result ignored: invalid cells_json for ${event.tool_call_id}`);
+      return;
+    }
+    const key = this.toolKey(event.request_id, event.tool_call_id);
+    let card = this.scratchpadCards.get(key);
+    if (!card) {
+      card = {
+        toolCallId: event.tool_call_id,
+        requestId: event.request_id,
+        step: event.step,
+        cells,
+        expanded: shouldExpandScratchpadCard(cells),
+        images: new Map(),
+      };
+      this.scratchpadCards.set(key, card);
+      this.scratchpadOrder.push(key);
+      this.selectedScratchpadIdx = this.scratchpadOrder.length - 1;
+      this.selectedComposeIdx = -1;
+    } else {
+      card.cells = cells;
+      if (shouldExpandScratchpadCard(cells)) card.expanded = true;
+      const idx = this.scratchpadOrder.indexOf(key);
+      if (idx >= 0) this.selectedScratchpadIdx = idx;
+      this.selectedComposeIdx = -1;
+    }
+
+    if (!this.toolRows.has(key)) {
+      const row = plainText(this.stamp(this.renderToolRowLine(key, "done", `${event.tool_call_id} scratchpad`, undefined, false, "SCRATCHPAD")));
+      this.history.addChild(row);
+      this.toolRows.set(key, row);
+      this.toolRowMeta.set(key, `${event.tool_call_id} scratchpad`);
+      this.toolRowKinds.set(key, "default");
+    }
+    this.toolRowToolNames.set(key, "scratchpad");
+
+    // Ensure the rich card body exists. scratchpad is dispatched as a normal
+    // tool, so the generic tool-result path (applyNativeToolResults) usually
+    // creates a plain detailRow Text under this same key *before* scratchpad_result arrives. A
+    // Text can't carry Image children (it shreds escape sequences), so swap that
+    // detailRow out for the bodyBox Box. The toolRow status line is kept.
+    if (!card.bodyBox) {
+      const staleDetail = this.toolDetailRows.get(key);
+      if (staleDetail) {
+        this.history.removeChild(staleDetail);
+        this.toolDetailRows.delete(key);
+      }
+      const bodyBox = new Box(0, 0);
+      card.bodyBox = bodyBox;
+      this.history.addChild(bodyBox);
+    }
+
+    this.renderScratchpadCard(card);
+  }
+
+  private renderScratchpadCard(card: ScratchpadCardState): void {
+    const bodyBox = card.bodyBox;
+    if (!bodyBox) return;
+    const segments = renderScratchpadCardLines(
+      card.cells,
+      card.expanded,
+      this.toolPreviewWidth(),
+      card.images,
+      scratchpadImageMaxRowsForTerminal(this.tui.terminal.rows),
+    );
+    // clear() detaches children from layout but the card.images map retains the
+    // Image instances, so re-adding reuses the same Kitty ids (replace, not stack).
+    bodyBox.clear();
+    bodyBox.addChild(plainText(this.stamp(formatScratchpadCardHeader(card.cells))));
+    for (const seg of segments) {
+      if (seg.kind === "text") {
+        bodyBox.addChild(plainText(seg.lines.join("\n")));
+      } else if (seg.image) {
+        bodyBox.addChild(seg.image);
+      } else {
+        bodyBox.addChild(plainText(seg.fallback.join("\n")));
+      }
+    }
+  }
+
   private ensureComposeCard(composeId: string): ComposeCardState | undefined {
     return this.composeCards.get(composeId);
   }
@@ -2321,6 +2986,7 @@ export class AgentUI {
     this.composeCards.set(event.compose_id, card);
     this.composeOrder.push(event.compose_id);
     this.selectedComposeIdx = this.composeOrder.length - 1;
+    this.selectedScratchpadIdx = -1;
     return card;
   }
 
@@ -2545,6 +3211,13 @@ export class AgentUI {
   }
 
   private refreshToolDetailRow(key: string): void {
+    // Scratchpad card bodies are a Box (not a Text in toolDetailRows), so resolve them
+    // before the toolDetailRows guard.
+    const scratchpadCard = this.scratchpadCards.get(key);
+    if (scratchpadCard) {
+      this.renderScratchpadCard(scratchpadCard);
+      return;
+    }
     const detailRow = this.toolDetailRows.get(key);
     if (!detailRow) return;
     const details = this.toolRowDetails.get(key);

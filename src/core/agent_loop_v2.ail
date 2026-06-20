@@ -45,6 +45,7 @@ import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
+import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_json)
 import src/core/parse (extract_bash)
@@ -53,12 +54,13 @@ import src/core/tool_runtime (backend_for_v2)
 import src/core/types (Msg, ToolBackend)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
 import src/core/compaction (compact_step)
 import src/core/context_usage (context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
+import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
 -- OpenRouter's API rejects the prefixed name. The fork's old code stored the
@@ -78,6 +80,57 @@ func strip_provider_prefix(model: string) -> string {
 -- Same protocol as src/core/ai_compat (M-AI-CALL-STREAM-HELPER side).
 func emit_json(payload: Json) -> () ! {IO} {
   println(encode(payload))
+}
+
+pure func trace_event_enabled(event_type: string) -> bool {
+  event_type == "session_start" || event_type == "run_summary"
+}
+
+pure func trace_sensitive_key(key: string) -> bool {
+  key == "task"
+    || key == "text"
+    || key == "text_delta"
+    || key == "output"
+    || key == "content"
+    || key == "cmd"
+    || key == "feedback"
+    || key == "errors"
+    || key == "message"
+}
+
+pure func trace_string_value(s: string) -> Json {
+  if Str.length(s) > 256 then
+    js("${substring(s, 0, 256)}...[truncated]")
+  else
+    js(s)
+}
+
+pure func trace_value_for_key(key: string, value: Json) -> Json {
+  if trace_sensitive_key(key) then js("[redacted]")
+  else match value {
+    JString(s) => trace_string_value(s),
+    JArray(_) => js("[array]"),
+    JObject(_) => js("[object]"),
+    _ => value
+  }
+}
+
+pure func trace_extra_kvs(extra: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  match extra {
+    [] => [],
+    item :: rest => kv(item.key, trace_value_for_key(item.key, item.value)) :: trace_extra_kvs(rest)
+  }
+}
+
+func emit_trace_event(session_id: string, event_type: string, extra: [{key: string, value: Json}]) -> () ! {Trace} {
+  if trace_event_enabled(event_type) then
+    Trace.event(event_type, encode(jo([
+      kv("schema_version", js(schema_version())),
+      kv("session_id",     js(session_id)),
+      kv("type",           js(event_type))
+    ] ++ trace_extra_kvs(extra))))
+  else
+    ()
 }
 
 -- M-MOTOKO-EVAL-INSTRUMENTATION (schema v1):
@@ -123,12 +176,28 @@ pure func zero_totals() -> LoopTotals {
 -- Emit a schema-v1 event: prepends schema_version + session_id + type to
 -- the caller's `extra` kv list. Use this for ALL new emissions; existing
 -- emit_json sites are migrated to emit_event in M1.
-func emit_event(session_id: string, event_type: string, extra: [{key: string, value: Json}]) -> () ! {IO} {
+func emit_event(session_id: string, event_type: string, extra: [{key: string, value: Json}]) -> () ! {IO, Trace} {
   emit_json(jo([
     kv("schema_version", js(schema_version())),
     kv("session_id",     js(session_id)),
     kv("type",           js(event_type))
-  ] ++ extra))
+  ] ++ extra));
+  emit_trace_event(session_id, event_type, extra)
+}
+
+func emit_scratchpad_result_if_present(session_id: string, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> () ! {IO, Trace} {
+  if is_scratchpad_tool_name(result_env.tool) then
+    match get(result_env.metadata, "cells") {
+      None => (),
+      Some(cells) =>
+        emit_event(session_id, "scratchpad_result", [
+          kv("tool_call_id", js(tool_call_id)),
+          kv("request_id", js(request_id)),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("cells_json", js(encode(cells)))
+        ])
+    }
+  else ()
 }
 
 -- emit_stream_chunk: dispatch one StreamChunk variant to the JSONL event
@@ -156,19 +225,25 @@ func emit_event(session_id: string, event_type: string, extra: [{key: string, va
 func emit_stream_chunk(session_id: string, step_idx: int, stream_id: string, chunk: StreamChunk) -> () ! {IO} {
   match chunk {
     ContentDelta(text) =>
-      emit_event(session_id, "thinking_delta", [
+      emit_json(jo([
+        kv("schema_version", js(schema_version())),
+        kv("session_id", js(session_id)),
+        kv("type", js("thinking_delta")),
         kv("step", jnum(_int_to_float(step_idx))),
         kv("stream_id", js(stream_id)),
         kv("seq", jnum(0.0)),
         kv("text_delta", js(text))
-      ]),
+      ])),
     ThinkingDelta(text) =>
-      emit_event(session_id, "reasoning_delta", [
+      emit_json(jo([
+        kv("schema_version", js(schema_version())),
+        kv("session_id", js(session_id)),
+        kv("type", js("reasoning_delta")),
         kv("step", jnum(_int_to_float(step_idx))),
         kv("stream_id", js(stream_id)),
         kv("seq", jnum(0.0)),
         kv("text_delta", js(text))
-      ]),
+      ])),
     Usage(_) => ()
   }
 }
@@ -230,7 +305,7 @@ func emit_run_summary(
   finish_code: int,
   error_msg: string,
   started_at_ms: int
-) -> () ! {IO, Clock} {
+) -> () ! {IO, Clock, Trace} {
   let now_ms = now();
   let duration = now_ms - started_at_ms;
   let total_tokens = totals.input_tokens + totals.output_tokens;
@@ -342,10 +417,6 @@ func mk_v2_ext_ctx(
     budget_remaining: remaining,
     history_slice: messages_to_msgs(history),
     state_key: "core:ext:v2",
-    -- abi 2.2.0: surface the host's authoritative context limit so extensions
-    -- (motoko_ext_compaction_ai@0.2.0+) don't need their own duplicate
-    -- heuristic table. 0 means unknown — extensions treat as "skip
-    -- context-aware behaviour" rather than guessing.
     context_limit: context_limit_for(model)
   }
 }
@@ -386,6 +457,28 @@ func json_field_str(obj: Json, key: string, fallback: string) -> string {
   match get(obj, key) {
     None    => fallback,
     Some(j) => match asString(j) { None => fallback, Some(s) => s }
+  }
+}
+
+func is_scratchpad_tool_name(name: string) -> bool {
+  name == "scratchpad" || name == "Scratchpad"
+}
+
+func scratchpad_extension_active(rt: ExtRuntime) -> bool {
+  scratchpad_extension_active_rec(rt.registry.hooks)
+}
+
+func scratchpad_extension_active_rec(hooks: [ExtensionHooks]) -> bool {
+  match hooks {
+    [] => false,
+    h :: rest => startsWith(h.id, "scratchpad#") || h.id == "scratchpad" || scratchpad_extension_active_rec(rest)
+  }
+}
+
+func scratchpad_cells_arg(args: Json) -> Json {
+  match get(args, "cells") {
+    Some(j) => j,
+    None => jo([])
   }
 }
 
@@ -532,7 +625,7 @@ func dispatch_calls(
   stream_id: string,
   ohmy_pi: bool,
   session_id: string
-) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream} {
+) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
   match calls {
     [] => [],
     call :: rest => {
@@ -613,6 +706,7 @@ func dispatch_calls(
                     kv("id", js(call.id)),
                     kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
                   ]);
+                  let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
                   let handled_msg: Message = {
                     role: "tool",
                     content: encode(result_to_json(result_env)),
@@ -659,8 +753,34 @@ func dispatch_calls(
         _ => {
           -- M5: ask extensions whether they want to handle this tool directly
           -- (e.g. compose's `Compose` tool dispatches its own pipeline).
-          let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
-          match handle_decision {
+          if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
+            let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
+            let result_env: ToolResultEnvelope = {
+              tool_call_id: envelope.id,
+              tool: "scratchpad",
+              exit_code: result_cell.exit_code,
+              stdout: result_cell.stdout,
+              stderr: result_cell.stderr,
+              metadata: result_cell.metadata
+            };
+            let _ = emit_event(session_id, "ext_tool_handled", [
+              kv("step", jnum(_int_to_float(step_idx))),
+              kv("stream_id", js(stream_id)),
+              kv("tool", js(call.name)),
+              kv("id", js(call.id)),
+              kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
+            ]);
+            let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+            let handled_msg: Message = {
+              role: "tool",
+              content: encode(result_to_json(result_env)),
+              tool_calls: [],
+              tool_call_id: call.id
+            };
+            handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
+          } else {
+            let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+            match handle_decision {
             Handled(result_env) => {
               let _ = emit_event(session_id, "ext_tool_handled", [
                 kv("step", jnum(_int_to_float(step_idx))),
@@ -669,6 +789,7 @@ func dispatch_calls(
                 kv("id", js(call.id)),
                 kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
               ]);
+              let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
               -- Use the call.id (model's typed tool_call_id) instead of the
               -- envelope's id for the tool-role Message correlation —
               -- providers correlate by the model-emitted id, not the
@@ -730,6 +851,7 @@ func dispatch_calls(
                 }
               }
             }
+          }
           }
         }
       }
@@ -799,7 +921,7 @@ func run_dp7_verifier(rt: ExtRuntime, workdir: string) -> FinalizeVerification !
     }
 }
 
-func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Message] ! {Process, IO} {
+func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Message] ! {Process, IO, Trace} {
   match run_dp7_verifier(rt, workdir) {
     Approve => None,
     Reject(errors) => {
@@ -814,6 +936,59 @@ func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string
         tool_call_id: ""
       })
     }
+  }
+}
+
+-- M-MOTOKO-PERSIST-NUDGE: bounded loop-persistence at the NoDecision boundary.
+-- Root cause (2026-06-18 A/B transcripts): on local models the agent often
+-- DISENGAGES after 0–1 tool calls WITHOUT writing a solution — either answering
+-- in prose (0 tool calls) or making one inspect call (e.g. `cat solution.ail`)
+-- and stopping. The loop then finalizes at NoDecision. These helpers let the loop
+-- inject a bounded nudge to keep going instead. Off by default (MOTOKO_PERSIST_
+-- RETRIES=0); opt-in for A/B so the rotation is unchanged until validated.
+
+-- Marker embedded in injected nudges so we can count them from history alone
+-- (no new loop_v2 state to thread through its 16 recursive call sites).
+func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
+
+-- How many persistence nudges are allowed this run (MOTOKO_PERSIST_RETRIES,
+-- default 0 = feature off).
+func persist_retries_budget() -> int ! {Env} {
+  match _stringToInt(trim(getEnvOr("MOTOKO_PERSIST_RETRIES", "0"))) {
+    Some(n) => if n > 0 then n else 0,
+    None => 0
+  }
+}
+
+-- Count nudges already injected (user messages carrying the marker) so we never
+-- exceed the budget — the count IS the persistence state, read from history.
+func count_persist_nudges(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "user" && contains(m.content, persist_nudge_marker()) then 1 else 0;
+      here + count_persist_nudges(rest)
+    }
+  }
+}
+
+func tool_calls_have_writefile(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.name == "WriteFile" then true else tool_calls_have_writefile(rest)
+  }
+}
+
+-- True once the model has attempted ANY WriteFile this run — if so it is engaged
+-- with producing a solution, so we let it finalize/fail on its own (don't nudge).
+-- Both disengagement modes (0 calls / 1 inspect call) have zero WriteFile, so
+-- this gates the nudge precisely to the premature-stop case.
+func any_writefile_attempt(msgs: [Message]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if tool_calls_have_writefile(m.tool_calls) then true
+      else any_writefile_attempt(rest)
   }
 }
 
@@ -835,7 +1010,7 @@ func loop_v2(
   provider: StepProvider,
   session_id: string,
   started_at_ms: int
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   if step_budget <= 0 then {
     let _ = emit_run_summary(session_id, model, totals, step_idx, 4, "v2 loop: step budget exhausted", started_at_ms);
     Err({
@@ -910,7 +1085,7 @@ func loop_v2(
     -- (not used for reordering on the consumer side as of v0.18.7).
     -- Match-in-lambda is a known AILANG parser bug, so the match lives in
     -- the top-level emit_stream_chunk helper.
-    let on_chunk = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
+    let on_chunk: (StreamChunk) -> () ! {IO} = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
     let dispatched = dispatch_step(provider, model, compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
@@ -1085,6 +1260,28 @@ func loop_v2(
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
                 NoDecision => {
+                  -- M-MOTOKO-PERSIST-NUDGE: the model stopped (finish_reason !=
+                  -- tool_calls) and no extension claimed the prose. If it never
+                  -- wrote a solution and we have nudge budget left, keep the loop
+                  -- ALIVE with a bounded nudge instead of finalizing — this is the
+                  -- backlog-#1 disengagement fix (off unless MOTOKO_PERSIST_RETRIES>0).
+                  let persist_budget = persist_retries_budget();
+                  let nudges_used = count_persist_nudges(msgs_with_assistant);
+                  if persist_budget > 0 && nudges_used < persist_budget && not any_writefile_attempt(msgs_with_assistant) then {
+                    let _ = emit_event(session_id, "persist_nudge", [
+                      kv("step", jnum(_int_to_float(step_idx))),
+                      kv("nudge_num", jnum(_int_to_float(nudges_used + 1))),
+                      kv("budget", jnum(_int_to_float(persist_budget)))
+                    ]);
+                    let nudge_msg: Message = {
+                      role: "user",
+                      content: "${persist_nudge_marker()} You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs.",
+                      tool_calls: [],
+                      tool_call_id: ""
+                    };
+                    let next_msgs = msgs_with_assistant ++ [nudge_msg];
+                    loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                  } else {
                   match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
                       -- IMPORTANT: run_summary BEFORE done — see Accept branch
@@ -1101,6 +1298,7 @@ func loop_v2(
                       let next_msgs = msgs_with_assistant ++ [retry_msg];
                       loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                     }
+                  }
                   }
                 }
               }
@@ -1180,14 +1378,18 @@ export func run_v2(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-  let messages = msgs_to_messages(initial_msgs);
-  let resolved_model = strip_provider_prefix(model);
-  let session_id = derive_session_id();
-  let started_at_ms = now();
-  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms)
-}
+	  let messages = msgs_to_messages(initial_msgs);
+	  let resolved_model = strip_provider_prefix(model);
+	  let session_id = derive_session_id();
+	  let started_at_ms = now();
+	  let session_span = "motoko.session.${session_id}";
+	  Trace.spanStart(session_span);
+	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
+	  Trace.spanEnd(session_span);
+	  result
+	}
 
 -- Run loop_v2 starting from an existing [Message] history (instead of the
 -- legacy [Msg] shape). Used by conversation_loop_v2 to resume after each
@@ -1207,13 +1409,17 @@ export func run_v2_from_messages(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-  let resolved_model = strip_provider_prefix(model);
-  let session_id = derive_session_id();
-  let started_at_ms = now();
-  loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms)
-}
+	  let resolved_model = strip_provider_prefix(model);
+	  let session_id = derive_session_id();
+	  let started_at_ms = now();
+	  let session_span = "motoko.session.${session_id}";
+	  Trace.spanStart(session_span);
+	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
+	  Trace.spanEnd(session_span);
+	  result
+	}
 
 -- Read a JSON-shaped string field from a decoded Json object, returning
 -- "" when the key is absent or has the wrong type. Mirrors rpc.ail's
@@ -1256,7 +1462,7 @@ export func conversation_loop_v2(
   cost_rates: CostRates,
   provider: StepProvider,
   session_id: string
-) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   -- Headless mode (M-MOTOKO-HEADLESS, 2026-05-08): skip the stdin-polling
   -- conversation loop entirely when MOTOKO_HEADLESS=1. The TS TUI layer
   -- (src/tui/src/index.ts) sets this env var when stdin is not a TTY
@@ -1342,7 +1548,7 @@ export func run_v2_with_conversation(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let initial_messages = msgs_to_messages(initial_msgs);
   let session_id = derive_session_id();
   match run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
@@ -1374,15 +1580,19 @@ export func run_v2_with_stub(
   max_cost_millicents: int,
   cost_rates: CostRates,
   script: [ScriptedStep]
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
-  let budget_steps = if step_budget <= 0 then 8 else step_budget;
-  let session_id = derive_session_id();
-  let started_at_ms = now();
-  loop_v2(rt, task, env_url, hybrid_tools, budget, model, history,
-          workdir, 0, budget_steps, ohmy_pi,
-          max_cost_millicents, cost_rates, zero_totals(), Scripted(script),
-          session_id, started_at_ms)
-}
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+	  let budget_steps = if step_budget <= 0 then 8 else step_budget;
+	  let session_id = derive_session_id();
+	  let started_at_ms = now();
+	  let session_span = "motoko.session.${session_id}";
+	  Trace.spanStart(session_span);
+	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, model, history,
+	          workdir, 0, budget_steps, ohmy_pi,
+	          max_cost_millicents, cost_rates, zero_totals(), Scripted(script),
+	          session_id, started_at_ms);
+	  Trace.spanEnd(session_span);
+	  result
+	}
 
 -- M-MOTOKO-EVAL-INSTRUMENTATION inline tests (pure-only). Validates the
 -- schema-v1 contract surface that downstream eval harnesses depend on.

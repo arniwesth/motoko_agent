@@ -14,7 +14,7 @@
 --      "compaction_exhausted" propagated from DP0 refusing the step.
 --
 -- Run:
---   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+--   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace \
 --     --net-allow-http --net-allow-localhost \
 --     --entry main scripts/smoke_v2_compaction_full_loop.ail
 
@@ -66,7 +66,7 @@ func mk_budget() -> BudgetPlan {
 }
 
 -- 1. Light history (10 chars total = ~2% usage). Compaction passthrough.
-func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(10);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_stub(
@@ -83,7 +83,7 @@ func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 -- 2. Moderate history (300 chars total = ~75% usage, tier 1). Elision
 -- fires; the loop should still complete because tier 1 just trims old
 -- tool_results, doesn't refuse the step.
-func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(300);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_stub(
@@ -100,7 +100,7 @@ func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 -- 3. Extreme history (385 chars total = ~96.5% usage, tier 3). DP0 refuses
 -- the step; run_v2_with_stub returns Err with the compaction_exhausted
 -- reason propagated through the loop.
-func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(385);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_stub(
@@ -117,7 +117,7 @@ func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, Shar
 -- 4. Extreme history but cap is disabled by using a model with no entry
 -- in context_limit_for. Should fail-open: compaction skips entirely, loop
 -- completes Ok because no threshold check fires for unknown models.
-func test_unknown_model_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+func test_unknown_model_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(1000);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_stub(
@@ -136,7 +136,7 @@ func report(name: string, ok: bool) -> () ! {IO} {
   else println("  ✗ ${name}")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} = {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} = {
   println("=== smoke_v2_compaction_full_loop ===");
   let r1 = test_light_history_completes();
   report("light history (~2% usage) → Ok",            r1);

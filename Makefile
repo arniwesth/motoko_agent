@@ -1,4 +1,15 @@
-PROFILE ?= default
+PROFILE ?= $(if $(MOTOKO_CONFIG),$(MOTOKO_CONFIG),default)
+
+codex:
+	clear
+	codex --yolo
+
+claude:
+	clear
+	claude --dangerously-skip-permissions --model claude-opus-4-8
+
+prune:
+	docker system prune -a
 
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
@@ -118,7 +129,7 @@ print_autoresearch_self_prompt:
 
 # Install all prerequisites (Go, Bun, Node, context-mode, AILANG, TUI deps)
 install:
-	./scripts/install-prerequisites.sh --with-omnigraph
+	./scripts/install-prerequisites.sh	
 
 # Run all core runtime module tests
 test_core:

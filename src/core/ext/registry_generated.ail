@@ -16,6 +16,7 @@ import pkg/sunholo/motoko_ext_decision_framework/register (register_with_config 
 import pkg/sunholo/motoko_ext_microrag/register (register_with_config as register_microrag)
 import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config as register_compaction_ai)
 import pkg/sunholo/motoko_ext_autoresearch/register (register_with_config as register_autoresearch)
+import pkg/sunholo/motoko_ext_scratchpad/register (register_with_config as register_scratchpad)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistry)
@@ -35,6 +36,7 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] {
   else if name == "microrag" then Some(register_microrag(cfg))
   else if name == "compaction_ai" then Some(register_compaction_ai(cfg))
   else if name == "autoresearch" then Some(register_autoresearch(cfg))
+  else if name == "scratchpad" then Some(register_scratchpad(cfg))
   else None
 }
 

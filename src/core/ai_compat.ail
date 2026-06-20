@@ -1,47 +1,49 @@
 -- src/core/ai_compat.ail
 -- Compatibility shim that re-exposes the fork's `callStreamResult` shape on
--- top of upstream AILANG v0.15.1's `std/ai/streaming.callStream`.
+-- top of upstream AILANG's `std/ai.stepWithStream` (v0.21+ API).
 --
--- This module is a one-time migration aid: the fork's `std/ai_motoko` module
--- shipped a `callStreamResult(input, step, stream_id, model) -> AIStreamResult`
--- function with a record return type carrying ok / output / chunks / error
--- fields. Upstream's equivalent is `callStream(provider, model, messagesJson)
--- -> Result[string, AIError]` — same wire-level behaviour but a different
--- AILANG-level shape, and routed through the [[ai_provider]] registry rather
--- than a hard-coded Go path.
+-- This module migrated from std/ai/streaming.callStream (v0.15.1 API) to
+-- std/ai.stepWithStream (v0.21+) on 2026-05-26. The public callStreamResult
+-- signature + AIStreamResult return shape are stable; only the underlying
+-- AILANG primitive changed.
 --
--- Migration strategy:
---   1. Each .ail file that previously did `import std/ai_motoko (callStreamResult)`
---      now does `import src/core/ai_compat (callStreamResult)`.
---   2. Call sites unchanged: `let r = callStreamResult(input, step, stream_id, model)`
---      followed by `r.ok`, `r.output`, `r.error_message`, `r.retryable`,
---      `r.error_code`, `r.chunks`, `r.streamed`, `r.provider`, `r.status_code`
---      access patterns continue to work.
---   3. Provider routing: model strings starting with "openrouter/" route
---      through the [[ai_provider]] block named "motoko-or" in ailang.toml.
---      Other prefixes return a structured error (the fork supported them
---      only via its own Go-side Provider interface; future work can add
---      [[ai_provider]] blocks for anthropic/, openai/, google/).
+-- Migration trade-offs:
+--   - The new stepWithStream takes a typed [Message] list (not a JSON
+--     string), so `messages_json_for` is removed.
+--   - stepWithStream invokes an `on_chunk` callback as the SSE stream
+--     drains — this preserves the v0.15-era per-token responsive UX (TUI
+--     sees real-time content + reasoning deltas, not one synthetic chunk
+--     at end-of-call).
+--   - Final return is Result[StepResult, AIError]; the joined response
+--     text comes from `result.message.content` after the stream completes.
+--   - Providers without native streaming (Gemini, Ollama, configdriven)
+--     fall back inside the AILANG runtime — they fire one synthetic
+--     ContentDelta(full_text) + Usage at end. So we get streaming
+--     semantics where supported and one-shot delivery elsewhere with
+--     zero extra code here.
 --
--- Known regressions vs the fork:
---   - r.chunks is always [] — upstream's synchronous accumulator does not
---     surface per-token chunks. Callers using r.chunks for partial-progress
---     retry detection (rpc.ail::ai_stream_call_with_retry) lose that
---     capability and treat all errors as "no partial output". Acceptable
---     for v0.15.1 migration; v0.15.2's callStreamWithReasoning may surface
---     chunks via a separate API.
---   - r.streamed is always true (the wire is always streaming) — fork
---     occasionally returned false when the runtime fell back to non-stream.
---     No call site checks this field, so safe.
---   - Reasoning-model fields (reasoning_content / thinking deltas) are read
---     but discarded by upstream callStream. r.output excludes reasoning.
+-- Public API (callers in agent_loop_v2.ail, tool_dispatch_adapter.ail,
+-- scripts/smoke_callstream.ail):
+--   callStreamResult(input, step_num, stream_id, model) -> AIStreamResult
+--   followed by r.ok / r.output / r.error_message / r.retryable /
+--   r.error_code / r.chunks / r.streamed / r.provider / r.status_code
+--   — unchanged.
+--
+-- Known properties:
+--   - r.chunks remains [] — populating it would require an AILANG Ref to
+--     accumulate across callback invocations. Real-time chunks reach the
+--     TUI via the JSONL event stream (thinking_delta / reasoning_delta);
+--     no caller reads r.chunks at this layer (the field is preserved for
+--     shape stability with the fork's std/ai_motoko.AIStreamResult).
+--   - r.streamed is always true.
+--   - r.provider is always "motoko-or".
+--   - r.status_code is heuristic-mapped from AIError.code.
 
 module src/core/ai_compat
 
-import std/ai/streaming (callStream)
+import std/ai (stepWithStream, Message, StreamChunk, ContentDelta, ThinkingDelta, Usage)
 import std/io (println)
-import std/json (jo, ja, kv, js, jnum, encode)
-import std/result (Result, Ok, Err)
+import std/json (jo, kv, js, jnum, encode)
 import std/string (startsWith, length, substring)
 
 -- Unchanged from the fork's std/ai_motoko.AIError. Preserved here so call
@@ -55,9 +57,8 @@ export type AIError = {
   code: string
 }
 
--- Mirrors the fork's std/ai_motoko.AIStreamResult shape exactly. Field
--- semantics match the fork; chunks is always [] in this implementation
--- (see module docstring).
+-- Mirrors the fork's std/ai_motoko.AIStreamResult shape exactly. chunks is
+-- always [] in this implementation (see module docstring).
 export type AIStreamChunk = {
   text: string,
   index: int
@@ -75,30 +76,10 @@ export type AIStreamResult = {
   error_code: string
 }
 
--- Build a minimal OpenAI-shape messages JSON for a single user prompt.
--- The fork's callStreamResult took the raw input string and constructed
--- the messages array internally; we do the same here so call sites are
--- byte-identical to the fork's API.
---
--- NOTE: The escaping is naive — strings containing unescaped quotes or
--- backslashes will produce malformed JSON. The fork had the same limitation
--- (it treated input as a pre-escaped fragment); production code should
--- pass JSON-escaped content. v1.1 of std/ai/streaming will accept a typed
--- [Message] list and obviate manual escaping.
-func messages_json_for(input: string) -> string {
-  let userMsg = jo([
-    kv("role", js("user")),
-    kv("content", js(input))
-  ]) in
-  encode(ja([userMsg]))
-}
-
 -- Strip the "openrouter/" prefix from a model string so the upstream
 -- OpenRouter API receives the bare model identifier (e.g. "z-ai/glm-5",
 -- not "openrouter/z-ai/glm-5"). Non-openrouter prefixes pass through
--- unchanged — they'll fail upstream with a ProviderNotFound or
--- model-not-found error, which is the right outcome until separate
--- [[ai_provider]] blocks for anthropic/openai/google are added.
+-- unchanged — they'll route to whichever [[ai_provider]] block matches.
 func model_for_provider(model: string) -> string {
   if startsWith(model, "openrouter/") then
     let prefix_len = length("openrouter/") in
@@ -108,12 +89,8 @@ func model_for_provider(model: string) -> string {
     model
 }
 
--- Build a fork-shape AIError from an upstream AIError record.
--- Upstream AIError = { code: string, message: string, retryable: bool }.
--- Status code is unavailable from the streaming layer (the upstream API
--- collapses 4xx/5xx into the AIError.code prefix), so we map it
--- heuristically: 401 if code==AuthFailed, 429 if BudgetExhausted,
--- 0 otherwise.
+-- Map upstream AIError.code → a heuristic HTTP-ish status code for the
+-- fork-shape AIStreamResult.status_code field.
 func status_code_for(code: string) -> int {
   if code == "AuthFailed" then 401
   else if code == "BudgetExhausted" then 429
@@ -127,73 +104,101 @@ func status_code_for(code: string) -> int {
 -- src/tui/src/runtime-process.ts. emit_event is unbuffered (println) so the
 -- TUI sees progress in real time. Without these, the TUI shows
 -- "Input locked: task still running" with no progress for the entire turn.
-func emit_thinking_start(step: int, stream_id: string, model: string) -> () ! {IO} {
+func emit_thinking_start(step_num: int, stream_id: string, model: string) -> () ! {IO} {
   let payload = encode(jo([
     kv("type", js("thinking_stream_start")),
-    kv("step", jnum(intToFloat(step))),
+    kv("step", jnum(intToFloat(step_num))),
     kv("stream_id", js(stream_id)),
     kv("model", js(model))
   ])) in
   println(payload)
 }
 
-func emit_thinking_delta_event(step: int, stream_id: string, seq: int, text_delta: string) -> () ! {IO} {
+func emit_thinking_delta_event(step_num: int, stream_id: string, text_delta: string) -> () ! {IO} {
   let payload = encode(jo([
     kv("type", js("thinking_delta")),
-    kv("step", jnum(intToFloat(step))),
+    kv("step", jnum(intToFloat(step_num))),
     kv("stream_id", js(stream_id)),
-    kv("seq", jnum(intToFloat(seq))),
+    kv("seq", jnum(0.0)),
     kv("text_delta", js(text_delta))
   ])) in
   println(payload)
 }
 
-func emit_thinking_end(step: int, stream_id: string, status: string) -> () ! {IO} {
+func emit_reasoning_delta_event(step_num: int, stream_id: string, text_delta: string) -> () ! {IO} {
+  let payload = encode(jo([
+    kv("type", js("reasoning_delta")),
+    kv("step", jnum(intToFloat(step_num))),
+    kv("stream_id", js(stream_id)),
+    kv("seq", jnum(0.0)),
+    kv("text_delta", js(text_delta))
+  ])) in
+  println(payload)
+}
+
+func emit_thinking_end(step_num: int, stream_id: string, status: string) -> () ! {IO} {
   let payload = encode(jo([
     kv("type", js("thinking_stream_end")),
-    kv("step", jnum(intToFloat(step))),
+    kv("step", jnum(intToFloat(step_num))),
     kv("stream_id", js(stream_id)),
     kv("status", js(status))
   ])) in
   println(payload)
 }
 
--- Synchronous-accumulator wrapper matching the fork's API exactly.
+-- M-IFACE-NESTED-EFFECTS / M-MOTOKO-V021-EFFECT-ROW-MIGRATION workaround:
+-- This handler MUST be a top-level function (not a let-bound lambda containing
+-- the match expression). AILANG v0.21+ has an effect-inference bug where a
+-- match expression with one pure branch (`Usage(_) => ()`) inside a lambda
+-- erases the lambda's effect row to {}, breaking unification with the
+-- `(StreamChunk) -> () ! {IO}` parameter type stepWithStream expects.
+-- Top-level function declarations honor the explicit `! {IO}` annotation.
+func handle_stream_chunk(step_num: int, stream_id: string, chunk: StreamChunk) -> () ! {IO} {
+  match chunk {
+    ContentDelta(text) => emit_thinking_delta_event(step_num, stream_id, text),
+    ThinkingDelta(text) => emit_reasoning_delta_event(step_num, stream_id, text),
+    Usage(_) => ()
+  }
+}
+
+-- Real-streaming wrapper matching the fork's API exactly.
 --
--- v0.15.x migration trade-off: upstream's callStream is a synchronous
--- accumulator (drives the SSE event loop in Go and returns the joined
--- string). The fork's callStreamResult emitted per-token streaming events
--- to the TUI as they arrived. To preserve responsive UX without rewriting
--- against the lower-level openaiCompatStream + onEvent + runEventLoop
--- primitives, this shim:
+-- v0.21+ migration: AILANG's std/ai.stepWithStream takes a typed [Message]
+-- list, invokes an `on_chunk` callback as the SSE stream drains, and
+-- returns Result[StepResult, AIError]. The public signature of this
+-- function and AIStreamResult return shape are stable; the internal call
+-- changed from a synchronous callStream accumulator to a stream + callback
+-- pair.
+--
+-- Behavior:
 --   1. Emits thinking_stream_start BEFORE the call (instant UI ack)
---   2. Calls upstream callStream (synchronous, blocks until done)
---   3. On success: emits a single thinking_delta with the full text, then
---      thinking_stream_end with status="completed"
---   4. On error:  emits thinking_stream_end with status="errored"
+--   2. Calls std/ai.stepWithStream with an on_chunk handler that:
+--      - ContentDelta(text)  → emit thinking_delta event (TUI appends)
+--      - ThinkingDelta(text) → emit reasoning_delta event (chain-of-thought)
+--      - Usage(_)            → drop (final usage telemetry surfaces via
+--                              result.usage if needed)
+--   3. On Ok: emits thinking_stream_end status="completed"
+--   4. On Err: emits thinking_stream_end status="errored"
 --
--- The user sees "thinking..." instantly, then the full response renders all
--- at once when callStream returns. v1.1 of this shim should re-implement
--- using openaiCompatStream + onEvent for true per-token UI updates; deferred
--- because the AILANG ref + closure ergonomics needed to thread the
--- accumulator through onEvent's callback are still v0.16.x territory.
+-- The user sees thinking_delta tokens stream in real time; final
+-- result.message.content is the concatenated response.
 export func callStreamResult(
   input: string,
-  step: int,
+  step_num: int,
   stream_id: string,
   model: string
-) -> AIStreamResult ! {AI, Stream, Net, IO} {
+) -> AIStreamResult ! {AI, IO} {
   let provider_name = "motoko-or" in
   let resolved_model = model_for_provider(model) in
-  let messages = messages_json_for(input) in
-  let _ = emit_thinking_start(step, stream_id, model) in
-  match callStream(provider_name, resolved_model, messages) {
-    Ok(text) => {
-      let _ = emit_thinking_delta_event(step, stream_id, 1, text) in
-      let _ = emit_thinking_end(step, stream_id, "completed") in
+  let messages: [Message] = [{ role: "user", content: input, tool_calls: [], tool_call_id: "" }] in
+  let _ = emit_thinking_start(step_num, stream_id, model) in
+  let on_chunk = \chunk. handle_stream_chunk(step_num, stream_id, chunk) in
+  match stepWithStream(resolved_model, messages, [], [], on_chunk) {
+    Ok(result) => {
+      let _ = emit_thinking_end(step_num, stream_id, "completed") in
       {
         ok: true,
-        output: text,
+        output: result.message.content,
         chunks: [],
         streamed: true,
         error_message: "",
@@ -204,7 +209,7 @@ export func callStreamResult(
       }
     },
     Err(e) => {
-      let _ = emit_thinking_end(step, stream_id, "errored") in
+      let _ = emit_thinking_end(step_num, stream_id, "errored") in
       {
         ok: false,
         output: "",

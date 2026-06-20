@@ -61,6 +61,152 @@ function stripLikelyInlineToolBlob(text: string): string {
   return text.slice(0, start).trimEnd();
 }
 
+function recordValue(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function stringValue(v: unknown, fallback = ""): string {
+  return typeof v === "string" ? v : fallback;
+}
+
+function numberValue(v: unknown, fallback = 0): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function boolValue(v: unknown, fallback = false): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
+
+function splitOutputLines(text: string): string[] {
+  const trimmed = text.replace(/\s+$/g, "");
+  return trimmed === "" ? [] : trimmed.split(/\r?\n/);
+}
+
+function scratchpadMetadataLines(metadata: unknown): string[] {
+  const rec = recordValue(metadata);
+  if (!rec) return [];
+  const lines: string[] = [];
+  const ailang = recordValue(rec.ailang);
+  if (ailang) {
+    const check = stringValue(ailang.check, "skipped");
+    const verify = stringValue(ailang.verify, "skipped");
+    const verifyAvailable = boolValue(ailang.verifyAvailable, false);
+    const parts = [
+      `check ${check}`,
+      `verify ${verify}${!verifyAvailable && check === "passed" ? " (Z3 unavailable)" : ""}`,
+      `committed ${boolValue(ailang.committed, false) ? "yes" : "no"}`,
+    ];
+    if (boolValue(ailang.ran, false)) parts.push("ran yes");
+    lines.push(`  ailang: ${parts.join(" | ")}`);
+    const fns = Array.isArray(ailang.functions)
+      ? ailang.functions.map(recordValue).filter((f): f is Record<string, unknown> => f !== null)
+      : [];
+    for (const f of fns) {
+      lines.push(`    ${stringValue(f.function, "<anon>")}: ${stringValue(f.status, "unknown")}`);
+    }
+    const notice = stringValue(ailang.notice, "");
+    if (notice) lines.push(...splitOutputLines(notice).map((line) => `    ${line}`));
+  }
+  const lean = recordValue(rec.lean);
+  if (lean) {
+    const parts = [
+      `elaboration ${stringValue(lean.elaborated, "error")}`,
+      `proof ${stringValue(lean.proof, "error")}`,
+      `committed ${boolValue(lean.committed, false) ? "yes" : "no"}`,
+    ];
+    lines.push(`  lean: ${parts.join(" | ")}`);
+    const theorems = Array.isArray(lean.theorems)
+      ? lean.theorems.map(recordValue).filter((t): t is Record<string, unknown> => t !== null)
+      : [];
+    for (const t of theorems) {
+      const axioms = Array.isArray(t.axioms) ? t.axioms.filter((x): x is string => typeof x === "string") : [];
+      lines.push(`    ${stringValue(t.name, "<anon>")}: ${stringValue(t.status, "error")}${axioms.length > 0 ? ` axioms=[${axioms.join(", ")}]` : ""}`);
+    }
+    const unexpected = Array.isArray(lean.unexpectedAxioms)
+      ? lean.unexpectedAxioms.filter((x): x is string => typeof x === "string")
+      : [];
+    if (unexpected.length > 0) lines.push(`    unexpected axioms: ${unexpected.join(", ")}`);
+    const sorries = numberValue(lean.sorries, 0);
+    if (sorries > 0) lines.push(`    sorries: ${sorries}`);
+    const notice = stringValue(lean.notice, "");
+    if (notice) lines.push(...splitOutputLines(notice).map((line) => `    ${line}`));
+  }
+  return lines;
+}
+
+function displayBundleLines(display: unknown): string[] {
+  const rec = recordValue(display);
+  if (!rec) return [];
+  const type = stringValue(rec.type, "text");
+  if (type === "status" || type === "text" || type === "markdown") {
+    return splitOutputLines(String(rec.data ?? ""));
+  }
+  if (type === "json") {
+    return splitOutputLines(JSON.stringify(rec.data, null, 2));
+  }
+  if (type === "image") {
+    const dataRec = recordValue(rec.data);
+    const path = stringValue(dataRec?.path, typeof rec.data === "string" ? "<inline>" : "<image>");
+    const mime = stringValue(rec.mime ?? dataRec?.mime, "image/*");
+    const width = numberValue(rec.width ?? dataRec?.width, 0);
+    const height = numberValue(rec.height ?? dataRec?.height, 0);
+    const dims = width > 0 && height > 0 ? ` (${width}x${height} ${mime})` : ` (${mime})`;
+    return [`[image: ${path}${dims}]`];
+  }
+  return [];
+}
+
+function formatScratchpadResultForTranscript(event: Extract<AgentEvent, { type: "scratchpad_result" }>): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(event.cells_json);
+  } catch {
+    return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
+  }
+  if (!Array.isArray(parsed)) return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
+  const cells = parsed.map(recordValue).filter((cell): cell is Record<string, unknown> => cell !== null);
+  if (cells.length !== parsed.length) return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
+
+  const passed = cells.filter((cell) => numberValue(cell.exit_code ?? cell.exitCode, 0) === 0 && recordValue(cell.error) === null).length;
+  const totalDuration = cells.reduce((sum, cell) => sum + (typeof cell.durationMs === "number" ? cell.durationMs : 0), 0);
+  const duration = totalDuration > 0 ? ` | ${Math.round(totalDuration)}ms` : "";
+  const lines = [`SCRATCHPAD | ${cells.length} cell${cells.length === 1 ? "" : "s"} | ok ${passed} failed ${cells.length - passed}${duration}`];
+  for (const cell of cells) {
+    const index = numberValue(cell.index, 0) + 1;
+    const language = stringValue(cell.language, "unknown");
+    const title = stringValue(cell.title, `${language} cell ${index}`);
+    const exitCode = numberValue(cell.exit_code ?? cell.exitCode, 0);
+    const ok = exitCode === 0 && recordValue(cell.error) === null;
+    const cellDuration = typeof cell.durationMs === "number" ? ` (${Math.max(0, Math.round(cell.durationMs))}ms)` : "";
+    lines.push(`${ok ? "OK" : "FAIL"} [${index}/${cells.length}] ${title}${cellDuration}`);
+    lines.push(...scratchpadMetadataLines(cell.metadata));
+    const code = stringValue(cell.code, "");
+    if (code.trim() !== "") {
+      for (const line of splitOutputLines(code)) lines.push(`  ${line}`);
+    }
+    lines.push("  - Output");
+    for (const line of splitOutputLines(stringValue(cell.stdout, ""))) lines.push(`  ${line}`);
+    for (const line of splitOutputLines(stringValue(cell.stderr, ""))) lines.push(`  [stderr] ${line}`);
+    const displays = Array.isArray(cell.displays)
+      ? cell.displays
+      : Array.isArray(cell.display)
+        ? cell.display
+        : [];
+    for (const display of displays) {
+      for (const line of displayBundleLines(display)) lines.push(`  ${line}`);
+    }
+    const resultLines = displayBundleLines(cell.result);
+    if (resultLines.length > 0) {
+      lines.push("  [result]");
+      for (const line of resultLines) lines.push(`  ${line}`);
+    }
+    const error = recordValue(cell.error);
+    if (error) lines.push(`    error: ${stringValue(error.ename, "Error")}: ${stringValue(error.evalue, "")}`);
+    if (boolValue(cell.truncated, false)) lines.push("  [truncated]");
+  }
+  return lines.join("\n");
+}
+
 export class SessionLogger {
   private jsonlStream: fs.WriteStream;
   private markdownStream: fs.WriteStream;
@@ -180,6 +326,9 @@ export class SessionLogger {
       case "obs":
         if (event.stdout) this.writeTranscriptMarkdown(event.stdout);
         if (event.stderr) this.writeTranscriptLine(`[stderr] ${event.stderr}`);
+        break;
+      case "scratchpad_result":
+        this.writeTranscriptMarkdown(formatScratchpadResultForTranscript(event));
         break;
       case "warning":
         this.writeTranscriptLine(`Warning: ${event.message}`);

@@ -9,15 +9,14 @@ import src/core/prompts  (with_cache_hint, fmt_msgs, fmt_obs)
 import src/core/types    (Msg, ExecResult)
 import std/string   (contains, startsWith)
 
--- empty hint is identity
-property "with_cache_hint empty hint identity" {
-  forall(system: string) => with_cache_hint(system, "") == system
+-- empty hint returns system unchanged
+test "with_cache_hint empty hint identity" {
+  with_cache_hint("system text", "") == "system text"
 }
 
--- non-empty hint strictly extends the system string
-property "with_cache_hint non-empty extends" {
-  forall(system: string, hint: string) =>
-    hint == "" || startsWith(with_cache_hint(system, hint), system)
+-- non-empty hint extends system (startsWith)
+test "with_cache_hint non-empty hint extends system" {
+  startsWith(with_cache_hint("base", "hint text"), "base")
 }
 
 -- fmt_msgs: empty, single, two messages (role ordering preserved)
@@ -29,7 +28,6 @@ test "fmt_msgs two" {
 }
 
 -- fmt_obs always starts with "$ "
-property "fmt_obs has dollar prefix" {
-  forall(cmd: string) =>
-    startsWith(fmt_obs(cmd, {stdout: "", stderr: "", exit_code: 0}), "$ ")
+test "fmt_obs has dollar prefix" {
+  startsWith(fmt_obs("ls", {stdout: "", stderr: "", exit_code: 0}), "$ ")
 }

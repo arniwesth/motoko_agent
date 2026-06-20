@@ -54,7 +54,7 @@ export interface NativeToolResult {
 export type ToolResultsPhase = "running" | "progress" | "done";
 
 export type AgentEvent =
-  | { type: "session_start"; task: string; model: string; brainVersion: string; ailangBuilt: string; loaded_extensions?: string[] }
+  | { type: "session_start"; task: string; model: string; brainVersion: string; ailangBuilt: string; config_profile?: string; config_dir?: string; loaded_extensions?: string[] }
   | { type: "context_usage"; step: number; tokens_est: number; limit: number }
   | { type: "thinking_stream_start"; step: number; stream_id: string; model: string }
   | { type: "thinking_delta"; step: number; stream_id: string; seq: number; text_delta: string }
@@ -81,6 +81,7 @@ export type AgentEvent =
   | { type: "compose_claimcheck_compare_result"; step: number; compose_id: string; attempt: number; verdict: "confirmed" | "disputed" | "vacuous" | "surprising_restriction" | "inconclusive"; confidence: "high" | "low"; reason: string; informalization?: string }
   | { type: "compose_summary_delta"; step: number; compose_id: string; delta: string }
   | { type: "compose_result"; step: number; compose_id: string; attempts: number; summary: string; stdout: string; stderr: string; exit_code: number; truncated: boolean; telemetry_json?: string }
+  | { type: "scratchpad_result"; tool_call_id: string; request_id: string; step: number; cells_json: string }
   | {
       type: "obs";
       step: number;
@@ -303,6 +304,7 @@ export class RuntimeProcess {
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
       EXA_API_KEY: process.env.EXA_API_KEY,
+      CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
       AILANG_FS_SANDBOX: workdir,
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
       // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
@@ -315,6 +317,11 @@ export class RuntimeProcess {
       MOTOKO_HEADLESS:
         process.env.MOTOKO_HEADLESS ??
         (process.stdin.isTTY ? "" : "1"),
+      // M-MOTOKO-PERSIST-NUDGE: forward the loop-persistence retry budget so
+      // agent_loop_v2.ail's NoDecision branch can read it. Without this the
+      // explicit env allowlist scrubs it and the feature is silently off —
+      // same gotcha as MOTOKO_REPO / the pricing vars below. Empty = off.
+      MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
       // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): forward
       // MOTOKO_REPO so the AILANG runtime can fall back to the fork's
       // bundled profile (.motoko/config/<profile>) when WORKDIR is a
@@ -333,6 +340,14 @@ export class RuntimeProcess {
       // moved out into separate packages without a corresponding launcher
       // wiring.
       MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+      // M-OLLAMA-PER-MODEL-MAX-TOKENS: forward the per-model output budget so the
+      // AILANG runtime's ollama /v1 path (resolveOllamaMaxTokens) uses the model's
+      // declared max_output_tokens instead of the 4096 std/ai default. Qwen3.6
+      // reasons thousands of tokens before the tool call and truncates
+      // (finish_reason=length) at 4096 → 0 tool calls (disengagement). Without this
+      // allowlist entry the explicit childEnv whitelist drops it — same gotcha as
+      // MOTOKO_REPO / the pricing vars. Empty = the AILANG-side 16384 floor applies.
+      AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
       // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
       // pricing env vars set by the AILANG adapter from Task.Budget. Without
       // this, the AILANG-side fix (load_cost_rates reads these env vars) is
@@ -351,6 +366,46 @@ export class RuntimeProcess {
     // because it falls back to system paths that don't have the new modules.
     if (process.env.AILANG_STDLIB_PATH) {
       childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
+    }
+    // ClickStack/OTLP handoff: the launcher uses an explicit env whitelist,
+    // so tracing variables must be copied deliberately. Keep export gated so
+    // default dev runs do not attempt OTLP delivery when the opt-in sidecar is
+    // down.
+    if (process.env.MOTOKO_OTEL && process.env.MOTOKO_OTEL.trim() !== "") {
+      childEnv.MOTOKO_OTEL = process.env.MOTOKO_OTEL;
+      childEnv.OTEL_EXPORTER_OTLP_ENDPOINT =
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://clickstack:4318";
+      childEnv.OTEL_EXPORTER_OTLP_PROTOCOL =
+        process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
+      childEnv.OTEL_SERVICE_NAME =
+        process.env.OTEL_SERVICE_NAME ?? "motoko-agent";
+      childEnv.AILANG_TRACE = process.env.AILANG_TRACE ?? "standard";
+      childEnv.AILANG_TRACE_MAX_SPANS =
+        process.env.AILANG_TRACE_MAX_SPANS ?? "100";
+      if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
+        childEnv.OTEL_EXPORTER_OTLP_HEADERS =
+          process.env.OTEL_EXPORTER_OTLP_HEADERS;
+      }
+      if (process.env.OTEL_RESOURCE_ATTRIBUTES) {
+        childEnv.OTEL_RESOURCE_ATTRIBUTES =
+          process.env.OTEL_RESOURCE_ATTRIBUTES;
+      }
+      for (const key of [
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_EXPORTER_OTLP_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
+      ]) {
+        const value = process.env[key];
+        if (value && value.trim() !== "") {
+          childEnv[key] = value;
+        }
+      }
     }
     // M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 cutover (2026-05-06): the
     // upstream std/ai.step() typed-tool-use loop is now the default and
@@ -409,13 +464,15 @@ export class RuntimeProcess {
       [
         "run",
         "--caps",
-        "Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream",
+        "Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace",
         "--ai",
         aiModelArg,
         "--entry",
         "main",
         "--net-allow-http",
         "--net-allow-localhost",
+        "--stream-allow-http",
+        "--stream-allow-localhost",
         "src/core/supervisor.ail",
         "--",
         ...supervisorArgs

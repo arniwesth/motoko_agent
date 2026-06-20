@@ -1,0 +1,55 @@
+services:
+  app:
+    depends_on:
+      - clickstack
+      - motoko-log-collector
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      MOTOKO_CONFIG: observability
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://clickstack:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
+      OTEL_EXPORTER_OTLP_TIMEOUT: ${OTEL_EXPORTER_OTLP_TIMEOUT:-5000}
+      OTEL_SERVICE_NAME: motoko-agent
+      AILANG_TRACE: standard
+      AILANG_TRACE_MAX_SPANS: ${AILANG_TRACE_MAX_SPANS:-100}
+
+  clickstack:
+    image: clickhouse/clickstack-all-in-one:2.21.0
+    ports:
+      - "8081:8080"
+      - "18123:8123"
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - clickstack-db:/data/db
+      - clickstack-ch:/var/lib/clickhouse
+      - clickstack-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  motoko-log-collector:
+    image: otel/opentelemetry-collector-contrib:0.153.0
+    user: "0:0"
+    command: ["--config=/etc/otelcol-contrib/logs-collector.yaml"]
+    depends_on:
+      - clickstack
+    env_file:
+      - path: ../.env
+        required: false
+    volumes:
+      - ..:/workspace:ro
+      - ./otel/logs-collector.yaml:/etc/otelcol-contrib/logs-collector.yaml:ro
+      - motoko-log-collector-storage:/var/lib/otelcol
+
+volumes:
+  clickstack-db:
+  clickstack-ch:
+  clickstack-logs:
+  motoko-log-collector-storage:

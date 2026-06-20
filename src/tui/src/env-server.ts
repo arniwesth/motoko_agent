@@ -9,12 +9,19 @@
 // env_client.ail simple (no HTTP error handling needed).
 
 import express from "express";
-import { execSync, spawn } from "child_process";
+import { execFileSync, execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { mkdirSync, writeFileSync, unlinkSync, rmSync } from "fs";
-import { join, resolve } from "path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "fs";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { createClaimCheckTelemetry, runClaimCheck } from "./compose-claimcheck.js";
+import type { ScratchpadCell, ScratchpadCellResult, ScratchpadCellResponse, LoopbackToolRequest, LoopbackToolResult } from "./scratchpad/frames.js";
+import { ScratchpadKernelRegistry } from "./scratchpad/registry.js";
+import type { JsLoopback } from "./scratchpad/kernel-js.js";
+import type { LeanKernelConfig } from "./scratchpad/kernel-lean.js";
+import { startLoopbackServer } from "./scratchpad/loopback.js";
+import { attachScratchpadCellWebSocketServer } from "./scratchpad/ws-channel.js";
+import { buildScratchpadTranscript, spillImages } from "./scratchpad/transcript.js";
 
 export interface ExecResult {
   stdout: string;
@@ -411,6 +418,52 @@ type ComposeRequest = {
 // spawns would both pick the same port, second's bind failed → wrapper
 // exited before AILANG runtime started → 0-byte JSONL → adapter reported
 // "motoko terminated without emitting run_summary (likely crash)".
+export function normalizeAilangVerify(v: unknown): ScratchpadCell["verify"] {
+  if (v === true || v === "true") return true;
+  if (v === false || v === "false" || v === "off") return false;
+  if (v === "required") return "required";
+  if (v === "auto") return "auto";
+  return "auto"; // default: verify when requires/ensures annotations are present
+}
+
+export function normalizeLeanProve(v: unknown): ScratchpadCell["prove"] {
+  if (v === "required") return "required";
+  if (v === "off" || v === false || v === "false") return "off";
+  return "auto";
+}
+
+// Normalize raw scratchpad-cell JSON into typed ScratchpadCell[]. Unknown languages are an
+// explicit error (never silently coerced to Python — see plan 05). A missing
+// language defaults to "py" for backward compatibility.
+export function normalizeScratchpadCells(raw: unknown): ScratchpadCell[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((cell, i) => {
+    const rec = (cell && typeof cell === "object") ? cell as Record<string, unknown> : {};
+    const langRaw = (rec.language === undefined || rec.language === null) ? "py" : String(rec.language);
+    if (langRaw !== "py" && langRaw !== "js" && langRaw !== "ail" && langRaw !== "lean") {
+      throw new Error(`unsupported scratchpad language "${langRaw}" in cell ${i + 1}; expected "py", "js", "ail", or "lean"`);
+    }
+    const language = langRaw as ScratchpadCell["language"];
+    const base: ScratchpadCell = {
+      language,
+      code: String(rec.code ?? ""),
+      title: typeof rec.title === "string" ? rec.title : undefined,
+      timeout: typeof rec.timeout === "number" ? rec.timeout : undefined,
+      reset: rec.reset === true,
+    };
+    if (language === "ail") {
+      base.verify = normalizeAilangVerify(rec.verify);
+      base.run = rec.run === true;
+      base.entry = typeof rec.entry === "string" ? rec.entry : undefined;
+      base.caps = typeof rec.caps === "string" ? rec.caps : undefined;
+    } else if (language === "lean") {
+      base.prove = normalizeLeanProve(rec.prove);
+      base.mathlib = rec.mathlib === true;
+    }
+    return base;
+  }).filter((cell) => cell.code.trim() !== "");
+}
+
 export async function startEnvServer(port: number, workdir: string): Promise<number> {
   const app = express();
   app.use(express.json({ limit: "2mb" }));
@@ -628,6 +681,280 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     } finally {
       try { unlinkSync(path); } catch { /* ignore */ }
     }
+  }
+
+  const defaultScratchpadModel = String(process.env.MOTOKO_SCRATCHPAD_AGENT_MODEL ?? process.env.AILANG_SUBAGENT_MODEL ?? process.env.MODEL ?? "anthropic/claude-sonnet-4-6");
+  const loopback = await startLoopbackServer({
+    workdir,
+    defaultModel: defaultScratchpadModel,
+    callAgent: (model, prompt) => callSubagentModel(model || defaultScratchpadModel, prompt),
+  });
+
+  function confinedScratchpadPath(userPath: string): string {
+    const root = resolve(workdir);
+    const target = resolve(root, userPath || ".");
+    if (target !== root && !target.startsWith(root + "/")) {
+      throw new Error(`path escapes workdir: ${userPath}`);
+    }
+    return target;
+  }
+
+  function makeJsLoopback(): JsLoopback {
+    return {
+      read: (path: string) => readFileSync(confinedScratchpadPath(path), "utf8"),
+      write: (path: string, content: string) => {
+        const p = confinedScratchpadPath(path);
+        mkdirSync(dirname(p), { recursive: true });
+        writeFileSync(p, String(content), "utf8");
+        return "";
+      },
+      append: (path: string, content: string) => {
+        const p = confinedScratchpadPath(path);
+        mkdirSync(dirname(p), { recursive: true });
+        appendFileSync(p, String(content), "utf8");
+        return "";
+      },
+      search: (pattern: string, path = ".") => {
+        const p = confinedScratchpadPath(path);
+        try {
+          return execFileSync("rg", ["-n", "--no-heading", "--color", "never", String(pattern), p], {
+            cwd: workdir,
+            encoding: "utf8",
+            timeout: 15_000,
+            maxBuffer: 1024 * 1024,
+          }).slice(0, 50 * 1024);
+        } catch (e: any) {
+          if (typeof e.status === "number" && e.status === 1) return String(e.stdout ?? "");
+          throw e;
+        }
+      },
+      agent: (prompt: string, model = "") => callSubagentModel(model || defaultScratchpadModel, prompt),
+    };
+  }
+
+  // Host capability ceiling for AILANG scratchpad `run`. Requested caps are
+  // intersected with this in the kernel; the .ail on_tool_policy layer does the
+  // mode-based gating (restricted/read-only deny scratchpad entirely). Process and Net
+  // are off unless explicitly enabled for this host.
+  function ailangCapsCeiling(): string[] {
+    const base = ["IO", "FS", "Clock", "Env"];
+    if (process.env.MOTOKO_SCRATCHPAD_NETWORK === "1") base.push("Net");
+    if (process.env.MOTOKO_SCRATCHPAD_AILANG_PROCESS === "1") base.push("Process");
+    return base;
+  }
+
+  // One-time AILANG teaching prompt, cached for the env-server process lifetime.
+  // `null` = not yet attempted; "" = attempted and unavailable.
+  let ailangAgentPromptCache: string | null = null;
+  function ailangAgentPrompt(): string {
+    if (ailangAgentPromptCache !== null) return ailangAgentPromptCache;
+    try {
+      ailangAgentPromptCache = execFileSync("ailang", ["agent-prompt"], {
+        timeout: 5000,
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+      });
+    } catch {
+      ailangAgentPromptCache = "";
+    }
+    return ailangAgentPromptCache;
+  }
+
+  let leanAgentPromptCache: string | null = null;
+  function leanAgentPrompt(): string {
+    if (leanAgentPromptCache !== null) return leanAgentPromptCache;
+    const candidates = [
+      join(agentRoot, "src", "scratchpad", "lean4-teach.md"),
+      join(agentRoot, "src", "tui", "src", "scratchpad", "lean4-teach.md"),
+      resolve(process.cwd(), "src/tui/src/scratchpad/lean4-teach.md"),
+    ];
+    for (const p of candidates) {
+      try {
+        leanAgentPromptCache = readFileSync(p, "utf8");
+        return leanAgentPromptCache;
+      } catch {
+        // try next path
+      }
+    }
+    leanAgentPromptCache = "";
+    return leanAgentPromptCache;
+  }
+
+  function splitArgs(raw: string | undefined, fallback: string[]): string[] {
+    const s = String(raw ?? "").trim();
+    return s === "" ? fallback : s.split(/\s+/).filter(Boolean);
+  }
+
+  function firstExisting(paths: string[]): string {
+    return paths.find((p) => p.trim() !== "" && existsSync(p)) ?? "";
+  }
+
+  function defaultLakeCommand(): string {
+    return firstExisting([
+      join(String(process.env.HOME ?? ""), ".elan", "bin", "lake"),
+      "lake",
+    ]) || "lake";
+  }
+
+  function projectRootForReplBin(bin: string): string {
+    // <project>/.lake/build/bin/repl -> <project>
+    const marker = "/.lake/build/bin/repl";
+    return bin.endsWith(marker) ? bin.slice(0, -marker.length) : "";
+  }
+
+  function defaultLeanReplProject(): string {
+    return firstExisting([
+      join(String(process.env.HOME ?? ""), ".local", "share", "lean-repl"),
+      "/tmp/lean-repl-smoke",
+    ]);
+  }
+
+  function defaultLeanReplBin(project: string): string {
+    return project ? firstExisting([join(project, ".lake", "build", "bin", "repl")]) : "";
+  }
+
+  function defaultLeanMathlibProject(): string {
+    return firstExisting([
+      join(String(process.env.HOME ?? ""), ".local", "share", "motoko-lean-mathlib"),
+      "/tmp/lean-mathlib-smoke",
+    ]);
+  }
+
+  function makeLeanConfig(): LeanKernelConfig {
+    const configuredReplBin = String(process.env.MOTOKO_LEAN_REPL_BIN ?? "").trim();
+    const configuredReplCwd = String(process.env.MOTOKO_LEAN_REPL_CWD ?? "").trim();
+    const defaultProject = defaultLeanReplProject();
+    const replBin = configuredReplBin || defaultLeanReplBin(defaultProject);
+    const replCwd = configuredReplCwd || projectRootForReplBin(replBin) || defaultProject;
+    const mathlibBin = String(process.env.MOTOKO_LEAN_MATHLIB_REPL_BIN ?? "").trim();
+    const mathlibCwd = String(process.env.MOTOKO_LEAN_MATHLIB_CWD ?? "").trim() || defaultLeanMathlibProject();
+    const lake = defaultLakeCommand();
+    const mathlibReplBin = mathlibBin || replBin;
+    return {
+      command: replBin || lake,
+      args: replBin ? splitArgs(process.env.MOTOKO_LEAN_REPL_ARGS, []) : splitArgs(process.env.MOTOKO_LEAN_REPL_ARGS, ["exe", "repl"]),
+      cwd: replCwd || undefined,
+      mathlibCommand: mathlibCwd && mathlibReplBin ? lake : (mathlibBin || (replBin || lake)),
+      mathlibArgs: mathlibCwd && mathlibReplBin
+        ? splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, ["env", mathlibReplBin])
+        : mathlibBin
+          ? splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, [])
+          : replBin
+            ? splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, [])
+            : splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, ["exe", "repl"]),
+      mathlibCwd: mathlibCwd || replCwd || undefined,
+      agentPrompt: leanAgentPrompt,
+    };
+  }
+
+  const scratchpadRegistry = new ScratchpadKernelRegistry(
+    Math.max(60_000, Number(process.env.MOTOKO_SCRATCHPAD_IDLE_MS ?? 10 * 60_000)),
+    () => ({
+      MOTOKO_SCRATCHPAD_LOOPBACK_URL: loopback.url,
+      MOTOKO_SCRATCHPAD_LOOPBACK_TOKEN: loopback.token,
+      MOTOKO_SCRATCHPAD_NETWORK: String(process.env.MOTOKO_SCRATCHPAD_NETWORK ?? "0"),
+    }),
+    makeJsLoopback,
+    () => ({
+      tmpDir: "/tmp/motoko-ailang-scratchpad",
+      capsCeiling: ailangCapsCeiling(),
+      agentPrompt: ailangAgentPrompt,
+    }),
+    makeLeanConfig,
+  );
+
+  function pythonAvailable(): boolean {
+    try {
+      execFileSync("python3", ["-c", "print('ok')"], { timeout: 3000, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function ailangAvailable(): boolean {
+    try {
+      execFileSync("ailang", ["--version"], { timeout: 3000, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function leanAvailable(): boolean {
+    try {
+      const cfg = makeLeanConfig();
+      if (cfg.command && cfg.command !== "lake") return existsSync(cfg.command);
+      execFileSync(cfg.command ?? "lake", ["--version"], { timeout: 3000, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function runScratchpadCells(cells: ScratchpadCell[], sessionId: string, defaultTimeout: number): Promise<ScratchpadCellResponse> {
+    if (cells.length === 0) {
+      return { exit_code: 0, stdout: "", stderr: "", cells: [], images: [], jsonOutputs: [], notice: "no scratchpad cells provided" };
+    }
+    if (cells.some((cell) => cell.language === "py") && !pythonAvailable()) {
+      const notice = "python3 unavailable; Python scratchpad cells were skipped";
+      return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
+    }
+    if (cells.some((cell) => cell.language === "ail") && !ailangAvailable()) {
+      const notice = "ailang CLI unavailable; AILANG scratchpad cells were skipped";
+      return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
+    }
+    if (cells.some((cell) => cell.language === "lean") && !leanAvailable()) {
+      const notice = "Lean/Lake unavailable; Lean scratchpad cells were skipped";
+      return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
+    }
+
+    const results: ScratchpadCellResult[] = [];
+    const images: Array<{ path: string; mime: string; width?: number; height?: number }> = [];
+    const jsonOutputs: unknown[] = [];
+    let exitCode = 0;
+
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      try {
+        const result = await scratchpadRegistry.runCell(i, sessionId, cell, workdir, defaultTimeout);
+        results.push(result);
+        const spilled = spillImages(workdir, sessionId, i + 1, result.displays.concat(result.result ? [result.result] : []));
+        images.push(...spilled);
+        for (const b of result.displays.concat(result.result ? [result.result] : [])) {
+          if (b.type === "json") jsonOutputs.push(b.data);
+        }
+        if (result.exit_code !== 0 && exitCode === 0) exitCode = result.exit_code;
+      } catch (e: any) {
+        exitCode = 1;
+        results.push({
+          index: i,
+          language: cell.language,
+          title: cell.title ?? `${cell.language} cell ${i + 1}`,
+          code: cell.code,
+          durationMs: 0,
+          exit_code: 1,
+          stdout: "",
+          stderr: String(e?.message ?? e),
+          displays: [],
+          error: { ename: "ScratchpadHostError", evalue: String(e?.message ?? e), traceback: [] },
+          executionCount: 0,
+          cancelled: false,
+          truncated: false,
+        });
+      }
+      if (exitCode !== 0) break;
+    }
+
+    const stdout = buildScratchpadTranscript(results, images);
+    return {
+      exit_code: exitCode,
+      stdout,
+      stderr: "",
+      cells: results,
+      images,
+      jsonOutputs,
+    };
   }
 
   type StreamAuthorResult = {
@@ -997,6 +1324,24 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
       };
       res.json(result);
     }
+  });
+
+  // POST /scratchpad-cell — run persistent Python/JS scratchpad cells for a session.
+  // Body: { cells: ScratchpadCell[], sessionId: string, timeout?: number }
+  app.post("/scratchpad-cell", async (req, res) => {
+    const body = req.body as { cells?: unknown; sessionId?: string; timeout?: number };
+    const sessionId = String(body.sessionId ?? "default");
+    const defaultTimeout = Math.max(1, Number(body.timeout ?? 30));
+    let cells: ScratchpadCell[];
+    try {
+      cells = normalizeScratchpadCells(body.cells);
+    } catch (e: any) {
+      // The env-server contract is "always HTTP 200; exit_code signals failure".
+      const msg = String(e?.message ?? e);
+      res.json({ exit_code: 1, stdout: "", stderr: msg, cells: [], images: [], jsonOutputs: [], notice: msg });
+      return;
+    }
+    res.json(await runScratchpadCells(cells, sessionId, defaultTimeout));
   });
 
   // Persist a snippet and its metadata to the permanent store.
@@ -1594,6 +1939,12 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   });
 
   const server = app.listen(port);
+  const scratchpadWsServer = attachScratchpadCellWebSocketServer(server, {
+    path: "/scratchpad-cell-ws",
+    normalizeCells: normalizeScratchpadCells,
+    runCells: (cells: ScratchpadCell[], sessionId: string, timeoutSecs: number, resolver: (frame: LoopbackToolRequest) => Promise<LoopbackToolResult>) =>
+      loopback.withBrainResolver(resolver, () => runScratchpadCells(cells, sessionId, timeoutSecs)),
+  });
   // Wait for the bind to settle so we can return the actual port. With
   // port=0 the kernel allocates lazily — server.address() returns null
   // until the 'listening' event fires.
@@ -1607,6 +1958,9 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   // Cleanup .motoko-store on process exit
   const cleanup = () => {
     try { rmSync(motokoStore, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { scratchpadRegistry.close(); } catch { /* ignore */ }
+    try { scratchpadWsServer.close(); } catch { /* ignore */ }
+    try { void loopback.close(); } catch { /* ignore */ }
   };
   process.on("exit", cleanup);
   process.on("SIGINT", () => { cleanup(); process.exit(0); });

@@ -2,6 +2,7 @@ module src/core/types
 
 import std/option (Option)
 import std/ai (ToolCall)
+import std/json (Json)
 import src/core/tool_contract (ToolCallEnvelope)
 
 export func version() -> string = "0.2.0"
@@ -31,6 +32,13 @@ export type AilangExecResult = {
   exit_code:    int,
   check_passed: bool,
   check_errors: string
+}
+
+export type CellExecResult = {
+  stdout:    string,
+  stderr:    string,
+  exit_code: int,
+  metadata:  Json
 }
 
 export type AgentState = {

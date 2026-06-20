@@ -1,0 +1,59 @@
+receivers:
+  file_log/motoko:
+    include:
+      - /workspace/.motoko/logfile/*.jsonl
+    start_at: beginning
+    exclude_older_than: 24h
+    storage: file_storage/motoko
+    max_log_size: 16MiB
+    include_file_path: true
+    include_file_name: true
+    retry_on_failure:
+      enabled: true
+    operators:
+      - type: json_parser
+        parse_from: body
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+  batch:
+    timeout: 2s
+    send_batch_size: 100
+  resource/motoko:
+    attributes:
+      - key: service.name
+        value: motoko-agent
+        action: upsert
+      - key: service.namespace
+        value: motoko
+        action: upsert
+      - key: deployment.environment
+        value: devcontainer
+        action: upsert
+
+exporters:
+  otlp_http/clickstack:
+    endpoint: http://clickstack:4318
+    headers:
+      authorization: ${env:CLICKSTACK_INGESTION_KEY}
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      storage: file_storage/motoko
+
+extensions:
+  file_storage/motoko:
+    directory: /var/lib/otelcol/file_storage
+    create_directory: true
+
+service:
+  extensions: [file_storage/motoko]
+  pipelines:
+    logs:
+      receivers: [file_log/motoko]
+      processors: [memory_limiter, resource/motoko, batch]
+      exporters: [otlp_http/clickstack]

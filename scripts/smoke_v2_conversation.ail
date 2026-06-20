@@ -11,10 +11,10 @@
 -- smokes plus the typed integration runs.
 --
 -- Setup (the key trick is feeding piped input to test EOF termination):
---   echo '{"type":"abort"}' | ailang run --caps IO,Env,Clock,FS,Process,AI,Net,SharedMem,Stream --entry main scripts/smoke_v2_conversation.ail
+--   echo '{"type":"abort"}' | ailang run --caps IO,Env,Clock,FS,Process,AI,Net,SharedMem,Stream,Trace --entry main scripts/smoke_v2_conversation.ail
 --
 -- Or feed empty input (EOF immediately) to verify clean exit:
---   : | ailang run --caps IO,Env,Clock,FS,Process,AI,Net,SharedMem,Stream --entry main scripts/smoke_v2_conversation.ail
+--   : | ailang run --caps IO,Env,Clock,FS,Process,AI,Net,SharedMem,Stream,Trace --entry main scripts/smoke_v2_conversation.ail
 
 module scripts/smoke_v2_conversation
 
@@ -23,7 +23,7 @@ import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
 import src/core/ext/runtime (init_runtime)
 import src/core/agent_loop_v2 (conversation_loop_v2)
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let rt = init_runtime();
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
 

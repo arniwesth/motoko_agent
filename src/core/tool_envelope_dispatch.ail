@@ -1,0 +1,56 @@
+module src/core/tool_envelope_dispatch
+
+import std/json (Json, jo, kv, js, jb, encode)
+import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, number_field)
+import src/core/tool_dispatch_adapter (tool_result_item_to_json)
+import src/core/tool_runtime (run_native_batch)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtRuntime, ToolPolicyDecision, ToolHandleDecision,
+  Deny, Pending, Handled, Delegate
+)
+import src/core/ext/runtime (dispatch_tool_policy, dispatch_tool_handle)
+
+func error_result(call: ToolCallEnvelope, message: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: call.id,
+    tool: call.tool,
+    exit_code: 1,
+    stdout: "",
+    stderr: message,
+    metadata: jo([kv("error", jb(true)), kv("message", js(message))])
+  }
+}
+
+func native_result(call: ToolCallEnvelope, payload: Json) -> ToolResultEnvelope {
+  let exit_code = number_field(payload, "exit_code", 0);
+  {
+    tool_call_id: call.id,
+    tool: call.tool,
+    exit_code: exit_code,
+    stdout: encode(payload),
+    stderr: "",
+    metadata: payload
+  }
+}
+
+export func dispatch_tool_envelope(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolResultEnvelope ! {IO, Clock, FS, Process, AI, Env, Net, SharedMem, Stream} {
+  if call.tool == "scratchpad" || call.tool == "Scratchpad" then
+    error_result(call, "recursive scratchpad loopback is disabled")
+  else {
+    match dispatch_tool_policy(rt, ctx, call) {
+      Deny(reason) => error_result(call, "denied by policy: ${reason}"),
+      Pending(reason, _) => error_result(call, "pending approval is not available inside scratchpad loopback: ${reason}"),
+      _ => {
+        match dispatch_tool_handle(rt, ctx, call) {
+          Handled(result) => result,
+          Delegate => {
+            match run_native_batch([call], ctx.workdir) {
+              [item] => native_result(call, tool_result_item_to_json(item)),
+              _ => error_result(call, "internal: native dispatcher returned unexpected result count")
+            }
+          }
+        }
+      }
+    }
+  }
+}
