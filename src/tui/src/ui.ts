@@ -1790,6 +1790,23 @@ function initialExtensionsFromEnv(): string {
   return names.join(", ");
 }
 
+function extensionNamesFromEnv(): string[] {
+  const raw = (process.env.CORE_EXT_ORDER ?? "").trim();
+  if (raw === "") return [];
+  return raw
+    .split(",")
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+}
+
+export function hasEvalExtension(extensions?: string[]): boolean {
+  const names = extensions ?? extensionNamesFromEnv();
+  return names.some((name) => {
+    const clean = name.trim();
+    return clean === "eval" || clean.startsWith("eval#");
+  });
+}
+
 export function shouldRenderThinkingAfterStream(streamedSteps: Set<number>, step: number): boolean {
   return !streamedSteps.has(step);
 }
@@ -2043,6 +2060,7 @@ export class AgentUI {
     const v = (process.env.MOTOKO_FINAL_ONLY ?? process.env.MOTOKO_HEURISTIC_FINAL_ONLY ?? "").trim().toLowerCase();
     return v === "1" || v === "true" || v === "yes";
   })();
+  private evalExtensionActive: boolean;
 
   constructor({ version, model, profile, ailangVersion, extensions }: { version?: string; model?: string; profile?: string; ailangVersion?: string; extensions?: string[] } = {}) {
     this.version = version ?? "0.0.0";
@@ -2052,6 +2070,7 @@ export class AgentUI {
     this.loadedExtensions = extensions && extensions.length > 0
       ? extensions.join(", ")
       : initialExtensionsFromEnv();
+    this.evalExtensionActive = hasEvalExtension(extensions);
     try { this.branch = execSync("git rev-parse --abbrev-ref HEAD").toString().trim(); } catch {}
     const terminal = new ProcessTerminal();
 
@@ -2180,7 +2199,9 @@ export class AgentUI {
     this.tui.start();
     // One-line note of the detected inline-image protocol so it's obvious
     // whether eval plots will render as pixels or the text fallback.
-    this.appendHistoryStyled(`eval images: ${evalImageCapabilityLabel()}`, chalk.dim);
+    if (this.evalExtensionActive) {
+      this.appendHistoryStyled(`eval images: ${evalImageCapabilityLabel()}`, chalk.dim);
+    }
     // Explicit render so children added before start() (e.g. version banner)
     // are visible immediately.
     this.tui.requestRender();
@@ -2279,6 +2300,7 @@ export class AgentUI {
           const names = event.loaded_extensions;
           const extText = names.length === 0 ? "(none)" : names.join(", ");
           this.loadedExtensions = extText;
+          this.evalExtensionActive = hasEvalExtension(names);
           this.appendHistoryStyled(`Loaded extensions: ${extText}`, chalk.dim);
         }
         break;
@@ -2658,6 +2680,7 @@ export class AgentUI {
         }
         break;
       case "eval_result":
+        if (!this.evalExtensionActive) break;
         this.upsertEvalCard(event);
         break;
 

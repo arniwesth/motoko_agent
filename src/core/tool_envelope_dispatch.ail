@@ -1,7 +1,7 @@
 module src/core/tool_envelope_dispatch
 
-import std/json (Json, jo, kv, js, jnum, jb, encode)
-import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
+import std/json (Json, jo, kv, js, jb, encode)
+import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, number_field)
 import src/core/tool_dispatch_adapter (tool_result_item_to_json)
 import src/core/tool_runtime (run_native_batch)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -22,10 +22,7 @@ func error_result(call: ToolCallEnvelope, message: string) -> ToolResultEnvelope
 }
 
 func native_result(call: ToolCallEnvelope, payload: Json) -> ToolResultEnvelope {
-  let exit_code = match payload {
-    JObject(_) => 0,
-    _ => 0
-  };
+  let exit_code = number_field(payload, "exit_code", 0);
   {
     tool_call_id: call.id,
     tool: call.tool,

@@ -54,7 +54,7 @@ import src/core/tool_runtime (backend_for_v2)
 import src/core/types (Msg, ToolBackend)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
 import src/core/compaction (compact_step)
 import src/core/context_usage (context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
@@ -464,6 +464,17 @@ func is_eval_tool_name(name: string) -> bool {
   name == "eval" || name == "Eval"
 }
 
+func eval_extension_active(rt: ExtRuntime) -> bool {
+  eval_extension_active_rec(rt.registry.hooks)
+}
+
+func eval_extension_active_rec(hooks: [ExtensionHooks]) -> bool {
+  match hooks {
+    [] => false,
+    h :: rest => startsWith(h.id, "eval#") || h.id == "eval" || eval_extension_active_rec(rest)
+  }
+}
+
 func eval_cells_arg(args: Json) -> Json {
   match get(args, "cells") {
     Some(j) => j,
@@ -742,7 +753,7 @@ func dispatch_calls(
         _ => {
           -- M5: ask extensions whether they want to handle this tool directly
           -- (e.g. compose's `Compose` tool dispatches its own pipeline).
-          if is_eval_tool_name(envelope.tool) then {
+          if is_eval_tool_name(envelope.tool) && eval_extension_active(rt) then {
             let result_cell = exec_cell_ws(rt, ctx, envelope, eval_cells_arg(envelope.arguments), 30);
             let result_env: ToolResultEnvelope = {
               tool_call_id: envelope.id,

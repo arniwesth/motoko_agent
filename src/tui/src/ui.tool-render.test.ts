@@ -19,6 +19,7 @@ import {
   evalSegmentsToText,
   evalCellsHaveImage,
   shouldExpandEvalCard,
+  hasEvalExtension,
 } from "./ui.js";
 import type { EvalCellResult } from "./eval/frames.js";
 import { __setCapabilitiesForTest } from "./eval/image-segment.js";
@@ -28,6 +29,13 @@ function stripAnsi(s: string): string {
 }
 
 describe("ui tool rendering helpers", () => {
+  it("detects whether eval is configured as an active extension", () => {
+    expect(hasEvalExtension(["compose", "eval", "mcp"])).toBe(true);
+    expect(hasEvalExtension(["compose", "eval#3"])).toBe(true);
+    expect(hasEvalExtension(["compose", "mcp"])).toBe(false);
+    expect(hasEvalExtension([])).toBe(false);
+  });
+
   it("formats canonical batch headers", () => {
     expect(formatToolHeaderQueued("req-1", 2)).toBe("[tools] req-1 queued (2 call(s))");
     expect(formatToolHeaderRunning("req-1", 1, 2, 1)).toBe("[tools] req-1 running (1/2 done, failed=1)");
