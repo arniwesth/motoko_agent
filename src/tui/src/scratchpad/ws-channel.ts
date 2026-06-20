@@ -1,23 +1,23 @@
 import type { Server } from "http";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import type { EvalCell, ExecCellResponse, LoopbackToolRequest, LoopbackToolResult } from "./frames.js";
+import type { ScratchpadCell, ScratchpadCellResponse, LoopbackToolRequest, LoopbackToolResult } from "./frames.js";
 
-export type ExecCellWsRequest = {
+export type ScratchpadCellWsRequest = {
   type: "run";
   cells?: unknown;
   sessionId?: string;
   timeout?: number;
 };
 
-export type ExecCellWsOptions = {
+export type ScratchpadCellWsOptions = {
   path?: string;
-  normalizeCells: (raw: unknown) => EvalCell[];
+  normalizeCells: (raw: unknown) => ScratchpadCell[];
   runCells: (
-    cells: EvalCell[],
+    cells: ScratchpadCell[],
     sessionId: string,
     timeoutSecs: number,
     resolver: (frame: LoopbackToolRequest) => Promise<LoopbackToolResult>,
-  ) => Promise<ExecCellResponse>;
+  ) => Promise<ScratchpadCellResponse>;
 };
 
 type PendingRequest = {
@@ -27,7 +27,7 @@ type PendingRequest = {
 };
 
 function send(ws: WebSocket, payload: unknown): void {
-  if (ws.readyState !== ws.OPEN) throw new Error("exec-cell WebSocket is not open");
+  if (ws.readyState !== ws.OPEN) throw new Error("scratchpad-cell WebSocket is not open");
   ws.send(JSON.stringify(payload));
 }
 
@@ -44,8 +44,8 @@ function failPending(pending: Map<string, PendingRequest>, err: Error): void {
   pending.clear();
 }
 
-export function attachExecCellWebSocketServer(server: Server, opts: ExecCellWsOptions): WebSocketServer {
-  const path = opts.path ?? "/exec-cell-ws";
+export function attachScratchpadCellWebSocketServer(server: Server, opts: ScratchpadCellWsOptions): WebSocketServer {
+  const path = opts.path ?? "/scratchpad-cell-ws";
   const wss = new WebSocketServer({ server, path });
 
   wss.on("connection", (ws) => {
@@ -98,13 +98,13 @@ export function attachExecCellWebSocketServer(server: Server, opts: ExecCellWsOp
         return;
       }
       if (running) {
-        send(ws, { type: "error", message: "exec-cell WebSocket run already in progress" });
+        send(ws, { type: "error", message: "scratchpad-cell WebSocket run already in progress" });
         return;
       }
 
       running = true;
       try {
-        const req = msg as ExecCellWsRequest;
+        const req = msg as ScratchpadCellWsRequest;
         const cells = opts.normalizeCells(req.cells);
         const sessionId = String(req.sessionId ?? "default");
         const timeoutSecs = Math.max(1, Number(req.timeout ?? 30));
@@ -122,7 +122,7 @@ export function attachExecCellWebSocketServer(server: Server, opts: ExecCellWsOp
         });
       } finally {
         running = false;
-        failPending(pending, new Error("exec-cell WebSocket run finished"));
+        failPending(pending, new Error("scratchpad-cell WebSocket run finished"));
         if (ws.readyState === ws.OPEN) ws.close(1000, "done");
       }
     });

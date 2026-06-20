@@ -23,10 +23,11 @@ import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
 import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
-import { AgentUI } from "./ui.js";
+import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
 import { activeProfile } from "./config.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
+import type { ScratchpadCellResult } from "./scratchpad/frames.js";
 
 // Like describeToolCall but also checks call.arguments for native dispatch
 // events where path/content etc. are nested in the arguments JSON blob.
@@ -82,6 +83,57 @@ function describeToolCall(call: DelegatedCall): string {
 function isInternalComposeStream(streamId: string): boolean {
   const id = (streamId ?? "").trim();
   return id.startsWith("compose-");
+}
+
+function firstNonEmptyLine(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => line.length > 0) ?? "";
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function plainScratchpadMetadata(cell: ScratchpadCellResult): string {
+  const parts: string[] = [];
+  const ailang = cell.metadata?.ailang;
+  if (ailang) {
+    parts.push(`check=${ailang.check}`);
+    parts.push(`verify=${ailang.verify}${!ailang.verifyAvailable && ailang.check === "passed" ? " (Z3 unavailable)" : ""}`);
+    parts.push(`committed=${ailang.committed ? "yes" : "no"}`);
+    if (ailang.ran) parts.push("ran=yes");
+  }
+  const lean = cell.metadata?.lean;
+  if (lean) {
+    parts.push(`elaborated=${lean.elaborated}`);
+    parts.push(`proof=${lean.proof}`);
+    parts.push(`committed=${lean.committed ? "yes" : "no"}`);
+    if (lean.unexpectedAxioms && lean.unexpectedAxioms.length > 0) {
+      parts.push(`unexpected_axioms=${lean.unexpectedAxioms.join(",")}`);
+    }
+    if (typeof lean.sorries === "number" && lean.sorries > 0) parts.push(`sorries=${lean.sorries}`);
+  }
+  return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+export function formatPlainScratchpadResult(event: Extract<AgentEvent, { type: "scratchpad_result" }>): string {
+  const cells = parseScratchpadCellsJson(event.cells_json);
+  if (!cells) return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
+  const passed = cells.filter((cell) => cell.exit_code === 0 && !cell.error).length;
+  const lines = [`[scratchpad] ${event.tool_call_id} ${plural(cells.length, "cell")} passed=${passed} failed=${cells.length - passed}`];
+  for (const cell of cells) {
+    const idx = cell.index + 1;
+    const status = cell.exit_code === 0 && !cell.error ? "ok" : "failed";
+    const duration = typeof cell.durationMs === "number" ? ` ${Math.max(0, Math.round(cell.durationMs))}ms` : "";
+    const displays = cell.displays.length > 0 ? ` displays=${cell.displays.map((d) => d.type).join(",")}` : "";
+    const result = cell.result ? ` result=${cell.result.type}` : "";
+    lines.push(`  [${status}] ${idx}. ${cell.language} ${cell.title} exit=${cell.exit_code}${duration}${displays}${result}${plainScratchpadMetadata(cell)}`);
+    const out = firstNonEmptyLine(cell.stdout);
+    if (out) lines.push(`    stdout: ${out.slice(0, 180)}`);
+    const err = firstNonEmptyLine(cell.stderr);
+    if (err) lines.push(`    stderr: ${err.slice(0, 180)}`);
+    if (cell.error) lines.push(`    error: ${cell.error.ename}: ${cell.error.evalue}`);
+  }
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +216,7 @@ type ProfileAgentConfig = {
   openaiBaseUrl?: string;
   aiOptionsJson?: string;
   extensions?: string[];
-  evalWsLoopback?: boolean;
+  scratchpadWsLoopback?: boolean;
   clickstack?: {
     enabled?: boolean;
     endpoint?: string;
@@ -221,8 +273,8 @@ function applyToolProfileConfig(
 ): void {
   setFromProfile(
     protectedKeys,
-    "MOTOKO_EVAL_WS_LOOPBACK",
-    profile.evalWsLoopback === undefined ? undefined : profile.evalWsLoopback ? "1" : "0",
+    "MOTOKO_SCRATCHPAD_WS_LOOPBACK",
+    profile.scratchpadWsLoopback === undefined ? undefined : profile.scratchpadWsLoopback ? "1" : "0",
   );
 }
 
@@ -243,7 +295,7 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         order?: unknown;
       };
       tools?: {
-        eval_ws_loopback?: unknown;
+        scratchpad_ws_loopback?: unknown;
       };
       clickstack?: {
         enabled?: unknown;
@@ -274,8 +326,8 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         ? parsed.agent.ai_options_json
         : undefined,
       extensions,
-      evalWsLoopback: typeof parsed.tools?.eval_ws_loopback === "boolean"
-        ? parsed.tools.eval_ws_loopback
+      scratchpadWsLoopback: typeof parsed.tools?.scratchpad_ws_loopback === "boolean"
+        ? parsed.tools.scratchpad_ws_loopback
         : undefined,
       clickstack: {
         enabled: typeof parsed.clickstack?.enabled === "boolean"
@@ -313,6 +365,34 @@ function systemPromptForWorkspace(projectRoot: string, workdir: string): string 
   if (rel === "") return ".";
   if (rel.startsWith("..") || path.isAbsolute(rel)) return "";
   return rel;
+}
+
+// materializeSystemPromptArg copies the CONTENT of an external --system-prompt
+// file into a managed in-workspace file and returns its absolute path. This lets
+// a headless caller inject a system prompt from ANY path (absolute or outside the
+// workspace) — motoko copies it in, so systemPromptForWorkspace's workdir-relative
+// contract (the supervisor reads the prompt via a path relative to workdir) stays
+// intact. Returns null if the source path is empty, missing, or unreadable, in
+// which case the caller falls back to SYSTEM_MD / the default SYSTEM.md.
+function materializeSystemPromptArg(flagValue: string, workdir: string): string | null {
+  const src = flagValue.trim();
+  if (src === "") return null;
+  const srcAbs = path.isAbsolute(src) ? src : path.resolve(process.cwd(), src);
+  let content: string;
+  try {
+    content = fs.readFileSync(srcAbs, "utf8");
+  } catch (err) {
+    console.error(`[motoko] --system-prompt: cannot read ${srcAbs}: ${String(err)}`);
+    return null;
+  }
+  const dest = path.join(path.resolve(workdir), ".motoko-system-prompt.md");
+  try {
+    fs.writeFileSync(dest, content, "utf8");
+  } catch (err) {
+    console.error(`[motoko] --system-prompt: cannot write ${dest}: ${String(err)}`);
+    return null;
+  }
+  return dest;
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +488,9 @@ class PlainLogger {
       case "compose_result":
         process.stdout.write(`[step ${event.step}] [compose ${event.compose_id}] result attempts=${event.attempts} exit=${event.exit_code}\n`);
         break;
+      case "scratchpad_result":
+        process.stdout.write(formatPlainScratchpadResult(event) + "\n");
+        break;
       case "obs":
         if (event.stdout) process.stdout.write(event.stdout + "\n");
         if (event.stderr) process.stderr.write(`[stderr] ${event.stderr}\n`);
@@ -491,8 +574,16 @@ class JsonlLogger {
 // Recognized flags are removed from process.argv so downstream argv[2] reads
 // still work for the task text. Unknown flags pass through to the task text
 // (so "motoko --whatever ..." doesn't break).
-function parseMotokoFlags(): { headless: boolean; printVersion: boolean } {
-  const flags = { headless: false, printVersion: false };
+function parseMotokoFlags(): {
+  headless: boolean;
+  printVersion: boolean;
+  systemPrompt: string | null;
+} {
+  const flags: {
+    headless: boolean;
+    printVersion: boolean;
+    systemPrompt: string | null;
+  } = { headless: false, printVersion: false, systemPrompt: null };
   const remaining: string[] = [process.argv[0], process.argv[1]];
   for (let i = 2; i < process.argv.length; i++) {
     const arg = process.argv[i];
@@ -500,6 +591,15 @@ function parseMotokoFlags(): { headless: boolean; printVersion: boolean } {
       flags.headless = true;
     } else if (arg === "--version" || arg === "-v") {
       flags.printVersion = true;
+    } else if (arg === "--system-prompt") {
+      // --system-prompt <path>: let an external harness (e.g. the AILANG eval
+      // adapter) inject a system-role prompt WITHOUT having to place a file
+      // inside the workspace or set SYSTEM_MD. The value is a path (absolute or
+      // relative to cwd); its CONTENT is materialized into a managed in-workspace
+      // file in main() so the workdir-relative SYSTEM_MD contract is preserved.
+      // Takes precedence over the SYSTEM_MD env var.
+      flags.systemPrompt = process.argv[i + 1] ?? "";
+      i++; // consume the value
     } else {
       remaining.push(arg);
     }
@@ -579,6 +679,16 @@ async function main(): Promise<void> {
   ) as { version: string };
   const projectRoot = path.resolve(import.meta.dirname, "../../..");
   const workdir = process.env.WORKDIR ?? process.cwd();
+  // --system-prompt <path> (flag) takes precedence over the SYSTEM_MD env var.
+  // Materialize the flag's file content into an in-workspace file and point
+  // SYSTEM_MD at it so the existing systemPromptForWorkspace resolution delivers
+  // it in the system role (the supervisor reads it via a workdir-relative path).
+  if (motokoFlags.systemPrompt !== null) {
+    const materialized = materializeSystemPromptArg(motokoFlags.systemPrompt, workdir);
+    if (materialized !== null) {
+      process.env.SYSTEM_MD = materialized;
+    }
+  }
   // M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): default
   // ENV_PORT to 0 = let the kernel pick a free port atomically when
   // startEnvServer binds. The wrapper used to do its own pick_free_port

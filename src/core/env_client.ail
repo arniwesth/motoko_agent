@@ -110,21 +110,21 @@ export func exec_ailang(url: string, code: string, caps: string, timeout_secs: i
 }
 
 -- ---------------------------------------------------------------------------
--- exec_cell : string -> Json -> string -> int -> CellExecResult ! {Net}
+-- exec_scratchpad_cell : string -> Json -> string -> int -> CellExecResult ! {Net}
 --
 -- Execute persistent Python/JS cells through the environment server.
--- `cells` is the JSON array from the eval tool arguments.
+-- `cells` is the JSON array from the scratchpad tool arguments.
 -- ---------------------------------------------------------------------------
-export func exec_cell(url: string, cells: Json, session_id: string, timeout_secs: int) -> CellExecResult ! {Net} {
+export func exec_scratchpad_cell(url: string, cells: Json, session_id: string, timeout_secs: int) -> CellExecResult ! {Net} {
   let body = encode(jo([
     kv("cells",     cells),
     kv("sessionId", js(session_id)),
     kv("timeout",   jnum(_int_to_float(timeout_secs)))
   ]));
-  let raw = httpPost("${url}/exec-cell", body);
+  let raw = httpPost("${url}/scratchpad-cell", body);
   match decode(raw) {
     Err(_) =>
-      { stdout: "", stderr: "env-server: malformed exec-cell response: ${raw}", exit_code: 1, metadata: jo([]) },
+      { stdout: "", stderr: "env-server: malformed scratchpad-cell response: ${raw}", exit_code: 1, metadata: jo([]) },
     Ok(obj) => {
       let stdout = match get(obj, "stdout") {
         None    => "",

@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it } from "@jest/globals";
 import { type TerminalCapabilities, resetCapabilitiesCache } from "@mariozechner/pi-tui";
 import { isImageLine } from "@mariozechner/pi-tui/dist/terminal-image.js";
 import {
-  EVAL_IMAGE_MAX_ROWS,
+  SCRATCHPAD_IMAGE_MAX_ROWS,
   __setCapabilitiesForTest,
   effectiveImageWidthCells,
-  evalImageCapabilityLabel,
-  evalImageExitSequence,
+  scratchpadImageCapabilityLabel,
+  scratchpadImageExitSequence,
   makeImageSegment,
 } from "./image-segment.js";
 
@@ -101,37 +101,37 @@ describe("makeImageSegment", () => {
 describe("effectiveImageWidthCells", () => {
   it("returns the full width for short images", () => {
     // 100x10 image is very wide & short → well under the row cap.
-    expect(effectiveImageWidthCells({ widthPx: 100, heightPx: 10 }, 60, EVAL_IMAGE_MAX_ROWS)).toBe(60);
+    expect(effectiveImageWidthCells({ widthPx: 100, heightPx: 10 }, 60, SCRATCHPAD_IMAGE_MAX_ROWS)).toBe(60);
   });
 
   it("shrinks width to honor the row cap for tall images", () => {
     // A tall image (e.g. 100x4000) would blow past the row cap at full width.
-    const w = effectiveImageWidthCells({ widthPx: 100, heightPx: 4000 }, 60, EVAL_IMAGE_MAX_ROWS);
+    const w = effectiveImageWidthCells({ widthPx: 100, heightPx: 4000 }, 60, SCRATCHPAD_IMAGE_MAX_ROWS);
     expect(w).toBeLessThan(60);
     expect(w).toBeGreaterThanOrEqual(1);
   });
 
   it("returns the width unchanged when dimensions are unknown", () => {
-    expect(effectiveImageWidthCells(null, 50, EVAL_IMAGE_MAX_ROWS)).toBe(50);
+    expect(effectiveImageWidthCells(null, 50, SCRATCHPAD_IMAGE_MAX_ROWS)).toBe(50);
   });
 });
 
-describe("evalImageExitSequence", () => {
+describe("scratchpadImageExitSequence", () => {
   it("emits a Kitty purge sequence for kitty terminals", () => {
-    expect(evalImageExitSequence(KITTY)).toContain("\x1b_Ga=d,d=A");
+    expect(scratchpadImageExitSequence(KITTY)).toContain("\x1b_Ga=d,d=A");
   });
 
   it("emits nothing for iTerm2 or non-capable terminals", () => {
-    expect(evalImageExitSequence(ITERM2)).toBeNull();
-    expect(evalImageExitSequence(NONE)).toBeNull();
+    expect(scratchpadImageExitSequence(ITERM2)).toBeNull();
+    expect(scratchpadImageExitSequence(NONE)).toBeNull();
   });
 });
 
-describe("evalImageCapabilityLabel", () => {
+describe("scratchpadImageCapabilityLabel", () => {
   it("labels each detected protocol", () => {
-    expect(evalImageCapabilityLabel(KITTY)).toBe("kitty");
-    expect(evalImageCapabilityLabel(ITERM2)).toBe("iterm2");
-    expect(evalImageCapabilityLabel(NONE)).toBe("ANSI half-block art");
-    expect(evalImageCapabilityLabel(NO_COLOR)).toBe("none (text fallback)");
+    expect(scratchpadImageCapabilityLabel(KITTY)).toBe("kitty");
+    expect(scratchpadImageCapabilityLabel(ITERM2)).toBe("iterm2");
+    expect(scratchpadImageCapabilityLabel(NONE)).toBe("ANSI half-block art");
+    expect(scratchpadImageCapabilityLabel(NO_COLOR)).toBe("none (text fallback)");
   });
 });

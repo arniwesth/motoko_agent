@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "@jest/globals";
 import { createServer, type Server } from "http";
 import WebSocket from "ws";
-import { attachExecCellWebSocketServer } from "./ws-channel.js";
+import { attachScratchpadCellWebSocketServer } from "./ws-channel.js";
 import type { LoopbackToolRequest, LoopbackToolResult } from "./frames.js";
 
 function listen(server: Server): Promise<number> {
@@ -15,7 +15,7 @@ function listen(server: Server): Promise<number> {
   });
 }
 
-describe("exec-cell WebSocket channel", () => {
+describe("scratchpad-cell WebSocket channel", () => {
   const servers: Server[] = [];
 
   afterEach(async () => {
@@ -27,7 +27,7 @@ describe("exec-cell WebSocket channel", () => {
     const server = createServer();
     servers.push(server);
 
-    attachExecCellWebSocketServer(server, {
+    attachScratchpadCellWebSocketServer(server, {
       normalizeCells: () => [{ language: "py", code: "tool.read('README.md')" }],
       runCells: async (_cells, _sessionId, _timeoutSecs, resolver) => {
         const frame: LoopbackToolRequest = {
@@ -49,7 +49,7 @@ describe("exec-cell WebSocket channel", () => {
     });
 
     const port = await listen(server);
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/exec-cell-ws`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/scratchpad-cell-ws`);
 
     const final = await new Promise<any>((resolve, reject) => {
       ws.on("error", reject);

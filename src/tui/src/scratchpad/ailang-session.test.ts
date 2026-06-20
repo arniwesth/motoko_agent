@@ -58,7 +58,7 @@ describe("AilangSession accumulation", () => {
     s.commit(parseCell(ABS_DIFF), "main");
     expect(s.acceptedNames).toEqual(["abs_diff"]);
     const rendered = s.renderModule(parseCell(`export func main() -> () ! {IO} { println(show(abs_diff(10, 3))) }`));
-    expect(rendered).toContain("module motoko/eval_session");
+    expect(rendered).toContain("module motoko/scratchpad_session");
     expect(rendered).toContain("func abs_diff");
     expect(rendered).toContain("func main");
   });

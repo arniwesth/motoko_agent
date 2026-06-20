@@ -1,4 +1,4 @@
-// AILANG eval kernel — drives the `ailang` CLI (ai-check / verify / run) over a
+// AILANG scratchpad kernel — drives the `ailang` CLI (ai-check / verify / run) over a
 // persistent source session. See ailang-session.ts for the (CLI-free) source
 // accumulation + gate logic; this file owns process execution and result
 // shaping only.
@@ -8,9 +8,9 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import type {
   AilangCellMetadata,
-  EvalCell,
-  EvalCellResult,
-  EvalDisplayBundle,
+  ScratchpadCell,
+  ScratchpadCellResult,
+  ScratchpadDisplayBundle,
 } from "./frames.js";
 import {
   AilangSession,
@@ -95,10 +95,10 @@ export class AilangKernel {
   }
 
   private writeModule(source: string): string {
-    const dir = this.config.tmpDir ?? "/tmp/motoko-ailang-eval";
+    const dir = this.config.tmpDir ?? "/tmp/motoko-ailang-scratchpad";
     mkdirSync(dir, { recursive: true });
     this.seq += 1;
-    const path = join(dir, `eval_session_${process.pid}_${Date.now()}_${this.seq}.ail`);
+    const path = join(dir, `scratchpad_session_${process.pid}_${Date.now()}_${this.seq}.ail`);
     writeFileSync(path, source, "utf8");
     return path;
   }
@@ -136,7 +136,7 @@ export class AilangKernel {
     }
   }
 
-  run(index: number, opts: { cell: EvalCell; timeoutMs: number }): EvalCellResult {
+  run(index: number, opts: { cell: ScratchpadCell; timeoutMs: number }): ScratchpadCellResult {
     this.executionCount += 1;
     const { cell, timeoutMs } = opts;
     const title = String(cell.title ?? `ail cell ${index + 1}`);
@@ -158,8 +158,8 @@ export class AilangKernel {
       exit_code: number,
       programStdout: string,
       stderr: string,
-    ): EvalCellResult => {
-      const displays: EvalDisplayBundle[] = [
+    ): ScratchpadCellResult => {
+      const displays: ScratchpadDisplayBundle[] = [
         { type: "status", mime: "text/plain", data: statusSummary(meta) },
       ];
       // Surface the one-time teaching guide in the VISIBLE output (stdout), not
@@ -196,7 +196,7 @@ export class AilangKernel {
         verifyAvailable: true,
         committed: false,
         ran: false,
-        notice: `duplicate top-level declaration(s) already accepted: ${dups.join(", ")}. AILANG eval does not replace declarations in place; use reset:true to start a fresh session.`,
+        notice: `duplicate top-level declaration(s) already accepted: ${dups.join(", ")}. AILANG scratchpad does not replace declarations in place; use reset:true to start a fresh session.`,
       };
       return finish(meta, 1, "", meta.notice ?? "");
     }

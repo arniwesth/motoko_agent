@@ -6,11 +6,11 @@
 #   - Go 1.22+
 #   - Bun 1.x
 #   - Node.js 18+ and npm
-#   - Python data science packages for eval cells (pandas, polars, numpy, SciPy, scikit-learn)
+#   - Python data science packages for scratchpad cells (pandas, polars, numpy, SciPy, scikit-learn)
 #   - context-mode CLI
 #   - AILANG runtime (cloned from github.com/sunholo-data/ailang at pinned tag)
 #   - Z3 solver (required by AILANG `verify` / `ai-check` for contract proofs,
-#     used by the AILANG eval kernel)
+#     used by the AILANG scratchpad kernel)
 #   - bun dependencies for the TypeScript frontend (src/tui/)
 #   - Optional: Omnigraph CLI/server (with --with-omnigraph)
 #   - Optional: Lean 4 REPL backend (with --with-lean)
@@ -67,9 +67,9 @@ Usage: ./scripts/install-prerequisites.sh [--with-omnigraph] [--with-lean] [--wi
 
 Options:
   --with-omnigraph   Build and install Omnigraph CLI/server from source
-  --with-lean        Install elan and build leanprover-community/repl for Lean eval
+  --with-lean        Install elan and build leanprover-community/repl for Lean scratchpad
   --with-lean-mathlib
-                     Also create a Mathlib-enabled Lean eval project and fetch cache
+                     Also create a Mathlib-enabled Lean scratchpad project and fetch cache
   --help             Show this help text
 EOF
 }
@@ -86,10 +86,10 @@ parse_args() {
   done
 }
 
-install_lean_eval() {
-  log_header "Lean 4 eval backend (optional)"
+install_lean_scratchpad() {
+  log_header "Lean 4 scratchpad backend (optional)"
   if [[ "$INSTALL_LEAN" -ne 1 ]]; then
-    log_info "Skipping Lean eval backend (pass --with-lean to enable)"
+    log_info "Skipping Lean scratchpad backend (pass --with-lean to enable)"
     return
   fi
 
@@ -121,7 +121,7 @@ install_lean_eval() {
   log_info "Building Lean REPL (uses the repo-pinned lean-toolchain)..."
   (cd "$repl_dir" && lake build)
   log_ok "Lean REPL built at $repl_dir/.lake/build/bin/repl"
-  log_info "Set MOTOKO_LEAN_REPL_BIN=$repl_dir/.lake/build/bin/repl for eval language:\"lean\""
+  log_info "Set MOTOKO_LEAN_REPL_BIN=$repl_dir/.lake/build/bin/repl for scratchpad language:\"lean\""
 
   if [[ "$INSTALL_LEAN_MATHLIB" -ne 1 ]]; then
     log_info "Skipping Mathlib cache/project (pass --with-lean-mathlib to enable)"
@@ -643,7 +643,7 @@ main() {
   install_context_mode
   install_bun_deps
   install_ailang
-  install_lean_eval
+  install_lean_scratchpad
   install_omnigraph
   print_summary
 }

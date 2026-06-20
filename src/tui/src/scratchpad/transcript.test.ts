@@ -2,8 +2,8 @@ import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it, afterEach } from "@jest/globals";
-import type { EvalCellResult } from "./frames.js";
-import { buildEvalTranscript, spillImages } from "./transcript.js";
+import type { ScratchpadCellResult } from "./frames.js";
+import { buildScratchpadTranscript, spillImages } from "./transcript.js";
 
 const temps: string[] = [];
 
@@ -11,7 +11,7 @@ afterEach(() => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function cell(overrides: Partial<EvalCellResult>): EvalCellResult {
+function cell(overrides: Partial<ScratchpadCellResult>): ScratchpadCellResult {
   return {
     index: 0,
     language: "py",
@@ -27,9 +27,9 @@ function cell(overrides: Partial<EvalCellResult>): EvalCellResult {
   };
 }
 
-describe("eval transcript", () => {
+describe("scratchpad transcript", () => {
   it("flattens stdout, json display, markdown, and result", () => {
-    const text = buildEvalTranscript([
+    const text = buildScratchpadTranscript([
       cell({
         stdout: "hello\n",
         displays: [
@@ -48,12 +48,12 @@ describe("eval transcript", () => {
   });
 
   it("spills image bundles and renders placeholders", () => {
-    const dir = mkdtempSync(join(tmpdir(), "motoko-eval-"));
+    const dir = mkdtempSync(join(tmpdir(), "motoko-scratchpad-"));
     temps.push(dir);
     const images = spillImages(dir, "session/one", 1, [
       { type: "image", mime: "image/png", data: Buffer.from("png").toString("base64"), width: 2, height: 3 },
     ]);
-    const text = buildEvalTranscript([cell({ displays: [{ type: "image", mime: "image/png", data: "ignored", width: 2, height: 3 }] })], images);
+    const text = buildScratchpadTranscript([cell({ displays: [{ type: "image", mime: "image/png", data: "ignored", width: 2, height: 3 }] })], images);
 
     expect(images).toHaveLength(1);
     expect(readFileSync(join(dir, images[0].path), "utf8")).toBe("png");
@@ -61,7 +61,7 @@ describe("eval transcript", () => {
   });
 
   it("pre-truncates long transcripts", () => {
-    const text = buildEvalTranscript([cell({ stdout: "x".repeat(200) })], [], 80);
+    const text = buildScratchpadTranscript([cell({ stdout: "x".repeat(200) })], [], 80);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(100);
     expect(text).toContain("[truncated]");
   });

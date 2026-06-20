@@ -4,7 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import { startLoopbackServer, type LoopbackServer } from "./loopback.js";
 
-describe("eval loopback server", () => {
+describe("scratchpad loopback server", () => {
   let tempDir = "";
   let server: LoopbackServer | undefined;
 

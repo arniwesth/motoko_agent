@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@jest/globals";
 import { execFileSync } from "child_process";
 import { AilangKernel } from "./kernel-ailang.js";
-import type { EvalCell } from "./frames.js";
+import type { ScratchpadCell } from "./frames.js";
 
 function ailangAvailable(): boolean {
   try {
@@ -24,7 +24,7 @@ function z3Available(): boolean {
 const hasAilang = ailangAvailable();
 const d = hasAilang ? describe : describe.skip;
 
-const ABS_DIFF: EvalCell = {
+const ABS_DIFF: ScratchpadCell = {
   language: "ail",
   code: `export func abs_diff(a: int, b: int) -> int ! {}
 requires { true }

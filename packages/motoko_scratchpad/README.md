@@ -1,6 +1,6 @@
-# motoko_eval
+# motoko_scratchpad
 
-`motoko_eval` provides the `eval` extension for Motoko agent sessions.
+`motoko_scratchpad` provides the `scratchpad` tool extension for Motoko agent sessions.
 
 It runs persistent evaluation cells in:
 
@@ -12,7 +12,7 @@ Lean cells report `metadata.lean.proof = "verified"` only when the cell elaborat
 
 ## Lean Setup
 
-Lean eval needs a built `leanprover-community/repl` checkout. The installer can prepare it:
+Lean scratchpad cells need a built `leanprover-community/repl` checkout. The installer can prepare it:
 
 ```sh
 ./scripts/install-prerequisites.sh --with-lean
@@ -24,12 +24,16 @@ Mathlib is opt-in and heavier:
 ./scripts/install-prerequisites.sh --with-lean-mathlib
 ```
 
+## Known Issues
+
+- AILANG scratchpad cells may repeat the AILANG teaching guide even if the same guide was already loaded earlier in the agent session outside scratchpad. Verified by code inspection: `AilangKernel` only tracks `teachPromptSeen` on its own per-scratchpad `AilangSession`, and does not know whether the wider conversation has already received `ailang agent-prompt` content. The repeat is limited to the first `language:"ail"` scratchpad authoring attempt for that scratchpad session.
+
 ## Mixed Lean + AILANG Test Prompt
 
-Use this prompt to verify that Lean and AILANG eval work in the same session:
+Use this prompt to verify that Lean and AILANG scratchpad cells work in the same session:
 
 ```text
-Use the eval tool in one session with both language:"lean" and language:"ail".
+Use the scratchpad tool in one session with both language:"lean" and language:"ail".
 
 Goal: Lean proves a general mathematical fact; AILANG implements and verifies the corresponding executable step relation in Z3's linear arithmetic fragment.
 

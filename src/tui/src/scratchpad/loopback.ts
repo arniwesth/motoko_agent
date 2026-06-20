@@ -138,7 +138,7 @@ export async function startLoopbackServer(opts: LoopbackResolverOptions): Promis
     url: `http://127.0.0.1:${address.port}/loopback`,
     token,
     withBrainResolver: async <T>(resolver: (frame: LoopbackToolRequest) => Promise<LoopbackToolResult>, fn: () => Promise<T>): Promise<T> => {
-      if (brainResolver) throw new Error("eval loopback brain resolver is already active");
+      if (brainResolver) throw new Error("scratchpad loopback brain resolver is already active");
       brainResolver = resolver;
       try {
         return await fn();
