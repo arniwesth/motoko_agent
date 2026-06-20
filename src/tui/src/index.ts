@@ -837,7 +837,7 @@ async function main(): Promise<void> {
   // Make ailang build datetime available to the runtime via environment variable.
   process.env.AILANG_BUILT = ailangVersion;
 
-  const ui = new AgentUI({ version: pkgVersion, model, ailangVersion, extensions: profileAgent.extensions });
+  const ui = new AgentUI({ version: pkgVersion, model, profile, ailangVersion, extensions: profileAgent.extensions });
 
   function spawnRuntimeProcess(task: string, logPrompt: boolean): void {
     errorOccurred = false;
@@ -870,6 +870,7 @@ async function main(): Promise<void> {
           // Restart requested — respawn with optional new profile
           if (typeof pendingRestart === "string") {
             profile = pendingRestart;
+            ui.setProfile(profile);
           }
           // Reset interrupted flag for clean restart
           interrupted = false;
@@ -911,6 +912,7 @@ async function main(): Promise<void> {
     } else {
       // No running process — start fresh
       profile = newProfile ?? profile;
+      ui.setProfile(profile);
       spawnRuntimeProcess("", false);
     }
   };
