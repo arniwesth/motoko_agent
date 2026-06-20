@@ -19,6 +19,7 @@ import {
   scratchpadSegmentsToText,
   scratchpadCellsHaveImage,
   shouldExpandScratchpadCard,
+  scratchpadImageMaxRowsForTerminal,
   hasScratchpadExtension,
 } from "./ui.js";
 import type { ScratchpadCellResult } from "./scratchpad/frames.js";
@@ -197,6 +198,13 @@ describe("ui tool rendering helpers", () => {
       expect(scratchpadSegmentsToText(segments).join("\n")).toContain("▀");
     });
 
+    it("caps half-block art rows from the scratchpad card image row budget", () => {
+      __setCapabilitiesForTest({ images: null, trueColor: true, hyperlinks: true });
+      const segments = renderScratchpadCardLines([imageCell], true, 80, undefined, 2);
+      const artLines = scratchpadSegmentsToText(segments).filter((line) => line.includes("▀"));
+      expect(artLines).toHaveLength(2);
+    });
+
     it("shows the collapse placeholder and no Image child when collapsed", () => {
       __setCapabilitiesForTest({ images: "kitty", trueColor: true, hyperlinks: true });
       const segments = renderScratchpadCardLines([imageCell], false, 80);
@@ -233,6 +241,13 @@ describe("ui tool rendering helpers", () => {
       expect(text).not.toContain("\x1b_G"); // no kitty graphics
       expect(text).not.toContain("\x1b]1337"); // no iTerm2 graphics
     });
+  });
+
+  it("derives scratchpad image row caps from terminal height", () => {
+    expect(scratchpadImageMaxRowsForTerminal(undefined)).toBeUndefined();
+    expect(scratchpadImageMaxRowsForTerminal(10)).toBe(2);
+    expect(scratchpadImageMaxRowsForTerminal(24)).toBe(16);
+    expect(scratchpadImageMaxRowsForTerminal(120)).toBe(112);
   });
 
   it("normalizes scratchpad_result cells_json with display alias", () => {

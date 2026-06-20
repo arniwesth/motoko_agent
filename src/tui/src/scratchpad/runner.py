@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import socket
 import sys
 import traceback
@@ -12,8 +13,12 @@ import uuid
 
 
 EXEC_COUNT = 0
-GLOBALS = {"__name__": "__motoko_scratchpad__"}
+GLOBALS = {"__name__": "__motoko_scratchpad__", "__motoko_image_emitted": 0}
 ORIG_STDOUT = sys.stdout
+DATA_IMAGE_RE = re.compile(
+    r'data:(image/(?:png|jpeg|jpg|gif|webp));base64,([A-Za-z0-9+/=\s]+)',
+    re.IGNORECASE,
+)
 
 if os.environ.get("MOTOKO_SCRATCHPAD_NETWORK", "0") != "1":
     _orig_create_connection = socket.create_connection
@@ -140,6 +145,61 @@ def _rich_image_bytes(value):
     return None
 
 
+def _data_url_image_bytes(value):
+    if not isinstance(value, str):
+        return None
+    match = DATA_IMAGE_RE.search(value)
+    if not match:
+        return None
+    mime = match.group(1).lower()
+    if mime == "image/jpg":
+        mime = "image/jpeg"
+    try:
+        blob = base64.b64decode(re.sub(r"\s+", "", match.group(2)), validate=True)
+    except Exception:
+        return None
+    if not blob:
+        return None
+    return mime, blob
+
+
+def _is_image_bundle(bundle):
+    return isinstance(bundle, dict) and bundle.get("type") == "image"
+
+
+def _bundle_from_image_bytes(mime, blob):
+    return {"type": "image", "mime": mime, "data": base64.b64encode(blob).decode("ascii")}
+
+
+def _auto_display_matplotlib_figures(cell_id):
+    """Emit open matplotlib figures as image bundles.
+
+    Motoko scratchpad is not an IPython notebook: ``plt.show()`` has no channel
+    to the TUI unless we convert the current figures into display frames.
+    """
+    if GLOBALS.get("__motoko_image_emitted", 0) > 0:
+        return
+    pyplot = sys.modules.get("matplotlib.pyplot")
+    if pyplot is None:
+        return
+    try:
+        fig_nums = list(pyplot.get_fignums())
+    except Exception:
+        return
+    for num in fig_nums:
+        try:
+            fig = pyplot.figure(num)
+            rich = _rich_image_bytes(fig)
+            if rich is None:
+                continue
+            mime, blob = rich
+            bundle = _bundle_from_image_bytes(mime, blob)
+            emit({"type": "display", "id": cell_id, "bundle": bundle})
+            GLOBALS["__motoko_image_emitted"] = GLOBALS.get("__motoko_image_emitted", 0) + 1
+        except Exception:
+            continue
+
+
 def to_bundle(value):
     if isinstance(value, dict):
         mime = value.get("mime")
@@ -159,17 +219,24 @@ def to_bundle(value):
     if isinstance(value, (dict, list, int, float, bool)) or value is None:
         return {"type": "json", "mime": "application/json", "data": value}
     if isinstance(value, (bytes, bytearray)):
-        return {"type": "image", "mime": "image/png", "data": base64.b64encode(bytes(value)).decode("ascii")}
+        return _bundle_from_image_bytes("image/png", bytes(value))
+    data_url = _data_url_image_bytes(value)
+    if data_url is not None:
+        mime, blob = data_url
+        return _bundle_from_image_bytes(mime, blob)
     rich = _rich_image_bytes(value)
     if rich is not None:
         mime, blob = rich
-        return {"type": "image", "mime": mime, "data": base64.b64encode(blob).decode("ascii")}
+        return _bundle_from_image_bytes(mime, blob)
     return {"type": "text", "mime": "text/plain", "data": str(value)}
 
 
 def display(value):
     current_id = GLOBALS.get("__motoko_cell_id", "")
-    emit({"type": "display", "id": current_id, "bundle": to_bundle(value)})
+    bundle = to_bundle(value)
+    if _is_image_bundle(bundle):
+        GLOBALS["__motoko_image_emitted"] = GLOBALS.get("__motoko_image_emitted", 0) + 1
+    emit({"type": "display", "id": current_id, "bundle": bundle})
 
 
 GLOBALS.update({
@@ -187,6 +254,7 @@ def run_cell(frame):
     if cwd:
         os.chdir(cwd)
     GLOBALS["__motoko_cell_id"] = cell_id
+    GLOBALS["__motoko_image_emitted"] = 0
     EXEC_COUNT += 1
     emit({"type": "started", "id": cell_id})
     status = "ok"
@@ -205,7 +273,11 @@ def run_cell(frame):
             if result_expr is not None:
                 value = eval(compile(result_expr, "<motoko-scratchpad>", "eval"), GLOBALS, GLOBALS)
                 if value is not None and not frame.get("silent", False):
-                    emit({"type": "result", "id": cell_id, "bundle": to_bundle(value)})
+                    bundle = to_bundle(value)
+                    if _is_image_bundle(bundle):
+                        GLOBALS["__motoko_image_emitted"] = GLOBALS.get("__motoko_image_emitted", 0) + 1
+                    emit({"type": "result", "id": cell_id, "bundle": bundle})
+            _auto_display_matplotlib_figures(cell_id)
     except KeyboardInterrupt:
         status = "timeout"
         cancelled = True
