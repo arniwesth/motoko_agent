@@ -11,13 +11,14 @@
 import express from "express";
 import { execFileSync, execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { createClaimCheckTelemetry, runClaimCheck } from "./compose-claimcheck.js";
 import type { EvalCell, EvalCellResult, ExecCellResponse, LoopbackToolRequest, LoopbackToolResult } from "./eval/frames.js";
 import { EvalKernelRegistry } from "./eval/registry.js";
 import type { JsLoopback } from "./eval/kernel-js.js";
+import type { LeanKernelConfig } from "./eval/kernel-lean.js";
 import { startLoopbackServer } from "./eval/loopback.js";
 import { attachExecCellWebSocketServer } from "./eval/ws-channel.js";
 import { buildEvalTranscript, spillImages } from "./eval/transcript.js";
@@ -425,6 +426,12 @@ export function normalizeAilangVerify(v: unknown): EvalCell["verify"] {
   return "auto"; // default: verify when requires/ensures annotations are present
 }
 
+export function normalizeLeanProve(v: unknown): EvalCell["prove"] {
+  if (v === "required") return "required";
+  if (v === "off" || v === false || v === "false") return "off";
+  return "auto";
+}
+
 // Normalize raw eval-cell JSON into typed EvalCell[]. Unknown languages are an
 // explicit error (never silently coerced to Python — see plan 05). A missing
 // language defaults to "py" for backward compatibility.
@@ -433,8 +440,8 @@ export function normalizeEvalCells(raw: unknown): EvalCell[] {
   return raw.map((cell, i) => {
     const rec = (cell && typeof cell === "object") ? cell as Record<string, unknown> : {};
     const langRaw = (rec.language === undefined || rec.language === null) ? "py" : String(rec.language);
-    if (langRaw !== "py" && langRaw !== "js" && langRaw !== "ail") {
-      throw new Error(`unsupported eval language "${langRaw}" in cell ${i + 1}; expected "py", "js", or "ail"`);
+    if (langRaw !== "py" && langRaw !== "js" && langRaw !== "ail" && langRaw !== "lean") {
+      throw new Error(`unsupported eval language "${langRaw}" in cell ${i + 1}; expected "py", "js", "ail", or "lean"`);
     }
     const language = langRaw as EvalCell["language"];
     const base: EvalCell = {
@@ -449,6 +456,9 @@ export function normalizeEvalCells(raw: unknown): EvalCell[] {
       base.run = rec.run === true;
       base.entry = typeof rec.entry === "string" ? rec.entry : undefined;
       base.caps = typeof rec.caps === "string" ? rec.caps : undefined;
+    } else if (language === "lean") {
+      base.prove = normalizeLeanProve(rec.prove);
+      base.mathlib = rec.mathlib === true;
     }
     return base;
   }).filter((cell) => cell.code.trim() !== "");
@@ -750,6 +760,93 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     return ailangAgentPromptCache;
   }
 
+  let leanAgentPromptCache: string | null = null;
+  function leanAgentPrompt(): string {
+    if (leanAgentPromptCache !== null) return leanAgentPromptCache;
+    const candidates = [
+      join(agentRoot, "src", "eval", "lean4-teach.md"),
+      join(agentRoot, "src", "tui", "src", "eval", "lean4-teach.md"),
+      resolve(process.cwd(), "src/tui/src/eval/lean4-teach.md"),
+    ];
+    for (const p of candidates) {
+      try {
+        leanAgentPromptCache = readFileSync(p, "utf8");
+        return leanAgentPromptCache;
+      } catch {
+        // try next path
+      }
+    }
+    leanAgentPromptCache = "";
+    return leanAgentPromptCache;
+  }
+
+  function splitArgs(raw: string | undefined, fallback: string[]): string[] {
+    const s = String(raw ?? "").trim();
+    return s === "" ? fallback : s.split(/\s+/).filter(Boolean);
+  }
+
+  function firstExisting(paths: string[]): string {
+    return paths.find((p) => p.trim() !== "" && existsSync(p)) ?? "";
+  }
+
+  function defaultLakeCommand(): string {
+    return firstExisting([
+      join(String(process.env.HOME ?? ""), ".elan", "bin", "lake"),
+      "lake",
+    ]) || "lake";
+  }
+
+  function projectRootForReplBin(bin: string): string {
+    // <project>/.lake/build/bin/repl -> <project>
+    const marker = "/.lake/build/bin/repl";
+    return bin.endsWith(marker) ? bin.slice(0, -marker.length) : "";
+  }
+
+  function defaultLeanReplProject(): string {
+    return firstExisting([
+      join(String(process.env.HOME ?? ""), ".local", "share", "lean-repl"),
+      "/tmp/lean-repl-smoke",
+    ]);
+  }
+
+  function defaultLeanReplBin(project: string): string {
+    return project ? firstExisting([join(project, ".lake", "build", "bin", "repl")]) : "";
+  }
+
+  function defaultLeanMathlibProject(): string {
+    return firstExisting([
+      join(String(process.env.HOME ?? ""), ".local", "share", "motoko-lean-mathlib"),
+      "/tmp/lean-mathlib-smoke",
+    ]);
+  }
+
+  function makeLeanConfig(): LeanKernelConfig {
+    const configuredReplBin = String(process.env.MOTOKO_LEAN_REPL_BIN ?? "").trim();
+    const configuredReplCwd = String(process.env.MOTOKO_LEAN_REPL_CWD ?? "").trim();
+    const defaultProject = defaultLeanReplProject();
+    const replBin = configuredReplBin || defaultLeanReplBin(defaultProject);
+    const replCwd = configuredReplCwd || projectRootForReplBin(replBin) || defaultProject;
+    const mathlibBin = String(process.env.MOTOKO_LEAN_MATHLIB_REPL_BIN ?? "").trim();
+    const mathlibCwd = String(process.env.MOTOKO_LEAN_MATHLIB_CWD ?? "").trim() || defaultLeanMathlibProject();
+    const lake = defaultLakeCommand();
+    const mathlibReplBin = mathlibBin || replBin;
+    return {
+      command: replBin || lake,
+      args: replBin ? splitArgs(process.env.MOTOKO_LEAN_REPL_ARGS, []) : splitArgs(process.env.MOTOKO_LEAN_REPL_ARGS, ["exe", "repl"]),
+      cwd: replCwd || undefined,
+      mathlibCommand: mathlibCwd && mathlibReplBin ? lake : (mathlibBin || (replBin || lake)),
+      mathlibArgs: mathlibCwd && mathlibReplBin
+        ? splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, ["env", mathlibReplBin])
+        : mathlibBin
+          ? splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, [])
+          : replBin
+            ? splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, [])
+            : splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, ["exe", "repl"]),
+      mathlibCwd: mathlibCwd || replCwd || undefined,
+      agentPrompt: leanAgentPrompt,
+    };
+  }
+
   const evalRegistry = new EvalKernelRegistry(
     Math.max(60_000, Number(process.env.MOTOKO_EVAL_IDLE_MS ?? 10 * 60_000)),
     () => ({
@@ -763,6 +860,7 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
       capsCeiling: ailangCapsCeiling(),
       agentPrompt: ailangAgentPrompt,
     }),
+    makeLeanConfig,
   );
 
   function pythonAvailable(): boolean {
@@ -783,6 +881,17 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }
   }
 
+  function leanAvailable(): boolean {
+    try {
+      const cfg = makeLeanConfig();
+      if (cfg.command && cfg.command !== "lake") return existsSync(cfg.command);
+      execFileSync(cfg.command ?? "lake", ["--version"], { timeout: 3000, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function runEvalCells(cells: EvalCell[], sessionId: string, defaultTimeout: number): Promise<ExecCellResponse> {
     if (cells.length === 0) {
       return { exit_code: 0, stdout: "", stderr: "", cells: [], images: [], jsonOutputs: [], notice: "no eval cells provided" };
@@ -793,6 +902,10 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }
     if (cells.some((cell) => cell.language === "ail") && !ailangAvailable()) {
       const notice = "ailang CLI unavailable; AILANG eval cells were skipped";
+      return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
+    }
+    if (cells.some((cell) => cell.language === "lean") && !leanAvailable()) {
+      const notice = "Lean/Lake unavailable; Lean eval cells were skipped";
       return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
     }
 

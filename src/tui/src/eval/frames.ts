@@ -1,4 +1,4 @@
-export type EvalLanguage = "py" | "js" | "ail";
+export type EvalLanguage = "py" | "js" | "ail" | "lean";
 
 // AILANG verification gate for a cell:
 //   "auto"     — run the verifier only when the candidate has requires/ensures
@@ -7,6 +7,7 @@ export type EvalLanguage = "py" | "js" | "ail";
 //                function or the candidate is rejected (not committed).
 //   false      — never invoke the verifier (check-only).
 export type AilangVerifyMode = boolean | "auto" | "required";
+export type LeanProveMode = "auto" | "required" | "off";
 
 export type EvalCell = {
   language: EvalLanguage;
@@ -19,6 +20,9 @@ export type EvalCell = {
   run?: boolean;        // execute --entry after a successful check/verify
   entry?: string;       // entrypoint for `run` (default "main")
   caps?: string;        // requested capabilities, comma-separated (intersected with policy)
+  // Lean-only fields (ignored for py/js/ail).
+  prove?: LeanProveMode;
+  mathlib?: boolean;
 };
 
 export type EvalDisplayBundle = {
@@ -84,6 +88,26 @@ export type AilangCellMetadata = {
   notice?: string;
 };
 
+export type LeanElabStatus = "passed" | "failed" | "error";
+export type LeanProofStatus = "verified" | "sorry" | "axiom_tainted" | "failed" | "skipped" | "error";
+
+export type LeanTheoremProof = {
+  name: string;
+  status: LeanProofStatus;
+  axioms?: string[];
+};
+
+export type LeanCellMetadata = {
+  elaborated: LeanElabStatus;
+  proof: LeanProofStatus;
+  committed: boolean;
+  theorems?: LeanTheoremProof[];
+  sorries?: number;
+  unexpectedAxioms?: string[];
+  teachPrompt?: string;
+  notice?: string;
+};
+
 export type EvalCellResult = {
   index: number;
   language: EvalLanguage;
@@ -99,7 +123,7 @@ export type EvalCellResult = {
   executionCount: number;
   cancelled: boolean;
   truncated: boolean;
-  metadata?: { ailang?: AilangCellMetadata };
+  metadata?: { ailang?: AilangCellMetadata; lean?: LeanCellMetadata };
 };
 
 export type ExecCellResponse = {

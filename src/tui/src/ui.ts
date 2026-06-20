@@ -37,6 +37,9 @@ import type {
   AilangVerifyStatus,
   EvalCellResult,
   EvalDisplayBundle,
+  LeanCellMetadata,
+  LeanProofStatus,
+  LeanTheoremProof,
 } from "./eval/frames.js";
 import { type EvalSegment, evalImageCapabilityLabel, evalImageExitSequence, makeImageSegment } from "./eval/image-segment.js";
 import { execSync } from "child_process";
@@ -56,7 +59,7 @@ type AilangState = {
   awaitEffectBrace: boolean;
 };
 
-type DiffInnerLang = "ts" | "py" | "ail" | "sh" | null;
+type DiffInnerLang = "ts" | "py" | "ail" | "lean" | "sh" | null;
 
 type DiffState = {
   innerLang: DiffInnerLang;
@@ -127,6 +130,7 @@ const EXT_TO_LANG: Record<string, DiffInnerLang> = {
   cjs: "ts",
   py: "py",
   ail: "ail",
+  lean: "lean",
   sh: "sh",
   bash: "sh",
   zsh: "sh",
@@ -525,6 +529,8 @@ function highlightInnerDiffLine(content: string, state: DiffState): string {
       return highlightPyLine(content, state.pyState);
     case "ail":
       return highlightAilangLine(content, state.ailangState);
+    case "lean":
+      return content.replace(/\b(theorem|lemma|def|abbrev|instance|example|axiom|import|by|where|match|with|if|then|else|let|have|show|calc|induction|cases|constructor|exact|apply|intro|intros|simp|omega|decide|rfl|native_decide)\b/g, (m) => chalk.cyan(m));
     case "sh":
       return highlightShellLine(content);
     default:
@@ -616,6 +622,16 @@ export function highlightCodeLines(code: string, lang?: string): string[] {
   if (["ail", "ailang"].includes(normalized)) {
     const state: AilangState = { inEffectBlock: false, awaitEffectBrace: false };
     return lines.map((line) => highlightAilangLine(line, state));
+  }
+  if (["lean", "lean4"].includes(normalized)) {
+    const kw = /\b(theorem|lemma|def|abbrev|instance|example|axiom|import|by|where|match|with|if|then|else|let|have|show|calc|induction|cases|constructor|exact|apply|intro|intros|simp|omega|decide|rfl|native_decide)\b/g;
+    return lines.map((line) => {
+      const commentAt = line.indexOf("--");
+      const codePart = commentAt >= 0 ? line.slice(0, commentAt) : line;
+      const comment = commentAt >= 0 ? line.slice(commentAt) : "";
+      const str = codePart.replace(/"([^"\\]|\\.)*"/g, (m) => chalk.green(m));
+      return str.replace(kw, (m) => chalk.cyan(m)) + (comment ? chalk.dim(comment) : "");
+    });
   }
   if (["bash", "sh", "zsh", "shell"].includes(normalized)) {
     return lines.map((line) => highlightShellLine(line));
@@ -1311,12 +1327,50 @@ function normalizeAilangMetadata(v: unknown): AilangCellMetadata | undefined {
   };
 }
 
+function normalizeLeanMetadata(v: unknown): LeanCellMetadata | undefined {
+  const rec = recordValue(v);
+  if (!rec) return undefined;
+  const lean = recordValue(rec.lean);
+  if (!lean) return undefined;
+  const elaboratedRaw = stringValue(lean.elaborated, "error");
+  const elaborated: LeanCellMetadata["elaborated"] =
+    elaboratedRaw === "passed" || elaboratedRaw === "failed" || elaboratedRaw === "error" ? elaboratedRaw : "error";
+  const proofRaw = stringValue(lean.proof, "error");
+  const proof: LeanProofStatus =
+    (["verified", "sorry", "axiom_tainted", "failed", "skipped", "error"] as const).includes(proofRaw as LeanProofStatus)
+      ? (proofRaw as LeanProofStatus)
+      : "error";
+  const theorems: LeanTheoremProof[] | undefined = Array.isArray(lean.theorems)
+    ? lean.theorems
+        .map((t) => recordValue(t))
+        .filter((t): t is Record<string, unknown> => t !== null)
+        .map((t) => ({
+          name: stringValue(t.name, "<anon>"),
+          status: stringValue(t.status, "error") as LeanProofStatus,
+          axioms: Array.isArray(t.axioms) ? t.axioms.filter((x): x is string => typeof x === "string") : undefined,
+        }))
+    : undefined;
+  return {
+    elaborated,
+    proof,
+    committed: boolValue(lean.committed, false),
+    theorems: theorems && theorems.length > 0 ? theorems : undefined,
+    sorries: typeof lean.sorries === "number" ? lean.sorries : undefined,
+    unexpectedAxioms: Array.isArray(lean.unexpectedAxioms)
+      ? lean.unexpectedAxioms.filter((x): x is string => typeof x === "string")
+      : undefined,
+    teachPrompt: typeof lean.teachPrompt === "string" ? lean.teachPrompt : undefined,
+    notice: typeof lean.notice === "string" ? lean.notice : undefined,
+  };
+}
+
 function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
   const rec = recordValue(v);
   if (!rec) return null;
   const language = stringValue(rec.language, "py");
-  if (language !== "py" && language !== "js" && language !== "ail") return null;
+  if (language !== "py" && language !== "js" && language !== "ail" && language !== "lean") return null;
   const ailang = normalizeAilangMetadata(rec.metadata);
+  const lean = normalizeLeanMetadata(rec.metadata);
   const displaysRaw = Array.isArray(rec.displays)
     ? rec.displays
     : Array.isArray(rec.display)
@@ -1346,7 +1400,7 @@ function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
     executionCount: numberValue(rec.executionCount ?? rec.execution_count, 0),
     cancelled: boolValue(rec.cancelled, false),
     truncated: boolValue(rec.truncated, false),
-    metadata: ailang ? { ailang } : undefined,
+    metadata: ailang || lean ? { ...(ailang ? { ailang } : {}), ...(lean ? { lean } : {}) } : undefined,
   };
 }
 
@@ -1392,6 +1446,34 @@ function ailangStatusLines(meta: AilangCellMetadata): string[] {
   }
   if (meta.notice) lines.push(chalk.yellow(`  ${meta.notice}`));
   if (meta.teachPrompt) lines.push(chalk.dim("  (AILANG teaching guide loaded — see output)"));
+  return lines;
+}
+
+function colorLeanStatus(status: string): string {
+  if (status === "passed" || status === "verified") return chalk.green(status);
+  if (status === "failed" || status === "error" || status === "sorry") return chalk.red(status);
+  return chalk.yellow(status);
+}
+
+function leanStatusLines(meta: LeanCellMetadata): string[] {
+  const parts = [
+    `elaboration ${colorLeanStatus(meta.elaborated)}`,
+    `proof ${colorLeanStatus(meta.proof)}`,
+    `committed ${meta.committed ? chalk.green("yes") : chalk.dim("no")}`,
+  ];
+  const lines = [chalk.dim("lean: ") + parts.join(chalk.dim(" · "))];
+  if (meta.theorems && meta.theorems.length > 0) {
+    for (const t of meta.theorems) {
+      const ax = t.axioms && t.axioms.length > 0 ? chalk.dim(` axioms=[${t.axioms.join(", ")}]`) : "";
+      lines.push(chalk.dim(`  ${t.name}: `) + colorLeanStatus(t.status) + ax);
+    }
+  }
+  if (meta.unexpectedAxioms && meta.unexpectedAxioms.length > 0) {
+    lines.push(chalk.yellow(`  unexpected axioms: ${meta.unexpectedAxioms.join(", ")}`));
+  }
+  if (typeof meta.sorries === "number" && meta.sorries > 0) lines.push(chalk.red(`  sorries: ${meta.sorries}`));
+  if (meta.notice) lines.push(chalk.yellow(`  ${meta.notice}`));
+  if (meta.teachPrompt) lines.push(chalk.dim("  (Lean 4 teaching guide loaded - see output)"));
   return lines;
 }
 
@@ -1563,6 +1645,10 @@ export function renderEvalCardLines(
     const ailMeta = cell.metadata?.ailang;
     if (ailMeta) {
       for (const line of ailangStatusLines(ailMeta)) pushLines(`  ${line}`);
+    }
+    const leanMeta = cell.metadata?.lean;
+    if (leanMeta) {
+      for (const line of leanStatusLines(leanMeta)) pushLines(`  ${line}`);
     }
     const code = cell.code ?? "";
     if (code.trim() !== "") {

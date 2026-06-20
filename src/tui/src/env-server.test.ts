@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import http from "http";
 import express from "express";
 import { execSync } from "child_process";
-import { normalizeEvalCells, normalizeAilangVerify } from "./env-server.js";
+import { normalizeEvalCells, normalizeAilangVerify, normalizeLeanProve } from "./env-server.js";
 
 // ---------------------------------------------------------------------------
 // Minimal inline env-server — mirrors env-server.ts so tests don't depend on
@@ -178,6 +178,22 @@ describe("normalizeEvalCells", () => {
     expect(cells[0].run).toBe(false);
   });
 
+  it("accepts language:'lean' and parses Lean-only fields", () => {
+    const cells = normalizeEvalCells([
+      { language: "lean", code: "theorem t : 1 = 1 := rfl", prove: "required", mathlib: true },
+    ]);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].language).toBe("lean");
+    expect(cells[0].prove).toBe("required");
+    expect(cells[0].mathlib).toBe(true);
+  });
+
+  it("defaults Lean prove to 'auto' and mathlib to false", () => {
+    const cells = normalizeEvalCells([{ language: "lean", code: "#eval 1+1" }]);
+    expect(cells[0].prove).toBe("auto");
+    expect(cells[0].mathlib).toBe(false);
+  });
+
   it("throws an explicit error for an unknown language (never coerces to py)", () => {
     expect(() => normalizeEvalCells([{ language: "ruby", code: "puts 1" }])).toThrow(/unsupported eval language "ruby"/);
   });
@@ -206,5 +222,12 @@ describe("normalizeEvalCells", () => {
     expect(normalizeAilangVerify("required")).toBe("required");
     expect(normalizeAilangVerify("auto")).toBe("auto");
     expect(normalizeAilangVerify(undefined)).toBe("auto");
+  });
+
+  it("normalizeLeanProve maps modes", () => {
+    expect(normalizeLeanProve("required")).toBe("required");
+    expect(normalizeLeanProve("off")).toBe("off");
+    expect(normalizeLeanProve(false)).toBe("off");
+    expect(normalizeLeanProve(undefined)).toBe("auto");
   });
 });

@@ -288,6 +288,33 @@ describe("ui tool rendering helpers", () => {
     expect(cells?.[0]?.metadata?.ailang?.verify).toBe("unknown");
   });
 
+  it("parseEvalCellsJson accepts language:'lean' and preserves metadata.lean through cells_json", () => {
+    const cells = parseEvalCellsJson(JSON.stringify([
+      {
+        index: 0,
+        language: "lean",
+        title: "add comm",
+        code: "theorem t (a b : Nat) : a + b = b + a := by omega",
+        exit_code: 0,
+        stdout: "",
+        stderr: "",
+        metadata: {
+          lean: {
+            elaborated: "passed",
+            proof: "verified",
+            committed: true,
+            theorems: [{ name: "t", status: "verified", axioms: ["propext", "Quot.sound"] }],
+            sorries: 0,
+          },
+        },
+      },
+    ]));
+    expect(cells).toHaveLength(1);
+    expect(cells?.[0]?.language).toBe("lean");
+    expect(cells?.[0]?.metadata?.lean?.proof).toBe("verified");
+    expect(cells?.[0]?.metadata?.lean?.theorems?.[0]?.name).toBe("t");
+  });
+
   it("renders the AILANG check/verify status in the eval card", () => {
     const cells = parseEvalCellsJson(JSON.stringify([
       { index: 0, language: "ail", title: "abs_diff", code: "export func f() -> int ! {} { 1 }",
@@ -299,6 +326,25 @@ describe("ui tool rendering helpers", () => {
     expect(plain).toContain("check passed");
     expect(plain).toContain("verify verified");
     expect(plain).toContain("committed yes");
+  });
+
+  it("renders Lean elaboration/proof status and unexpected axioms in the eval card", () => {
+    const cells = parseEvalCellsJson(JSON.stringify([
+      { index: 0, language: "lean", title: "native", code: "theorem n : True := by native_decide",
+        exit_code: 0, stdout: "", stderr: "",
+        metadata: { lean: {
+          elaborated: "passed",
+          proof: "axiom_tainted",
+          committed: true,
+          theorems: [{ name: "n", status: "axiom_tainted", axioms: ["n._native.native_decide.ax_1"] }],
+          unexpectedAxioms: ["n._native.native_decide.ax_1"],
+        } } },
+    ]))!;
+    const plain = evalSegmentsToText(renderEvalCardLines(cells, true, 120)).map(stripAnsi).join("\n");
+    expect(plain).toContain("lean:");
+    expect(plain).toContain("elaboration passed");
+    expect(plain).toContain("proof axiom_tainted");
+    expect(plain).toContain("unexpected axioms: n._native.native_decide.ax_1");
   });
 
   it("renders collapsed output-hidden marker when output exists", () => {

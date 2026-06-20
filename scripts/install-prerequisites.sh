@@ -13,6 +13,8 @@
 #     used by the AILANG eval kernel)
 #   - bun dependencies for the TypeScript frontend (src/tui/)
 #   - Optional: Omnigraph CLI/server (with --with-omnigraph)
+#   - Optional: Lean 4 REPL backend (with --with-lean)
+#   - Optional: Lean Mathlib cache/project (with --with-lean-mathlib)
 # Usage:
 #   ./scripts/install-prerequisites.sh
 #
@@ -36,6 +38,8 @@ OMNIGRAPH_MIN_VERSION="0.3.0"
 AILANG_REF="v0.24.2"
 AILANG_MIN_VERSION="0.24.2"
 INSTALL_OMNIGRAPH=0
+INSTALL_LEAN=0
+INSTALL_LEAN_MATHLIB=0
 SUDO=()
 SUDO_E=()
 
@@ -59,10 +63,13 @@ die() { log_error "$1"; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/install-prerequisites.sh [--with-omnigraph] [--help]
+Usage: ./scripts/install-prerequisites.sh [--with-omnigraph] [--with-lean] [--with-lean-mathlib] [--help]
 
 Options:
   --with-omnigraph   Build and install Omnigraph CLI/server from source
+  --with-lean        Install elan and build leanprover-community/repl for Lean eval
+  --with-lean-mathlib
+                     Also create a Mathlib-enabled Lean eval project and fetch cache
   --help             Show this help text
 EOF
 }
@@ -71,10 +78,81 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --with-omnigraph) INSTALL_OMNIGRAPH=1; shift ;;
+      --with-lean) INSTALL_LEAN=1; shift ;;
+      --with-lean-mathlib) INSTALL_LEAN=1; INSTALL_LEAN_MATHLIB=1; shift ;;
       --help|-h) usage; exit 0 ;;
       *) die "Unknown argument: $1" ;;
     esac
   done
+}
+
+install_lean_eval() {
+  log_header "Lean 4 eval backend (optional)"
+  if [[ "$INSTALL_LEAN" -ne 1 ]]; then
+    log_info "Skipping Lean eval backend (pass --with-lean to enable)"
+    return
+  fi
+
+  ensure_user_local_bin_on_path
+  if [[ ! -x "$HOME/.elan/bin/elan" ]]; then
+    log_info "Installing elan toolchain manager..."
+    curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain leanprover/lean4:stable
+  else
+    log_ok "elan already installed"
+  fi
+  export PATH="$HOME/.elan/bin:$PATH"
+  if ! grep -qF '.elan/bin' "$HOME/.bashrc" 2>/dev/null; then
+    echo 'export PATH="$HOME/.elan/bin:$PATH"' >> "$HOME/.bashrc"
+  fi
+  if ! grep -qF '.elan/bin' "$HOME/.profile" 2>/dev/null; then
+    echo 'export PATH="$HOME/.elan/bin:$PATH"' >> "$HOME/.profile"
+  fi
+
+  local repl_dir="$HOME/.local/share/lean-repl"
+  if [[ -d "$repl_dir/.git" ]]; then
+    log_info "Updating leanprover-community/repl at $repl_dir..."
+    git -C "$repl_dir" fetch --all
+    git -C "$repl_dir" pull --ff-only
+  else
+    log_info "Cloning leanprover-community/repl to $repl_dir..."
+    rm -rf "$repl_dir"
+    git clone https://github.com/leanprover-community/repl.git "$repl_dir"
+  fi
+  log_info "Building Lean REPL (uses the repo-pinned lean-toolchain)..."
+  (cd "$repl_dir" && lake build)
+  log_ok "Lean REPL built at $repl_dir/.lake/build/bin/repl"
+  log_info "Set MOTOKO_LEAN_REPL_BIN=$repl_dir/.lake/build/bin/repl for eval language:\"lean\""
+
+  if [[ "$INSTALL_LEAN_MATHLIB" -ne 1 ]]; then
+    log_info "Skipping Mathlib cache/project (pass --with-lean-mathlib to enable)"
+    return
+  fi
+
+  local mathlib_dir="$HOME/.local/share/motoko-lean-mathlib"
+  mkdir -p "$mathlib_dir"
+  if [[ ! -f "$mathlib_dir/lean-toolchain" ]]; then
+    cp "$repl_dir/lean-toolchain" "$mathlib_dir/lean-toolchain"
+  fi
+  if [[ ! -f "$mathlib_dir/lakefile.toml" ]]; then
+    cat > "$mathlib_dir/lakefile.toml" <<'EOF'
+name = "MotokoLeanMathlib"
+version = "0.1.0"
+defaultTargets = ["MotokoLeanMathlib"]
+
+[[lean_lib]]
+name = "MotokoLeanMathlib"
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "master"
+EOF
+    echo 'import Mathlib' > "$mathlib_dir/MotokoLeanMathlib.lean"
+  fi
+  log_info "Resolving Mathlib and fetching cache (large, opt-in)..."
+  (cd "$mathlib_dir" && lake update && lake exe cache get)
+  log_ok "Mathlib project ready at $mathlib_dir"
+  log_info "Set MOTOKO_LEAN_MATHLIB_CWD=$mathlib_dir and MOTOKO_LEAN_MATHLIB_REPL_BIN=$repl_dir/.lake/build/bin/repl for mathlib:true"
 }
 
 # ---------------------------------------------------------------------------
@@ -533,6 +611,7 @@ print_summary() {
   echo "  ailang:  $(command -v ailang &>/dev/null && echo 'found' || echo 'not found')"
   echo "  context-mode: $(command -v context-mode &>/dev/null && echo 'found' || echo 'not found')"
   echo "  omnigraph: $(command -v omnigraph &>/dev/null && echo 'found' || echo 'not found')"
+  echo "  lean:    $(command -v lean &>/dev/null && echo 'found' || echo 'not found')"
   echo ""
   echo "  Next steps:"
   echo "    1. Set your API key (OPENROUTER_API_KEY)"
@@ -564,6 +643,7 @@ main() {
   install_context_mode
   install_bun_deps
   install_ailang
+  install_lean_eval
   install_omnigraph
   print_summary
 }
