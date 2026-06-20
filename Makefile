@@ -1,5 +1,19 @@
 PROFILE ?= $(if $(MOTOKO_CONFIG),$(MOTOKO_CONFIG),default)
 
+SOKOL_REV ?= 453c71214fbb55d782683d20ea7e6c07314e3e9b
+IMGUI_REV ?= 85b2fe8486190fa9326565a2fb5fccb6caea4396
+EMSDK_VERSION ?= latest
+EMSDK_DIR ?= .emsdk
+EMSDK_ENV := $(EMSDK_DIR)/emsdk_env.sh
+EMSDK_STAMP := $(EMSDK_DIR)/.motoko-emsdk-$(EMSDK_VERSION).stamp
+WEB_DIST := web/dist
+WEB_ASSETS := web/assets
+WEB_SOURCES := src/main.cpp \
+	ext/imgui/imgui.cpp \
+	ext/imgui/imgui_draw.cpp \
+	ext/imgui/imgui_tables.cpp \
+	ext/imgui/imgui_widgets.cpp
+
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
 	./scripts/sync-extension-packages.sh
@@ -124,7 +138,7 @@ test_integration:
 	@ailang test src/core/test/integration_tests.ail || (echo "src/core/test/integration_tests.ail tests failed" && exit 1)
 	@printf "\nAll integration tests passed!\n"
 
-test: test_core
+test: test_core test_integration
 
 # Z3 contract verification for pure core modules.
 # VIOLATION or ERROR exits 1 (contracts written but broken).
@@ -171,3 +185,81 @@ verify_ext:
 	done; \
 	echo "verify_ext: $$ok with contracts, $$fail failed, $$none without contracts"; \
 	[ "$$fail" -eq 0 ] || exit 1
+
+.PHONY: check_emcc emsdk deps web web-debug clean-web serve
+
+check_emcc:
+	@if [ -f "$(EMSDK_ENV)" ]; then cd "$(EMSDK_DIR)" && export EMSDK_QUIET=1 && . ./emsdk_env.sh >/dev/null && cd "$(CURDIR)"; fi; \
+	command -v emcc >/dev/null 2>&1 || { echo "emcc not found. Run 'make emsdk' or install and activate Emscripten 3.1.x or newer."; exit 1; }; \
+	ver="$$(emcc --version | head -1)"; \
+	echo "$$ver"; \
+	nums="$$(printf '%s\n' "$$ver" | sed -E 's/.*[^0-9]([0-9]+)\.([0-9]+)\.[0-9]+.*/\1 \2/')"; \
+	set -- $$nums; \
+	major="$$1"; minor="$$2"; \
+	if [ -z "$$major" ] || [ "$$major" -lt 3 ] || { [ "$$major" -eq 3 ] && [ "$$minor" -lt 1 ]; }; then \
+		echo "Emscripten 3.1.x or newer is required."; \
+		exit 1; \
+	fi
+
+$(EMSDK_STAMP):
+	@if [ ! -d "$(EMSDK_DIR)/.git" ]; then \
+		rm -rf "$(EMSDK_DIR)"; \
+		git clone https://github.com/emscripten-core/emsdk.git "$(EMSDK_DIR)"; \
+	fi
+	cd "$(EMSDK_DIR)" && ./emsdk install $(EMSDK_VERSION) && ./emsdk activate $(EMSDK_VERSION)
+	@touch "$@"
+
+emsdk: $(EMSDK_STAMP)
+	@cd "$(EMSDK_DIR)" && export EMSDK_QUIET=1 && . ./emsdk_env.sh >/dev/null && emcc --version | head -1
+
+deps:
+	@mkdir -p ext/sokol ext/imgui
+	curl -fsSL https://raw.githubusercontent.com/floooh/sokol/$(SOKOL_REV)/sokol_app.h -o ext/sokol/sokol_app.h
+	curl -fsSL https://raw.githubusercontent.com/floooh/sokol/$(SOKOL_REV)/sokol_gfx.h -o ext/sokol/sokol_gfx.h
+	curl -fsSL https://raw.githubusercontent.com/floooh/sokol/$(SOKOL_REV)/sokol_glue.h -o ext/sokol/sokol_glue.h
+	curl -fsSL https://raw.githubusercontent.com/floooh/sokol/$(SOKOL_REV)/sokol_time.h -o ext/sokol/sokol_time.h
+	curl -fsSL https://raw.githubusercontent.com/floooh/sokol/$(SOKOL_REV)/util/sokol_imgui.h -o ext/sokol/sokol_imgui.h
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imconfig.h -o ext/imgui/imconfig.h
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imgui.h -o ext/imgui/imgui.h
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imgui_internal.h -o ext/imgui/imgui_internal.h
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imgui.cpp -o ext/imgui/imgui.cpp
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imgui_draw.cpp -o ext/imgui/imgui_draw.cpp
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imgui_tables.cpp -o ext/imgui/imgui_tables.cpp
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imgui_widgets.cpp -o ext/imgui/imgui_widgets.cpp
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imstb_rectpack.h -o ext/imgui/imstb_rectpack.h
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imstb_textedit.h -o ext/imgui/imstb_textedit.h
+	curl -fsSL https://raw.githubusercontent.com/ocornut/imgui/$(IMGUI_REV)/imstb_truetype.h -o ext/imgui/imstb_truetype.h
+
+web: emsdk check_emcc deps
+	@mkdir -p $(WEB_DIST)
+	cd "$(EMSDK_DIR)" && export EMSDK_QUIET=1 && . ./emsdk_env.sh >/dev/null && cd "$(CURDIR)" && emcc $(WEB_SOURCES) \
+		-Iext/sokol -Iext/imgui \
+		-std=c++17 -O2 \
+		-sUSE_WEBGL2=1 \
+		-sMIN_WEBGL_VERSION=2 \
+		-sMAX_WEBGL_VERSION=2 \
+		-sALLOW_MEMORY_GROWTH=1 \
+		-sNO_EXIT_RUNTIME=1 \
+		--preload-file $(WEB_ASSETS)/motoko.log@/assets/motoko.log \
+		-o $(WEB_DIST)/motoko.js
+
+web-debug: emsdk check_emcc deps
+	@mkdir -p $(WEB_DIST)
+	cd "$(EMSDK_DIR)" && export EMSDK_QUIET=1 && . ./emsdk_env.sh >/dev/null && cd "$(CURDIR)" && emcc $(WEB_SOURCES) \
+		-Iext/sokol -Iext/imgui \
+		-std=c++17 -O0 -gsource-map \
+		-sASSERTIONS=1 \
+		-sUSE_WEBGL2=1 \
+		-sMIN_WEBGL_VERSION=2 \
+		-sMAX_WEBGL_VERSION=2 \
+		-sALLOW_MEMORY_GROWTH=1 \
+		-sNO_EXIT_RUNTIME=1 \
+		--preload-file $(WEB_ASSETS)/motoko.log@/assets/motoko.log \
+		-o $(WEB_DIST)/motoko.js
+
+clean-web:
+	rm -rf $(WEB_DIST)
+
+serve: web
+	@echo "Serving Motoko site at http://127.0.0.1:$${PORT:-8080}"
+	python3 -m http.server $${PORT:-8080} --bind 127.0.0.1 --directory web
