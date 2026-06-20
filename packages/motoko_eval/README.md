@@ -76,3 +76,75 @@ Goal: Lean proves a general mathematical fact; AILANG implements and verifies th
      metadata.ailang.check, metadata.ailang.verify, metadata.ailang.committed,
      and the AILANG run stdout.
 ```
+
+## Expected Outcome
+
+A successful run should end with results like this:
+
+### Summary
+
+#### 1. Lean tri_step_identity (prove:"required")
+
+- metadata.lean.elaborated: "passed"
+- metadata.lean.proof: "verified"
+- metadata.lean.committed: true
+- Axioms used: [propext, Quot.sound]
+
+#### 2. Lean tri_step_10 (prove:"required")
+
+- metadata.lean.elaborated: "passed"
+- metadata.lean.proof: "verified"
+- metadata.lean.committed: true
+- Axioms used: [propext, Quot.sound]
+
+#### 3. AILANG tri_step with contracts (verify:"required")
+
+Example final implementation:
+
+```ailang
+func tri_step(n: int, t: int) -> int ! {}
+requires { n >= 0, t >= 0 }
+ensures { result == t + n + 1, result >= t, result >= 0 }
+{
+  t + n + 1
+}
+```
+
+Expected metadata:
+
+- metadata.ailang.check: "passed"
+- metadata.ailang.verify: "verified"
+- metadata.ailang.committed: true
+
+#### 4. AILANG run: tri_step(10, 55)
+
+Example run cell:
+
+```ailang
+export func main() -> () ! {IO} {
+  println(show(tri_step(10, 55)))
+}
+```
+
+Expected stdout:
+
+```text
+66
+```
+
+Expected summary table:
+
+```text
+Component         Language  Result                  Elaborated  Proof/Verify  Committed  Stdout
+tri_step_identity Lean      Theorem proved          passed      verified      yes        -
+tri_step_10       Lean      Theorem proved          passed      verified      yes        -
+tri_step def      AILANG    All contracts verified  passed      verified      yes        -
+tri_step(10,55)   AILANG    Runs, prints 66         passed      verified      yes        66
+```
+
+### Division of labor
+
+- Lean proves the nonlinear invariant-preservation theorem: given `2*t = n*(n+1)`, after adding `n+1` the corresponding property holds at the next step.
+- The theorem contains nonlinear multiplication of variables, so the successful proof may need a `calc` block and rewrites such as `Nat.add_mul` and `Nat.mul_comm` before arithmetic goals close.
+- AILANG/Z3 verifies the executable `tri_step` function in the linear arithmetic fragment: `result == t+n+1`, `result >= t`, and `result >= 0`.
+- The concrete AILANG execution `tri_step(10, 55)` prints `66`.
