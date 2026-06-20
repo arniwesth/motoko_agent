@@ -14,6 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
 import http from "http";
 import express from "express";
 import { execSync } from "child_process";
+import { normalizeScratchpadCells, normalizeAilangVerify, normalizeLeanProve } from "./env-server.js";
 
 // ---------------------------------------------------------------------------
 // Minimal inline env-server — mirrors env-server.ts so tests don't depend on
@@ -152,5 +153,81 @@ describe("env-server", () => {
       status: string;
     };
     expect(r.status).toBe("ok");
+  });
+});
+
+// normalizeScratchpadCells is the single shared normalization used by BOTH the HTTP
+// /scratchpad-cell route and the WS /scratchpad-cell-ws handler (wired identically), so
+// testing it covers the language-survival requirements on both transports.
+describe("normalizeScratchpadCells", () => {
+  it("accepts language:'ail' and parses the AILANG-only fields", () => {
+    const cells = normalizeScratchpadCells([
+      { language: "ail", code: "export func f() -> int ! {} { 1 }", run: true, entry: "f", caps: "IO,FS", verify: "required" },
+    ]);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].language).toBe("ail");
+    expect(cells[0].run).toBe(true);
+    expect(cells[0].entry).toBe("f");
+    expect(cells[0].caps).toBe("IO,FS");
+    expect(cells[0].verify).toBe("required");
+  });
+
+  it("defaults AILANG verify to 'auto' and run to false", () => {
+    const cells = normalizeScratchpadCells([{ language: "ail", code: "export func f() -> int ! {} { 1 }" }]);
+    expect(cells[0].verify).toBe("auto");
+    expect(cells[0].run).toBe(false);
+  });
+
+  it("accepts language:'lean' and parses Lean-only fields", () => {
+    const cells = normalizeScratchpadCells([
+      { language: "lean", code: "theorem t : 1 = 1 := rfl", prove: "required", mathlib: true },
+    ]);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].language).toBe("lean");
+    expect(cells[0].prove).toBe("required");
+    expect(cells[0].mathlib).toBe(true);
+  });
+
+  it("defaults Lean prove to 'auto' and mathlib to false", () => {
+    const cells = normalizeScratchpadCells([{ language: "lean", code: "#eval 1+1" }]);
+    expect(cells[0].prove).toBe("auto");
+    expect(cells[0].mathlib).toBe(false);
+  });
+
+  it("throws an explicit error for an unknown language (never coerces to py)", () => {
+    expect(() => normalizeScratchpadCells([{ language: "ruby", code: "puts 1" }])).toThrow(/unsupported scratchpad language "ruby"/);
+  });
+
+  it("still accepts py and js, and a missing language defaults to py", () => {
+    const cells = normalizeScratchpadCells([
+      { language: "py", code: "print(1)" },
+      { language: "js", code: "1" },
+      { code: "print(2)" },
+    ]);
+    expect(cells.map((c) => c.language)).toEqual(["py", "js", "py"]);
+  });
+
+  it("does not attach AILANG fields to py/js cells", () => {
+    const cells = normalizeScratchpadCells([{ language: "py", code: "print(1)", verify: "required" } as any]);
+    expect(cells[0].verify).toBeUndefined();
+  });
+
+  it("filters out empty-code cells", () => {
+    expect(normalizeScratchpadCells([{ language: "ail", code: "   " }])).toHaveLength(0);
+  });
+
+  it("normalizeAilangVerify maps modes (string and boolean forms)", () => {
+    expect(normalizeAilangVerify(true)).toBe(true);
+    expect(normalizeAilangVerify(false)).toBe(false);
+    expect(normalizeAilangVerify("required")).toBe("required");
+    expect(normalizeAilangVerify("auto")).toBe("auto");
+    expect(normalizeAilangVerify(undefined)).toBe("auto");
+  });
+
+  it("normalizeLeanProve maps modes", () => {
+    expect(normalizeLeanProve("required")).toBe("required");
+    expect(normalizeLeanProve("off")).toBe("off");
+    expect(normalizeLeanProve(false)).toBe("off");
+    expect(normalizeLeanProve(undefined)).toBe("auto");
   });
 });

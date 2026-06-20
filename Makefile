@@ -1,5 +1,16 @@
 PROFILE ?= $(if $(MOTOKO_CONFIG),$(MOTOKO_CONFIG),default)
 
+codex:
+	clear
+	codex --yolo
+
+claude:
+	clear
+	claude --dangerously-skip-permissions --model claude-opus-4-8
+
+prune:
+	docker system prune -a
+
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
 	./scripts/sync-extension-packages.sh

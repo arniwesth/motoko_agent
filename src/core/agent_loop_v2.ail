@@ -54,12 +54,13 @@ import src/core/tool_runtime (backend_for_v2)
 import src/core/types (Msg, ToolBackend)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
 import src/core/compaction (compact_step)
 import src/core/context_usage (context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
+import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
 -- OpenRouter's API rejects the prefixed name. The fork's old code stored the
@@ -182,6 +183,21 @@ func emit_event(session_id: string, event_type: string, extra: [{key: string, va
     kv("type",           js(event_type))
   ] ++ extra));
   emit_trace_event(session_id, event_type, extra)
+}
+
+func emit_scratchpad_result_if_present(session_id: string, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> () ! {IO, Trace} {
+  if is_scratchpad_tool_name(result_env.tool) then
+    match get(result_env.metadata, "cells") {
+      None => (),
+      Some(cells) =>
+        emit_event(session_id, "scratchpad_result", [
+          kv("tool_call_id", js(tool_call_id)),
+          kv("request_id", js(request_id)),
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("cells_json", js(encode(cells)))
+        ])
+    }
+  else ()
 }
 
 -- emit_stream_chunk: dispatch one StreamChunk variant to the JSONL event
@@ -444,6 +460,28 @@ func json_field_str(obj: Json, key: string, fallback: string) -> string {
   }
 }
 
+func is_scratchpad_tool_name(name: string) -> bool {
+  name == "scratchpad" || name == "Scratchpad"
+}
+
+func scratchpad_extension_active(rt: ExtRuntime) -> bool {
+  scratchpad_extension_active_rec(rt.registry.hooks)
+}
+
+func scratchpad_extension_active_rec(hooks: [ExtensionHooks]) -> bool {
+  match hooks {
+    [] => false,
+    h :: rest => startsWith(h.id, "scratchpad#") || h.id == "scratchpad" || scratchpad_extension_active_rec(rest)
+  }
+}
+
+func scratchpad_cells_arg(args: Json) -> Json {
+  match get(args, "cells") {
+    Some(j) => j,
+    None => jo([])
+  }
+}
+
 -- Helper: detect whether a JSON object has a boolean field set to true.
 -- Used to detect policy_denied_message / delegated_deferred_message
 -- payloads (both flag themselves with `error: true`).
@@ -668,6 +706,7 @@ func dispatch_calls(
                     kv("id", js(call.id)),
                     kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
                   ]);
+                  let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
                   let handled_msg: Message = {
                     role: "tool",
                     content: encode(result_to_json(result_env)),
@@ -714,8 +753,34 @@ func dispatch_calls(
         _ => {
           -- M5: ask extensions whether they want to handle this tool directly
           -- (e.g. compose's `Compose` tool dispatches its own pipeline).
-          let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
-          match handle_decision {
+          if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
+            let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
+            let result_env: ToolResultEnvelope = {
+              tool_call_id: envelope.id,
+              tool: "scratchpad",
+              exit_code: result_cell.exit_code,
+              stdout: result_cell.stdout,
+              stderr: result_cell.stderr,
+              metadata: result_cell.metadata
+            };
+            let _ = emit_event(session_id, "ext_tool_handled", [
+              kv("step", jnum(_int_to_float(step_idx))),
+              kv("stream_id", js(stream_id)),
+              kv("tool", js(call.name)),
+              kv("id", js(call.id)),
+              kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
+            ]);
+            let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+            let handled_msg: Message = {
+              role: "tool",
+              content: encode(result_to_json(result_env)),
+              tool_calls: [],
+              tool_call_id: call.id
+            };
+            handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
+          } else {
+            let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+            match handle_decision {
             Handled(result_env) => {
               let _ = emit_event(session_id, "ext_tool_handled", [
                 kv("step", jnum(_int_to_float(step_idx))),
@@ -724,6 +789,7 @@ func dispatch_calls(
                 kv("id", js(call.id)),
                 kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
               ]);
+              let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
               -- Use the call.id (model's typed tool_call_id) instead of the
               -- envelope's id for the tool-role Message correlation —
               -- providers correlate by the model-emitted id, not the
@@ -785,6 +851,7 @@ func dispatch_calls(
                 }
               }
             }
+          }
           }
         }
       }

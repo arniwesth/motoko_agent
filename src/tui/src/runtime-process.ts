@@ -81,6 +81,7 @@ export type AgentEvent =
   | { type: "compose_claimcheck_compare_result"; step: number; compose_id: string; attempt: number; verdict: "confirmed" | "disputed" | "vacuous" | "surprising_restriction" | "inconclusive"; confidence: "high" | "low"; reason: string; informalization?: string }
   | { type: "compose_summary_delta"; step: number; compose_id: string; delta: string }
   | { type: "compose_result"; step: number; compose_id: string; attempts: number; summary: string; stdout: string; stderr: string; exit_code: number; truncated: boolean; telemetry_json?: string }
+  | { type: "scratchpad_result"; tool_call_id: string; request_id: string; step: number; cells_json: string }
   | {
       type: "obs";
       step: number;
@@ -470,6 +471,8 @@ export class RuntimeProcess {
         "main",
         "--net-allow-http",
         "--net-allow-localhost",
+        "--stream-allow-http",
+        "--stream-allow-localhost",
         "src/core/supervisor.ail",
         "--",
         ...supervisorArgs

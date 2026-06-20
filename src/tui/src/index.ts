@@ -23,10 +23,11 @@ import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
 import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
-import { AgentUI } from "./ui.js";
+import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
 import { activeProfile } from "./config.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
+import type { ScratchpadCellResult } from "./scratchpad/frames.js";
 
 // Like describeToolCall but also checks call.arguments for native dispatch
 // events where path/content etc. are nested in the arguments JSON blob.
@@ -82,6 +83,57 @@ function describeToolCall(call: DelegatedCall): string {
 function isInternalComposeStream(streamId: string): boolean {
   const id = (streamId ?? "").trim();
   return id.startsWith("compose-");
+}
+
+function firstNonEmptyLine(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => line.length > 0) ?? "";
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function plainScratchpadMetadata(cell: ScratchpadCellResult): string {
+  const parts: string[] = [];
+  const ailang = cell.metadata?.ailang;
+  if (ailang) {
+    parts.push(`check=${ailang.check}`);
+    parts.push(`verify=${ailang.verify}${!ailang.verifyAvailable && ailang.check === "passed" ? " (Z3 unavailable)" : ""}`);
+    parts.push(`committed=${ailang.committed ? "yes" : "no"}`);
+    if (ailang.ran) parts.push("ran=yes");
+  }
+  const lean = cell.metadata?.lean;
+  if (lean) {
+    parts.push(`elaborated=${lean.elaborated}`);
+    parts.push(`proof=${lean.proof}`);
+    parts.push(`committed=${lean.committed ? "yes" : "no"}`);
+    if (lean.unexpectedAxioms && lean.unexpectedAxioms.length > 0) {
+      parts.push(`unexpected_axioms=${lean.unexpectedAxioms.join(",")}`);
+    }
+    if (typeof lean.sorries === "number" && lean.sorries > 0) parts.push(`sorries=${lean.sorries}`);
+  }
+  return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+export function formatPlainScratchpadResult(event: Extract<AgentEvent, { type: "scratchpad_result" }>): string {
+  const cells = parseScratchpadCellsJson(event.cells_json);
+  if (!cells) return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
+  const passed = cells.filter((cell) => cell.exit_code === 0 && !cell.error).length;
+  const lines = [`[scratchpad] ${event.tool_call_id} ${plural(cells.length, "cell")} passed=${passed} failed=${cells.length - passed}`];
+  for (const cell of cells) {
+    const idx = cell.index + 1;
+    const status = cell.exit_code === 0 && !cell.error ? "ok" : "failed";
+    const duration = typeof cell.durationMs === "number" ? ` ${Math.max(0, Math.round(cell.durationMs))}ms` : "";
+    const displays = cell.displays.length > 0 ? ` displays=${cell.displays.map((d) => d.type).join(",")}` : "";
+    const result = cell.result ? ` result=${cell.result.type}` : "";
+    lines.push(`  [${status}] ${idx}. ${cell.language} ${cell.title} exit=${cell.exit_code}${duration}${displays}${result}${plainScratchpadMetadata(cell)}`);
+    const out = firstNonEmptyLine(cell.stdout);
+    if (out) lines.push(`    stdout: ${out.slice(0, 180)}`);
+    const err = firstNonEmptyLine(cell.stderr);
+    if (err) lines.push(`    stderr: ${err.slice(0, 180)}`);
+    if (cell.error) lines.push(`    error: ${cell.error.ename}: ${cell.error.evalue}`);
+  }
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +216,7 @@ type ProfileAgentConfig = {
   openaiBaseUrl?: string;
   aiOptionsJson?: string;
   extensions?: string[];
+  scratchpadWsLoopback?: boolean;
   clickstack?: {
     enabled?: boolean;
     endpoint?: string;
@@ -214,6 +267,17 @@ function applyClickStackProfileConfig(
   setFromProfile(protectedKeys, "OTEL_EXPORTER_OTLP_TIMEOUT", clickstack.timeoutMs);
 }
 
+function applyToolProfileConfig(
+  profile: ProfileAgentConfig,
+  protectedKeys: Set<string>,
+): void {
+  setFromProfile(
+    protectedKeys,
+    "MOTOKO_SCRATCHPAD_WS_LOOPBACK",
+    profile.scratchpadWsLoopback === undefined ? undefined : profile.scratchpadWsLoopback ? "1" : "0",
+  );
+}
+
 function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAgentConfig {
   const profileDir = path.isAbsolute(profile)
     ? profile
@@ -229,6 +293,9 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
       };
       extensions?: {
         order?: unknown;
+      };
+      tools?: {
+        scratchpad_ws_loopback?: unknown;
       };
       clickstack?: {
         enabled?: unknown;
@@ -259,6 +326,9 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         ? parsed.agent.ai_options_json
         : undefined,
       extensions,
+      scratchpadWsLoopback: typeof parsed.tools?.scratchpad_ws_loopback === "boolean"
+        ? parsed.tools.scratchpad_ws_loopback
+        : undefined,
       clickstack: {
         enabled: typeof parsed.clickstack?.enabled === "boolean"
           ? parsed.clickstack.enabled
@@ -417,6 +487,9 @@ class PlainLogger {
         break;
       case "compose_result":
         process.stdout.write(`[step ${event.step}] [compose ${event.compose_id}] result attempts=${event.attempts} exit=${event.exit_code}\n`);
+        break;
+      case "scratchpad_result":
+        process.stdout.write(formatPlainScratchpadResult(event) + "\n");
         break;
       case "obs":
         if (event.stdout) process.stdout.write(event.stdout + "\n");
@@ -630,6 +703,7 @@ async function main(): Promise<void> {
   const envPort = Number(process.env.ENV_PORT ?? 0);
   let profile = activeProfile();
   const profileAgent = resolveProfileAgentConfig(workdir, profile);
+  applyToolProfileConfig(profileAgent, shellEnvKeys);
   applyClickStackProfileConfig(profileAgent.clickstack, shellEnvKeys);
   const model =
     process.env.MODEL ??

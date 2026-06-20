@@ -11,6 +11,7 @@ const ENV_KEYS = [
   "AI_MAX_STEPS",
   "HYBRID_TOOLS",
   "OHMY_PI_TOOLS",
+  "MOTOKO_SCRATCHPAD_WS_LOOPBACK",
   "AILANG_SNIPPET_CAPS",
   "CORE_EXT_ORDER",
   "MOTOKO_JSONL_OUTPUT",
@@ -54,6 +55,7 @@ ai_options_json = '{"chat_template_kwargs":{"enable_thinking":true}}'
 
 [tools]
 hybrid = true
+scratchpad_ws_loopback = true
 snippet_caps = ["IO", "FS", "Process"]
 
 [extensions]
@@ -69,6 +71,7 @@ jsonl_output = true
     expect(process.env.AI_MAX_STEPS).toBe("12");
     expect(process.env.MOTOKO_AI_OPTIONS_JSON).toBe('{"chat_template_kwargs":{"enable_thinking":true}}');
     expect(process.env.HYBRID_TOOLS).toBe("1");
+    expect(process.env.MOTOKO_SCRATCHPAD_WS_LOOPBACK).toBe("1");
     expect(process.env.AILANG_SNIPPET_CAPS).toBe("IO,FS,Process");
     expect(process.env.CORE_EXT_ORDER).toBe("compose,omnigraph");
     expect(process.env.MOTOKO_JSONL_OUTPUT).toBe("1");

@@ -1,0 +1,19 @@
+module sunholo/motoko_ext_scratchpad/register
+
+import std/env (getEnvOr)
+import std/string (stringToInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_scratchpad/scratchpad (make_hooks)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None    => fallback
+  }
+}
+
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, Net} {
+  let timeout_secs = parse_int_or(getEnvOr("MOTOKO_SCRATCHPAD_TIMEOUT_SECS", "30"), 30);
+  make_hooks(timeout_secs)
+}

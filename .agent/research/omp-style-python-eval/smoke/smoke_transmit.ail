@@ -1,0 +1,42 @@
+-- Smoke test: can `transmit` be called INSIDE an `onEvent` handler during a
+-- live `runEventLoop`?  This is the open "B′ blocker" from 00-design.md §4.
+--
+-- The handler receives the server's "ping-from-server" Message and, from
+-- inside the handler, calls transmit(conn, "reply-from-handler"). If the WS
+-- server records that reply, bidirectional send-from-handler works and the
+-- faithful re-entrant loopback (Design B′) is feasible.
+--
+-- Run with:
+--   ailang run smoke_transmit.ail --caps IO,Net \
+--     --stream-allow-http --stream-allow-localhost
+
+module smoke_transmit
+
+import std/stream (connect, transmit, onEvent, runEventLoop, StreamConn, StreamEvent)
+import std/io (println)
+import std/result (Result)
+
+export func main() -> () ! {Stream, IO} {
+  println("CLIENT: connecting");
+  match connect("ws://127.0.0.1:8787", {headers: []}) {
+    Err(_) => println("CLIENT: connect failed"),
+    Ok(conn) => {
+      onEvent(conn, \event. match event {
+        Message(s) => {
+          println("CLIENT_GOT: ${s}");
+          -- THE TEST: send from inside the handler
+          match transmit(conn, "reply-from-handler") {
+            Ok(_)  => println("CLIENT: transmit-in-handler returned Ok"),
+            Err(_) => println("CLIENT: transmit-in-handler returned Err")
+          };
+          false
+        },
+        Opened(_) => { println("CLIENT: opened"); true },
+        Closed(_, _) => { println("CLIENT: closed"); false },
+        _ => true
+      });
+      runEventLoop(conn);
+      println("CLIENT: event loop done")
+    }
+  }
+}
