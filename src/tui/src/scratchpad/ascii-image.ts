@@ -185,6 +185,7 @@ export function renderImageAsAnsi(
   mime: string,
   maxWidthCells: number,
   maxRows: number,
+  cellDimensions: { widthPx: number; heightPx: number } = { widthPx: 9, heightPx: 18 },
 ): string[] | null {
   if (mime !== "image/png" || !base64) return null;
   let buf: Buffer;
@@ -196,13 +197,22 @@ export function renderImageAsAnsi(
   const img = decodePng(buf);
   if (!img || img.width <= 0 || img.height <= 0) return null;
 
-  // Width follows the card budget (never upscaled past native); height follows
-  // from the aspect ratio (÷2: a cell is ~2× taller than wide), then hard-capped
-  // at maxRows. Capping compresses pathologically tall images slightly rather
-  // than letting them flood scrollback.
-  const targetWidth = Math.max(1, Math.min(Math.floor(maxWidthCells), img.width));
-  const aspectRows = Math.max(1, Math.ceil((targetWidth * (img.height / img.width)) / 2));
-  const rows = Math.min(aspectRows, Math.max(1, Math.floor(maxRows)));
+  // Preserve visual aspect ratio in terminal cells. A rendered text row has the
+  // terminal cell's physical height; the half-block glyph only increases colour
+  // sampling resolution inside that row. If the row budget is too small, shrink
+  // width instead of squashing the sampled image vertically.
+  const maxWidth = Math.max(1, Math.min(Math.floor(maxWidthCells), img.width));
+  const rowBudget = Math.max(1, Math.floor(maxRows));
+  const cellAspect = cellDimensions.widthPx > 0 && cellDimensions.heightPx > 0
+    ? cellDimensions.widthPx / cellDimensions.heightPx
+    : 0.5;
+  const imageAspect = img.height / img.width;
+  const rowsForWidth = (width: number) => Math.max(1, Math.ceil(width * imageAspect * cellAspect));
+  const uncappedRows = rowsForWidth(maxWidth);
+  const targetWidth = uncappedRows <= rowBudget
+    ? maxWidth
+    : Math.max(1, Math.min(maxWidth, Math.floor(rowBudget / Math.max(imageAspect * cellAspect, 1e-6))));
+  const rows = Math.min(rowsForWidth(targetWidth), rowBudget);
   const targetHeight = rows * 2;
 
   const small = resampleBox(img.rgba, img.width, img.height, targetWidth, targetHeight);

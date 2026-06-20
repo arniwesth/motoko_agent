@@ -903,6 +903,7 @@ interface ScratchpadCardImageEntry {
   image: Image | null;
   base64: string;
   fallbackWidth?: number;
+  fallbackMaxRows?: number;
   fallbackLines?: string[];
 }
 
@@ -1566,6 +1567,11 @@ export function formatScratchpadCardHeader(cells: ScratchpadCellResult[]): strin
   return `SCRATCHPAD · ${cells.length} cell${cells.length === 1 ? "" : "s"} · ✓${passed} ✗${failed}${duration}`;
 }
 
+export function scratchpadImageMaxRowsForTerminal(terminalRows: number | undefined): number | undefined {
+  if (!Number.isFinite(terminalRows) || !terminalRows || terminalRows <= 0) return undefined;
+  return Math.max(1, terminalRows - 8);
+}
+
 /**
  * Build the ordered segment list for a scratchpad card body (header excluded — the
  * caller prepends it). Text runs accumulate the existing highlighted/dim lines;
@@ -1580,8 +1586,10 @@ export function renderScratchpadCardLines(
   expanded: boolean,
   maxLineWidth: number,
   images?: Map<string, ScratchpadCardImageEntry>,
+  maxImageRows?: number,
 ): ScratchpadSegment[] {
   const maxWidth = Math.max(8, maxLineWidth);
+  const imageRows = maxImageRows && maxImageRows > 0 ? Math.floor(maxImageRows) : undefined;
   const visibleCells = expanded ? cells : cells.slice(0, 1);
   const segments: ScratchpadSegment[] = [];
   let buf: string[] = [];
@@ -1616,13 +1624,20 @@ export function renderScratchpadCardLines(
     const sameData = existing != null && existing.base64 === base64;
     // Reuse cached fallback art (non-graphics terminals): re-decoding the PNG on
     // every render/Ctrl+O would be wasteful, and it's deterministic per width.
-    if (sameData && !existing.image && existing.fallbackLines && existing.fallbackWidth === maxWidth) {
+    if (
+      sameData &&
+      !existing.image &&
+      existing.fallbackLines &&
+      existing.fallbackWidth === maxWidth &&
+      existing.fallbackMaxRows === imageRows
+    ) {
       for (const line of existing.fallbackLines) pushLines(`  ${line}`);
       return;
     }
     const reuse = sameData && existing.image ? existing.image : null;
     const seg = makeImageSegment(base64, mime, {
       cardWidth: maxWidth,
+      maxRows: imageRows,
       imageId: existing?.image?.getImageId(),
       reuse,
     });
@@ -1633,7 +1648,7 @@ export function renderScratchpadCardLines(
     } else if (seg.kind === "image") {
       // No graphics protocol → half-block art or a text placeholder, inline as
       // text. Cache it keyed by width so we don't re-decode next render.
-      images?.set(idKey, { image: null, base64, fallbackWidth: maxWidth, fallbackLines: seg.fallback });
+      images?.set(idKey, { image: null, base64, fallbackWidth: maxWidth, fallbackMaxRows: imageRows, fallbackLines: seg.fallback });
       for (const line of seg.fallback) pushLines(`  ${line}`);
     }
   };
@@ -2909,7 +2924,13 @@ export class AgentUI {
   private renderScratchpadCard(card: ScratchpadCardState): void {
     const bodyBox = card.bodyBox;
     if (!bodyBox) return;
-    const segments = renderScratchpadCardLines(card.cells, card.expanded, this.toolPreviewWidth(), card.images);
+    const segments = renderScratchpadCardLines(
+      card.cells,
+      card.expanded,
+      this.toolPreviewWidth(),
+      card.images,
+      scratchpadImageMaxRowsForTerminal(this.tui.terminal.rows),
+    );
     // clear() detaches children from layout but the card.images map retains the
     // Image instances, so re-adding reuses the same Kitty ids (replace, not stack).
     bodyBox.clear();

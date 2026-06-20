@@ -80,6 +80,15 @@ describe("renderImageAsAnsi", () => {
     expect(lines!.length).toBeLessThanOrEqual(8);
   });
 
+  it("shrinks width instead of squashing height when the row cap binds", () => {
+    const square = makeRgbPng(100, 100, new Array(100 * 100 * 3).fill(120));
+    const lines = renderImageAsAnsi(square.toString("base64"), "image/png", 80, 10, { widthPx: 9, heightPx: 18 });
+    expect(lines).not.toBeNull();
+    expect(lines).toHaveLength(10);
+    const firstLineCells = [...lines![0]!.matchAll(/▀/g)].length;
+    expect(firstLineCells).toBe(20);
+  });
+
   it("returns null for non-PNG mime or undecodable data", () => {
     expect(renderImageAsAnsi(PNG_4x4, "image/jpeg", 10, 24)).toBeNull();
     expect(renderImageAsAnsi("@@@not-base64@@@", "image/png", 10, 24)).toBeNull();

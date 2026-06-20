@@ -120,7 +120,7 @@ export function makeImageSegment(
     // No graphics protocol, but a true-colour terminal (VS Code, xterm-256color)
     // can still show colour half-block art instead of a bare text placeholder.
     if (caps.trueColor) {
-      const art = renderImageAsAnsi(base64, mime, opts.cardWidth, maxRows);
+      const art = renderImageAsAnsi(base64, mime, opts.cardWidth, maxRows, getCellDimensions());
       if (art && art.length > 0) {
         return { kind: "image", image: null, fallback: art };
       }
