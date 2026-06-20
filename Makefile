@@ -1,9 +1,11 @@
 PROFILE ?= $(if $(MOTOKO_CONFIG),$(MOTOKO_CONFIG),default)
 
 codex:
+	clear
 	codex --yolo
 
 claude:
+	clear
 	claude --dangerously-skip-permissions --model claude-opus-4-8
 
 prune:

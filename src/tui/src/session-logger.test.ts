@@ -125,4 +125,55 @@ describe("SessionLogger filename unification (M4a)", () => {
       }
     }
   });
+
+  it("writes eval_result summaries to the markdown transcript", async () => {
+    process.env.MOTOKO_SESSION_ID = "eval-result-transcript";
+    const logger = new SessionLogger(projectRoot, "test-tui-version");
+    logger.log({
+      type: "eval_result",
+      tool_call_id: "call_eval",
+      request_id: "step-1",
+      step: 1,
+      cells_json: JSON.stringify([
+        {
+          index: 0,
+          language: "ail",
+          title: "tri_step",
+          code: "export func main() -> () ! {IO} {\n  println(show(tri_step(10, 55)))\n}",
+          exit_code: 0,
+          stdout: "66\n",
+          stderr: "",
+          displays: [
+            {
+              type: "status",
+              mime: "text/plain",
+              data: "[ailang] check: passed | verify: verified | committed: yes | ran: yes\n  - tri_step: verified",
+            },
+          ],
+          executionCount: 1,
+          cancelled: false,
+          truncated: false,
+          metadata: {
+            ailang: {
+              check: "passed",
+              verify: "verified",
+              verifyAvailable: true,
+              committed: true,
+              ran: true,
+            },
+          },
+          durationMs: 12,
+        },
+      ]),
+    });
+    await logger.close();
+
+    const markdown = fs.readFileSync(logger.markdownPath, "utf8");
+    expect(markdown).toContain("EVAL | 1 cell | ok 1 failed 0 | 12ms");
+    expect(markdown).toContain("OK [1/1] tri_step (12ms)");
+    expect(markdown).toContain("ailang: check passed | verify verified | committed yes | ran yes");
+    expect(markdown).toContain("export func main() -> () ! {IO}");
+    expect(markdown).toContain("  66");
+    expect(markdown).toContain("[ailang] check: passed | verify: verified | committed: yes | ran: yes");
+  });
 });
