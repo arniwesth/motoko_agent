@@ -20,20 +20,20 @@ describe("stream protocol decoder", () => {
     expect(end?.type).toBe("thinking_stream_end");
   });
 
-  it("parses eval_result events with structured cells intact", () => {
+  it("parses scratchpad_result events with structured cells intact", () => {
     const cells = [{ index: 0, language: "py", code: "print(1)", title: "setup", exit_code: 0, stdout: "1\n", stderr: "", displays: [{ type: "json", data: { ok: true } }], executionCount: 1, cancelled: false, truncated: false }];
     const evt = parseAgentEventLine(JSON.stringify({
-      type: "eval_result",
+      type: "scratchpad_result",
       step: 4,
       request_id: "step-4",
-      tool_call_id: "call_eval",
+      tool_call_id: "call_scratchpad",
       cells_json: JSON.stringify(cells),
     }));
 
-    expect(evt?.type).toBe("eval_result");
-    if (evt?.type !== "eval_result") return;
+    expect(evt?.type).toBe("scratchpad_result");
+    if (evt?.type !== "scratchpad_result") return;
     expect(evt.request_id).toBe("step-4");
-    expect(evt.tool_call_id).toBe("call_eval");
+    expect(evt.tool_call_id).toBe("call_scratchpad");
     expect(JSON.parse(evt.cells_json)).toEqual(cells);
   });
 

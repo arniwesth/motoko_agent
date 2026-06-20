@@ -34,12 +34,12 @@ func native_result(call: ToolCallEnvelope, payload: Json) -> ToolResultEnvelope 
 }
 
 export func dispatch_tool_envelope(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolResultEnvelope ! {IO, Clock, FS, Process, AI, Env, Net, SharedMem, Stream} {
-  if call.tool == "eval" || call.tool == "Eval" then
-    error_result(call, "recursive eval loopback is disabled")
+  if call.tool == "scratchpad" || call.tool == "Scratchpad" then
+    error_result(call, "recursive scratchpad loopback is disabled")
   else {
     match dispatch_tool_policy(rt, ctx, call) {
       Deny(reason) => error_result(call, "denied by policy: ${reason}"),
-      Pending(reason, _) => error_result(call, "pending approval is not available inside eval loopback: ${reason}"),
+      Pending(reason, _) => error_result(call, "pending approval is not available inside scratchpad loopback: ${reason}"),
       _ => {
         match dispatch_tool_handle(rt, ctx, call) {
           Handled(result) => result,

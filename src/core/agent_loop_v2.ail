@@ -60,7 +60,7 @@ import src/core/context_usage (context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
-import pkg/sunholo/motoko_ext_eval/ws_loopback (exec_cell_ws)
+import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 
 -- Strip the "openrouter/" model prefix before forwarding to upstream step().
 -- OpenRouter's API rejects the prefixed name. The fork's old code stored the
@@ -185,12 +185,12 @@ func emit_event(session_id: string, event_type: string, extra: [{key: string, va
   emit_trace_event(session_id, event_type, extra)
 }
 
-func emit_eval_result_if_present(session_id: string, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> () ! {IO, Trace} {
-  if toLower(result_env.tool) == "eval" then
+func emit_scratchpad_result_if_present(session_id: string, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> () ! {IO, Trace} {
+  if is_scratchpad_tool_name(result_env.tool) then
     match get(result_env.metadata, "cells") {
       None => (),
       Some(cells) =>
-        emit_event(session_id, "eval_result", [
+        emit_event(session_id, "scratchpad_result", [
           kv("tool_call_id", js(tool_call_id)),
           kv("request_id", js(request_id)),
           kv("step", jnum(_int_to_float(step_idx))),
@@ -460,22 +460,22 @@ func json_field_str(obj: Json, key: string, fallback: string) -> string {
   }
 }
 
-func is_eval_tool_name(name: string) -> bool {
-  name == "eval" || name == "Eval"
+func is_scratchpad_tool_name(name: string) -> bool {
+  name == "scratchpad" || name == "Scratchpad"
 }
 
-func eval_extension_active(rt: ExtRuntime) -> bool {
-  eval_extension_active_rec(rt.registry.hooks)
+func scratchpad_extension_active(rt: ExtRuntime) -> bool {
+  scratchpad_extension_active_rec(rt.registry.hooks)
 }
 
-func eval_extension_active_rec(hooks: [ExtensionHooks]) -> bool {
+func scratchpad_extension_active_rec(hooks: [ExtensionHooks]) -> bool {
   match hooks {
     [] => false,
-    h :: rest => startsWith(h.id, "eval#") || h.id == "eval" || eval_extension_active_rec(rest)
+    h :: rest => startsWith(h.id, "scratchpad#") || h.id == "scratchpad" || scratchpad_extension_active_rec(rest)
   }
 }
 
-func eval_cells_arg(args: Json) -> Json {
+func scratchpad_cells_arg(args: Json) -> Json {
   match get(args, "cells") {
     Some(j) => j,
     None => jo([])
@@ -706,7 +706,7 @@ func dispatch_calls(
                     kv("id", js(call.id)),
                     kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
                   ]);
-                  let _ = emit_eval_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+                  let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
                   let handled_msg: Message = {
                     role: "tool",
                     content: encode(result_to_json(result_env)),
@@ -753,11 +753,11 @@ func dispatch_calls(
         _ => {
           -- M5: ask extensions whether they want to handle this tool directly
           -- (e.g. compose's `Compose` tool dispatches its own pipeline).
-          if is_eval_tool_name(envelope.tool) && eval_extension_active(rt) then {
-            let result_cell = exec_cell_ws(rt, ctx, envelope, eval_cells_arg(envelope.arguments), 30);
+          if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
+            let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
             let result_env: ToolResultEnvelope = {
               tool_call_id: envelope.id,
-              tool: "eval",
+              tool: "scratchpad",
               exit_code: result_cell.exit_code,
               stdout: result_cell.stdout,
               stderr: result_cell.stderr,
@@ -770,7 +770,7 @@ func dispatch_calls(
               kv("id", js(call.id)),
               kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
             ]);
-            let _ = emit_eval_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+            let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
             let handled_msg: Message = {
               role: "tool",
               content: encode(result_to_json(result_env)),
@@ -789,7 +789,7 @@ func dispatch_calls(
                 kv("id", js(call.id)),
                 kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
               ]);
-              let _ = emit_eval_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+              let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
               -- Use the call.id (model's typed tool_call_id) instead of the
               -- envelope's id for the tool-role Message correlation —
               -- providers correlate by the model-emitted id, not the

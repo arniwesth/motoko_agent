@@ -1,6 +1,6 @@
-import type { EvalDisplayBundle } from "./frames.js";
+import type { ScratchpadDisplayBundle } from "./frames.js";
 
-export function bundleFromValue(value: unknown): EvalDisplayBundle {
+export function bundleFromValue(value: unknown): ScratchpadDisplayBundle {
   if (value && typeof value === "object") {
     const rec = value as Record<string, unknown>;
     if (typeof rec.markdown === "string") {
@@ -23,7 +23,7 @@ export function bundleFromValue(value: unknown): EvalDisplayBundle {
   return { type: "json", mime: "application/json", data: value };
 }
 
-export function normalizeBundle(raw: unknown): EvalDisplayBundle {
+export function normalizeBundle(raw: unknown): ScratchpadDisplayBundle {
   if (raw && typeof raw === "object") {
     const rec = raw as Record<string, unknown>;
     const type = String(rec.type ?? "");
@@ -40,7 +40,7 @@ export function normalizeBundle(raw: unknown): EvalDisplayBundle {
   return bundleFromValue(raw);
 }
 
-export function renderBundle(bundle: EvalDisplayBundle): string {
+export function renderBundle(bundle: ScratchpadDisplayBundle): string {
   if (bundle.type === "json") return JSON.stringify(bundle.data, null, 2);
   if (bundle.type === "markdown" || bundle.type === "status" || bundle.type === "text") return String(bundle.data ?? "");
   if (bundle.type === "image") {

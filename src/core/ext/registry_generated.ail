@@ -15,7 +15,7 @@ import pkg/sunholo/motoko_ext_a2a/register (register_with_config as register_a2a
 import pkg/sunholo/motoko_ext_decision_framework/register (register_with_config as register_decision_framework)
 import pkg/sunholo/motoko_ext_microrag/register (register_with_config as register_microrag)
 import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config as register_compaction_ai)
-import pkg/sunholo/motoko_ext_eval/register (register_with_config as register_eval)
+import pkg/sunholo/motoko_ext_scratchpad/register (register_with_config as register_scratchpad)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistry)
@@ -34,7 +34,7 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtensionHooks] {
   else if name == "decision_framework" then Some(register_decision_framework(cfg))
   else if name == "microrag" then Some(register_microrag(cfg))
   else if name == "compaction_ai" then Some(register_compaction_ai(cfg))
-  else if name == "eval" then Some(register_eval(cfg))
+  else if name == "scratchpad" then Some(register_scratchpad(cfg))
   else None
 }
 
@@ -42,7 +42,7 @@ func with_id(h: ExtensionHooks, id: string) -> ExtensionHooks {
   { h | id: id }
 }
 
-func parse_tokens(xs: [string], idx: int, acc: [ExtensionHooks], cfg: RuntimeConfig) -> ExtRegistry ! {Env, FS, Net} {
+func parse_tokens(xs: [string], idx: int, acc: [ExtensionHooks], cfg: RuntimeConfig) -> ExtRegistry ! {Env, FS} {
   match xs {
     [] => { hooks: acc },
     raw :: rest => {
@@ -58,7 +58,7 @@ func parse_tokens(xs: [string], idx: int, acc: [ExtensionHooks], cfg: RuntimeCon
   }
 }
 
-export func parse_core_ext_order(raw: string, cfg: RuntimeConfig) -> ExtRegistry ! {Env, FS, Net} {
+export func parse_core_ext_order(raw: string, cfg: RuntimeConfig) -> ExtRegistry ! {Env, FS} {
   if trim(raw) == "" then { hooks: [] }
   else parse_tokens(split(raw, ","), 0, [], cfg)
 }

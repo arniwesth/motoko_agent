@@ -82,7 +82,7 @@ function splitOutputLines(text: string): string[] {
   return trimmed === "" ? [] : trimmed.split(/\r?\n/);
 }
 
-function evalMetadataLines(metadata: unknown): string[] {
+function scratchpadMetadataLines(metadata: unknown): string[] {
   const rec = recordValue(metadata);
   if (!rec) return [];
   const lines: string[] = [];
@@ -156,21 +156,21 @@ function displayBundleLines(display: unknown): string[] {
   return [];
 }
 
-function formatEvalResultForTranscript(event: Extract<AgentEvent, { type: "eval_result" }>): string {
+function formatScratchpadResultForTranscript(event: Extract<AgentEvent, { type: "scratchpad_result" }>): string {
   let parsed: unknown;
   try {
     parsed = JSON.parse(event.cells_json);
   } catch {
-    return `[eval] ${event.tool_call_id} invalid cells_json`;
+    return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
   }
-  if (!Array.isArray(parsed)) return `[eval] ${event.tool_call_id} invalid cells_json`;
+  if (!Array.isArray(parsed)) return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
   const cells = parsed.map(recordValue).filter((cell): cell is Record<string, unknown> => cell !== null);
-  if (cells.length !== parsed.length) return `[eval] ${event.tool_call_id} invalid cells_json`;
+  if (cells.length !== parsed.length) return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
 
   const passed = cells.filter((cell) => numberValue(cell.exit_code ?? cell.exitCode, 0) === 0 && recordValue(cell.error) === null).length;
   const totalDuration = cells.reduce((sum, cell) => sum + (typeof cell.durationMs === "number" ? cell.durationMs : 0), 0);
   const duration = totalDuration > 0 ? ` | ${Math.round(totalDuration)}ms` : "";
-  const lines = [`EVAL | ${cells.length} cell${cells.length === 1 ? "" : "s"} | ok ${passed} failed ${cells.length - passed}${duration}`];
+  const lines = [`SCRATCHPAD | ${cells.length} cell${cells.length === 1 ? "" : "s"} | ok ${passed} failed ${cells.length - passed}${duration}`];
   for (const cell of cells) {
     const index = numberValue(cell.index, 0) + 1;
     const language = stringValue(cell.language, "unknown");
@@ -179,7 +179,7 @@ function formatEvalResultForTranscript(event: Extract<AgentEvent, { type: "eval_
     const ok = exitCode === 0 && recordValue(cell.error) === null;
     const cellDuration = typeof cell.durationMs === "number" ? ` (${Math.max(0, Math.round(cell.durationMs))}ms)` : "";
     lines.push(`${ok ? "OK" : "FAIL"} [${index}/${cells.length}] ${title}${cellDuration}`);
-    lines.push(...evalMetadataLines(cell.metadata));
+    lines.push(...scratchpadMetadataLines(cell.metadata));
     const code = stringValue(cell.code, "");
     if (code.trim() !== "") {
       for (const line of splitOutputLines(code)) lines.push(`  ${line}`);
@@ -327,8 +327,8 @@ export class SessionLogger {
         if (event.stdout) this.writeTranscriptMarkdown(event.stdout);
         if (event.stderr) this.writeTranscriptLine(`[stderr] ${event.stderr}`);
         break;
-      case "eval_result":
-        this.writeTranscriptMarkdown(formatEvalResultForTranscript(event));
+      case "scratchpad_result":
+        this.writeTranscriptMarkdown(formatScratchpadResultForTranscript(event));
         break;
       case "warning":
         this.writeTranscriptLine(`Warning: ${event.message}`);

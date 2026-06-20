@@ -35,13 +35,13 @@ import type {
   AilangCheckStatus,
   AilangFnVerify,
   AilangVerifyStatus,
-  EvalCellResult,
-  EvalDisplayBundle,
+  ScratchpadCellResult,
+  ScratchpadDisplayBundle,
   LeanCellMetadata,
   LeanProofStatus,
   LeanTheoremProof,
-} from "./eval/frames.js";
-import { type EvalSegment, evalImageCapabilityLabel, evalImageExitSequence, makeImageSegment } from "./eval/image-segment.js";
+} from "./scratchpad/frames.js";
+import { type ScratchpadSegment, scratchpadImageCapabilityLabel, scratchpadImageExitSequence, makeImageSegment } from "./scratchpad/image-segment.js";
 import { execSync } from "child_process";
 // NOTE: The ASCII-art banner is printed unconditionally in main() before the 
 // TUI starts here — ANSI escapes in Text children corrupt the layout system.
@@ -899,18 +899,18 @@ interface ComposeCardState {
  * half-block / text fallback lines (so we don't re-decode the PNG on every
  * re-render or Ctrl+O toggle).
  */
-interface EvalCardImageEntry {
+interface ScratchpadCardImageEntry {
   image: Image | null;
   base64: string;
   fallbackWidth?: number;
   fallbackLines?: string[];
 }
 
-interface EvalCardState {
+interface ScratchpadCardState {
   toolCallId: string;
   requestId: string;
   step: number;
-  cells: EvalCellResult[];
+  cells: ScratchpadCellResult[];
   expanded: boolean;
   /**
    * The card body. Replaces the old single flattened detail `Text`: a `Box`
@@ -924,7 +924,7 @@ interface EvalCardState {
    * than stacks). Cards persist for the session; there is no mid-session
    * teardown — purge happens only on process exit.
    */
-  images: Map<string, EvalCardImageEntry>;
+  images: Map<string, ScratchpadCardImageEntry>;
 }
 
 interface PlannedToolEntry {
@@ -1093,20 +1093,20 @@ export function renderToolCallMetaWithFallback(
   }
 }
 
-function evalCallCellCount(call: DelegatedCall): number {
+function scratchpadCallCellCount(call: DelegatedCall): number {
   const args = recordValue(call.arguments);
   const cells = args?.cells;
   return Array.isArray(cells) ? cells.length : 0;
 }
 
-TOOL_RENDERERS.eval = {
+TOOL_RENDERERS.scratchpad = {
   renderCall: (call) => {
     const id = call.id ?? "unknown";
-    const count = evalCallCellCount(call);
-    return `${id} eval ${count} cell${count === 1 ? "" : "s"}`;
+    const count = scratchpadCallCellCount(call);
+    return `${id} scratchpad ${count} cell${count === 1 ? "" : "s"}`;
   },
 };
-TOOL_RENDERERS.Eval = TOOL_RENDERERS.eval;
+TOOL_RENDERERS.Scratchpad = TOOL_RENDERERS.scratchpad;
 
 function splitOutputLines(text: string): string[] {
   if (!text) return [];
@@ -1279,11 +1279,11 @@ function boolValue(v: unknown, fallback = false): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
 
-function normalizeEvalDisplayBundle(v: unknown): EvalDisplayBundle | null {
+function normalizeScratchpadDisplayBundle(v: unknown): ScratchpadDisplayBundle | null {
   const rec = recordValue(v);
   if (!rec) return null;
   const rawType = stringValue(rec.type, "text");
-  const type = ["json", "image", "markdown", "status", "text"].includes(rawType) ? rawType as EvalDisplayBundle["type"] : "text";
+  const type = ["json", "image", "markdown", "status", "text"].includes(rawType) ? rawType as ScratchpadDisplayBundle["type"] : "text";
   return {
     type,
     mime: typeof rec.mime === "string" ? rec.mime : undefined,
@@ -1364,7 +1364,7 @@ function normalizeLeanMetadata(v: unknown): LeanCellMetadata | undefined {
   };
 }
 
-function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
+function normalizeScratchpadCellResult(v: unknown): ScratchpadCellResult | null {
   const rec = recordValue(v);
   if (!rec) return null;
   const language = stringValue(rec.language, "py");
@@ -1377,13 +1377,13 @@ function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
       ? rec.display
       : [];
   const displays = displaysRaw
-    .map(normalizeEvalDisplayBundle)
-    .filter((x): x is EvalDisplayBundle => x !== null);
-  const result = normalizeEvalDisplayBundle(rec.result);
+    .map(normalizeScratchpadDisplayBundle)
+    .filter((x): x is ScratchpadDisplayBundle => x !== null);
+  const result = normalizeScratchpadDisplayBundle(rec.result);
   const errorRec = recordValue(rec.error);
   return {
     index: numberValue(rec.index, 0),
-    language: language as EvalCellResult["language"],
+    language: language as ScratchpadCellResult["language"],
     title: stringValue(rec.title, `${language} cell ${numberValue(rec.index, 0) + 1}`),
     code: stringValue(rec.code, ""),
     durationMs: typeof rec.durationMs === "number" ? rec.durationMs : typeof rec.duration_ms === "number" ? rec.duration_ms : undefined,
@@ -1404,13 +1404,13 @@ function normalizeEvalCellResult(v: unknown): EvalCellResult | null {
   };
 }
 
-export function parseEvalCellsJson(cellsJson: string): EvalCellResult[] | null {
+export function parseScratchpadCellsJson(cellsJson: string): ScratchpadCellResult[] | null {
   try {
     const parsed = JSON.parse(cellsJson) as unknown;
     if (!Array.isArray(parsed)) return null;
     const cells = parsed
-      .map(normalizeEvalCellResult)
-      .filter((x): x is EvalCellResult => x !== null);
+      .map(normalizeScratchpadCellResult)
+      .filter((x): x is ScratchpadCellResult => x !== null);
     return cells.length === parsed.length ? cells : null;
   } catch {
     return null;
@@ -1477,15 +1477,15 @@ function leanStatusLines(meta: LeanCellMetadata): string[] {
   return lines;
 }
 
-function evalStatusIcon(cell: EvalCellResult): string {
+function scratchpadStatusIcon(cell: ScratchpadCellResult): string {
   return cell.exit_code === 0 && !cell.error ? "✓" : "✗";
 }
 
-function evalDurationSuffix(cell: EvalCellResult): string {
+function scratchpadDurationSuffix(cell: ScratchpadCellResult): string {
   return typeof cell.durationMs === "number" ? ` (${Math.max(0, Math.round(cell.durationMs))}ms)` : "";
 }
 
-function formatEvalOutputLines(
+function formatScratchpadOutputLines(
   lines: string[],
   maxLines: number,
   expanded: boolean,
@@ -1504,7 +1504,7 @@ function formatEvalOutputLines(
   return rendered;
 }
 
-function renderEvalMarkdownLines(text: string, maxWidth: number, expanded: boolean): string[] {
+function renderScratchpadMarkdownLines(text: string, maxWidth: number, expanded: boolean): string[] {
   const trimmed = trimSegmentsForLiveRender(segmentStreamMarkdown(text), expanded ? 80 : 12);
   const lines: string[] = [];
   for (const seg of trimmed.segments) {
@@ -1520,12 +1520,12 @@ function renderEvalMarkdownLines(text: string, maxWidth: number, expanded: boole
   return lines;
 }
 
-function renderEvalDisplayBundle(bundle: EvalDisplayBundle, maxWidth: number, expanded: boolean): string[] {
+function renderScratchpadDisplayBundle(bundle: ScratchpadDisplayBundle, maxWidth: number, expanded: boolean): string[] {
   if (bundle.type === "json") {
     return highlightJsonLines(JSON.stringify(bundle.data, null, 2));
   }
   if (bundle.type === "markdown") {
-    return renderEvalMarkdownLines(String(bundle.data ?? ""), maxWidth, expanded);
+    return renderScratchpadMarkdownLines(String(bundle.data ?? ""), maxWidth, expanded);
   }
   if (bundle.type === "image") {
     const rec = recordValue(bundle.data);
@@ -1541,33 +1541,33 @@ function renderEvalDisplayBundle(bundle: EvalDisplayBundle, maxWidth: number, ex
 }
 
 /** True when any cell carries an image display/result bundle. */
-export function evalCellsHaveImage(cells: EvalCellResult[]): boolean {
+export function scratchpadCellsHaveImage(cells: ScratchpadCellResult[]): boolean {
   return cells.some(
     (cell) => cell.displays.some((d) => d.type === "image") || cell.result?.type === "image",
   );
 }
 
-const EVAL_DEFAULT_EXPANDED_CELL_LIMIT = 2;
+const SCRATCHPAD_DEFAULT_EXPANDED_CELL_LIMIT = 2;
 
 /** A card defaults to expanded when it is small, errored, or emitted an image. */
-export function shouldExpandEvalCard(cells: EvalCellResult[]): boolean {
+export function shouldExpandScratchpadCard(cells: ScratchpadCellResult[]): boolean {
   return (
-    cells.length <= EVAL_DEFAULT_EXPANDED_CELL_LIMIT ||
+    cells.length <= SCRATCHPAD_DEFAULT_EXPANDED_CELL_LIMIT ||
     cells.some((cell) => cell.exit_code !== 0 || Boolean(cell.error)) ||
-    evalCellsHaveImage(cells)
+    scratchpadCellsHaveImage(cells)
   );
 }
 
-export function formatEvalCardHeader(cells: EvalCellResult[]): string {
+export function formatScratchpadCardHeader(cells: ScratchpadCellResult[]): string {
   const passed = cells.filter((cell) => cell.exit_code === 0 && !cell.error).length;
   const failed = Math.max(0, cells.length - passed);
   const totalDuration = cells.reduce((sum, cell) => sum + (typeof cell.durationMs === "number" ? cell.durationMs : 0), 0);
   const duration = totalDuration > 0 ? ` · ${Math.round(totalDuration)}ms` : "";
-  return `EVAL · ${cells.length} cell${cells.length === 1 ? "" : "s"} · ✓${passed} ✗${failed}${duration}`;
+  return `SCRATCHPAD · ${cells.length} cell${cells.length === 1 ? "" : "s"} · ✓${passed} ✗${failed}${duration}`;
 }
 
 /**
- * Build the ordered segment list for an eval card body (header excluded — the
+ * Build the ordered segment list for a scratchpad card body (header excluded — the
  * caller prepends it). Text runs accumulate the existing highlighted/dim lines;
  * an image bundle becomes an `image` segment (real pixels) when the terminal
  * supports it, otherwise its text fallback stays inline within a text segment.
@@ -1575,15 +1575,15 @@ export function formatEvalCardHeader(cells: EvalCellResult[]): string {
  * When `images` is provided, `Image` instances are reused by stable id so
  * redraws replace rather than stack. Tests may omit it.
  */
-export function renderEvalCardLines(
-  cells: EvalCellResult[],
+export function renderScratchpadCardLines(
+  cells: ScratchpadCellResult[],
   expanded: boolean,
   maxLineWidth: number,
-  images?: Map<string, EvalCardImageEntry>,
-): EvalSegment[] {
+  images?: Map<string, ScratchpadCardImageEntry>,
+): ScratchpadSegment[] {
   const maxWidth = Math.max(8, maxLineWidth);
   const visibleCells = expanded ? cells : cells.slice(0, 1);
-  const segments: EvalSegment[] = [];
+  const segments: ScratchpadSegment[] = [];
   let buf: string[] = [];
   const pushLines = (...ls: string[]) => { for (const l of ls) buf.push(l); };
   const flush = () => {
@@ -1592,13 +1592,13 @@ export function renderEvalCardLines(
     buf = [];
   };
 
-  const emitBundle = (bundle: EvalDisplayBundle, idKey: string) => {
+  const emitBundle = (bundle: ScratchpadDisplayBundle, idKey: string) => {
     if (bundle.type !== "image") {
-      for (const line of renderEvalDisplayBundle(bundle, maxWidth - 2, expanded)) pushLines(`  ${line}`);
+      for (const line of renderScratchpadDisplayBundle(bundle, maxWidth - 2, expanded)) pushLines(`  ${line}`);
       return;
     }
     // Collapsed cards never draw pixels — a compact one-liner stands in. Image
-    // cards default to expanded (see upsertEvalCard), so this is only seen after
+    // cards default to expanded (see upsertScratchpadCard), so this is only seen after
     // a deliberate collapse.
     if (!expanded) {
       pushLines(chalk.dim("  [image — Ctrl+O to expand]"));
@@ -1608,7 +1608,7 @@ export function renderEvalCardLines(
     // path reference, no inline bytes) keeps the existing text placeholder.
     const base64 = typeof bundle.data === "string" ? bundle.data : "";
     if (!base64) {
-      for (const line of renderEvalDisplayBundle(bundle, maxWidth - 2, expanded)) pushLines(`  ${line}`);
+      for (const line of renderScratchpadDisplayBundle(bundle, maxWidth - 2, expanded)) pushLines(`  ${line}`);
       return;
     }
     const mime = bundle.mime ?? "image/png";
@@ -1641,7 +1641,7 @@ export function renderEvalCardLines(
   for (const cell of visibleCells) {
     const idx = Math.max(1, cell.index + 1);
     const title = cell.title || `${cell.language} cell ${idx}`;
-    pushLines(`${evalStatusIcon(cell)} [${idx}/${cells.length}] ${title}${evalDurationSuffix(cell)}`);
+    pushLines(`${scratchpadStatusIcon(cell)} [${idx}/${cells.length}] ${title}${scratchpadDurationSuffix(cell)}`);
     const ailMeta = cell.metadata?.ailang;
     if (ailMeta) {
       for (const line of ailangStatusLines(ailMeta)) pushLines(`  ${line}`);
@@ -1655,8 +1655,8 @@ export function renderEvalCardLines(
       for (const line of highlightCodeLines(code, cell.language)) pushLines(`  ${line}`);
     }
     pushLines(chalk.dim("  ─ Output"));
-    pushLines(...formatEvalOutputLines(splitOutputLines(cell.stdout), TOOL_STDOUT_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.dim));
-    pushLines(...formatEvalOutputLines(splitOutputLines(cell.stderr), TOOL_STDERR_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.red.dim, "stderr"));
+    pushLines(...formatScratchpadOutputLines(splitOutputLines(cell.stdout), TOOL_STDOUT_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.dim));
+    pushLines(...formatScratchpadOutputLines(splitOutputLines(cell.stderr), TOOL_STDERR_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.red.dim, "stderr"));
     cell.displays.forEach((display, di) => emitBundle(display, `${cell.index}:d${di}`));
     if (cell.result) emitBundle(cell.result, `${cell.index}:r`);
     if (cell.error) {
@@ -1682,7 +1682,7 @@ export function renderEvalCardLines(
  * and the regression assertion that text-only cards are byte-identical to the
  * old flattened output.
  */
-export function evalSegmentsToText(segments: EvalSegment[]): string[] {
+export function scratchpadSegmentsToText(segments: ScratchpadSegment[]): string[] {
   const out: string[] = [];
   for (const seg of segments) {
     if (seg.kind === "text") out.push(...seg.lines);
@@ -1799,11 +1799,11 @@ function extensionNamesFromEnv(): string[] {
     .filter((x) => x.length > 0);
 }
 
-export function hasEvalExtension(extensions?: string[]): boolean {
+export function hasScratchpadExtension(extensions?: string[]): boolean {
   const names = extensions ?? extensionNamesFromEnv();
   return names.some((name) => {
     const clean = name.trim();
-    return clean === "eval" || clean.startsWith("eval#");
+    return clean === "scratchpad" || clean.startsWith("scratchpad#");
   });
 }
 
@@ -1989,9 +1989,9 @@ export class AgentUI {
   private readonly composeOrder: string[] = [];
   private selectedComposeIdx = -1;
   private composeFooterStatus = "";
-  private readonly evalCards = new Map<string, EvalCardState>();
-  private readonly evalOrder: string[] = [];
-  private selectedEvalIdx = -1;
+  private readonly scratchpadCards = new Map<string, ScratchpadCardState>();
+  private readonly scratchpadOrder: string[] = [];
+  private selectedScratchpadIdx = -1;
   private readonly thinkStepOrder: number[] = [];  // insertion order; used for ctrl+t cycling
   private selectedThinkIdx = -1;                   // index into thinkStepOrder, -1 = none selected
   /** True once the first task is complete; enables free-text follow-ups. */
@@ -2060,7 +2060,7 @@ export class AgentUI {
     const v = (process.env.MOTOKO_FINAL_ONLY ?? process.env.MOTOKO_HEURISTIC_FINAL_ONLY ?? "").trim().toLowerCase();
     return v === "1" || v === "true" || v === "yes";
   })();
-  private evalExtensionActive: boolean;
+  private scratchpadExtensionActive: boolean;
 
   constructor({ version, model, profile, ailangVersion, extensions }: { version?: string; model?: string; profile?: string; ailangVersion?: string; extensions?: string[] } = {}) {
     this.version = version ?? "0.0.0";
@@ -2070,7 +2070,7 @@ export class AgentUI {
     this.loadedExtensions = extensions && extensions.length > 0
       ? extensions.join(", ")
       : initialExtensionsFromEnv();
-    this.evalExtensionActive = hasEvalExtension(extensions);
+    this.scratchpadExtensionActive = hasScratchpadExtension(extensions);
     try { this.branch = execSync("git rev-parse --abbrev-ref HEAD").toString().trim(); } catch {}
     const terminal = new ProcessTerminal();
 
@@ -2139,15 +2139,15 @@ export class AgentUI {
         return { consume: true };
       }
       if (matchesKey(data, "ctrl+o")) {
-        if (this.evalOrder.length > 0 && this.selectedEvalIdx !== -1) {
-          const idx = this.selectedEvalIdx;
-          const key = this.evalOrder[idx];
+        if (this.scratchpadOrder.length > 0 && this.selectedScratchpadIdx !== -1) {
+          const idx = this.selectedScratchpadIdx;
+          const key = this.scratchpadOrder[idx];
           if (key) {
-            const card = this.evalCards.get(key);
+            const card = this.scratchpadCards.get(key);
             if (card) {
               card.expanded = !card.expanded;
-              this.renderEvalCard(card);
-              this.selectedEvalIdx = idx;
+              this.renderScratchpadCard(card);
+              this.selectedScratchpadIdx = idx;
               this.tui.requestRender();
               return { consume: true };
             }
@@ -2178,7 +2178,7 @@ export class AgentUI {
     // (e.g. external kill -INT or non-raw contexts).
     process.on("SIGINT", () => this.onAbort?.());
 
-    // Purge any eval images from the terminal on exit so Kitty plots don't
+    // Purge any scratchpad images from the terminal on exit so Kitty plots don't
     // linger after Motoko quits. No-op on iTerm2 (repaints inline) and
     // non-capable terminals. Cards persist for the session, so this is the only
     // image cleanup point.
@@ -2198,9 +2198,9 @@ export class AgentUI {
     }, 150);
     this.tui.start();
     // One-line note of the detected inline-image protocol so it's obvious
-    // whether eval plots will render as pixels or the text fallback.
-    if (this.evalExtensionActive) {
-      this.appendHistoryStyled(`eval images: ${evalImageCapabilityLabel()}`, chalk.dim);
+    // whether scratchpad plots will render as pixels or the text fallback.
+    if (this.scratchpadExtensionActive) {
+      this.appendHistoryStyled(`scratchpad images: ${scratchpadImageCapabilityLabel()}`, chalk.dim);
     }
     // Explicit render so children added before start() (e.g. version banner)
     // are visible immediately.
@@ -2223,7 +2223,7 @@ export class AgentUI {
 
   /** Emit a Kitty image-purge sequence (no-op for iTerm2 / non-capable terms). */
   private purgeTerminalImages(): void {
-    const seq = evalImageExitSequence();
+    const seq = scratchpadImageExitSequence();
     if (!seq) return;
     try {
       process.stdout.write(seq);
@@ -2300,7 +2300,7 @@ export class AgentUI {
           const names = event.loaded_extensions;
           const extText = names.length === 0 ? "(none)" : names.join(", ");
           this.loadedExtensions = extText;
-          this.evalExtensionActive = hasEvalExtension(names);
+          this.scratchpadExtensionActive = hasScratchpadExtension(names);
           this.appendHistoryStyled(`Loaded extensions: ${extText}`, chalk.dim);
         }
         break;
@@ -2679,9 +2679,9 @@ export class AgentUI {
           this.renderComposeCard(card);
         }
         break;
-      case "eval_result":
-        if (!this.evalExtensionActive) break;
-        this.upsertEvalCard(event);
+      case "scratchpad_result":
+        if (!this.scratchpadExtensionActive) break;
+        this.upsertScratchpadCard(event);
         break;
 
       case "obs":
@@ -2846,47 +2846,47 @@ export class AgentUI {
     if (block) this.expandThinkBlock(block);
   }
 
-  private upsertEvalCard(event: Extract<AgentEvent, { type: "eval_result" }>): void {
-    const cells = parseEvalCellsJson(event.cells_json);
+  private upsertScratchpadCard(event: Extract<AgentEvent, { type: "scratchpad_result" }>): void {
+    const cells = parseScratchpadCellsJson(event.cells_json);
     if (!cells || cells.length === 0) {
-      this.addActivity(`eval_result ignored: invalid cells_json for ${event.tool_call_id}`);
+      this.addActivity(`scratchpad_result ignored: invalid cells_json for ${event.tool_call_id}`);
       return;
     }
     const key = this.toolKey(event.request_id, event.tool_call_id);
-    let card = this.evalCards.get(key);
+    let card = this.scratchpadCards.get(key);
     if (!card) {
       card = {
         toolCallId: event.tool_call_id,
         requestId: event.request_id,
         step: event.step,
         cells,
-        expanded: shouldExpandEvalCard(cells),
+        expanded: shouldExpandScratchpadCard(cells),
         images: new Map(),
       };
-      this.evalCards.set(key, card);
-      this.evalOrder.push(key);
-      this.selectedEvalIdx = this.evalOrder.length - 1;
+      this.scratchpadCards.set(key, card);
+      this.scratchpadOrder.push(key);
+      this.selectedScratchpadIdx = this.scratchpadOrder.length - 1;
       this.selectedComposeIdx = -1;
     } else {
       card.cells = cells;
-      if (shouldExpandEvalCard(cells)) card.expanded = true;
-      const idx = this.evalOrder.indexOf(key);
-      if (idx >= 0) this.selectedEvalIdx = idx;
+      if (shouldExpandScratchpadCard(cells)) card.expanded = true;
+      const idx = this.scratchpadOrder.indexOf(key);
+      if (idx >= 0) this.selectedScratchpadIdx = idx;
       this.selectedComposeIdx = -1;
     }
 
     if (!this.toolRows.has(key)) {
-      const row = plainText(this.stamp(this.renderToolRowLine(key, "done", `${event.tool_call_id} eval`, undefined, false, "EVAL")));
+      const row = plainText(this.stamp(this.renderToolRowLine(key, "done", `${event.tool_call_id} scratchpad`, undefined, false, "SCRATCHPAD")));
       this.history.addChild(row);
       this.toolRows.set(key, row);
-      this.toolRowMeta.set(key, `${event.tool_call_id} eval`);
+      this.toolRowMeta.set(key, `${event.tool_call_id} scratchpad`);
       this.toolRowKinds.set(key, "default");
     }
-    this.toolRowToolNames.set(key, "eval");
+    this.toolRowToolNames.set(key, "scratchpad");
 
-    // Ensure the rich card body exists. eval is dispatched as a normal tool, so
-    // the generic tool-result path (applyNativeToolResults) usually creates a
-    // plain detailRow Text under this same key *before* eval_result arrives. A
+    // Ensure the rich card body exists. scratchpad is dispatched as a normal
+    // tool, so the generic tool-result path (applyNativeToolResults) usually
+    // creates a plain detailRow Text under this same key *before* scratchpad_result arrives. A
     // Text can't carry Image children (it shreds escape sequences), so swap that
     // detailRow out for the bodyBox Box. The toolRow status line is kept.
     if (!card.bodyBox) {
@@ -2900,17 +2900,17 @@ export class AgentUI {
       this.history.addChild(bodyBox);
     }
 
-    this.renderEvalCard(card);
+    this.renderScratchpadCard(card);
   }
 
-  private renderEvalCard(card: EvalCardState): void {
+  private renderScratchpadCard(card: ScratchpadCardState): void {
     const bodyBox = card.bodyBox;
     if (!bodyBox) return;
-    const segments = renderEvalCardLines(card.cells, card.expanded, this.toolPreviewWidth(), card.images);
+    const segments = renderScratchpadCardLines(card.cells, card.expanded, this.toolPreviewWidth(), card.images);
     // clear() detaches children from layout but the card.images map retains the
     // Image instances, so re-adding reuses the same Kitty ids (replace, not stack).
     bodyBox.clear();
-    bodyBox.addChild(plainText(this.stamp(formatEvalCardHeader(card.cells))));
+    bodyBox.addChild(plainText(this.stamp(formatScratchpadCardHeader(card.cells))));
     for (const seg of segments) {
       if (seg.kind === "text") {
         bodyBox.addChild(plainText(seg.lines.join("\n")));
@@ -2962,7 +2962,7 @@ export class AgentUI {
     this.composeCards.set(event.compose_id, card);
     this.composeOrder.push(event.compose_id);
     this.selectedComposeIdx = this.composeOrder.length - 1;
-    this.selectedEvalIdx = -1;
+    this.selectedScratchpadIdx = -1;
     return card;
   }
 
@@ -3187,11 +3187,11 @@ export class AgentUI {
   }
 
   private refreshToolDetailRow(key: string): void {
-    // Eval card bodies are a Box (not a Text in toolDetailRows), so resolve them
+    // Scratchpad card bodies are a Box (not a Text in toolDetailRows), so resolve them
     // before the toolDetailRows guard.
-    const evalCard = this.evalCards.get(key);
-    if (evalCard) {
-      this.renderEvalCard(evalCard);
+    const scratchpadCard = this.scratchpadCards.get(key);
+    if (scratchpadCard) {
+      this.renderScratchpadCard(scratchpadCard);
       return;
     }
     const detailRow = this.toolDetailRows.get(key);

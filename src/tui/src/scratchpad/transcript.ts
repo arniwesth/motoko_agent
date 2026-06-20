@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import type { EvalCellResult, EvalDisplayBundle } from "./frames.js";
+import type { ScratchpadCellResult, ScratchpadDisplayBundle } from "./frames.js";
 import { renderBundle } from "./display.js";
 
 const DEFAULT_LIMIT = 50 * 1024;
@@ -16,7 +16,7 @@ export function spillImages(
   workdir: string,
   sessionId: string,
   cellIndex: number,
-  bundles: EvalDisplayBundle[],
+  bundles: ScratchpadDisplayBundle[],
 ): Array<{ path: string; mime: string; width?: number; height?: number }> {
   const images: Array<{ path: string; mime: string; width?: number; height?: number }> = [];
   const dir = join(workdir, ".motoko", "artifacts", sessionId.replace(/[^A-Za-z0-9_.-]/g, "_"));
@@ -35,7 +35,7 @@ export function spillImages(
   return images;
 }
 
-export function buildEvalTranscript(cells: EvalCellResult[], images: Array<{ path: string; mime: string; width?: number; height?: number }>, limit = DEFAULT_LIMIT): string {
+export function buildScratchpadTranscript(cells: ScratchpadCellResult[], images: Array<{ path: string; mime: string; width?: number; height?: number }>, limit = DEFAULT_LIMIT): string {
   const lines: string[] = [];
   let imageAt = 0;
   for (const cell of cells) {

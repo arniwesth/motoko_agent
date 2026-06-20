@@ -1,5 +1,5 @@
 import vm from "vm";
-import type { EvalCellResult, EvalDisplayBundle } from "./frames.js";
+import type { ScratchpadCellResult, ScratchpadDisplayBundle } from "./frames.js";
 import { bundleFromValue } from "./display.js";
 
 export type JsLoopback = {
@@ -32,18 +32,18 @@ export class JsKernel {
 
   private stdout = "";
   private stderr = "";
-  private displays: EvalDisplayBundle[] = [];
+  private displays: ScratchpadDisplayBundle[] = [];
 
   private writeStdout(s: string): void { this.stdout += s; }
   private writeStderr(s: string): void { this.stderr += s; }
 
-  async run(index: number, opts: { code: string; title: string; timeoutMs: number }): Promise<EvalCellResult> {
+  async run(index: number, opts: { code: string; title: string; timeoutMs: number }): Promise<ScratchpadCellResult> {
     this.stdout = "";
     this.stderr = "";
     this.displays = [];
     this.executionCount += 1;
-    let result: EvalDisplayBundle | undefined;
-    let error: EvalCellResult["error"];
+    let result: ScratchpadDisplayBundle | undefined;
+    let error: ScratchpadCellResult["error"];
     let exit_code = 0;
     try {
       const script = new vm.Script(opts.code);

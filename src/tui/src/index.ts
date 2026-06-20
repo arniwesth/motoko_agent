@@ -23,11 +23,11 @@ import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
 import { startEnvServer } from "./env-server.js";
 import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
-import { AgentUI, parseEvalCellsJson } from "./ui.js";
+import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
 import { activeProfile } from "./config.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
-import type { EvalCellResult } from "./eval/frames.js";
+import type { ScratchpadCellResult } from "./scratchpad/frames.js";
 
 // Like describeToolCall but also checks call.arguments for native dispatch
 // events where path/content etc. are nested in the arguments JSON blob.
@@ -93,7 +93,7 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-function plainEvalMetadata(cell: EvalCellResult): string {
+function plainScratchpadMetadata(cell: ScratchpadCellResult): string {
   const parts: string[] = [];
   const ailang = cell.metadata?.ailang;
   if (ailang) {
@@ -115,18 +115,18 @@ function plainEvalMetadata(cell: EvalCellResult): string {
   return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 }
 
-export function formatPlainEvalResult(event: Extract<AgentEvent, { type: "eval_result" }>): string {
-  const cells = parseEvalCellsJson(event.cells_json);
-  if (!cells) return `[eval] ${event.tool_call_id} invalid cells_json`;
+export function formatPlainScratchpadResult(event: Extract<AgentEvent, { type: "scratchpad_result" }>): string {
+  const cells = parseScratchpadCellsJson(event.cells_json);
+  if (!cells) return `[scratchpad] ${event.tool_call_id} invalid cells_json`;
   const passed = cells.filter((cell) => cell.exit_code === 0 && !cell.error).length;
-  const lines = [`[eval] ${event.tool_call_id} ${plural(cells.length, "cell")} passed=${passed} failed=${cells.length - passed}`];
+  const lines = [`[scratchpad] ${event.tool_call_id} ${plural(cells.length, "cell")} passed=${passed} failed=${cells.length - passed}`];
   for (const cell of cells) {
     const idx = cell.index + 1;
     const status = cell.exit_code === 0 && !cell.error ? "ok" : "failed";
     const duration = typeof cell.durationMs === "number" ? ` ${Math.max(0, Math.round(cell.durationMs))}ms` : "";
     const displays = cell.displays.length > 0 ? ` displays=${cell.displays.map((d) => d.type).join(",")}` : "";
     const result = cell.result ? ` result=${cell.result.type}` : "";
-    lines.push(`  [${status}] ${idx}. ${cell.language} ${cell.title} exit=${cell.exit_code}${duration}${displays}${result}${plainEvalMetadata(cell)}`);
+    lines.push(`  [${status}] ${idx}. ${cell.language} ${cell.title} exit=${cell.exit_code}${duration}${displays}${result}${plainScratchpadMetadata(cell)}`);
     const out = firstNonEmptyLine(cell.stdout);
     if (out) lines.push(`    stdout: ${out.slice(0, 180)}`);
     const err = firstNonEmptyLine(cell.stderr);
@@ -216,7 +216,7 @@ type ProfileAgentConfig = {
   openaiBaseUrl?: string;
   aiOptionsJson?: string;
   extensions?: string[];
-  evalWsLoopback?: boolean;
+  scratchpadWsLoopback?: boolean;
   clickstack?: {
     enabled?: boolean;
     endpoint?: string;
@@ -273,8 +273,8 @@ function applyToolProfileConfig(
 ): void {
   setFromProfile(
     protectedKeys,
-    "MOTOKO_EVAL_WS_LOOPBACK",
-    profile.evalWsLoopback === undefined ? undefined : profile.evalWsLoopback ? "1" : "0",
+    "MOTOKO_SCRATCHPAD_WS_LOOPBACK",
+    profile.scratchpadWsLoopback === undefined ? undefined : profile.scratchpadWsLoopback ? "1" : "0",
   );
 }
 
@@ -295,7 +295,7 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         order?: unknown;
       };
       tools?: {
-        eval_ws_loopback?: unknown;
+        scratchpad_ws_loopback?: unknown;
       };
       clickstack?: {
         enabled?: unknown;
@@ -326,8 +326,8 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
         ? parsed.agent.ai_options_json
         : undefined,
       extensions,
-      evalWsLoopback: typeof parsed.tools?.eval_ws_loopback === "boolean"
-        ? parsed.tools.eval_ws_loopback
+      scratchpadWsLoopback: typeof parsed.tools?.scratchpad_ws_loopback === "boolean"
+        ? parsed.tools.scratchpad_ws_loopback
         : undefined,
       clickstack: {
         enabled: typeof parsed.clickstack?.enabled === "boolean"
@@ -460,8 +460,8 @@ class PlainLogger {
       case "compose_result":
         process.stdout.write(`[step ${event.step}] [compose ${event.compose_id}] result attempts=${event.attempts} exit=${event.exit_code}\n`);
         break;
-      case "eval_result":
-        process.stdout.write(formatPlainEvalResult(event) + "\n");
+      case "scratchpad_result":
+        process.stdout.write(formatPlainScratchpadResult(event) + "\n");
         break;
       case "obs":
         if (event.stdout) process.stdout.write(event.stdout + "\n");

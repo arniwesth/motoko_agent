@@ -126,12 +126,12 @@ describe("SessionLogger filename unification (M4a)", () => {
     }
   });
 
-  it("writes eval_result summaries to the markdown transcript", async () => {
-    process.env.MOTOKO_SESSION_ID = "eval-result-transcript";
+  it("writes scratchpad_result summaries to the markdown transcript", async () => {
+    process.env.MOTOKO_SESSION_ID = "scratchpad-result-transcript";
     const logger = new SessionLogger(projectRoot, "test-tui-version");
     logger.log({
-      type: "eval_result",
-      tool_call_id: "call_eval",
+      type: "scratchpad_result",
+      tool_call_id: "call_scratchpad",
       request_id: "step-1",
       step: 1,
       cells_json: JSON.stringify([
@@ -169,7 +169,7 @@ describe("SessionLogger filename unification (M4a)", () => {
     await logger.close();
 
     const markdown = fs.readFileSync(logger.markdownPath, "utf8");
-    expect(markdown).toContain("EVAL | 1 cell | ok 1 failed 0 | 12ms");
+    expect(markdown).toContain("SCRATCHPAD | 1 cell | ok 1 failed 0 | 12ms");
     expect(markdown).toContain("OK [1/1] tri_step (12ms)");
     expect(markdown).toContain("ailang: check passed | verify verified | committed yes | ran yes");
     expect(markdown).toContain("export func main() -> () ! {IO}");

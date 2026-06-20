@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
-import type { CellRunFrame, EvalCellResult, EvalDisplayBundle } from "./frames.js";
+import type { CellRunFrame, ScratchpadCellResult, ScratchpadDisplayBundle } from "./frames.js";
 import { normalizeBundle } from "./display.js";
 
 export type KernelRunOptions = {
@@ -17,15 +17,15 @@ function runnerSourcePath(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   const direct = join(here, "runner.py");
   if (existsSync(direct)) return direct;
-  const fromDist = resolve(here, "../src/eval/runner.py");
+  const fromDist = resolve(here, "../src/scratchpad/runner.py");
   if (existsSync(fromDist)) return fromDist;
-  return resolve(process.cwd(), "src/tui/src/eval/runner.py");
+  return resolve(process.cwd(), "src/tui/src/scratchpad/runner.py");
 }
 
 function cachedRunnerPath(): string {
   const src = readFileSync(runnerSourcePath(), "utf8");
   const hash = createHash("sha256").update(src).digest("hex").slice(0, 16);
-  const dir = "/tmp/motoko-eval";
+  const dir = "/tmp/motoko-scratchpad";
   mkdirSync(dir, { recursive: true });
   const dst = join(dir, `runner-${hash}.py`);
   if (!existsSync(dst)) writeFileSync(dst, src, "utf8");
@@ -38,12 +38,12 @@ export class PythonKernel {
   private pending:
     | {
         id: string;
-        resolve: (r: EvalCellResult) => void;
+        resolve: (r: ScratchpadCellResult) => void;
         frames: CellRunFrame[];
         stdout: string;
         stderr: string;
-        displays: EvalDisplayBundle[];
-        result?: EvalDisplayBundle;
+        displays: ScratchpadDisplayBundle[];
+        result?: ScratchpadDisplayBundle;
         error?: { ename: string; evalue: string; traceback: string[] };
         timer: NodeJS.Timeout;
         index: number;
@@ -135,7 +135,7 @@ export class PythonKernel {
     }
   }
 
-  run(index: number, opts: KernelRunOptions): Promise<EvalCellResult> {
+  run(index: number, opts: KernelRunOptions): Promise<ScratchpadCellResult> {
     this.start();
     const child = this.child;
     if (!child) throw new Error("python kernel failed to start");

@@ -12,16 +12,16 @@ import uuid
 
 
 EXEC_COUNT = 0
-GLOBALS = {"__name__": "__motoko_eval__"}
+GLOBALS = {"__name__": "__motoko_scratchpad__"}
 ORIG_STDOUT = sys.stdout
 
-if os.environ.get("MOTOKO_EVAL_NETWORK", "0") != "1":
+if os.environ.get("MOTOKO_SCRATCHPAD_NETWORK", "0") != "1":
     _orig_create_connection = socket.create_connection
     def _guarded_create_connection(address, *args, **kwargs):
         host = address[0] if isinstance(address, tuple) and address else ""
         if host in ("127.0.0.1", "localhost", "::1"):
             return _orig_create_connection(address, *args, **kwargs)
-        raise OSError("network access is disabled for eval kernels")
+        raise OSError("network access is disabled for scratchpad kernels")
     socket.create_connection = _guarded_create_connection
 
 
@@ -43,10 +43,10 @@ class Capture(io.StringIO):
 
 
 def call_loopback(tool, arguments):
-    url = os.environ.get("MOTOKO_EVAL_LOOPBACK_URL", "")
-    token = os.environ.get("MOTOKO_EVAL_LOOPBACK_TOKEN", "")
+    url = os.environ.get("MOTOKO_SCRATCHPAD_LOOPBACK_URL", "")
+    token = os.environ.get("MOTOKO_SCRATCHPAD_LOOPBACK_TOKEN", "")
     if not url or not token:
-        raise RuntimeError("eval loopback is not configured")
+        raise RuntimeError("scratchpad loopback is not configured")
     req_id = str(uuid.uuid4())
     payload = json.dumps({
         "type": "tool-request",
@@ -201,9 +201,9 @@ def run_cell(frame):
         stderr = Capture("stderr", cell_id)
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             if tree.body:
-                exec(compile(tree, "<motoko-eval>", "exec"), GLOBALS, GLOBALS)
+                exec(compile(tree, "<motoko-scratchpad>", "exec"), GLOBALS, GLOBALS)
             if result_expr is not None:
-                value = eval(compile(result_expr, "<motoko-eval>", "eval"), GLOBALS, GLOBALS)
+                value = eval(compile(result_expr, "<motoko-scratchpad>", "eval"), GLOBALS, GLOBALS)
                 if value is not None and not frame.get("silent", False):
                     emit({"type": "result", "id": cell_id, "bundle": to_bundle(value)})
     except KeyboardInterrupt:
