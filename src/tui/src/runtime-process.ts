@@ -334,6 +334,14 @@ export class RuntimeProcess {
       // moved out into separate packages without a corresponding launcher
       // wiring.
       MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+      // M-OLLAMA-PER-MODEL-MAX-TOKENS: forward the per-model output budget so the
+      // AILANG runtime's ollama /v1 path (resolveOllamaMaxTokens) uses the model's
+      // declared max_output_tokens instead of the 4096 std/ai default. Qwen3.6
+      // reasons thousands of tokens before the tool call and truncates
+      // (finish_reason=length) at 4096 → 0 tool calls (disengagement). Without this
+      // allowlist entry the explicit childEnv whitelist drops it — same gotcha as
+      // MOTOKO_REPO / the pricing vars. Empty = the AILANG-side 16384 floor applies.
+      AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
       // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
       // pricing env vars set by the AILANG adapter from Task.Budget. Without
       // this, the AILANG-side fix (load_cost_rates reads these env vars) is
