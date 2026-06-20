@@ -7,7 +7,7 @@ import zlib from "node:zlib";
  * character cell encodes two vertical pixels — foreground = top pixel,
  * background = bottom pixel — so one text row covers two image rows.
  *
- * The eval kernel always emits PNG (runner.py forces `format="png"`), so this
+ * The scratchpad kernel always emits PNG (runner.py forces `format="png"`), so this
  * decodes PNG only; anything else (or any decode failure) returns `null` and the
  * caller keeps the `[Image: …]` text placeholder.
  */

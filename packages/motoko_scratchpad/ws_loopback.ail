@@ -1,4 +1,4 @@
-module sunholo/motoko_ext_eval/ws_loopback
+module sunholo/motoko_ext_scratchpad/ws_loopback
 
 import std/fs (writeFile, readFile, removeFileResult, fileExists)
 import std/env (getEnvOr)
@@ -10,7 +10,7 @@ import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtRuntime)
 import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
 import src/core/types (CellExecResult)
 import src/core/tool_envelope_dispatch (dispatch_tool_envelope)
-import src/core/env_client (exec_cell)
+import src/core/env_client (exec_scratchpad_cell)
 
 func string_field(obj: Json, key: string, fallback: string) -> string {
   match obj {
@@ -132,11 +132,11 @@ func ws_url(env_url: string) -> string {
 }
 
 func state_path(call_id: string) -> string {
-  "/tmp/motoko-eval-ws-${replace(replace(call_id, "/", "_"), ":", "_")}.json"
+  "/tmp/motoko-scratchpad-ws-${replace(replace(call_id, "/", "_"), ":", "_")}.json"
 }
 
 func request_path(call_id: string) -> string {
-  "/tmp/motoko-eval-ws-${replace(replace(call_id, "/", "_"), ":", "_")}.request.json"
+  "/tmp/motoko-scratchpad-ws-${replace(replace(call_id, "/", "_"), ":", "_")}.request.json"
 }
 
 func result_from_json(raw: string) -> CellExecResult {
@@ -207,17 +207,17 @@ func loop_until_done(rt: ExtRuntime, ctx: ExtCtx, conn, req_path: string, done_p
   }
 }
 
-export func exec_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, cells: Json, timeout_secs: int) -> CellExecResult ! {Stream, FS, IO, Clock, Process, AI, Env, Net, SharedMem} {
-  if getEnvOr("MOTOKO_EVAL_WS_LOOPBACK", "0") != "1" then
-    exec_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs)
+export func exec_scratchpad_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, cells: Json, timeout_secs: int) -> CellExecResult ! {Stream, FS, IO, Clock, Process, AI, Env, Net, SharedMem} {
+  if getEnvOr("MOTOKO_SCRATCHPAD_WS_LOOPBACK", "0") != "1" then
+    exec_scratchpad_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs)
   else {
     let path = state_path(call.id);
     let req_path = request_path(call.id);
     let _ = removeFileResult(path);
     let _ = removeFileResult(req_path);
-    let url = "${ws_url(ctx.env_server_url)}/exec-cell-ws";
+    let url = "${ws_url(ctx.env_server_url)}/scratchpad-cell-ws";
     match connect(url, {headers: []}) {
-      Err(_) => exec_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs),
+      Err(_) => exec_scratchpad_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs),
       Ok(conn) => {
         let run_frame = encode(jo([
           kv("type", js("run")),
@@ -231,7 +231,7 @@ export func exec_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, ce
         if fileExists(path) then
           result_from_json(readFile(path))
         else
-          exec_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs)
+          exec_scratchpad_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs)
       }
     }
   }

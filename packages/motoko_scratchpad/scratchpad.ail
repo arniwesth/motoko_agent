@@ -1,4 +1,4 @@
-module sunholo/motoko_ext_eval/eval
+module sunholo/motoko_ext_scratchpad/scratchpad
 
 import std/option (Option, Some, None)
 import std/json (Json, jo, kv, js, get, asArray, asString)
@@ -12,9 +12,9 @@ import pkg/sunholo/motoko_ext_abi/types (
   Allow, Deny, NoOpinion, Delegate, Handled, NoIntercept, NoDecision, PassThrough,
   Msg
 )
-import pkg/sunholo/motoko_ext_eval/prompts (prompt_patch)
-import pkg/sunholo/motoko_ext_eval/types (tool_name, schema_json)
-import src/core/env_client (exec_cell)
+import pkg/sunholo/motoko_ext_scratchpad/prompts (prompt_patch)
+import pkg/sunholo/motoko_ext_scratchpad/types (tool_name, schema_json)
+import src/core/env_client (exec_scratchpad_cell)
 
 func no_budget_patch() -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
@@ -24,8 +24,8 @@ func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   no_budget_patch()
 }
 
-func is_eval_tool(name: string) -> bool {
-  name == "eval" || name == "Eval"
+func is_scratchpad_tool(name: string) -> bool {
+  name == "scratchpad" || name == "Scratchpad"
 }
 
 func cells_arg(args: Json) -> Json {
@@ -39,13 +39,13 @@ func cells_arg(args: Json) -> Json {
 }
 
 export func provided_tools() -> [string] {
-  ["eval"]
+  [tool_name()]
 }
 
 export func on_describe_tools() -> [ToolSchema] {
   [{
-    name: "eval",
-    description: "Run persistent eval cells: Python/JavaScript (mutable REPL kernels), AILANG (language:\"ail\" — source-backed scratchpad gated by ailang check with optional Z3 contracts), or Lean 4 (language:\"lean\" — persistent theorem-proving scratchpad with honest proof metadata).",
+    name: tool_name(),
+    description: "Run persistent scratchpad cells: Python/JavaScript for scripting and plots, AILANG (language:\"ail\" — source-backed scratchpad gated by ailang check with optional Z3 contracts), or Lean 4 (language:\"lean\" — persistent theorem-proving scratchpad with honest proof metadata).",
     parameters: schema_json()
   }]
 }
@@ -66,8 +66,8 @@ func cells_have_lean_effect_hatch(cells: [Json]) -> bool {
 }
 
 export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
-  if not is_eval_tool(call.tool) then NoOpinion
-  else if ctx.mode == "restricted" || ctx.mode == "read_only" || ctx.mode == "readonly" then Deny("eval is disabled in restricted/read-only mode")
+  if not is_scratchpad_tool(call.tool) then NoOpinion
+  else if ctx.mode == "restricted" || ctx.mode == "read_only" || ctx.mode == "readonly" then Deny("scratchpad is disabled in restricted/read-only mode")
   else if ctx.mode == "prove_only" || ctx.mode == "proof_only" then
     match asArray(cells_arg(call.arguments)) {
       Some(cells) => if cells_have_lean_effect_hatch(cells) then Deny("Lean proof-only mode rejects #eval/#exit/run_cmd/IO.Process") else Allow,
@@ -79,7 +79,7 @@ export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDec
 func result_from_exec(call: ToolCallEnvelope, result: { stdout: string, stderr: string, exit_code: int, metadata: Json }) -> ToolResultEnvelope {
   {
     tool_call_id: call.id,
-    tool: "eval",
+    tool: tool_name(),
     exit_code: result.exit_code,
     stdout: result.stdout,
     stderr: result.stderr,
@@ -88,10 +88,10 @@ func result_from_exec(call: ToolCallEnvelope, result: { stdout: string, stderr: 
 }
 
 export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleDecision ! {Net} {
-  if not is_eval_tool(call.tool) then Delegate
+  if not is_scratchpad_tool(call.tool) then Delegate
   else {
     let cells = cells_arg(call.arguments);
-    let result = exec_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs);
+    let result = exec_scratchpad_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs);
     Handled(result_from_exec(call, result))
   }
 }
@@ -101,7 +101,7 @@ export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net} {
     on_tool_handle(ctx, call, timeout_secs)
   };
   {
-    id: "eval",
+    id: "scratchpad",
     provided_tools: provided_tools(),
     on_describe_tools: \_ . on_describe_tools(),
     on_build_system_prompt: \_ctx. prompt_patch(),

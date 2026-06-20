@@ -1,4 +1,4 @@
-export type EvalLanguage = "py" | "js" | "ail" | "lean";
+export type ScratchpadLanguage = "py" | "js" | "ail" | "lean";
 
 // AILANG verification gate for a cell:
 //   "auto"     — run the verifier only when the candidate has requires/ensures
@@ -9,8 +9,8 @@ export type EvalLanguage = "py" | "js" | "ail" | "lean";
 export type AilangVerifyMode = boolean | "auto" | "required";
 export type LeanProveMode = "auto" | "required" | "off";
 
-export type EvalCell = {
-  language: EvalLanguage;
+export type ScratchpadCell = {
+  language: ScratchpadLanguage;
   code: string;
   title?: string;
   timeout?: number;
@@ -25,7 +25,7 @@ export type EvalCell = {
   mathlib?: boolean;
 };
 
-export type EvalDisplayBundle = {
+export type ScratchpadDisplayBundle = {
   type: "json" | "image" | "markdown" | "status" | "text";
   mime?: string;
   data: unknown;
@@ -38,8 +38,8 @@ export type CellRunFrame =
   | { type: "started"; id: string }
   | { type: "stdout"; id: string; text: string }
   | { type: "stderr"; id: string; text: string }
-  | { type: "display"; id: string; bundle: EvalDisplayBundle }
-  | { type: "result"; id: string; bundle: EvalDisplayBundle }
+  | { type: "display"; id: string; bundle: ScratchpadDisplayBundle }
+  | { type: "result"; id: string; bundle: ScratchpadDisplayBundle }
   | { type: "error"; id: string; ename: string; evalue: string; traceback: string[] }
   | { type: "done"; id: string; status: "ok" | "error" | "timeout"; executionCount: number; cancelled: boolean };
 
@@ -108,17 +108,17 @@ export type LeanCellMetadata = {
   notice?: string;
 };
 
-export type EvalCellResult = {
+export type ScratchpadCellResult = {
   index: number;
-  language: EvalLanguage;
+  language: ScratchpadLanguage;
   title: string;
   code?: string;
   durationMs?: number;
   exit_code: number;
   stdout: string;
   stderr: string;
-  displays: EvalDisplayBundle[];
-  result?: EvalDisplayBundle;
+  displays: ScratchpadDisplayBundle[];
+  result?: ScratchpadDisplayBundle;
   error?: { ename: string; evalue: string; traceback: string[] };
   executionCount: number;
   cancelled: boolean;
@@ -126,11 +126,11 @@ export type EvalCellResult = {
   metadata?: { ailang?: AilangCellMetadata; lean?: LeanCellMetadata };
 };
 
-export type ExecCellResponse = {
+export type ScratchpadCellResponse = {
   exit_code: number;
   stdout: string;
   stderr: string;
-  cells: EvalCellResult[];
+  cells: ScratchpadCellResult[];
   images: Array<{ path: string; mime: string; width?: number; height?: number }>;
   jsonOutputs: unknown[];
   notice?: string;

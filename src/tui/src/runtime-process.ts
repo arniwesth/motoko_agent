@@ -81,7 +81,7 @@ export type AgentEvent =
   | { type: "compose_claimcheck_compare_result"; step: number; compose_id: string; attempt: number; verdict: "confirmed" | "disputed" | "vacuous" | "surprising_restriction" | "inconclusive"; confidence: "high" | "low"; reason: string; informalization?: string }
   | { type: "compose_summary_delta"; step: number; compose_id: string; delta: string }
   | { type: "compose_result"; step: number; compose_id: string; attempts: number; summary: string; stdout: string; stderr: string; exit_code: number; truncated: boolean; telemetry_json?: string }
-  | { type: "eval_result"; tool_call_id: string; request_id: string; step: number; cells_json: string }
+  | { type: "scratchpad_result"; tool_call_id: string; request_id: string; step: number; cells_json: string }
   | {
       type: "obs";
       step: number;
@@ -317,6 +317,11 @@ export class RuntimeProcess {
       MOTOKO_HEADLESS:
         process.env.MOTOKO_HEADLESS ??
         (process.stdin.isTTY ? "" : "1"),
+      // M-MOTOKO-PERSIST-NUDGE: forward the loop-persistence retry budget so
+      // agent_loop_v2.ail's NoDecision branch can read it. Without this the
+      // explicit env allowlist scrubs it and the feature is silently off —
+      // same gotcha as MOTOKO_REPO / the pricing vars below. Empty = off.
+      MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
       // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): forward
       // MOTOKO_REPO so the AILANG runtime can fall back to the fork's
       // bundled profile (.motoko/config/<profile>) when WORKDIR is a
@@ -335,6 +340,14 @@ export class RuntimeProcess {
       // moved out into separate packages without a corresponding launcher
       // wiring.
       MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+      // M-OLLAMA-PER-MODEL-MAX-TOKENS: forward the per-model output budget so the
+      // AILANG runtime's ollama /v1 path (resolveOllamaMaxTokens) uses the model's
+      // declared max_output_tokens instead of the 4096 std/ai default. Qwen3.6
+      // reasons thousands of tokens before the tool call and truncates
+      // (finish_reason=length) at 4096 → 0 tool calls (disengagement). Without this
+      // allowlist entry the explicit childEnv whitelist drops it — same gotcha as
+      // MOTOKO_REPO / the pricing vars. Empty = the AILANG-side 16384 floor applies.
+      AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
       // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
       // pricing env vars set by the AILANG adapter from Task.Budget. Without
       // this, the AILANG-side fix (load_cost_rates reads these env vars) is

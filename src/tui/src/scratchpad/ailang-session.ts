@@ -1,8 +1,8 @@
 // AILANG persistent source session — the pure, CLI-free core of the AILANG
-// eval kernel. This file holds NO process/exec logic so it can be unit-tested
+// scratchpad kernel. This file holds NO process/exec logic so it can be unit-tested
 // without the `ailang` binary installed.
 //
-// Persistence model (see plan 05): an AILANG eval cell is NOT a mutable REPL.
+// Persistence model (see plan 05): an AILANG scratchpad cell is NOT a mutable REPL.
 // Accepted top-level declarations and imports accumulate as *source* in a
 // generated session module. A later cell may USE earlier declarations, but a
 // failed candidate (check/verify gate not satisfied) never mutates the
@@ -21,7 +21,7 @@ import type {
   AilangVerifyStatus,
 } from "./frames.js";
 
-export const SESSION_MODULE = "motoko/eval_session";
+export const SESSION_MODULE = "motoko/scratchpad_session";
 export const DEFAULT_ENTRY = "main";
 
 export type ParsedDecl = {

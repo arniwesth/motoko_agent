@@ -15,13 +15,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, unl
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { createClaimCheckTelemetry, runClaimCheck } from "./compose-claimcheck.js";
-import type { EvalCell, EvalCellResult, ExecCellResponse, LoopbackToolRequest, LoopbackToolResult } from "./eval/frames.js";
-import { EvalKernelRegistry } from "./eval/registry.js";
-import type { JsLoopback } from "./eval/kernel-js.js";
-import type { LeanKernelConfig } from "./eval/kernel-lean.js";
-import { startLoopbackServer } from "./eval/loopback.js";
-import { attachExecCellWebSocketServer } from "./eval/ws-channel.js";
-import { buildEvalTranscript, spillImages } from "./eval/transcript.js";
+import type { ScratchpadCell, ScratchpadCellResult, ScratchpadCellResponse, LoopbackToolRequest, LoopbackToolResult } from "./scratchpad/frames.js";
+import { ScratchpadKernelRegistry } from "./scratchpad/registry.js";
+import type { JsLoopback } from "./scratchpad/kernel-js.js";
+import type { LeanKernelConfig } from "./scratchpad/kernel-lean.js";
+import { startLoopbackServer } from "./scratchpad/loopback.js";
+import { attachScratchpadCellWebSocketServer } from "./scratchpad/ws-channel.js";
+import { buildScratchpadTranscript, spillImages } from "./scratchpad/transcript.js";
 
 export interface ExecResult {
   stdout: string;
@@ -418,7 +418,7 @@ type ComposeRequest = {
 // spawns would both pick the same port, second's bind failed → wrapper
 // exited before AILANG runtime started → 0-byte JSONL → adapter reported
 // "motoko terminated without emitting run_summary (likely crash)".
-export function normalizeAilangVerify(v: unknown): EvalCell["verify"] {
+export function normalizeAilangVerify(v: unknown): ScratchpadCell["verify"] {
   if (v === true || v === "true") return true;
   if (v === false || v === "false" || v === "off") return false;
   if (v === "required") return "required";
@@ -426,25 +426,25 @@ export function normalizeAilangVerify(v: unknown): EvalCell["verify"] {
   return "auto"; // default: verify when requires/ensures annotations are present
 }
 
-export function normalizeLeanProve(v: unknown): EvalCell["prove"] {
+export function normalizeLeanProve(v: unknown): ScratchpadCell["prove"] {
   if (v === "required") return "required";
   if (v === "off" || v === false || v === "false") return "off";
   return "auto";
 }
 
-// Normalize raw eval-cell JSON into typed EvalCell[]. Unknown languages are an
+// Normalize raw scratchpad-cell JSON into typed ScratchpadCell[]. Unknown languages are an
 // explicit error (never silently coerced to Python — see plan 05). A missing
 // language defaults to "py" for backward compatibility.
-export function normalizeEvalCells(raw: unknown): EvalCell[] {
+export function normalizeScratchpadCells(raw: unknown): ScratchpadCell[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((cell, i) => {
     const rec = (cell && typeof cell === "object") ? cell as Record<string, unknown> : {};
     const langRaw = (rec.language === undefined || rec.language === null) ? "py" : String(rec.language);
     if (langRaw !== "py" && langRaw !== "js" && langRaw !== "ail" && langRaw !== "lean") {
-      throw new Error(`unsupported eval language "${langRaw}" in cell ${i + 1}; expected "py", "js", "ail", or "lean"`);
+      throw new Error(`unsupported scratchpad language "${langRaw}" in cell ${i + 1}; expected "py", "js", "ail", or "lean"`);
     }
-    const language = langRaw as EvalCell["language"];
-    const base: EvalCell = {
+    const language = langRaw as ScratchpadCell["language"];
+    const base: ScratchpadCell = {
       language,
       code: String(rec.code ?? ""),
       title: typeof rec.title === "string" ? rec.title : undefined,
@@ -683,14 +683,14 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }
   }
 
-  const defaultEvalModel = String(process.env.MOTOKO_EVAL_AGENT_MODEL ?? process.env.AILANG_SUBAGENT_MODEL ?? process.env.MODEL ?? "anthropic/claude-sonnet-4-6");
+  const defaultScratchpadModel = String(process.env.MOTOKO_SCRATCHPAD_AGENT_MODEL ?? process.env.AILANG_SUBAGENT_MODEL ?? process.env.MODEL ?? "anthropic/claude-sonnet-4-6");
   const loopback = await startLoopbackServer({
     workdir,
-    defaultModel: defaultEvalModel,
-    callAgent: (model, prompt) => callSubagentModel(model || defaultEvalModel, prompt),
+    defaultModel: defaultScratchpadModel,
+    callAgent: (model, prompt) => callSubagentModel(model || defaultScratchpadModel, prompt),
   });
 
-  function confinedEvalPath(userPath: string): string {
+  function confinedScratchpadPath(userPath: string): string {
     const root = resolve(workdir);
     const target = resolve(root, userPath || ".");
     if (target !== root && !target.startsWith(root + "/")) {
@@ -701,21 +701,21 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
 
   function makeJsLoopback(): JsLoopback {
     return {
-      read: (path: string) => readFileSync(confinedEvalPath(path), "utf8"),
+      read: (path: string) => readFileSync(confinedScratchpadPath(path), "utf8"),
       write: (path: string, content: string) => {
-        const p = confinedEvalPath(path);
+        const p = confinedScratchpadPath(path);
         mkdirSync(dirname(p), { recursive: true });
         writeFileSync(p, String(content), "utf8");
         return "";
       },
       append: (path: string, content: string) => {
-        const p = confinedEvalPath(path);
+        const p = confinedScratchpadPath(path);
         mkdirSync(dirname(p), { recursive: true });
         appendFileSync(p, String(content), "utf8");
         return "";
       },
       search: (pattern: string, path = ".") => {
-        const p = confinedEvalPath(path);
+        const p = confinedScratchpadPath(path);
         try {
           return execFileSync("rg", ["-n", "--no-heading", "--color", "never", String(pattern), p], {
             cwd: workdir,
@@ -728,18 +728,18 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
           throw e;
         }
       },
-      agent: (prompt: string, model = "") => callSubagentModel(model || defaultEvalModel, prompt),
+      agent: (prompt: string, model = "") => callSubagentModel(model || defaultScratchpadModel, prompt),
     };
   }
 
-  // Host capability ceiling for AILANG eval `run`. Requested caps are
+  // Host capability ceiling for AILANG scratchpad `run`. Requested caps are
   // intersected with this in the kernel; the .ail on_tool_policy layer does the
-  // mode-based gating (restricted/read-only deny eval entirely). Process and Net
+  // mode-based gating (restricted/read-only deny scratchpad entirely). Process and Net
   // are off unless explicitly enabled for this host.
   function ailangCapsCeiling(): string[] {
     const base = ["IO", "FS", "Clock", "Env"];
-    if (process.env.MOTOKO_EVAL_NETWORK === "1") base.push("Net");
-    if (process.env.MOTOKO_EVAL_AILANG_PROCESS === "1") base.push("Process");
+    if (process.env.MOTOKO_SCRATCHPAD_NETWORK === "1") base.push("Net");
+    if (process.env.MOTOKO_SCRATCHPAD_AILANG_PROCESS === "1") base.push("Process");
     return base;
   }
 
@@ -764,9 +764,9 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   function leanAgentPrompt(): string {
     if (leanAgentPromptCache !== null) return leanAgentPromptCache;
     const candidates = [
-      join(agentRoot, "src", "eval", "lean4-teach.md"),
-      join(agentRoot, "src", "tui", "src", "eval", "lean4-teach.md"),
-      resolve(process.cwd(), "src/tui/src/eval/lean4-teach.md"),
+      join(agentRoot, "src", "scratchpad", "lean4-teach.md"),
+      join(agentRoot, "src", "tui", "src", "scratchpad", "lean4-teach.md"),
+      resolve(process.cwd(), "src/tui/src/scratchpad/lean4-teach.md"),
     ];
     for (const p of candidates) {
       try {
@@ -847,16 +847,16 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     };
   }
 
-  const evalRegistry = new EvalKernelRegistry(
-    Math.max(60_000, Number(process.env.MOTOKO_EVAL_IDLE_MS ?? 10 * 60_000)),
+  const scratchpadRegistry = new ScratchpadKernelRegistry(
+    Math.max(60_000, Number(process.env.MOTOKO_SCRATCHPAD_IDLE_MS ?? 10 * 60_000)),
     () => ({
-      MOTOKO_EVAL_LOOPBACK_URL: loopback.url,
-      MOTOKO_EVAL_LOOPBACK_TOKEN: loopback.token,
-      MOTOKO_EVAL_NETWORK: String(process.env.MOTOKO_EVAL_NETWORK ?? "0"),
+      MOTOKO_SCRATCHPAD_LOOPBACK_URL: loopback.url,
+      MOTOKO_SCRATCHPAD_LOOPBACK_TOKEN: loopback.token,
+      MOTOKO_SCRATCHPAD_NETWORK: String(process.env.MOTOKO_SCRATCHPAD_NETWORK ?? "0"),
     }),
     makeJsLoopback,
     () => ({
-      tmpDir: "/tmp/motoko-ailang-eval",
+      tmpDir: "/tmp/motoko-ailang-scratchpad",
       capsCeiling: ailangCapsCeiling(),
       agentPrompt: ailangAgentPrompt,
     }),
@@ -892,24 +892,24 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }
   }
 
-  async function runEvalCells(cells: EvalCell[], sessionId: string, defaultTimeout: number): Promise<ExecCellResponse> {
+  async function runScratchpadCells(cells: ScratchpadCell[], sessionId: string, defaultTimeout: number): Promise<ScratchpadCellResponse> {
     if (cells.length === 0) {
-      return { exit_code: 0, stdout: "", stderr: "", cells: [], images: [], jsonOutputs: [], notice: "no eval cells provided" };
+      return { exit_code: 0, stdout: "", stderr: "", cells: [], images: [], jsonOutputs: [], notice: "no scratchpad cells provided" };
     }
     if (cells.some((cell) => cell.language === "py") && !pythonAvailable()) {
-      const notice = "python3 unavailable; Python eval cells were skipped";
+      const notice = "python3 unavailable; Python scratchpad cells were skipped";
       return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
     }
     if (cells.some((cell) => cell.language === "ail") && !ailangAvailable()) {
-      const notice = "ailang CLI unavailable; AILANG eval cells were skipped";
+      const notice = "ailang CLI unavailable; AILANG scratchpad cells were skipped";
       return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
     }
     if (cells.some((cell) => cell.language === "lean") && !leanAvailable()) {
-      const notice = "Lean/Lake unavailable; Lean eval cells were skipped";
+      const notice = "Lean/Lake unavailable; Lean scratchpad cells were skipped";
       return { exit_code: 0, stdout: notice, stderr: "", cells: [], images: [], jsonOutputs: [], notice };
     }
 
-    const results: EvalCellResult[] = [];
+    const results: ScratchpadCellResult[] = [];
     const images: Array<{ path: string; mime: string; width?: number; height?: number }> = [];
     const jsonOutputs: unknown[] = [];
     let exitCode = 0;
@@ -917,7 +917,7 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     for (let i = 0; i < cells.length; i++) {
       const cell = cells[i];
       try {
-        const result = await evalRegistry.runCell(i, sessionId, cell, workdir, defaultTimeout);
+        const result = await scratchpadRegistry.runCell(i, sessionId, cell, workdir, defaultTimeout);
         results.push(result);
         const spilled = spillImages(workdir, sessionId, i + 1, result.displays.concat(result.result ? [result.result] : []));
         images.push(...spilled);
@@ -937,7 +937,7 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
           stdout: "",
           stderr: String(e?.message ?? e),
           displays: [],
-          error: { ename: "EvalHostError", evalue: String(e?.message ?? e), traceback: [] },
+          error: { ename: "ScratchpadHostError", evalue: String(e?.message ?? e), traceback: [] },
           executionCount: 0,
           cancelled: false,
           truncated: false,
@@ -946,7 +946,7 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
       if (exitCode !== 0) break;
     }
 
-    const stdout = buildEvalTranscript(results, images);
+    const stdout = buildScratchpadTranscript(results, images);
     return {
       exit_code: exitCode,
       stdout,
@@ -1326,22 +1326,22 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     }
   });
 
-  // POST /exec-cell — run persistent Python/JS eval cells for a session.
-  // Body: { cells: EvalCell[], sessionId: string, timeout?: number }
-  app.post("/exec-cell", async (req, res) => {
+  // POST /scratchpad-cell — run persistent Python/JS scratchpad cells for a session.
+  // Body: { cells: ScratchpadCell[], sessionId: string, timeout?: number }
+  app.post("/scratchpad-cell", async (req, res) => {
     const body = req.body as { cells?: unknown; sessionId?: string; timeout?: number };
     const sessionId = String(body.sessionId ?? "default");
     const defaultTimeout = Math.max(1, Number(body.timeout ?? 30));
-    let cells: EvalCell[];
+    let cells: ScratchpadCell[];
     try {
-      cells = normalizeEvalCells(body.cells);
+      cells = normalizeScratchpadCells(body.cells);
     } catch (e: any) {
       // The env-server contract is "always HTTP 200; exit_code signals failure".
       const msg = String(e?.message ?? e);
       res.json({ exit_code: 1, stdout: "", stderr: msg, cells: [], images: [], jsonOutputs: [], notice: msg });
       return;
     }
-    res.json(await runEvalCells(cells, sessionId, defaultTimeout));
+    res.json(await runScratchpadCells(cells, sessionId, defaultTimeout));
   });
 
   // Persist a snippet and its metadata to the permanent store.
@@ -1939,11 +1939,11 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   });
 
   const server = app.listen(port);
-  const evalWsServer = attachExecCellWebSocketServer(server, {
-    path: "/exec-cell-ws",
-    normalizeCells: normalizeEvalCells,
-    runCells: (cells: EvalCell[], sessionId: string, timeoutSecs: number, resolver: (frame: LoopbackToolRequest) => Promise<LoopbackToolResult>) =>
-      loopback.withBrainResolver(resolver, () => runEvalCells(cells, sessionId, timeoutSecs)),
+  const scratchpadWsServer = attachScratchpadCellWebSocketServer(server, {
+    path: "/scratchpad-cell-ws",
+    normalizeCells: normalizeScratchpadCells,
+    runCells: (cells: ScratchpadCell[], sessionId: string, timeoutSecs: number, resolver: (frame: LoopbackToolRequest) => Promise<LoopbackToolResult>) =>
+      loopback.withBrainResolver(resolver, () => runScratchpadCells(cells, sessionId, timeoutSecs)),
   });
   // Wait for the bind to settle so we can return the actual port. With
   // port=0 the kernel allocates lazily — server.address() returns null
@@ -1958,8 +1958,8 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
   // Cleanup .motoko-store on process exit
   const cleanup = () => {
     try { rmSync(motokoStore, { recursive: true, force: true }); } catch { /* ignore */ }
-    try { evalRegistry.close(); } catch { /* ignore */ }
-    try { evalWsServer.close(); } catch { /* ignore */ }
+    try { scratchpadRegistry.close(); } catch { /* ignore */ }
+    try { scratchpadWsServer.close(); } catch { /* ignore */ }
     try { void loopback.close(); } catch { /* ignore */ }
   };
   process.on("exit", cleanup);

@@ -1,4 +1,4 @@
-import type { EvalCell, EvalCellResult, EvalLanguage } from "./frames.js";
+import type { ScratchpadCell, ScratchpadCellResult, ScratchpadLanguage } from "./frames.js";
 import { PythonKernel } from "./kernel-py.js";
 import { JsKernel, type JsLoopback } from "./kernel-js.js";
 import { AilangKernel, type AilangKernelConfig } from "./kernel-ailang.js";
@@ -10,7 +10,7 @@ type RegistryEntry =
   | { language: "ail"; kernel: AilangKernel; lastUsed: number }
   | { language: "lean"; kernel: LeanKernel; lastUsed: number };
 
-export class EvalKernelRegistry {
+export class ScratchpadKernelRegistry {
   private entries = new Map<string, RegistryEntry>();
   private cleanupTimer: NodeJS.Timeout;
 
@@ -25,7 +25,7 @@ export class EvalKernelRegistry {
     this.cleanupTimer.unref();
   }
 
-  private key(language: EvalLanguage, sessionId: string): string {
+  private key(language: ScratchpadLanguage, sessionId: string): string {
     return `${language}:${sessionId}`;
   }
 
@@ -39,14 +39,14 @@ export class EvalKernelRegistry {
     }
   }
 
-  reset(language: EvalLanguage, sessionId: string): void {
+  reset(language: ScratchpadLanguage, sessionId: string): void {
     const key = this.key(language, sessionId);
     const existing = this.entries.get(key);
     if (existing) existing.kernel.close();
     this.entries.delete(key);
   }
 
-  private get(language: EvalLanguage, sessionId: string): RegistryEntry {
+  private get(language: ScratchpadLanguage, sessionId: string): RegistryEntry {
     const key = this.key(language, sessionId);
     const existing = this.entries.get(key);
     if (existing) {
@@ -67,7 +67,7 @@ export class EvalKernelRegistry {
     return entry;
   }
 
-  async runCell(index: number, sessionId: string, cell: EvalCell, workdir: string, defaultTimeoutSecs: number): Promise<EvalCellResult> {
+  async runCell(index: number, sessionId: string, cell: ScratchpadCell, workdir: string, defaultTimeoutSecs: number): Promise<ScratchpadCellResult> {
     // AILANG/Lean reset is handled inside the kernel (session.reset) so that the
     // one-time teach-prompt marker survives a source reset; py/js reset
     // destroys the kernel process.
@@ -76,7 +76,7 @@ export class EvalKernelRegistry {
     const timeoutMs = Math.max(1, Number(cell.timeout ?? defaultTimeoutSecs)) * 1000;
     const title = String(cell.title ?? `${cell.language} cell ${index + 1}`);
     const started = Date.now();
-    let result: EvalCellResult;
+    let result: ScratchpadCellResult;
     if (entry.language === "py") {
       result = await entry.kernel.run(index, { code: cell.code, title, cwd: workdir, timeoutMs });
     } else if (entry.language === "js") {

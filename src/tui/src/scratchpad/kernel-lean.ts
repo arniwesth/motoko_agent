@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import type {
-  EvalCell,
-  EvalCellResult,
-  EvalDisplayBundle,
+  ScratchpadCell,
+  ScratchpadCellResult,
+  ScratchpadDisplayBundle,
   LeanCellMetadata,
   LeanProofStatus,
 } from "./frames.js";
@@ -114,7 +114,7 @@ export class LeanKernel {
         ...process.env,
         ...this.config.env,
         AILANG_FS_SANDBOX: workdir,
-        MOTOKO_EVAL_NETWORK: String(process.env.MOTOKO_EVAL_NETWORK ?? "0"),
+        MOTOKO_SCRATCHPAD_NETWORK: String(process.env.MOTOKO_SCRATCHPAD_NETWORK ?? "0"),
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -193,8 +193,8 @@ export class LeanKernel {
     stdout: string,
     stderr: string,
     teachPrompt?: string,
-  ): EvalCellResult {
-    const displays: EvalDisplayBundle[] = [{ type: "status", mime: "text/plain", data: statusSummary(meta) }];
+  ): ScratchpadCellResult {
+    const displays: ScratchpadDisplayBundle[] = [{ type: "status", mime: "text/plain", data: statusSummary(meta) }];
     const visibleStdout = teachPrompt
       ? `===== Lean 4 teaching guide - read before authoring (shown once per session) =====\n${teachPrompt}\n===== end Lean 4 teaching guide =====\n${stdout}`
       : stdout;
@@ -214,7 +214,7 @@ export class LeanKernel {
     };
   }
 
-  async run(index: number, opts: { cell: EvalCell; title: string; timeoutMs: number; workdir: string }): Promise<EvalCellResult> {
+  async run(index: number, opts: { cell: ScratchpadCell; title: string; timeoutMs: number; workdir: string }): Promise<ScratchpadCellResult> {
     this.executionCount += 1;
     const { cell, title, timeoutMs, workdir } = opts;
     const mathlib = cell.mathlib === true;
