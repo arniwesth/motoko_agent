@@ -2266,6 +2266,9 @@ export class AgentUI {
           this.setRunState("idle");
         }
         this.model = event.model;
+        if (typeof event.config_profile === "string" && event.config_profile.trim() !== "") {
+          this.profile = event.config_profile;
+        }
         // Conversational re-emits of session_start (one per user turn in
         // agent_loop_v2.conversation_loop_v2) omit the version fields,
         // which would render as "AILANG built undefined | Core Runtime

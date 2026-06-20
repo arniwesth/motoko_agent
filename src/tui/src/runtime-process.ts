@@ -54,7 +54,7 @@ export interface NativeToolResult {
 export type ToolResultsPhase = "running" | "progress" | "done";
 
 export type AgentEvent =
-  | { type: "session_start"; task: string; model: string; brainVersion: string; ailangBuilt: string; loaded_extensions?: string[] }
+  | { type: "session_start"; task: string; model: string; brainVersion: string; ailangBuilt: string; config_profile?: string; config_dir?: string; loaded_extensions?: string[] }
   | { type: "context_usage"; step: number; tokens_est: number; limit: number }
   | { type: "thinking_stream_start"; step: number; stream_id: string; model: string }
   | { type: "thinking_delta"; step: number; stream_id: string; seq: number; text_delta: string }
