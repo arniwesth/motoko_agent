@@ -60,6 +60,7 @@ Profiles live under `.motoko/config/`. Select one with the Make `PROFILE` variab
 ```bash
 PROFILE=default make run
 PROFILE=openrouter make run TASK="Add unit tests"
+PROFILE=bedrock make run TASK="Reply with exactly: bedrock smoke ok"
 ```
 
 Generate a starter profile:
@@ -100,6 +101,39 @@ make init-config PROFILE=myprofile
 Per-extension JSON files are optional; if missing, hardcoded defaults apply.
 
 Precedence: hardcoded defaults < profile JSON < CLI args. API keys are always env vars.
+
+### Bedrock through LiteLLM
+
+The `bedrock` profile uses the existing OpenAI-compatible path and expects a local LiteLLM proxy at `http://127.0.0.1:4000/v1`. Motoko does not call Bedrock directly.
+
+Bearer-token-only setup:
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_BEARER_TOKEN_BEDROCK=...
+litellm --config scripts/bedrock-litellm.yaml --host 127.0.0.1 --port 4000
+```
+
+Smoke from another shell:
+
+```bash
+curl -sS http://127.0.0.1:4000/v1/models
+
+curl -sS http://127.0.0.1:4000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer motoko-litellm-local' \
+  -d '{"model":"gpt-bedrock-smoke","messages":[{"role":"user","content":"Say bedrock smoke ok."}],"max_tokens":64}'
+
+OPENAI_BASE_URL=http://127.0.0.1:4000/v1 \
+OPENAI_API_KEY=motoko-litellm-local \
+ailang run --caps AI,IO --ai gpt-bedrock-smoke --entry main scripts/smoke_bedrock_litellm.ail
+
+OPENAI_API_KEY=motoko-litellm-local \
+PROFILE=bedrock \
+make run TASK="Reply with exactly: bedrock smoke ok"
+```
+
+Do not use `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or mounted `~/.aws` for this profile. The LiteLLM config reads `AWS_BEARER_TOKEN_BEDROCK` and `AWS_REGION`; the dummy `OPENAI_API_KEY` only satisfies the OpenAI-compatible client path when the local proxy has no auth.
 
 ## Usage
 
