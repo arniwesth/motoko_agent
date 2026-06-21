@@ -21,9 +21,9 @@ pure func filter_completed(tasks: [Task]) -> [Task] {
 }
 
 pure func process_task(t: Task) -> Task ! {IO, AI} {
-  let prompt = "Summarize this task in 5 words: " ++ t.description;
+  let prompt = concat(["Summarize this task in 5 words: ", t.description]);
   let summary = call(prompt);
-  println("AI Summary for Task " ++ show(t.id) ++ ": " ++ summary);
+  println(concat(["AI Summary for Task ", show(t.id), ": ", summary]));
   {t | description: summary}
 }
 
@@ -46,10 +46,10 @@ export func main() -> () ! {IO, AI} {
   ];
 
   let completed_tasks = filter_completed(tasks);
-  println("Found " ++ show(length(completed_tasks)) ++ " completed tasks.");
+  println(concat(["Found ", show(length(completed_tasks)), " completed tasks."]));
 
   let incomplete_tasks = filter_incomplete(tasks);
-  println("Processing " ++ show(length(incomplete_tasks)) ++ " incomplete tasks...");
+  println(concat(["Processing ", show(length(incomplete_tasks)), " incomplete tasks..."]));
   
   let processed_tasks = process_all_tasks(incomplete_tasks);
 
@@ -67,7 +67,7 @@ pure func filter_incomplete(tasks: [Task]) -> [Task] {
 pure func print_descriptions(tasks: [Task]) -> () ! {IO} {
   match tasks {
     [] => (),
-    t :: rest => let _ = println("- " ++ t.description) in print_descriptions(rest)
+    t :: rest => let _ = println(concat(["- ", t.description])) in print_descriptions(rest)
   }
 }
 
