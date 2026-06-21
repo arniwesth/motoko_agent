@@ -4,6 +4,16 @@
 
 **Non-goal:** Do not introduce a native Bedrock provider in Motoko or AILANG for this phase. Bedrock remains behind LiteLLM's OpenAI-compatible proxy.
 
+## TL;DR
+
+- Keep Bedrock behind LiteLLM; Motoko continues using the OpenAI-compatible path.
+- Use bearer-token-only Bedrock auth: `AWS_BEARER_TOKEN_BEDROCK` + `AWS_REGION`.
+- The current main blocker is upstream AILANG: direct `gpt-*` aliases must honor `OPENAI_BASE_URL` in `setupAIHandlerDirect`.
+- Until upstream AILANG is fixed and installed, Bedrock runs require the patched local binary via `AILANG_BIN`.
+- Use `gpt-bedrock-smoke` so AILANG stays on Chat Completions and does not route through OpenRouter or OpenAI Responses.
+- Use the working LiteLLM inference profile mapping in `scripts/bedrock-litellm.yaml`, adjusting it per AWS account/region if needed.
+- Full integration means: upstream AILANG fix, stable `bedrock` profile, proxy start target, layered smoke targets, and docs that avoid printing secrets.
+
 ## Current Validated State
 
 The following path has been validated end to end with bearer-token-only Bedrock auth:
