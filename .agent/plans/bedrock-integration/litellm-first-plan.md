@@ -11,6 +11,8 @@
 - Config-driven `[[ai_provider]]` supports simple auth shapes, but not AWS SigV4.
 - Motoko already supports OpenAI-compatible endpoints through `OPENAI_BASE_URL`.
 - LiteLLM can expose Bedrock through OpenAI-compatible `/v1/chat/completions`.
+- Motoko launches AILANG with `--ai <model>`. If the model is not found in AILANG's `models.yml`, AILANG uses direct provider guessing. For a `gpt-*` alias, this routes to the OpenAI provider.
+- In the direct OpenAI provider path, AILANG still requires `OPENAI_API_KEY` even when `OPENAI_BASE_URL` points at a local proxy. For the LiteLLM smoke, set `OPENAI_API_KEY` to a dummy non-secret value unless the proxy is configured with a real LiteLLM master key.
 
 ## Proposed Architecture
 
@@ -36,6 +38,11 @@ Motoko should see a normal OpenAI-compatible model alias. LiteLLM handles AWS cr
 - AWS region, for example `us-east-1` or `us-west-2`.
 - Bedrock model ID to test, for example an Anthropic Claude model available in the account.
 - Python environment capable of installing/running LiteLLM and `boto3`.
+- A local proxy API key policy:
+  - no-auth LiteLLM: use `OPENAI_API_KEY=motoko-litellm-local` only to satisfy AILANG's direct OpenAI key guard
+  - LiteLLM with `master_key`: set `OPENAI_API_KEY` to that LiteLLM key
+
+Do not forward a real OpenAI API key to the local proxy during this test. It is unnecessary and may be logged by the proxy.
 
 ## Model Alias Strategy
 
@@ -48,6 +55,8 @@ gpt-bedrock-smoke
 ```
 
 Avoid `openai/<model>` for the initial smoke. In current AILANG routing, `openai/...` can be interpreted as an OpenRouter-style vendor/model string in direct provider guessing paths. A plain `gpt-*` alias routes as OpenAI.
+
+Avoid aliases starting with `gpt-5`, `o1`, `o3`, or `codex` for the first smoke. AILANG routes those through its OpenAI Responses API path. `gpt-bedrock-smoke` should use Chat Completions.
 
 ## Phase 1: Manual LiteLLM Smoke
 
@@ -73,7 +82,7 @@ litellm --config /path/to/bedrock-litellm.yaml --host 127.0.0.1 --port 4000
 Validate proxy directly:
 
 ```bash
-curl http://127.0.0.1:4000/v1/models
+curl -sS http://127.0.0.1:4000/v1/models
 ```
 
 Then test chat completions directly:
@@ -95,9 +104,66 @@ Acceptance criteria:
 - `/v1/chat/completions` returns a valid OpenAI-shaped response.
 - No AWS auth, model access, or region errors.
 
-## Phase 2: Motoko Profile Smoke
+## Phase 2: AILANG Provider Preflight
 
-Create or use a dedicated Motoko profile with:
+Before involving Motoko, verify AILANG's actual `--ai` path can talk to the proxy and can exercise the same `stepWithStream` primitive family Motoko uses.
+
+Create a temporary smoke file:
+
+```ailang
+module tmp/bedrock_litellm_smoke
+
+import std/ai (stepWithStream, Message, StreamChunk, ContentDelta, ThinkingDelta, Usage)
+import std/io (print, println)
+
+func render(chunk: StreamChunk) -> () ! {IO} {
+  match chunk {
+    ContentDelta(text) => print(text),
+    ThinkingDelta(_) => (),
+    Usage(_) => println("")
+  }
+}
+
+export func main() -> () ! {AI, IO} {
+  let messages: [Message] = [{
+    role: "user",
+    content: "Reply with exactly: bedrock ailang ok",
+    tool_calls: [],
+    tool_call_id: ""
+  }];
+  match stepWithStream("gpt-bedrock-smoke", messages, [], [], render) {
+    Ok(result) => {
+      println("");
+      println("finish_reason=${result.finish_reason}")
+    },
+    Err(e) => {
+      println("ERR ${e.code}: ${e.message}")
+    }
+  }
+}
+```
+
+Run:
+
+```bash
+OPENAI_BASE_URL=http://127.0.0.1:4000/v1 \
+OPENAI_API_KEY=motoko-litellm-local \
+ailang run --caps AI,IO --ai gpt-bedrock-smoke --entry main tmp/bedrock_litellm_smoke.ail
+```
+
+Acceptance criteria:
+
+- AILANG selects the OpenAI provider, not OpenRouter.
+- The request reaches LiteLLM.
+- Streaming or synthetic streaming completes and prints a response.
+- No `OPENAI_API_KEY environment variable required` error.
+- No provider error from OpenAI `stream_options`, `tools`, message format, or Chat Completions shape.
+
+If this fails before reaching LiteLLM, fix AILANG routing/config before attempting Motoko.
+
+## Phase 3: Motoko Profile Smoke
+
+Create or use a dedicated Motoko profile. The snippet below shows the important fields; in practice copy an existing complete profile and only change the Bedrock-specific fields.
 
 ```json
 {
@@ -118,7 +184,9 @@ Keep extensions off for the first smoke. This isolates provider compatibility fr
 Run a minimal task:
 
 ```bash
-PROFILE=bedrock make run TASK="Reply with exactly: bedrock smoke ok"
+OPENAI_API_KEY=motoko-litellm-local \
+PROFILE=bedrock \
+make run TASK="Reply with exactly: bedrock smoke ok"
 ```
 
 Acceptance criteria:
@@ -128,14 +196,16 @@ Acceptance criteria:
 - The task completes without provider/auth errors.
 - Session log shows the selected model and successful termination.
 
-## Phase 3: Native Tool-Use Smoke
+## Phase 4: Native Tool-Use Smoke
 
 Run a task that forces one simple tool call.
 
 Suggested task:
 
-```text
-Use bash to print the current working directory, then summarize it in one sentence.
+```bash
+OPENAI_API_KEY=motoko-litellm-local \
+PROFILE=bedrock \
+make run TASK="Use bash to print the current working directory, then summarize it in one sentence."
 ```
 
 Acceptance criteria:
@@ -145,7 +215,7 @@ Acceptance criteria:
 - Tool result is accepted on the follow-up model turn.
 - No Bedrock/LiteLLM rejection for tool-call schema or tool-result correlation.
 
-## Phase 4: Extension Compatibility Smoke
+## Phase 5: Extension Compatibility Smoke
 
 Re-enable extensions one group at a time:
 
@@ -158,7 +228,9 @@ Re-enable extensions one group at a time:
 For each group:
 
 ```bash
-PROFILE=bedrock make run TASK="Perform a one-step smoke test and stop."
+OPENAI_API_KEY=motoko-litellm-local \
+PROFILE=bedrock \
+make run TASK="Perform a one-step smoke test and stop."
 ```
 
 Acceptance criteria:
@@ -172,7 +244,7 @@ Known risk:
 
 - Bedrock-backed Anthropic models are strict about tool names and tool-result correlation. AILANG and packages have prior compatibility fixes, but extension-by-extension validation is still needed.
 
-## Phase 5: Observability and Debugging
+## Phase 6: Observability and Debugging
 
 Enable raw wire logging only when needed.
 
@@ -182,6 +254,7 @@ Useful checks:
 - Motoko `.motoko/logfile/*.jsonl` session output.
 - AILANG HTTP wire logging if available through `AILANG_AI_HTTP_LOG`.
 - Confirm no fallback to OpenRouter by checking outbound URL/logs.
+- Confirm the local proxy does not log a real OpenAI API key. Use a dummy key for no-auth LiteLLM.
 
 Common failure modes:
 
@@ -190,8 +263,10 @@ Common failure modes:
 - `ThrottlingException`: account or model quota too low.
 - `ResourceNotFoundException`: model ID not available in selected region.
 - OpenAI-style `400`: LiteLLM dropped/translated a parameter incorrectly, or model does not support the requested feature.
+- `OPENAI_API_KEY environment variable required`: AILANG's direct OpenAI provider guard fired before proxy dispatch. Set a dummy local key or use a configured models.yml path that relaxes the key guard.
+- `OPENROUTER_API_KEY environment variable required`: the model alias routed incorrectly. Use `gpt-bedrock-smoke`, not `openai/...` or a known OpenRouter vendor prefix.
 
-## Phase 6: Decide Next Step
+## Phase 7: Decide Next Step
 
 If LiteLLM smoke passes:
 
