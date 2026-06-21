@@ -3,6 +3,25 @@
 Fixes GitHub issue **#15 — "Aborting (Esc) in the middle of a task flushes the
 context window."**
 
+## TL;DR
+
+- **Bug:** ESC mid-task calls `runtimeProcess.kill()` (SIGTERM). The conversation
+  lives only in the runtime's memory (`loop_v2`'s `[Message]` param), so the kill
+  destroys it and the next prompt respawns a fresh, empty process. Regression from the
+  v2 loop rewrite.
+- **Why not just keep the process alive (Option B):** grounded against the AILANG MCP,
+  `std/io` has only blocking `readLine` — no non-blocking/poll stdin in v0.24.2 — so a
+  blocking in-flight step can only be interrupted by killing the process. Surviving that
+  requires persisting history to disk.
+- **Fix (Option A):** (1) TS passes a stable `MOTOKO_SESSION_ID` across respawns;
+  (2) AILANG checkpoints `[Message]` history to `${workdir}/.motoko/session/<id>.json`
+  after each step via sandboxed `std/fs`; (3) on `MOTOKO_RESUME=1` respawn the runtime
+  rehydrates from the checkpoint into `conversation_loop_v2`, and the post-ESC prompt
+  arrives as a follow-up `user_message`. Checkpoint is deleted on clean exit.
+- **Works on current AILANG v0.24.2**, no upstream change. Three independently
+  landable/revertible patches. Follow-up: file upstream feedback for non-blocking stdin
+  to unlock the cleaner Option B later.
+
 ## Background
 
 Pressing **ESC** mid-task wipes the conversation. Repro (from the issue): start a
@@ -95,11 +114,14 @@ Three coordinated changes:
    `MOTOKO_SESSION_ID` is only set by the eval adapter; interactive runs fall back to
    `session_${now()}`, which differs per process — unusable as a stable key.)
 
-2. **Checkpoint after each step (AILANG).** `loop_v2` serializes its `[Message]`
-   history to `${workdir}/.motoko/session/<session_id>.json` after each step, and
-   `conversation_loop_v2` re-checkpoints after each completed turn. Writes are
-   atomic-ish (write temp + rename via two `std/fs` calls, or accept truncating
-   `writeFile` since a step boundary is a consistent point).
+2. **Checkpoint at each step boundary (AILANG).** `loop_v2` serializes its incoming
+   `[Message]` history to `${workdir}/.motoko/session/<session_id>.json` once at the top
+   of the loop (covers every step including step 0), and `conversation_loop_v2`
+   re-checkpoints after each completed turn. `std/fs` has **no `rename`**, so a
+   write-temp-then-rename atomic swap isn't available; we accept a truncating
+   `writeFile` (a step boundary is a consistent snapshot point) and handle the only real
+   risk — a SIGTERM landing mid-`writeFile` — on the **read** side via `std/json.repair`
+   + best-effort fallback (Patch 2a/3b).
 
 3. **Resume on respawn (AILANG + TS).** When the TUI respawns after ESC, it sets
    `MOTOKO_RESUME=1`. `run_with_config` checks for the checkpoint; if present and
@@ -153,23 +175,69 @@ On `/restart`, mint a new `sessionId` (it's a genuinely new session).
 
 ### 2a. Message ↔ JSON round-trip
 
-The file already serializes tool results (`tool_messages_to_result_jsons`,
-`:544`) and converts `[Msg]`↔`[Message]` (`msgs_to_messages` `:342`,
-`messages_to_msgs` `:468`). Add a faithful full-`Message` codec covering all four
-fields (`role`, `content`, `tool_calls`, `tool_call_id`):
+**Grounded type shapes (from the AILANG MCP, `std/ai`):**
+
+- `Message = { role: string, content: string, tool_calls: [ToolCall], tool_call_id: string }`
+- `ToolCall = { id: string, name: string, arguments: string }` — `arguments` is a
+  **JSON-encoded string**, not a `Json`. (Confirmed by the record literal at
+  `agent_loop_v2.ail:588-593`; do **not** confuse with `tool_contract.ToolCallEnvelope`,
+  whose `arguments` is a `Json`.)
+
+Both are plain records, so a `ToolCall` is reconstructable in user code via a record
+literal — the codec is feasible. Add it to `agent_loop_v2.ail` (the only module that
+imports `Message`/`ToolCall`; rpc.ail must stay codec-free, see 3b).
+
+Write encoders/decoders as **explicit recursion**, matching the existing
+`messages_to_msgs` (`:468`) idiom — avoid `map`+lambda (the file notes a match-in-lambda
+parser bug at `:1125`).
 
 ```ailang
-func message_to_json(m: Message) -> Json { ... }      -- includes tool_calls array
-func messages_to_json(ms: [Message]) -> Json { ja(map(message_to_json, ms)) }
-func json_to_message(j: Json) -> Message { ... }
-func json_to_messages(j: Json) -> [Message] { ... }   -- tolerant of missing fields
+-- encode
+func tool_call_to_json(tc: ToolCall) -> Json {
+  jo([kv("id", js(tc.id)), kv("name", js(tc.name)), kv("arguments", js(tc.arguments))])
+}
+func tool_calls_to_json(tcs: [ToolCall]) -> [Json] {
+  match tcs { [] => [], h :: t => tool_call_to_json(h) :: tool_calls_to_json(t) }
+}
+func message_to_json(m: Message) -> Json {
+  jo([
+    kv("role", js(m.role)),
+    kv("content", js(m.content)),
+    kv("tool_calls", ja(tool_calls_to_json(m.tool_calls))),
+    kv("tool_call_id", js(m.tool_call_id))
+  ])
+}
+func messages_to_json(ms: [Message]) -> [Json] {
+  match ms { [] => [], h :: t => message_to_json(h) :: messages_to_json(t) }
+}
+
+-- decode (tolerant: missing fields default to "" / [])
+--   reuse the file's existing msg_get_str (get + asString, "" fallback, :495);
+--   add getArray to the std/json import list (:41) for the tool_calls / messages arrays.
+func json_to_tool_call(j: Json) -> ToolCall {
+  { id: msg_get_str(j, "id"), name: msg_get_str(j, "name"),
+    arguments: msg_get_str(j, "arguments") }
+}
+func json_to_message(j: Json) -> Message {
+  { role: msg_get_str(j, "role"), content: msg_get_str(j, "content"),
+    tool_calls: <getArray(j,"tool_calls") |> recurse json_to_tool_call, [] if None>,
+    tool_call_id: msg_get_str(j, "tool_call_id") }
+}
+func json_to_messages(j: Json) -> [Message] {
+  -- getArray(j, "messages") -> Option[List[Json]]; None/empty => []; else map json_to_message via explicit recursion
+  ...
+}
 ```
 
-`tool_calls` must round-trip (id, name, arguments) — reuse whatever ToolCall JSON
-shape `step_result_to_message` / the hybrid path already build (`:1246-1251`) so the
-restored history is accepted by every provider (the Bedrock tool_use correlation note
-at `:1228-1245` applies — a restored assistant message with tool_calls must keep its
-`tool_call_id` correlation intact).
+`tool_calls` **must** round-trip (id, name, arguments) so restored assistant messages
+keep their `tool_call_id` correlation — the Bedrock note at `:1228-1245` applies: a
+restored assistant message carrying tool_calls whose ids don't match the following
+tool-role messages is rejected with HTTP 400. The round-trip test (below) is the guard.
+
+**Robustness:** if `decode` of a checkpoint truncated by a mid-write kill fails, retry
+once via `std/json.repair` before giving up — `repair` handles unclosed
+arrays/objects/strings, which is exactly the truncation a SIGTERM mid-`writeFile` can
+produce.
 
 ### 2b. Checkpoint helper
 
@@ -181,9 +249,9 @@ func checkpoint_path(workdir: string, session_id: string) -> string {
 func write_checkpoint(workdir: string, session_id: string, msgs: [Message]) -> () ! {FS} {
   let _ = mkdirAllResult("${workdir}/.motoko/session");
   let body = encode(jo([
-    kv("schema_version", jnum(1.0)),
+    kv("schema_version", jnum(_int_to_float(1))),  -- match the file's jnum idiom
     kv("session_id", js(session_id)),
-    kv("messages", messages_to_json(msgs))
+    kv("messages", ja(messages_to_json(msgs)))     -- messages_to_json returns [Json]
   ]));
   -- writeFileResult so a checkpoint failure never aborts the task.
   let _ = writeFileResult(checkpoint_path(workdir, session_id), body);
@@ -192,25 +260,64 @@ func write_checkpoint(workdir: string, session_id: string, msgs: [Message]) -> (
 ```
 
 Use the `Result` variants (`writeFileResult`, `mkdirAllResult`) so a disk error
-degrades to "no checkpoint" rather than killing the run.
+degrades to "no checkpoint" rather than killing the run. `writeFile` does **not** create
+parent dirs (per the std/fs doc — "future enhancement"), so the `mkdirAllResult` call is
+required, not optional.
 
-### 2c. Call sites
+**Sandbox alignment.** The runtime's FS is restricted to `AILANG_FS_SANDBOX = workdir`
+(`runtime-process.ts:308`), and `workdir` here is `cwd` from `run_with_config`
+(`= inv.workdir_override || cfg.agent.workdir`). The checkpoint path is under that root,
+so writes are permitted. The TS cleanup (3c) must target the **same** `workdir` the
+runtime was given.
 
-- In `loop_v2`, after each step's history is finalized and **before** the recursive
-  call (every branch that recurses with `next_msgs` — e.g. `:1211`, `:1255`, and the
-  typed-tool-calls dispatch branch), call
-  `write_checkpoint(workdir, session_id, next_msgs)`. Centralize by writing once at the
-  point `next_msgs` is computed, or wrap the recursion in a small helper that
-  checkpoints then recurses.
-- In `conversation_loop_v2`, after a turn returns `Ok(updated_history)` (`:1553`),
-  `write_checkpoint(workdir, session_id, updated_history)` before recursing.
+### 2c. Call site — one checkpoint at the top of `loop_v2`
 
-`loop_v2` and `conversation_loop_v2` already declare the `FS` effect, so no signature
-changes. `workdir` and `session_id` are already in scope in both.
+`loop_v2` recurses from **seven** distinct branches (verified:
+`:1211, :1255, :1283, :1299, :1322, :1338, :1374`). Checkpointing before each recursion
+would mean seven edits and a standing risk that a future branch is added without one.
 
-**Frequency / cost:** one truncating write per step of the full message list. For
-typical step counts and message sizes this is negligible; if it ever matters, switch to
-append-only JSONL deltas. Not needed now.
+**Instead, checkpoint the incoming `msgs` once, at the top of `loop_v2`** — at the start
+of the main `else` block (`agent_loop_v2.ail:1075`, just before
+`let ctx = mk_v2_ext_ctx(...)`):
+
+```ailang
+else {
+  let _ = write_checkpoint(workdir, session_id, msgs);   -- NEW: snapshot pre-step state
+  let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs);
+  ...
+```
+
+This single site captures the full history at **every** step boundary including
+**step 0** (where `msgs` is the initial `[system, user-task]`). Two consequences:
+
+1. It covers all seven recursion branches automatically — the next iteration's
+   pre-step snapshot *is* the previous iteration's `next_msgs`.
+2. It fixes the exact issue scenario: an ESC ~55 s in (likely during step 0/1) still
+   leaves a checkpoint containing the original task + system prompt, so the follow-up
+   "what was my last prompt?" can answer.
+
+The documented non-goal stands: the checkpoint reflects state **before** the in-flight
+step's LLM call, so the interrupted step's own (incomplete) output is not recovered.
+
+**Secondary checkpoint (belt-and-suspenders):** in `conversation_loop_v2`, after a turn
+returns `Ok(updated_history)` (`:1553`), call
+`write_checkpoint(workdir, session_id, updated_history)` before recursing — so a
+*completed* task's final assistant turn is on disk even before the next turn's first
+step would re-snapshot it. Low cost, closes the "killed while idle after done" gap.
+
+`loop_v2` and `conversation_loop_v2` already declare the `FS` effect and already have
+`workdir` + `session_id` in scope, so no signature changes.
+
+**Consistency note (depends on Patch 1).** `loop_v2`'s `session_id` comes from
+`run_v2_from_messages`'s own `derive_session_id()` call (`:1440`), while
+`conversation_loop_v2`'s comes from `run_v2_with_conversation`'s separate
+`derive_session_id()` (`:1591`). These agree **only** when `MOTOKO_SESSION_ID` is set —
+which is exactly what Patch 1 guarantees. Without Patch 1 the two would diverge and the
+secondary checkpoint would write to a different file than the primary. Patch 1 is a hard
+prerequisite for Patch 2, not just Patch 3.
+
+**Frequency / cost:** one truncating write of the full message list per step. Negligible
+for typical sizes; switch to append-only deltas only if it ever shows up in profiling.
 
 ---
 
@@ -220,70 +327,107 @@ append-only JSONL deltas. Not needed now.
 
 **File:** `src/tui/src/index.ts`
 
-The interrupted-respawn path is the `setAwaitingTask(true)` branch at `:932-935`. The
-next submission currently calls `onInitialTask → spawnRuntimeProcess(value, true)`.
-Change the respawn after an interrupt to pass a resume flag so the new process
-rehydrates instead of starting the task fresh:
+Currently the interrupt branch (`index.ts:932-935`) sets `interrupted=false` and calls
+`ui.setAwaitingTask(true)`, so the next plain submission routes through `onInitialTask →
+spawnRuntimeProcess(value, true)` — a fresh task. Two changes:
 
-- Set `MOTOKO_RESUME=1` in the child env for respawns that follow an interrupt
-  (thread a `resume: boolean` through `spawnRuntimeProcess` / `RuntimeProcess`, exported
-  alongside `MOTOKO_SESSION_ID` in `runtime-process.ts`).
-- The post-ESC first submission should be delivered as a **`user_message`** on the
-  resumed session, not as the initial `task`. Concretely: after an interrupt, the
-  respawn happens immediately (empty task) with `MOTOKO_RESUME=1`; the runtime
-  rehydrates and enters `conversation_loop_v2` waiting on stdin; the user's next line is
-  sent via `runtimeProcess.sendUserMessage(...)` (the `taskDone`/follow-up path,
-  `ui.ts:4009-4017`), exactly like a normal follow-up after `done`.
+**(i) Respawn immediately with resume, instead of awaiting a fresh task.** Mirror the
+existing restart branch's deferred respawn (`index.ts:931`):
 
-  This means after ESC the UI should transition to the **follow-up** state
-  (`taskDone = true`) rather than the **awaiting-initial-task** state, so plain text
-  routes to `onUserMessage` not `onInitialTask`. Adjust the interrupt branch at
-  `index.ts:932-935` accordingly (e.g. respawn with resume immediately, then
-  `ui.setTaskDone(true)` once the resumed process signals it is ready).
+```ts
+} else if (interrupted) {
+  interrupted = false;
+  // Respawn immediately and resume the checkpointed history; the user's next
+  // line will arrive as a follow-up user_message, not a new task.
+  setTimeout(() => spawnRuntimeProcess("", false, /* resume */ true), 100);
+}
+```
+
+Thread a third `resume?: boolean` arg through `spawnRuntimeProcess` →
+`RuntimeProcess`, exported as `MOTOKO_RESUME=1` in the child env alongside
+`MOTOKO_SESSION_ID` (env allowlist, `runtime-process.ts:300-330`). Default off, so every
+other spawn path is unchanged.
+
+**(ii) Enable follow-up input via the `session_resume` event, not a public setter.**
+There is no public `setTaskDone` — `taskDone` is private and is flipped inside the event
+handlers (e.g. the `done` path at `ui.ts:2730-2732`). So handle the new `session_resume`
+event in `ui.handleEvent` the same way `done` is handled: set `taskDone = true`,
+`setRunState("idle")`, render a "Resumed N messages" line. That puts the UI in the
+**follow-up** state, so plain text routes to `onUserMessage → sendUserMessage(...)`
+(`ui.ts:4009-4017`) — exactly a normal post-`done` follow-up. The resumed runtime is
+already blocking in `conversation_loop_v2`'s `readLine()`, ready to receive it.
+
+Do **not** call `setAwaitingTask(true)` on the interrupt path anymore (that would route
+the next line to `onInitialTask`, starting a fresh task and defeating the resume).
+
+> TTY/headless check: the respawned child's `MOTOKO_HEADLESS` is derived from the
+> **parent TUI's** `process.stdin.isTTY` (`runtime-process.ts:317-319`), which stays a
+> TTY across respawn — so `conversation_loop_v2` runs its `readLine()` loop (not the
+> headless early-exit). Resume works in interactive mode; headless/eval runs never set
+> `MOTOKO_RESUME` and are unaffected.
 
 ### 3b. AILANG — load checkpoint and enter the conversation loop
 
-**File:** `src/core/rpc.ail` (`run_with_config`, `:156-238`)
+Keep all `Message`/JSON/checkpoint logic **inside `agent_loop_v2.ail`** — `rpc.ail` does
+not import `Message` and must not start to. rpc.ail only decides *whether* to resume and
+calls the right entry.
 
-Before building the fresh `init` task, check for resume:
-
-```ailang
-let resume = getEnvOr("MOTOKO_RESUME", "") == "1";
-let session_id = getEnvOr("MOTOKO_SESSION_ID", "");
-let ckpt = "${cwd}/.motoko/session/${session_id}.json";
-```
-
-If `resume && session_id != "" && fileExists(ckpt)`:
-
-- Read + decode the checkpoint, `json_to_messages` → restored `[Message]`.
-- Emit a `session_resume` event (new event type; mirror `session_start` fields plus
-  `restored_messages: <count>`) so the TUI/logger can show "resumed N messages".
-- Call a new exported entry `resume_v2_conversation(rt, env_url, ..., restored_history,
-  ...)` that **skips the initial run** and goes straight to `conversation_loop_v2` with
-  the restored history. This reuses the existing `conversation_loop_v2` verbatim.
-- On decode failure or empty/missing checkpoint, **fall through** to the normal fresh
-  `init` path (resume is best-effort, never fatal).
-
-Otherwise: the existing `run_v2_with_conversation(... init ...)` path, unchanged.
-
-Add the `resume_v2_conversation` wrapper next to `run_v2_with_conversation`
-(`agent_loop_v2.ail:1576`) — it is `run_v2_with_conversation` minus the initial
-`run_v2_from_messages` call:
+**`agent_loop_v2.ail` — new exports:**
 
 ```ailang
+-- Best-effort load; None on missing/corrupt (after one std/json.repair retry).
+export func try_load_checkpoint(workdir: string, session_id: string)
+  -> Option[[Message]] ! {FS} { ... readFileResult → decode/repair → json_to_messages ... }
+
+-- conversation_loop_v2 entry from a restored history; emits session_resume.
+-- `fallback_init` is used only if the checkpoint vanished/decoded empty between
+-- rpc.ail's fileExists check and this read (tiny race) — never silently start blank.
 export func resume_v2_conversation(
   rt, env_url, hybrid_tools, budget, model,
-  restored_history: [Message], workdir, step_budget, ohmy_pi,
+  fallback_init: [Msg], workdir, step_budget, ohmy_pi,   -- [Msg] in, like run_v2_with_conversation
   max_cost_millicents, cost_rates, provider, session_id
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let history = match try_load_checkpoint(workdir, session_id) {
+    Some(restored) => restored,
+    None           => msgs_to_messages(fallback_init)  -- race/corrupt: never start blank
+  };
+  let _ = emit_event(session_id, "session_resume", [
+    kv("model", js(model)),
+    kv("restored_messages", jnum(_int_to_float(List.length(history))))
+  ]);
   conversation_loop_v2(rt, env_url, hybrid_tools, budget, model,
-    restored_history, workdir, step_budget, ohmy_pi,
+    history, workdir, step_budget, ohmy_pi,
     max_cost_millicents, cost_rates, provider, session_id)
 }
 ```
 
-Note: pass `session_id` explicitly (don't re-`derive_session_id()`) so the checkpoint
-key stays stable across the resumed turns.
+`session_id` is passed in explicitly (don't re-`derive_session_id()`), keeping the
+checkpoint key stable across resumed turns.
+
+**`src/core/rpc.ail` (`run_with_config`, `:156-238`) — gate the entry:**
+
+```ailang
+let session_id = getEnvOr("MOTOKO_SESSION_ID", "");
+let resume = getEnvOr("MOTOKO_RESUME", "") == "1"
+          && session_id != ""
+          && fileExists("${cwd}/.motoko/session/${session_id}.json");
+```
+
+- **Resume path:** skip the unconditional `session_start` emit (`rpc.ail:~180-191`) —
+  emit nothing here; `resume_v2_conversation` emits `session_resume` instead. Then call
+  `resume_v2_conversation(ext_runtime, env_url, ..., init, settings.workdir, ...,
+  session_id)`, passing the freshly-built `init` as the fallback.
+- **Normal path (unchanged):** emit `session_start` as today, then
+  `run_v2_with_conversation(... init ...)`.
+
+So `session_start` and `session_resume` are mutually exclusive — the TUI never sees both
+for one respawn, and never double-counts a session.
+
+**Required new import in `rpc.ail`:** `std/env (getEnvOr)` (rpc.ail does not currently
+import it). `fileExists` is already imported (`rpc.ail:21`). rpc.ail keeps passing the
+`init: [Msg]` it builds at `:228` unchanged — `resume_v2_conversation` takes `[Msg]` and
+converts via `msgs_to_messages` internally (same as `run_v2_with_conversation` at
+`:1591`), so rpc.ail stays codec-free.
 
 ### 3c. Normal-exit cleanup
 
@@ -320,12 +464,17 @@ No other protocol changes.
   `tool_call_id` survives encode→decode unchanged (field-by-field).
 - `write_checkpoint` then read-back: assert the file at `checkpoint_path` decodes to the
   same messages.
-- Resume entry: given a checkpoint on disk and `MOTOKO_RESUME=1` +
-  `MOTOKO_SESSION_ID`, `run_with_config` enters the resume path (assert a
-  `session_resume` event is emitted with the right `restored_messages` count) and does
-  **not** emit a fresh-task `session_start`.
-- Best-effort fallback: corrupt/empty checkpoint → falls through to the normal fresh
-  path (no panic, `session_start` emitted).
+- **Truncation recovery:** truncate a checkpoint mid-array, assert `try_load_checkpoint`
+  recovers via `std/json.repair` (or cleanly returns `None` if unrecoverable — never
+  panics).
+- **Step-0 coverage:** drive `loop_v2` for a single step and assert the checkpoint
+  written at the top contains the initial `[system, user-task]` (proves an abort during
+  the first step still preserves the original task — the issue's exact scenario).
+- Resume entry: given a checkpoint on disk, `resume_v2_conversation` emits
+  `session_resume` with the right `restored_messages` count and enters
+  `conversation_loop_v2` with the restored history.
+- Best-effort fallback: missing/corrupt checkpoint → `resume_v2_conversation` falls back
+  to `msgs_to_messages(fallback_init)` (no panic, still emits `session_resume`).
 
 ### TS (`src/tui/src/…`)
 
@@ -361,11 +510,33 @@ before 3.
 
 ## Blast radius / rollback
 
+### At a glance
+
+| Patch | Files touched | Lines of change | Risk | Reversibility | Effect when feature off |
+|---|---|---|---|---|---|
+| 1 — stable session id | `src/tui/src/index.ts`, `src/tui/src/runtime-process.ts` | small (~1 var + 1 env entry) | Low | `git revert` clean | n/a — always on, but only adds an env var the runtime already prefers |
+| 2 — checkpoint writes | `src/core/agent_loop_v2.ail` (+ AILANG tests) | medium (codec + helper + **one** top-of-loop call site) | Low–Med | `git revert` clean | one best-effort per-step file write; never reads back |
+| 3 — resume + cleanup | `src/core/rpc.ail`, `src/core/agent_loop_v2.ail`, `src/tui/src/index.ts`, `src/tui/src/runtime-process.ts`, `src/tui/src/session-logger.ts` (+ tests) | medium | Med | `git revert` clean | gated on `MOTOKO_RESUME=1`; absent the flag, byte-for-byte the old path |
+
+**Scope guarantees.** No changes to streaming, tool dispatch, the JSONL event shape
+(only an additive `session_resume` event type), or the legacy `/abort` / Ctrl+C /
+`/restart` paths. Eval-harness runs are unaffected (they set `MOTOKO_SESSION_ID`
+themselves and never set `MOTOKO_RESUME`). New on-disk artifact is confined to the
+sandboxed `${workdir}/.motoko/session/` and removed on clean exit.
+
+**Worst-case failure mode.** A bug in the `Message`↔JSON codec (Patch 2) could yield a
+malformed *restored* history — bounded by: (a) the round-trip unit test, (b) resume
+being best-effort (corrupt/empty checkpoint → fresh path), and (c) the gate, so a
+non-aborted session is never affected beyond a per-step write.
+
+### Per-patch detail
+
 - Patch 1: one env var + one id variable. `git revert` clean.
-- Patch 2: new helpers + checkpoint calls at recursion points; if `messages_to_json`
-  drops a field the *restored* history could be malformed — covered by the round-trip
-  test, and resume is best-effort (corrupt → fresh). No effect on a session that never
-  aborts beyond a per-step file write.
+- Patch 2: new codec + a single checkpoint write at the top of `loop_v2` (covers all 7
+  recursion branches and step 0); if `message_to_json`/`json_to_messages` drops a field
+  the *restored* history could be malformed — covered by the round-trip test, and resume
+  is best-effort (corrupt → repair → fallback). No effect on a session that never aborts
+  beyond a per-step file write.
 - Patch 3: new resume branch in `run_with_config` + `resume_v2_conversation` wrapper +
   TS respawn flag + cleanup. The resume branch is gated on `MOTOKO_RESUME=1`, so absent
   the flag behavior is byte-for-byte the old path.
