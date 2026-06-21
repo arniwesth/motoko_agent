@@ -217,36 +217,7 @@ Acceptance criteria:
 - Tool result is accepted on the follow-up model turn.
 - No Bedrock/LiteLLM rejection for tool-call schema or tool-result correlation.
 
-## Phase 5: Extension Compatibility Smoke
-
-Re-enable extensions one group at a time:
-
-1. `context_mode`
-2. `exa_search`
-3. `omnigraph`
-4. `compaction_ai`
-5. `compose`
-
-For each group:
-
-```bash
-OPENAI_API_KEY=motoko-litellm-local \
-PROFILE=bedrock \
-make run TASK="Perform a one-step smoke test and stop."
-```
-
-Acceptance criteria:
-
-- Advertised tool names are accepted.
-- Tool schemas are accepted.
-- Extension startup does not panic.
-- Tool calls, if emitted, round-trip through LiteLLM and Bedrock.
-
-Known risk:
-
-- Bedrock-backed Anthropic models are strict about tool names and tool-result correlation. AILANG and packages have prior compatibility fixes, but extension-by-extension validation is still needed.
-
-## Phase 6: Observability and Debugging
+## Phase 5: Observability and Debugging
 
 Enable raw wire logging only when needed.
 
@@ -269,7 +240,7 @@ Common failure modes:
 - `OPENAI_API_KEY environment variable required`: AILANG's direct OpenAI provider guard fired before proxy dispatch. Set a dummy local key or use a configured models.yml path that relaxes the key guard.
 - `OPENROUTER_API_KEY environment variable required`: the model alias routed incorrectly. Use `gpt-bedrock-smoke`, not `openai/...` or a known OpenRouter vendor prefix.
 
-## Phase 7: Decide Next Step
+## Phase 6: Decide Next Step
 
 If LiteLLM smoke passes:
 
