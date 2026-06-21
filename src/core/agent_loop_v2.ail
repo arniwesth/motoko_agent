@@ -38,12 +38,13 @@ import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError, StreamC
 import std/io (println, readLine)
 import std/clock (now)
 import std/env (getEnvOr)
-import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString, getArray)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
 import std/process (exec, ProcessError, ProcessOutput)
+import std/fs (mkdirAllResult, writeFileResult)
 import std/bytes (toString)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
@@ -350,6 +351,146 @@ func msgs_to_messages(msgs: [Msg]) -> [Message] {
     } :: msgs_to_messages(rest))
   }
 }
+
+func tool_call_to_json(tc: ToolCall) -> Json {
+  jo([
+    kv("id", js(tc.id)),
+    kv("name", js(tc.name)),
+    kv("arguments", js(tc.arguments))
+  ])
+}
+
+func tool_calls_to_json(tcs: [ToolCall]) -> [Json] {
+  match tcs {
+    [] => [],
+    tc :: rest => tool_call_to_json(tc) :: tool_calls_to_json(rest)
+  }
+}
+
+func message_to_json(m: Message) -> Json {
+  jo([
+    kv("role", js(m.role)),
+    kv("content", js(m.content)),
+    kv("tool_calls", ja(tool_calls_to_json(m.tool_calls))),
+    kv("tool_call_id", js(m.tool_call_id))
+  ])
+}
+
+func messages_to_json(ms: [Message]) -> [Json] {
+  match ms {
+    [] => [],
+    m :: rest => message_to_json(m) :: messages_to_json(rest)
+  }
+}
+
+func json_to_tool_call(j: Json) -> ToolCall {
+  {
+    id: msg_get_str(j, "id"),
+    name: msg_get_str(j, "name"),
+    arguments: msg_get_str(j, "arguments")
+  }
+}
+
+func json_to_tool_calls(items: [Json]) -> [ToolCall] {
+  match items {
+    [] => [],
+    j :: rest => json_to_tool_call(j) :: json_to_tool_calls(rest)
+  }
+}
+
+func json_to_message(j: Json) -> Message {
+  {
+    role: msg_get_str(j, "role"),
+    content: msg_get_str(j, "content"),
+    tool_calls: match getArray(j, "tool_calls") {
+      Some(tcs) => json_to_tool_calls(tcs),
+      None => []
+    },
+    tool_call_id: msg_get_str(j, "tool_call_id")
+  }
+}
+
+func json_to_message_list(items: [Json]) -> [Message] {
+  match items {
+    [] => [],
+    j :: rest => json_to_message(j) :: json_to_message_list(rest)
+  }
+}
+
+func json_to_messages(j: Json) -> [Message] {
+  match getArray(j, "messages") {
+    Some(ms) => json_to_message_list(ms),
+    None => []
+  }
+}
+
+func checkpoint_dir(workdir: string) -> string {
+  "${workdir}/.motoko/session"
+}
+
+func checkpoint_path(workdir: string, session_id: string) -> string {
+  "${checkpoint_dir(workdir)}/${session_id}.json"
+}
+
+func write_checkpoint(workdir: string, session_id: string, msgs: [Message]) -> () ! {FS} {
+  let _ = mkdirAllResult(checkpoint_dir(workdir));
+  let body = encode(jo([
+    kv("schema_version", jnum(_int_to_float(1))),
+    kv("session_id", js(session_id)),
+    kv("messages", ja(messages_to_json(msgs)))
+  ]));
+  let _ = writeFileResult(checkpoint_path(workdir, session_id), body);
+  ()
+}
+
+func tool_call_eq(a: ToolCall, b: ToolCall) -> bool {
+  a.id == b.id && a.name == b.name && a.arguments == b.arguments
+}
+
+func tool_calls_eq(a: [ToolCall], b: [ToolCall]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    ah :: at => match b {
+      [] => false,
+      bh :: bt => tool_call_eq(ah, bh) && tool_calls_eq(at, bt)
+    }
+  }
+}
+
+func message_eq(a: Message, b: Message) -> bool {
+  a.role == b.role
+    && a.content == b.content
+    && tool_calls_eq(a.tool_calls, b.tool_calls)
+    && a.tool_call_id == b.tool_call_id
+}
+
+func messages_eq(a: [Message], b: [Message]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    ah :: at => match b {
+      [] => false,
+      bh :: bt => message_eq(ah, bh) && messages_eq(at, bt)
+    }
+  }
+}
+
+pure func test_checkpoint_message_codec_preserves_tool_calls() -> bool
+  tests [((), true)]
+  {
+    let assistant_call: ToolCall = {
+      id: "call_1",
+      name: "BashExec",
+      arguments: "{\"cmd\":\"pwd\"}"
+    };
+    let history: [Message] = [
+      { role: "system", content: "system", tool_calls: [], tool_call_id: "" },
+      { role: "user", content: "run pwd", tool_calls: [], tool_call_id: "" },
+      { role: "assistant", content: "", tool_calls: [assistant_call], tool_call_id: "" },
+      { role: "tool", content: "{\"stdout\":\"/tmp\"}", tool_calls: [], tool_call_id: "call_1" }
+    ];
+    let encoded = jo([kv("messages", ja(messages_to_json(history)))]);
+    messages_eq(json_to_messages(encoded), history)
+  }
 
 -- Build a [Message] entry for one assistant turn from the StepResult. Carries
 -- the typed tool_calls verbatim so the model sees its own tool_call IDs on
@@ -1073,6 +1214,7 @@ func loop_v2(
     })
   }
   else {
+  let _ = write_checkpoint(workdir, session_id, msgs);
   -- Build extension context for this step (needed for dispatch_pre_step)
   let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs);
   
@@ -1550,7 +1692,10 @@ export func conversation_loop_v2(
           kv("mode", js("v2"))
         ]);
         match run_v2_from_messages(rt, content, env_url, hybrid_tools, budget, model, next_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
-          Ok(updated_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+          Ok(updated_history) => {
+            let _ = write_checkpoint(workdir, session_id, updated_history);
+            conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+          },
           Err(e) => {
             let _ = emit_event(session_id, "error", [
               kv("source", js("agent_loop_v2")),
