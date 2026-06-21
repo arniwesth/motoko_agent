@@ -120,7 +120,7 @@ Acceptance criteria:
 - Dummy `OPENAI_API_KEY=motoko-litellm-local` is only sent to LiteLLM.
 - No `OPENROUTER_API_KEY` prompt appears for `gpt-bedrock-smoke`.
 
-### Phase 2: Motoko Profile Finalization
+### Phase 2: Motoko Launcher and Profile Finalization
 
 Keep `.motoko/config/bedrock/config.json` as the canonical Bedrock profile:
 
@@ -146,11 +146,29 @@ Profile requirements:
 - Keep `max_steps` low for smoke runs.
 - Keep `tools.hybrid=true` and `tools.ohmy_pi=false`.
 
+Makefile/profile propagation issue to fix or document:
+
+- `PROFILE=bedrock make run` correctly passes `MOTOKO_CONFIG=bedrock` to `scripts/run-agent.sh`.
+- However, `make run` depends on `build`, and current prerequisite targets such as `verify_extensions` can read `MOTOKO_CONFIG` directly from the shell instead of the Make `PROFILE` variable.
+- During validation this showed up as extension verification using another shell profile before the final runtime used `bedrock`.
+- This is confusing and can hide profile-specific boot failures.
+
+Preferred fix:
+
+- Ensure `PROFILE` is propagated to prerequisite checks, or make `verify_extensions` derive its profile from the Make `PROFILE` variable.
+- At minimum, document that deterministic Bedrock runs should use both:
+
+```bash
+PROFILE=bedrock MOTOKO_CONFIG=bedrock
+```
+
+until the Makefile is cleaned up.
+
 Acceptance criteria:
 
 ```bash
 OPENAI_API_KEY=motoko-litellm-local \
-PROFILE=bedrock \
+PROFILE=bedrock MOTOKO_CONFIG=bedrock \
 make run TASK="Reply with exactly: bedrock smoke ok"
 ```
 
@@ -171,11 +189,18 @@ Behavior:
 - Load `.env` if present.
 - Require `AWS_REGION`.
 - Require `AWS_BEARER_TOKEN_BEDROCK`.
-- Refuse to use `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, or `AWS_SECRET_ACCESS_KEY` as the documented auth path.
+- Do not require or rely on `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or mounted `~/.aws`.
+- Prefer sanitizing the LiteLLM subprocess environment by unsetting normal AWS credential-chain variables before launch, while preserving `AWS_REGION` and `AWS_BEARER_TOKEN_BEDROCK`.
 - Start:
 
 ```bash
-.venv-litellm/bin/litellm \
+env -u AWS_PROFILE \
+    -u AWS_ACCESS_KEY_ID \
+    -u AWS_SECRET_ACCESS_KEY \
+    -u AWS_SESSION_TOKEN \
+  AWS_REGION="$AWS_REGION" \
+  AWS_BEARER_TOKEN_BEDROCK="$AWS_BEARER_TOKEN_BEDROCK" \
+  .venv-litellm/bin/litellm \
   --config scripts/bedrock-litellm.yaml \
   --host 127.0.0.1 \
   --port 4000
@@ -213,6 +238,7 @@ make smoke_bedrock_tools
 
 `smoke_bedrock_ailang`:
 
+- Must depend on `smoke_bedrock_litellm` passing first.
 - Runs:
 
 ```bash
@@ -225,23 +251,36 @@ ailang run --caps AI,IO --ai gpt-bedrock-smoke --entry main scripts/smoke_bedroc
 
 `smoke_bedrock_motoko`:
 
+- Must depend on `smoke_bedrock_ailang` passing first.
 - Runs:
 
 ```bash
 OPENAI_API_KEY=motoko-litellm-local \
-PROFILE=bedrock \
+PROFILE=bedrock MOTOKO_CONFIG=bedrock \
 make run TASK="Reply with exactly: bedrock smoke ok"
 ```
 
 `smoke_bedrock_tools`:
 
+- Must depend on `smoke_bedrock_motoko` passing first.
 - Runs:
 
 ```bash
 OPENAI_API_KEY=motoko-litellm-local \
-PROFILE=bedrock \
+PROFILE=bedrock MOTOKO_CONFIG=bedrock \
 make run TASK="Use bash to print the current working directory, then summarize it in one sentence."
 ```
+
+Smoke target ordering:
+
+```text
+smoke_bedrock_litellm
+  -> smoke_bedrock_ailang
+  -> smoke_bedrock_motoko
+  -> smoke_bedrock_tools
+```
+
+Do not run later layers after an earlier layer fails. This keeps Bedrock model/profile/auth failures separate from AILANG routing failures and Motoko tool-loop failures.
 
 Acceptance criteria:
 
@@ -303,6 +342,14 @@ Option B: Motoko-managed proxy, possible later
 
 Do not implement Option B until the manual proxy path has passed repeated local and remote smokes.
 
+## Repository Hygiene
+
+- `.env` must remain ignored and must never be printed by smoke scripts.
+- `.venv-litellm/` should remain ignored if the repo owns local LiteLLM installation.
+- LiteLLM logs should go under ignored local paths such as `tmp/` or `logs/`.
+- Built local AILANG binaries such as `ailang/.bin/ailang` are temporary workarounds and should remain ignored.
+- Do not commit bearer tokens, proxy logs, `.env`, or generated venv contents.
+
 ## Failure Triage
 
 `Incorrect API key provided: motoko-l********ocal`
@@ -339,6 +386,7 @@ Tool-result correlation errors
 
 - Upstream AILANG direct OpenAI fallback honors `OPENAI_BASE_URL`.
 - Installed `ailang` can pass the AILANG `stepWithStream` smoke without local `AILANG_BIN`.
+- `PROFILE=bedrock` is propagated consistently through Motoko build/check/run prerequisites, or the required `MOTOKO_CONFIG=bedrock` pairing is documented.
 - LiteLLM proxy startup is documented or scripted.
 - `PROFILE=bedrock` runs Motoko minimal smoke successfully.
 - Native tool-use smoke succeeds.
