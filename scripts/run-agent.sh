@@ -24,7 +24,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENTRY="${PROJECT_ROOT}/src/tui/src/index.ts"
-LOCAL_AILANG_BIN="${PROJECT_ROOT}/ailang/bin/ailang"
+# Locally-built AILANG binary, used only when AILANG_BIN is not already set so
+# an explicit override always wins. The repo's build emits it under
+# ailang/.bin/ailang (this is where the patched Bedrock OPENAI_BASE_URL
+# fallback binary lands); ailang/bin/ailang is kept as a historical fallback.
+LOCAL_AILANG_BIN=""
+for candidate in "${PROJECT_ROOT}/ailang/.bin/ailang" "${PROJECT_ROOT}/ailang/bin/ailang"; do
+  if [[ -x "$candidate" ]]; then
+    LOCAL_AILANG_BIN="$candidate"
+    break
+  fi
+done
 
 if [[ ! -f "$ENTRY" ]]; then
   echo "Error: src/tui/src/index.ts not found." >&2
@@ -34,7 +44,7 @@ if [[ ! -f "$ENTRY" ]]; then
   exit 1
 fi
 
-if [[ -x "$LOCAL_AILANG_BIN" ]]; then
+if [[ -z "${AILANG_BIN:-}" && -n "$LOCAL_AILANG_BIN" ]]; then
   export AILANG_BIN="$LOCAL_AILANG_BIN"
 fi
 

@@ -18,7 +18,7 @@ export func main() -> () ! {AI, IO} {
     tool_calls: [],
     tool_call_id: ""
   }];
-  match stepWithStream("gpt-bedrock-smoke", messages, [], [], render) {
+  match stepWithStream("gpt-bedrock-claude-sonnet-4-5", messages, [], [], render) {
     Ok(result) => {
       println("");
       println("finish_reason=${result.finish_reason}")

@@ -14,6 +14,22 @@
 - Use the working LiteLLM inference profile mapping in `scripts/bedrock-litellm.yaml`, adjusting it per AWS account/region if needed.
 - Full integration means: upstream AILANG fix, stable `bedrock` profile, proxy start target, layered smoke targets, and docs that avoid printing secrets.
 
+## Implementation Status (2026-06-21)
+
+Implemented and validated end to end against real Bedrock (`eu.anthropic.claude-sonnet-4-5`, `eu-north-1`, bearer-token-only):
+
+- **AILANG fix** — `setupAIHandlerDirect` OpenAI branch now honors `OPENAI_BASE_URL` (`ailang/cmd/ailang/ai_handlers.go`), with regression test `TestSetupAIHandlerDirect_OpenAIUsesCustomBaseURL` (`ailang/cmd/ailang/openai_local_endpoint_test.go`, passing). The change is in the local `ailang/` checkout's working tree — still to be committed and contributed upstream; until an upstream-fixed `ailang` is installed, `ailang/.bin/ailang` is used.
+- **Binary wiring** — `scripts/run-agent.sh` auto-prefers `ailang/.bin/ailang` (falls back to `ailang/bin/ailang`, then `PATH`) only when `AILANG_BIN` is unset, so `make run` uses the patched binary with no env fuss.
+- **Makefile** — `verify_extensions` derives the profile from `$(PROFILE)` so `PROFILE=bedrock make run` verifies the same profile it boots. Added `bedrock_proxy` + layered `smoke_bedrock_litellm → smoke_bedrock_ailang → smoke_bedrock_motoko → smoke_bedrock_tools` (and `smoke_bedrock`).
+- **Scripts** — `scripts/bedrock-proxy.sh` (loads `.env`, requires `AWS_REGION` + `AWS_BEARER_TOKEN_BEDROCK`, strips AWS credential-chain vars, no secret printing) and `scripts/smoke_bedrock_litellm.sh` (redacted, secret-safe).
+- **Docs** — README "Bedrock through LiteLLM" rewritten as a runbook (install, proxy, layered smokes, inference-profile selection).
+- **Hygiene** — `/ailang/` added to `.gitignore`; smoke logs land in `tmp/` (already ignored).
+
+Open / deferred:
+
+- Commit the AILANG fix in the `ailang/` checkout and contribute upstream (see `ailang-feedback` skill); after an upstream-fixed `ailang` is installed, the AILANG smoke no longer needs `ailang/.bin/ailang`.
+- Optional Motoko-managed proxy lifecycle (Phase 6) remains out of scope.
+
 ## Current Validated State
 
 The following path has been validated end to end with bearer-token-only Bedrock auth:
