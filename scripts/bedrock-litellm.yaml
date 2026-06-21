@@ -1,0 +1,32 @@
+# LiteLLM model map for Amazon Bedrock (bearer-token-only auth).
+#
+# model_name = the OpenAI-facing alias Motoko/AILANG use. It MUST start with
+#   `gpt` (not `gpt-5`) and must not contain `anthropic`/`claude` or a `/`, or
+#   AILANG's GuessProvider routes it away from the OpenAI->LiteLLM path. See
+#   README "Model alias and inference profiles".
+# model      = the real Bedrock inference-profile ID. EU cross-region profiles
+#   are `eu.` + the foundation-model ID. Discover what your account/region has:
+#     curl -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" \
+#       https://bedrock.$AWS_REGION.amazonaws.com/foundation-models \
+#       | jq -r '.modelSummaries[]|select(.modelId|test("anthropic")).modelId'
+model_list:
+  - model_name: gpt-bedrock-claude-sonnet-4-5
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_region_name: os.environ/AWS_REGION
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+      drop_params: true
+
+  - model_name: gpt-bedrock-opus-4-8
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-opus-4-8
+      aws_region_name: os.environ/AWS_REGION
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+      drop_params: true
+
+  - model_name: gpt-bedrock-sonnet-4-6
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-sonnet-4-6
+      aws_region_name: os.environ/AWS_REGION
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+      drop_params: true

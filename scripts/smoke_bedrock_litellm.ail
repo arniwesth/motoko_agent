@@ -1,0 +1,30 @@
+module scripts/smoke_bedrock_litellm
+
+import std/ai (stepWithStream, Message, StreamChunk, ContentDelta, ThinkingDelta, Usage)
+import std/io (print, println)
+
+func render(chunk: StreamChunk) -> () ! {IO} {
+  match chunk {
+    ContentDelta(text) => print(text),
+    ThinkingDelta(_) => (),
+    Usage(_) => println("")
+  }
+}
+
+export func main() -> () ! {AI, IO} {
+  let messages: [Message] = [{
+    role: "user",
+    content: "Reply with exactly: bedrock ailang ok",
+    tool_calls: [],
+    tool_call_id: ""
+  }];
+  match stepWithStream("gpt-bedrock-claude-sonnet-4-5", messages, [], [], render) {
+    Ok(result) => {
+      println("");
+      println("finish_reason=${result.finish_reason}")
+    },
+    Err(e) => {
+      println("ERR ${e.code}: ${e.message}")
+    }
+  }
+}

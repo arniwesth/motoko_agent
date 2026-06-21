@@ -60,6 +60,7 @@ Profiles live under `.motoko/config/`. Select one with the Make `PROFILE` variab
 ```bash
 PROFILE=default make run
 PROFILE=openrouter make run TASK="Add unit tests"
+PROFILE=bedrock make run TASK="Reply with exactly: bedrock smoke ok"
 ```
 
 Generate a starter profile:
@@ -100,6 +101,103 @@ make init-config PROFILE=myprofile
 Per-extension JSON files are optional; if missing, hardcoded defaults apply.
 
 Precedence: hardcoded defaults < profile JSON < CLI args. API keys are always env vars.
+
+### Bedrock through LiteLLM
+
+The `bedrock` profile reuses the OpenAI-compatible path. Motoko never calls Bedrock directly — a local LiteLLM proxy at `http://127.0.0.1:4000/v1` translates OpenAI Chat Completions to Bedrock:
+
+```text
+Motoko -> AILANG OpenAI-compatible provider
+       -> OPENAI_BASE_URL=http://127.0.0.1:4000/v1
+       -> LiteLLM  (AWS_BEARER_TOKEN_BEDROCK + AWS_REGION)
+       -> Amazon Bedrock
+```
+
+**Auth is bearer-token only.** Put these in `.env` (gitignored) or the shell:
+
+```bash
+AWS_REGION=eu-north-1          # a region where your account has Bedrock access
+AWS_BEARER_TOKEN_BEDROCK=...   # Bedrock API key (never printed by the scripts)
+```
+
+Do **not** use `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, or a mounted `~/.aws` — `make bedrock_proxy` strips all of them from the LiteLLM subprocess so boto3 can't silently fall back to them.
+
+Motoko/AILANG still need an `OPENAI_API_KEY` to satisfy the OpenAI-compatible client guard. For a no-auth local proxy use only the dummy value `motoko-litellm-local`; **never forward a real OpenAI key to the proxy** (the smoke targets set the dummy explicitly so a real key in `.env` is overridden).
+
+#### One-time install
+
+```bash
+python3 -m venv .venv-litellm && .venv-litellm/bin/pip install 'litellm[proxy]' boto3
+```
+
+#### Start the proxy
+
+```bash
+make bedrock_proxy        # foreground; Ctrl-C to stop. Serves 127.0.0.1:4000
+```
+
+#### Layered smokes (run in order; stop at first failure)
+
+```bash
+make smoke_bedrock_litellm   # 1. proxy direct: /v1/models + /v1/chat/completions
+make smoke_bedrock_ailang    # 2. AILANG std/ai.stepWithStream through the proxy
+make smoke_bedrock_motoko    # 3. Motoko minimal task on PROFILE=bedrock
+make smoke_bedrock_tools     # 4. native tool-use (forces one BashExec)
+make smoke_bedrock           # all four in sequence
+```
+
+Layering keeps a Bedrock model/auth problem (layer 1) separate from an AILANG routing problem (layer 2) and a Motoko tool-loop problem (layers 3-4). Smoke logs go to `tmp/` (gitignored) with bearer tokens redacted.
+
+Equivalent manual invocations:
+
+```bash
+OPENAI_BASE_URL=http://127.0.0.1:4000/v1 \
+OPENAI_API_KEY=motoko-litellm-local \
+ailang run --caps AI,IO --ai gpt-bedrock-claude-sonnet-4-5 --entry main scripts/smoke_bedrock_litellm.ail
+
+OPENAI_API_KEY=motoko-litellm-local \
+PROFILE=bedrock MOTOKO_CONFIG=bedrock \
+make run TASK="Reply with exactly: bedrock smoke ok"
+```
+
+> **Profile flags:** pass both `PROFILE=bedrock` and `MOTOKO_CONFIG=bedrock`. `PROFILE` now propagates into the build prerequisites (`verify_extensions`), but setting both keeps every prerequisite and the runtime on the same profile regardless of shell state.
+
+#### Model alias and inference profiles
+
+The model field in `.motoko/config/bedrock/config.json` is an **alias**, not the Bedrock model ID. It's both the `--ai` name AILANG sees and the LiteLLM `model_name`, so the two must always match. The real Bedrock model ID lives only in the LiteLLM `model:` line.
+
+The alias name is constrained by AILANG's provider guessing (`internal/ai/config.go GuessProvider`):
+
+- It must start with `gpt` (not `gpt-5`) so AILANG picks the **OpenAI Chat Completions** path and honors `OPENAI_BASE_URL` → LiteLLM. `o1`/`o3`/`codex`/`gpt-5` prefixes route to the OpenAI Responses API instead.
+- It must **not** start with `claude` or contain `anthropic` — either would make AILANG call the **direct Anthropic API** (needs `ANTHROPIC_API_KEY`, ignores `OPENAI_BASE_URL`), bypassing LiteLLM. This is why the alias can't be the raw `eu.anthropic.claude-...` Bedrock ID.
+- It must not look like a `vendor/model` string (avoid `/`), which would route to OpenRouter.
+
+So `gpt-bedrock-claude-sonnet-4-5` names the underlying model while staying on the LiteLLM path. The mapping in `scripts/bedrock-litellm.yaml`:
+
+```yaml
+model_list:
+  - model_name: gpt-bedrock-claude-sonnet-4-5
+    litellm_params:
+      model: bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_region_name: os.environ/AWS_REGION
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+      drop_params: true
+```
+
+That inference profile is account/region-specific. If layer 1 fails with `The provided model identifier is invalid` or `Invocation ... with on-demand throughput isn't supported`, list what your account/region offers and update the `model:` line to an available **inference profile** ID/ARN (not a bare on-demand model ID):
+
+```bash
+aws bedrock list-inference-profiles --region "$AWS_REGION"
+aws bedrock list-foundation-models  --region "$AWS_REGION"
+```
+
+#### AILANG binary note
+
+The direct OpenAI fallback for unresolved `gpt-*` aliases must honor `OPENAI_BASE_URL`. The fix lives in the `ailang/` source checkout (`cmd/ailang/ai_handlers.go`, with a regression test in `cmd/ailang/openai_local_endpoint_test.go`). Until a fixed `ailang` is installed on `PATH`, the build at `ailang/.bin/ailang` is used automatically: `scripts/run-agent.sh` prefers it, and the AILANG smoke target points at it. To check whether your installed binary already has the fix:
+
+```bash
+go -C ailang test ./cmd/ailang/ -run TestSetupAIHandlerDirect_OpenAIUsesCustomBaseURL
+```
 
 ## Usage
 
