@@ -15,6 +15,68 @@ before it becomes the tool-role message. This keeps native execution, policy,
 approval, tracing, backend selection, and provider correlation in core while
 letting `context_mode` transparently compress large `stdout`/`stderr` payloads.
 
+## AILANG MCP Grounding
+
+The plan is grounded against the AILANG MCP server configured in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "ailang-docs": {
+      "type": "http",
+      "url": "https://mcp.ailang.sunholo.com/mcp/"
+    }
+  }
+}
+```
+
+MCP session facts checked on 2026-06-21:
+
+- `initialize` reported server `ailang-api` version `0.8.1`.
+- `ailang_versions` reported latest docs version `0.25.0`.
+- This repository currently uses local `AILANG v0.24.2`, so implementation must
+  satisfy both MCP-documented syntax and the local compiler.
+
+Language and stdlib grounding:
+
+- `prompt_get(forVersion="0.25.0", kind="agent")` confirms AILANG is a strict
+  Hindley-Milner language with explicit effect rows, slash-based imports, and
+  type-checking through `ailang check`.
+- `effects_catalog(forVersion="0.25.0")` confirms the documented effects used by
+  this plan's hook signatures: `IO`, `FS`, `Net`, `AI`, `Env`, `Clock`,
+  `Process`, and `Stream`.
+- `stdlib_module(name="std/json", forVersion="0.25.0")` confirms `Json`,
+  `encode`, `decode`, `jo`, `kv`, `js`, `jnum`, and related JSON helpers. This
+  grounds the `ToolResultFrame.content: Json` proposal.
+- `stdlib_module(name="std/sem", forVersion="0.25.0")` confirms semantic-frame
+  storage APIs with `SharedMem` and `SharedIndex` effects, including
+  `load_frame`, `store_frame`, `make_frame_at`, and `store_frame_ns`. This
+  grounds the plan's use of SharedMem-backed storage for full tool output.
+- `stdlib_search(query="Trace emit event telemetry", forVersion="0.25.0")`
+  returned no MCP stdlib hits. Treat `Trace` as a Motoko/runtime-local effect
+  seen in this repository, not as an AILANG MCP-documented extension ABI effect.
+  The plan therefore keeps trace emission in host call sites that already carry
+  `Trace`, instead of adding `Trace` to `on_tool_result`.
+
+ABI compatibility grounding:
+
+- MCP searches for `optional record fields default record fields` and
+  `record optional field` returned no feature documentation.
+- MCP record/type-system docs describe row polymorphism/open record types, not
+  optional record fields or defaulted record fields.
+- Local `AILANG v0.24.2` checks reject `field?: type`, reject
+  `field: type = value` inside record types, and reject record literals that
+  omit required fields.
+
+Consequences for this plan:
+
+- Adding `result_tools` and `on_tool_result` to `ExtensionHooks` is a
+  source-breaking ABI change.
+- Every `ExtensionHooks` record literal in in-repo and active registry packages
+  must be updated unless an ABI helper/builder abstraction is introduced first.
+- The proposed hook should use MCP-grounded types and effects only. Runtime-local
+  tracing remains outside the hook signature.
+
 ## Problem
 
 PR #58 fixes `context_mode` as an explicit extension tool provider: the model can call
@@ -141,26 +203,11 @@ Rollout must be versioned:
 4. Regenerate `src/core/ext/registry_generated.ail` and `ailang.lock`.
 5. Run extension boot verification before landing runtime wiring.
 
-If AILANG later supports optional record fields or defaulted hook builders, use
-that to reduce future ABI churn. For this change, assume direct record updates
-are required.
-
-Grounding: `.mcp.json` points to the AILANG MCP server at
-`https://mcp.ailang.sunholo.com/mcp/`. As of MCP server `ailang-api` `0.8.1`,
-`ailang_versions` reports latest docs version `0.25.0`; this repo currently uses
-local `AILANG v0.24.2`. MCP searches for `optional record fields default record
-fields` and `record optional field` returned no feature documentation. The MCP
-record docs describe Hindley-Milner row polymorphism/open record types, not
-optional fields or defaulted record literals. Local compiler checks against
-`v0.24.2` reject:
-
-- `field?: type` in a record type (`expected :, got ?`);
-- `field: type = value` in a record type;
-- constructing a record literal that omits a required field.
-
-So the plan must treat added `ExtensionHooks` fields as a source-breaking ABI
-change unless/until AILANG gains an explicit optional/default field mechanism or
-the ABI package provides a builder/helper abstraction in advance.
+As grounded above against the AILANG MCP docs and the local `v0.24.2` compiler,
+optional/defaulted record fields are not currently available. If AILANG later
+supports optional record fields or the ABI package introduces a defaulted
+hook-builder abstraction, use that to reduce future ABI churn. For this change,
+assume direct record updates are required.
 
 ## Dispatch Semantics
 
