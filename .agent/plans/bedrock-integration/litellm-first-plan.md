@@ -14,6 +14,17 @@
 - LiteLLM supports Amazon Bedrock API-key authentication through `AWS_BEARER_TOKEN_BEDROCK` or `api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK` in `config.yaml`. This plan assumes bearer-token auth only; normal AWS credential-chain auth is out of scope.
 - Motoko launches AILANG with `--ai <model>`. If the model is not found in AILANG's `models.yml`, AILANG uses direct provider guessing. For a `gpt-*` alias, this routes to the OpenAI provider.
 - In the direct OpenAI provider path, AILANG still requires `OPENAI_API_KEY` even when `OPENAI_BASE_URL` points at a local proxy. For the LiteLLM smoke, set `OPENAI_API_KEY` to a dummy non-secret value unless the proxy is configured with a real LiteLLM master key.
+- **Important upstream AILANG fix required:** the installed upstream `ailang` binary can still ignore `OPENAI_BASE_URL` in the direct provider-guessing path for unresolved `gpt-*` aliases such as `gpt-bedrock-smoke`. Symptom: `OPENAI_BASE_URL=http://127.0.0.1:4000/v1 OPENAI_API_KEY=motoko-litellm-local ailang run --ai gpt-bedrock-smoke ...` calls the real OpenAI API and fails with `Incorrect API key provided: motoko-l********ocal` instead of reaching LiteLLM. Root cause: `setupAIHandlerDirect` guesses `ProviderOpenAI` but constructs `openai.NewClient(apiKey)` without passing `openai.WithBaseURL(os.Getenv("OPENAI_BASE_URL"))`. The configured-model path already handles this; the direct fallback path must be fixed upstream. Local workaround used during validation: build the patched local AILANG source and run Motoko with `AILANG_BIN=/workspaces/motoko_agent/ailang/.bin/ailang`.
+
+Required upstream patch shape:
+
+```go
+var clientOpts []openai.ClientOption
+if customBaseURL := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")); customBaseURL != "" {
+	clientOpts = append(clientOpts, openai.WithBaseURL(customBaseURL))
+}
+client := openai.NewClient(apiKey, clientOpts...)
+```
 
 ## Proposed Architecture
 
@@ -73,12 +84,18 @@ model_list:
       drop_params: true
 ```
 
+Checked-in template:
+
+```bash
+scripts/bedrock-litellm.yaml
+```
+
 Run proxy:
 
 ```bash
 export AWS_REGION=us-east-1
 export AWS_BEARER_TOKEN_BEDROCK=...
-litellm --config /path/to/bedrock-litellm.yaml --host 127.0.0.1 --port 4000
+litellm --config scripts/bedrock-litellm.yaml --host 127.0.0.1 --port 4000
 ```
 
 Validate proxy directly:
@@ -92,7 +109,7 @@ Then test chat completions directly:
 ```bash
 curl http://127.0.0.1:4000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer anything' \
+  -H 'Authorization: Bearer motoko-litellm-local' \
   -d '{
     "model": "gpt-bedrock-smoke",
     "messages": [{"role": "user", "content": "Say bedrock smoke ok."}],
@@ -145,12 +162,18 @@ export func main() -> () ! {AI, IO} {
 }
 ```
 
+Checked-in smoke file:
+
+```bash
+scripts/smoke_bedrock_litellm.ail
+```
+
 Run:
 
 ```bash
 OPENAI_BASE_URL=http://127.0.0.1:4000/v1 \
 OPENAI_API_KEY=motoko-litellm-local \
-ailang run --caps AI,IO --ai gpt-bedrock-smoke --entry main tmp/bedrock_litellm_smoke.ail
+ailang run --caps AI,IO --ai gpt-bedrock-smoke --entry main scripts/smoke_bedrock_litellm.ail
 ```
 
 Acceptance criteria:
@@ -179,6 +202,12 @@ Create or use a dedicated Motoko profile. The snippet below shows the important 
     "strict": false
   }
 }
+```
+
+Checked-in profile:
+
+```bash
+.motoko/config/bedrock/config.json
 ```
 
 Keep extensions off for the first smoke. This isolates provider compatibility from extension tool schemas and Bedrock strictness around tool names/tool results.
