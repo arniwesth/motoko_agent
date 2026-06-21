@@ -1794,6 +1794,19 @@ export function shouldLockPlainInput(
   return !awaitingTask && !taskDone && value.length > 0 && !value.startsWith("/");
 }
 
+export type PlainInputRoute = "initial" | "followup" | "locked" | "unknown";
+
+export function plainInputRoute(
+  awaitingTask: boolean,
+  taskDone: boolean,
+  value: string,
+): PlainInputRoute {
+  if (awaitingTask && value && !value.startsWith("/")) return "initial";
+  if (taskDone && value && !value.startsWith("/")) return "followup";
+  if (shouldLockPlainInput(awaitingTask, taskDone, value)) return "locked";
+  return "unknown";
+}
+
 function initialExtensionsFromEnv(): string {
   const raw = (process.env.CORE_EXT_ORDER ?? "").trim();
   if (raw === "") return "";
@@ -2009,6 +2022,7 @@ export class AgentUI {
   private selectedScratchpadIdx = -1;
   private readonly thinkStepOrder: number[] = [];  // insertion order; used for ctrl+t cycling
   private selectedThinkIdx = -1;                   // index into thinkStepOrder, -1 = none selected
+  private interruptPending = false;
   /** True once the first task is complete; enables free-text follow-ups. */
   private taskDone = false;
   /** Package version shown as a startup banner in the history pane. */
@@ -2138,6 +2152,8 @@ export class AgentUI {
       // ESC while a task is running: kill the runtime process immediately.
       // Do NOT consume ESC when idle — let Editor handle it (e.g. cancel autocomplete).
       if (matchesKey(data, "escape") && this.runtimeProcess && !this.taskDone) {
+        if (this.interruptPending) return { consume: true };
+        this.interruptPending = true;
         this.appendHistoryStyled("Task interrupted", chalk.yellow);
         this.tui.requestRender();
         this.onInterrupt?.();
@@ -2290,6 +2306,7 @@ export class AgentUI {
     this.lastUpdateMs = Date.now();
     switch (event.type) {
       case "session_start":
+        this.interruptPending = false;
         this.composeFooterStatus = "";
         this.toolOutputExpanded = true;
         this.refreshAllToolDetailRows();
@@ -2321,6 +2338,20 @@ export class AgentUI {
           this.scratchpadExtensionActive = hasScratchpadExtension(names);
           this.appendHistoryStyled(`Loaded extensions: ${extText}`, chalk.dim);
         }
+        break;
+
+      case "session_resume":
+        this.interruptPending = false;
+        this.composeFooterStatus = "";
+        this.toolOutputExpanded = true;
+        this.refreshAllToolDetailRows();
+        this.model = event.model;
+        this.setRunState("idle");
+        this.awaitingTask = false;
+        this.taskDone = true;
+        this.tui.setFocus(this.cmdInput);
+        this.appendHistoryStyled(`Resumed ${event.restored_messages} messages`, chalk.dim);
+        this.updateStatus();
         break;
 
       case "thinking":
@@ -2713,6 +2744,7 @@ export class AgentUI {
         break;
 
       case "done":
+        this.interruptPending = false;
         if (event.output && event.output.trim()) {
           const visible = this.stripToolJsonBlocks(event.output).trim();
           const tagged = extractTaggedThinkAnswer(visible);
@@ -2739,6 +2771,7 @@ export class AgentUI {
         this.appendHistoryStyled(`Warning: ${event.message}`, chalk.yellow);
         break;
       case "error":
+        this.interruptPending = false;
         this.composeFooterStatus = "";
         this.setRunState("error");
         this.appendHistoryStyled(`Error: ${event.message}`, chalk.redBright);
@@ -3980,6 +4013,7 @@ export class AgentUI {
 
   setAwaitingTask(waiting: boolean): void {
     this.awaitingTask = waiting;
+    if (waiting) this.interruptPending = false;
     if (waiting) this.setRunState("idle");
     this.updateStatus();
   }
@@ -3996,8 +4030,10 @@ export class AgentUI {
       return;
     }
 
+    const route = plainInputRoute(this.awaitingTask, this.taskDone, value);
+
     // Before any task has started, treat the first plain-text submission as the task.
-    if (this.awaitingTask && value && !value.startsWith("/")) {
+    if (route === "initial") {
       this.awaitingTask = false;
       this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       this.tui.requestRender();
@@ -4006,7 +4042,7 @@ export class AgentUI {
     }
 
     // After task completion, plain text (not starting with '/') is a follow-up.
-    if (this.taskDone && value && !value.startsWith("/")) {
+    if (route === "followup") {
       this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       this.onUserMessage?.(value);
       // Reset taskDone — runtime process is now processing again; next done re-enables it.
@@ -4017,7 +4053,7 @@ export class AgentUI {
       return;
     }
 
-    if (shouldLockPlainInput(this.awaitingTask, this.taskDone, value)) {
+    if (route === "locked") {
       this.appendHistoryStyled("Input locked: task still running. Use /abort to stop.", chalk.dim);
       this.tui.requestRender();
       return;

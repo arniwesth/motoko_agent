@@ -16,11 +16,11 @@ export func main() -> () ! {Stream, Process, IO} {
 
     selectEvents([proc, stdin], \event. match event {
         SourceBytes(src, data) => {
-            println("[" ++ src ++ " (SUBPROCESS)] " ++ toString(data));
+            println(concat(["[", src, " (SUBPROCESS)] ", toString(data)]));
             true
         },
         SourceText(src, text) => {
-            println("[" ++ src ++ " (STDIN)] You typed: " ++ text);
+            println(concat(["[", src, " (STDIN)] You typed: ", text]));
             false 
         },
         _ => {

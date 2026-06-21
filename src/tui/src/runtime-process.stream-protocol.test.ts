@@ -37,6 +37,14 @@ describe("stream protocol decoder", () => {
     expect(JSON.parse(evt.cells_json)).toEqual(cells);
   });
 
+  it("parses session_resume events", () => {
+    const evt = parseAgentEventLine('{"type":"session_resume","session_id":"session_a","model":"test/model","restored_messages":4}');
+    expect(evt?.type).toBe("session_resume");
+    if (evt?.type !== "session_resume") return;
+    expect(evt.model).toBe("test/model");
+    expect(evt.restored_messages).toBe(4);
+  });
+
   it("returns null for malformed or non-event lines", () => {
     expect(parseAgentEventLine("")).toBeNull();
     expect(parseAgentEventLine("not-json")).toBeNull();

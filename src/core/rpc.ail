@@ -11,10 +11,11 @@ module src/core/rpc
 -- For history of what was here before, see the M-MOTOKO-RPC-LOOP-FULL-
 -- MIGRATION sprint plan + CHANGELOG.md and git log around 2026-05-06.
 
-import src/core/agent_loop_v2 (run_v2_with_conversation)
+import src/core/agent_loop_v2 (run_v2_with_conversation, resume_v2_conversation)
 import src/core/context_usage (context_limit_for)
 import src/core/test/stub_step (LiveAI)
 import std/io     (println, exit)
+import std/env    (getEnvOr)
 import std/json   (Json, encode, jo, ja, kv, js, jb, jnum)
 import std/list   (foldl)
 import std/string (length)
@@ -162,6 +163,10 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   let ext_runtime = init_runtime_with_config(cfg);
   let ailang_built = inv.ailang_built;
   let cwd = if inv.workdir_override != "" then inv.workdir_override else cfg.agent.workdir;
+  let session_id = getEnvOr("MOTOKO_SESSION_ID", "");
+  let resume = getEnvOr("MOTOKO_RESUME", "") == "1"
+    && session_id != ""
+    && fileExists("${cwd}/.motoko/session/${session_id}.json");
   let settings = {
     task: task,
     ailang_built: ailang_built,
@@ -180,17 +185,18 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     cost_rates: cfg.cost_rates
   };
   let bv = version();
-  let _ = emit(encode(jo([
-    kv("type", js("session_start")),
-    kv("task", js(task)),
-    kv("model", js(model)),
-    kv("brainVersion", js(bv)),
-    kv("ailangBuilt", js(ailang_built)),
-    kv("config_profile", js(cfg.profile)),
-    kv("config_dir", js(cfg.profile_dir)),
-    kv("backend_mode", js(cfg.backend.mode)),
-    kv("loaded_extensions", ja(json_string_values(loaded_extension_names(ext_runtime))))
-  ])));
+  let _ = if resume then ()
+    else emit(encode(jo([
+      kv("type", js("session_start")),
+      kv("task", js(task)),
+      kv("model", js(model)),
+      kv("brainVersion", js(bv)),
+      kv("ailangBuilt", js(ailang_built)),
+      kv("config_profile", js(cfg.profile)),
+      kv("config_dir", js(cfg.profile_dir)),
+      kv("backend_mode", js(cfg.backend.mode)),
+      kv("loaded_extensions", ja(json_string_values(loaded_extension_names(ext_runtime))))
+    ])));
 
   let hint = get_hint(task);
   let system_md_path = cfg.agent.system_prompt;
@@ -234,7 +240,10 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     kv("type", js("v2_mode")),
     kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete"))
   ])));
-  run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI)
+  if resume then
+    resume_v2_conversation(ext_runtime, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, session_id)
+  else
+    run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI)
 }
 
 export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream, Trace} {

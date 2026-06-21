@@ -825,6 +825,7 @@ async function main(): Promise<void> {
   // callbacks, and spawnRuntimeProcess() may be called again on model switch.
   let runtimeProcess: RuntimeProcess | undefined;
   let sessionLogger: SessionLogger | undefined;
+  let sessionId = `session_${new Date().toISOString().replace(/[:.]/g, "-")}`;
   // Set to true when the user presses ESC to interrupt a running task.
   // Prevents the normal process.exit(0) on runtime process exit so the user can
   // submit a new task instead.
@@ -860,6 +861,8 @@ async function main(): Promise<void> {
       systemPrompt,
       openaiBaseUrl,
       aiOptionsJson,
+      process.env.MOTOKO_SESSION_ID ?? "",
+      false,
       (event) => {
         logger.log(event);
         // For terminal events, drain the JSONL stream BEFORE letting the UI
@@ -891,7 +894,21 @@ async function main(): Promise<void> {
 
   const ui = new AgentUI({ version: pkgVersion, model, profile, ailangVersion, extensions: profileAgent.extensions });
 
-  function spawnRuntimeProcess(task: string, logPrompt: boolean): void {
+  function checkpointPathForSession(): string {
+    const id = process.env.MOTOKO_SESSION_ID ?? sessionId;
+    return path.join(workdir, ".motoko", "session", `${id}.json`);
+  }
+
+  function removeSessionCheckpoint(): void {
+    try {
+      fs.rmSync(checkpointPathForSession(), { force: true });
+    } catch {
+      // Best-effort cleanup only; stale checkpoints are ignored unless a future
+      // spawn explicitly requests MOTOKO_RESUME.
+    }
+  }
+
+  function spawnRuntimeProcess(task: string, logPrompt: boolean, resume = false): void {
     errorOccurred = false;
     const logger = new SessionLogger(projectRoot, pkgVersion);
     sessionLogger = logger;
@@ -906,6 +923,8 @@ async function main(): Promise<void> {
       systemPrompt,
       openaiBaseUrl,
       aiOptionsJson,
+      sessionId,
+      resume,
       (event) => {
         if (event.type === "error") errorOccurred = true;
         logger.log(event);
@@ -927,12 +946,14 @@ async function main(): Promise<void> {
           // Reset interrupted flag for clean restart
           interrupted = false;
           errorOccurred = false;
+          removeSessionCheckpoint();
+          sessionId = `session_${new Date().toISOString().replace(/[:.]/g, "-")}`;
           // Small delay before respawn
           setTimeout(() => spawnRuntimeProcess("", false), 100);
         } else if (interrupted) {
-          // ESC was pressed — don't exit; let the user submit a new task.
+          // ESC was pressed — respawn into the checkpointed conversation.
           interrupted = false;
-          ui.setAwaitingTask(true);
+          setTimeout(() => spawnRuntimeProcess("", false, true), 100);
         } else if (errorOccurred) {
           // Process crashed after emitting an error (unexpected exit on the
           // normal error path).  Recover rather than exiting the TUI.
@@ -940,6 +961,7 @@ async function main(): Promise<void> {
           ui.setAwaitingTask(true);
         } else {
           void closing.then(() => {
+            removeSessionCheckpoint();
             ui.stop();
             process.exit(0);
           });
@@ -965,6 +987,7 @@ async function main(): Promise<void> {
       // No running process — start fresh
       profile = newProfile ?? profile;
       ui.setProfile(profile);
+      sessionId = `session_${new Date().toISOString().replace(/[:.]/g, "-")}`;
       spawnRuntimeProcess("", false);
     }
   };
