@@ -48,6 +48,28 @@ The core boundary should remain:
   compression.
 - Do not change provider-facing tool call correlation semantics.
 
+## Why Existing Hooks Do Not Fit
+
+This requires a new hook. None of the existing hooks can transparently transform
+native `BashExec` output at the right point in the lifecycle:
+
+- `on_tool_policy` runs before execution and can only allow, deny, defer, or stay
+  neutral. It never sees stdout or stderr.
+- `on_tool_handle` also runs before native execution. If it returns
+  `Handled(result)`, the extension must fully own execution; if it returns
+  `Delegate`, native execution continues but the extension never sees the
+  completed result.
+- `on_response_intercept` sees assistant text responses, not native tool results.
+- `on_solver_candidate` sees final-answer candidates, which is too late to
+  compress tool output before the next model turn.
+- `on_pre_step` can compact or rewrite message history before a later step, but
+  by then the large tool result has already entered the conversation. It also
+  operates on message text rather than structured tool result payloads, making it
+  the wrong layer for preserving tool-call correlation and native result shape.
+
+Therefore the extension boundary needs a post-result decision point: after core
+has executed the native tool and before core emits the tool-role message.
+
 ## Proposed ABI
 
 Add a narrow post-result hook to `ExtensionHooks`. The hook should operate on
