@@ -1,0 +1,113 @@
+module sunholo/motoko_ext_context_mode/exec
+
+import std/bytes (toString)
+import std/json (Json, decode, encode, jo, kv, js)
+import std/option (Option, Some, None)
+import std/process (exec, ProcessError)
+import std/string (trim, toLower, contains)
+import pkg/sunholo/motoko_ext_abi/types (ToolResultEnvelope)
+import pkg/sunholo/motoko_ext_context_mode/compress (compress_output)
+
+func process_error_to_string(err: ProcessError) -> string {
+  match err {
+    NotAllowed(cmd) => "not allowed: ${cmd}",
+    NotFound(cmd) => "not found: ${cmd}",
+    PermissionDenied(cmd) => "permission denied: ${cmd}",
+    Timeout(ms) => "timeout after ${show(ms)}ms",
+    OutputLimitExceeded(n) => "output limit exceeded: ${show(n)} bytes",
+    SpawnFailed(msg) => "spawn failed: ${msg}",
+    AbnormalExit(sig, name) => "abnormal exit signal ${show(sig)} (${name})"
+  }
+}
+
+func is_binary_missing(err: ProcessError) -> bool {
+  match err {
+    NotFound(_) => true,
+    SpawnFailed(_) => true,
+    _ => false
+  }
+}
+
+export func parse_output_json(raw_stdout: string) -> Json {
+  let t = trim(raw_stdout);
+  if t == "" then jo([kv("output", js(""))])
+  else
+    match decode(t) {
+      Ok(parsed) => parsed,
+      Err(_) => jo([kv("output", js(t))])
+    }
+}
+
+func timeout_seconds(timeout_ms: int) -> int {
+  if timeout_ms <= 0 then 0
+  else {
+    let secs = timeout_ms / 1000;
+    if (secs * 1000) < timeout_ms then secs + 1 else secs
+  }
+}
+
+export func build_shell_argv(bin: string, args: [string], cwd: string, timeout_ms: int) -> [string] {
+  let secs = timeout_seconds(timeout_ms);
+  let script = if secs > 0 then
+    "set -eu\ncd \"$1\"\nPATH=\"$HOME/.local/bin:$PATH\"\nbin=\"$2\"\nduration=\"$3\"\nshift 3\ntimeout \"$duration\" \"$bin\" \"$@\""
+    else
+    "set -eu\ncd \"$1\"\nPATH=\"$HOME/.local/bin:$PATH\"\nbin=\"$2\"\nshift 2\n\"$bin\" \"$@\"";
+  if secs > 0 then ["-lc", script, "motoko-context-mode", cwd, bin, "${show(secs)}s"] ++ args
+  else ["-lc", script, "motoko-context-mode", cwd, bin] ++ args
+}
+
+func shell_exec(bin: string, args: [string], cwd: string, timeout_ms: int) -> Option[{ stdout: string, stderr: string, exit_code: int, err: string }] ! {Process} {
+  let argv = build_shell_argv(bin, args, cwd, timeout_ms);
+  match exec("bash", argv) {
+    Err(e) => {
+      if is_binary_missing(e) then None
+      else Some({ stdout: "", stderr: "", exit_code: 1, err: process_error_to_string(e) })
+    },
+    Ok(out) => Some({ stdout: toString(out.stdout), stderr: toString(out.stderr), exit_code: out.exitCode, err: "" })
+  }
+}
+
+func error_envelope(id: string, tool: string, message: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: id,
+    tool: tool,
+    stdout: "",
+    stderr: message,
+    exit_code: 1,
+    metadata: jo([kv("json_metadata", js(encode(jo([kv("output", js(message))]))))])
+  }
+}
+
+func looks_like_missing_binary(stderr: string, exit_code: int) -> bool {
+  let s = toLower(stderr);
+  exit_code == 127 && (contains(s, "context-mode") && contains(s, "not found") || contains(s, "command not found"))
+}
+
+export func run_context_mode(id: string, tool: string, bin: string, args: [string], cwd: string, timeout_ms: int, max_chars: int) -> Option[ToolResultEnvelope] ! {Process} {
+  match shell_exec(bin, args, cwd, timeout_ms) {
+    None => None,
+    Some(out) => {
+      if out.err != "" then Some(error_envelope(id, tool, out.err))
+      else if looks_like_missing_binary(out.stderr, out.exit_code) then None
+      else {
+        let stdout = compress_output(out.stdout, max_chars);
+        let stderr = compress_output(out.stderr, max_chars);
+        Some({
+          tool_call_id: id,
+          tool: tool,
+          stdout: stdout,
+          stderr: stderr,
+          exit_code: out.exit_code,
+          metadata: jo([kv("json_metadata", js(encode(parse_output_json(stdout))))])
+        })
+      }
+    }
+  }
+}
+
+export func run_context_mode_fire_and_forget(bin: string, args: [string], cwd: string, timeout_ms: int) -> bool ! {Process} {
+  match shell_exec(bin, args, cwd, timeout_ms) {
+    None => false,
+    Some(_) => true
+  }
+}

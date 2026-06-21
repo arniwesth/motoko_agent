@@ -1,0 +1,77 @@
+module sunholo/motoko_ext_context_mode/register
+
+import std/env (getEnvOr)
+import std/option (None)
+import std/string (stringToInt)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtensionHooks,
+  ExtCtx,
+  BudgetPlan,
+  BudgetPatch,
+  ToolHandleDecision,
+  FinalizeDecision,
+  PreStepDecision,
+  PassThrough,
+  Msg
+)
+import pkg/sunholo/motoko_ext_context_mode/types (CtxConfig)
+import pkg/sunholo/motoko_ext_context_mode/context_mode (
+  provided_tools,
+  on_build_system_prompt,
+  on_tool_policy,
+  on_tool_handle,
+  finalize_with_index
+)
+import pkg/sunholo/motoko_ext_context_mode/prompts (load_agent_prompt)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None => fallback
+  }
+}
+
+func no_budget_patch() -> BudgetPatch {
+  {
+    requested_total: None,
+    requested_solver: None,
+    requested_verifier: None
+  }
+}
+
+func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  no_budget_patch()
+}
+
+func config_from_env() -> CtxConfig ! {Env} {
+  {
+    bin: getEnvOr("CONTEXT_MODE_BIN", "context-mode"),
+    timeout_ms: parse_int_or(getEnvOr("CONTEXT_MODE_TIMEOUT_MS", "25000"), 25000),
+    max_output_chars: parse_int_or(getEnvOr("CONTEXT_MODE_MAX_OUTPUT_CHARS", "6000"), 6000),
+    snapshot_key_prefix: getEnvOr("CONTEXT_MODE_SNAPSHOT_KEY_PREFIX", "ctxmode:snapshot:")
+  }
+}
+
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+  let cfg = config_from_env();
+  let cached_prompt = load_agent_prompt(getEnvOr("MOTOKO_WORKDIR", "."));
+  let handle = func(ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle(cfg, ctx, call)
+  };
+  let finalize = func(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    finalize_with_index(cfg, ctx, candidate)
+  };
+  {
+    id: "context_mode",
+    provided_tools: provided_tools(),
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
+    on_budget_plan: budget_hook,
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+    on_tool_policy: on_tool_policy,
+    on_tool_handle: handle,
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: finalize
+  }
+}
