@@ -2022,6 +2022,7 @@ export class AgentUI {
   private selectedScratchpadIdx = -1;
   private readonly thinkStepOrder: number[] = [];  // insertion order; used for ctrl+t cycling
   private selectedThinkIdx = -1;                   // index into thinkStepOrder, -1 = none selected
+  private interruptPending = false;
   /** True once the first task is complete; enables free-text follow-ups. */
   private taskDone = false;
   /** Package version shown as a startup banner in the history pane. */
@@ -2151,6 +2152,8 @@ export class AgentUI {
       // ESC while a task is running: kill the runtime process immediately.
       // Do NOT consume ESC when idle — let Editor handle it (e.g. cancel autocomplete).
       if (matchesKey(data, "escape") && this.runtimeProcess && !this.taskDone) {
+        if (this.interruptPending) return { consume: true };
+        this.interruptPending = true;
         this.appendHistoryStyled("Task interrupted", chalk.yellow);
         this.tui.requestRender();
         this.onInterrupt?.();
@@ -2303,6 +2306,7 @@ export class AgentUI {
     this.lastUpdateMs = Date.now();
     switch (event.type) {
       case "session_start":
+        this.interruptPending = false;
         this.composeFooterStatus = "";
         this.toolOutputExpanded = true;
         this.refreshAllToolDetailRows();
@@ -2337,6 +2341,7 @@ export class AgentUI {
         break;
 
       case "session_resume":
+        this.interruptPending = false;
         this.composeFooterStatus = "";
         this.toolOutputExpanded = true;
         this.refreshAllToolDetailRows();
@@ -2739,6 +2744,7 @@ export class AgentUI {
         break;
 
       case "done":
+        this.interruptPending = false;
         if (event.output && event.output.trim()) {
           const visible = this.stripToolJsonBlocks(event.output).trim();
           const tagged = extractTaggedThinkAnswer(visible);
@@ -2765,6 +2771,7 @@ export class AgentUI {
         this.appendHistoryStyled(`Warning: ${event.message}`, chalk.yellow);
         break;
       case "error":
+        this.interruptPending = false;
         this.composeFooterStatus = "";
         this.setRunState("error");
         this.appendHistoryStyled(`Error: ${event.message}`, chalk.redBright);
@@ -4006,6 +4013,7 @@ export class AgentUI {
 
   setAwaitingTask(waiting: boolean): void {
     this.awaitingTask = waiting;
+    if (waiting) this.interruptPending = false;
     if (waiting) this.setRunState("idle");
     this.updateStatus();
   }
