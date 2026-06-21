@@ -3,6 +3,15 @@
 Date: 2026-06-21
 Status: planned
 
+## TL;DR
+
+Do not give extensions a general native-tool execution callback through
+`ExtCtx`. Add a narrow post-result hook instead: core runs `BashExec` normally,
+then subscribed extensions may transform the completed model-visible JSON result
+before it becomes the tool-role message. This keeps native execution, policy,
+approval, tracing, backend selection, and provider correlation in core while
+letting `context_mode` transparently compress large `stdout`/`stderr` payloads.
+
 ## Problem
 
 PR #58 fixes `context_mode` as an explicit extension tool provider: the model can call
