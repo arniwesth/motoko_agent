@@ -47,7 +47,7 @@ import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
-import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_json)
+import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_model_json)
 import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for_v2)
@@ -363,13 +363,52 @@ func step_result_to_message(result: StepResult) -> Message {
   }
 }
 
+pure func cap_tool_message_content(content: string) -> string {
+  let cap = 65536;
+  let n = Str.length(content);
+  if n <= cap then content
+  else {
+    let marker = "\n...[truncated; original ${show(n)} bytes]";
+    let keep = cap - Str.length(marker);
+    "${substring(content, 0, keep)}${marker}"
+  }
+}
+
+pure func test_cap_tool_message_content_keeps_small_content() -> bool
+  tests [((), true)]
+  {
+    cap_tool_message_content("small result") == "small result"
+  }
+
+pure func test_cap_tool_message_content_truncates_oversized_content() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let capped = cap_tool_message_content(x1024);
+    Str.length(capped) == 65536 && contains(capped, "...[truncated; original ")
+  }
+
+func result_env_model_content(result: ToolResultEnvelope) -> string {
+  cap_tool_message_content(encode(result_to_model_json(result)))
+}
+
 -- Build a tool-role Message containing a dispatcher result. The tool_call_id
 -- field is the load-bearing wire-format requirement: Anthropic / OpenAI /
 -- Gemini all correlate tool_use → tool_result by this id.
 func tool_result_message(call: ToolCall, content: string) -> Message {
   {
     role: "tool",
-    content: content,
+    content: cap_tool_message_content(content),
     tool_calls: [],
     tool_call_id: call.id
   }
@@ -383,7 +422,7 @@ func tool_result_message(call: ToolCall, content: string) -> Message {
 func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
   {
     role: "tool",
-    content: encode(result_to_json(envelope)),
+    content: result_env_model_content(envelope),
     tool_calls: [],
     tool_call_id: envelope.tool_call_id
   }
@@ -709,7 +748,7 @@ func dispatch_calls(
                   let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
                   let handled_msg: Message = {
                     role: "tool",
-                    content: encode(result_to_json(result_env)),
+                    content: result_env_model_content(result_env),
                     tool_calls: [],
                     tool_call_id: call.id
                   };
@@ -773,7 +812,7 @@ func dispatch_calls(
             let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
             let handled_msg: Message = {
               role: "tool",
-              content: encode(result_to_json(result_env)),
+              content: result_env_model_content(result_env),
               tool_calls: [],
               tool_call_id: call.id
             };
@@ -796,7 +835,7 @@ func dispatch_calls(
               -- extension-internal id.
               let handled_msg: Message = {
                 role: "tool",
-                content: encode(result_to_json(result_env)),
+                content: result_env_model_content(result_env),
                 tool_calls: [],
                 tool_call_id: call.id
               };
