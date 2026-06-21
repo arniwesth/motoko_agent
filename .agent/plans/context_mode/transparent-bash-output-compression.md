@@ -3,6 +3,9 @@
 Date: 2026-06-21
 Status: planned
 
+Reference: PR #58 discussion comment:
+https://github.com/arniwesth/motoko_agent/pull/58#issuecomment-4761393381
+
 ## TL;DR
 
 Do not give extensions a general native-tool execution callback through
@@ -141,6 +144,23 @@ Rollout must be versioned:
 If AILANG later supports optional record fields or defaulted hook builders, use
 that to reduce future ABI churn. For this change, assume direct record updates
 are required.
+
+Grounding: `.mcp.json` points to the AILANG MCP server at
+`https://mcp.ailang.sunholo.com/mcp/`. As of MCP server `ailang-api` `0.8.1`,
+`ailang_versions` reports latest docs version `0.25.0`; this repo currently uses
+local `AILANG v0.24.2`. MCP searches for `optional record fields default record
+fields` and `record optional field` returned no feature documentation. The MCP
+record docs describe Hindley-Milner row polymorphism/open record types, not
+optional fields or defaulted record literals. Local compiler checks against
+`v0.24.2` reject:
+
+- `field?: type` in a record type (`expected :, got ?`);
+- `field: type = value` in a record type;
+- constructing a record literal that omits a required field.
+
+So the plan must treat added `ExtensionHooks` fields as a source-breaking ABI
+change unless/until AILANG gains an explicit optional/default field mechanism or
+the ABI package provides a builder/helper abstraction in advance.
 
 ## Dispatch Semantics
 
