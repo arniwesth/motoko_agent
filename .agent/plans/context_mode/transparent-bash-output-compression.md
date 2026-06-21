@@ -209,6 +209,65 @@ supports optional record fields or the ABI package introduces a defaulted
 hook-builder abstraction, use that to reduce future ABI churn. For this change,
 assume direct record updates are required.
 
+## Blast Radius
+
+This is not a context-mode-only change. Adding a required hook field to
+`ExtensionHooks` touches the extension ABI, every hook record literal, and both
+tool-dispatch paths.
+
+Expected affected areas:
+
+- ABI package:
+  - `sunholo/motoko_ext_abi/types`
+  - version bump and registry/local dependency updates
+- Root dependency graph:
+  - `ailang.toml`
+  - `ailang.lock`
+  - generated registry imports if ABI package versions or local overrides change
+- In-repo extension packages:
+  - `packages/motoko-ext-context-mode/*`
+  - `packages/motoko_scratchpad/*`
+- Registry extensions currently imported by `src/core/ext/registry_generated.ail`:
+  - test dummy
+  - omnigraph
+  - MCP
+  - exa search
+  - ailang docs
+  - compose
+  - A2A
+  - decision framework
+  - microrag
+  - compaction AI
+  - scratchpad
+- Hand-built test/smoke hook records:
+  - `scripts/smoke_v2_handle.ail`
+  - `scripts/smoke_v2_policy_denial.ail`
+  - `scripts/smoke_v2_pending.ail`
+  - `scripts/smoke_v2_pending_full_loop.ail`
+  - `src/core/test/stub_step.ail`
+  - inline tests in `src/core/ext/runtime.ail`
+- Core runtime:
+  - `src/core/ext/types.ail`
+  - `src/core/ext/runtime.ail`
+  - `src/core/tool_envelope_dispatch.ail`
+  - `src/core/agent_loop_v2.ail`
+  - `src/core/tool_dispatch_adapter.ail` if a structured native-result helper is
+    added beside `dispatch_one`
+- Observability/UI:
+  - TUI and session log readers should continue to parse native `BashExec` JSON
+    with added `context_mode` fields.
+  - Trace event names must not collide with existing `native_tool_*` events.
+
+High-risk compatibility points:
+
+- Every existing `ExtensionHooks` literal must compile after the ABI bump.
+- Native `BashExec` JSON shape must remain backward-compatible.
+- Tool-call correlation IDs must remain unchanged.
+- The v2 delegated-deferred path must not accidentally run result hooks until it
+  has real completed delegated results.
+- `Trace` must not leak into the extension ABI unless AILANG MCP docs and local
+  compiler/runtime support it as a stable effect.
+
 ## Dispatch Semantics
 
 1. Existing policy hooks run first.
