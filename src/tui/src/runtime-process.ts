@@ -55,6 +55,7 @@ export type ToolResultsPhase = "running" | "progress" | "done";
 
 export type AgentEvent =
   | { type: "session_start"; task: string; model: string; brainVersion: string; ailangBuilt: string; config_profile?: string; config_dir?: string; loaded_extensions?: string[] }
+  | { type: "session_resume"; session_id?: string; model: string; restored_messages: number }
   | { type: "context_usage"; step: number; tokens_est: number; limit: number }
   | { type: "thinking_stream_start"; step: number; stream_id: string; model: string }
   | { type: "thinking_delta"; step: number; stream_id: string; seq: number; text_delta: string }
@@ -271,6 +272,80 @@ function mirrorAbsoluteProfile(workdir: string, profile: string): string {
   return basename;
 }
 
+export function buildRuntimeChildEnv(
+  workdir: string,
+  profile: string,
+  sessionId: string,
+  resume: boolean,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+    GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+    EXA_API_KEY: process.env.EXA_API_KEY,
+    CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
+    AILANG_FS_SANDBOX: workdir,
+    MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
+    MOTOKO_SESSION_ID: process.env.MOTOKO_SESSION_ID ?? sessionId,
+    // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
+    // MOTOKO_HEADLESS=1 so the AILANG runtime's conversation_loop_v2
+    // skips its readLine() drain (which blocks indefinitely on non-TTY
+    // stdin instead of returning EOF) and exits cleanly after the first
+    // task completes. Manual override: set MOTOKO_HEADLESS in the parent
+    // env to force either mode regardless of TTY state.
+    // See agent_loop_v2.ail conversation_loop_v2 for the AILANG-side gate.
+    MOTOKO_HEADLESS:
+      process.env.MOTOKO_HEADLESS ??
+      (process.stdin.isTTY ? "" : "1"),
+    // M-MOTOKO-PERSIST-NUDGE: forward the loop-persistence retry budget so
+    // agent_loop_v2.ail's NoDecision branch can read it. Without this the
+    // explicit env allowlist scrubs it and the feature is silently off —
+    // same gotcha as MOTOKO_REPO / the pricing vars below. Empty = off.
+    MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
+    // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): forward
+    // MOTOKO_REPO so the AILANG runtime can fall back to the fork's
+    // bundled profile (.motoko/config/<profile>) when WORKDIR is a
+    // per-task scratch dir without its own .motoko/config. Without
+    // this, eval-harness runs see extensions.order=[] and other
+    // profile defaults silently mask user-configured behavior.
+    MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
+    // MOTOKO_PROFILE_DIR — absolute path to the active profile's config
+    // directory. Standalone AILANG extension packages (motoko-ext-*) read
+    // their own JSON config here (e.g. motoko-ext-compaction-ai reads
+    // ${MOTOKO_PROFILE_DIR}/compaction_ai.json). Without this var, the
+    // packages fall back to "." which resolves to the AILANG runtime's
+    // CWD (motoko_agent root) → "no such file or directory" panics on
+    // first turn. The original src/core/config.ail path-built the same
+    // location internally; the env-var split happened when extensions
+    // moved out into separate packages without a corresponding launcher
+    // wiring.
+    MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+    // M-OLLAMA-PER-MODEL-MAX-TOKENS: forward the per-model output budget so the
+    // AILANG runtime's ollama /v1 path (resolveOllamaMaxTokens) uses the model's
+    // declared max_output_tokens instead of the 4096 std/ai default. Qwen3.6
+    // reasons thousands of tokens before the tool call and truncates
+    // (finish_reason=length) at 4096 → 0 tool calls (disengagement). Without this
+    // allowlist entry the explicit childEnv whitelist drops it — same gotcha as
+    // MOTOKO_REPO / the pricing vars. Empty = the AILANG-side 16384 floor applies.
+    AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
+    // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
+    // pricing env vars set by the AILANG adapter from Task.Budget. Without
+    // this, the AILANG-side fix (load_cost_rates reads these env vars) is
+    // a no-op because the explicit whitelist drops them — same gotcha as
+    // MOTOKO_REPO above (gap #6). Empty string falls through to motoko's
+    // profile config fallback inside load_cost_rates.
+    MOTOKO_COST_INPUT_PER_1M_MILLICENTS:
+      process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
+    MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
+      process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
+  };
+  if (resume) childEnv.MOTOKO_RESUME = "1";
+  return childEnv;
+}
+
 export class RuntimeProcess {
   private proc: ChildProcess;
   private dead = false;
@@ -289,6 +364,7 @@ export class RuntimeProcess {
     openaiBaseUrl: string,
     aiOptionsJson: string,
     sessionId: string,
+    resume: boolean,
     onEvent: (e: AgentEvent) => void,
     onExit: () => void
   ) {
@@ -299,70 +375,7 @@ export class RuntimeProcess {
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
       : "ailang";
-    const childEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
-      GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
-      EXA_API_KEY: process.env.EXA_API_KEY,
-      CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
-      AILANG_FS_SANDBOX: workdir,
-      MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
-      MOTOKO_SESSION_ID: process.env.MOTOKO_SESSION_ID ?? this.sessionId,
-      // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
-      // MOTOKO_HEADLESS=1 so the AILANG runtime's conversation_loop_v2
-      // skips its readLine() drain (which blocks indefinitely on non-TTY
-      // stdin instead of returning EOF) and exits cleanly after the first
-      // task completes. Manual override: set MOTOKO_HEADLESS in the parent
-      // env to force either mode regardless of TTY state.
-      // See agent_loop_v2.ail conversation_loop_v2 for the AILANG-side gate.
-      MOTOKO_HEADLESS:
-        process.env.MOTOKO_HEADLESS ??
-        (process.stdin.isTTY ? "" : "1"),
-      // M-MOTOKO-PERSIST-NUDGE: forward the loop-persistence retry budget so
-      // agent_loop_v2.ail's NoDecision branch can read it. Without this the
-      // explicit env allowlist scrubs it and the feature is silently off —
-      // same gotcha as MOTOKO_REPO / the pricing vars below. Empty = off.
-      MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
-      // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): forward
-      // MOTOKO_REPO so the AILANG runtime can fall back to the fork's
-      // bundled profile (.motoko/config/<profile>) when WORKDIR is a
-      // per-task scratch dir without its own .motoko/config. Without
-      // this, eval-harness runs see extensions.order=[] and other
-      // profile defaults silently mask user-configured behavior.
-      MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
-      // MOTOKO_PROFILE_DIR — absolute path to the active profile's config
-      // directory. Standalone AILANG extension packages (motoko-ext-*) read
-      // their own JSON config here (e.g. motoko-ext-compaction-ai reads
-      // ${MOTOKO_PROFILE_DIR}/compaction_ai.json). Without this var, the
-      // packages fall back to "." which resolves to the AILANG runtime's
-      // CWD (motoko_agent root) → "no such file or directory" panics on
-      // first turn. The original src/core/config.ail path-built the same
-      // location internally; the env-var split happened when extensions
-      // moved out into separate packages without a corresponding launcher
-      // wiring.
-      MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
-      // M-OLLAMA-PER-MODEL-MAX-TOKENS: forward the per-model output budget so the
-      // AILANG runtime's ollama /v1 path (resolveOllamaMaxTokens) uses the model's
-      // declared max_output_tokens instead of the 4096 std/ai default. Qwen3.6
-      // reasons thousands of tokens before the tool call and truncates
-      // (finish_reason=length) at 4096 → 0 tool calls (disengagement). Without this
-      // allowlist entry the explicit childEnv whitelist drops it — same gotcha as
-      // MOTOKO_REPO / the pricing vars. Empty = the AILANG-side 16384 floor applies.
-      AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
-      // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
-      // pricing env vars set by the AILANG adapter from Task.Budget. Without
-      // this, the AILANG-side fix (load_cost_rates reads these env vars) is
-      // a no-op because the explicit whitelist drops them — same gotcha as
-      // MOTOKO_REPO above (gap #6). Empty string falls through to motoko's
-      // profile config fallback inside load_cost_rates.
-      MOTOKO_COST_INPUT_PER_1M_MILLICENTS:
-        process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
-      MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
-        process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
-    };
+    const childEnv = buildRuntimeChildEnv(workdir, profile, this.sessionId, resume);
     // AILANG v0.15.x migration: forward AILANG_STDLIB_PATH if set in the
     // parent env so callers can point the runtime at an upstream stdlib
     // checkout (e.g. /Users/mark/dev/sunholo/ailang/std). Without this,

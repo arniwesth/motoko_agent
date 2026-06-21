@@ -38,13 +38,13 @@ import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError, StreamC
 import std/io (println, readLine)
 import std/clock (now)
 import std/env (getEnvOr)
-import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString, getArray)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, repair, get, asString, getArray)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
 import std/process (exec, ProcessError, ProcessOutput)
-import std/fs (mkdirAllResult, writeFileResult)
+import std/fs (mkdirAllResult, writeFileResult, readFileResult)
 import std/bytes (toString)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
@@ -443,6 +443,26 @@ func write_checkpoint(workdir: string, session_id: string, msgs: [Message]) -> (
   ()
 }
 
+func decode_checkpoint_body(body: string) -> Option[[Message]] {
+  match decode(body) {
+    Ok(j) => Some(json_to_messages(j)),
+    Err(_) => match repair(body) {
+      Ok(repaired) => match decode(repaired) {
+        Ok(j2) => Some(json_to_messages(j2)),
+        Err(_) => None
+      },
+      Err(_) => None
+    }
+  }
+}
+
+export func try_load_checkpoint(workdir: string, session_id: string) -> Option[[Message]] ! {FS} {
+  match readFileResult(checkpoint_path(workdir, session_id)) {
+    Ok(body) => decode_checkpoint_body(body),
+    Err(_) => None
+  }
+}
+
 func tool_call_eq(a: ToolCall, b: ToolCall) -> bool {
   a.id == b.id && a.name == b.name && a.arguments == b.arguments
 }
@@ -490,6 +510,27 @@ pure func test_checkpoint_message_codec_preserves_tool_calls() -> bool
     ];
     let encoded = jo([kv("messages", ja(messages_to_json(history)))]);
     messages_eq(json_to_messages(encoded), history)
+  }
+
+pure func test_checkpoint_decode_repair_recovers_truncated_body() -> bool
+  tests [((), true)]
+  {
+    let body = "{\"schema_version\":1,\"session_id\":\"s\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\",\"tool_calls\":[],\"tool_call_id\":\"\"}";
+    match decode_checkpoint_body(body) {
+      Some(history) => messages_eq(history, [
+        { role: "user", content: "hello", tool_calls: [], tool_call_id: "" }
+      ]),
+      None => false
+    }
+  }
+
+pure func test_checkpoint_decode_corrupt_body_is_none() -> bool
+  tests [((), true)]
+  {
+    match decode_checkpoint_body("not json") {
+      Some(_) => false,
+      None => true
+    }
   }
 
 -- Build a [Message] entry for one assistant turn from the StepResult. Carries
@@ -1746,6 +1787,32 @@ export func run_v2_with_conversation(
       conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
     }
   }
+}
+
+export func resume_v2_conversation(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  fallback_init: [Msg],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  session_id: string
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let history = match try_load_checkpoint(workdir, session_id) {
+    Some(restored) => restored,
+    None => msgs_to_messages(fallback_init)
+  };
+  let _ = emit_event(session_id, "session_resume", [
+    kv("model", js(model)),
+    kv("restored_messages", jnum(_int_to_float(List.length(history))))
+  ]);
+  conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
 }
 
 -- Run loop_v2 with a scripted provider. No real LLM call made.

@@ -1794,6 +1794,19 @@ export function shouldLockPlainInput(
   return !awaitingTask && !taskDone && value.length > 0 && !value.startsWith("/");
 }
 
+export type PlainInputRoute = "initial" | "followup" | "locked" | "unknown";
+
+export function plainInputRoute(
+  awaitingTask: boolean,
+  taskDone: boolean,
+  value: string,
+): PlainInputRoute {
+  if (awaitingTask && value && !value.startsWith("/")) return "initial";
+  if (taskDone && value && !value.startsWith("/")) return "followup";
+  if (shouldLockPlainInput(awaitingTask, taskDone, value)) return "locked";
+  return "unknown";
+}
+
 function initialExtensionsFromEnv(): string {
   const raw = (process.env.CORE_EXT_ORDER ?? "").trim();
   if (raw === "") return "";
@@ -2321,6 +2334,19 @@ export class AgentUI {
           this.scratchpadExtensionActive = hasScratchpadExtension(names);
           this.appendHistoryStyled(`Loaded extensions: ${extText}`, chalk.dim);
         }
+        break;
+
+      case "session_resume":
+        this.composeFooterStatus = "";
+        this.toolOutputExpanded = true;
+        this.refreshAllToolDetailRows();
+        this.model = event.model;
+        this.setRunState("idle");
+        this.awaitingTask = false;
+        this.taskDone = true;
+        this.tui.setFocus(this.cmdInput);
+        this.appendHistoryStyled(`Resumed ${event.restored_messages} messages`, chalk.dim);
+        this.updateStatus();
         break;
 
       case "thinking":
@@ -3996,8 +4022,10 @@ export class AgentUI {
       return;
     }
 
+    const route = plainInputRoute(this.awaitingTask, this.taskDone, value);
+
     // Before any task has started, treat the first plain-text submission as the task.
-    if (this.awaitingTask && value && !value.startsWith("/")) {
+    if (route === "initial") {
       this.awaitingTask = false;
       this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       this.tui.requestRender();
@@ -4006,7 +4034,7 @@ export class AgentUI {
     }
 
     // After task completion, plain text (not starting with '/') is a follow-up.
-    if (this.taskDone && value && !value.startsWith("/")) {
+    if (route === "followup") {
       this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       this.onUserMessage?.(value);
       // Reset taskDone — runtime process is now processing again; next done re-enables it.
@@ -4017,7 +4045,7 @@ export class AgentUI {
       return;
     }
 
-    if (shouldLockPlainInput(this.awaitingTask, this.taskDone, value)) {
+    if (route === "locked") {
       this.appendHistoryStyled("Input locked: task still running. Use /abort to stop.", chalk.dim);
       this.tui.requestRender();
       return;

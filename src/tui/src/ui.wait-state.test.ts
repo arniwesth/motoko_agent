@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { applyToolProgressCounters, computeMissingDoneResultIds, shouldLockPlainInput, type ToolBatchCounters } from "./ui.js";
+import { applyToolProgressCounters, computeMissingDoneResultIds, plainInputRoute, shouldLockPlainInput, type ToolBatchCounters } from "./ui.js";
 
 describe("ui wait-state helpers", () => {
   it("locks plain text input only during active runs", () => {
@@ -7,6 +7,12 @@ describe("ui wait-state helpers", () => {
     expect(shouldLockPlainInput(true, false, "new task")).toBe(false);
     expect(shouldLockPlainInput(false, true, "follow up")).toBe(false);
     expect(shouldLockPlainInput(false, false, "/abort")).toBe(false);
+  });
+
+  it("routes plain text as a follow-up after resume marks the task done", () => {
+    expect(plainInputRoute(false, true, "what was my last prompt?")).toBe("followup");
+    expect(plainInputRoute(true, false, "new task")).toBe("initial");
+    expect(plainInputRoute(false, false, "still running")).toBe("locked");
   });
 
   it("applies tool progress counters with dedupe and mixed status", () => {

@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "bun node_modules/.bin/jest --testPathPattern='src/.*\\.test\\.ts'"
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --testPathPattern='src/.*\\.test\\.ts' --runInBand"
   },
   "dependencies": {
     "@mariozechner/pi-tui": "^0.64.0",

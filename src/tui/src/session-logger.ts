@@ -278,6 +278,10 @@ export class SessionLogger {
           this.writeTranscriptLine(`Loaded extensions: ${extText}`);
         }
         break;
+      case "session_resume":
+        this.setState("idle");
+        this.writeTranscriptLine(`Resumed ${event.restored_messages} messages`);
+        break;
       case "thinking":
         this.ensureThinkingLine();
         {
