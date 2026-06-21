@@ -11,6 +11,7 @@
 - Config-driven `[[ai_provider]]` supports simple auth shapes, but not AWS SigV4.
 - Motoko already supports OpenAI-compatible endpoints through `OPENAI_BASE_URL`.
 - LiteLLM can expose Bedrock through OpenAI-compatible `/v1/chat/completions`.
+- LiteLLM supports Amazon Bedrock API-key authentication through `AWS_BEARER_TOKEN_BEDROCK` or `api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK` in `config.yaml`. This plan assumes bearer-token auth only; normal AWS credential-chain auth is out of scope.
 - Motoko launches AILANG with `--ai <model>`. If the model is not found in AILANG's `models.yml`, AILANG uses direct provider guessing. For a `gpt-*` alias, this routes to the OpenAI provider.
 - In the direct OpenAI provider path, AILANG still requires `OPENAI_API_KEY` even when `OPENAI_BASE_URL` points at a local proxy. For the LiteLLM smoke, set `OPENAI_API_KEY` to a dummy non-secret value unless the proxy is configured with a real LiteLLM master key.
 
@@ -21,7 +22,7 @@ Motoko
   -> AILANG OpenAI-compatible client
   -> OPENAI_BASE_URL=http://127.0.0.1:4000/v1
   -> LiteLLM proxy
-  -> boto3 / AWS credential chain
+  -> AWS_BEARER_TOKEN_BEDROCK + AWS_REGION
   -> Amazon Bedrock Runtime
 ```
 
@@ -30,12 +31,8 @@ Motoko should see a normal OpenAI-compatible model alias. LiteLLM handles AWS cr
 ## Required Inputs
 
 - AWS account with Bedrock model access enabled in the selected region.
-- AWS credentials available to the LiteLLM process through one of:
-  - `AWS_PROFILE`
-  - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
-  - mounted `~/.aws`
-  - another boto3-supported credential source
-- AWS region, for example `us-east-1` or `us-west-2`.
+- `AWS_BEARER_TOKEN_BEDROCK` available to the LiteLLM process.
+- `AWS_REGION` or `AWS_REGION_NAME`, for example `us-east-1` or `us-west-2`.
 - Bedrock model ID to test, for example an Anthropic Claude model available in the account.
 - Python environment capable of installing/running LiteLLM and `boto3`.
 - A local proxy API key policy:
@@ -43,6 +40,8 @@ Motoko should see a normal OpenAI-compatible model alias. LiteLLM handles AWS cr
   - LiteLLM with `master_key`: set `OPENAI_API_KEY` to that LiteLLM key
 
 Do not forward a real OpenAI API key to the local proxy during this test. It is unnecessary and may be logged by the proxy.
+
+Do not rely on `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or `~/.aws` for this plan. If `AWS_BEARER_TOKEN_BEDROCK` is absent, the LiteLLM-first plan is not ready to run.
 
 ## Model Alias Strategy
 
@@ -69,13 +68,16 @@ model_list:
   - model_name: gpt-bedrock-smoke
     litellm_params:
       model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-east-1
+      aws_region_name: os.environ/AWS_REGION
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
       drop_params: true
 ```
 
 Run proxy:
 
 ```bash
+export AWS_REGION=us-east-1
+export AWS_BEARER_TOKEN_BEDROCK=...
 litellm --config /path/to/bedrock-litellm.yaml --host 127.0.0.1 --port 4000
 ```
 
@@ -102,7 +104,7 @@ Acceptance criteria:
 
 - `/v1/models` returns the alias.
 - `/v1/chat/completions` returns a valid OpenAI-shaped response.
-- No AWS auth, model access, or region errors.
+- No Bedrock bearer-token auth, model access, or region errors.
 
 ## Phase 2: AILANG Provider Preflight
 
@@ -258,7 +260,8 @@ Useful checks:
 
 Common failure modes:
 
-- `AccessDeniedException`: IAM policy or Bedrock model access missing.
+- `AccessDeniedException`: bearer token lacks access to the selected Bedrock model or action.
+- `UnrecognizedClientException` / auth failure: `AWS_BEARER_TOKEN_BEDROCK` is missing, expired, malformed, or not being read by LiteLLM.
 - `ValidationException`: unsupported model/API shape or invalid tool schema.
 - `ThrottlingException`: account or model quota too low.
 - `ResourceNotFoundException`: model ID not available in selected region.
