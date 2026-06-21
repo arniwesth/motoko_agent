@@ -825,6 +825,7 @@ async function main(): Promise<void> {
   // callbacks, and spawnRuntimeProcess() may be called again on model switch.
   let runtimeProcess: RuntimeProcess | undefined;
   let sessionLogger: SessionLogger | undefined;
+  let sessionId = `session_${new Date().toISOString().replace(/[:.]/g, "-")}`;
   // Set to true when the user presses ESC to interrupt a running task.
   // Prevents the normal process.exit(0) on runtime process exit so the user can
   // submit a new task instead.
@@ -860,6 +861,7 @@ async function main(): Promise<void> {
       systemPrompt,
       openaiBaseUrl,
       aiOptionsJson,
+      process.env.MOTOKO_SESSION_ID ?? "",
       (event) => {
         logger.log(event);
         // For terminal events, drain the JSONL stream BEFORE letting the UI
@@ -906,6 +908,7 @@ async function main(): Promise<void> {
       systemPrompt,
       openaiBaseUrl,
       aiOptionsJson,
+      sessionId,
       (event) => {
         if (event.type === "error") errorOccurred = true;
         logger.log(event);
@@ -927,6 +930,7 @@ async function main(): Promise<void> {
           // Reset interrupted flag for clean restart
           interrupted = false;
           errorOccurred = false;
+          sessionId = `session_${new Date().toISOString().replace(/[:.]/g, "-")}`;
           // Small delay before respawn
           setTimeout(() => spawnRuntimeProcess("", false), 100);
         } else if (interrupted) {
@@ -965,6 +969,7 @@ async function main(): Promise<void> {
       // No running process — start fresh
       profile = newProfile ?? profile;
       ui.setProfile(profile);
+      sessionId = `session_${new Date().toISOString().replace(/[:.]/g, "-")}`;
       spawnRuntimeProcess("", false);
     }
   };

@@ -276,6 +276,7 @@ export class RuntimeProcess {
   private dead = false;
   private readonly workdir: string;
   private readonly onEvent: (e: AgentEvent) => void;
+  private readonly sessionId: string;
 
   constructor(
     task: string,
@@ -287,11 +288,13 @@ export class RuntimeProcess {
     systemPrompt: string,
     openaiBaseUrl: string,
     aiOptionsJson: string,
+    sessionId: string,
     onEvent: (e: AgentEvent) => void,
     onExit: () => void
   ) {
     this.workdir = workdir;
     this.onEvent = onEvent;
+    this.sessionId = sessionId;
     const aiModelArg = model;
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
@@ -307,6 +310,7 @@ export class RuntimeProcess {
       CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
       AILANG_FS_SANDBOX: workdir,
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
+      MOTOKO_SESSION_ID: process.env.MOTOKO_SESSION_ID ?? this.sessionId,
       // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
       // MOTOKO_HEADLESS=1 so the AILANG runtime's conversation_loop_v2
       // skips its readLine() drain (which blocks indefinitely on non-TTY
