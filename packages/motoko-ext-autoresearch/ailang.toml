@@ -1,0 +1,32 @@
+[package]
+name = "sunholo/motoko_ext_autoresearch"
+version = "0.1.0"
+edition = "1"
+ailang = ">=0.18.4"
+description = "TODO: describe your extension here"
+license = "Apache-2.0"
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_autoresearch/register",
+  "sunholo/motoko_ext_autoresearch/autoresearch",
+  "sunholo/motoko_ext_autoresearch/types",
+  "sunholo/motoko_ext_autoresearch/tools",
+  "sunholo/motoko_ext_autoresearch/db",
+  "sunholo/motoko_ext_autoresearch/notes",
+  "sunholo/motoko_ext_autoresearch/git_ops",
+  "sunholo/motoko_ext_autoresearch/scope",
+  "sunholo/motoko_ext_autoresearch/state",
+  "sunholo/motoko_ext_autoresearch/metrics",
+  "sunholo/motoko_ext_autoresearch/prompts",
+  "sunholo/motoko_ext_autoresearch/compaction"
+]
+
+[dependencies]
+"sunholo/motoko_ext_abi" = "2.2.0"
+
+[effects]
+max = ["IO", "Process", "FS", "Env", "AI", "Net", "SharedMem", "Clock", "Stream"]
+
+[stability]
+level = "experimental"

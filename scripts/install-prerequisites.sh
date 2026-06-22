@@ -234,6 +234,10 @@ npm_ok() {
   command -v npm &>/dev/null
 }
 
+duckdb_ok() {
+  command -v duckdb &>/dev/null
+}
+
 context_mode_ok() {
   if ! command -v context-mode &>/dev/null; then return 1; fi
   context-mode doctor &>/dev/null
@@ -272,6 +276,8 @@ install_apt_packages() {
     ca-certificates
     jq
     rsync
+    locales 
+    unzip
     python3-pip
     python3-numpy
     python3-pandas
@@ -290,6 +296,12 @@ install_apt_packages() {
     log_info "Installing: ${missing[*]}"
     "${SUDO[@]}" apt-get install -y -qq "${missing[@]}"
     log_ok "System packages installed"
+  fi
+  # Generate en_US.UTF-8 locale if the locales package was installed
+  if ! locale -a 2>/dev/null | grep -q en_US; then
+    log_info "Generating en_US.UTF-8 locale..."
+    "${SUDO[@]}" locale-gen en_US.UTF-8 2>/dev/null || true
+    log_ok "en_US.UTF-8 locale generated"
   fi
 }
 
@@ -425,6 +437,50 @@ install_node() {
     die "Node.js install completed but npm is not on PATH."
   fi
   log_ok "Node.js $(node --version) and npm $(npm --version) installed"
+}
+
+# ---------------------------------------------------------------------------
+# DuckDB CLI
+# ---------------------------------------------------------------------------
+install_duckdb() {
+  log_header "DuckDB CLI"
+  if duckdb_ok; then
+    log_ok "duckdb already installed at $(command -v duckdb)"
+    return
+  fi
+
+  if [[ "$OS" == "macos" ]]; then
+    log_info "Installing duckdb via Homebrew..."
+    brew install duckdb
+  else
+    # DuckDB is not packaged in Debian/Ubuntu apt repos, so download the
+    # official CLI release binary for this architecture into ~/.local/bin.
+    ensure_user_local_bin_on_path
+    local ddb_arch
+    case "$ARCH" in
+      amd64) ddb_arch="amd64" ;;
+      arm64) ddb_arch="aarch64" ;;
+      *)     log_warn "No DuckDB CLI release for arch '$ARCH'. Install duckdb manually."; return ;;
+    esac
+    local url="https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-${ddb_arch}.zip"
+    local tmp
+    tmp="$(mktemp -d)"
+    log_info "Downloading DuckDB ${DUCKDB_VERSION} CLI (linux/${ddb_arch})..."
+    if ! curl -fsSL "$url" -o "${tmp}/duckdb.zip"; then
+      log_warn "Failed to download DuckDB CLI from ${url}. Install duckdb manually."
+      rm -rf "$tmp"; return
+    fi
+    unzip -o -q "${tmp}/duckdb.zip" -d "$tmp"
+    cp "${tmp}/duckdb" "$HOME/.local/bin/duckdb"
+    chmod +x "$HOME/.local/bin/duckdb"
+    rm -rf "$tmp"
+  fi
+
+  if duckdb_ok; then
+    log_ok "duckdb installed at $(command -v duckdb)"
+  else
+    log_warn "duckdb installation step finished but binary is not on PATH"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -609,6 +665,7 @@ print_summary() {
   echo "  Node.js: $(node --version 2>/dev/null || echo 'not found')"
   echo "  npm:     $(npm --version 2>/dev/null || echo 'not found')"
   echo "  ailang:  $(command -v ailang &>/dev/null && echo 'found' || echo 'not found')"
+  echo "  duckdb:  $(command -v duckdb &>/dev/null && echo 'found' || echo 'not found')"
   echo "  context-mode: $(command -v context-mode &>/dev/null && echo 'found' || echo 'not found')"
   echo "  omnigraph: $(command -v omnigraph &>/dev/null && echo 'found' || echo 'not found')"
   echo "  lean:    $(command -v lean &>/dev/null && echo 'found' || echo 'not found')"
@@ -637,6 +694,7 @@ main() {
   install_go
   install_bun
   install_node
+  install_duckdb
   if [[ "$OS" == "debian" ]]; then
     install_python_data_science_packages
   fi

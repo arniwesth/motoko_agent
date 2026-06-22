@@ -1,0 +1,48 @@
+-- Real-code hot-path exercise for the self-bootstrap benchmark.
+--
+-- Imports the CANDIDATE's own `state` + `db` modules (resolved via
+-- `pkg/sunholo/motoko_ext_autoresearch/...` from the candidate package root)
+-- and calls the real `derive_state` 100 times. Run under the duckdb counting
+-- shim, this measures the genuine number of duckdb process spawns the
+-- candidate code produces — so optimizing `derive_state` to fetch the session
+-- row once (instead of once per `current_segment` and again per
+-- `current_status`) actually moves the metric.
+--
+-- This file is an immutable, hashed fixture: do NOT edit it during the run.
+-- It is authored and compile-verified up front so the agent never has to
+-- write AILANG at runtime.
+--
+-- Expected baseline: derive_state in the Ready state spawns duckdb 3 times
+--   1. current_segment  -> current_session_row -> SELECT * FROM sessions ...
+--   2. current_status   -> current_session_row -> (same row, separate spawn)
+--   3. has_pending_run  -> SELECT COUNT(*) FROM pending_runs ...
+-- 100 calls => 300 spawns, plus 2 setup spawns (ensure_schema + seed) = 302.
+-- A successful single-row-fetch optimization drops the loop to 2 spawns/call
+-- => 202 total.
+module bench/exercise_derive_state
+
+import std/io (println)
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_autoresearch/db as DB
+import pkg/sunholo/motoko_ext_autoresearch/state as State
+
+func loop(sd: string, n: int) -> () ! {Process} {
+  if n <= 0 then ()
+  else {
+    let _ = State.derive_state(sd);
+    loop(sd, n - 1)
+  }
+}
+
+export func main() -> () ! {IO, Process, FS, Clock, Env} {
+  -- SESSION_DIR points at scratch OUTSIDE the worktree (set by benchmark.sh)
+  -- so the benchmark never dirties scoped/off-limits candidate paths.
+  let sd = getEnvOr("SESSION_DIR", ".ar_bench_session");
+  let _ = DB.ensure_schema(sd);
+  -- Seed an active session so derive_state hits the 3-spawn Ready path
+  -- rather than the 1-spawn Setup shortcut for an empty DB.
+  let _ = DB.insert_session(sd, 1, "bench-seed", "[]", "[]", "[]", "[]", 20, 3, "[]", "", "", "");
+  loop(sd, 100);
+  println("exercise_derive_state: done");
+  ()
+}

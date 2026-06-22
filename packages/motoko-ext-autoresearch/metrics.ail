@@ -1,0 +1,114 @@
+module sunholo/motoko_ext_autoresearch/metrics
+
+import std/list (length)
+import std/result (Result, Ok, Err)
+
+import pkg/sunholo/motoko_ext_autoresearch/db as DB
+import pkg/sunholo/motoko_ext_autoresearch/types (ConfidenceResult)
+
+func absf(x: float) -> float = if x < 0.0 then 0.0 - x else x
+
+func sorted_insert(x: float, xs: [float]) -> [float] {
+  match xs {
+    [] => [x],
+    y :: rest => if x <= y then x :: xs else y :: sorted_insert(x, rest)
+  }
+}
+
+func sort_floats(xs: [float]) -> [float] {
+  match xs {
+    [] => [],
+    x :: rest => sorted_insert(x, sort_floats(rest))
+  }
+}
+
+export pure func median(xs: [float]) -> float {
+  let ys = sort_floats(xs);
+  let n = length(ys);
+  if n == 0 then 0.0
+  else if (n % 2) == 1 then nth_float(ys, n / 2)
+  else (nth_float(ys, (n / 2) - 1) + nth_float(ys, n / 2)) / 2.0
+}
+
+func nth_float(xs: [float], idx: int) -> float {
+  match xs {
+    [] => 0.0,
+    x :: rest => if idx <= 0 then x else nth_float(rest, idx - 1)
+  }
+}
+
+func deviations(xs: [float], m: float) -> [float] {
+  match xs {
+    [] => [],
+    x :: rest => absf(x - m) :: deviations(rest, m)
+  }
+}
+
+export pure func mad(xs: [float]) -> float {
+  let m = median(xs);
+  median(deviations(xs, m))
+}
+
+export pure func improved(direction: string, prev: float, cur: float, noise: float) -> bool {
+  if direction == "maximize" then cur > (prev + noise)
+  else cur < (prev - noise)
+}
+
+func stall_rec(flags: [bool], acc: int) -> int {
+  match flags {
+    [] => acc,
+    b :: rest => if b then acc else stall_rec(rest, acc + 1)
+  }
+}
+
+func stall_from_flags(flags: [bool]) -> int {
+  match flags {
+    [] => 0,
+    _ => stall_rec(flags, 0)
+  }
+}
+
+export func stall_count(session_dir: string, segment: int) -> int ! {Process} {
+  match DB.recent_improved_flags(session_dir, segment) {
+    Err(_) => 0,
+    Ok(flags) => stall_from_flags(flags)
+  }
+}
+
+export func confidence_report(
+  session_dir: string,
+  segment: int,
+  metric_name: string,
+  noisy: bool,
+  baseline: float,
+  direction: string
+) -> Result[ConfidenceResult, string] ! {Process} {
+  match DB.best_metric_value(session_dir, segment, metric_name, direction) {
+    Err(e) => Err(e),
+    Ok(None) => Ok({ kind: if noisy then "noisy" else "deterministic", value: baseline, noise: 0.0, ratio: 0.0, pct: 0.0 }),
+    Ok(Some(best)) =>
+      match DB.first_metric_value(session_dir, segment, metric_name) {
+        Err(e) => Err(e),
+        Ok(first_opt) => {
+          let ref0 = if baseline != 0.0 then baseline else match first_opt { Some(v) => v, None => best };
+          let delta = absf(best - ref0);
+          let pct = if ref0 == 0.0 then 0.0 else (delta / absf(ref0)) * 100.0;
+          let noise =
+            if noisy then
+              match DB.kept_metric_values(session_dir, segment, metric_name) {
+                Ok(vals) => if length(vals) >= 2 then mad(vals) else 0.0,
+                Err(_) => 0.0
+              }
+            else 0.0;
+          let ratio = if noise == 0.0 then 0.0 else delta / noise;
+          Ok({
+            kind: if noisy then "noisy" else "deterministic",
+            value: best,
+            noise: noise,
+            ratio: ratio,
+            pct: pct
+          })
+        }
+      }
+  }
+}

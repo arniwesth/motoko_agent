@@ -85,6 +85,7 @@ export const EXTENSION_MAPS: Record<string, ConfigMap> = {
   },
   exa_search: {},
   omnigraph: {},
+  autoresearch: {},
 };
 
 export const CORE_CONFIG_TEMPLATE = `# Motoko project config. Shell environment variables override these values.
@@ -222,6 +223,13 @@ snapshot_key_prefix = "ctxmode:snapshot:" # CONTEXT_MODE_SNAPSHOT_KEY_PREFIX
   omnigraph: `[omnigraph]
 # Omnigraph currently has no env-var based config.
 `,
+  autoresearch: `[autoresearch]
+default_session_dir = ".motoko/autoresearch"
+default_patience = 3
+default_max_iterations = 20
+default_samples = 1
+default_timeout_ms = 60000
+`,
 };
 
 export const EXTENSION_CONFIG_JSON_TEMPLATES: Record<string, string> = {
@@ -273,6 +281,20 @@ export const EXTENSION_CONFIG_JSON_TEMPLATES: Record<string, string> = {
   ) + "\n",
   exa_search: JSON.stringify({ exa_search: { timeout_ms: 30000, max_output_chars: 8000 } }, null, 2) + "\n",
   omnigraph: JSON.stringify({ omnigraph: { timeout_ms: 30000 } }, null, 2) + "\n",
+  autoresearch:
+    JSON.stringify(
+      {
+        autoresearch: {
+          default_session_dir: ".motoko/autoresearch",
+          default_patience: 3,
+          default_max_iterations: 20,
+          default_samples: 1,
+          default_timeout_ms: 60000,
+        },
+      },
+      null,
+      2,
+    ) + "\n",
 };
 
 function getPathValue(root: unknown, dottedPath: string): unknown {

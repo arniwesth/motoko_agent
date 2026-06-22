@@ -112,6 +112,14 @@ export type CompactionAiConfig = {
   keep_recent: int
 }
 
+export type AutoresearchConfig = {
+  default_session_dir: string,
+  default_patience: int,
+  default_max_iterations: int,
+  default_samples: int,
+  default_timeout_ms: int
+}
+
 export type VerificationConfig = {
   enabled: bool,
   command: string
@@ -147,6 +155,7 @@ export type RuntimeConfig = {
   exa_search: ExaSearchConfig,
   omnigraph: OmnigraphConfig,
   compaction_ai: CompactionAiConfig,
+  autoresearch: AutoresearchConfig,
   cost_rates: CostRates,
   verification: VerificationConfig,
   warnings: [string]
@@ -437,6 +446,17 @@ func load_compaction_ai(root: Json) -> CompactionAiConfig {
   }
 }
 
+func load_autoresearch(root: Json) -> AutoresearchConfig {
+  let a = object_at(root, "autoresearch");
+  {
+    default_session_dir: json_string(a, "default_session_dir", ".motoko/autoresearch"),
+    default_patience: json_int(a, "default_patience", 3),
+    default_max_iterations: json_int(a, "default_max_iterations", 20),
+    default_samples: json_int(a, "default_samples", 1),
+    default_timeout_ms: json_int(a, "default_timeout_ms", 60000)
+  }
+}
+
 -- Read an int from an env var, falling back to a default. Used for cost
 -- rate overrides (M-MOTOKO-EVAL-HARNESS-HARDENING M5b, gaps #3 + #9):
 -- AILANG eval harness sets MOTOKO_COST_INPUT_PER_1M_MILLICENTS and
@@ -545,6 +565,7 @@ export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO
   let exa_search = read_json_or_empty("${profile_dir}/exa_search.json");
   let omnigraph = read_json_or_empty("${profile_dir}/omnigraph.json");
   let compaction_ai = read_json_or_empty("${profile_dir}/compaction_ai.json");
+  let autoresearch = read_json_or_empty("${profile_dir}/autoresearch.json");
   let agent = apply_agent_cli(load_agent(core), cli);
   let max_cost_env = match getEnv("AI_MAX_COST_USD_CENTS") {
     Ok(raw) => match _stringToInt(trim(raw)) { Some(n) => if n > 0 then n * 1000 else 0, None => 0 },
@@ -565,6 +586,7 @@ export func load_config_from_cli(args: [string]) -> RuntimeConfig ! {Env, FS, IO
     exa_search: load_exa_search(exa_search),
     omnigraph: load_omnigraph(omnigraph),
     compaction_ai: load_compaction_ai(compaction_ai),
+    autoresearch: load_autoresearch(autoresearch),
     cost_rates: load_cost_rates(core),
     verification: load_verification(core),
     warnings: warnings_for(profile_dir, workdir)
@@ -627,6 +649,13 @@ func runtime_config_json(cfg: RuntimeConfig) -> Json =
     kv("extensions", jo([
       kv("order", ja(json_strings(cfg.extensions.order))),
       kv("strict", jb(cfg.extensions.strict))
+    ])),
+    kv("autoresearch", jo([
+      kv("default_session_dir", js(cfg.autoresearch.default_session_dir)),
+      kv("default_patience", jnum(_int_to_float(cfg.autoresearch.default_patience))),
+      kv("default_max_iterations", jnum(_int_to_float(cfg.autoresearch.default_max_iterations))),
+      kv("default_samples", jnum(_int_to_float(cfg.autoresearch.default_samples))),
+      kv("default_timeout_ms", jnum(_int_to_float(cfg.autoresearch.default_timeout_ms)))
     ])),
     kv("warnings", ja(json_strings(cfg.warnings)))
   ])

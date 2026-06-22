@@ -1,0 +1,317 @@
+module sunholo/motoko_ext_autoresearch/tools
+
+import std/json (
+  Json, get, asString, asNumber, asBool, asArray,
+  jo, kv, js, ja, encode, decode
+)
+
+import pkg/sunholo/motoko_ext_abi/types (ToolSchema)
+import pkg/sunholo/motoko_ext_autoresearch/types (ExperimentConfig, MetricSpec, AutoresearchConfig)
+
+func normalize_args(args: Json) -> Json {
+  let j1 = match decode(encode(args)) {
+    Ok(j) => j,
+    Err(_) => args
+  };
+  match asString(j1) {
+    Some(s) =>
+      match decode(s) {
+        Ok(j2) => j2,
+        Err(_) => j1
+      },
+    None => j1
+  }
+}
+
+func str_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(v) => match asString(v) {
+      Some(s) => s,
+      None => fallback
+    }
+  }
+}
+
+func int_field(obj: Json, key: string, fallback: int) -> int {
+  match get(obj, key) {
+    None => fallback,
+    Some(v) => match asNumber(v) {
+      Some(n) => _float_to_int(n),
+      None => fallback
+    }
+  }
+}
+
+func bool_field(obj: Json, key: string, fallback: bool) -> bool {
+  match get(obj, key) {
+    None => fallback,
+    Some(v) => match asBool(v) {
+      Some(b) => b,
+      None => fallback
+    }
+  }
+}
+
+func string_list(v: Json) -> [string] {
+  match asArray(v) {
+    None => [],
+    Some(xs) => string_list_rec(xs)
+  }
+}
+
+func string_list_rec(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      match asString(x) {
+        Some(s) => s :: string_list_rec(rest),
+        None => string_list_rec(rest)
+      }
+  }
+}
+
+func list_field(obj: Json, key: string) -> [string] {
+  match get(obj, key) {
+    None => [],
+    Some(v) => string_list(v)
+  }
+}
+
+func metric_spec_of(v: Json) -> MetricSpec {
+  {
+    name: str_field(v, "name", ""),
+    direction: str_field(v, "direction", "minimize"),
+    noisy: bool_field(v, "noisy", false)
+  }
+}
+
+func metric_specs_rec(xs: [Json]) -> [MetricSpec] {
+  match xs {
+    [] => [],
+    x :: rest => metric_spec_of(x) :: metric_specs_rec(rest)
+  }
+}
+
+func metric_specs_field(obj: Json) -> [MetricSpec] {
+  match get(obj, "metrics") {
+    None => [],
+    Some(v) => match asArray(v) {
+      None => [],
+      Some(xs) => metric_specs_rec(xs)
+    }
+  }
+}
+
+export func parse_init_args(args: Json, defaults: AutoresearchConfig) -> ExperimentConfig {
+  let obj = normalize_args(args);
+  {
+    objective: str_field(obj, "objective", ""),
+    metrics: metric_specs_field(obj),
+    benchmark_script: str_field(obj, "benchmark_script", ""),
+    scope_paths: list_field(obj, "scope_paths"),
+    off_limits: list_field(obj, "off_limits"),
+    constraints: list_field(obj, "constraints"),
+    checks_script: str_field(obj, "checks_script", ""),
+    max_iterations: int_field(obj, "max_iterations", defaults.default_max_iterations),
+    patience: int_field(obj, "patience", defaults.default_patience),
+    new_segment: bool_field(obj, "new_segment", false),
+    session_dir: str_field(obj, "session_dir", defaults.default_session_dir)
+  }
+}
+
+export func parse_run_timeout_ms(args: Json, fallback: int) -> int {
+  int_field(normalize_args(args), "timeout_ms", fallback)
+}
+
+export func parse_run_samples(args: Json, fallback: int) -> int {
+  let n = int_field(normalize_args(args), "samples", fallback);
+  if n < 1 then 1 else n
+}
+
+export func parse_run_label(args: Json) -> string {
+  str_field(normalize_args(args), "label", "")
+}
+
+export func parse_run_number(args: Json) -> int {
+  int_field(normalize_args(args), "run_number", 0)
+}
+
+export func parse_decision(args: Json) -> string {
+  str_field(normalize_args(args), "decision", "")
+}
+
+export func parse_changes_summary(args: Json) -> string {
+  str_field(normalize_args(args), "changes_summary", "")
+}
+
+export func parse_reasoning(args: Json) -> string {
+  str_field(normalize_args(args), "reasoning", "")
+}
+
+export func parse_learnings(args: Json) -> string {
+  str_field(normalize_args(args), "learnings", "")
+}
+
+export func parse_justification(args: Json) -> string {
+  str_field(normalize_args(args), "justification", "")
+}
+
+func flag_reason_rec(xs: [Json], run_number: int) -> string {
+  match xs {
+    [] => "",
+    x :: rest => {
+      let rn =
+        match get(x, "run_number") {
+          None => -1,
+          Some(v) => match asNumber(v) {
+            Some(n) => _float_to_int(n),
+            None => -1
+          }
+        };
+      let reason = str_field(x, "reason", "");
+      if rn == run_number then reason else flag_reason_rec(rest, run_number)
+    }
+  }
+}
+
+export func parse_flag_reason(args: Json, run_number: int) -> string {
+  let obj = normalize_args(args);
+  match get(obj, "flag_runs") {
+    None => "",
+    Some(v) => match asArray(v) {
+      None => "",
+      Some(xs) => flag_reason_rec(xs, run_number)
+    }
+  }
+}
+
+export func parse_notes_body(args: Json) -> string {
+  str_field(normalize_args(args), "body", "")
+}
+
+export func parse_notes_append_idea(args: Json) -> string {
+  str_field(normalize_args(args), "append_idea", "")
+}
+
+export func parse_session_dir(args: Json, fallback: string) -> string {
+  str_field(normalize_args(args), "session_dir", fallback)
+}
+
+export func parse_cwd(args: Json, fallback: string) -> string {
+  let c = str_field(normalize_args(args), "cwd", "");
+  if c == "" then fallback else c
+}
+
+func schema_metric_spec() -> Json {
+  jo([
+    kv("type", js("object")),
+    kv("required", ja([js("name"), js("direction")])),
+    kv("properties", jo([
+      kv("name", jo([kv("type", js("string"))])),
+      kv("direction", jo([kv("type", js("string")), kv("enum", ja([js("minimize"), js("maximize")]))])),
+      kv("noisy", jo([kv("type", js("boolean"))]))
+    ]))
+  ])
+}
+
+func schema_init() -> string {
+  let j = jo([
+    kv("type", js("object")),
+    kv("required", ja([js("objective"), js("metrics"), js("benchmark_script")])),
+    kv("properties", jo([
+      kv("objective", jo([kv("type", js("string"))])),
+      kv("metrics", jo([kv("type", js("array")), kv("items", schema_metric_spec())])),
+      kv("benchmark_script", jo([kv("type", js("string"))])),
+      kv("scope_paths", jo([kv("type", js("array")), kv("items", jo([kv("type", js("string"))]))])),
+      kv("off_limits", jo([kv("type", js("array")), kv("items", jo([kv("type", js("string"))]))])),
+      kv("constraints", jo([kv("type", js("array")), kv("items", jo([kv("type", js("string"))]))])),
+      kv("checks_script", jo([kv("type", js("string"))])),
+      kv("max_iterations", jo([kv("type", js("integer"))])),
+      kv("patience", jo([kv("type", js("integer"))])),
+      kv("new_segment", jo([kv("type", js("boolean"))])),
+      kv("session_dir", jo([kv("type", js("string"))])),
+      kv("cwd", jo([kv("type", js("string"))]))
+    ]))
+  ]);
+  encode(j)
+}
+
+func schema_run() -> string {
+  let j = jo([
+    kv("type", js("object")),
+    kv("required", ja([])),
+    kv("properties", jo([
+      kv("session_dir", jo([kv("type", js("string"))])),
+      kv("timeout_ms", jo([kv("type", js("integer"))])),
+      kv("samples", jo([kv("type", js("integer"))])),
+      kv("label", jo([kv("type", js("string"))]))
+    ]))
+  ]);
+  encode(j)
+}
+
+func schema_log() -> string {
+  let j = jo([
+    kv("type", js("object")),
+    kv("required", ja([js("run_number"), js("decision"), js("changes_summary"), js("reasoning")])),
+    kv("properties", jo([
+      kv("run_number", jo([kv("type", js("integer"))])),
+      kv("decision", jo([kv("type", js("string")), kv("enum", ja([js("keep"), js("discard")]))])),
+      kv("changes_summary", jo([kv("type", js("string"))])),
+      kv("reasoning", jo([kv("type", js("string"))])),
+      kv("learnings", jo([kv("type", js("string"))])),
+      kv("justification", jo([kv("type", js("string"))])),
+      kv("flag_runs", jo([
+        kv("type", js("array")),
+        kv("items", jo([
+          kv("type", js("object")),
+          kv("required", ja([js("run_number"), js("reason")])),
+          kv("properties", jo([
+            kv("run_number", jo([kv("type", js("integer"))])),
+            kv("reason", jo([kv("type", js("string"))]))
+          ]))
+        ]))
+      ])),
+      kv("asi", jo([kv("type", js("object"))]))
+    ]))
+  ]);
+  encode(j)
+}
+
+func schema_notes() -> string {
+  let j = jo([
+    kv("type", js("object")),
+    kv("required", ja([])),
+    kv("properties", jo([
+      kv("body", jo([kv("type", js("string"))])),
+      kv("append_idea", jo([kv("type", js("string"))]))
+    ]))
+  ]);
+  encode(j)
+}
+
+export func tool_schemas() -> [ToolSchema] {
+  [
+    {
+      name: "ar_init",
+      description: "Initialize or reconfigure an autoresearch session.",
+      parameters: schema_init()
+    },
+    {
+      name: "ar_run",
+      description: "Run autoresearch benchmark and persist pending run data.",
+      parameters: schema_run()
+    },
+    {
+      name: "ar_log",
+      description: "Log pending run decision and perform selective git action.",
+      parameters: schema_log()
+    },
+    {
+      name: "ar_notes",
+      description: "Update autoresearch notes document.",
+      parameters: schema_notes()
+    }
+  ]
+}

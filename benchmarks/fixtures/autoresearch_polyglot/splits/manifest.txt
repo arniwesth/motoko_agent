@@ -1,0 +1,33 @@
+CANARY_GUID=AR-POLYGLOT-0_5A-20260531-f8c567c6-f4cd-4aaf-9eb4-52af64f80969
+
+Split rationale (Pro rebalance, 2026-05-31):
+The original six-exercise TRAIN/TEST split saturated at pass_rate=1.0 under
+openrouter/deepseek/deepseek-v4-pro, leaving no headroom for an improvement loop.
+This split was rebalanced after probing ~26 Python practice exercises with Pro at
+180-300s per-exercise caps.
+
+Pro is a strong solver: stable correctness failures are rare. The two reproducible
+correctness failures found were `pov` (tree reparenting) and `dominoes` (chain/cycle
+arrangement) — each fails on reasoning even with generous time. Each split is built
+around one stable correctness-failer plus one borderline exercise that exceeds the
+180s per-exercise cap under the default scaffolding (`connect` ~213s in TRAIN,
+`ledger` >240s in TEST), padded with four reliable fast passers. This yields a
+baseline pass_rate well below 1.0 (~0.5-0.67) on both splits and a deliberately
+noisy primary metric: the borderline exercise flips between pass and timeout across
+samples, which is exactly the noisy-primary signal the autoresearch loop is meant to
+handle.
+
+TRAIN: pov, connect, alphametics, food-chain, grep, poker
+TEST:  dominoes, ledger, change, minesweeper, satellite, bowling
+
+The sets are disjoint. TEST is never referenced by benchmark.sh; it is graded only
+out-of-loop by grade_test.sh.
+
+Metric contract:
+pass_rate = (count(status == pass_1) + count(status == pass_2)) / total_exercises.
+wall_ms is elapsed wall-clock time for the whole subset runner.
+
+Subset mechanism:
+The upstream runner has no arbitrary subset flag. The fixture loops
+benchmarks/aider_polyglot.py once per exercise with --exercise <name> and aggregates
+the per-exercise result JSON files.

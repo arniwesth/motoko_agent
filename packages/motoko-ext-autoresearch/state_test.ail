@@ -1,0 +1,60 @@
+module sunholo/motoko_ext_autoresearch/state_test
+
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_autoresearch/state (legal)
+import pkg/sunholo/motoko_ext_autoresearch/types (Setup, Ready, AwaitingLog, Done)
+
+func setup_denies_run(_n: int) -> bool
+  tests [
+    (0, true)
+  ]
+  {
+    match legal(Setup, "ar_run") {
+      Err(_) => true,
+      Ok(_) => false
+    }
+  }
+
+func ready_allows_run(_n: int) -> bool
+  tests [
+    (0, true)
+  ]
+  {
+    match legal(Ready, "ar_run") {
+      Ok(_) => true,
+      Err(_) => false
+    }
+  }
+
+func awaiting_denies_edit(_n: int) -> bool
+  tests [
+    (0, true)
+  ]
+  {
+    match legal(AwaitingLog(3), "EditFile") {
+      Err(_) => true,
+      Ok(_) => false
+    }
+  }
+
+func awaiting_allows_log(_n: int) -> bool
+  tests [
+    (0, true)
+  ]
+  {
+    match legal(AwaitingLog(3), "ar_log") {
+      Ok(_) => true,
+      Err(_) => false
+    }
+  }
+
+func done_denies_run(_n: int) -> bool
+  tests [
+    (0, true)
+  ]
+  {
+    match legal(Done("exhausted"), "ar_run") {
+      Err(_) => true,
+      Ok(_) => false
+    }
+  }

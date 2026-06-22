@@ -1,0 +1,52 @@
+CANARY_GUID=AR-CRC-20260602-d09e6a1d-76a1-4429-b478-5d6f55143f34
+
+Purpose:
+A controlled autoresearch fixture with a REAL optimization lever for a checksum:
+a large throughput headroom behind a sharp exact-match correctness gate. NON-LEAKY
+by design: this file, the README, and the candidate do NOT name or describe the
+fast method or why the baseline is slow, so an agent cannot read the answer out of
+the tree. The operator-side design notes (method, expected numbers, lever map)
+live OUTSIDE this fixture, in the handoff under .agent/plans/.
+
+Task:
+The candidate file candidate/crc.c implements
+    uint32_t crc_fast(const uint8_t *data, size_t len);
+which must return the SAME value as a trusted reference for every input: a
+reflected 32-bit CRC with a fixed CUSTOM polynomial (reflected form 0xB2A8D703),
+init 0xFFFFFFFF, final xor 0xFFFFFFFF. The reference is the bit-by-bit
+implementation in harness/main.c. The objective is to MAXIMIZE throughput on the
+workload (large buffers). The shipped baseline is a correct table-driven
+implementation; a materially faster correct implementation exists and transfers
+to the held-out corpus.
+
+Note on the polynomial: it is deliberately NOT a polynomial the aarch64 hardware
+CRC instruction supports, so a candidate cannot shortcut correctness with a
+single dedicated intrinsic — it must implement the arithmetic itself.
+
+Metric contract:
+  METRIC throughput_mbps=<float>   primary, MAXIMIZE, noisy (timing)
+  METRIC wall_ms=<int>             secondary, minimize, noisy
+throughput_mbps is bytes processed per second of CPU time, median over a few
+rounds. Correctness is a hard GATE, not part of the score: any buffer whose
+crc_fast output differs from the reference prints CORRECTNESS_FAIL and emits no
+METRIC, so a fast-but-wrong candidate cannot be kept.
+
+Splits:
+  corpus/train/  TRAIN — scanned by benchmark.sh (ar_run).
+  corpus/test/   TEST  — disjoint held-out, graded only by grade_test.sh, never
+                         referenced by benchmark.sh.
+Both are deterministic random-byte buffers from harness/gen_corpus.py. The cost
+is data-independent, so what matters is the SIZE distribution: dominated by large
+buffers (where a block-parallel implementation wins), plus small and non-block-
+aligned sizes; TEST emphasizes non-aligned and small sizes so a candidate that
+mishandles the head/tail or only fast-paths aligned lengths is exposed on held-out.
+
+Scope:
+  in scope (editable):  candidate/crc.c
+  off-limits:           harness/ (reference + driver + corpus generator),
+                        corpus/ (train+test), bench/, levers/ (hand-written
+                        Phase-1 variants), immutable.sha256, manifest.txt, README.md
+Build: gcc -O2 -march=armv8-a+crypto (NEON + full ARMv8 crypto extensions
+available; the candidate may use <arm_neon.h>). immutable.sha256 hashes
+everything except the editable candidate; both benchmark.sh and checks.sh verify
+it before running.
