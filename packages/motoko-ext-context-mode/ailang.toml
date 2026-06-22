@@ -1,0 +1,21 @@
+[package]
+name = "sunholo/motoko_ext_context_mode"
+version = "0.2.2"
+edition = "1"
+ailang = ">=0.17.0"
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_context_mode/compress",
+  "sunholo/motoko_ext_context_mode/context_mode",
+  "sunholo/motoko_ext_context_mode/exec",
+  "sunholo/motoko_ext_context_mode/prompts",
+  "sunholo/motoko_ext_context_mode/register",
+  "sunholo/motoko_ext_context_mode/types",
+]
+
+[dependencies]
+"sunholo/motoko_ext_abi" = "2.2.0"
+
+[effects]
+max = ["Process", "FS", "Env", "SharedMem", "Clock", "SharedIndex"]

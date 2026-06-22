@@ -1,0 +1,187 @@
+module sunholo/motoko_ext_context_mode/context_mode
+
+import std/bytes (fromString, toString)
+import std/json (Json, encode, jo, kv, js, get, asString)
+import std/option (Option, Some, None)
+import std/sem (make_frame_at, store_frame, load_frame)
+import std/string (toLower, trim, contains, startsWith)
+
+import pkg/sunholo/motoko_ext_abi/types (ToolCallEnvelope, ExtCtx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
+import pkg/sunholo/motoko_ext_context_mode/types (CtxConfig)
+import pkg/sunholo/motoko_ext_context_mode/exec (run_context_mode, run_context_mode_fire_and_forget)
+import pkg/sunholo/motoko_ext_context_mode/prompts (build_prompt_patch)
+
+func snapshot_key_for(prefix: string, state_key: string) -> string {
+  "${prefix}${state_key}"
+}
+
+func read_snapshot(prefix: string, state_key: string) -> string ! {SharedMem} {
+  match load_frame(snapshot_key_for(prefix, state_key)) {
+    Some(frame) => toString(frame.opaque),
+    None => ""
+  }
+}
+
+func write_snapshot(prefix: string, state_key: string, snapshot: string) -> () ! {SharedMem} {
+  let key = snapshot_key_for(prefix, state_key);
+  let frame = make_frame_at(key, "context-mode session snapshot", fromString(snapshot), 0);
+  store_frame(key, frame)
+}
+
+func ready_key_for(prefix: string, state_key: string) -> string {
+  "${prefix}ready:${state_key}"
+}
+
+func is_ready(prefix: string, state_key: string) -> bool ! {SharedMem} {
+  match load_frame(ready_key_for(prefix, state_key)) {
+    Some(_) => true,
+    None => false
+  }
+}
+
+func mark_ready(prefix: string, state_key: string) -> () ! {SharedMem} {
+  let key = ready_key_for(prefix, state_key);
+  let frame = make_frame_at(key, "context-mode readiness marker", fromString("1"), 0);
+  store_frame(key, frame)
+}
+
+func arg_string(args: Json, key: string, fallback: string) -> string {
+  match get(args, key) {
+    Some(j) => match asString(j) {
+      Some(v) => v,
+      None => fallback
+    },
+    None => fallback
+  }
+}
+
+func denied_bash_reason(call: ToolCallEnvelope) -> Option[string] {
+  if call.tool != "BashExec" then None
+  else {
+    let cmd = toLower(trim(arg_string(call.arguments, "cmd", "")));
+    let has_url = contains(cmd, "http://") || contains(cmd, "https://");
+    if cmd == "" then None
+    else if has_url then
+      Some("Do not fetch remote URLs via BashExec when context_mode is loaded. Use CtxFetchAndIndex/ctx_fetch_and_index for URL retrieval, then CtxSearch/ctx_search for follow-up queries.")
+    else if contains(cmd, "context-mode")
+      || contains(cmd, "ctx_stats")
+      || contains(cmd, "ctx_doctor")
+      || contains(cmd, "ctx_search")
+      || contains(cmd, "ctxstats")
+      || contains(cmd, "ctxdoctor")
+      || contains(cmd, "ctxsearch")
+      || startsWith(cmd, "ctx_")
+      || startsWith(cmd, "ctx.")
+      then Some("Do not run context-mode or Ctx* probes via BashExec. Call extension tools directly via JSON tool_calls (CtxStats/CtxDoctor/CtxSearch or ctx_stats/ctx_doctor/ctx_search), even if they are not listed in the generic tool table.")
+    else None
+  }
+}
+
+export func on_tool_policy(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  match denied_bash_reason(call) {
+    Some(msg) => Deny(msg),
+    None => NoOpinion
+  }
+}
+
+export func canonical_tool_name(raw: string) -> string {
+  let t = toLower(trim(raw));
+  if t == "ctxexecute" || t == "ctx_execute" || t == "ctx.execute" || t == "context_mode.execute" then "CtxExecute"
+  else if t == "ctxbatchexecute" || t == "ctx_batch_execute" || t == "ctx.batch_execute" || t == "context_mode.batch_execute" then "CtxBatchExecute"
+  else if t == "ctxexecutefile" || t == "ctx_execute_file" || t == "ctx.execute_file" || t == "context_mode.execute_file" then "CtxExecuteFile"
+  else if t == "ctxindex" || t == "ctx_index" || t == "ctx.index" || t == "context_mode.index" then "CtxIndex"
+  else if t == "ctxsearch" || t == "ctx_search" || t == "ctx.search" || t == "context_mode.search" then "CtxSearch"
+  else if t == "ctxfetchandindex" || t == "ctx_fetch_and_index" || t == "ctx.fetch_and_index" || t == "context_mode.fetch_and_index" then "CtxFetchAndIndex"
+  else if t == "ctxstats" || t == "ctx_stats" || t == "ctx.stats" || t == "context_mode.stats" then "CtxStats"
+  else if t == "ctxdoctor" || t == "ctx_doctor" || t == "ctx.doctor" || t == "context_mode.doctor" then "CtxDoctor"
+  else if t == "ctxpurge" || t == "ctx_purge" || t == "ctx.purge" || t == "context_mode.purge" then "CtxPurge"
+  else ""
+}
+
+func action_name(canonical: string) -> string {
+  if canonical == "CtxExecute" then "ctx_execute"
+  else if canonical == "CtxBatchExecute" then "ctx_batch_execute"
+  else if canonical == "CtxExecuteFile" then "ctx_execute_file"
+  else if canonical == "CtxIndex" then "ctx_index"
+  else if canonical == "CtxSearch" then "ctx_search"
+  else if canonical == "CtxFetchAndIndex" then "ctx_fetch_and_index"
+  else if canonical == "CtxStats" then "ctx_stats"
+  else if canonical == "CtxDoctor" then "ctx_doctor"
+  else if canonical == "CtxPurge" then "ctx_purge"
+  else ""
+}
+
+func bridge_args_for(cfg: CtxConfig, ctx: ExtCtx, tool_name: string, args: Json) -> [string] {
+  [
+    "${ctx.workdir}/scripts/context-mode-mcp-call.mjs",
+    "--context-mode-bin", cfg.bin,
+    "--tool", tool_name,
+    "--args-json", encode(args),
+    "--timeout-ms", show(cfg.timeout_ms)
+  ]
+}
+
+func ensure_context_mode_ready(cfg: CtxConfig, ctx: ExtCtx, tool_name: string) -> bool ! {Process, SharedMem} {
+  if tool_name == "ctx_doctor" then true
+  else if is_ready(cfg.snapshot_key_prefix, ctx.state_key) then true
+  else {
+    let ok = run_context_mode_fire_and_forget("node", bridge_args_for(cfg, ctx, "ctx_doctor", jo([])), ctx.cwd, cfg.timeout_ms);
+    if ok then {
+      mark_ready(cfg.snapshot_key_prefix, ctx.state_key);
+      true
+    } else false
+  }
+}
+
+-- Tool names advertised to the model. MUST match Anthropic's Bedrock
+-- pattern ^[a-zA-Z0-9_-]{1,128}$ — no dots, no slashes, no colons.
+-- The 18 dotted aliases (ctx.execute / context_mode.execute / etc) were
+-- dropped in motoko v0.18.1 because Bedrock rejects them at the
+-- tools[].custom.name validator (other Anthropic backends are permissive
+-- but Bedrock is strict). canonical_tool_name() still maps the dotted
+-- forms as INPUT — in case a model generated them despite not seeing
+-- them advertised — so the normalizer is unchanged. Only the OUTPUT
+-- (advertised) list needs Bedrock-compat names.
+export func provided_tools() -> [string] {
+  [
+    "CtxExecute", "ctx_execute",
+    "CtxBatchExecute", "ctx_batch_execute",
+    "CtxExecuteFile", "ctx_execute_file",
+    "CtxIndex", "ctx_index",
+    "CtxSearch", "ctx_search",
+    "CtxFetchAndIndex", "ctx_fetch_and_index",
+    "CtxStats", "ctx_stats",
+    "CtxDoctor", "ctx_doctor",
+    "CtxPurge", "ctx_purge"
+  ]
+}
+
+export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> PromptPatch {
+  build_prompt_patch(cached_prompt, "")
+}
+
+export func on_tool_handle(cfg: CtxConfig, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, SharedMem} {
+  let canonical = canonical_tool_name(call.tool);
+  if canonical == "" then Delegate
+  else {
+    let tool_name = action_name(canonical);
+    if tool_name == "" then Delegate
+    else {
+      let _ = ensure_context_mode_ready(cfg, ctx, tool_name);
+      match run_context_mode(call.id, canonical, "node", bridge_args_for(cfg, ctx, tool_name, call.arguments), ctx.cwd, cfg.timeout_ms, cfg.max_output_chars) {
+      Some(result) => Handled(result),
+      None => Delegate
+      }
+    }
+  }
+}
+
+export func finalize_with_index(cfg: CtxConfig, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {Process} {
+  let idx_args = jo([
+    kv("content", js(candidate)),
+    kv("source", js("motoko:final_output")),
+    kv("metadata", jo([kv("task", js(ctx.task)), kv("model", js(ctx.model))]))
+  ]);
+  let _ = run_context_mode_fire_and_forget("node", bridge_args_for(cfg, ctx, "ctx_index", idx_args), ctx.cwd, cfg.timeout_ms);
+  NoDecision
+}

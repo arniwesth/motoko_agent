@@ -1,0 +1,74 @@
+module sunholo/motoko_ext_context_mode/compress
+
+import std/string (trim, split, join, replace, contains)
+
+func normalize_newlines(text: string) -> string {
+  replace(replace(text, "\r\n", "\n"), "\r", "\n")
+}
+
+func strip_ansi_escape_char(text: string) -> string {
+  replace(text, "\u001b", "")
+}
+
+func collapse_spaces_once(text: string) -> string {
+  replace(text, "  ", " ")
+}
+
+func collapse_spaces(text: string) -> string {
+  let next = collapse_spaces_once(text);
+  if next == text then text else collapse_spaces(next)
+}
+
+func trim_non_empty_lines(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => {
+      let t = trim(x);
+      if t == "" then trim_non_empty_lines(rest)
+      else t :: trim_non_empty_lines(rest)
+    }
+  }
+}
+
+func count_same_prefix(lines: [string], value: string, n: int) -> { count: int, rest: [string] } {
+  match lines {
+    [] => { count: n, rest: [] },
+    x :: rest =>
+      if x == value then count_same_prefix(rest, value, n + 1)
+      else { count: n, rest: lines }
+  }
+}
+
+func collapse_repeated_lines(lines: [string]) -> [string] {
+  match lines {
+    [] => [],
+    x :: rest => {
+      let grouped = count_same_prefix(rest, x, 1);
+      if grouped.count >= 4 then {
+        [x, "(repeated ${show(grouped.count)}x)"] ++ collapse_repeated_lines(grouped.rest)
+      } else {
+        [x] ++ collapse_repeated_lines(rest)
+      }
+    }
+  }
+}
+
+func truncate_with_suffix(text: string, max_chars: int) -> string
+  requires { max_chars >= 0 }
+  {
+    if max_chars <= 0 then ""
+    else if _str_len(text) <= max_chars then text
+    else if max_chars <= 24 then _str_slice(text, 0, max_chars)
+    else {
+      let kept = _str_slice(text, 0, max_chars - 24);
+      "${kept}\n... (truncated)"
+    }
+  }
+
+export func compress_output(text: string, max_chars: int) -> string
+  requires { max_chars >= 0 }
+  {
+    let clean = collapse_spaces(strip_ansi_escape_char(normalize_newlines(text)));
+    let compact = join("\n", collapse_repeated_lines(trim_non_empty_lines(split(clean, "\n"))));
+    truncate_with_suffix(compact, max_chars)
+  }
