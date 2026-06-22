@@ -479,7 +479,7 @@ export class RuntimeProcess {
       ],
       {
         env: childEnv,
-        stdio: ["pipe", "pipe", "inherit"],
+        stdio: ["pipe", "pipe", "pipe"],
       }
     );
 
@@ -499,8 +499,19 @@ export class RuntimeProcess {
       }
     });
 
+    const stderrRl = readline.createInterface({
+      input: this.proc.stderr!,
+      crlfDelay: Infinity,
+    });
+    stderrRl.on("line", (line) => {
+      const message = line.trim();
+      if (!message) return;
+      this.onEvent({ type: "warning", message });
+    });
+
     this.proc.on("exit", () => {
       this.dead = true;
+      stderrRl.close();
       onExit();
     });
   }

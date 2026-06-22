@@ -30,6 +30,8 @@ pure func context_limit_base(model: string) -> int
     else if model == "openai/gpt-4o" then 128000
     else if model == "openai/gpt-4o-mini" then 128000
     else if model == "openai/gpt-5" then 400000
+    else if model == "gemini-2.5-flash" then 1000000
+    else if model == "gemini-2.5-pro" then 2000000
     else if model == "google/gemini-2.5-flash" then 1000000
     else if model == "google/gemini-2.5-pro" then 2000000
     else if model == "z-ai/glm-5" then 128000
@@ -50,6 +52,7 @@ export pure func context_limit_for(model: string) -> int
   ensures { result >= 0 }
   tests [
     ("anthropic/claude-sonnet-4-6",                 200000),
+    ("gemini-2.5-pro",                              2000000),
     ("google/gemini-2.5-pro",                       2000000),
     ("openrouter/anthropic/claude-sonnet-4-5",      200000),
     ("openrouter/z-ai/glm-5",                       128000),

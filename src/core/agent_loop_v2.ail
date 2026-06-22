@@ -65,23 +65,24 @@ import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 -- Convert Motoko's UI/profile model identifier to the provider API model id
 -- expected by upstream stepWithStream(). The --ai flag already selected the
 -- handler/provider; the model argument passed to step is forwarded to the
--- upstream API body. Keep OpenRouter's vendor/model id intact after stripping
--- only the Motoko routing prefix.
-pure func provider_api_model(model: string) -> string {
-  if startsWith(model, "openrouter/") then
+-- upstream API body.
+--
+-- Important: OpenRouter's API model ids are themselves vendor/model strings
+-- such as "anthropic/claude-sonnet-4-6" and "openai/gpt-4o". Strip the
+-- explicit Motoko/OpenRouter routing prefix only for pinned vendor/model ids;
+-- keep "openrouter/auto" intact because AILANG/OpenRouter use it as the
+-- routing-policy model. Strip "openai/" only when a custom OpenAI-compatible
+-- base URL is configured, where "openai/<local-id>" is Motoko UI routing
+-- syntax rather than an OpenRouter vendor/model id.
+pure func provider_api_model(model: string, openai_base_url: string) -> string {
+  if model == "openrouter/auto" then
+    model
+  else if startsWith(model, "openrouter/") then
     let prefix_len = Str.length("openrouter/") in
     let total = Str.length(model) in
     substring(model, prefix_len, total)
-  else if startsWith(model, "openai/") then
+  else if openai_base_url != "" && startsWith(model, "openai/") then
     let prefix_len = Str.length("openai/") in
-    let total = Str.length(model) in
-    substring(model, prefix_len, total)
-  else if startsWith(model, "google/") then
-    let prefix_len = Str.length("google/") in
-    let total = Str.length(model) in
-    substring(model, prefix_len, total)
-  else if startsWith(model, "anthropic/") then
-    let prefix_len = Str.length("anthropic/") in
     let total = Str.length(model) in
     substring(model, prefix_len, total)
   else
@@ -413,31 +414,49 @@ pure func test_cap_tool_message_content_truncates_oversized_content() -> bool
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
   tests [((), true)]
   {
-    provider_api_model("openrouter/deepseek/deepseek-v4-flash") == "deepseek/deepseek-v4-flash"
+    provider_api_model("openrouter/deepseek/deepseek-v4-flash", "") == "deepseek/deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_openrouter_auto_stays_intact() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openrouter/auto", "") == "openrouter/auto"
   }
 
 pure func test_provider_api_model_local_openai_strips_routing_prefix() -> bool
   tests [((), true)]
   {
-    provider_api_model("openai/deepseek-v4-flash") == "deepseek-v4-flash"
+    provider_api_model("openai/deepseek-v4-flash", "http://127.0.0.1:8000/v1") == "deepseek-v4-flash"
   }
 
 pure func test_provider_api_model_local_openai_preserves_slashful_id() -> bool
   tests [((), true)]
   {
-    provider_api_model("openai/google/gemma-4-26B-A4B-it") == "google/gemma-4-26B-A4B-it"
+    provider_api_model("openai/google/gemma-4-26B-A4B-it", "http://127.0.0.1:8000/v1") == "google/gemma-4-26B-A4B-it"
   }
 
-pure func test_provider_api_model_direct_google_strips_routing_prefix() -> bool
+pure func test_provider_api_model_openrouter_openai_vendor_model_stays_intact() -> bool
   tests [((), true)]
   {
-    provider_api_model("google/gemini-2.5-flash") == "gemini-2.5-flash"
+    provider_api_model("openai/gpt-4o", "") == "openai/gpt-4o"
+  }
+
+pure func test_provider_api_model_openrouter_anthropic_vendor_model_stays_intact() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("anthropic/claude-sonnet-4-6", "") == "anthropic/claude-sonnet-4-6"
+  }
+
+pure func test_provider_api_model_openrouter_google_vendor_model_stays_intact() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("google/gemini-2.5-flash", "") == "google/gemini-2.5-flash"
   }
 
 pure func test_provider_api_model_ollama_keeps_routing_prefix_for_provider() -> bool
   tests [((), true)]
   {
-    provider_api_model("ollama/qwen3.5:35b-a3b-mxfp8") == "ollama/qwen3.5:35b-a3b-mxfp8"
+    provider_api_model("ollama/qwen3.5:35b-a3b-mxfp8", "") == "ollama/qwen3.5:35b-a3b-mxfp8"
   }
 
 func result_env_model_content(result: ToolResultEnvelope) -> string {
@@ -1167,7 +1186,7 @@ func loop_v2(
     -- Match-in-lambda is a known AILANG parser bug, so the match lives in
     -- the top-level emit_stream_chunk helper.
     let on_chunk: (StreamChunk) -> () ! {IO} = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
-    let dispatched = dispatch_step(provider, provider_api_model(model), compacted_msgs, rt, on_chunk);
+    let dispatched = dispatch_step(provider, provider_api_model(model, getEnvOr("OPENAI_BASE_URL", "")), compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
       Err(e) => {

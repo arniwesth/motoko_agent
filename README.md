@@ -101,6 +101,39 @@ Per-extension JSON files are optional; if missing, hardcoded defaults apply.
 
 Precedence: hardcoded defaults < profile JSON < CLI args. API keys are always env vars.
 
+### Model identifiers
+
+Model selection and model discovery are separate:
+
+- Runtime model resolution is shared by TUI and headless runs:
+  `MODEL` env var > profile `agent.model` > `anthropic/claude-sonnet-4-6`.
+- The TUI `/model` picker loads its baseline suggestion catalog from
+  `.motoko/model-catalog.json`. Set
+  `MOTOKO_MODELS_FILE=/path/to/model-catalog.json` to use
+  a different catalog.
+- Dynamic suggestions from `OPENAI_BASE_URL` and OpenRouter are merged into the
+  picker catalog at runtime. They do not override the selected runtime model.
+- Ollama models are selected explicitly with `ollama/<model>`, either in
+  `MODEL`, profile `agent.model`, or `.motoko/model-catalog.json`. They are not
+  auto-discovered by the picker.
+
+Motoko model strings are intentionally close to AILANG's provider routing
+syntax, but a few prefixes have provider-specific meanings:
+
+| Goal | Model string | Notes |
+|---|---|---|
+| Direct Anthropic | `anthropic/claude-sonnet-4-6` | Requires `ANTHROPIC_API_KEY`. |
+| Direct OpenAI | `openai/gpt-4o` | Requires `OPENAI_API_KEY`, unless `OPENAI_BASE_URL` points at a local OpenAI-compatible endpoint. |
+| Local OpenAI-compatible | `openai/deepseek-v4-flash` | Motoko strips the leading `openai/` before sending the model id to `OPENAI_BASE_URL`. Slashful local ids also work, e.g. `openai/google/gemma-4-26B-A4B-it` becomes `google/gemma-4-26B-A4B-it`. |
+| Direct Google Gemini / Vertex | `gemini-2.5-flash` | AILANG selects the Google provider from the bare `gemini-*` prefix. It tries Vertex ADC first, then falls back to `GOOGLE_API_KEY` for AI Studio. |
+| OpenRouter pinned model | `openrouter/google/gemini-2.5-flash` | Motoko strips only the outer `openrouter/`; OpenRouter receives `google/gemini-2.5-flash`. |
+| OpenRouter routing policy | `openrouter/auto` | Preserved as-is for AILANG/OpenRouter routing. |
+| Ollama | `ollama/llama3.2` | Preserved for AILANG to route to the native Ollama provider. Use any model name installed in your local Ollama server after the `ollama/` prefix. |
+
+Important distinction: `google/gemini-2.5-flash` is an OpenRouter vendor/model
+id in AILANG's routing rules, not the direct Vertex form. Use bare
+`gemini-2.5-flash` for direct Google Gemini / Vertex.
+
 ## Usage
 
 ### How it works
