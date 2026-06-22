@@ -633,7 +633,7 @@ func run_edit_decl(id: string, path: string, decl: string, new_body: string, wor
         let tmp = "${resolved}.editdecl.new";
         match writeFileResult(tmp, new_body) {
           Err(msg) => ToolErrorResult({ id: id, tool: "EditDecl", message: "cannot stage new body: ${msg}" }),
-          Ok(_) => match exec("ailang", ["ast-edit", "replace", "--file", resolved, "--decl", decl, "--new", tmp, "--in-place", "--relax-modules"]) {
+          Ok(_) => match exec("ailang", ["ast-edit", "replace", "--file", resolved, "--decl", decl, "--new", tmp, "--in-place"]) {
             Err(err) => ToolErrorResult({ id: id, tool: "EditDecl", message: process_error_to_string(err) }),
             Ok(out) =>
               if out.exitCode == 0 then
