@@ -62,14 +62,26 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
 import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 
--- Strip the "openrouter/" model prefix before forwarding to upstream step().
--- OpenRouter's API rejects the prefixed name. The fork's old code stored the
--- prefix as part of the model identifier for routing-style dispatch; with
--- upstream step() the AI handler is configured at --ai time, so the prefix
--- is redundant noise that breaks the upstream API call.
-func strip_provider_prefix(model: string) -> string {
+-- Convert Motoko's UI/profile model identifier to the provider API model id
+-- expected by upstream stepWithStream(). The --ai flag already selected the
+-- handler/provider; the model argument passed to step is forwarded to the
+-- upstream API body. Keep OpenRouter's vendor/model id intact after stripping
+-- only the Motoko routing prefix.
+pure func provider_api_model(model: string) -> string {
   if startsWith(model, "openrouter/") then
     let prefix_len = Str.length("openrouter/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "openai/") then
+    let prefix_len = Str.length("openai/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "google/") then
+    let prefix_len = Str.length("google/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "anthropic/") then
+    let prefix_len = Str.length("anthropic/") in
     let total = Str.length(model) in
     substring(model, prefix_len, total)
   else
@@ -396,6 +408,36 @@ pure func test_cap_tool_message_content_truncates_oversized_content() -> bool
     let x1024 = "${x512}${x512}";
     let capped = cap_tool_message_content(x1024);
     Str.length(capped) == 65536 && contains(capped, "...[truncated; original ")
+  }
+
+pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openrouter/deepseek/deepseek-v4-flash") == "deepseek/deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_local_openai_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/deepseek-v4-flash") == "deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_local_openai_preserves_slashful_id() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/google/gemma-4-26B-A4B-it") == "google/gemma-4-26B-A4B-it"
+  }
+
+pure func test_provider_api_model_direct_google_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("google/gemini-2.5-flash") == "gemini-2.5-flash"
+  }
+
+pure func test_provider_api_model_ollama_keeps_routing_prefix_for_provider() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("ollama/qwen3.5:35b-a3b-mxfp8") == "ollama/qwen3.5:35b-a3b-mxfp8"
   }
 
 func result_env_model_content(result: ToolResultEnvelope) -> string {
@@ -1125,7 +1167,7 @@ func loop_v2(
     -- Match-in-lambda is a known AILANG parser bug, so the match lives in
     -- the top-level emit_stream_chunk helper.
     let on_chunk: (StreamChunk) -> () ! {IO} = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
-    let dispatched = dispatch_step(provider, model, compacted_msgs, rt, on_chunk);
+    let dispatched = dispatch_step(provider, provider_api_model(model), compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
       Err(e) => {
@@ -1420,12 +1462,11 @@ export func run_v2(
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
 	  let messages = msgs_to_messages(initial_msgs);
-	  let resolved_model = strip_provider_prefix(model);
 	  let session_id = derive_session_id();
 	  let started_at_ms = now();
 	  let session_span = "motoko.session.${session_id}";
 	  Trace.spanStart(session_span);
-	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
+	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
 	  Trace.spanEnd(session_span);
 	  result
 	}
@@ -1450,12 +1491,11 @@ export func run_v2_from_messages(
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-	  let resolved_model = strip_provider_prefix(model);
 	  let session_id = derive_session_id();
 	  let started_at_ms = now();
 	  let session_span = "motoko.session.${session_id}";
 	  Trace.spanStart(session_span);
-	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
+	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
 	  Trace.spanEnd(session_span);
 	  result
 	}
@@ -1523,8 +1563,7 @@ export func conversation_loop_v2(
       if cmd_type == "abort" || cmd_type == "exit" then ()
       else if cmd_type == "model_change" then {
         let new_model = msg_get_str(obj, "model");
-        let resolved_new = strip_provider_prefix(new_model);
-        conversation_loop_v2(rt, env_url, hybrid_tools, budget, resolved_new, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+        conversation_loop_v2(rt, env_url, hybrid_tools, budget, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
       }
       else if cmd_type == "restart" then {
         -- Emit session_suspend event and exit cleanly; TUI will respawn
