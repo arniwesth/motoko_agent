@@ -1,7 +1,7 @@
 module src/core/tool_contract
 
 import std/option (Option, Some, None)
-import std/json (Json, jo, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray)
+import std/json (Json, JObject, JBool, JString, jo, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray)
 
 export type ToolCallEnvelope = {
   id: string,
@@ -36,6 +36,35 @@ export func result_to_json(result: ToolResultEnvelope) -> Json {
     kv("stdout", js(result.stdout)),
     kv("stderr", js(result.stderr)),
     kv("metadata", result.metadata)
+  ])
+}
+
+export pure func sanitize_model_metadata(metadata: Json) -> Json {
+  match metadata {
+    JObject(kvs) => JObject(sanitize_model_metadata_kvs(kvs)),
+    _ => metadata
+  }
+}
+
+pure func sanitize_model_metadata_kvs(kvs: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    x :: rest =>
+      if x.key == "cells" || x.key == "images" || x.key == "jsonOutputs" then
+        sanitize_model_metadata_kvs(rest)
+      else
+        x :: sanitize_model_metadata_kvs(rest)
+  }
+}
+
+export pure func result_to_model_json(result: ToolResultEnvelope) -> Json {
+  jo([
+    kv("tool_call_id", js(result.tool_call_id)),
+    kv("tool", js(result.tool)),
+    kv("exit_code", jnum(_int_to_float(result.exit_code))),
+    kv("stdout", js(result.stdout)),
+    kv("stderr", js(result.stderr)),
+    kv("metadata", sanitize_model_metadata(result.metadata))
   ])
 }
 
@@ -101,3 +130,43 @@ func string_list_rec(xs: [Json]) -> [string] {
       }
   }
 }
+
+pure func json_has_key(obj: Json, key: string) -> bool {
+  match get(obj, key) {
+    None => false,
+    Some(_) => true
+  }
+}
+
+pure func test_result_to_model_json_strips_heavy_metadata() -> bool
+  tests [((), true)]
+  {
+    let result: ToolResultEnvelope = {
+      tool_call_id: "call-1",
+      tool: "scratchpad",
+      exit_code: 0,
+      stdout: "[image: /tmp/plot.png (640x480 image/png)]",
+      stderr: "",
+      metadata: jo([
+        kv("cells", js("raw-cell-payload")),
+        kv("images", js("raw-image-payload")),
+        kv("jsonOutputs", js("raw-json-payload")),
+        kv("error", jb(false)),
+        kv("message", js("ok"))
+      ])
+    };
+    match get(result_to_model_json(result), "metadata") {
+      None => false,
+      Some(meta) =>
+        not json_has_key(meta, "cells")
+          && not json_has_key(meta, "images")
+          && not json_has_key(meta, "jsonOutputs")
+          && match get(meta, "error") {
+            Some(JBool(false)) => match get(meta, "message") {
+              Some(JString("ok")) => true,
+              _ => false
+            },
+            _ => false
+          }
+    }
+  }

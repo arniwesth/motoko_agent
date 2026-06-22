@@ -6,6 +6,7 @@
 #   - Go 1.22+
 #   - Bun 1.x
 #   - Node.js 18+ and npm
+#   - DuckDB CLI
 #   - Python data science packages for scratchpad cells (pandas, polars, numpy, SciPy, scikit-learn)
 #   - context-mode CLI
 #   - AILANG runtime (cloned from github.com/sunholo-data/ailang at pinned tag)
@@ -37,6 +38,7 @@ NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
 AILANG_REF="v0.24.2"
 AILANG_MIN_VERSION="0.24.2"
+DUCKDB_VERSION="1.1.3"
 INSTALL_OMNIGRAPH=0
 INSTALL_LEAN=0
 INSTALL_LEAN_MATHLIB=0
@@ -187,6 +189,9 @@ configure_privilege() {
     return
   fi
 
+  export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+  export TZ="${TZ:-Etc/UTC}"
+
   if [[ "$(id -u)" -eq 0 ]]; then
     SUDO=()
     SUDO_E=()
@@ -234,6 +239,10 @@ npm_ok() {
   command -v npm &>/dev/null
 }
 
+duckdb_ok() {
+  command -v duckdb &>/dev/null
+}
+
 context_mode_ok() {
   if ! command -v context-mode &>/dev/null; then return 1; fi
   context-mode doctor &>/dev/null
@@ -263,7 +272,7 @@ ensure_user_local_bin_on_path() {
 install_apt_packages() {
   log_header "System packages (apt)"
   log_info "Updating package lists..."
-  "${SUDO[@]}" apt-get update -qq
+  "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive TZ="${TZ:-Etc/UTC}" apt-get update -qq
 
   local pkgs=(
     git
@@ -288,7 +297,7 @@ install_apt_packages() {
     log_ok "All system packages already installed"
   else
     log_info "Installing: ${missing[*]}"
-    "${SUDO[@]}" apt-get install -y -qq "${missing[@]}"
+    "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive TZ="${TZ:-Etc/UTC}" apt-get install -y -qq "${missing[@]}"
     log_ok "System packages installed"
   fi
 }
@@ -415,7 +424,7 @@ install_node() {
   else
     log_info "Installing Node.js 22.x via NodeSource..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | "${SUDO_E[@]}" bash -
-    "${SUDO[@]}" apt-get install -y -qq nodejs
+    "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive TZ="${TZ:-Etc/UTC}" apt-get install -y -qq nodejs
   fi
 
   if ! node_version_ok; then
@@ -425,6 +434,50 @@ install_node() {
     die "Node.js install completed but npm is not on PATH."
   fi
   log_ok "Node.js $(node --version) and npm $(npm --version) installed"
+}
+
+# ---------------------------------------------------------------------------
+# DuckDB CLI
+# ---------------------------------------------------------------------------
+install_duckdb() {
+  log_header "DuckDB CLI"
+  if duckdb_ok; then
+    log_ok "duckdb already installed at $(command -v duckdb)"
+    return
+  fi
+
+  if [[ "$OS" == "macos" ]]; then
+    log_info "Installing duckdb via Homebrew..."
+    brew install duckdb
+  else
+    # DuckDB is not packaged in Debian/Ubuntu apt repos, so download the
+    # official CLI release binary for this architecture into ~/.local/bin.
+    ensure_user_local_bin_on_path
+    local ddb_arch
+    case "$ARCH" in
+      amd64) ddb_arch="amd64" ;;
+      arm64) ddb_arch="aarch64" ;;
+      *)     log_warn "No DuckDB CLI release for arch '$ARCH'. Install duckdb manually."; return ;;
+    esac
+    local url="https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-${ddb_arch}.zip"
+    local tmp
+    tmp="$(mktemp -d)"
+    log_info "Downloading DuckDB ${DUCKDB_VERSION} CLI (linux/${ddb_arch})..."
+    if ! curl -fsSL "$url" -o "${tmp}/duckdb.zip"; then
+      log_warn "Failed to download DuckDB CLI from ${url}. Install duckdb manually."
+      rm -rf "$tmp"; return
+    fi
+    unzip -o -q "${tmp}/duckdb.zip" -d "$tmp"
+    cp "${tmp}/duckdb" "$HOME/.local/bin/duckdb"
+    chmod +x "$HOME/.local/bin/duckdb"
+    rm -rf "$tmp"
+  fi
+
+  if duckdb_ok; then
+    log_ok "duckdb installed at $(command -v duckdb)"
+  else
+    log_warn "duckdb installation step finished but binary is not on PATH"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -544,7 +597,7 @@ install_omnigraph() {
     done
     if [[ ${#og_missing[@]} -gt 0 ]]; then
       log_info "Installing Omnigraph apt prerequisites: ${og_missing[*]}"
-      "${SUDO[@]}" apt-get install -y -qq "${og_missing[@]}"
+      "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive TZ="${TZ:-Etc/UTC}" apt-get install -y -qq "${og_missing[@]}"
     fi
   else
     for pkg in protobuf; do
@@ -609,6 +662,7 @@ print_summary() {
   echo "  Node.js: $(node --version 2>/dev/null || echo 'not found')"
   echo "  npm:     $(npm --version 2>/dev/null || echo 'not found')"
   echo "  ailang:  $(command -v ailang &>/dev/null && echo 'found' || echo 'not found')"
+  echo "  duckdb:  $(command -v duckdb &>/dev/null && echo 'found' || echo 'not found')"
   echo "  context-mode: $(command -v context-mode &>/dev/null && echo 'found' || echo 'not found')"
   echo "  omnigraph: $(command -v omnigraph &>/dev/null && echo 'found' || echo 'not found')"
   echo "  lean:    $(command -v lean &>/dev/null && echo 'found' || echo 'not found')"
@@ -637,6 +691,7 @@ main() {
   install_go
   install_bun
   install_node
+  install_duckdb
   if [[ "$OS" == "debian" ]]; then
     install_python_data_science_packages
   fi
