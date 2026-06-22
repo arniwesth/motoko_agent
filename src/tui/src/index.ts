@@ -703,21 +703,30 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Set the terminal/tab title to "motoko" so VS Code, iTerm2, etc. show
-  // the agent name instead of the underlying runtime ("bun.exe" /
-  // "node"). OSC 0 sets both icon and window title; ST is BEL (\x07) for
-  // maximal compatibility (some terminals don't recognise ST = \x1b\\).
-  // Skip when TTY detection fails (piped output, JSONL mode) so we don't
-  // pollute log streams with the escape bytes.
-  if (process.stdout.isTTY && process.env.MOTOKO_JSONL_OUTPUT !== "1") {
-    process.stdout.write("\x1b]0;[λ] motoko\x07");
-  }
-
   const shellEnvKeys = new Set(Object.keys(process.env));
   loadDotEnv(shellEnvKeys);
   synthesizeClickStackOtelHeaders();
 
   const jsonlOutput = process.env.MOTOKO_JSONL_OUTPUT === "1";
+  const headlessOutput = process.env.MOTOKO_HEADLESS === "1";
+  // process.stdout.isTTY can be undefined in piped subprocess contexts
+  // (e.g. oh-my-pi's session runner) even when the outer environment has a
+  // real terminal. Use a multi-signal heuristic, but keep MOTOKO_HEADLESS as a
+  // hard opt-out from TUI-only output such as the bitmap banner.
+  //
+  // CI is NOT treated as a TUI blocker — devcontainers and CI runners often
+  // set CI=1 even when the user is running interactively.
+  const isTTY =
+    Boolean(process.stdout.isTTY) ||
+    Boolean(process.stdout.columns) ||
+    Boolean(process.env.FORCE_TTY);
+
+  // Set the terminal/tab title to "motoko" so VS Code, iTerm2, etc. show
+  // the agent name instead of the underlying runtime ("bun.exe" / "node").
+  // Skip in headless/plain/jsonl output so log streams stay text-only.
+  if (isTTY && !headlessOutput && !jsonlOutput) {
+    process.stdout.write("\x1b]0;[λ] motoko\x07");
+  }
   // Read version FIRST so it appears before any other output.
   const pkgPath = path.join(
     path.resolve(import.meta.dirname, ".."),
@@ -791,7 +800,7 @@ async function main(): Promise<void> {
   } catch {}
 
   // Future improvement: regenerate/reflow banner on terminal resize events.
-  if (!jsonlOutput) {
+  if (isTTY && !headlessOutput && !jsonlOutput) {
     const bannerLines = renderBanner({ columns: process.stdout.columns });
     process.stdout.write(
       bannerLines.join("\n") +
@@ -811,18 +820,6 @@ async function main(): Promise<void> {
   // completes. boundPort == envPort when envPort > 0 (operator override).
   const boundPort = await startEnvServer(envPort, workdir);
   const envUrl = `http://localhost:${boundPort}`;
-
-  // Determine whether we have a real terminal available for the TUI.
-  // process.stdout.isTTY can be undefined in piped subprocess contexts
-  // (e.g. oh-my-pi's session runner) even when the outer environment
-  // has a real terminal. Use a multi-signal heuristic.
-  //
-  // CI is NOT treated as a TUI blocker — devcontainers and CI runners
-  // often set CI=1 even when the user is running interactively.
-  const isTTY =
-    Boolean(process.stdout.isTTY) ||
-    Boolean(process.stdout.columns) ||
-    Boolean(process.env.FORCE_TTY);
 
   // runtime process handle is declared mutable because abort()/setModel() fire from
   // callbacks, and spawnRuntimeProcess() may be called again on model switch.
