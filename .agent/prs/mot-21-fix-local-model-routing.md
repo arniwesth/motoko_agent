@@ -4,66 +4,74 @@ Base branch: `origin/main`
 
 ## Summary
 
-This branch fixes local OpenAI-compatible model routing by separating Motoko's
-UI/profile model identifiers from the provider API model id sent to
-`stepWithStream`.
+This branch fixes Motoko model resolution so interactive TUI runs and headless
+runs use the same selected model and route it through the intended provider.
 
-Previously `PROFILE=local` could pass a model like
-`openai/deepseek-v4-flash` all the way into the upstream request body, causing
-local servers to reject it as an invalid model id. The runtime now keeps the
-prefixed model for display, context accounting, and provider routing, but
-normalizes the provider API model id only at the AI call boundary.
+The critical fix is that Motoko no longer passes direct-provider model ids such
+as `openai/deepseek-v4-flash`, `openai/gpt-4o`, `anthropic/...`, or `google/...`
+to AILANG's `--ai` provider guessing unchanged. AILANG treats those
+`vendor/model` strings as OpenRouter ids, so `PROFILE=local make run` could
+silently route a local OpenAI-compatible profile through OpenRouter. The TUI
+launcher now normalizes provider-selection ids separately from the model id sent
+to `stepWithStream`.
 
-It also centralizes runtime model resolution so TUI and headless runs choose the
-model with the same precedence: `MODEL` environment variable, then profile
-`agent.model`, then the default runtime model.
+Local OpenAI-compatible profiles now force AILANG's OpenAI provider selection
+while preserving the real local model id for the provider request. Explicit
+OpenRouter ids still use `openrouter/...`, and Ollama ids still use
+`ollama/...`.
 
 ## Changes
 
-- Switch the local profile model from `openai/google/gemma-4-26B-A4B-it` to
-  `openai/deepseek-v4-flash`.
-- Replace the old OpenRouter-only prefix stripping with `provider_api_model`.
-- Strip the explicit `openrouter/` Motoko routing prefix only for pinned
-  vendor/model ids before `stepWithStream`, preserving OpenRouter vendor/model
-  ids such as `anthropic/claude-sonnet-4-6`.
-- Preserve `openrouter/auto`, which AILANG documents and tests as the
-  OpenRouter routing-policy model.
-- Strip `openai/` only when `OPENAI_BASE_URL` is set, where
-  `openai/<local-id>` is local OpenAI-compatible routing syntax rather than an
-  OpenRouter vendor/model id.
-- Preserve `ollama/...` model ids so AILANG can route them to the native Ollama
-  provider, which strips the Ollama prefix internally.
-- Document model identifier rules in `README.md`, including the direct
-  Google/Vertex `gemini-*` form versus the OpenRouter `google/...` vendor/model
-  form.
-- Move the TUI baseline model catalog and OpenRouter fallback catalog to
+- Add shared runtime model resolution for both TUI and headless startup:
+  `MODEL` environment variable, then profile `agent.model`, then the default
+  runtime model.
+- Keep `process.env.MODEL` synchronized with the resolved runtime model so
+  env-server, scratchpad, subagents, and the runtime process agree.
+- Add TUI-side provider-selection normalization:
+  - Local OpenAI-compatible endpoints use an OpenAI-shaped `--ai` selector.
+  - Direct `openai/`, `anthropic/`, and `google/` profile ids are stripped
+    before AILANG provider guessing.
+  - Explicit `openrouter/...`, `openrouter/auto`, and `ollama/...` ids are
+    preserved.
+- Normalize the provider API model at the `stepWithStream` boundary while
+  keeping the user-facing/profile model id intact for display, context
+  accounting, and model switching.
+- Fix blank environment overrides such as `OPENAI_BASE_URL=` so they no longer
+  mask profile-configured local endpoint values.
+- Update the local profile and local `compaction_ai` config to use
+  `openai/deepseek-v4-flash` instead of OpenRouter model ids.
+- Build and use the repo-local `ailang/bin/ailang` from `make run`, so branch
+  behavior does not depend on an older globally installed AILANG binary.
+- Make Makefile AILANG checks and package sync use the same repo-local binary,
+  and make `PROFILE=local make run` verify the local profile extension set.
+- Suppress expected local-runtime warning noise in the TUI:
+  - AILANG stdlib version mismatch warnings from dirty local builds.
+  - Informational cache-hint warnings for providers that cannot honor explicit
+    cache breakpoints.
+  - Duplicate `Warning: Warning:` prefixes.
+- Suppress the Motoko banner/header in headless and JSONL modes.
+- Route runtime stderr through structured warning events instead of letting it
+  spill into the TUI input line.
+- Move model picker/discovery data and concrete per-model context limits into
   `.motoko/model-catalog.json`, with `MOTOKO_MODELS_FILE` as an override.
-- Move concrete per-model context windows to `.motoko/model-catalog.json`
-  under `context_limits`; core AILANG now keeps only broad provider-family
-  fallback limits.
-- Keep `.motoko/model-catalog.json` out of runtime model selection; it feeds
-  picker/discovery suggestions and known context-window metadata.
-- Add a shared `resolveRuntimeModel` helper and use it before both interactive
-  and headless runtime startup.
-- Publish the resolved model back to `process.env.MODEL` so env-server,
-  scratchpad, subagents, and runtime process args agree on the same model.
-- Suppress the Motoko banner/header in headless and JSONL modes so those bytes
-  are not written into headless output.
-- Route runtime stderr through warning events instead of inheriting it into the
-  TUI prompt line.
-- Update the configured direct Google/Vertex models to use bare `gemini-*` ids.
-- Add regression tests for OpenRouter pinned models, `openrouter/auto`, local
-  OpenAI-compatible models, vendor/model ids, Ollama model id normalization,
-  shared runtime model resolution, model catalog loading, context-limit catalog
-  parsing, direct Gemini model picker entries, and headless local/OpenRouter
-  smoke paths.
+- Replace hardcoded concrete context-window entries in core AILANG with catalog
+  lookups plus broad provider-family fallbacks.
+- Document model identifier rules in `README.md`, including local
+  OpenAI-compatible models, direct Google/Vertex `gemini-*` ids, OpenRouter
+  `vendor/model` ids, and Ollama `ollama/<model>` ids.
 
 ## Verification
 
-- `ailang check src/core/agent_loop_v2.ail`
-- `ailang test src/core/agent_loop_v2.ail`
-- `ailang check src/core/context_usage.ail`
+- `make build`
+- `MOTOKO_CONFIG=local make check_core`
+- `AILANG_STDLIB_PATH=/workspaces/motoko_agent/ailang/std ./ailang/bin/ailang test src/core/agent_loop_v2.ail`
+- `cd ailang && go test ./cmd/ailang -run 'OpenAI.*(Local|Custom|KeyRelaxation|UsesCustomBaseURL)'`
+- `bun test src/tui/src/runtime-process.stream-protocol.test.ts`
 - `bun test src/tui/src/models.test.ts`
 - `bun run --cwd src/tui build`
-- Headless `MOTOKO_CONFIG=local` smoke returned `ok` without the invalid model
-  id error.
+- Headless `MOTOKO_CONFIG=local` smoke succeeded with an intentionally bogus
+  OpenRouter key.
+- `PROFILE=local make run` smoke succeeded and verified the local profile
+  extension set before startup.
+- Local endpoint probe confirmed the remaining timeout error is TCP
+  connectivity to `http://100.79.48.75:8000`, not OpenRouter routing.
