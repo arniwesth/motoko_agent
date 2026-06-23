@@ -122,9 +122,11 @@ export function providerSelectionModel(model: string, openaiBaseUrl: string): st
 
   // For local OpenAI-compatible endpoints, unknown model ids like
   // "deepseek-v4-flash" do not let AILANG infer the OpenAI provider. Use a
-  // known OpenAI-shaped selector for --ai; stepWithStream still sends the real
-  // local model id.
-  if (openaiBaseUrl.trim() !== "") return "gpt-4o";
+  // configured OpenAI selector for --ai; stepWithStream still sends the real
+  // local model id. Use the AILANG model alias ("gpt5"), not the provider API
+  // id ("gpt-5"), so AILANG takes the configured-model path that honors
+  // OPENAI_BASE_URL.
+  if (openaiBaseUrl.trim() !== "") return "gpt5";
 
   // AILANG's --ai provider guessing treats vendor/model strings such as
   // "openai/..." and "anthropic/..." as OpenRouter vendor ids. Motoko uses

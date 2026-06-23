@@ -46,8 +46,8 @@ describe("stream protocol decoder", () => {
 
 describe("providerSelectionModel", () => {
   it("routes local OpenAI-compatible Motoko ids through AILANG's OpenAI provider", () => {
-    expect(providerSelectionModel("openai/deepseek-v4-flash", "http://127.0.0.1:8000/v1")).toBe("gpt-4o");
-    expect(providerSelectionModel("deepseek-v4-flash", "http://127.0.0.1:8000/v1")).toBe("gpt-4o");
+    expect(providerSelectionModel("openai/deepseek-v4-flash", "http://127.0.0.1:8000/v1")).toBe("gpt5");
+    expect(providerSelectionModel("deepseek-v4-flash", "http://127.0.0.1:8000/v1")).toBe("gpt5");
   });
 
   it("strips Motoko direct-provider prefixes before AILANG provider guessing", () => {
