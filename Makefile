@@ -1,5 +1,4 @@
 PROFILE ?= $(if $(MOTOKO_CONFIG),$(MOTOKO_CONFIG),default)
-AILANG_BIN ?= $(CURDIR)/ailang/bin/ailang
 
 codex:
 	clear
@@ -13,12 +12,9 @@ prune:
 	docker system prune -a
 
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
-build_ailang:
-	cd ailang && make build
-
-sync_packages: build_ailang
-	AILANG_BIN=$(AILANG_BIN) ./scripts/sync-extension-packages.sh
-	$(AILANG_BIN) lock
+sync_packages:
+	./scripts/sync-extension-packages.sh
+	ailang lock
 
 # M-MOTOKO-OHMY-PI-DEFAULT-FLIP regression guard: assert every shipped config
 # profile has tools.ohmy_pi=false. Until M-MOTOKO-M6.5 (env-server inbox-based
@@ -52,12 +48,12 @@ smoke_no_delegated_storm:
 check_core: verify_extensions
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
-		if $(AILANG_BIN) check "$$f" >/dev/null 2>&1; then \
+		if ailang check "$$f" >/dev/null 2>&1; then \
 			echo "  ✓ $$f"; \
 			ok=$$((ok + 1)); \
 		else \
 			echo "  ✗ $$f"; \
-			$(AILANG_BIN) check "$$f" 2>&1 | tail -3; \
+			ailang check "$$f" 2>&1 | tail -3; \
 			fail=$$((fail + 1)); \
 		fi; \
 	done; \
@@ -89,7 +85,7 @@ verify_extensions:
 	for ext in $$exts; do \
 		out=$$(MOTOKO_PROFILE_DIR="$$PWD/.motoko/config/$$profile" \
 		      AILANG_RELAX_MODULES=1 \
-		      $(AILANG_BIN) run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
+		      ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
 		        --ai-stub --entry main \
 		        scripts/verify_extension_boot.ail -- "$$ext" 2>&1); \
 		rc=$$?; \
@@ -115,7 +111,7 @@ init-config:
 	bun src/tui/src/init-config.ts --profile $(PROFILE) $(ARGS)
 
 # Build everything
-build: build_ailang sync_packages check_core build_tui
+build: sync_packages check_core build_tui
 
 # Run the agent
 run: build
@@ -129,14 +125,14 @@ install:
 # Run all core runtime module tests
 test_core:
 	@echo "Running src/core/agents_md.ail tests..."
-	@$(AILANG_BIN) test src/core/agents_md.ail || (echo "src/core/agents_md.ail tests failed" && exit 1)
+	@ailang test src/core/agents_md.ail || (echo "src/core/agents_md.ail tests failed" && exit 1)
 	@echo "Running src/core/parse_test.ail tests..."
-	@$(AILANG_BIN) test src/core/parse_test.ail || (echo "src/core/parse_test.ail tests failed" && exit 1)
+	@ailang test src/core/parse_test.ail || (echo "src/core/parse_test.ail tests failed" && exit 1)
 	@printf "\nAll core runtime module tests passed!\n"
 
 test_integration:
 	@echo "Running src/core/test/integration_tests.ail tests..."
-	@$(AILANG_BIN) test src/core/test/integration_tests.ail || (echo "src/core/test/integration_tests.ail tests failed" && exit 1)
+	@ailang test src/core/test/integration_tests.ail || (echo "src/core/test/integration_tests.ail tests failed" && exit 1)
 	@printf "\nAll integration tests passed!\n"
 
 test: test_core
@@ -149,7 +145,7 @@ verify_core:
 	@ok=0; fail=0; none=0; \
 	for f in src/core/*.ail; do \
 		case "$$f" in *_test.ail) continue ;; esac; \
-		out="$$($(AILANG_BIN) verify "$$f" 2>&1)"; \
+		out="$$(ailang verify "$$f" 2>&1)"; \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "  ✗ $$f"; \
@@ -170,7 +166,7 @@ verify_core:
 verify_ext:
 	@ok=0; fail=0; none=0; \
 	for f in $$(find src/core/ext -name "*.ail" ! -name "*_test.ail"); do \
-		out="$$($(AILANG_BIN) verify "$$f" 2>&1)"; \
+		out="$$(ailang verify "$$f" 2>&1)"; \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "  ✗ $$f"; \
