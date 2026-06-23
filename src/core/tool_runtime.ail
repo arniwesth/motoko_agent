@@ -141,7 +141,7 @@ func parse_edit_ops_rec(xs: [Json]) -> [EditOp] {
 }
 
 export pure func backend_for(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBackend {
-  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" then
+  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" || call.tool == "ReadInterface" then
     if ohmy_pi then Delegated else Native
   else if call.tool == "BashExec" || call.tool == "RunTests" then
     if needs_delegation_for_process(parse_exec_from_args(call.arguments)) then Delegated else Native
@@ -166,6 +166,8 @@ func run_native_call(call: ToolCallEnvelope, workdir: string) -> ToolResultItem 
   let args = call.arguments;
   if call.tool == "ReadFile" then
     run_read_file(call.id, arg_string(args, "path", ""), arg_number(args, "start", 1), arg_number(args, "end", 200), workdir)
+  else if call.tool == "ReadInterface" then
+    run_read_interface(call.id, arg_string(args, "path", ""), workdir)
   else if call.tool == "Search" then
     run_search(call.id, arg_string(args, "pattern", ""), arg_string(args, "dir", "."), workdir)
   else if call.tool == "WriteFile" then
@@ -618,6 +620,23 @@ func run_write_file(id: string, path: string, content: string, workdir: string) 
   }
 }
 
+func run_read_interface(id: string, path: string, workdir: string) -> ToolResultItem ! {FS, Process} {
+  match validate_path_common("ReadInterface", id, path, workdir) {
+    Err(e) => e,
+    Ok(_) => {
+      let resolved = resolve_workdir_path(workdir, path);
+      match exec("ailang", ["iface", "--compact", resolved]) {
+        Err(err) => ToolErrorResult({ id: id, tool: "ReadInterface", message: process_error_to_string(err) }),
+        Ok(out) =>
+          if out.exitCode == 0 then
+            ReadFileResult({ id: id, path: path, content: toString(out.stdout), line_count: 0, truncated: false, sha256: "" })
+          else
+            ToolErrorResult({ id: id, tool: "ReadInterface", message: "ailang iface failed: ${toString(out.stderr)}" })
+      }
+    }
+  }
+}
+
 func path_dirname(path: string) -> string {
   if startsWith(path, "/") then {
     let rel = substring(path, 1, length(path));
@@ -993,7 +1012,7 @@ func t_normalize_relative_path() -> bool
 -- use the normal delegation check (streaming/hard-cancel requirements).
 -- See: design_docs/planned/m-motoko-path-doubling-v2.md
 export pure func backend_for_v2(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBackend {
-  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" then
+  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" || call.tool == "ReadInterface" then
     Native
   else
     backend_for(call, ohmy_pi)

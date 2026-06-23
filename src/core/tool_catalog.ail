@@ -66,9 +66,16 @@ pure func search_schema() -> ToolSchema = {
 
 -- The full tool catalog motoko_agent advertises to the model. Pass this
 -- to upstream `runTools(model, msgs, tools(), dispatch, budget)`.
+pure func read_interface_schema() -> ToolSchema = {
+  name: "ReadInterface",
+  description: "Read a module's TYPED INTERFACE — exported declarations as one-line signatures with types and effect rows (plus ADT constructors) — instead of its full source. ~10x smaller than ReadFile (and the model otherwise re-reads full files to re-find signatures). Use this to learn how to USE a dependency/module; use ReadFile only for the file you are actually editing.",
+  parameters: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to the .ail module\"}},\"required\":[\"path\"]}"
+}
+
 export pure func tools() -> [ToolSchema] {
   [
     read_file_schema(),
+    read_interface_schema(),
     write_file_schema(),
     edit_file_schema(),
     bash_exec_schema(),
