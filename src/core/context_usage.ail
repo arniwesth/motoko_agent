@@ -42,6 +42,7 @@ pure func context_limit_base(model: string) -> int
     else if startsWith(model, "openai/") then 128000
     else if startsWith(model, "google/") then 1000000
     else if startsWith(model, "deepseek/deepseek-v4") then 1000000
+    else if startsWith(model, "ollama/qwen3") then 262144
     else if model == "test/tiny" then 100
     else 0
   }
@@ -50,6 +51,7 @@ export pure func context_limit_for(model: string) -> int
   ensures { result >= 0 }
   tests [
     ("anthropic/claude-sonnet-4-6",                 200000),
+    ("ollama/qwen3.6:35b-a3b-mxfp8",                262144),
     ("google/gemini-2.5-pro",                       2000000),
     ("openrouter/anthropic/claude-sonnet-4-5",      200000),
     ("openrouter/z-ai/glm-5",                       128000),
