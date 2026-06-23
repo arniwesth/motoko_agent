@@ -72,12 +72,20 @@ describe("loadModelsConfig", () => {
     const { env, cleanup } = withTempModelsConfig({
       known_models: ["gemini-2.5-flash", "google/gemini-2.5-flash", ""],
       openrouter_fallback_models: ["openrouter/google/gemini-2.5-flash"],
+      context_limits: {
+        "gemini-2.5-flash": 1000000,
+        "ignored-zero": 0,
+        "ignored-string": "100",
+      },
     });
     try {
       expect(resolveModelsConfigPath(env)).toBe(env.MOTOKO_MODELS_FILE);
       expect(loadModelsConfig(env)).toEqual({
         known_models: ["gemini-2.5-flash", "google/gemini-2.5-flash"],
         openrouter_fallback_models: ["openrouter/google/gemini-2.5-flash"],
+        context_limits: {
+          "gemini-2.5-flash": 1000000,
+        },
       });
     } finally {
       cleanup();
@@ -91,6 +99,7 @@ describe("loadModelsConfig", () => {
 
     expect(directGoogleModels.length).toBeGreaterThan(0);
     expect(openRouterGoogleModels).toEqual([]);
+    expect(config.context_limits["gemini-2.5-flash"]).toBeGreaterThan(0);
   });
 });
 

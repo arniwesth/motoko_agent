@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+AILANG_BIN="${AILANG_BIN:-ailang}"
 
 sync_extension() {
   local ext_name="$1"
@@ -58,7 +59,7 @@ sync_extension() {
   # Pre-fix this hard-failed CI on PR #22 because src/core/ext/context_mode/
   # only shipped register.ail with no manifest.
   if [[ -f "$pkg_dir/ailang.toml" ]]; then
-    (cd "$pkg_dir" && ailang lock)
+    (cd "$pkg_dir" && "$AILANG_BIN" lock)
   else
     echo "  (no ailang.toml in $pkg_dir — local-only override, skipping lock)" >&2
   fi

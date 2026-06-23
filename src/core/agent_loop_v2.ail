@@ -55,8 +55,8 @@ import src/core/types (Msg, ToolBackend)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
-import src/core/compaction (compact_step)
-import src/core/context_usage (context_limit_for)
+import src/core/compaction (compact_step_with_limit)
+import src/core/context_usage (catalog_context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
@@ -71,9 +71,12 @@ import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 -- such as "anthropic/claude-sonnet-4-6" and "openai/gpt-4o". Strip the
 -- explicit Motoko/OpenRouter routing prefix only for pinned vendor/model ids;
 -- keep "openrouter/auto" intact because AILANG/OpenRouter use it as the
--- routing-policy model. Strip "openai/" only when a custom OpenAI-compatible
--- base URL is configured, where "openai/<local-id>" is Motoko UI routing
--- syntax rather than an OpenRouter vendor/model id.
+-- routing-policy model.
+--
+-- Direct provider prefixes are Motoko routing syntax and are stripped before
+-- the provider request. AILANG itself treats vendor/model strings such as
+-- "openai/..." and "anthropic/..." as OpenRouter, so the TS launcher also
+-- strips those prefixes for --ai provider selection.
 pure func provider_api_model(model: string, openai_base_url: string) -> string {
   if model == "openrouter/auto" then
     model
@@ -81,8 +84,16 @@ pure func provider_api_model(model: string, openai_base_url: string) -> string {
     let prefix_len = Str.length("openrouter/") in
     let total = Str.length(model) in
     substring(model, prefix_len, total)
-  else if openai_base_url != "" && startsWith(model, "openai/") then
+  else if startsWith(model, "openai/") then
     let prefix_len = Str.length("openai/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "anthropic/") then
+    let prefix_len = Str.length("anthropic/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "google/") then
+    let prefix_len = Str.length("google/") in
     let total = Str.length(model) in
     substring(model, prefix_len, total)
   else
@@ -435,22 +446,22 @@ pure func test_provider_api_model_local_openai_preserves_slashful_id() -> bool
     provider_api_model("openai/google/gemma-4-26B-A4B-it", "http://127.0.0.1:8000/v1") == "google/gemma-4-26B-A4B-it"
   }
 
-pure func test_provider_api_model_openrouter_openai_vendor_model_stays_intact() -> bool
+pure func test_provider_api_model_direct_openai_strips_routing_prefix() -> bool
   tests [((), true)]
   {
-    provider_api_model("openai/gpt-4o", "") == "openai/gpt-4o"
+    provider_api_model("openai/gpt-4o", "") == "gpt-4o"
   }
 
-pure func test_provider_api_model_openrouter_anthropic_vendor_model_stays_intact() -> bool
+pure func test_provider_api_model_direct_anthropic_strips_routing_prefix() -> bool
   tests [((), true)]
   {
-    provider_api_model("anthropic/claude-sonnet-4-6", "") == "anthropic/claude-sonnet-4-6"
+    provider_api_model("anthropic/claude-sonnet-4-6", "") == "claude-sonnet-4-6"
   }
 
-pure func test_provider_api_model_openrouter_google_vendor_model_stays_intact() -> bool
+pure func test_provider_api_model_direct_google_strips_routing_prefix() -> bool
   tests [((), true)]
   {
-    provider_api_model("google/gemini-2.5-flash", "") == "google/gemini-2.5-flash"
+    provider_api_model("google/gemini-2.5-flash", "") == "gemini-2.5-flash"
   }
 
 pure func test_provider_api_model_ollama_keeps_routing_prefix_for_provider() -> bool
@@ -501,7 +512,8 @@ func mk_v2_ext_ctx(
   env_url: string,
   hybrid_tools: bool,
   budget: BudgetPlan,
-  history: [Message]
+  history: [Message],
+  context_limit: int
 ) -> ExtCtx {
   let remaining = if budget.total - step_idx < 0 then 0 else budget.total - step_idx;
   {
@@ -517,7 +529,7 @@ func mk_v2_ext_ctx(
     budget_remaining: remaining,
     history_slice: messages_to_msgs(history),
     state_key: "core:ext:v2",
-    context_limit: context_limit_for(model)
+    context_limit: context_limit
   }
 }
 
@@ -1134,8 +1146,9 @@ func loop_v2(
     })
   }
   else {
+  let context_limit = catalog_context_limit_for(model);
   -- Build extension context for this step (needed for dispatch_pre_step)
-  let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs);
+  let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs, context_limit);
   
   -- DP0a: let extensions compact first (e.g., AI summarization)
   let after_ext = match dispatch_pre_step(rt, ctx, messages_to_msgs(msgs)) {
@@ -1155,7 +1168,7 @@ func loop_v2(
   -- DP0b: structural compaction as fallback
   -- compact_step is a no-op below 70% usage; elides old tool_result content
   -- at 70-85% and 85-95%; at ≥95% tries emergency compaction.
-  match compact_step(msgs_after_ext, model) {
+  match compact_step_with_limit(msgs_after_ext, model, context_limit) {
     Err(compaction_reason) => {
       let _ = emit_event(session_id, "compaction_exhausted", [
         kv("step", jnum(_int_to_float(step_idx))),
@@ -1221,7 +1234,7 @@ func loop_v2(
 
         let assistant_msg = step_result_to_message(result);
         let msgs_with_assistant = msgs ++ [assistant_msg];
-        let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant);
+        let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit);
 
         let new_total_cost = totals.cost_millicents + step_cost;
         let new_input  = totals.input_tokens  + result.input_tokens;

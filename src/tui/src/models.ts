@@ -21,6 +21,7 @@ import { fileURLToPath } from "url";
 export type ModelsConfig = {
   known_models: string[];
   openrouter_fallback_models: string[];
+  context_limits: Record<string, number>;
 };
 
 export const DEFAULT_RUNTIME_MODEL = "anthropic/claude-sonnet-4-6";
@@ -28,6 +29,7 @@ export const DEFAULT_RUNTIME_MODEL = "anthropic/claude-sonnet-4-6";
 const EMPTY_MODELS_CONFIG: ModelsConfig = {
   known_models: [],
   openrouter_fallback_models: [],
+  context_limits: {},
 };
 
 export function resolveRuntimeModel(
@@ -48,14 +50,27 @@ function stringArrayField(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
+function positiveNumberRecordField(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, limit] of Object.entries(value)) {
+    if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+      out[key] = limit;
+    }
+  }
+  return out;
+}
+
 function parseModelsConfig(raw: string): ModelsConfig {
   const parsed = JSON.parse(raw) as {
     known_models?: unknown;
     openrouter_fallback_models?: unknown;
+    context_limits?: unknown;
   };
   return {
     known_models: stringArrayField(parsed.known_models),
     openrouter_fallback_models: stringArrayField(parsed.openrouter_fallback_models),
+    context_limits: positiveNumberRecordField(parsed.context_limits),
   };
 }
 

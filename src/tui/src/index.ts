@@ -238,6 +238,10 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
+function envOrProfileString(envKey: string, profileValue: string | undefined): string {
+  return nonEmptyString(process.env[envKey]) ?? profileValue ?? "";
+}
+
 function positiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
@@ -707,9 +711,10 @@ async function main(): Promise<void> {
   // the agent name instead of the underlying runtime ("bun.exe" /
   // "node"). OSC 0 sets both icon and window title; ST is BEL (\x07) for
   // maximal compatibility (some terminals don't recognise ST = \x1b\\).
-  // Skip when TTY detection fails (piped output, JSONL mode) so we don't
-  // pollute log streams with the escape bytes.
-  if (process.stdout.isTTY && process.env.MOTOKO_JSONL_OUTPUT !== "1") {
+  // Skip in non-interactive output modes so we don't pollute log streams with
+  // escape bytes.
+  const headlessOutput = process.env.MOTOKO_HEADLESS === "1";
+  if (process.stdout.isTTY && process.env.MOTOKO_JSONL_OUTPUT !== "1" && !headlessOutput) {
     process.stdout.write("\x1b]0;[λ] motoko\x07");
   }
 
@@ -759,8 +764,8 @@ async function main(): Promise<void> {
   // scratchpad, subagents) observe the same default as the AILANG runtime.
   process.env.MODEL = model;
   const systemPrompt = systemPromptForWorkspace(projectRoot, workdir);
-  const openaiBaseUrl = process.env.OPENAI_BASE_URL ?? profileAgent.openaiBaseUrl ?? "";
-  const aiOptionsJson = process.env.MOTOKO_AI_OPTIONS_JSON ?? profileAgent.aiOptionsJson ?? "";
+  const openaiBaseUrl = envOrProfileString("OPENAI_BASE_URL", profileAgent.openaiBaseUrl);
+  const aiOptionsJson = envOrProfileString("MOTOKO_AI_OPTIONS_JSON", profileAgent.aiOptionsJson);
 
   let brainVersion = "unknown";
   try {
@@ -791,7 +796,7 @@ async function main(): Promise<void> {
   } catch {}
 
   // Future improvement: regenerate/reflow banner on terminal resize events.
-  if (!jsonlOutput) {
+  if (!jsonlOutput && !headlessOutput) {
     const bannerLines = renderBanner({ columns: process.stdout.columns });
     process.stdout.write(
       bannerLines.join("\n") +
@@ -820,9 +825,13 @@ async function main(): Promise<void> {
   // CI is NOT treated as a TUI blocker — devcontainers and CI runners
   // often set CI=1 even when the user is running interactively.
   const isTTY =
-    Boolean(process.stdout.isTTY) ||
-    Boolean(process.stdout.columns) ||
-    Boolean(process.env.FORCE_TTY);
+    !headlessOutput &&
+    !jsonlOutput &&
+    (
+      Boolean(process.stdout.isTTY) ||
+      Boolean(process.stdout.columns) ||
+      Boolean(process.env.FORCE_TTY)
+    );
 
   // runtime process handle is declared mutable because abort()/setModel() fire from
   // callbacks, and spawnRuntimeProcess() may be called again on model switch.

@@ -2,6 +2,11 @@ module src/core/context_usage
 
 import std/string (length, startsWith, substring)
 import std/list (foldl)
+import std/fs (fileExists, readFile)
+import std/env (getEnvOr)
+import std/json (Json, decode, get, getInt)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
 import src/core/types (Msg)
 
 export pure func estimate_tokens(msgs: [Msg], system: string) -> int =
@@ -16,53 +21,77 @@ pure func est0(system: string) -> int
   ]
   { estimate_tokens([], system) }
 
--- Flat dispatch without the "openrouter/" prefix. All branches return >= 0.
--- Split from context_limit_for to eliminate the recursive openrouter/ case
--- so Z3 can verify the non-negativity contract.
-pure func context_limit_base(model: string) -> int
+-- Broad provider-family fallback. Concrete model limits live in
+-- .motoko/model-catalog.json under context_limits so routine catalog updates do
+-- not require AILANG code changes.
+pure func context_limit_fallback_base(model: string) -> int
   ensures { result >= 0 }
   {
-    if model == "anthropic/claude-sonnet-4-6" then 200000
-    else if model == "anthropic/claude-sonnet-4-5" then 200000
-    else if model == "anthropic/claude-opus-4-6" then 200000
-    else if model == "anthropic/claude-opus-4-7" then 1000000
-    else if model == "anthropic/claude-haiku-4-5" then 200000
-    else if model == "openai/gpt-4o" then 128000
-    else if model == "openai/gpt-4o-mini" then 128000
-    else if model == "openai/gpt-5" then 400000
-    else if model == "gemini-2.5-flash" then 1000000
-    else if model == "gemini-2.5-pro" then 2000000
-    else if model == "google/gemini-2.5-flash" then 1000000
-    else if model == "google/gemini-2.5-pro" then 2000000
-    else if model == "z-ai/glm-5" then 128000
-    else if model == "minimax/minimax-m2.7" then 256000
-    else if model == "x-ai/grok-3" then 131072
-    else if model == "deepseek/deepseek-v4-pro" then 1000000
-    else if model == "deepseek/deepseek-v4-flash" then 1000000
-    else if model == "deepseek/deepseek-v4-flash:free" then 1000000
-    else if startsWith(model, "anthropic/") then 200000
+    if startsWith(model, "anthropic/") then 200000
     else if startsWith(model, "openai/") then 128000
     else if startsWith(model, "google/") then 1000000
+    else if startsWith(model, "gemini-") then 1000000
     else if startsWith(model, "deepseek/deepseek-v4") then 1000000
-    else if model == "test/tiny" then 100
     else 0
   }
 
 export pure func context_limit_for(model: string) -> int
   ensures { result >= 0 }
   tests [
-    ("anthropic/claude-sonnet-4-6",                 200000),
-    ("gemini-2.5-pro",                              2000000),
-    ("google/gemini-2.5-pro",                       2000000),
+    ("anthropic/some-future-model",                 200000),
+    ("gemini-new-model",                            1000000),
+    ("google/some-gemini-model",                    1000000),
     ("openrouter/anthropic/claude-sonnet-4-5",      200000),
-    ("openrouter/z-ai/glm-5",                       128000),
-    ("openrouter/openai/gpt-5",                     400000),
+    ("openrouter/openai/some-model",                128000),
     ("openrouter/whatever",                         0),
     ("totally-unknown",                             0)
   ]
   {
     if startsWith(model, "openrouter/") then
-      context_limit_base(substring(model, length("openrouter/"), length(model)))
+      context_limit_fallback_base(substring(model, length("openrouter/"), length(model)))
     else
-      context_limit_base(model)
+      context_limit_fallback_base(model)
   }
+
+func catalog_path() -> string ! {Env, FS} {
+  let explicit = getEnvOr("MOTOKO_MODELS_FILE", "");
+  if explicit != "" then explicit
+  else if fileExists(".motoko/model-catalog.json") then ".motoko/model-catalog.json"
+  else {
+    let repo = getEnvOr("MOTOKO_REPO", "");
+    if repo != "" then "${repo}/.motoko/model-catalog.json"
+    else ".motoko/model-catalog.json"
+  }
+}
+
+func lookup_context_limit(limits: Json, model: string) -> Option[int] {
+  match getInt(limits, model) {
+    Some(n) => if n > 0 then Some(n) else None,
+    None => {
+      if startsWith(model, "openrouter/") then {
+        let stripped = substring(model, length("openrouter/"), length(model));
+        match getInt(limits, stripped) {
+          Some(n) => if n > 0 then Some(n) else None,
+          None => None
+        }
+      } else None
+    }
+  }
+}
+
+export func catalog_context_limit_for(model: string) -> int ! {Env, FS} {
+  let path = catalog_path();
+  if not fileExists(path) then context_limit_for(model)
+  else {
+    match decode(readFile(path)) {
+      Err(_) => context_limit_for(model),
+      Ok(root) => match get(root, "context_limits") {
+        Some(limits) => match lookup_context_limit(limits, model) {
+          Some(n) => n,
+          None => context_limit_for(model)
+        },
+        None => context_limit_for(model)
+      }
+    }
+  }
+}

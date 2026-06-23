@@ -33,8 +33,11 @@ server received `openai/deepseek-v4-flash` instead of the API model id
   vendor/model form.
 - Move the TUI baseline model catalog and OpenRouter fallback catalog to
   `.motoko/model-catalog.json`, with `MOTOKO_MODELS_FILE` as an override.
-- Keep `.motoko/model-catalog.json` as picker/discovery configuration only;
-  runtime selection is resolved separately.
+- Move concrete per-model context windows to `.motoko/model-catalog.json`
+  under `context_limits`; core AILANG now keeps only broad provider-family
+  fallback limits.
+- Keep `.motoko/model-catalog.json` out of runtime model selection; it feeds
+  picker/discovery suggestions and known context-window metadata.
 - Add shared runtime model resolution for TUI and headless runs with precedence
   `MODEL` environment variable, then profile `agent.model`, then the default
   runtime model.
@@ -42,13 +45,17 @@ server received `openai/deepseek-v4-flash` instead of the API model id
   startup so env-server, scratchpad, subagents, and `RuntimeProcess` observe the
   same model.
 - Update the configured direct Google/Vertex models to use bare `gemini-*` ids.
-- Add direct Gemini context-window entries for context accounting.
+- Suppress the Motoko banner/header in headless and JSONL modes so headless
+  output stays machine-readable.
+- Route runtime stderr through warning events instead of inheriting it into the
+  TUI prompt line.
 - Kept the user-facing/profile model id intact for UI display, context
   accounting, and conversation model switching.
 - Added regression tests for OpenRouter pinned models, `openrouter/auto`, local
   OpenAI-compatible models with and without slashful ids, OpenRouter
   vendor/model ids, Ollama, shared runtime model resolution, model catalog
-  loading, and direct Gemini picker entries.
+  loading, context-limit catalog parsing, direct Gemini picker entries, and
+  headless local/OpenRouter smoke paths.
 - Wrote PR notes to `.agent/prs/mot-21-fix-local-model-routing.md`.
 
 ## Verification

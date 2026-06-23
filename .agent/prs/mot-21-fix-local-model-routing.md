@@ -38,17 +38,25 @@ model with the same precedence: `MODEL` environment variable, then profile
   form.
 - Move the TUI baseline model catalog and OpenRouter fallback catalog to
   `.motoko/model-catalog.json`, with `MOTOKO_MODELS_FILE` as an override.
-- Keep `.motoko/model-catalog.json` scoped to picker/discovery suggestions; it
-  does not choose the runtime model.
+- Move concrete per-model context windows to `.motoko/model-catalog.json`
+  under `context_limits`; core AILANG now keeps only broad provider-family
+  fallback limits.
+- Keep `.motoko/model-catalog.json` out of runtime model selection; it feeds
+  picker/discovery suggestions and known context-window metadata.
 - Add a shared `resolveRuntimeModel` helper and use it before both interactive
   and headless runtime startup.
 - Publish the resolved model back to `process.env.MODEL` so env-server,
   scratchpad, subagents, and runtime process args agree on the same model.
+- Suppress the Motoko banner/header in headless and JSONL modes so those bytes
+  are not written into headless output.
+- Route runtime stderr through warning events instead of inheriting it into the
+  TUI prompt line.
 - Update the configured direct Google/Vertex models to use bare `gemini-*` ids.
 - Add regression tests for OpenRouter pinned models, `openrouter/auto`, local
   OpenAI-compatible models, vendor/model ids, Ollama model id normalization,
-  shared runtime model resolution, model catalog loading, and direct Gemini
-  model picker entries.
+  shared runtime model resolution, model catalog loading, context-limit catalog
+  parsing, direct Gemini model picker entries, and headless local/OpenRouter
+  smoke paths.
 
 ## Verification
 

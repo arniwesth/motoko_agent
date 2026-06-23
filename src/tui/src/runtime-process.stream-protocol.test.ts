@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { parseAgentEventLine } from "./runtime-process.js";
+import { normalizeRuntimeWarning, parseAgentEventLine, providerSelectionModel } from "./runtime-process.js";
 
 describe("stream protocol decoder", () => {
   it("parses context usage events", () => {
@@ -41,5 +41,35 @@ describe("stream protocol decoder", () => {
     expect(parseAgentEventLine("")).toBeNull();
     expect(parseAgentEventLine("not-json")).toBeNull();
     expect(parseAgentEventLine('{"foo":"bar"}')).toBeNull();
+  });
+});
+
+describe("providerSelectionModel", () => {
+  it("routes local OpenAI-compatible Motoko ids through AILANG's OpenAI provider", () => {
+    expect(providerSelectionModel("openai/deepseek-v4-flash", "http://127.0.0.1:8000/v1")).toBe("gpt-4o");
+    expect(providerSelectionModel("deepseek-v4-flash", "http://127.0.0.1:8000/v1")).toBe("gpt-4o");
+  });
+
+  it("strips Motoko direct-provider prefixes before AILANG provider guessing", () => {
+    expect(providerSelectionModel("openai/gpt-4o", "")).toBe("gpt-4o");
+    expect(providerSelectionModel("anthropic/claude-sonnet-4-6", "")).toBe("claude-sonnet-4-6");
+    expect(providerSelectionModel("google/gemini-2.5-flash", "")).toBe("gemini-2.5-flash");
+  });
+
+  it("preserves explicit OpenRouter and Ollama routing ids", () => {
+    expect(providerSelectionModel("openrouter/openai/gpt-4o", "")).toBe("openrouter/openai/gpt-4o");
+    expect(providerSelectionModel("openrouter/auto", "")).toBe("openrouter/auto");
+    expect(providerSelectionModel("ollama/llama3.2", "")).toBe("ollama/llama3.2");
+  });
+});
+
+describe("normalizeRuntimeWarning", () => {
+  it("strips duplicated warning prefixes", () => {
+    expect(normalizeRuntimeWarning("Warning: Warning: something happened")).toBe("something happened");
+  });
+
+  it("drops expected local runtime informational noise", () => {
+    expect(normalizeRuntimeWarning("Warning: stdlib version mismatch: expected dev, found v0.25.0 at /tmp/std")).toBeNull();
+    expect(normalizeRuntimeWarning("[ai] cache_hint_ignored_openai_auto_cache: provider observed Request.CacheBreakpoints")).toBeNull();
   });
 });
