@@ -348,6 +348,12 @@ export class RuntimeProcess {
       // allowlist entry the explicit childEnv whitelist drops it — same gotcha as
       // MOTOKO_REPO / the pricing vars. Empty = the AILANG-side 16384 floor applies.
       AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
+      // Forward the ollama /v1 HTTP timeout (AILANG default 300s). Large-context tasks
+      // accumulate a big prompt; a single qwen request can exceed 5 min on a local GPU and
+      // the AILANG runtime aborts with `context deadline exceeded`, killing the run mid-task.
+      // Without this allowlist entry the var set by the launcher is dropped — same gotcha as
+      // AILANG_OLLAMA_MAX_TOKENS above.
+      AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",
       // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
       // pricing env vars set by the AILANG adapter from Task.Budget. Without
       // this, the AILANG-side fix (load_cost_rates reads these env vars) is
