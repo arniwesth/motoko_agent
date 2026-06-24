@@ -605,13 +605,17 @@ func run_write_file(id: string, path: string, content: string, workdir: string) 
         Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", message: "cannot create parent directory: ${msg}" }),
         Ok(_) => match writeFileResult(resolved, content) {
           Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", message: msg }),
-          Ok(_) => WriteFileResult({
-            id: id,
-            path: path,
-            bytes_written: length(content),
-            sha256: sha256Hex(content),
-            diff: build_write_file_diff(path, before, content, existed_before)
-          })
+          Ok(_) => {
+            let tc = ail_typecheck_after_edit(resolved, workdir);
+            WriteFileResult({
+              id: id,
+              path: path,
+              bytes_written: length(content),
+              sha256: sha256Hex(content),
+              diff: build_write_file_diff(path, before, content, existed_before),
+              typecheck: tc
+            })
+          }
         }
       }
     }
@@ -791,12 +795,14 @@ func run_edit_file(
                   first_changed_line: changed_line,
                   applied_edits: applied.applied,
                   dry_run: true,
-                  match_strategy: "exact"
+                  match_strategy: "exact",
+                  typecheck: ""
                 })
               else
                 match atomic_write(resolved, after) {
                   Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", message: msg }),
-                  Ok(_) =>
+                  Ok(_) => {
+                    let tc = ail_typecheck_after_edit(resolved, workdir);
                     EditFileResult({
                       id: id,
                       path: path,
@@ -806,8 +812,10 @@ func run_edit_file(
                       first_changed_line: changed_line,
                       applied_edits: applied.applied,
                       dry_run: false,
-                      match_strategy: "exact"
+                      match_strategy: "exact",
+                      typecheck: tc
                     })
+                  }
                 }
             }
           }
@@ -868,6 +876,24 @@ func to_test_result(id: string, req: ProcessExecReq, out: ProcessOutput) -> Tool
     failures: if failed == 0 then [] else [{ test: "test-command", message: "non-zero exit code" }],
     meta: mk_meta(stdout, stderr, out.truncated)
   })
+}
+
+-- Per-edit DP7 (M-MOTOKO-IMMEDIATE-TYPECHECK): after a .ail write/edit, type-check the
+-- file IMMEDIATELY and return concise feedback in the tool result. The finalize-only dp7
+-- gate is never reached on max_steps runs, so without this the model writes broken AILANG
+-- (e.g. => match-arm drift) for the whole step budget with no feedback. Non-.ail files -> "".
+func ail_typecheck_after_edit(resolved: string, workdir: string) -> string ! {Process} {
+  if not endsWith(resolved, ".ail") then ""
+  else match exec("bash", ["-c", "cd \"$1\" && ailang check \"$2\" 2>&1", "_chk", workdir, resolved]) {
+    Err(_) => "",
+    Ok(out) =>
+      if out.exitCode == 0 then "ailang check: OK - file type-checks."
+      else {
+        let raw = toString(out.stdout);
+        let snippet = if length(raw) > 1200 then substring(raw, 0, 1200) else raw;
+        "ailang check: FAILED - fix these errors before continuing:\n${snippet}"
+      }
+  }
 }
 
 func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolResultItem ! {Process} {

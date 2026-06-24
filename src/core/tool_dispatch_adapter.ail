@@ -88,6 +88,7 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
       kv("bytes_written", jnum(_int_to_float(r.bytes_written))),
       kv("sha256", js(r.sha256)),
       kv("diff", js(r.diff)),
+      kv("typecheck", js(r.typecheck)),
       kv("exit_code", jnum(0.0))
     ]),
 
@@ -101,6 +102,7 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
       kv("applied_edits", jnum(_int_to_float(r.applied_edits))),
       kv("dry_run", jb(r.dry_run)),
       kv("match_strategy", js(r.match_strategy)),
+      kv("typecheck", js(r.typecheck)),
       kv("exit_code", jnum(0.0))
     ]),
 
