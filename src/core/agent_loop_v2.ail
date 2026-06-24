@@ -549,7 +549,15 @@ func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
         Ok(j) => j,
         Err(_) => jo([])
       };
-      let stdout_str = json_field_str(inner, "stdout", "");
+      -- WriteFile/EditFile results carry their unified diff under a `diff`
+      -- key (tool_result_item_to_json), not `stdout`. The TUI's edit-diff
+      -- renderer (ui.ts parseUnifiedDiff) reads the diff out of `stdout`,
+      -- so forward `diff` into `stdout` when there's no real stdout. Without
+      -- this, edit-tool rows show no diff (issue #19: TUI edit diff disabled
+      -- after the upstream AILANG port).
+      let stdout_raw = json_field_str(inner, "stdout", "");
+      let diff_str = json_field_str(inner, "diff", "");
+      let stdout_str = if stdout_raw == "" then diff_str else stdout_raw;
       let stderr_str = json_field_str(inner, "stderr", "");
       -- If the payload flags itself as an error (policy_denied_message
       -- or delegated_deferred_message both set `error: true`), drive
