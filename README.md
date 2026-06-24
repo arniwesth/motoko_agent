@@ -113,8 +113,8 @@ Model selection and model discovery are separate:
   a different catalog.
 - Known per-model context windows also live in `.motoko/model-catalog.json`
   under `context_limits`. Motoko uses them for context telemetry and
-  compaction; unknown models fall back to broad provider-family defaults or no
-  compaction when the limit is unknown.
+  compaction. Unknown or uncatalogued models have no known limit, so
+  compaction is skipped rather than guessed from provider-family prefixes.
 - Dynamic suggestions from `OPENAI_BASE_URL` and OpenRouter are merged into the
   picker catalog at runtime. They do not override the selected runtime model.
 - Ollama models are selected explicitly with `ollama/<model>`, either in

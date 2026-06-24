@@ -21,36 +21,22 @@ pure func est0(system: string) -> int
   ]
   { estimate_tokens([], system) }
 
--- Broad provider-family fallback. Concrete model limits live in
--- .motoko/model-catalog.json under context_limits so routine catalog updates do
--- not require AILANG code changes.
-pure func context_limit_fallback_base(model: string) -> int
-  ensures { result >= 0 }
-  {
-    if startsWith(model, "anthropic/") then 200000
-    else if startsWith(model, "openai/") then 128000
-    else if startsWith(model, "google/") then 1000000
-    else if startsWith(model, "gemini-") then 1000000
-    else if startsWith(model, "deepseek/deepseek-v4") then 1000000
-    else 0
-  }
-
+-- Concrete model limits live in .motoko/model-catalog.json under
+-- context_limits. Without a readable catalog, unknown means "no limit known"
+-- so callers fail open instead of guessing provider-family windows in code.
 export pure func context_limit_for(model: string) -> int
   ensures { result >= 0 }
   tests [
-    ("anthropic/some-future-model",                 200000),
-    ("gemini-new-model",                            1000000),
-    ("google/some-gemini-model",                    1000000),
-    ("openrouter/anthropic/claude-sonnet-4-5",      200000),
-    ("openrouter/openai/some-model",                128000),
+    ("anthropic/some-future-model",                 0),
+    ("gemini-new-model",                            0),
+    ("google/some-gemini-model",                    0),
+    ("openrouter/anthropic/claude-sonnet-4-5",      0),
+    ("openrouter/openai/some-model",                0),
     ("openrouter/whatever",                         0),
     ("totally-unknown",                             0)
   ]
   {
-    if startsWith(model, "openrouter/") then
-      context_limit_fallback_base(substring(model, length("openrouter/"), length(model)))
-    else
-      context_limit_fallback_base(model)
+    0
   }
 
 func catalog_path() -> string ! {Env, FS} {

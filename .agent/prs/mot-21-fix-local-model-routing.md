@@ -36,8 +36,9 @@ strings as OpenRouter routing ids.
   `.motoko/model-catalog.json`, with `MOTOKO_MODELS_FILE` support for custom
   catalogs.
 - Update context usage, budget planning, extension context, and structural
-  compaction to read catalog-backed context limits, while keeping broad
-  provider-family fallbacks for unknown models.
+  compaction to read catalog-backed context limits. Unknown or uncatalogued
+  models have no known limit, so compaction is skipped rather than guessed from
+  provider-family prefixes.
 - Resolve the runtime model consistently as:
   `MODEL` env var > profile `agent.model` > `anthropic/claude-sonnet-4-6`,
   then publish the resolved value back to `process.env.MODEL` so helper paths
@@ -73,6 +74,20 @@ strings as OpenRouter routing ids.
 - `make -n build`
   - Confirms build, sync, lock, extension boot, and core check commands use
     upstream `ailang` from PATH.
+- `ailang check src/core/context_usage.ail`
+  - Passes.
+- `ailang test src/core/context_usage.ail`
+  - Passes: 11 tests.
+- `ailang check scripts/smoke_catalog_compaction.ail`
+  - Passes.
+- `ailang run --caps IO,FS,Env --entry main scripts/smoke_catalog_compaction.ail`
+  - Passes and confirms:
+    - `catalog_context_limit_for("test/tiny")` reads the checked-in catalog
+      limit of `100`.
+    - `compact_step_with_limit` reports `compaction_exhausted` when that
+      catalog limit is exceeded by non-elidable history.
+    - uncatalogued provider-prefixed models resolve to `0` instead of a
+      guessed provider-family limit.
 - `cd src/tui && bun run build`
   - Passes.
 - `cd src/tui && bun run test -- src/models.test.ts src/runtime-process.stream-protocol.test.ts`
