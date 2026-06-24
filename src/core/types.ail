@@ -128,7 +128,8 @@ export type ToolResultItem
       path:          string,
       bytes_written: int,
       sha256:        string,
-      diff:          string
+      diff:          string,
+      typecheck:     string
     })
   | EditFileResult({
       id:                 string,
@@ -139,7 +140,8 @@ export type ToolResultItem
       first_changed_line: int,
       applied_edits:      int,
       dry_run:            bool,
-      match_strategy:     string
+      match_strategy:     string,
+      typecheck:          string
     })
   | BashExecResult({
       id:        string,
