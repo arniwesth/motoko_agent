@@ -35,6 +35,9 @@ strings as OpenRouter routing ids.
 - Move the static model picker catalog and known context windows into
   `.motoko/model-catalog.json`, with `MOTOKO_MODELS_FILE` support for custom
   catalogs.
+- Preserve newer model context windows, such as
+  `ollama/qwen3.6:35b-a3b-mxfp8`, as catalog entries rather than hardcoded
+  AILANG branches.
 - Update context usage, budget planning, extension context, and structural
   compaction to read catalog-backed context limits. Unknown or uncatalogued
   models have no known limit, so compaction is skipped rather than guessed from
@@ -78,6 +81,10 @@ strings as OpenRouter routing ids.
   - Passes.
 - `ailang test src/core/context_usage.ail`
   - Passes: 11 tests.
+- `jq empty .motoko/model-catalog.json`
+  - Passes.
+- `jq -e '.context_limits["ollama/qwen3.6:35b-a3b-mxfp8"] == 262144' .motoko/model-catalog.json`
+  - Passes.
 - `ailang check scripts/smoke_catalog_compaction.ail`
   - Passes.
 - `ailang run --caps IO,FS,Env --entry main scripts/smoke_catalog_compaction.ail`
