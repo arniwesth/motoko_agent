@@ -1134,8 +1134,22 @@ func loop_v2(
           kv("stream_id", js(stream_id)),
           kv("status", js("errored"))
         ]);
-        let _ = emit_run_summary(session_id, model, totals, step_idx, 5, e.message, started_at_ms);
-        Err(e)
+        -- M-MOTOKO-STREAM-RETRY: a stream/parse error mid-step (e.g. AILANG std/xml
+        -- choking on malformed DOCX XML in the model's work -> "XML syntax error ...
+        -- unexpected EOF") is RECOVERABLE. Re-issue the step (fresh generation)
+        -- instead of KILLING the whole run with finish=error. Same pattern as #13
+        -- (length) / #19 (empty). Bounded by step_budget. Disable: MOTOKO_RETRY_STREAM_ERROR=0.
+        let retry_stream = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
+        if retry_stream && step_budget > 1 then {
+          let _ = emit_event(session_id, "stream_error_retry", [
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("error", js(e.message))
+          ]);
+          loop_v2(rt, task, env_url, hybrid_tools, budget, model, msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, totals, next_provider, session_id, started_at_ms)
+        } else {
+          let _ = emit_run_summary(session_id, model, totals, step_idx, 5, e.message, started_at_ms);
+          Err(e)
+        }
       },
       Ok(result) => {
         let n_calls = List.length(result.tool_calls);
