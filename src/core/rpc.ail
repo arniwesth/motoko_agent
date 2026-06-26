@@ -17,7 +17,9 @@ import src/core/test/stub_step (LiveAI)
 import std/io     (println, exit)
 import std/json   (Json, encode, jo, ja, kv, js, jb, jnum)
 import std/list   (foldl)
-import std/string (length)
+import std/string (length, substring, contains)
+import std/env    (getEnvOr)
+import std/math   (intToFloat)
 import std/fs     (readFile, fileExists)
 import src/core/types  (Msg, version)
 import src/core/prompts (with_cache_hint, with_agents_context)
@@ -193,7 +195,12 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   ])));
 
   let hint = get_hint(task);
-  let system_md_path = cfg.agent.system_prompt;
+  -- System prompt is env-AUTHORITATIVE: the SYSTEM_MD env wins over any profile config
+  -- that may silently set system_prompt="" (the AI-101 failure where AILANG tasks lost
+  -- their language reference). One explicit source of truth, env over config.
+  let cfg_system_path = cfg.agent.system_prompt;
+  let env_system_path = getEnvOr("SYSTEM_MD", "");
+  let system_md_path = if env_system_path != "" then env_system_path else cfg_system_path;
   let raw_system =
     if system_md_path == "" then ""
     else if fileExists(system_md_path)
@@ -224,6 +231,27 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     context_limit: context_limit_for(model)
   };
   let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_hint);
+
+  -- OBSERVABILITY + LOUD FAILURE (no silent fallbacks): record exactly what system prompt
+  -- the model receives on every run, and shout if a source was set but produced nothing.
+  -- After 4 days of guessing, "is the AILANG reference served?" is now one line in the log.
+  let sys_chars = length(system);
+  let sys_prev_end = if sys_chars < 160 then sys_chars else 160;
+  let _ = emit(encode(jo([
+    kv("type", js("system_prompt_built")),
+    kv("source", js(if env_system_path != "" then "env:SYSTEM_MD"
+                    else if cfg_system_path != "" then "config:agent.system_prompt"
+                    else "none")),
+    kv("chars", jnum(intToFloat(sys_chars))),
+    kv("has_ailang_reference", jb(contains(system, "AILANG LANGUAGE REFERENCE"))),
+    kv("preview", js(substring(system, 0, sys_prev_end)))])));
+  let _ =
+    if system_md_path != "" && raw_system == "" then {
+      let _ = emit(encode(jo([
+        kv("type", js("error")),
+        kv("message", js("SYSTEM PROMPT EMPTY: '${system_md_path}' was set but produced no content — model running WITHOUT its system prompt."))])));
+      ()
+    } else ();
 
   let init: [Msg] = [
     { role: "system", content: system, tool_calls: [], tool_call_id: "" },
