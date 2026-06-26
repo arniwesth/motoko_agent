@@ -305,6 +305,12 @@ export class RuntimeProcess {
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
       EXA_API_KEY: process.env.EXA_API_KEY,
       CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
+      // SYSTEM_MD — path to the system-prompt file (for AILANG tasks, the language
+      // reference). rpc.ail reads it via getEnvOr("SYSTEM_MD"). Without forwarding it
+      // here the explicit allowlist scrubs it (same gotcha as MOTOKO_PERSIST_RETRIES /
+      // MOTOKO_REPO above), so the model runs with NO system prompt — silently, chars=0.
+      // This was invisible for days until the system_prompt_built event surfaced it.
+      SYSTEM_MD: process.env.SYSTEM_MD ?? "",
       AILANG_FS_SANDBOX: workdir,
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
       // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
