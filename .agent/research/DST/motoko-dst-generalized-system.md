@@ -7,6 +7,7 @@ Related:
 - `.agent/research/DST/deterministic-simulation-testing-for-agent-loop-compaction.md`
 - PR #75: actual-token compaction and system-message pinning
 - PR #76: out-of-workspace `SYSTEM_MD` materialization
+- AILANG docs MCP: `.mcp.json` -> `https://mcp.ailang.sunholo.com/mcp/`
 
 ## Thesis
 
@@ -39,6 +40,24 @@ The test oracle should be structural:
 - Did extension hooks receive the right slice of state?
 - Did cost/context counters advance monotonically and drive the next decision?
 
+## AILANG Docs Grounding
+
+This draft was checked against the AILANG docs MCP configured in `.mcp.json`.
+
+Important version note: the local repo declares `ailang = ">=0.24.2"` and the local binary reports `AILANG v0.24.2`, but the MCP docs server does not expose a `v0.24.2` snapshot. It reported `latest = 0.25.0`, so the grounding below uses the MCP `latest` docs and stdlib metadata. Anything used for implementation should be validated against the local `ailang check`/`ailang test` binary before landing.
+
+Grounding points from MCP:
+
+- AILANG has first-class unit and property tests in the docs (`test "name" = expr`, `property "name" (...) = expr`) and property tests generate random cases with shrinking.
+- Property-test configuration is documented through environment variables: `ailang_test_runs`, `ailang_test_seed`, `ailang_test_max_size`, `ailang_test_min_int`, and `ailang_test_max_int`.
+- AILANG's effect system is explicit and capability-based; side effects must appear in signatures and be granted at runtime through `--caps`.
+- The docs explicitly call out testing benefits from explicit effects and describe mocking effects as planned, while pure function testing is current. That supports starting DST with pure policy tests and explicit fakes rather than assuming a mature effect-handler mocking layer.
+- `std/fs` operations are sandboxed and respect `AILANG_FS_SANDBOX`, which directly grounds the PR #76 scenario.
+- `std/env` exposes environment variables through snapshot semantics and allowlist enforcement; DST should test child-env preparation in TypeScript and not assume all parent env vars are visible inside AILANG.
+- `std/rand` provides `rand_seed(seed)` and deterministic random generation via the `Rand` effect. This can support AILANG-native seeded fuzzing where the local version supports it.
+- `std/trace` exposes `spanStart`, `spanEnd`, and `event` with the `Trace` effect. `std/trace_test` exposes trace-existence assertions. This supports an optional trace-backed oracle, though the first DST trace recorder can simply emit normalized JSONL from the harness.
+- `std/ai` defines the multi-turn protocol shape used by Motoko: `Message`, `ToolCall`, `ToolSchema`, `StepResult`, `AIError`, `step`, `stepWithCache`, and streaming variants. Its docs state that tool results come back as `role="tool"` messages whose `tool_call_id` matches a prior `ToolCall.id`, which grounds the tool-shape invariants.
+
 ## Layers
 
 A useful Motoko DST system has four layers. Each layer can be tested independently, and some scenarios intentionally cross layers.
@@ -69,6 +88,12 @@ input data -> pure function -> invariant checks
 
 This layer is cheap and should run on every PR.
 
+AILANG fit:
+
+- Use regular `ailang test` for pure helpers when the syntax is supported locally.
+- Use existing inline `tests [(...), ...]` style where it fits the current repo's code style.
+- For scenario-like pure smokes that need richer reporting, `ailang run --caps IO --entry main ...` remains reasonable.
+
 ### Layer 1: Loop-State DST
 
 Scope:
@@ -92,6 +117,11 @@ initial loop state
 
 This is where PR #75 belongs.
 
+AILANG fit:
+
+- Because the docs describe effect mocking as planned rather than complete, the first implementation should use explicit dependency injection and scripted providers rather than depending on language-level effect handlers.
+- Provider fakes should return `std/ai.StepResult`-shaped values and record `std/ai.Message` arrays.
+
 ### Layer 2: Harness-Boundary DST
 
 Scope:
@@ -114,6 +144,11 @@ parent env + temp filesystem + profile
 
 This is where PR #76 belongs.
 
+AILANG fit:
+
+- `std/fs` sandbox behavior and `std/env` snapshot/allowlist behavior mean this layer belongs mostly in TypeScript harness tests, with a minimal child probe if needed.
+- The child probe should not assume ambient env access; the harness must explicitly forward/allow the env vars under test.
+
 ### Layer 3: End-to-End Deterministic Harness DST
 
 Scope:
@@ -135,6 +170,11 @@ workspace fixture
 ```
 
 This layer is slower but gives confidence that Layers 1 and 2 compose.
+
+AILANG fit:
+
+- Use `--ai-stub` or scripted providers for deterministic AI behavior.
+- Use `--caps` narrowly and deliberately. The relevant caps for Motoko loop tests are usually some subset of `AI,FS,Process,IO,Env,Net,SharedMem,Clock,Stream,Trace`.
 
 ## Core Components
 
@@ -179,6 +219,11 @@ scenario_end
 
 The trace is the object under test. Assertions should read from the trace.
 
+Implementation note:
+
+- AILANG's `std/trace` can emit `Trace` events, and `std/trace_test` can assert span existence. That is useful for AILANG-native trace assertions.
+- For cross-layer Motoko DST, a normalized JSONL trace is still preferable as the portable boundary format because the TypeScript harness, AILANG runtime, and subprocess probes can all emit it.
+
 ### Invariant Library
 
 Common invariants should be reusable functions:
@@ -205,6 +250,7 @@ Provider fake:
 - returns scripted `StepResult`s
 - records each input message list
 - supports explicit `input_tokens`, `output_tokens`, `finish_reason`, `tool_calls`
+- uses `std/ai` protocol types where possible
 
 Extension fake:
 
@@ -233,6 +279,11 @@ Filesystem fixture:
 - creates external files outside the workspace
 - creates profile mirrors
 - records materialized files
+
+Random generator:
+
+- for AILANG-native fuzzing, use `std/rand.rand_seed(seed)` plus `rand_int`, `rand_bool`, and `rand_float` where supported by the local binary
+- for TypeScript harness-boundary fuzzing, use a deterministic seeded RNG in TS and persist the seed in the failure trace
 
 ## DST Plus Fuzzing
 
@@ -412,6 +463,20 @@ first failed invariant
 ```
 
 Seeded generators should be deterministic across machines as much as possible. Avoid depending on wall time, filesystem listing order, live network, provider output, or platform-specific temp path names unless those values are explicitly normalized in the trace.
+
+AILANG-specific seed controls:
+
+```bash
+ailang_test_runs=500 ailang_test_seed=42 ailang test path/to/test.ail
+```
+
+For scenario runners invoked with `ailang run`, pass the seed explicitly through args or env:
+
+```bash
+DST_SEED=42 ailang run --caps IO,Rand --entry main scripts/smoke_dst_loop.ail
+```
+
+If using `std/rand`, call `rand_seed(seed)` at the beginning of each generated scenario so the sequence is not affected by previous tests.
 
 ### Shrinking
 
@@ -707,6 +772,12 @@ Nightly:
 DST_SEEDS=500 make test_dst_seeded
 ```
 
+AILANG property-test variant:
+
+```bash
+ailang_test_runs=500 ailang_test_seed=42 ailang test src/core/test/dst
+```
+
 Optional provider smoke:
 
 ```bash
@@ -734,3 +805,21 @@ The provider smoke should not be the primary regression gate.
 - Should compaction thresholds and headroom be exported constants so tests do not duplicate policy values?
 - Should event traces become the canonical DST output format across both AILANG and TypeScript layers?
 - Can the existing `run_v2_with_stub` path be extended to record provider-call messages without invasive changes?
+- Which AILANG testing syntax is safest for this repo's pinned local version: top-level `property` tests from the latest docs, or the existing inline `tests [(...)]` style already used in `src/core/*.ail`?
+- Should AILANG-native DST use `std/trace`/`std/trace_test`, normalized JSONL, or both?
+
+## MCP Sources Consulted
+
+Queried through the configured AILANG MCP endpoint:
+
+- `ailang_versions`: latest available docs snapshot is `0.25.0`; `v0.24.2` was not available.
+- `docs_nav`: confirmed docs include `guides/testing`, `reference/effects`, `guides/evaluation/*`, `guides/traces`, and stdlib reference pages.
+- `docs_search("Testing Guide")`: returned AILANG Testing Guide with unit tests, property tests, shrinking, and env-based configuration.
+- `docs_search("Effect System")`: returned effect-system docs covering explicit effects, capability grants, FS sandbox, env/process effects, and testing with effects.
+- `effects_catalog`: confirmed core effect/capability mapping for `IO`, `FS`, `Net`, `AI`, `Env`, `Clock`, `Process`, and `Stream`.
+- `stdlib_modules`: confirmed availability and summaries for `std/ai`, `std/fs`, `std/env`, `std/process`, `std/rand`, `std/trace`, `std/trace_test`, `std/json`, and related modules.
+- `stdlib_module(std/ai)`: confirmed protocol types and `step`/`stepWithCache` shape.
+- `stdlib_module(std/fs)`: confirmed `readFile`, `readFileResult`, `writeFile`, `mkdirAll`, `fileExists`, and sandbox behavior.
+- `stdlib_module(std/env)`: confirmed env snapshot and allowlist semantics.
+- `stdlib_module(std/rand)`: confirmed `rand_seed` and deterministic random generation functions.
+- `stdlib_module(std/trace)` and `std/trace_test`: confirmed trace event/span emission and trace-existence assertions.
