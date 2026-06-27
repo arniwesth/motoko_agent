@@ -21,6 +21,63 @@ Inline comments tagged 🔴 Critical / 🟡 Major / 🔵 Minor. Summary:
 - ✅ Grounding accurate where checked: std/rand (rand_seed/int/bool/float), std/trace_test, std/ai, and the
   v0.24.2-absent / 0.25.0-latest version gap all confirmed via MCP.
 -->
+<!-- REVIEW BANNER — 2026-06-27, by GLM 5.2 (z-ai/glm-5.2), verified against source + AILANG MCP (v0.24.2 local).
+Independent re-review. Tagged 🔴 Critical / 🟡 Major / 🔵 Minor. The Claude Opus 4.8 banner's core invariants
+(ephemeral compaction, emergency-on-estimate, stub provider-call recording gap, scenario overlap) were
+RE-CONFIRMED against source. Findings below are additions and corrections.
+
+🔴 OVERRULES the Opus 4.8 banner's implication that loop-level checks already run (see §Where This Should Live,
+lines 765-773). They do not. `ailang check src/core/test/stub_step.ail` passes (imports only
+pkg/sunholo/motoko_ext_abi/types), but `ailang check scripts/smoke_v2_compaction_full_loop.ail` FAILS:
+  Error: failed to load pkg/sunholo/motoko_ext_test_dummy/register: registry package ... cache not found;
+  run 'ailang install sunholo/motoko_ext_test_dummy@0.2.2'
+The registry cache holds only 2 of ~14 ext packages. run_v2_with_stub → agent_loop_v2 → registry_generated.ail
+pulls in ALL extension register modules, so every full-loop smoke is hard-blocked. The doc's own deferral
+(lines 793-798, "If AILANG package-resolution remains unstable...") is therefore CURRENT, not conservative.
+Layer-1/3 DST cannot land until `ailang install` is part of CI — and the CI shapes in §CI Shape (lines 800-826)
+never mention it. This must be step zero of §Implementation Strategy, not a side-note.
+
+🔴 Layer 0 is already partially RED. integration_tests.ail#test_compaction_fires_above_70pct fails ("expected
+true, got false"). The 75k headroom (compaction.ail:60, `effective = limit - 75000`) makes test/tiny
+(context_limit_for=100) return effective<=0 → usage_percent=0 → compact_step Ok, never Err; the test comment
+still cites the pre-headroom chars/4 estimator. compaction.ail's own unit tests pass 6/6. The doc proposes
+Layer 0 as "cheap and should run on every PR" (line 110) — the foundation isn't standing. Fixing the stale
+headroom tests is a prerequisite to adding dst/scenarios.ail; landing green DST beside red Layer-0 is priority
+inversion.
+
+🟡 std/clock grounding (lines 74-79) is hollow as prescribed. MCP stdlib_module(std/clock)@0.25.0 exports ONLY
+now() and sleep(ms), both with the Clock effect. There is NO visible API to activate deterministic/virtual-time
+mode through this module surface — the "virtual time in deterministic mode" is in the docstring only, likely a
+runtime/capability flag not exposed here. The Opus banner says "ground on std/clock for virtual time" without
+noting you cannot drive virtual time through these two calls alone. Before treating std/clock as load-bearing
+grounding, confirm how deterministic mode is enabled (likely a runtime flag, not a stdlib call).
+
+🟡 Missing first-class invariant — systematic under-pressure. Because the loop recurses on FULL uncompacted
+msgs (agent_loop_v2.ail:1192, `msgs ++ [assistant_msg]`) but last_input_tokens reflects the COMPACTED payload
+sent at the prior step (:1158 dispatch_step(compacted_msgs)), step N+1's tier selection runs against a LARGER
+history than the count that selected it. Actual-token compaction under-pressures relative to real payload
+growth. This is a genuine bug class, currently only hinted at in an Opus inline comment (line 596-602). Promote
+it to a named invariant in the library (§Invariant Library, line 248): "tier pressure measured on compacted
+payload but elision applied to full uncompacted history."
+
+🟡 Option B recommendation (§Architecture Options, lines 469-516) should probably be Option A. The doc
+recommends extracting prepare_provider_messages as "pure or mostly pure." But on_pre_step carries a broad
+effect row (stub_step.ail:220: IO,Process,FS,AI,Env,Net,SharedMem,Clock,Stream), so the helper is NOT pure and
+drags that row into its signature. Worse, extraction does not capture the ephemeral payload — the load-bearing
+invariant is "what was SENT to the provider" (agent_loop_v2.ail:1158). Option A (a recorder inside dispatch_step
+at the seam where msgs are consumed) captures exactly that. Reverse the recommendation: A first, B only if a
+clean pure subset is later separable.
+
+🔵 Version gap understated (line 60). MCP `available` jumps 0.16.1 → 0.25.0 — versions 0.17 through 0.24 are
+ALL absent, not merely "v0.24.2 not available." Grounding a 0.24.2 binary against 0.25.0 docs is a 9-version
+extrapolation; std/clock / std/rand shape cannot be confirmed for 0.24.2. The "validate against local ailang
+check" caveat (line 60) is correct but the gap is larger than framed.
+
+🔵 compaction.ail's module header (lines 9-14) documents only the 70/85/95 estimate table as canonical; the
+60/75/85 actual-token table lives only in inline comments (lines 152-158). The doc's §AILANG Docs Grounding
+surveys the stdlib surface but the parallel source-side inconsistency is more impactful — it's the file
+maintainers read first.
+-->
 
 ## Thesis
 

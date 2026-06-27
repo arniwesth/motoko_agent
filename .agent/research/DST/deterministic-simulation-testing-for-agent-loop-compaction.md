@@ -12,6 +12,54 @@ Review comments are inline below, tagged 🔴 Critical / 🟡 Major / 🔵 Minor
 - 🟡 Two live tier tables exist (60/75/85 actual vs 70/85 estimate-fallback); doc only documents one (see §Headroom Policy).
 - 🟡 Existing test infra (integration_tests.ail, ~15 smoke_v2_* scripts) not inventoried (see §Current Repo Observations).
 -->
+<!-- REVIEW BANNER — 2026-06-27, by GLM 5.2 (z-ai/glm-5.2), verified against source + AILANG MCP (v0.24.2 local).
+Independent re-review. Tagged 🔴 Critical / 🟡 Major / 🔵 Minor. The Claude Opus 4.8 banner's load-bearing
+invariants (ephemeral compaction, emergency-on-estimate, two tier tables, stub provider-call gap) were all
+RE-CONFIRMED against source. The findings below are additions and corrections.
+
+🔴 OVERRULES the Opus 4.8 banner's "package-resolution blocked appears STALE" claim (line 11). It is NOT stale;
+the Opus check is itself wrong. `ailang check src/core/test/stub_step.ail` passes (imports only
+pkg/sunholo/motoko_ext_abi/types), but `ailang check scripts/smoke_v2_compaction_full_loop.ail` FAILS:
+  Error: module loading error: failed to load pkg/sunholo/motoko_ext_test_dummy/register: registry package
+  sunholo/motoko_ext_test_dummy cache not found at /home/motoko/.ailang/cache/registry/.../0.2.2; run 'ailang install'
+The registry cache currently holds only 2 of ~14 ext packages (motoko_ext_abi, motoko_ext_compaction_ai).
+run_v2_with_stub → agent_loop_v2 → registry_generated.ail pulls in ALL extension register modules, so every
+full-loop smoke (smoke_v2_compaction_full_loop, smoke_v2_cost_budget_full_loop, ...) is hard-blocked. The doc's
+original "Loop-level checks are currently blocked by AILANG package-resolution errors" (line 566) is CURRENT and
+CORRECT. Layer-1/3 DST cannot land until `ailang install` is part of the workflow — and neither doc's CI shape
+mentions it.
+
+🔴 integration_tests.ail#test_compaction_fires_above_70pct is currently RED (ran it: "expected true, got false").
+Root cause: the 75k output headroom added in compaction.ail:60 (`effective = limit - 75000`) makes test/tiny
+(context_limit_for=100, context_usage.ail:46) hit `effective <= 0` → usage_percent returns 0 (compaction.ail:61)
+→ compact_step returns Ok, never Err. The test's own comment still cites the pre-headroom chars/4 estimator.
+This is exactly the stale-test rot the DST doc worries about, sitting in the infra the Opus banner calls
+"sufficient." compaction.ail's own unit tests pass 6/6; the rot is in integration_tests.ail and the full-loop
+smokes (see also 🔴 below). Fixing this is a prerequisite, not a follow-up — landing a green DST suite beside a
+red Layer-0 test is priority inversion.
+
+🔴 smoke_v2_compaction_full_loop.ail is stale for the same headroom reason. Its threshold comments
+(lines 36-41, 83-114) use chars/4 vs test/tiny limit 100 with NO headroom. test_tier3_history_refused (expects
+Err) cannot pass once it loads, via the same path that just failed in integration_tests. The doc flagged only
+smoke_v2_compaction_tiers.ail as stale (line 565); full_loop.ail and integration_tests.ail are stale too.
+
+🟡 Actual-token path also FAILS OPEN for small models — undocumented edge. compact_step_actual:162-163:
+`effective = context_limit_for(model) - 75000; pct = if effective > 0 then … else 0`. For any model with
+context_limit <= 75000 (e.g. test/tiny, openai/gpt-4o at 128k is fine, but the *principle* bites anything <=75k),
+pct=0 → Ok(msgs) regardless of actual_input. No compaction, no emergency, even at 100% actual usage. The
+"Actual Tokens Drive Compaction" invariant list (lines 139-146) does not cover this; only the estimate-path
+"limit<=75000 → 0%" invariant (line 179) does. Add: "actual_input path fails open when effective<=0".
+
+🔵 compaction.ail's own module header (lines 9-14) documents ONLY the 70/85/95 table as canonical; the
+60/75/85 actual-token table lives only in the inline comment at lines 152-158. A header reader wouldn't know
+the actual path exists. The doc caught the doc-side omission; the source-side omission is parallel and worse
+(it's the file maintainers read first).
+
+🔵 Version gap understated. MCP `available` jumps 0.16.1 → 0.25.0 — versions 0.17 through 0.24 are ALL absent,
+not just "v0.24.2 not available." Grounding a 0.24.2 binary against 0.25.0 docs is a 9-version extrapolation;
+std/clock / std/rand shape cannot be confirmed for 0.24.2. The "validate against local ailang check" caveat is
+right but the gap is larger than framed.
+-->
 
 ## Summary
 
