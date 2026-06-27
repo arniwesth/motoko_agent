@@ -141,7 +141,7 @@ func parse_edit_ops_rec(xs: [Json]) -> [EditOp] {
 }
 
 export pure func backend_for(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBackend {
-  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" then
+  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" || call.tool == "EditDecl" then
     if ohmy_pi then Delegated else Native
   else if call.tool == "BashExec" || call.tool == "RunTests" then
     if needs_delegation_for_process(parse_exec_from_args(call.arguments)) then Delegated else Native
@@ -172,6 +172,8 @@ func run_native_call(call: ToolCallEnvelope, workdir: string) -> ToolResultItem 
     run_write_file(call.id, arg_string(args, "path", ""), arg_string(args, "content", ""), workdir)
   else if call.tool == "EditFile" then
     run_edit_file(call.id, arg_string(args, "path", ""), parse_edit_ops(arg_json(args, "edits")), arg_bool(args, "dry_run", false), arg_string(args, "expected_sha256", ""), workdir)
+  else if call.tool == "EditDecl" then
+    run_edit_decl(call.id, arg_string(args, "path", ""), arg_string(args, "decl", ""), arg_string(args, "new_body", ""), workdir)
   else if call.tool == "BashExec" then
     run_process_result("BashExec", call.id, parse_exec_from_args(args))
   else if call.tool == "RunTests" then
@@ -618,6 +620,33 @@ func run_write_file(id: string, path: string, content: string, workdir: string) 
   }
 }
 
+func run_edit_decl(id: string, path: string, decl: string, new_body: string, workdir: string) -> ToolResultItem ! {FS, Process} {
+  match validate_path_common("EditDecl", id, path, workdir) {
+    Err(e) => e,
+    Ok(_) => {
+      let resolved = resolve_workdir_path(workdir, path);
+      if not fileExists(resolved) then
+        ToolErrorResult({ id: id, tool: "EditDecl", message: "file does not exist: ${path}" })
+      else {
+        -- Stage the new declaration source, then splice it by parsed AST span via
+        -- `ailang ast-edit replace` (preserves the rest of the file byte-for-byte).
+        let tmp = "${resolved}.editdecl.new";
+        match writeFileResult(tmp, new_body) {
+          Err(msg) => ToolErrorResult({ id: id, tool: "EditDecl", message: "cannot stage new body: ${msg}" }),
+          Ok(_) => match exec("ailang", ["ast-edit", "replace", "--file", resolved, "--decl", decl, "--new", tmp, "--in-place"]) {
+            Err(err) => ToolErrorResult({ id: id, tool: "EditDecl", message: process_error_to_string(err) }),
+            Ok(out) =>
+              if out.exitCode == 0 then
+                WriteFileResult({ id: id, path: path, bytes_written: length(new_body), sha256: sha256Hex(new_body), diff: "(EditDecl: replaced top-level decl '${decl}')" })
+              else
+                ToolErrorResult({ id: id, tool: "EditDecl", message: "ast-edit replace failed (decl '${decl}' not found?): ${toString(out.stderr)}" })
+          }
+        }
+      }
+    }
+  }
+}
+
 func path_dirname(path: string) -> string {
   if startsWith(path, "/") then {
     let rel = substring(path, 1, length(path));
@@ -993,7 +1022,7 @@ func t_normalize_relative_path() -> bool
 -- use the normal delegation check (streaming/hard-cancel requirements).
 -- See: design_docs/planned/m-motoko-path-doubling-v2.md
 export pure func backend_for_v2(call: ToolCallEnvelope, ohmy_pi: bool) -> ToolBackend {
-  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" then
+  if call.tool == "ReadFile" || call.tool == "WriteFile" || call.tool == "EditFile" || call.tool == "Search" || call.tool == "EditDecl" then
     Native
   else
     backend_for(call, ohmy_pi)

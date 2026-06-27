@@ -66,6 +66,12 @@ pure func search_schema() -> ToolSchema = {
 
 -- The full tool catalog motoko_agent advertises to the model. Pass this
 -- to upstream `runTools(model, msgs, tools(), dispatch, budget)`.
+pure func edit_decl_schema() -> ToolSchema = {
+  name: "EditDecl",
+  description: "Replace ONE top-level declaration (function/type) by name via its parsed AST span; the rest of the file is preserved byte-for-byte. Prefer this for whole-decl rewrites in a large file (far cheaper than re-emitting the file with WriteFile). Use EditFile for small intra-decl substring edits; WriteFile for new files.",
+  parameters: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"decl\":{\"type\":\"string\",\"description\":\"Top-level declaration name to replace\"},\"new_body\":{\"type\":\"string\",\"description\":\"Full new source text for the declaration\"}},\"required\":[\"path\",\"decl\",\"new_body\"]}"
+}
+
 export pure func tools() -> [ToolSchema] {
   [
     read_file_schema(),
@@ -73,7 +79,8 @@ export pure func tools() -> [ToolSchema] {
     edit_file_schema(),
     bash_exec_schema(),
     run_tests_schema(),
-    search_schema()
+    search_schema(),
+    edit_decl_schema()
   ]
 }
 
