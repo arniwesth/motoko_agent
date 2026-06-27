@@ -17,6 +17,8 @@ Real-provider tests are insufficient as the primary regression mechanism. They a
 
 We need a deterministic test system that drives production transition code where practical, records boundary traces, and asserts structural invariants rather than final model prose.
 
+The AILANG docs used for this ADR come from the MCP configured in `.mcp.json`. The local repo targets AILANG `>=0.24.2`, and the local binary observed during research was `v0.24.2`; the MCP docs expose `latest = 0.25.0` but no `0.24.x` snapshot. Therefore AILANG test syntax, stdlib helpers, and any property-test APIs are design inputs only until validated with the local `ailang check` or `ailang test`.
+
 This ADR is based on:
 
 - `.agent/research/DST/motoko-dst-generalized-system.md`
@@ -36,6 +38,22 @@ DST will mean:
 5. Report scenario id, seed, and trace on failure.
 
 The system will use explicit scripted fakes and recorders rather than assuming mature AILANG effect-handler mocking. AILANG latest docs describe effect mocking as planned, while the local repo currently uses explicit stubs such as `run_v2_with_stub`.
+
+## Decision Drivers
+
+- Deterministic replay must work without Ollama, OpenRouter, or live network.
+- Tests must observe boundary payloads, not infer correctness from final model prose.
+- The first implementation should use existing Motoko test seams before introducing a new framework tree.
+- CI must not hide failures behind missing AILANG package-cache state.
+- Seeded generation should extend fixed scenario tests, not replace them.
+- Time, random, filesystem, and env observations must be normalized or explicitly controlled.
+
+## Constraints
+
+- Layer 1 and Layer 3 tests that import `agent_loop_v2` also import `src/core/ext/registry_generated.ail`; dependency hydration is a hard precondition, not a best-effort setup step.
+- `ailang lock` is not accepted as sufficient by itself unless a follow-up check proves all generated-registry imports resolve.
+- AILANG `std/clock` latest-doc metadata does not show how to enable virtual time. DST traces must normalize clock-derived fields until a local deterministic clock control is identified.
+- Real-provider and live-network calls are outside the DST oracle and remain supplemental smokes only.
 
 ## Layers
 
@@ -87,6 +105,8 @@ DST will use:
 - Harness-boundary fixtures for temp workspaces, external files, and env layouts.
 - Seeded generators for fuzzing scenario parameters after fixed scenarios are stable.
 
+Scenario ids are the stable public contract. Fixture representation can vary by layer in v1, but each scenario must report the same id in failures and traces.
+
 Canonical trace events should include:
 
 ```text
@@ -102,6 +122,21 @@ tool_result_appended
 loop_totals_updated
 scenario_end
 ```
+
+### Provider-Call Recording Contract
+
+The first required Layer 1 seam is a recorder around the scripted provider path. For every provider call, the trace should record at least:
+
+- scenario id and loop step index
+- normalized message payload passed to `dispatch_step`
+- pinned system-prefix projection
+- tool schema names or ids, if present
+- previous `last_input_tokens`
+- provider result `input_tokens`, `output_tokens`, `finish_reason`, and tool-call ids
+- selected compaction tier or enough input facts to recompute the tier
+- whether persisted loop history remains uncompacted after the call
+
+The recorder must not change production provider behavior. If full messages are too large for default output, the failure trace can include a bounded projection plus hashes, while the in-memory invariant checks can still inspect the complete payload.
 
 ## Initial Scenario Families
 
@@ -155,12 +190,14 @@ Before Layer 1 or Layer 3 DST is enabled:
 2. Ensure every package imported by `src/core/ext/registry_generated.ail` is available.
 3. Fix or retire stale compaction tests that still assume no output headroom, especially tests using `test/tiny`.
 4. Update compaction source comments to document both tier tables.
+5. Validate any AILANG test/property-test syntax against the local binary, not only MCP latest docs.
 
 ## Implementation Plan
 
 ### Phase 0: Restore Test Preconditions
 
 - Add dependency hydration to the test workflow.
+- Add a concrete import-resolution check for the full-loop path, for example `ailang check` on a script or test that imports `agent_loop_v2`.
 - Repair stale compaction tests around `context_limit - 75000`.
 - Keep current pure compaction checks green.
 
@@ -223,11 +260,12 @@ Fast PR gate:
 ```bash
 ailang lock
 make test_core
+ailang check scripts/smoke_v2_compaction_actual_dst.ail
 ailang run --caps IO --entry main scripts/smoke_v2_compaction_actual_dst.ail
 cd src/tui && bun test src/harness-dst.test.ts
 ```
 
-If `ailang lock` does not hydrate every registry dependency, CI must explicitly install missing packages before full-loop DST.
+If `ailang lock` does not hydrate every registry dependency, CI must explicitly install missing packages before full-loop DST. The lock/install step is only successful when the full-loop import-resolution check passes.
 
 Expanded gate:
 
@@ -243,6 +281,17 @@ DST_SEEDS=500 make test_dst_seeded
 ```
 
 Provider smokes remain optional and supplemental.
+
+## Acceptance Criteria
+
+The first DST implementation is acceptable when:
+
+- package hydration plus import-resolution checks pass in CI
+- known stale compaction tests are fixed or retired rather than ignored
+- a compaction DST scenario can prove that the provider payload was compacted while persisted loop history stayed uncompacted
+- the external `SYSTEM_MD` harness scenario fails against the buggy behavior from PR #76 and passes after materialization
+- every DST failure prints scenario id, seed when applicable, first failed invariant, and a normalized trace
+- no DST gate requires Ollama, OpenRouter, or live network
 
 ## Consequences
 
@@ -285,5 +334,3 @@ Rejected for v1. Fuzzing should be seeded, scenario-shaped, and invariant-driven
 - Should scenario fixtures be AILANG records, JSON files, TypeScript objects, or layer-specific?
 - Should traces be normalized JSONL everywhere, or should AILANG `std/trace` be used for Layer 1?
 - How should virtual time be enabled for `std/clock`, if needed?
-- Can provider-call recording be added without changing production provider behavior?
-
