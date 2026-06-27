@@ -4,6 +4,15 @@ Date: 2026-06-27
 Status: Research draft
 Related: `.agent/plans/DST_v1_Motoko_Core.md`, PR #75 compaction branch
 
+<!-- REVIEW BANNER — 2026-06-27, by Claude Opus 4.8, verified against source + AILANG MCP (v0.24.2 local / 0.25.0 docs).
+Review comments are inline below, tagged 🔴 Critical / 🟡 Major / 🔵 Minor. Summary:
+- 🔴 Emergency/exhaustion is gated on the chars/7 ESTIMATE, not actual tokens → Scenario 5 tests a near-dead path (see §Actual Tokens Drive Compaction, §Scenario 5).
+- 🔴 Compaction output is EPHEMERAL — never persisted to history; the loop recurses on full uncompacted msgs. Scenario assertions must target the provider-call payload, not stored state (see §Scenario 1).
+- 🟡 "Package resolution blocked" appears STALE — `ailang check` on stub_step passes and a full-loop stub smoke already runs (see §Current Repo Observations).
+- 🟡 Two live tier tables exist (60/75/85 actual vs 70/85 estimate-fallback); doc only documents one (see §Headroom Policy).
+- 🟡 Existing test infra (integration_tests.ail, ~15 smoke_v2_* scripts) not inventoried (see §Current Repo Observations).
+-->
+
 ## Summary
 
 Deterministic Simulation Testing (DST) is a strong fit for Motoko behaviors that are hard to test with ordinary unit tests and expensive or flaky to test against real providers. The current compaction branch is a good example: the correctness claim depends on a sequence of loop states, provider token telemetry, extension hooks, system-message handling, tool-call preservation, and compaction policy.
@@ -135,6 +144,16 @@ Invariants:
 - `actual_input >= 75% effective` keeps the last 5 tool results.
 - `actual_input >= 85% effective` enters emergency compaction.
 
+<!-- 🔴 REVIEW (Critical) — actual/estimate MIXING inside the emergency branch.
+`compact_step_actual` ENTERS emergency at actual pct>=85 (compaction.ail:164), but
+`try_emergency_compaction` then decides success/failure via `usage_percent` — the
+chars/7 ESTIMATE (compaction.ail:123-138), which is deliberately built to under-count.
+So the >=95% exhaustion gate is on a metric engineered to stay low: emergency will
+almost always return Ok(keep-3) and `ContextExhausted` is nearly unreachable through
+the actual-token path. The invariant list should add: "emergency exhaustion is gated on
+the ESTIMATE, not actual_input" and test that explicitly. This actual-vs-estimate split
+is exactly the bug class DST should catch — it must be named, not glossed. -->
+
 The critical DST scenario is a message list whose estimated size is small but whose previous `input_tokens` is above threshold. That proves the actual-token path is load-bearing.
 
 ### Tool Shape Preservation
@@ -160,6 +179,14 @@ Invariants:
 - models with `context_limit <= 75000` return 0% usage
 - known large-context models calculate usage against `limit - 75000`
 - `tool_calls.arguments` contributes to token estimate even when message `content` is small
+
+<!-- 🟡 REVIEW (Major) — there are TWO live tier tables; this doc documents only one.
+  • compact_step_actual (actual-token path):   60% keep-10, 75% keep-5, 85% emergency  (compaction.ail:159-167)
+  • compact_step      (estimate/step-0 path):   70% keep-10, 85% keep-5, 95% emergency  (compaction.ail:144-150)
+The DST suite must pin BOTH, since the estimate path is what runs at step 0 / whenever
+last_input_tokens==0. The "Actual Tokens Drive Compaction" section silently assumes only the
+first table exists. -->
+
 
 ## Scenario Tests for PR #75
 
@@ -187,6 +214,23 @@ Expected:
 - before step 2 provider call, `compact_step_actual` uses the 75% tier
 - first 7 of 12 old tool messages are elided, last 5 are preserved
 - system message still appears at the beginning of step 2 provider call
+
+<!-- 🔴 REVIEW (Critical) — compaction output is EPHEMERAL; assert on the provider-call payload, not stored state.
+agent_loop_v2.ail sends `compacted_msgs = sys_prefix ++ conv_compacted` to the provider (line 1141)
+but recurses on `msgs ++ [assistant_msg]` — the FULL, uncompacted history (line 1192). So:
+  • "first 7 elided, last 5 preserved" is true ONLY in the step-2 provider call, NEVER in returned/persisted msgs.
+    Any test asserting on run_v2_with_stub's returned message list will fail. The recorder must capture the
+    provider-call payload (this reinforces the doc's call for a provider-call seam — but the prose conflates
+    "sent" with "stored").
+  • Subtle: last_input_tokens=140359 is the provider's count of the COMPACTED payload sent at step 1, yet at
+    step 2 that count selects a tier applied to the LARGER full history. Pressure is measured on the trimmed
+    list but elision runs on the untrimmed one (under-pressures). Add this as an explicit invariant to test.
+
+🟡 REVIEW (Major) — "no actual-token compaction yet" at step 1 is misleading.
+With last_input_tokens==0, compact_step_actual falls back to the ESTIMATE path compact_step (compaction.ail:160),
+which fires at estimate>=70%. With 12 *long* tool messages the chars/7 estimate may already elide at step 1.
+Reword to "no actual-token-DRIVEN compaction; estimate-fallback (compact_step, 70/85 tiers) may still fire." -->
+
 
 ### Scenario 2: Actual Tokens Beat Estimate
 
@@ -266,10 +310,20 @@ actual_input >= 85% effective
 messages include large non-tool content that cannot be elided
 ```
 
+<!-- 🔴 REVIEW (Critical) — this scenario likely tests an unreachable path as written.
+The ">=95% after elision" check uses usage_percent (chars/7 ESTIMATE), not actual_input
+(see compaction.ail:123-138, 164). Because the estimate is engineered to under-count, a
+realistic message set that is at 85%+ of ACTUAL tokens will usually estimate well under 95%,
+so try_emergency_compaction returns Ok and ContextExhausted never fires. To actually reach
+the Err branch the fixture must contain large NON-tool content (system/user/assistant prose)
+whose chars/7 estimate alone exceeds 95% of effective — tool elision can't help there. Either
+rewrite the fixture to force that, or change the production code to gate emergency on actual
+tokens too. Flag which behavior is intended before writing the test. -->
+
 Expected:
 
 - emergency compaction tries keep-last-3 and keep-last-1
-- if usage remains >=95% after elision, loop returns `ContextExhausted`
+- if usage remains >=95% after elision (measured by the chars/7 ESTIMATE, not actual_input), loop returns `ContextExhausted`
 - run summary reason includes `compaction_exhausted`
 
 ## Follow-up PR #76: Harness Prompt Materialization
@@ -511,6 +565,19 @@ Real-provider OpenRouter or Ollama tests should remain optional smoke tests, not
 - `scripts/smoke_v2_compaction_tiers.ail` encodes old threshold assumptions and currently needs revision for the new headroom and actual-token policy.
 - Loop-level checks are currently blocked in this checkout by AILANG package-resolution errors for `pkg/sunholo/motoko_ext_abi/types`, despite `ailang.toml` and `ailang.lock` being present. DST work that depends on full `loop_v2` execution should first resolve that package-root/import issue.
 - A narrow pure smoke can still be written immediately for `compact_step_actual`, `estimate_tokens_messages`, and tool-shape preservation.
+
+<!-- 🟡 REVIEW (Major) — this section's "current state" is incomplete and partly STALE. Verified 2026-06-27:
+  • STALE: `ailang check src/core/test/stub_step.ail` → "✓ No errors found!", and
+    `scripts/smoke_v2_compaction_full_loop.ail` / `smoke_v2_cost_budget_full_loop.ail` already call
+    `run_v2_with_stub` (agent_loop_v2.ail:1639) and run. The "package resolution blocked" blocker — the
+    main argument for deferring Layer-1 DST — could not be reproduced. RE-VERIFY before relying on it.
+  • MISSING infra that already exists and overlaps the proposal:
+      - src/core/test/integration_tests.ail  (already documents run_v2_with_stub invariants)
+      - ~15 scripts/smoke_v2_*.ail, incl. smoke_v2_compaction_full_loop.ail, smoke_compaction_tool_call_id.ail
+      - stub_step.ail already exposes token_step / continuing_token_step (scripted input_tokens) —
+        so only PROVIDER-CALL MESSAGE RECORDING is the genuine gap, not token scripting.
+  Inventory these before adding scripts/smoke_v2_compaction_actual_dst.ail to avoid duplication. -->
+
 
 ## Proposed First Implementation Slice
 

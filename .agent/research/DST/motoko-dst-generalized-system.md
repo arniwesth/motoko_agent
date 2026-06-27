@@ -9,6 +9,19 @@ Related:
 - PR #76: out-of-workspace `SYSTEM_MD` materialization
 - AILANG docs MCP: `.mcp.json` -> `https://mcp.ailang.sunholo.com/mcp/`
 
+<!-- REVIEW BANNER — 2026-06-27, by Claude Opus 4.8, verified against source + AILANG MCP (v0.24.2 local / 0.25.0 docs).
+Inline comments tagged 🔴 Critical / 🟡 Major / 🔵 Minor. Summary:
+- 🔴 Compaction is EPHEMERAL (sent to provider, not persisted) AND emergency exhaustion is gated on the
+  chars/7 ESTIMATE, not actual tokens. Both PR #75 scenarios below need these invariants (see §PR #75).
+- 🟡 std/clock ("virtual time for determinism") is the most DST-relevant stdlib module and is absent from
+  the grounding (see §AILANG Docs Grounding).
+- 🟡 Existing infra (integration_tests.ail, ~15 smoke_v2_* scripts, run_v2_with_stub) not surveyed before
+  proposing new files (see §Where This Should Live).
+- 🔵 Heavy scenario overlap with the PR#75-specific doc — dedupe (see below).
+- ✅ Grounding accurate where checked: std/rand (rand_seed/int/bool/float), std/trace_test, std/ai, and the
+  v0.24.2-absent / 0.25.0-latest version gap all confirmed via MCP.
+-->
+
 ## Thesis
 
 Motoko needs a generalized Deterministic Simulation Testing (DST) system, not one-off smokes for each bug. The recurring failures have the same shape: behavior depends on multi-step state transitions across process boundaries, environment setup, sandbox rules, provider telemetry, extension hooks, tool dispatch, and conversation history.
@@ -57,6 +70,14 @@ Grounding points from MCP:
 - `std/rand` provides `rand_seed(seed)` and deterministic random generation via the `Rand` effect. This can support AILANG-native seeded fuzzing where the local version supports it.
 - `std/trace` exposes `spanStart`, `spanEnd`, and `event` with the `Trace` effect. `std/trace_test` exposes trace-existence assertions. This supports an optional trace-backed oracle, though the first DST trace recorder can simply emit normalized JSONL from the harness.
 - `std/ai` defines the multi-turn protocol shape used by Motoko: `Message`, `ToolCall`, `ToolSchema`, `StepResult`, `AIError`, `step`, `stepWithCache`, and streaming variants. Its docs state that tool results come back as `role="tool"` messages whose `tool_call_id` matches a prior `ToolCall.id`, which grounds the tool-shape invariants.
+
+<!-- 🟡 REVIEW (Major) — std/clock is missing from the grounding and is the most on-point module for DST.
+MCP stdlib_modules (0.25.0) lists `std/clock` with summary "Time operations (virtual time for determinism)".
+A framework whose whole premise is deterministic, reproducible traces should ground on the stdlib module
+that advertises determinism — for timestamp/ordering control in traces and for any Clock-effect code paths.
+Add a grounding bullet and decide whether DST drives virtual time or normalizes timestamps out of the trace.
+🔵 Minor: also confirm whether Motoko's loop touches the Clock effect (the run_v2 iface row includes Clock). -->
+
 
 ## Layers
 
@@ -529,6 +550,11 @@ Fuzz dimensions:
 
 This gives the value of fuzzing without losing the clarity of scenario-based DST.
 
+<!-- 🔵 REVIEW (Minor) — this section duplicates the scenarios in
+deterministic-simulation-testing-for-agent-loop-compaction.md almost verbatim. Pick one home for the
+canonical scenario spec (recommend: the policy-specific doc owns scenarios; this doc owns the framework
+taxonomy and references them by id). Otherwise the two will drift. -->
+
 ## PR #75 as Two Scenario Tests
 
 ### Scenario: `compaction.actual_tokens_drive_next_step`
@@ -566,6 +592,17 @@ Invariants:
 - old tool messages outside the last 5 were elided
 - last 5 tool messages remain unelided
 - tool message `tool_call_id`s are preserved
+
+<!-- 🔴 REVIEW (Critical) — assert these against the PROVIDER-CALL payload, not returned/persisted msgs.
+agent_loop_v2.ail sends compacted msgs to the provider (line 1141) but recurses on the FULL uncompacted
+history (line 1192). "old tool messages elided / last 5 unelided" holds only in the step-2 provider call.
+The recorder MUST capture provider inputs (this is the load-bearing seam). Add invariant:
+"last_input_tokens reflects the COMPACTED payload sent, but the next step's tier is applied to the FULL
+history" — measuring pressure on the trimmed list while eliding the untrimmed one (an under-pressure bug
+candidate worth a dedicated invariant).
+🟡 Also note: at step 1 last_input_tokens==0 → compact_step_actual falls back to the ESTIMATE path
+(70/85 tiers), which can itself elide; "step 2 used the 75% tier" is only the *actual-token* path. -->
+
 
 ### Scenario: `compaction.system_messages_hidden_from_compactors`
 
@@ -724,6 +761,16 @@ Every failure must print:
 - normalized trace
 
 ## Where This Should Live
+
+<!-- 🟡 REVIEW (Major) — survey what already exists before creating these files (verified 2026-06-27):
+  • src/core/test/stub_step.ail        — ScriptedStep, StepProvider, dispatch_step, token_step,
+                                          continuing_token_step, empty_rt, deny_all_rt
+  • src/core/agent_loop_v2.ail:1639    — run_v2_with_stub (the loop seam; returns Result[[Message], AIError])
+  • src/core/test/integration_tests.ail — already documents run_v2_with_stub invariants
+  • ~15 scripts/smoke_v2_*.ail          — incl. smoke_v2_compaction_full_loop.ail, smoke_compaction_tool_call_id.ail
+The genuine missing seam is PROVIDER-CALL MESSAGE RECORDING inside dispatch_step (it returns
+{result, next_provider} and drops the msgs it was handed). Frame Phase 1 around adding that recorder to
+the EXISTING stub path rather than a new dst/ tree, then grow into src/core/test/dst/ only if it earns its keep. -->
 
 Suggested structure:
 
