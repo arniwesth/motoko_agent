@@ -9,76 +9,6 @@ Related:
 - PR #76: out-of-workspace `SYSTEM_MD` materialization
 - AILANG docs MCP: `.mcp.json` -> `https://mcp.ailang.sunholo.com/mcp/`
 
-<!-- REVIEW BANNER — 2026-06-27, by Claude Opus 4.8, verified against source + AILANG MCP (v0.24.2 local / 0.25.0 docs).
-Inline comments tagged 🔴 Critical / 🟡 Major / 🔵 Minor. Summary:
-- 🔴 Compaction is EPHEMERAL (sent to provider, not persisted) AND emergency exhaustion is gated on the
-  chars/7 ESTIMATE, not actual tokens. Both PR #75 scenarios below need these invariants (see §PR #75).
-- 🟡 std/clock ("virtual time for determinism") is the most DST-relevant stdlib module and is absent from
-  the grounding (see §AILANG Docs Grounding).
-- 🟡 Existing infra (integration_tests.ail, ~15 smoke_v2_* scripts, run_v2_with_stub) not surveyed before
-  proposing new files (see §Where This Should Live).
-- 🔵 Heavy scenario overlap with the PR#75-specific doc — dedupe (see below).
-- ✅ Grounding accurate where checked: std/rand (rand_seed/int/bool/float), std/trace_test, std/ai, and the
-  v0.24.2-absent / 0.25.0-latest version gap all confirmed via MCP.
--->
-<!-- REVIEW BANNER — 2026-06-27, by GLM 5.2 (z-ai/glm-5.2), verified against source + AILANG MCP (v0.24.2 local).
-Independent re-review. Tagged 🔴 Critical / 🟡 Major / 🔵 Minor. The Claude Opus 4.8 banner's core invariants
-(ephemeral compaction, emergency-on-estimate, stub provider-call recording gap, scenario overlap) were
-RE-CONFIRMED against source. Findings below are additions and corrections.
-
-🔴 OVERRULES the Opus 4.8 banner's implication that loop-level checks already run (see §Where This Should Live,
-lines 765-773). They do not. `ailang check src/core/test/stub_step.ail` passes (imports only
-pkg/sunholo/motoko_ext_abi/types), but `ailang check scripts/smoke_v2_compaction_full_loop.ail` FAILS:
-  Error: failed to load pkg/sunholo/motoko_ext_test_dummy/register: registry package ... cache not found;
-  run 'ailang install sunholo/motoko_ext_test_dummy@0.2.2'
-The registry cache holds only 2 of ~14 ext packages. run_v2_with_stub → agent_loop_v2 → registry_generated.ail
-pulls in ALL extension register modules, so every full-loop smoke is hard-blocked. The doc's own deferral
-(lines 793-798, "If AILANG package-resolution remains unstable...") is therefore CURRENT, not conservative.
-Layer-1/3 DST cannot land until `ailang install` is part of CI — and the CI shapes in §CI Shape (lines 800-826)
-never mention it. This must be step zero of §Implementation Strategy, not a side-note.
-
-🔴 Layer 0 is already partially RED. integration_tests.ail#test_compaction_fires_above_70pct fails ("expected
-true, got false"). The 75k headroom (compaction.ail:60, `effective = limit - 75000`) makes test/tiny
-(context_limit_for=100) return effective<=0 → usage_percent=0 → compact_step Ok, never Err; the test comment
-still cites the pre-headroom chars/4 estimator. compaction.ail's own unit tests pass 6/6. The doc proposes
-Layer 0 as "cheap and should run on every PR" (line 110) — the foundation isn't standing. Fixing the stale
-headroom tests is a prerequisite to adding dst/scenarios.ail; landing green DST beside red Layer-0 is priority
-inversion.
-
-🟡 std/clock grounding (lines 74-79) is hollow as prescribed. MCP stdlib_module(std/clock)@0.25.0 exports ONLY
-now() and sleep(ms), both with the Clock effect. There is NO visible API to activate deterministic/virtual-time
-mode through this module surface — the "virtual time in deterministic mode" is in the docstring only, likely a
-runtime/capability flag not exposed here. The Opus banner says "ground on std/clock for virtual time" without
-noting you cannot drive virtual time through these two calls alone. Before treating std/clock as load-bearing
-grounding, confirm how deterministic mode is enabled (likely a runtime flag, not a stdlib call).
-
-🟡 Missing first-class invariant — systematic under-pressure. Because the loop recurses on FULL uncompacted
-msgs (agent_loop_v2.ail:1192, `msgs ++ [assistant_msg]`) but last_input_tokens reflects the COMPACTED payload
-sent at the prior step (:1158 dispatch_step(compacted_msgs)), step N+1's tier selection runs against a LARGER
-history than the count that selected it. Actual-token compaction under-pressures relative to real payload
-growth. This is a genuine bug class, currently only hinted at in an Opus inline comment (line 596-602). Promote
-it to a named invariant in the library (§Invariant Library, line 248): "tier pressure measured on compacted
-payload but elision applied to full uncompacted history."
-
-🟡 Option B recommendation (§Architecture Options, lines 469-516) should probably be Option A. The doc
-recommends extracting prepare_provider_messages as "pure or mostly pure." But on_pre_step carries a broad
-effect row (stub_step.ail:220: IO,Process,FS,AI,Env,Net,SharedMem,Clock,Stream), so the helper is NOT pure and
-drags that row into its signature. Worse, extraction does not capture the ephemeral payload — the load-bearing
-invariant is "what was SENT to the provider" (agent_loop_v2.ail:1158). Option A (a recorder inside dispatch_step
-at the seam where msgs are consumed) captures exactly that. Reverse the recommendation: A first, B only if a
-clean pure subset is later separable.
-
-🔵 Version gap understated (line 60). MCP `available` jumps 0.16.1 → 0.25.0 — versions 0.17 through 0.24 are
-ALL absent, not merely "v0.24.2 not available." Grounding a 0.24.2 binary against 0.25.0 docs is a 9-version
-extrapolation; std/clock / std/rand shape cannot be confirmed for 0.24.2. The "validate against local ailang
-check" caveat (line 60) is correct but the gap is larger than framed.
-
-🔵 compaction.ail's module header (lines 9-14) documents only the 70/85/95 estimate table as canonical; the
-60/75/85 actual-token table lives only in inline comments (lines 152-158). The doc's §AILANG Docs Grounding
-surveys the stdlib surface but the parallel source-side inconsistency is more impactful — it's the file
-maintainers read first.
--->
-
 ## Thesis
 
 Motoko needs a generalized Deterministic Simulation Testing (DST) system, not one-off smokes for each bug. The recurring failures have the same shape: behavior depends on multi-step state transitions across process boundaries, environment setup, sandbox rules, provider telemetry, extension hooks, tool dispatch, and conversation history.
@@ -114,7 +44,7 @@ The test oracle should be structural:
 
 This draft was checked against the AILANG docs MCP configured in `.mcp.json`.
 
-Important version note: the local repo declares `ailang = ">=0.24.2"` and the local binary reports `AILANG v0.24.2`, but the MCP docs server does not expose a `v0.24.2` snapshot. It reported `latest = 0.25.0`, so the grounding below uses the MCP `latest` docs and stdlib metadata. Anything used for implementation should be validated against the local `ailang check`/`ailang test` binary before landing.
+Important version note: the local repo declares `ailang = ">=0.24.2"` and the local binary reports `AILANG v0.24.2`, but the MCP docs server does not expose any `0.17.x` through `0.24.x` snapshots. It jumps from `0.16.1` to `0.25.0`, with `latest = 0.25.0`. The grounding below therefore uses MCP `latest` docs and stdlib metadata as directional evidence, not as a guaranteed local API contract. Anything used for implementation must be validated against the local `ailang check`/`ailang test` binary before landing.
 
 Grounding points from MCP:
 
@@ -125,16 +55,23 @@ Grounding points from MCP:
 - `std/fs` operations are sandboxed and respect `AILANG_FS_SANDBOX`, which directly grounds the PR #76 scenario.
 - `std/env` exposes environment variables through snapshot semantics and allowlist enforcement; DST should test child-env preparation in TypeScript and not assume all parent env vars are visible inside AILANG.
 - `std/rand` provides `rand_seed(seed)` and deterministic random generation via the `Rand` effect. This can support AILANG-native seeded fuzzing where the local version supports it.
+- `std/clock` latest-docs metadata exposes only `now() -> int ! {Clock}` and `sleep(ms: int) -> () ! {Clock}`. Their docstrings mention virtual time in deterministic mode, but the module surface does not show how to enable that mode. DST should either normalize clock-derived fields out of traces or first identify the runtime flag/control that activates virtual time.
 - `std/trace` exposes `spanStart`, `spanEnd`, and `event` with the `Trace` effect. `std/trace_test` exposes trace-existence assertions. This supports an optional trace-backed oracle, though the first DST trace recorder can simply emit normalized JSONL from the harness.
 - `std/ai` defines the multi-turn protocol shape used by Motoko: `Message`, `ToolCall`, `ToolSchema`, `StepResult`, `AIError`, `step`, `stepWithCache`, and streaming variants. Its docs state that tool results come back as `role="tool"` messages whose `tool_call_id` matches a prior `ToolCall.id`, which grounds the tool-shape invariants.
 
-<!-- 🟡 REVIEW (Major) — std/clock is missing from the grounding and is the most on-point module for DST.
-MCP stdlib_modules (0.25.0) lists `std/clock` with summary "Time operations (virtual time for determinism)".
-A framework whose whole premise is deterministic, reproducible traces should ground on the stdlib module
-that advertises determinism — for timestamp/ordering control in traces and for any Clock-effect code paths.
-Add a grounding bullet and decide whether DST drives virtual time or normalizes timestamps out of the trace.
-🔵 Minor: also confirm whether Motoko's loop touches the Clock effect (the run_v2 iface row includes Clock). -->
+## Current Preconditions
 
+Do not add generalized DST on top of known-red foundation tests. The current compaction branch has two prerequisites:
+
+- **Registry/package hydration:** `run_v2_with_stub` imports `agent_loop_v2`, which imports `registry_generated.ail`, which imports all extension register modules. A checkout with only a partial AILANG registry cache cannot run full-loop smokes. CI must run the package install/lock step before Layer 1 or Layer 3 DST.
+- **Stale headroom tests:** `src/core/test/integration_tests.ail#test_compaction_fires_above_70pct` and `scripts/smoke_v2_compaction_full_loop.ail` still encode the old `test/tiny`/chars/4/no-headroom assumptions. With `effective = context_limit - 75000`, `test/tiny` has `effective <= 0`, so usage is 0 and compaction fails open. These tests need updating before DST results are meaningful.
+
+The immediate order should be:
+
+1. Hydrate AILANG package dependencies in CI/local setup.
+2. Fix or retire stale compaction tests that contradict the new headroom policy.
+3. Add provider-call recording to the existing stub path.
+4. Add DST scenarios.
 
 ## Layers
 
@@ -164,7 +101,7 @@ Simulator shape:
 input data -> pure function -> invariant checks
 ```
 
-This layer is cheap and should run on every PR.
+This layer is cheap and should run on every PR, but only after existing stale Layer 0 tests are made green. In particular, tests using `test/tiny` must account for the new `context_limit - 75000` headroom policy.
 
 AILANG fit:
 
@@ -314,12 +251,18 @@ Common invariants should be reusable functions:
 - `message_order_preserved`
 - `last_input_tokens_carried_forward`
 - `actual_tokens_select_compaction_tier`
+- `provider_payload_compacted_but_history_uncompacted`
+- `actual_token_pressure_not_lower_than_full_history_pressure`
+- `emergency_compaction_exhaustion_uses_estimate`
+- `small_effective_context_fails_open`
 - `sandbox_paths_readable_by_child`
 - `config_env_vars_forwarded_to_child`
 - `loop_terminates_within_budget`
 - `no_unexpected_provider_call_after_terminal_stop`
 
 Scenario tests should mostly compose invariants instead of implementing bespoke assertions.
+
+For compaction specifically, remember that compaction is ephemeral: the compacted message list is sent to the provider, but the loop recurses on the full uncompacted history. The provider-call recorder is therefore the load-bearing observation point. Tests that inspect only returned or persisted `msgs` will miss the behavior that matters.
 
 ### Fakes and Scripts
 
@@ -607,132 +550,50 @@ Fuzz dimensions:
 
 This gives the value of fuzzing without losing the clarity of scenario-based DST.
 
-<!-- 🔵 REVIEW (Minor) — this section duplicates the scenarios in
-deterministic-simulation-testing-for-agent-loop-compaction.md almost verbatim. Pick one home for the
-canonical scenario spec (recommend: the policy-specific doc owns scenarios; this doc owns the framework
-taxonomy and references them by id). Otherwise the two will drift. -->
+## Scenario Families
 
-## PR #75 as Two Scenario Tests
+The policy-specific compaction research doc owns detailed fixtures for PR #75. This generalized doc should keep only the scenario taxonomy and shared invariants to avoid drift.
 
-### Scenario: `compaction.actual_tokens_drive_next_step`
+### PR #75: Loop-State Compaction
 
-Layer: Loop-state DST
+Canonical scenario ids:
 
-Purpose: provider telemetry from step N must drive compaction before step N+1.
+- `compaction.actual_tokens_drive_next_step`
+- `compaction.system_messages_hidden_from_compactors`
+- `compaction.emergency_exhaustion_estimate_gated`
+- `compaction.actual_tokens_small_context_fail_open`
+- `compaction.provider_payload_vs_uncompacted_history_pressure`
 
-Fixture:
+Required observations:
 
-```text
-model = "ollama/qwen3.6:35b-a3b-mxfp8"
-effective_context = 262144 - 75000
+- provider-call message payloads, not just returned/persisted loop history
+- extension `on_pre_step` inputs
+- `last_input_tokens` after each provider result
+- tool message `tool_call_id`s before and after provider-payload compaction
 
-initial messages:
-  system "AILANG reference sentinel"
-  user "task"
-  12 old tool messages
+Key caveats:
 
-provider script:
-  step 1:
-    finish_reason = "tool_calls"
-    input_tokens = 140359
-    tool_calls = [BashExec true]
-  step 2:
-    finish_reason = "stop"
-    input_tokens = 100
-```
+- Step 0 or any `last_input_tokens <= 0` path uses estimate-based `compact_step` and its 70/85/95 tiers.
+- The actual-token path uses 60/75/85 tiers only when `effective = context_limit - 75000` is positive.
+- Emergency exhaustion is still decided by estimate-based post-elision `usage_percent`, not directly by actual provider tokens.
+- Compacted messages are sent to the provider but are not persisted as the next loop history.
 
-Invariants:
+### PR #76: Harness-Boundary Prompt Materialization
 
-- step 1 provider call includes the system prefix
-- after step 1, `last_input_tokens == 140359`
-- step 2 provider call used the 75% compaction tier
-- old tool messages outside the last 5 were elided
-- last 5 tool messages remain unelided
-- tool message `tool_call_id`s are preserved
+Canonical scenario ids:
 
-<!-- 🔴 REVIEW (Critical) — assert these against the PROVIDER-CALL payload, not returned/persisted msgs.
-agent_loop_v2.ail sends compacted msgs to the provider (line 1141) but recurses on the FULL uncompacted
-history (line 1192). "old tool messages elided / last 5 unelided" holds only in the step-2 provider call.
-The recorder MUST capture provider inputs (this is the load-bearing seam). Add invariant:
-"last_input_tokens reflects the COMPACTED payload sent, but the next step's tier is applied to the FULL
-history" — measuring pressure on the trimmed list while eliding the untrimmed one (an under-pressure bug
-candidate worth a dedicated invariant).
-🟡 Also note: at step 1 last_input_tokens==0 → compact_step_actual falls back to the ESTIMATE path
-(70/85 tiers), which can itself elide; "step 2 used the 75% tier" is only the *actual-token* path. -->
+- `harness.external_system_md_materialized`
+- `harness.workspace_system_md_not_rewritten`
+- `harness.missing_system_md_fails_loudly`
+- `harness.system_md_forwarded_to_child_env`
 
+Required observations:
 
-### Scenario: `compaction.system_messages_hidden_from_compactors`
-
-Layer: Loop-state DST
-
-Purpose: no compaction layer can drop or mutate the system prompt.
-
-Fixture:
-
-```text
-initial messages:
-  system "AILANG reference sentinel"
-  user "task"
-  tool "large output"
-
-extension script:
-  on_pre_step:
-    record received messages
-    return Compacted([], "drop conversation")
-
-provider script:
-  step 1 stop
-```
-
-Invariants:
-
-- extension received no `system` messages
-- provider call still begins with the original system message
-- system content is byte-identical to the initial content
-
-## PR #76 as Two Scenario Tests
-
-### Scenario: `harness.external_system_md_materialized`
-
-Layer: Harness-boundary DST
-
-Purpose: external `SYSTEM_MD` paths are materialized into the workspace before AILANG spawn.
-
-Fixture:
-
-```text
-WORKDIR = /tmp/motoko-dst/workdir
-SYSTEM_MD = /tmp/motoko-dst/external/SYSTEM.md
-external SYSTEM.md content = "AILANG reference sentinel"
-```
-
-Invariants:
-
-- child env `SYSTEM_MD` points inside `WORKDIR`
-- materialized file exists
-- materialized file content equals the external file content
-- child env includes `AILANG_FS_SANDBOX=WORKDIR`
-- a sandboxed child read of `SYSTEM_MD` succeeds
-
-### Scenario: `harness.workspace_system_md_not_rewritten`
-
-Layer: Harness-boundary DST
-
-Purpose: local workspace prompt paths remain valid and are not broken by materialization.
-
-Fixture:
-
-```text
-WORKDIR = /tmp/motoko-dst/workdir
-SYSTEM_MD = /tmp/motoko-dst/workdir/SYSTEM.md
-workspace SYSTEM.md content = "AILANG reference sentinel"
-```
-
-Invariants:
-
-- child env `SYSTEM_MD` points to a readable path under `WORKDIR`
-- content equals the original workspace prompt
-- no empty prompt is observed
+- parent env before harness preparation
+- child env prepared for the AILANG runtime
+- materialized file paths and content hashes
+- sandbox readability under `AILANG_FS_SANDBOX`
+- `system_prompt_built` chars when a child/runtime probe is used
 
 ## Cross-Layer Scenario
 
@@ -764,16 +625,25 @@ This is the best high-level regression for the combined failure class: "the agen
 
 ## Implementation Strategy
 
-### Phase 1: Make Boundaries Inspectable
+### Phase 0: Restore Test Preconditions
+
+Before new DST work:
+
+- run the repo's package hydration step in CI and local setup (`ailang lock` or explicit `ailang install` for registry dependencies from `ailang.toml`/`ailang.lock`)
+- make full-loop smoke imports reliable by ensuring every extension referenced by `src/core/ext/registry_generated.ail` is present in the local AILANG registry cache
+- update stale compaction tests that still assume no output headroom, especially `src/core/test/integration_tests.ail#test_compaction_fires_above_70pct` and `scripts/smoke_v2_compaction_full_loop.ail`
+- update `src/core/compaction.ail`'s module header to document both tier policies: estimate fallback 70/85/95 and actual-token 60/75/85
+
+### Phase 1: Make Existing Boundaries Inspectable
 
 Add test-only or production-safe seams:
 
-- provider call recorder for scripted `StepProvider`
+- provider-call recorder for the existing scripted `StepProvider` path in `src/core/test/stub_step.ail`
 - extension hook recorder
 - harness preparation function that can be invoked without launching the full UI
 - child env/spawn recorder for `RuntimeProcess`
 
-Avoid large refactors. The first goal is observability at boundaries.
+Avoid large refactors. The first goal is observability at boundaries, especially the provider-call payload consumed by `dispatch_step`. Extracting a separate "prepare provider messages" helper can wait; it would carry broad extension-hook effect rows and still would not directly observe the payload handed to the provider.
 
 ### Phase 2: Add Scenario Runners
 
@@ -819,17 +689,30 @@ Every failure must print:
 
 ## Where This Should Live
 
-<!-- 🟡 REVIEW (Major) — survey what already exists before creating these files (verified 2026-06-27):
-  • src/core/test/stub_step.ail        — ScriptedStep, StepProvider, dispatch_step, token_step,
-                                          continuing_token_step, empty_rt, deny_all_rt
-  • src/core/agent_loop_v2.ail:1639    — run_v2_with_stub (the loop seam; returns Result[[Message], AIError])
-  • src/core/test/integration_tests.ail — already documents run_v2_with_stub invariants
-  • ~15 scripts/smoke_v2_*.ail          — incl. smoke_v2_compaction_full_loop.ail, smoke_compaction_tool_call_id.ail
-The genuine missing seam is PROVIDER-CALL MESSAGE RECORDING inside dispatch_step (it returns
-{result, next_provider} and drops the msgs it was handed). Frame Phase 1 around adding that recorder to
-the EXISTING stub path rather than a new dst/ tree, then grow into src/core/test/dst/ only if it earns its keep. -->
+Start from existing test infrastructure:
 
-Suggested structure:
+- `src/core/test/stub_step.ail` already defines `ScriptedStep`, `StepProvider`, `dispatch_step`, `token_step`, `continuing_token_step`, `empty_rt`, and `deny_all_rt`.
+- `src/core/agent_loop_v2.ail` already exposes `run_v2_with_stub`.
+- `src/core/test/integration_tests.ail` already documents several stub invariants.
+- `scripts/smoke_v2_*.ail` already contains the smoke-test convention for runtime scenarios.
+
+The genuine missing seam is provider-call message recording inside or adjacent to `dispatch_step`, which currently receives `msgs` and then drops that observation when returning `{result, next_provider}`.
+
+Start small:
+
+```text
+src/core/test/stub_step.ail
+  add provider-call recording or a recording provider variant
+
+scripts/
+  smoke_v2_compaction_actual_dst.ail
+
+src/tui/src/
+  harness-dst.test.ts
+  runtime-process-env.test.ts
+```
+
+Only grow into a dedicated tree once the above earns its keep:
 
 ```text
 src/core/test/dst/
@@ -841,13 +724,9 @@ src/core/test/dst/
 
 scripts/
   smoke_dst_loop.ail
-
-src/tui/src/
-  harness-dst.test.ts
-  runtime-process-env.test.ts
 ```
 
-If AILANG package-resolution remains unstable for full loop tests, start with:
+If AILANG package-resolution remains unstable for full-loop tests, start with:
 
 - pure compaction DST in `scripts/smoke_v2_compaction_actual_dst.ail`
 - TypeScript harness-boundary DST in `src/tui/src/harness-dst.test.ts`
@@ -859,14 +738,18 @@ Then connect the full loop once `pkg/...` import resolution is reliable.
 Fast PR gate:
 
 ```bash
+ailang lock
 make test_core
 ailang run --caps IO --entry main scripts/smoke_v2_compaction_actual_dst.ail
 cd src/tui && bun test src/harness-dst.test.ts
 ```
 
+If `ailang lock` does not hydrate the local registry cache for every dependency in `ailang.toml`, CI must explicitly install the missing registry packages before any full-loop DST or smoke that imports `registry_generated.ail`.
+
 Expanded PR gate:
 
 ```bash
+ailang lock
 make test_dst
 ```
 
@@ -916,7 +799,7 @@ The provider smoke should not be the primary regression gate.
 
 Queried through the configured AILANG MCP endpoint:
 
-- `ailang_versions`: latest available docs snapshot is `0.25.0`; `v0.24.2` was not available.
+- `ailang_versions`: latest available docs snapshot is `0.25.0`; versions `0.17.x` through `0.24.x`, including `v0.24.2`, were not available.
 - `docs_nav`: confirmed docs include `guides/testing`, `reference/effects`, `guides/evaluation/*`, `guides/traces`, and stdlib reference pages.
 - `docs_search("Testing Guide")`: returned AILANG Testing Guide with unit tests, property tests, shrinking, and env-based configuration.
 - `docs_search("Effect System")`: returned effect-system docs covering explicit effects, capability grants, FS sandbox, env/process effects, and testing with effects.
@@ -926,4 +809,5 @@ Queried through the configured AILANG MCP endpoint:
 - `stdlib_module(std/fs)`: confirmed `readFile`, `readFileResult`, `writeFile`, `mkdirAll`, `fileExists`, and sandbox behavior.
 - `stdlib_module(std/env)`: confirmed env snapshot and allowlist semantics.
 - `stdlib_module(std/rand)`: confirmed `rand_seed` and deterministic random generation functions.
+- `stdlib_module(std/clock)`: confirmed only `now` and `sleep` are exposed in latest docs; deterministic/virtual-time activation is not visible through that module surface.
 - `stdlib_module(std/trace)` and `std/trace_test`: confirmed trace event/span emission and trace-existence assertions.
