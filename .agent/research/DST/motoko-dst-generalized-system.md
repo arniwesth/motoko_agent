@@ -234,6 +234,236 @@ Filesystem fixture:
 - creates profile mirrors
 - records materialized files
 
+## DST Plus Fuzzing
+
+It makes sense to combine DST with fuzzing in Motoko, but the fuzzing should be structured and seed-reproducible. Plain random fuzzing over full agent runs would mostly produce noisy failures and hard-to-debug traces. The better model is:
+
+```text
+Deterministic simulator + seeded scenario generator + invariant library
+```
+
+In other words, DST supplies the controlled world and the trace oracle; fuzzing supplies many variations inside that world.
+
+### Why The Combination Fits Motoko
+
+Motoko has many bug-prone boundaries:
+
+- provider message protocol shape
+- tool-call and tool-result correlation
+- context and cost counters across steps
+- extension hook ordering
+- sandbox path materialization
+- environment-variable forwarding
+- profile mirroring
+- parser handling of model-generated text
+- truncation and large tool outputs
+
+Most of these are not well tested by either hand-written examples or black-box provider runs. Seeded fuzzing inside a deterministic harness can explore the cross-product:
+
+```text
+message history shape
+  x provider token counts
+  x extension hook decisions
+  x tool result sizes
+  x env/profile path layouts
+  x termination reasons
+```
+
+The key is that every generated case must still be a valid Motoko protocol scenario, or an intentionally invalid scenario with a clearly expected failure mode.
+
+### Fuzzing Levels
+
+#### Level A: Pure Input Fuzzing
+
+Applies to Layer 0.
+
+Good targets:
+
+- command/fence parsing
+- JSON-ish tool argument parsing
+- token estimation
+- path normalization
+- config coercion
+
+Example generators:
+
+- malformed markdown fences
+- nested code blocks
+- huge strings
+- unicode and zero-width characters
+- incomplete JSON
+- paths with symlinks, `..`, absolute paths, spaces
+
+Oracle:
+
+- function is total
+- output shape is valid
+- round-trip properties where applicable
+- no unexpected panic
+
+#### Level B: Protocol-Shape Fuzzing
+
+Applies to Layer 1.
+
+Good targets:
+
+- message sequences
+- tool-call arrays
+- assistant/tool correlation
+- provider finish reasons
+- token counters
+- extension decisions
+
+Example generators:
+
+- 0-3 system messages
+- 0-20 previous tool results
+- assistant messages with 0-N tool calls
+- matching and mismatching `tool_call_id`s
+- provider `input_tokens` around compaction thresholds
+- tool outputs just below and above elision thresholds
+- extension `PassThrough` vs `Compacted`
+
+Oracle:
+
+- system messages are not lost
+- provider-call shape remains valid
+- tool IDs are preserved by compaction
+- actual tokens drive compaction tiers
+- loop terminates within step budget
+- invalid protocol inputs fail loudly or are sanitized according to policy
+
+#### Level C: Harness Layout Fuzzing
+
+Applies to Layer 2.
+
+Good targets:
+
+- `WORKDIR`
+- `SYSTEM_MD`
+- `MOTOKO_CONFIG`
+- `MOTOKO_REPO`
+- profile directories
+- sandbox-readable and sandbox-unreadable paths
+
+Example generators:
+
+- prompt inside workspace
+- prompt outside workspace
+- missing prompt
+- relative prompt path
+- absolute profile path
+- repo path equal to workdir
+- repo path different from workdir
+- profile already mirrored
+- basename collisions for absolute profiles
+
+Oracle:
+
+- child env contains required config vars
+- sandbox-readable files are materialized
+- external files are copied with identical content
+- missing required files fail loudly
+- no feature silently disappears because an env var was scrubbed
+
+#### Level D: Stateful Sequence Fuzzing
+
+Applies to Layers 1 and 3.
+
+Good targets:
+
+- multi-step loops
+- repeated tool failures
+- compaction after long histories
+- cost cap exhaustion
+- retry behavior
+- terminal vs non-terminal finish reasons
+
+Example generators:
+
+- provider script of length 1-50
+- stochastic but seeded finish reasons
+- high token counts followed by low token counts
+- repeated tool calls with growing outputs
+- extension compaction at random steps
+- tool denial at random steps
+
+Oracle:
+
+- no infinite loop
+- budget exhaustion happens before unbounded recursion
+- terminal stop prevents further provider calls
+- summaries/events reflect the final termination reason
+- all provider calls remain protocol-valid
+
+### Seed Discipline
+
+Fuzzing only belongs in DST if failures are reproducible.
+
+Every fuzz test should report:
+
+```text
+scenario_id
+seed
+generator version
+shrunk/minimized input if available
+normalized trace
+first failed invariant
+```
+
+Seeded generators should be deterministic across machines as much as possible. Avoid depending on wall time, filesystem listing order, live network, provider output, or platform-specific temp path names unless those values are explicitly normalized in the trace.
+
+### Shrinking
+
+Shrinking is useful but not required for v1. For Motoko, the first practical shrinker can be domain-specific:
+
+- reduce number of messages
+- reduce tool-output size
+- reduce provider script length
+- remove extension decisions one by one
+- move token counts to the nearest threshold boundary
+- simplify paths from complex absolute paths to minimal inside/outside workspace examples
+
+This will be more useful than generic byte-level shrinking because the failures are usually protocol or state-machine failures.
+
+### What Not To Fuzz Initially
+
+Avoid fuzzing real providers. It will be expensive and mostly unreproducible.
+
+Avoid fully arbitrary invalid message arrays as the main workload. They can be useful negative tests, but if most generated inputs are nonsense, the harness will spend its time testing defensive checks rather than Motoko behavior.
+
+Avoid concurrent fuzzing until the single-threaded deterministic trace is stable. Concurrency can come later for env-server and process-lifecycle bugs.
+
+### Recommended v1 Combination
+
+Start with fixed scenarios for known regressions, then fuzz around their parameters:
+
+```text
+Fixed scenario:
+  compaction.actual_tokens_drive_next_step
+
+Fuzz dimensions:
+  number of old tool messages
+  tool output sizes
+  exact token count around 60/75/85%
+  assistant tool_call argument sizes
+  extension PassThrough vs Compacted
+```
+
+```text
+Fixed scenario:
+  harness.external_system_md_materialized
+
+Fuzz dimensions:
+  SYSTEM_MD inside/outside workspace
+  relative vs absolute path
+  missing vs present file
+  nested workspace paths
+  profile mirror present vs absent
+```
+
+This gives the value of fuzzing without losing the clarity of scenario-based DST.
+
 ## PR #75 as Two Scenario Tests
 
 ### Scenario: `compaction.actual_tokens_drive_next_step`
@@ -504,4 +734,3 @@ The provider smoke should not be the primary regression gate.
 - Should compaction thresholds and headroom be exported constants so tests do not duplicate policy values?
 - Should event traces become the canonical DST output format across both AILANG and TypeScript layers?
 - Can the existing `run_v2_with_stub` path be extended to record provider-call messages without invasive changes?
-
