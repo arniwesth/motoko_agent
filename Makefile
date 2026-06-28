@@ -70,7 +70,7 @@ check_core: verify_extensions
 # mask the status of the others. Set MOTOKO_CONFIG=<profile> to probe a
 # different profile (default: current MOTOKO_CONFIG or "default").
 verify_extensions:
-	@profile=$${MOTOKO_CONFIG:-default}; \
+	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \
 	cfg=".motoko/config/$$profile/config.json"; \
 	if [ ! -f "$$cfg" ]; then \
 		echo "verify_extensions: no config at $$cfg — skipping"; \

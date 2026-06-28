@@ -6,7 +6,7 @@
 -- Works on [Message] (upstream typed shape) so tool_call_id correlation
 -- is preserved — the provider needs those IDs for conversation continuation.
 --
--- Thresholds (usage = estimated_tokens / context_limit_for(model)):
+-- Thresholds (usage = estimated_tokens / loaded context limit):
 --   < 70%  → PassThrough (no compaction needed)
 --   70-85% → Elide tool_result content older than last 10 turns
 --   85-95% → Elide tool_result content older than last 5 turns
@@ -17,7 +17,7 @@
 -- loop iteration) always retains the original unelided messages. The
 -- compacted view is a transient input to step() for this step only.
 --
--- For unknown models (context_limit_for returns 0), compaction is skipped
+-- For unknown models (context limit is 0), compaction is skipped
 -- entirely — fail open rather than incorrectly refusing a valid step.
 
 module src/core/compaction
@@ -39,10 +39,13 @@ export pure func estimate_tokens_messages(msgs: [Message]) -> int {
 -- Context usage as integer percent (0-100). Returns 0 for unknown models.
 -- Uses integer arithmetic throughout to avoid float precision issues.
 -- contracts: SKIPPED — depends on foldl-based estimate_tokens_messages
-export pure func usage_percent(msgs: [Message], model: string) -> int {
-  let limit = context_limit_for(model);
+export pure func usage_percent_with_limit(msgs: [Message], limit: int) -> int {
   if limit == 0 then 0
   else (estimate_tokens_messages(msgs) * 100) / limit
+}
+
+export pure func usage_percent(msgs: [Message], model: string) -> int {
+  usage_percent_with_limit(msgs, context_limit_for(model))
 }
 
 -- Count tool-role messages in the list.
@@ -103,15 +106,15 @@ export pure func elide_old_tool_results(msgs: [Message], keep_last: int) -> [Mes
 
 -- Apply emergency compaction for ≥95% usage.
 -- Returns Ok(compacted) if we can get below 95%, otherwise Err.
-pure func try_emergency_compaction(msgs: [Message], model: string) -> Result[[Message], string] {
+pure func try_emergency_compaction_with_limit(msgs: [Message], model: string, limit: int) -> Result[[Message], string] {
   -- Try keeping only last 3 tool results
   let emergency1 = elide_old_tool_results(msgs, 3);
-  let pct1 = usage_percent(emergency1, model);
+  let pct1 = usage_percent_with_limit(emergency1, limit);
   if pct1 < 95 then Ok(emergency1)
   else {
     -- Try keeping only last 1 tool result
     let emergency2 = elide_old_tool_results(msgs, 1);
-    let pct2 = usage_percent(emergency2, model);
+    let pct2 = usage_percent_with_limit(emergency2, limit);
     if pct2 < 95 then Ok(emergency2)
     else {
       -- Even extreme compaction failed
@@ -120,16 +123,24 @@ pure func try_emergency_compaction(msgs: [Message], model: string) -> Result[[Me
   }
 }
 
+pure func try_emergency_compaction(msgs: [Message], model: string) -> Result[[Message], string] {
+  try_emergency_compaction_with_limit(msgs, model, context_limit_for(model))
+}
+
 -- Apply the default structural compaction policy for one step.
 -- Returns Ok(msgs) — possibly with elided tool content — or
 -- Err("compaction_exhausted") when the window is critically full.
 -- At ≥95%, attempts emergency compaction before failing.
-export pure func compact_step(msgs: [Message], model: string) -> Result[[Message], string] {
-  let pct = usage_percent(msgs, model);
-  if pct >= 95 then try_emergency_compaction(msgs, model)
+export pure func compact_step_with_limit(msgs: [Message], model: string, limit: int) -> Result[[Message], string] {
+  let pct = usage_percent_with_limit(msgs, limit);
+  if pct >= 95 then try_emergency_compaction_with_limit(msgs, model, limit)
   else if pct >= 85 then Ok(elide_old_tool_results(msgs, 5))
   else if pct >= 70 then Ok(elide_old_tool_results(msgs, 10))
   else Ok(msgs)
+}
+
+export pure func compact_step(msgs: [Message], model: string) -> Result[[Message], string] {
+  compact_step_with_limit(msgs, model, context_limit_for(model))
 }
 
 -- Unknown model → usage 0% → no compaction.
@@ -221,4 +232,3 @@ func emergency_compaction_tries_elision() -> bool
       Err(_) => false
     }
   }
-

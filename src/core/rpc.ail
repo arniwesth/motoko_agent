@@ -12,7 +12,7 @@ module src/core/rpc
 -- MIGRATION sprint plan + CHANGELOG.md and git log around 2026-05-06.
 
 import src/core/agent_loop_v2 (run_v2_with_conversation)
-import src/core/context_usage (context_limit_for)
+import src/core/context_usage (catalog_context_limit_for)
 import src/core/test/stub_step (LiveAI)
 import std/io     (println, exit)
 import std/json   (Json, encode, jo, ja, kv, js, jb, jnum)
@@ -98,11 +98,12 @@ func compute_budget_plan(
   hybrid_enabled: bool,
   step: int,
   settings: RunSettings
-) -> BudgetPlan ! {Env, IO, Clock} {
+) -> BudgetPlan ! {Env, IO, Clock, FS} {
   let max_steps = clamp_positive(settings.max_steps, 50);
   let verifier_mode = settings.verifier_mode;
   let base = default_budget_plan(max_steps, verifier_mode);
   let remaining = if base.total - step < 0 then 0 else base.total - step;
+  let context_limit = catalog_context_limit_for(model);
   let ctx = {
     task: task,
     step: step,
@@ -116,7 +117,7 @@ func compute_budget_plan(
     budget_remaining: remaining,
     history_slice: [],
     state_key: "core:ext:budget",
-    context_limit: context_limit_for(model)
+    context_limit: context_limit
   };
   let patched = dispatch_budget_plan(ext_runtime, ctx, base);
   clamp_budget_plan(patched, max_steps)
@@ -208,6 +209,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   let remaining = budget.total;
   let system_with_agents = with_agents_context(raw_system, cwd);
   let system_with_hint = with_cache_hint(system_with_agents, hint);
+  let context_limit = catalog_context_limit_for(model);
   let system_ctx = {
     task: task,
     step: 0,
@@ -221,7 +223,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     budget_remaining: remaining,
     history_slice: [],
     state_key: "core:ext:system",
-    context_limit: context_limit_for(model)
+    context_limit: context_limit
   };
   let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_hint);
 

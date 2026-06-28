@@ -114,6 +114,49 @@ export function parseAgentEventLine(line: string): AgentEvent | null {
   }
 }
 
+export function providerSelectionModel(model: string, openaiBaseUrl: string): string {
+  const trimmed = model.trim();
+  if (trimmed === "openrouter/auto") return trimmed;
+  if (trimmed.startsWith("openrouter/")) return trimmed;
+  if (trimmed.startsWith("ollama/") || trimmed.startsWith("ollama:")) return trimmed;
+
+  // For local OpenAI-compatible endpoints, unknown model ids like
+  // "deepseek-v4-flash" do not let AILANG infer the OpenAI provider. Use a
+  // configured OpenAI selector for --ai; stepWithStream still sends the real
+  // local model id. Use the AILANG model alias ("gpt5"), not the provider API
+  // id ("gpt-5"), so AILANG takes the configured-model path that honors
+  // OPENAI_BASE_URL.
+  if (openaiBaseUrl.trim() !== "") return "gpt5";
+
+  // AILANG's --ai provider guessing treats vendor/model strings such as
+  // "openai/..." and "anthropic/..." as OpenRouter vendor ids. Motoko uses
+  // those prefixes as direct-provider UI/profile routing ids, so strip them
+  // before provider selection. The step call separately receives the same
+  // stripped API model id from provider_api_model().
+  for (const prefix of ["openai/", "anthropic/", "google/"]) {
+    if (trimmed.startsWith(prefix)) {
+      const bare = trimmed.slice(prefix.length);
+      return bare.length > 0 ? bare : trimmed;
+    }
+  }
+
+  return trimmed;
+}
+
+export function normalizeRuntimeWarning(line: string): string | null {
+  let message = line.trim();
+  if (!message) return null;
+
+  while (message.toLowerCase().startsWith("warning:")) {
+    message = message.slice("warning:".length).trim();
+  }
+
+  if (message.includes("stdlib version mismatch:")) return null;
+  if (message.includes("cache_hint_ignored_")) return null;
+
+  return message.length > 0 ? message : null;
+}
+
 export function runDelegatedCallsSequential(
   calls: DelegatedCall[],
   runner: (call: DelegatedCall) => DelegatedResult,
@@ -292,7 +335,7 @@ export class RuntimeProcess {
   ) {
     this.workdir = workdir;
     this.onEvent = onEvent;
-    const aiModelArg = model;
+    const aiModelArg = providerSelectionModel(model, openaiBaseUrl);
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
       : "ailang";
@@ -306,6 +349,7 @@ export class RuntimeProcess {
       EXA_API_KEY: process.env.EXA_API_KEY,
       CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
       AILANG_FS_SANDBOX: workdir,
+      AILANG_NO_VERSION_WARNINGS: process.env.AILANG_NO_VERSION_WARNINGS ?? "1",
       MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
       // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
       // MOTOKO_HEADLESS=1 so the AILANG runtime's conversation_loop_v2
@@ -485,7 +529,7 @@ export class RuntimeProcess {
       ],
       {
         env: childEnv,
-        stdio: ["pipe", "pipe", "inherit"],
+        stdio: ["pipe", "pipe", "pipe"],
       }
     );
 
@@ -505,8 +549,19 @@ export class RuntimeProcess {
       }
     });
 
+    const stderrRl = readline.createInterface({
+      input: this.proc.stderr!,
+      crlfDelay: Infinity,
+    });
+    stderrRl.on("line", (line) => {
+      const message = normalizeRuntimeWarning(line);
+      if (!message) return;
+      this.onEvent({ type: "warning", message });
+    });
+
     this.proc.on("exit", () => {
       this.dead = true;
+      stderrRl.close();
       onExit();
     });
   }
