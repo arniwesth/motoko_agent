@@ -329,4 +329,149 @@ dependencies, and are not needed for deterministic code search.
 - CSV quoting handles multiline chunks and commas/quotes in source, verified by a
   round-trip read through chDB `CSVWithNames` (confirmed on chDB 4.1.9).
 - No ClickHouse server is required for v1.
+<!-- Reviewer: GLM 5.2 · 2026-06-28 · Verified against the working tree at review time. -->
+
+## Review Comments — GLM 5.2
+
+Grounded against the current repo (`tools/code-graph/extractor/source_parser.py`,
+`extractor/slugs.py`, `query/cgq.py`, `scripts/install-prerequisites.sh`) and a live
+chDB 4.1.9 probe.
+
+### 🔴 Blocking — "the version pinned in this repo" is not pinned
+
+**Ref:** "Verified contract (chDB 4.1.9, the version pinned in this repo)" (lines 147, 152,
+289) and "must be re-checked on version bumps" (line 289).
+
+`scripts/install-prerequisites.sh:327-338` (`install_chdb`) runs
+`python3 -m pip install --user --break-system-packages chdb` with **no version
+constraint**. There is no `requirements.txt`, constraints file, or lock pinning chDB
+anywhere in the repo (`pip freeze` shows `chdb==4.1.9` incidentally; `chdb-core` is
+`26.5.0`). So:
+
+- The premise "v1 does not need to discover whether these functions exist — only
+  re-verify if the pinned version changes" has no pin to detect a change against. A
+  fresh install, a different machine, or a PyPI release silently swaps the version.
+- A future chDB that drops/regresses `hasToken`/`tokens` would break the `search` named
+  queries with no runtime guard, because `cgq.py` performs no version or
+  feature check (verified: `status_meta` / `run_sql` issue chDB calls unconditionally).
+
+The verification I ran confirms the functions work on 4.1.9 (`positionCaseInsensitive`,
+`match` with `(?i)`/`\b`, `extractAll`, `hasToken`, `tokens`, and `trimBoth` all returned
+expected results; multiline CSV fields round-trip), so the contract is *currently* sound —
+but the "pinned" framing is wrong and the safety argument is hollow without one of:
+
+1. Actually pin: add a `chdb==4.1.9` constraint to `install-prerequisites.sh` (or a
+   committed `constraints.txt`) **and** assert the version at runtime in `cgq.py`
+   (`import chdb; assert chdb.__version__ == "4.1.9"`), surfacing a clear error on drift;
+   **or**
+2. Drop the "pinned" claim and add a one-shot feature-detection query (e.g.
+   `SELECT hasToken('a b','b')`) gated before any token-function named query, falling
+   back to `positionCaseInsensitive` when unavailable.
+
+Option (2) is more robust to the install reality; option (1) is simpler if the project
+is willing to pin. Pick one before v1 lands.
+
+### 🟠 The "Verified contract" list is incomplete and not committed
+
+**Ref:** "Verified contract" block (lines 147-153) and the `trimmed`-drop note's
+`trimBoth(line)` reference (line 82).
+
+- `trimBoth` is cited as a derivable SQL helper but is **not** in the verified
+  enumeration. I confirmed `SELECT trimBoth('  x  ')` returns `'x'` on chDB 4.1.9, so the
+  claim holds — but the doc relies on a function it never lists as verified. Either add
+  `trimBoth` to the contract or avoid referencing it.
+- The "local check confirmed …" is asserted prose with no committed artifact. Since the
+  *entire* v1 convenience ("does not need to discover whether these functions exist")
+  rests on it, commit the check as a runnable smoke under `tools/code-graph/tests/`
+  (or extend `smoke.sh`) so a chDB bump or new contributor can re-run it. Without a
+  committed check, the contract is folklore and will rot the moment someone bumps the
+  (currently unpinned) chDB.
+
+### 🟠 Non-AILANG whole-file chunks double the line text
+
+**Ref:** "For non-AILANG files, v1 uses whole-file chunks (`kind=file`, empty
+`func_slug`)" (lines 116-118) and the bulki-CSV consequence (line 287).
+
+`source_lines.csv` already stores every line of every indexed file. A `source_chunks`
+row with `kind=file` and `text` = the entire host file re-stores that file's full text a
+second time, for chunks that (by the doc's own admission) "have no graph counterpart and
+do not join to `funcs`/`effect_edges`." For the proposed host set
+(`src/tui/src/*.ts`, `AGENTS.md`, `ailang.toml`) a single `.ts` file can be hundreds of
+KB, materialized twice with no join power the line table doesn't already provide. The
+"Consequences" section flags bulkiness generically but does not address this specific
+doubling. Recommend for v1: either drop the `text` column for `kind=file` rows (emit
+`path`/`start_line`/`end_line` only, since line-level text already lives in
+`source_lines`), or exclude non-AILANG files from `source_chunks` entirely and rely on
+line-level search for them.
+
+### 🟡 Schema asymmetry across the three tables
+
+**Ref:** table column lists (lines 53-100).
+
+`source_files` carries `profile` + `include_tests`; `source_lines` carries `profile`
+but not `include_tests`; `source_chunks` carries neither `profile`, `include_tests`, nor
+`lang`. The doc justifies denormalizing `lang`/`module` onto `source_lines` precisely to
+let `WHERE lang='ailang'` avoid a join — then withholds the same convenience from
+`source_chunks`, forcing any chunk-level `WHERE lang=...` to join `source_files`. Either
+state the asymmetry is intentional (and why) or add `lang`/`profile` to
+`source_chunks` for parity. Same question for `include_tests` on `source_lines`.
+
+### 🟡 `is_comment` type unspecified
+
+**Ref:** `source_lines` column notes (line 75) and the `SCHEMAS` integration note
+(lines 160-164).
+
+`is_comment` is described as "best-effort per file kind" but no type is given, while the
+doc is explicit that `line_no`/`start_line` must be `Int64` rather than inferred
+`Nullable(...)`. For consistency, state the type (`UInt8` or `Int64`) and include it in the
+`SCHEMAS` entry spec so it is not left to chDB inference.
+
+### 🟡 Staleness signal is under-specified
+
+**Ref:** "compared by mtime and/or sha256" (line 173) vs. the acceptance criterion
+(lines 324-327).
+
+"and/or" is too vague to implement against. mtime-only is cheap but breaks under git
+operations / checkouts that reset mtimes (a real concern for an agent-driven repo where
+files are rewritten constantly); sha256 is exact but reads every indexed file on every
+`cgq.py status`. The acceptance criterion asserts only the *outcome* ("editing
+`AGENTS.md` marks stale"), not which signal produces it. Pick the v1 default (recommend
+sha256, cached in `source_files.csv` and compared on `status`) and state it; mention the
+other as an explicit fallback. Note `source_files.csv` already plans a `sha256` column, so
+the exact-signal path is nearly free.
+
+### 🟢 Minor — `\b` semantics in the duplicated-literals example
+
+**Ref:** example query (lines 257-271).
+
+`extractAll(line, '\\b[0-9]{3,}\\b')` uses RE2 `\b` word boundaries, so digit runs
+adjacent to identifiers (`foo123`, `x1f2`) do **not** match — only standalone numeric
+literals do. I verified this: `extractAll('a1 b22 c333', '\\b\\d{2,}\\b')` returns `[]`
+because `22`/`333` are glued to letters with no word boundary. That may well be the intent
+for "duplicated literals", but it is unstated; a reader expecting "any 3+ digit run" will
+be surprised. Add a one-line caveat, or drop `\b` if the goal is any run of 3+ digits.
+
+### 🟢 Minor — `func_spans` boundary is "any top-level keyword", not "next func"
+
+**Ref:** "`func_spans` returns a half-open span `[start, end)` where `end` is the next
+top-level declaration (or EOF)" (lines 111-114).
+
+Accurate, but worth a clarifying note: `source_parser.TOPLEVEL_RE` (line 10) matches
+`func`/`type`/`module`/`import`, so a `kind=func` chunk ends at the next `type`,
+`module`, or `import` line, not only the next `func`. This is correct behavior (a
+trailing `type` decl properly terminates the preceding function body) but the doc's
+phrasing could be read as "next function". The `end_line = end` (inclusive, 1-based)
+mapping is correct: `end` is the 0-based index of the boundary line, so 1-based last body
+line is `end`. No action beyond a wording tweak.
+
+### Summary
+
+The design is sound and well-scoped; the slug/`func_slug` join discipline
+(`{module}#{name}` vs `{module}#func:{name}`) is correctly handled and the
+staleness-from-`source_files` insight is a real improvement over the current
+`modules`-only check (confirmed: `cgq.py:106` keys freshness off `SELECT path FROM
+modules`, which excludes host files). The blocking issue is narrowly factual: the
+"pinned version" premise is false against the actual install path, which undermines the
+only guard the doc proposes. Resolve the pin (🔴) and commit the verification (🟠) and v1
+is ready to implement.
 
