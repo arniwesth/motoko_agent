@@ -299,6 +299,128 @@ items are related, but ClickHouse should provide the inspectable evidence rows. 
 answer that implies causality should still point to explicit paths, sections, changed
 files, commits, and hunks.
 
+### Local PoC Results
+
+A quick local PoC ran EmbeddingGemma through Ollama on the Mac host and called it from
+the dev Docker container over `host.docker.internal`. Because another process was
+already using Ollama's default port `11434`, the host server was started on `11435`:
+
+```bash
+OLLAMA_HOST=127.0.0.1:11435 ollama serve
+ollama pull embeddinggemma
+```
+
+The container successfully reached:
+
+```text
+http://host.docker.internal:11435/api/embed
+```
+
+The model returned 768-dimensional vectors. The PoC script is:
+
+```text
+tools/code-graph/query/agent_semantic_poc.py
+```
+
+Initial narrow test over `.agent/projects/002_code_graph/*.md`:
+
+```text
+Markdown files: 9
+Sections: 172
+First run: roughly 1 minute
+Cached run: sub-second to about 1 second
+```
+
+Expanded all-`.agent` test:
+
+```text
+Markdown files under .agent: 219
+Legacy heading-only sections: 3,766
+V2 merged/context sections: 2,987
+Embedding model: embeddinggemma
+Vector size: 768
+Cache: tools/code-graph/.out/agent_section_embeddings_embeddinggemma.jsonl
+```
+
+The first all-`.agent` legacy pass took roughly 8 minutes cold. Cached full-corpus
+queries were around 1 second.
+
+### Chunking Quality Finding
+
+The first version split Markdown purely by headings. That produced many tiny sections
+such as:
+
+```text
+Execution Plan
+Test Plan
+Phase Plan
+```
+
+Those tiny sections often ranked highly for broad planning queries even when they had
+little useful context. For example, the query:
+
+```text
+plans related to source_chunks and func_slug
+```
+
+initially surfaced generic plan headings from unrelated files.
+
+A pragmatic v2 improved ranking quality by:
+
+- prefixing embedded text with path, file title, and heading hierarchy;
+- merging sections shorter than 200 characters into neighboring context;
+- adding a small lexical boost for exact query terms, paths, and code-like symbols.
+
+After v2, the same query ranked directly relevant source-index documents first:
+
+```text
+HANDOFF-source-index-plan.md :: What the plan must specify
+HANDOFF-source-index-plan.md :: Decisions already made - do not relitigate
+AILANG_Source_Index.md :: Fixed Decisions
+ADR-003-clickhouse-source-index.md :: Decision / Tables
+AILANG_Source_Index.md :: Phase 1: Extraction
+AILANG_Source_Index.md :: Phase 2: Query Surface
+RESEARCH-project-memory-index.md :: EmbeddingGemma as a Semantic Recall Layer
+AILANG_Source_Index.md :: Phase 3: Graph Joins And Docs
+ADR-003-clickhouse-source-index.md :: Scope / In v1
+HANDOFF-source-index-implementation.md :: Decisions already made - do not relitigate
+```
+
+This suggests the core challenge is not raw embedding performance. It is choosing
+good document units and combining semantic similarity with exact technical signals.
+
+### Batching Finding
+
+Ollama's `/api/embed` endpoint accepts an array of input strings and returns one
+embedding per input. Batching cache misses materially improved cold indexing time.
+
+Measured on the all-`.agent` v2 corpus:
+
+```text
+Unbatched:
+  2,987 sections
+  7m31s
+
+Batch size 16:
+  2,987 sections
+  2m23s
+
+Batch size 32:
+  2,987 sections
+  2m13s
+
+Batch size 64:
+  2,987 sections
+  2m05s
+
+Cached query:
+  0 cache misses
+  about 1.5s
+```
+
+Defaulting the PoC to batch size 64 is reasonable on this setup. It reduced cold
+all-`.agent` indexing time by roughly 3.6x compared with unbatched calls.
+
 ## Local DeepSeek V4 Flash vs EmbeddingGemma
 
 If a local DeepSeek V4 Flash model is available and practically free to use, it should
