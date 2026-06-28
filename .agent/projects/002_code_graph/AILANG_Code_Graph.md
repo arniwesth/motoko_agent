@@ -40,10 +40,12 @@ call-graph/effect output is labeled approximate** with coverage + staleness.
 **Accept gate:** golden fixtures pass + measured precision/recall recorded + the
 effect oracle holds.
 
-**⚠️ One decision needed (FLAG 1, below):** the ADR's seed-catalog source — `iface`
-on stdlib modules — **does not work on the v0.26.0 binary**. The plan falls back to
-**module-granular seeding** from `builtins list --by-effect` (sound superset;
-over-seeding measured by the oracle). Needs your ratification.
+**Decided (FLAG 1, below):** the ADR's seed-catalog source — `iface` on stdlib
+modules — **does not work on the v0.26.0 binary**, so v1 uses **module-granular
+seeding** from `builtins list --by-effect` (sound superset; over-seeding measured by
+the oracle). The clean per-symbol fix is filed upstream as an `ailang-feedback`
+feature request and **pre-wired to a one-line switch** (`SEED_GRANULARITY`) so
+adoption needs no schema/consumer/CSV changes when AILANG ships it.
 
 ---
 
@@ -51,9 +53,11 @@ over-seeding measured by the oracle). Needs your ratification.
 
 Per the handoff's grounding rule ("if you find an ADR decision that is wrong or
 contradictory, flag it for the user — do not silently diverge"), two items in
-ADR-002 require a decision before Phase 0 closes. **Neither blocks the plan** (both
-have validated fallbacks built in), but both change a stated ADR mechanism, so they
-are conversations, not silent edits.
+ADR-002 diverged from the binary's actual behavior. Both are now **resolved**
+(decided 2026-06-28): v1 uses module-granular effect seeding from
+`builtins list --by-effect`, and the clean per-symbol fix is filed upstream and
+pre-wired to a one-line switch. The flags are retained below as the rationale + the
+upstream-adoption path, not as open decisions.
 
 ### FLAG 1 (substantive) — the seed-catalog source in ADR Phase 0 does not work as written
 
@@ -78,8 +82,8 @@ So app code never calls the `_net_*` primitives directly either — it imports t
 `import std/env (getEnv)`), and we cannot read those wrappers' effect rows via
 `iface`.
 
-**Proposed correction (built into this plan):** derive the seed catalog at
-**module granularity** from `builtins list --by-effect` alone, which maps every
+**DECISION (ratified 2026-06-28): module-granular seeding.** Derive the seed catalog
+at **module granularity** from `builtins list --by-effect` alone, which maps every
 primitive to its `(module, effect)`. Group by module → each `std/X` gets an effect
 set (`std/net→{Net}`, `std/fs→{FS}`, `std/env→{Env}`, `std/process→{Process}`,
 `std/clock→{Clock}`, `std/io→{IO}`, pure modules→∅). Then **seed by import
@@ -94,23 +98,52 @@ URL-encode in `std/net` would seed `Net`). That over-seeding is exactly what the
 reported, not hidden. A *per-symbol* precision upgrade (parse stdlib source
 signatures for `! {E}`) is available but **incomplete** on its own — validated:
 `std/process` annotates `0/4` public funcs inline and `std/net`'s multi-line sigs
-are missed by a line parser — so it is a Phase-2 refinement layered **on top of**
-the module-granular seed, never a replacement.
+are missed by a line parser — so it is layered **on top of** the module-granular
+seed if/when AILANG exposes the data cleanly, never a replacement.
 
-**Decision needed:** ratify module-granular seeding (with per-symbol as a later
-precision upgrade), or invest Phase-0 effort chasing a working stdlib-`iface` path
-(e.g. an upstream `ailang-feedback` ask for `iface --stdlib <name>`). Recommended:
-ratify the fallback; file the upstream ask in parallel.
+#### Upstream feature request — file it, and pre-wire the adoption
+
+The clean per-symbol fix belongs in AILANG, not in a brittle stdlib-source scraper.
+**File this via the `ailang-feedback` skill** (Phase-0 task 6 carries the ready-to-
+submit text); it is the proper home for the data and removes FLAG 2's brittleness too.
+
+> **Ask (one line):** a machine-readable way to read **public stdlib function → effect
+> row** mappings — e.g. `ailang iface --stdlib std/net` (accept a stdlib module name
+> and emit the standard `ailang.iface/v1` JSON with each public fn's `effects`
+> array), **or** extend `ailang builtins list --by-effect --public` to include the
+> exported wrapper functions (not only the `_`-prefixed primitives). Today `iface`
+> on a stdlib path fails (MOD010 / invalid-characters / file-not-found, every form),
+> so app-callable stdlib effect rows are not machine-readable.
+
+**Adoption is pre-wired to a one-line switch — when the feature lands, no schema, no
+consumer, and no CSV changes:**
+
+- The catalog exposes a single resolver the seeding pass calls and **never** changes:
+  `effects_for(catalog, std_module, symbol) -> set[effect]`. Today it ignores
+  `symbol` and returns the module set; per-symbol mode returns the symbol set when
+  present, else falls back to the module set.
+- A single flag in `extractor/config.py` — `SEED_GRANULARITY = "module"` — flips to
+  `"symbol"`. The **only** new code needed at that point is one builder function,
+  `parse_stdlib_public_iface()`, that fills the `(std_module, symbol) → effects` map
+  from the new AILANG command. The consumer (`effects.py`), `std_calls.csv` (which
+  **already records `symbol`**), `effect_edges.csv`, the oracle, and the CLI are all
+  untouched.
+- `seed_catalog.json` records `"granularity"` and `"source"`, so the oracle/CLI label
+  which mode produced the effects, and the **over-seed metric in `oracle_report.json`
+  auto-quantifies the precision gain** the moment the switch is flipped — the upgrade
+  proves itself with no extra test scaffolding.
 
 ### FLAG 2 (minor) — stdlib source location is real but brittle
 
 Stdlib `.ail` source **is** on disk at `~/.local/share/ailang/std/*.ail` (validated;
 `export func httpGet(url: string) -> string ! {Net}` is greppable there). But that
 path is install-specific, undocumented as stable, not env-overridable via any flag
-surfaced in `ailang --help`, and blocked from `iface` by MOD010. The plan therefore
-treats `builtins list --by-effect` (a stable CLI contract) as authoritative and uses
-the stdlib source only as an **optional** Phase-2 precision input, with the path
-resolved at runtime and the build degrading gracefully if it is absent.
+surfaced in `ailang --help`, blocked from `iface` by MOD010, **and incomplete as a
+source** (validated: `std/process` annotates `0/4` public funcs inline; multi-line
+sigs are missed). **Decision:** v1 does **not** scrape stdlib source at all — it relies
+solely on `builtins list --by-effect` (a stable CLI contract). The per-symbol
+precision path is the **upstream feature request** (FLAG 1 / Phase-0 task 6(c)), not
+source scraping. This flag collapses into FLAG 1's FR and needs no separate handling.
 
 ---
 
@@ -160,18 +193,18 @@ still sits at repo-root `code-graph/`.
 ```
 tools/code-graph/
 ├── README.md                  # what this is, how to run, how agents query it
-├── extract.sh                 # orchestrator: structural pass → typed pass → effect pass → viz; records built_at + ailang_version
+├── extract.sh                 # orchestrator: structural → typed → effect → viz; records built_at + ailang_version; `--structural-only` skips the typed+effect passes (no hydration)
 ├── .gitignore                 # ".out/"
 ├── extractor/
 │   ├── __init__.py
 │   ├── slugs.py               # slug construction + (table,slug) uniqueness asserts; dup-import flagger
 │   ├── source_parser.py       # HARDENED PoC: imports, func spans, call resolution, ctor decls, interpolation scan
 │   ├── iface_pass.py          # drives `ailang iface`, ok/failed/partial classifier
-│   ├── seed_catalog.py        # builds stdlib module→effect map from `builtins list --by-effect`
+│   ├── seed_catalog.py        # builds stdlib effect map; exposes effects_for(catalog, std_module, symbol); module-granular today, symbol-granular behind SEED_GRANULARITY (one-line switch on AILANG fix)
 │   ├── effects.py             # backward propagation + oracle check → effects.csv, effect_edges.csv
-│   ├── roots.py               # programmatic root-set assembly (TS scan, registry, globs) for unimported detection
+│   ├── roots.py               # (Phase 1) programmatic root-set assembly (TS scan, registry, globs) → modules.csv is_root
 │   ├── emit.py                # writes all CSVs + extraction_status.csv (built_at, ailang_version, graph_schema)
-│   └── config.py              # roots (src, scripts, examples), std-module filter, GRAPH_SCHEMA constant
+│   └── config.py              # roots (src, scripts, examples), std-module filter, GRAPH_SCHEMA, SEED_GRANULARITY ("module"→"symbol")
 ├── query/
 │   └── cgq.py                 # chDB CLI: SQL/named-query in, JSON out, staleness+coverage banners, truncation
 ├── viz/
@@ -187,11 +220,13 @@ tools/code-graph/
 │   ├── test_seed_catalog.py
 │   ├── test_effects_oracle.py
 │   └── test_precision_recall.py
-└── .out/                      # GITIGNORED — generated CSVs + .mmd/.svg
+└── .out/                      # GITIGNORED — generated CSVs + reports + .mmd/.svg
     ├── modules.csv  funcs.csv  types.csv  ctors.csv
-    ├── imports.csv  invokes.csv  uses.csv
+    ├── imports.csv  invokes.csv  std_calls.csv  uses.csv
     ├── effects.csv  effect_edges.csv
     ├── extraction_status.csv
+    ├── seed_catalog.json       # stdlib module→effect map (Phase 0 build input, cached here)
+    ├── oracle_report.json      # Phase 2 reachable-vs-declared divergence report
     └── *.mmd  *.svg
 ```
 
@@ -202,6 +237,13 @@ tools/code-graph/
   repo-root `code-graph/visualize.py` (it shells `bun tools/mmd2svg/mmd2svg.ts in out`
   — validated to exist). Its namespace-coarsening graph-building is **not** reused
   (AILANG modules are path-based, not `namespace.Type`).
+  - **Scoping is mandatory, not optional.** The tree is ~68 modules / ~415 funcs
+    (measured), so a whole-repo func-level SVG is unreadable. Views take a scope:
+    a `--scope <dir-prefix>` (e.g. `src/core/ext`) and/or a seed
+    `--around <module|func> --depth N`. The module-dependency view additionally
+    offers **directory-level coarsening** (collapse `src/core/ext/*` to one node) as
+    the AILANG analog of the C# namespace coarsening. Default render set = one
+    coarsened module-dep graph + per-effect reachability graphs (naturally small).
 - `query/cgq.py` reuses the *mechanism* of `.agent/tools/code-graph-query.ts`
   (auto-create a view per existing CSV, query, JSON-parse, truncate at N rows) but
   swaps `clickhouse local` for in-process `chdb.query(sql, "JSON")`. The `.ts`
@@ -218,9 +260,16 @@ it now would touch `.agent/tools/*.ts` path assumptions and is out of scope.
 ## 2. CSV schemas (exact columns)
 
 All CSVs are `CSVWithNames` (header row = column names). Slugs are case-preserving,
-`{module}#{name}`. `module` columns are repo-relative paths without `.ail`. Booleans
-emit as `0`/`1`. Empty/unknown effect or status fields emit as empty string, never
-`NULL`. Every file carries a header even when zero rows.
+`{module}#{name}`. `module` columns are repo-relative paths without `.ail`. Every
+file carries a header even when zero rows.
+
+**Typing rule (chDB CSV inference).** chDB infers a column's type from its values, so
+a column that mixes integers with empty strings infers as `String` and silently
+breaks numeric predicates. Therefore: a numeric column that is **always present**
+(`n_funcs`, `decl_matches_path`, `distance`) emits as a bare integer; a flag/number
+that can be **unknown** (`pure`) emits as a **string** `'1'`/`'0'`/`''` and is
+compared as a string. Booleans that are always known emit `0`/`1` (integer). Unknown
+text fields emit empty string, never `NULL`.
 
 ### Node tables (kind-separated; each its own slug space)
 
@@ -236,18 +285,23 @@ emit as `0`/`1`. Empty/unknown effect or status fields emit as empty string, nev
 | `is_root` | int | `1` if in the unimported-detection root set |
 | `root_reason` | string | provenance: `ts_host` / `extension` / `script_main` / `example_main` / `test` / `generated` / `` |
 
-**`funcs.csv`**
+**`funcs.csv`** — note the deliberate split between *source facts* (always present)
+and *typed facts* (present only when `iface` provided this func). `exported` and
+`is_internal` are **source-derived** (a `func` is internal iff it has no `export`
+keyword), so an `export func` in a module `iface` couldn't load is correctly
+`exported=1, is_internal=0, has_typed_sig=0` — never mislabeled internal.
 | column | type | notes |
 |---|---|---|
 | `slug` | string | `{module}#{name}` |
 | `module` | string | module slug |
 | `name` | string | function name, case-preserving |
-| `exported` | int | `1` if `export func` |
-| `is_internal` | int | `1` if discovered by source parse but absent from `iface` funcs |
-| `type_sig` | string | from `iface` (exported, `ok` only); else `` |
-| `declared_effects` | string | pipe-joined `iface` effects array, e.g. `Env|FS|Net`; `` if none/unknown |
-| `pure` | int | passthrough from `iface`; `` if unknown (ADR: no signal today) |
-| `iface_status` | string | `ok` / `partial` / `failed` / `internal` (the owning module's status, or `internal`) |
+| `exported` | int | `1` if source has `export func` (source fact) |
+| `is_internal` | int | `1` iff `exported=0` (source fact; kept for query convenience) |
+| `has_typed_sig` | int | `1` if `iface` emitted a signature for this func (only ever `1` in `ok`/`partial` modules, and only for exported funcs) |
+| `type_sig` | string | from `iface` when `has_typed_sig=1`; else `` |
+| `declared_effects` | string | pipe-joined `iface` effects array, e.g. `Env\|FS\|Net`; `` if none or `has_typed_sig=0` |
+| `pure` | string | `'1'`/`'0'` passthrough from `iface`; `''` if `has_typed_sig=0` (ADR: no signal today) |
+| `module_iface_status` | string | owning module's classification: `ok` / `partial` / `failed` (so a func's typed-data availability is queryable) |
 
 **`types.csv`**
 | column | type | notes |
@@ -269,22 +323,39 @@ emit as `0`/`1`. Empty/unknown effect or status fields emit as empty string, nev
 
 ### Edge tables (join to node tables by edge type)
 
-**`imports.csv`** — module → module (std-filtered, alias-aware)
+**`imports.csv`** — **repo** module → **repo** module (alias-aware). `std/*` imports
+are intentionally **not** here: they carry no repo-module edge, and effect seeding
+reads call-level `std_calls.csv` instead. (The parser still reads `std/*` import lines
+in-memory to resolve which calls are std calls.)
 | column | notes |
 |---|---|
 | `from_module` | importing module slug |
-| `to_module` | imported module slug (repo modules only; `std/*` excluded from this table) |
+| `to_module` | imported repo module slug |
 | `alias` | alias if `import … as X`, else `` |
-| `symbols` | pipe-joined selective symbols, e.g. `readFile|writeFile`, else `` |
-| `is_std` | `1` if target was `std/*` (kept here for the seed pass, filtered from module-dep views) |
+| `symbols` | pipe-joined selective symbols, e.g. `readFile\|writeFile`, else `` |
 
-**`invokes.csv`** — func → func (approximate; whole-program; hydration-free)
+**`invokes.csv`** — **repo** func → **repo** func (approximate; whole-program;
+hydration-free). Calls to `std/*` symbols do **not** appear here — they go to
+`std_calls.csv` so this table stays a clean repo-only call graph for the `callers`
+query and call-graph viz.
 | column | notes |
 |---|---|
 | `from_slug` | caller func slug |
-| `to_slug` | callee func slug |
-| `resolution` | `local` / `import` / `alias` / `interpolation` |
-| `approximate` | always `1` in v1 (label) |
+| `to_slug` | callee func slug (a repo func) |
+| `resolution` | `local` (same module) / `import` (cross-module, incl. aliased) / `interpolation` (call inside `${…}`) |
+| `approximate` | always `1` in v1 (in-band label) |
+
+**`std_calls.csv`** — func → stdlib symbol (the **effect-seed source**; source-parsed,
+hydration-free). Every call resolved to a symbol imported from `std/*` (selective,
+aliased, or qualified form) emits one row. This is what Phase 2 joins against the seed
+catalog; the specific `symbol` is recorded for the future per-symbol precision upgrade
+even though module-granular seeding only needs `std_module`.
+| column | notes |
+|---|---|
+| `from_slug` | calling repo func slug |
+| `std_module` | the `std/X` the symbol was imported from, e.g. `std/env` |
+| `symbol` | the called symbol, e.g. `getEnv` |
+| `resolution` | `selective` / `alias` / `qualified` (how the import was written) |
 
 **`uses.csv`** — func → type (from exported `iface` signatures only)
 | column | notes |
@@ -308,16 +379,18 @@ emit as `0`/`1`. Empty/unknown effect or status fields emit as empty string, nev
 | `distance` | call-graph hops from the seed; `0` = this func directly calls the stdlib symbol |
 | `derivation` | `primitive_seed` (distance 0) or `backward_reachable` (distance > 0) |
 
-**`extraction_status.csv`** — staleness + classification + provenance (one row per module + a header/meta convention)
+**`extraction_status.csv`** — one row per module; the four build-metadata columns are
+**denormalized onto every row** (identical within a run) so any single row answers
+"how fresh is this graph?" without a side file.
 | column | notes |
 |---|---|
 | `module` | module slug |
 | `iface_status` | `ok` / `partial` / `failed` |
 | `iface_detail` | short reason, e.g. `empty_funcs` / `no_json` / `warning_prefixed` |
-| `built_at` | ISO-8601 UTC of this extraction run (same for all rows in a run) |
-| `ailang_version` | `ailang --version` string at build time |
-| `graph_schema` | integer `GRAPH_SCHEMA` constant; bump invalidates cache |
-| `iface_schema` | `ailang.iface/v1` (per-row, for future migration) |
+| `built_at` | ISO-8601 UTC of this extraction run (identical on every row) |
+| `ailang_version` | `ailang --version` string at build time (identical on every row) |
+| `graph_schema` | integer `GRAPH_SCHEMA` constant; bump invalidates cache (identical on every row) |
+| `iface_schema` | `ailang.iface/v1` (identical on every row; lets a future `v2` be migrated/rejected) |
 
 > A `graph_schema` bump forces a full refresh; the CLI rejects a cache whose
 > `graph_schema` differs from the running extractor's constant.
@@ -341,23 +414,41 @@ validated ground. Mirrors ADR Phase 0.
    in the function's log line.
    - **Validate** the `file('…','CSVWithNames')` in-process path with a throwaway
      2-row CSV and `chdb.query("SELECT … FROM file(...)","JSON")`.
-2. **Build the seed catalog** (`extractor/seed_catalog.py`) — see FLAG 1.
+   - **Validate `WITH RECURSIVE`** in the bundled chDB (needed for transitive
+     `importers`/`callers` closures — the DST R3/R13/R8 answers). ClickHouse gates
+     recursive CTEs behind the analyzer (`SET enable_analyzer=1` / `allow_experimental_analyzer`
+     on older builds); confirm the exact setting for this wheel. **Fallback if
+     unsupported or unstable:** compute the closure in Python (iterate the edge table
+     to a fixed point) and hand chDB only the resolved frontier. Record which path
+     works so Phase 3 doesn't rediscover it.
+2. **Build the seed catalog** (`extractor/seed_catalog.py`) — module-granular per the
+   FLAG-1 decision, structured so the per-symbol upgrade is a one-line switch.
    - Parse `ailang builtins list --by-effect` (validated; 18 effect groups incl.
      `FS(33)`, `Env(3)`, `Net(2)`, `Process(4)`, `Clock(5)`, `IO(6)`, `Pure(209)`).
      Each line is `<primitive>  <module>`; the `# Effect (n)` headers give the effect.
-   - Produce `module → set(effect)` (drop the `Pure` group). Persist as
-     `seed_catalog.json` under `.out/` with the `ailang_version` it was built from.
-   - **Gate the open mechanism (FLAG 1):** record in the catalog file which source
-     produced each mapping (`builtins_by_effect`), so a later per-symbol upgrade is
-     additive.
+   - Produce `module_effects: {std_module → set(effect)}` (drop the `Pure` group).
+   - **Resolver boundary (the adoption seam).** Expose exactly one function the
+     seeding pass calls — `effects_for(catalog, std_module, symbol) -> set[effect]` —
+     and a `build_catalog()` that branches on `config.SEED_GRANULARITY`:
+     `"module"` (today) fills only `module_effects`; `"symbol"` (post-AILANG-fix) also
+     fills `symbol_effects: {(std_module, symbol) → set(effect)}` via a single new
+     `parse_stdlib_public_iface()` builder, and `effects_for` prefers the symbol set,
+     falling back to the module set. Nothing downstream of `effects_for` ever changes.
+   - Persist `seed_catalog.json` under `.out/` with `ailang_version`, `granularity`
+     (`"module"`/`"symbol"`), and per-mapping `source` (`builtins_by_effect`), so the
+     oracle/CLI can label provenance and the over-seed metric can be compared across
+     granularities.
 3. **Snapshot `iface` JSON** for a representative module set (`types`, `version`,
    `compaction` = `ok`; `runtime`, `agent_loop_v2` = `failed` pre-hydration) into
    `tests/fixtures/iface/`. Pin the `ailang.iface/v1` shape:
    funcs = `{name, type, effects[], pure}`; types = `{name, ctors[]?}`
    (validated against the live binary).
 4. **Ship the `ok/failed/partial` classifier** (`extractor/iface_pass.py`) with golden
-   fixtures (see §"Classifier" below). The classifier is pure (stdout string → verdict)
-   and unit-tested independent of the binary.
+   fixtures (see §"Classifier" below). Signature: `classify(stdout: str, source_func_count: int) -> verdict`.
+   JSON-validity (`ok` vs `failed`) is a pure function of stdout; the `partial`
+   refinement additionally needs the module's source-parsed func count (an `ok`-shaped
+   JSON with empty `funcs` is only `partial` if source found ≥1 func). Both inputs are
+   in-memory, so it is still unit-tested independent of the binary.
 5. **Build the precision/recall harness** (`tests/test_precision_recall.py`) against
    the hand-validated 3-module `sample3/` corpus. The harness loads
    `sample3/<mod>.expected_invokes.json` (hand-curated true edge set) and compares
@@ -365,10 +456,18 @@ validated ground. Mirrors ADR Phase 0.
    false-negative breakdown. **Must include `agent_loop_v2`** (which `iface` cannot
    load — proves the hydration-free path). The numbers are recorded in §"Acceptance"
    below before v1 is Accepted.
-6. **File upstream asks** via the `ailang-feedback` skill: (a) `ailang debug ast --json`
-   (call-graph precision upgrade — Phase 4); (b) `pure`-semantics question; (c) **NEW
-   from this plan:** a machine-readable way to get stdlib public-function effect rows
-   (`iface --stdlib <name>` or equivalent), since `iface` on stdlib paths fails (FLAG 1).
+6. **File upstream asks** via the `ailang-feedback` skill. Three, with (c) the one
+   that unlocks the FLAG-1 precision upgrade — file it explicitly, not as an aside:
+   - (a) `ailang debug ast --json` (call-graph precision upgrade — Phase 4).
+   - (b) `pure`-semantics question (why invariant `true`; what it means).
+   - (c) **Machine-readable public-stdlib-function effect rows** (the FLAG-1 fix).
+     Submit the ready-to-file text from the FLAG-1 box verbatim: ask for
+     `ailang iface --stdlib <module>` emitting `ailang.iface/v1` JSON with each public
+     fn's `effects`, **or** `builtins list --by-effect --public` including the exported
+     wrappers. Note in the issue that adopting it on the Motoko side is a one-line
+     `SEED_GRANULARITY` flip (link this plan), so AILANG maintainers see the consumer
+     is already pre-wired. **Record the issue URL/number in this plan and in
+     `seed_catalog.py`'s docstring** so the switch's owner can track when it lands.
 
 ### Acceptance gate (Phase 0)
 
@@ -420,14 +519,23 @@ structural+call graph ships first").
    `.agent/projects/002_code_graph/poc_callgraph.py`, with these specific upgrades
    (ADR cut line):
    - **Slugs → `#` separator, kind-separated** (replace the PoC's `{mod}.{name}`).
-   - **Imports:** std-filtered for the module-dep graph but **retained with
-     `is_std=1`** in `imports.csv` (the effect seed pass needs them); alias-aware;
-     selective-symbol lists parsed into `symbols`.
+   - **Imports:** repo→repo edges to `imports.csv` (std excluded); `std/*` import
+     lines are still parsed in-memory to drive std-call resolution (→ `std_calls.csv`);
+     alias-aware; selective-symbol lists parsed into `symbols`.
    - **Func discovery:** all top-level `func` (col-0), exported + internal.
+     `exported` = the `export` keyword precedes the decl — note the real order is
+     `export pure func …` (validated: `compaction.ail` uses `export pure func`, so a
+     naïve `^export func` test gives 0; the PoC's `(?:export\s+)?(?:pure\s+)?func`
+     regex is correct). Cross-check the `export`-keyword set against `iface`'s exported
+     set for `ok` modules as a consistency assertion.
    - **Alias-only-qualified resolution (DO):** map `import std/x as X (f)` calls
      written `X.f(` to the import; do **not** also map a bare `f(` to it unless `f`
      was selectively imported (fixes the PoC's over-tolerant `imp[s]=mod` on line 37,
      which can create false edges).
+   - **Split repo calls from std calls (DO):** a call resolved to a repo module → an
+     `invokes` row; a call resolved to a `std/*` symbol → a `std_calls` row (not
+     `invokes`). This keeps `invokes` a clean repo-only graph and gives Phase 2 its
+     seed source. Handle all three std-import forms (selective, aliased, qualified).
    - **Source-derived ctor filtering (DO):** parse `type T = Ctor(...) | …` decls →
      `ctors.csv` with `source=source`; exclude those names from `invokes`. (Hydration-
      free — no `iface` dependency, resolving the GLM ctor concern.)
@@ -442,12 +550,20 @@ structural+call graph ships first").
 2. **Slug + integrity layer** (`extractor/slugs.py`): assert `(table, slug)`
    uniqueness at emit; **flag duplicate unqualified imports** (`import a (f)` +
    `import b (f)`) within a module as a loud build error; emit `decl_matches_path`.
-3. **Emit** `modules.csv`, `funcs.csv` (with `is_internal=1`, `iface_status=internal`
-   for now), `imports.csv`, `invokes.csv`, `ctors.csv` (`source=source`).
-4. **Query via chDB** (`query/cgq.py`, minimal form) — enough to run the
+3. **Root-set assembly** (`extractor/roots.py`) — moved here (it is pure
+   source/config scanning, hydration-free, and `modules.csv` carries `is_root`).
+   Populate `is_root` / `root_reason` (categories + detection in §Phase-3
+   "Unimported", which consumes this data). The *query/labeling* stays Phase 3; the
+   *data* is produced here so `modules.csv` is complete in one pass.
+4. **Emit** `modules.csv` (incl. `is_root`/`root_reason`), `funcs.csv` (source columns
+   only: `exported`, `is_internal`, `has_typed_sig=0`, `module_iface_status=''` — Phase 2
+   backfills the typed columns), `imports.csv`, `invokes.csv`, `std_calls.csv`,
+   `ctors.csv` (`source=source`).
+5. **Query via chDB** (`query/cgq.py`, minimal form) — enough to run the
    module-dependency and "who calls X" queries.
-5. **Viz** (`viz/visualize.py`): module-dependency and call-graph Mermaid → SVG via
-   the reused `render_svg` path.
+6. **Viz** (`viz/visualize.py`): module-dependency and call-graph Mermaid → SVG via
+   the reused `render_svg` path. **Scoped** (see viz note below) — a whole-repo
+   415-func call graph is unreadable.
 
 ### Acceptance gate (Phase 1)
 
@@ -478,6 +594,10 @@ One `*.ail` input + `*.expected.json` per case (ADR Acceptance list), in
 | `qualified` | `Mod.fn(` resolves to `Mod`'s module |
 | `same_name` | `f` defined locally AND imported → local wins; documented behavior |
 | `dup_import` | two unqualified imports of `f` → build error raised |
+| `std_call` | `import std/env (getEnv)` + `getEnv(` → a `std_calls` row (`std/env`), **not** an `invokes` row |
+
+Plus a **root-set assembly test** (`roots.py`): synthetic TS string-literals + `ailang.toml [extensions]` + `scripts`/`examples`/`*_test.ail` globs → the expected
+`is_root`/`root_reason` set, including the `test "…"`/`property "…"` detection.
 
 ---
 
@@ -490,8 +610,10 @@ structure from Phase 1 stays intact.
 ### Ordered tasks
 
 1. **`iface` pass** (`extractor/iface_pass.py`): run `ailang iface` per module,
-   classify (Phase 0 classifier), and backfill `funcs.csv` (`exported`, `type_sig`,
-   `declared_effects`, `pure`, `iface_status`), emit `types.csv`, merge `iface` ctors
+   classify (Phase 0 classifier), and backfill `funcs.csv` typed columns
+   (`has_typed_sig`, `type_sig`, `declared_effects`, `pure`, `module_iface_status`;
+   `exported`/`is_internal` are source facts already set in Phase 1), emit `types.csv`,
+   merge `iface` ctors
    into `ctors.csv` (`source=iface`, cross-checking the source-derived set), emit
    `uses.csv` (parse type references out of `type_sig` strings — **type names only,
    never effects**; ADR §"Effects come from the `effects` array, full stop"), and
@@ -501,33 +623,40 @@ structure from Phase 1 stays intact.
    effect in its `iface` `effects` array.
 3. **Seed + backward propagation → `effect_edges.csv`** (`extractor/effects.py`):
 
-   **Seeding (distance 0).** For each func `F` and each call `F → s` where `s` is a
-   symbol imported via `import std/X (…)` (read from `imports.csv`, `is_std=1`) and
-   `effects(std/X)` from the seed catalog is non-empty: emit one
-   `effect_edges` row per `e ∈ effects(std/X)` with
+   **Seeding (distance 0).** Read `std_calls.csv`. For each row `(F, std_module, …)`
+   where `effects(std_module)` from the seed catalog is non-empty: emit one
+   `effect_edges` row per `e ∈ effects(std_module)` with
    `(func_slug=F, effect=e, source_func_slug=F, distance=0, derivation=primitive_seed)`.
+   (`std_calls.csv` is the dedicated seed source emitted in Phase 1 — no re-parsing.)
 
    **Backward propagation (distance > 0).** Build the reverse `invokes` graph
    (callee→caller). For each seeded `(func, effect)`, BFS **backward** over callers;
    each caller `C` at hop `d` gets
    `(func_slug=C, effect=e, source_func_slug=<original seed func>, distance=d,
    derivation=backward_reachable)`, keeping the **minimum** `distance` per
-   `(func, effect, source)`. Terminate per ADR's directionality: effects flow
-   callee→caller only (never the reverse).
+   `(func, effect, source_func_slug)`. A `(func, effect)` pair may therefore have
+   multiple rows (one per seed source/path) — that is the audit trail; `reaches`
+   queries `DISTINCT` on `(func, effect)`. Effects flow callee→caller only.
 
-   *(Algorithm is sound-superset given FLAG-1 module-granular seeding; over-seeding is
-   surfaced by the oracle, below.)*
+   *(Algorithm is a sound superset given FLAG-1 module-granular seeding; over-seeding
+   is surfaced by the oracle, below.)*
 
-4. **Oracle check** (`tests/test_effects_oracle.py` + a build report): for every
+4. **Oracle check** (`tests/test_effects_oracle.py` + `oracle_report.json`): for every
    `ok` module's exported func `F`, compute `reachable(F) = { effect : ∃ effect_edges
-   row for F }` and compare to `declared(F)` from `effects.csv`:
-   - `reachable ⊇ declared` is the **target** (every declared effect is reached).
-     A **missing** declared effect (`declared \ reachable ≠ ∅`) = **call-graph
-     incompleteness** → the precision metric; enumerate, don't wave away.
-   - `reachable ⊋ declared` (over-reach) = **over-seeding** from module-granular
-     seeds (FLAG 1) or a wrong call edge; enumerate separately.
-   - Emit `oracle_report.json` to `.out/`: per-module divergence counts + a global
-     "oracle holds for N/M ok modules."
+   row for F }` and compare to `declared(F)` from `effects.csv`. The two divergence
+   directions are **not symmetric** — they measure different things, which is what
+   makes the oracle useful despite the deliberate seed over-approximation:
+   - `declared \ reachable ≠ ∅` (a declared effect we did **not** reach) is a **clean
+     call-graph-incompleteness signal**: since module-granular seeding is a *superset*,
+     the only way to miss a *declared* effect is a **missing call edge**. This
+     direction is independent of seed granularity → it is **the** call-graph precision
+     metric. Enumerate every instance; don't wave away.
+   - `reachable \ declared ≠ ∅` (we reached an effect not declared) mixes two causes:
+     **over-seeding** (FLAG 1 — a pure helper in an effectful module) and a **wrong
+     call edge**. Report it separately as the over-seed/false-edge signal; it informs
+     the per-symbol-seeding ROI but is *expected* to be non-zero in v1.
+   - `oracle_report.json`: per-module divergence lists for both directions + globals
+     "declared-effects reached: X/Y" and "funcs with zero over-reach: N/M".
 5. **Effect-graph viz**: "what reaches `{Net}/{FS}/{Env}`" Mermaid → SVG.
 
 ### Acceptance gate (Phase 2)
@@ -537,9 +666,12 @@ structure from Phase 1 stays intact.
 - `effect_edges.csv` populated with correct `distance`/`derivation` provenance; a
   spot fixture (a func that directly calls `getEnv`) shows a `distance=0,
   primitive_seed` row and its caller a `distance=1, backward_reachable` row.
-- **Oracle report generated**; the oracle holds (reachable ⊇ declared) for the
-  `ok`-module exported funcs on the `sample3/` corpus, with all divergences listed
-  and explained (ADR Acceptance: "divergences enumerated and explained").
+- **Oracle report generated repo-wide** over **all** `ok`-module exported funcs (not
+  just `sample3/` — the oracle is the independent global correctness signal). It holds
+  (declared ⊆ reachable) with all divergences listed and explained (ADR Acceptance:
+  "divergences enumerated and explained"). Note the check is only non-trivial for
+  funcs with a **non-empty** declared-effects row (e.g. `version#print_version` →
+  `[IO]`); `sample3/`'s `ok` module is chosen to include at least one such func.
 - `uses.csv` references only type names (no effect leakage from text parsing).
 
 ### Test/fixture deliverables (Phase 2)
@@ -568,8 +700,15 @@ cgq.py status                        # extraction status, coverage, staleness
 ```
 
 - **View preamble** (mechanism from the reference `.ts`): for each existing
-  `.out/*.csv`, `CREATE VIEW <name> AS SELECT * FROM file('.out/<name>.csv','CSVWithNames')`,
-  then run the query via `chdb.query(sql, "JSON")`.
+  `.out/*.csv`, `CREATE VIEW <name> AS SELECT * FROM file('<ABS>/.out/<name>.csv','CSVWithNames')`,
+  then run the query via `chdb.query(sql, "JSON")`. Paths are **absolute** (resolved
+  from the tool's own location, like the reference `.ts`'s `path.join(worktree,…)`) —
+  `file()` resolves relative to CWD, so a relative path would break when an agent runs
+  the CLI from elsewhere.
+- **Transitive queries** (`importers`, `callers`, `unimported`) use `WITH RECURSIVE`
+  if Phase 0 confirmed support, else the Python fixed-point fallback (Phase 0 note).
+  Either way the closure is exact over the (exact) `imports` graph / (approximate)
+  `invokes` graph.
 - **Output JSON shape:**
   ```json
   {
@@ -607,7 +746,7 @@ cgq.py status                        # extraction status, coverage, staleness
 
 | Name | Answers | Mechanism |
 |---|---|---|
-| `module-deps [module]` | module-dependency graph / one module's deps | `imports` (is_std=0) |
+| `module-deps [module]` | module-dependency graph / one module's deps | `imports` (already repo-only) |
 | `importers <module>` | **DST R3/R13** transitive importers of e.g. `src/core/ext/registry_generated` | recursive closure over `imports` (sound, hydration-free — labeled exact) |
 | `callers <func>` | **DST R8** who calls `dispatch_step`; **R15** who calls `try_emergency_compaction` | reverse `invokes` (approximate; labeled) |
 | `reaches <effect>` | **DST R7** funcs reaching `{Net}/{FS}/{Env}` | `effect_edges` filtered by effect (approximate + coverage/INCOMPLETE) |
@@ -617,15 +756,22 @@ cgq.py status                        # extraction status, coverage, staleness
 
 ### Unimported-module detection (ADR §"Root Set" — sound, labeled, never "dead")
 
-- **Root set assembled programmatically** (`extractor/roots.py`), with provenance in
-  `modules.csv` (`is_root`, `root_reason`):
+- **Root set** is assembled in **Phase 1** (`extractor/roots.py`) and stored in
+  `modules.csv` (`is_root`, `root_reason`); Phase 3 only adds the *query* (the
+  transitive `imports` closure from the roots) and the labeling. The root categories
+  and detection rules (consumed by `roots.py`):
   1. **TS-host runtime entries** — scan `src/tui/src/*.ts` (and `index.ts`,
      `runtime-process.ts`) string literals for `src/core/*.ail` paths
      (`supervisor`, `config`, `rpc`, `version`, `agent_loop_v2`, `ext/runtime`, …).
   2. **Extension entries** — `src/core/ext/registry_generated.ail` + `ailang.toml`
      `[extensions].order` / active profile `config.json`.
-  3. **`func main` modules** under `scripts/` and `examples/`.
-  4. **Test modules** — `*_test.ail`, `src/core/test/*`, modules containing test funcs.
+  3. **`func main` modules** under `scripts/` and `examples/` (validated: e.g.
+     `scripts/smoke_v2_compaction_ai.ail`).
+  4. **Test modules** — detected by the **real AILANG test convention** (validated
+     against `ailang test --help`): the `*_test.ail` glob (what `ailang test --package`
+     discovers), plus `src/core/test/*`, plus any module containing a
+     `test "…" = …` or `property "…" (…) = …` declaration. (Note: `func test_*` is
+     only a helper-naming convention, **not** the test mechanism — do not key on it.)
   5. **Generated** — `registry_generated.ail` itself.
 - Output every result labeled **"unimported (not reachable via static imports from
   declared roots)"** — never "dead"/"safe to delete." Two residual unsoundness
@@ -635,7 +781,8 @@ cgq.py status                        # extraction status, coverage, staleness
 ### Ordered tasks
 
 1. Finalize `cgq.py` (banners, coverage, named queries, truncation).
-2. Implement `roots.py` + the `unimported` query.
+2. Implement the `unimported` query (transitive `imports` closure from the Phase-1
+   root set) + its "unimported, not dead" labeling.
 3. Add fan-in/fan-out + the four DST canned queries.
 4. **Document in `AGENTS.md`** (next section).
 
@@ -655,8 +802,7 @@ cgq.py status                        # extraction status, coverage, staleness
 ### Test/fixture deliverables (Phase 3)
 
 - `query/` unit tests over a tiny fixture `.out/` (deterministic rows): banner logic,
-  truncation, staleness, INCOMPLETE.
-- Root-set assembly test (synthetic TS + toml + globs → expected roots).
+  truncation, staleness, INCOMPLETE, and the `unimported`-closure result + labeling.
 
 ---
 
@@ -665,8 +811,14 @@ cgq.py status                        # extraction status, coverage, staleness
 **Goal (deferred):** when upstream `ailang debug ast --json` lands, replace the
 heuristic call graph with a type-resolved one (R7/R8/R15 become exact); optionally
 model `inherits`/`implements` from type classes/instances into the reserved empty
-columns. Also the place to revisit FLAG-1 per-symbol stdlib seeding once a working
-stdlib-`iface` exists. No work scheduled until the upstream `--json` ask is delivered.
+columns. No work scheduled until the upstream `--json` ask is delivered.
+
+**Independent, smaller upgrade — FLAG-1 per-symbol seeding** (decoupled from `--json`;
+ships whenever the Phase-0 task-6(c) feature request lands): implement
+`parse_stdlib_public_iface()` and flip `config.SEED_GRANULARITY` to `"symbol"`. By
+design this touches **only** `seed_catalog.py` — no schema, consumer, or CSV change —
+and `oracle_report.json`'s over-seed metric immediately quantifies the precision gain.
+This is the cheapest precision win in the plan; do it the moment AILANG ships the data.
 
 ---
 
@@ -685,18 +837,28 @@ records `built_at` + `ailang_version` into `extraction_status.csv`. Batch tool, 
 a fast-PR gate.
 
 ```bash
-ailang lock                     # precondition for the TYPED layer (shared w/ ADR-001)
-tools/code-graph/extract.sh     # -> .out/*.csv + *.svg
-  # fails loudly if any module's iface_status is UNEXPECTEDLY 'failed'
-  #   (expected-failed set is a checked-in allowlist; new failures break CI)
-# advisory (once stable):
+# Two run modes — the loud iface gate applies ONLY to the hydrated mode.
+#
+# (a) structural-only (no hydration; always runnable, incl. minimal CI):
+tools/code-graph/extract.sh --structural-only   # imports/invokes/std_calls/ctors/roots
+  # typed columns stay empty; NO module-failed gate (every typed module is expected-failed here)
+#
+# (b) full (typed layer; needs the registry hydrated — shared precondition w/ ADR-001):
+ailang lock                                      # + install any unhydrated registry packages
+tools/code-graph/extract.sh                      # -> .out/*.csv + reports + *.svg
+  # fails loudly if a module's iface_status is 'failed' AND it is NOT in the
+  # checked-in expected-failed allowlist (a NEW typed-layer regression breaks CI)
+#
+# advisory (once stable; either mode):
 #   - no NEW unimported modules (sound; imports closure)
 #   - effect-diff: a func that NEWLY reaches Net/FS/Env (self-evolution signal)
 ```
 
-- The structural pass runs **without** hydration (CI can run it even when `ailang
-  lock` / registry hydration is unavailable — it just skips the typed layer and marks
-  modules `failed`).
+- The structural pass runs **without** hydration. The loud "unexpected `failed`" gate
+  is **only meaningful in the hydrated full run** — in structural-only mode every
+  hydration-dependent module is expected to be `failed`, so the gate is disabled
+  there. The allowlist therefore enumerates modules that fail **even with full
+  hydration** (genuine `iface` bugs/limitations), not the hydration-pending set.
 - Effect-diff + unimported checks are **advisory** while the call graph is
   approximate (ADR: candidate blocking gate only after the Phase-4 `--json` upgrade).
 
@@ -755,7 +917,7 @@ speed/coverage alone):
 | Call-graph **recall** on `sample3/` | bar agreed before Accept; R8/R15 claimed only to this | _to measure_ |
 | Oracle: `ok` modules where reachable ⊇ declared | report as N/M + divergence list | _to measure_ |
 | Over-seed rate (reachable ⊋ declared) | FLAG-1 cost; informs per-symbol upgrade ROI | _to measure_ |
-| `sample3/` composition | must include `agent_loop_v2` + one `ok` module + one `partial`/`failed` | _to fix_ |
+| `sample3/` composition | `agent_loop_v2` (failed/hydration-free proof) + one `ok` module **with ≥1 declared effect** (non-trivial oracle) + one `partial`/`failed` | _to fix_ |
 
 ---
 
@@ -769,8 +931,8 @@ speed/coverage alone):
   **auto-treat as a test root** (root category 4: "any module containing test
   functions"), labeled `root_reason=test`, so it is never reported "unimported."
   Revisit only if a no-importer/no-test/no-main module appears (flag-for-review).
-- **FLAG 1 seed granularity** (this plan): default = module-granular seeding from
-  `builtins list --by-effect`; per-symbol stdlib-signature parse is a Phase-2
-  precision upgrade gated on the over-seed rate measured by the oracle. **Needs user
-  ratification** (see top).
+- **FLAG 1 seed granularity** — **DECIDED (2026-06-28): module-granular seeding** from
+  `builtins list --by-effect`. The per-symbol upgrade is filed upstream
+  (Phase-0 task 6(c)) and pre-wired to the `SEED_GRANULARITY` one-line switch
+  (Phase-4 "Independent upgrade"); no longer open.
 ```
