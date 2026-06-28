@@ -13,6 +13,7 @@ from extractor.iface_pass import ailang_version, apply_iface
 from extractor.roots import assemble_roots
 from extractor.seed_catalog import write_catalog
 from extractor.slugs import assert_unique
+from extractor.source_index import SOURCE_CHUNK_FIELDS, SOURCE_FILE_FIELDS, SOURCE_LINE_FIELDS, build_source_index
 from extractor.source_parser import discover_files, parse_all
 
 MODULE_FIELDS = ["slug", "path", "module_decl", "decl_matches_path", "n_funcs", "is_generated", "is_root", "root_reason"]
@@ -26,7 +27,7 @@ USES_FIELDS = ["from_slug", "type_slug", "resolved"]
 EFFECT_FIELDS = ["func_slug", "effect"]
 EFFECT_EDGE_FIELDS = ["func_slug", "effect", "source_func_slug", "distance", "derivation"]
 STATUS_FIELDS = ["module", "iface_status", "iface_detail", "iface_error", "built_at", "ailang_version",
-                 "graph_schema", "iface_schema", "profile", "include_tests"]
+                 "graph_schema", "source_schema", "iface_schema", "profile", "include_tests"]
 
 
 def write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
@@ -78,6 +79,9 @@ def main() -> int:
             file=sys.stderr,
         )
     files = discover_files(config.REPO_ROOT, profile=args.profile, include_tests=args.include_tests)
+    source_files, source_lines, source_chunks = build_source_index(
+        config.REPO_ROOT, profile=args.profile, include_tests=args.include_tests
+    )
     parsed = parse_all(files, config.REPO_ROOT)
     roots = assemble_roots(files)
 
@@ -114,6 +118,7 @@ def main() -> int:
         ctors.extend(typed_ctors)
     for row in status_rows:
         row.update({"built_at": built_at, "ailang_version": version, "graph_schema": config.GRAPH_SCHEMA,
+                    "source_schema": config.SOURCE_SCHEMA,
                     "iface_schema": config.IFACE_SCHEMA, "profile": args.profile,
                     "include_tests": int(args.include_tests)})
     status_by_module = {r["module"]: r["iface_status"] for r in status_rows}
@@ -146,6 +151,9 @@ def main() -> int:
     write_csv(out / "uses.csv", USES_FIELDS, uses)
     write_csv(out / "effects.csv", EFFECT_FIELDS, declared)
     write_csv(out / "effect_edges.csv", EFFECT_EDGE_FIELDS, effect_edges)
+    write_csv(out / "source_files.csv", SOURCE_FILE_FIELDS, source_files)
+    write_csv(out / "source_lines.csv", SOURCE_LINE_FIELDS, source_lines)
+    write_csv(out / "source_chunks.csv", SOURCE_CHUNK_FIELDS, source_chunks)
     write_csv(out / "extraction_status.csv", STATUS_FIELDS, status_rows)
     profile = args.profile + ("+tests" if args.include_tests else "")
     print(f"wrote {out}: profile={profile}, {len(modules)} modules, {len(funcs)} funcs, {len(invokes)} invokes, {len(std_calls)} std calls")

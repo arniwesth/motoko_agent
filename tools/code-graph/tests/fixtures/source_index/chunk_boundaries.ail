@@ -1,0 +1,19 @@
+module chunk_boundaries
+func before_type() -> int {
+  1
+}
+
+type T = A | B
+func before_module() -> int {
+  2
+}
+
+module nested
+func before_import() -> int {
+  3
+}
+
+import std/io (print)
+func after_import() -> int {
+  4
+}
