@@ -14,6 +14,29 @@ v1 remains CSV-backed through chDB `file(..., 'CSVWithNames')`. There is no
 ClickHouse server, persistent database, native text index, embeddings, vector search,
 or host-language deep parser in v1.
 
+## TL;DR
+
+Implement a lightweight source index inside `tools/code-graph/` that emits three new
+CSV tables into `.out/`: `source_files`, `source_lines`, and AILANG-only
+`source_chunks`. Extraction follows the active graph profile and `--include-tests`;
+host files are indexed line-by-line only.
+
+The key implementation constraints are:
+
+- Use existing helpers: `source_parser.discover_files`, `source_parser.func_spans`,
+  `module_slug`, and `symbol_slug`.
+- Join graph/effect data through `source_chunks.func_slug`, never `chunk_slug`.
+- Compute source freshness from `source_files.sha256`, not mtimes or `modules.csv`.
+- Add `SOURCE_SCHEMA` and `source_schema` so schema bumps stale the source index.
+- Extend `cgq.py` with `search`, `search-line`, `search-chunk`, and
+  `search-effects`, preserving ADR-002 coverage/staleness/`INCOMPLETE` metadata.
+- Feature-detect token search in unpinned chDB and fall back to substring search with
+  explicit metadata.
+
+Ship it in four implementation phases: contracts/smokes, extraction, query surface,
+then graph-join docs and agent guidance. Keep materialized ClickHouse tables,
+non-AILANG chunks, ranking, and richer host-language parsing as later upgrades.
+
 ## Fixed Decisions
 
 - Location: implement under `tools/code-graph/`; generated CSVs go to

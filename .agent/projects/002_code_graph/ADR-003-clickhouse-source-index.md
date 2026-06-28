@@ -21,6 +21,21 @@ v1 should stay simple and CSV-backed through the existing chDB CLI. Native Click
 full-text indexes are a later materialized-table upgrade, because chDB querying
 `file(..., 'CSVWithNames')` over CSVs does not give persistent MergeTree text indexes.
 
+Concrete v1 shape:
+
+- Emit `source_files.csv`, `source_lines.csv`, and AILANG-only `source_chunks.csv`
+  under `tools/code-graph/.out/`.
+- Reuse `source_parser.func_spans` and `symbol_slug`; joins to `funcs` and
+  `effect_edges` use `source_chunks.func_slug`, not the human-readable `chunk_slug`.
+- Index non-AILANG host files through `source_lines` only.
+- Compute source staleness from stored `sha256` values in `source_files.csv`; mtimes
+  are not a correctness signal.
+- Add `SOURCE_SCHEMA`/`source_schema` so source schema changes stale the index.
+- Add `cgq.py` named queries: `search`, `search-line`, `search-chunk`, and
+  `search-effects`.
+- Because chDB is not pinned, token queries must feature-detect support and fall back
+  to substring search with explicit metadata.
+
 ## Context
 
 Motoko now has `tools/code-graph/`, which emits CSVs and queries them with embedded
