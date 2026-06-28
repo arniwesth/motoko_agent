@@ -22,7 +22,7 @@
 
 module src/core/compaction
 
-import std/ai (Message)
+import std/ai (Message, ToolCall)
 import std/string (length, substring)
 import std/list (foldl)
 import std/result (Result, Ok, Err)
@@ -31,9 +31,40 @@ import src/core/context_usage (context_limit_for)
 -- Token estimate for [Message]: sum all content-field lengths, divide by 4.
 -- Same approximation as estimate_tokens for [Msg] in context_usage.ail.
 -- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order)
+-- Sum the serialized size of a message's tool_calls (name + arguments). WriteFile/EditFile carry the FULL
+-- file content in `arguments`, re-sent every turn — counting only `content` (as before) massively undercounts
+-- those turns, so compaction fires too late -> context overflow (docx hit input 263259 > 262144).
+pure func tool_calls_chars(tcs: [ToolCall]) -> int {
+  foldl(\acc tc. acc + length(tc.name) + length(tc.arguments), 0, tcs)
+}
+
+-- Raw serialized char count of a [Message] (content + tool_calls args). The single source
+-- of size truth; both the chars/7 estimate and the provider-calibrated estimate build on it.
+-- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order)
+export pure func message_chars(msgs: [Message]) -> int {
+  foldl(\acc m. acc + length(m.content) + tool_calls_chars(m.tool_calls), 0, msgs)
+}
+
 export pure func estimate_tokens_messages(msgs: [Message]) -> int {
-  let total = foldl(\acc m. acc + length(m.content), 0, msgs);
-  (total + 3) / 4
+  -- chars/7: MEASURED ratio for AILANG code + DOCX XML is ~7.5 chars/token. Used only as the
+  -- step-0 fallback (before any provider sample) and by usage_percent; the live decision uses
+  -- est_send_tokens (provider-calibrated). Slightly conservative (/7 > real 7.5).
+  (message_chars(msgs) + 6) / 7
+}
+
+-- M-COMPACT-CALIBRATED: estimated tokens of the call we are ABOUT TO SEND = (pinned system
+-- prefix + conversation) chars, scaled by the provider's TRUE ratio learned last call
+-- (last_input_tokens / last_sent_chars). This measures the CURRENT full history (right thing)
+-- with provider ground-truth accuracy (right number) — unlike the v5 trigger, which read the
+-- previous call's token count directly and so skipped compaction the step after every compaction
+-- (the post-compaction count fell under the 60% floor) -> oscillation -> overflow. `pinned_chars`
+-- is the system prefix the loop re-prepends to every call; it must be counted here because it is
+-- always sent. Falls back to chars/7 until the first provider sample exists.
+-- contracts: SKIPPED — integer arithmetic over a foldl-based char count
+export pure func est_send_tokens(msgs: [Message], pinned_chars: int, last_input_tokens: int, last_sent_chars: int) -> int {
+  let total_chars = pinned_chars + message_chars(msgs);
+  if last_input_tokens > 0 && last_sent_chars > 0 then (total_chars * last_input_tokens) / last_sent_chars
+  else (total_chars + 6) / 7
 }
 
 -- Context usage as integer percent (0-100). Returns 0 for unknown models.
@@ -41,8 +72,14 @@ export pure func estimate_tokens_messages(msgs: [Message]) -> int {
 -- contracts: SKIPPED — depends on foldl-based estimate_tokens_messages
 export pure func usage_percent(msgs: [Message], model: string) -> int {
   let limit = context_limit_for(model);
-  if limit == 0 then 0
-  else (estimate_tokens_messages(msgs) * 100) / limit
+  -- Reserve ~75k headroom for the model's OUTPUT. context_limit is the TOTAL input+output window,
+  -- so compaction must keep INPUT well below it. docx overflowed at input 263259 > 262144 because
+  -- usage was measured against the FULL window — compaction never reserved output room and let input
+  -- crowd the hard limit. 75k covers the 65536 output cap + estimate margin. Small (rotation)
+  -- contexts stay ~0% so this only bites large-context tasks (compacts them earlier, as intended).
+  let effective = limit - 75000;
+  if limit == 0 || effective <= 0 then 0
+  else (estimate_tokens_messages(msgs) * 100) / effective
 }
 
 -- Count tool-role messages in the list.
@@ -132,6 +169,46 @@ export pure func compact_step(msgs: [Message], model: string) -> Result[[Message
   else Ok(msgs)
 }
 
+-- M-COMPACT-CALIBRATED: emergency elision for ≥85% of effective, re-checked with the SAME
+-- calibrated estimate so the decision is consistent end to end. Fails loudly (BEFORE sending)
+-- if even keep_last=1 can't get the estimate under 95% — we never hand the provider a call we
+-- already estimate it will reject (the old try_emergency_compaction re-checked with a different,
+-- pinned-prefix-excluding estimate, so its 95% could disagree with what was actually sent).
+pure func try_emergency_calibrated(msgs: [Message], model: string, pinned_chars: int, last_input_tokens: int, last_sent_chars: int) -> Result[[Message], string] {
+  let effective = context_limit_for(model) - 75000;
+  let e1 = elide_old_tool_results(msgs, 3);
+  let pct1 = if effective > 0 then est_send_tokens(e1, pinned_chars, last_input_tokens, last_sent_chars) * 100 / effective else 0;
+  if pct1 < 95 then Ok(e1)
+  else {
+    let e2 = elide_old_tool_results(msgs, 1);
+    let pct2 = if effective > 0 then est_send_tokens(e2, pinned_chars, last_input_tokens, last_sent_chars) * 100 / effective else 0;
+    if pct2 < 95 then Ok(e2)
+    else Err("compaction_exhausted: context at ${show(pct2)}% of ${model} limit after emergency compaction")
+  }
+}
+
+-- M-COMPACT-CALIBRATED: the live per-step compaction decision. Drives elision off est_send_tokens
+-- (the CURRENT full history — pinned prefix + conversation — scaled by the provider's true ratio),
+-- so it CANNOT oscillate: every step measures the real size of what is about to be sent, not the
+-- previous (possibly compacted) call's token count. That stale-signal read was the v5 bug — after a
+-- compacted call the reported count fell under the 60% floor, the next step skipped compaction, and
+-- the full uncompacted history was sent and grew until it overflowed (267365 > 262144).
+-- Tiers: keep_last=10 at 60%, 5 at 75%, emergency at 85% of effective(=limit-75000). Unknown model
+-- (effective<=0) -> skip (matches context_limit_for==0). Elides only OLD tool_results (the measured
+-- 96K bloat = BashExec/cat XML dumps); the recent working set stays. The 85% trigger + the
+-- emergency ceiling keep the SENT estimate under ~95% of effective regardless of one-step jumps.
+export pure func compact_step_calibrated(msgs: [Message], model: string, pinned_chars: int, last_input_tokens: int, last_sent_chars: int) -> Result[[Message], string] {
+  let effective = context_limit_for(model) - 75000;
+  if effective <= 0 then Ok(msgs)
+  else {
+    let pct = est_send_tokens(msgs, pinned_chars, last_input_tokens, last_sent_chars) * 100 / effective;
+    if pct >= 85 then try_emergency_calibrated(msgs, model, pinned_chars, last_input_tokens, last_sent_chars)
+    else if pct >= 75 then Ok(elide_old_tool_results(msgs, 5))
+    else if pct >= 60 then Ok(elide_old_tool_results(msgs, 10))
+    else Ok(msgs)
+  }
+}
+
 -- Unknown model → usage 0% → no compaction.
 func unknown_model_skips_compaction() -> bool
   tests [((), true)]
@@ -218,6 +295,52 @@ func emergency_compaction_tries_elision() -> bool
     -- when there's reasonable headroom (not actually at 95%)
     match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
       Ok(_) => true,
+      Err(_) => false
+    }
+  }
+
+-- M-COMPACT-CALIBRATED test helper: a string of length ~len(s)*2^n (repeated doubling).
+pure func double_str(s: string, n: int) -> string {
+  if n <= 0 then s else double_str("${s}${s}", n - 1)
+}
+
+-- M-COMPACT-CALIBRATED test helper: n tool messages with the given content.
+pure func n_tool_msgs(content: string, n: int) -> [Message] {
+  if n <= 0 then []
+  else ({ role: "tool", content: content, tool_calls: [], tool_call_id: "c" } :: n_tool_msgs(content, n - 1))
+}
+
+-- THE REGRESSION GUARD for the v5 oscillation overflow (the multi-step dynamics the old
+-- single-decision tests never exercised). A large CURRENT history (~2M chars ~= 270k tok) whose
+-- PREVIOUS call was compacted to a small size: last_input_tokens reflects the COMPACTED call, not
+-- this history. The v5 trigger read last_input_tokens directly -> ~5% usage -> passthrough -> sent
+-- the full 2M -> overflow (267365 > 262144). The calibrated trigger sizes THIS history via the
+-- provider ratio (last_input_tokens/last_sent_chars) and MUST compact it so the SENT estimate
+-- stays under effective. If this fails, the oscillation is back.
+func calibrated_compacts_despite_low_last_tokens() -> bool
+  tests [((), true)]
+  {
+    let block = double_str("01234567890123456789012345678901234567890123456789", 10); -- ~51k chars
+    let msgs = n_tool_msgs(block, 40); -- ~2M chars, ~270k tok at the ratio below
+    let model = "ollama/qwen3.6:35b-a3b-mxfp8";
+    -- previous call was compacted: sent ~80k chars -> ~10.6k tokens (true ratio ~7.5 chars/tok)
+    let lit = 10666; let lsc = 80000;
+    match compact_step_calibrated(msgs, model, 0, lit, lsc) {
+      Err(_) => true,  -- refused to send an over-limit call: also acceptable (fail-loud, no overflow)
+      Ok(out) => est_send_tokens(out, 0, lit, lsc) < (context_limit_for(model) - 75000)
+    }
+  }
+
+-- The converse: a genuinely small history must pass through unchanged (no premature thrash).
+func calibrated_small_passthrough() -> bool
+  tests [((), true)]
+  {
+    let msgs: [Message] = [
+      { role: "user", content: "task", tool_calls: [], tool_call_id: "" },
+      { role: "tool", content: "small result", tool_calls: [], tool_call_id: "c1" }
+    ];
+    match compact_step_calibrated(msgs, "ollama/qwen3.6:35b-a3b-mxfp8", 100, 50, 400) {
+      Ok(out) => message_chars(out) == message_chars(msgs),
       Err(_) => false
     }
   }
