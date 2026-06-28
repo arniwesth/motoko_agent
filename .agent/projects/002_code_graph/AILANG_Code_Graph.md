@@ -12,6 +12,39 @@ its fixtures, the seed-catalog build + backward-propagation algorithm + oracle, 
 CLI contract, the test/precision plan, prerequisite/CI changes, and the `AGENTS.md`
 task. The extractor itself is not written here.
 
+## TL;DR
+
+Build `ailang-graph` under **`tools/code-graph/`** (Python extractor + chDB query CLI
++ SVG viz) in four phases, sequenced so the hydration-free graph ships first.
+
+- **Phase 0 — contracts before code:** add `chdb` to the prereq script; build the
+  stdlib-effect **seed catalog**; ship the `ok/failed/partial` `iface` classifier with
+  golden fixtures; stand up the precision/recall harness on a 3-module sample (incl.
+  `agent_loop_v2`); file upstream asks.
+- **Phase 1 — structural + call graph (no hydration, whole-program):** harden the PoC
+  source parser (`#`-slugs, alias resolution, source-derived ctor filtering,
+  interpolation scanning), emit `modules/funcs/imports/invokes/ctors` CSVs, gate on
+  golden parser fixtures. Works on modules `iface` can't load.
+- **Phase 2 — typed layer + effect graph:** `iface` pass (types, sigs, declared
+  effects), then seed effects at stdlib call sites and propagate **backward**
+  (callee→caller) into `effect_edges`, validated against `iface`'s transitive effect
+  rows — the **oracle**.
+- **Phase 3 — agent surface:** a CLI (`cgq.py`) over the CSVs with staleness +
+  coverage/`INCOMPLETE` banners, canned DST queries (R3/R7/R8/R13/R15) + sound
+  "unimported" (never "dead") detection, documented in `AGENTS.md`.
+- **Phase 4 (later):** swap the heuristic call graph for a type-resolved one when
+  upstream `ailang debug ast --json` lands.
+
+**Engine:** embedded **chDB** (ClickHouse SQL over CSVs, in-process). **All
+call-graph/effect output is labeled approximate** with coverage + staleness.
+**Accept gate:** golden fixtures pass + measured precision/recall recorded + the
+effect oracle holds.
+
+**⚠️ One decision needed (FLAG 1, below):** the ADR's seed-catalog source — `iface`
+on stdlib modules — **does not work on the v0.26.0 binary**. The plan falls back to
+**module-granular seeding** from `builtins list --by-effect` (sound superset;
+over-seeding measured by the oracle). Needs your ratification.
+
 ---
 
 ## ⚠️ Flags for the user — two ADR points that did not survive binary validation
