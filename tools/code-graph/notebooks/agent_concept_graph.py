@@ -88,6 +88,13 @@ def _(DEFAULT_CACHE, mo):
         label="Color by",
     )
     n_concepts = mo.ui.slider(2, 30, value=12, step=1, label="k-means concepts")
+    community_algo = mo.ui.dropdown(
+        options=["louvain", "greedy modularity", "label propagation"],
+        value="louvain",
+        label="Community algorithm",
+    )
+    resolution = mo.ui.slider(0.2, 3.0, value=1.0, step=0.1, label="Louvain resolution (higher = more concepts)")
+    community_seed = mo.ui.number(value=7, start=0, stop=9999, step=1, label="Community seed")
     k_neighbors = mo.ui.slider(1, 15, value=5, step=1, label="Edges per node (k)")
     edge_threshold = mo.ui.slider(0.0, 0.95, value=0.55, step=0.01, label="Min cosine similarity for an edge")
     show_edges = mo.ui.checkbox(value=True, label="Show edges")
@@ -98,11 +105,14 @@ def _(DEFAULT_CACHE, mo):
         mo.hstack([min_chars, max_chars, max_points, color_by]),
         mo.hstack([projection, tsne_perplexity]),
         mo.hstack([k_neighbors, edge_threshold, show_edges, n_concepts]),
+        mo.hstack([community_algo, resolution, community_seed]),
     ])
     return (
         backend,
         cache_input,
         color_by,
+        community_algo,
+        community_seed,
         dimension,
         edge_threshold,
         filter_input,
@@ -114,6 +124,7 @@ def _(DEFAULT_CACHE, mo):
         model_input,
         n_concepts,
         projection,
+        resolution,
         show_edges,
         tsne_perplexity,
     )
@@ -208,6 +219,8 @@ def _(
     TSNE,
     TfidfVectorizer,
     color_by,
+    community_algo,
+    community_seed,
     edge_threshold,
     filter_input,
     k_neighbors,
@@ -217,6 +230,7 @@ def _(
     nx,
     pd,
     projection,
+    resolution,
     rows,
     tsne_perplexity,
 ):
@@ -282,7 +296,20 @@ def _(
                 _graph.add_nodes_from(range(len(df)))
                 for _ea, _eb, _es in edges:
                     _graph.add_edge(_ea, _eb, weight=_es)
-                _comms = nx.community.greedy_modularity_communities(_graph, weight="weight")
+                if community_algo.value == "louvain":
+                    _comms = nx.community.louvain_communities(
+                        _graph, weight="weight",
+                        resolution=float(resolution.value),
+                        seed=int(community_seed.value),
+                    )
+                elif community_algo.value == "label propagation":
+                    _comms = nx.community.asyn_lpa_communities(
+                        _graph, weight="weight", seed=int(community_seed.value),
+                    )
+                else:  # greedy modularity
+                    _comms = nx.community.greedy_modularity_communities(_graph, weight="weight")
+                # Largest concept first, so palette order is stable across algorithms.
+                _comms = sorted((set(c) for c in _comms), key=len, reverse=True)
                 _labels = [0] * len(df)
                 for _ci, _comm in enumerate(_comms):
                     for _node in _comm:
