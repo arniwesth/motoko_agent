@@ -7,14 +7,16 @@ Status: Proposed
 
 Build `ailang-graph`: a structural and effect graph of Motoko's own ~671 `.ail` source files, modeled on the existing C#/Zeus `code-graph` but thin, because AILANG ships the semantic layer (`ailang iface`) that C# lacked.
 
-- **How (two sources):** (1) `ailang iface` per module for exported types/functions with type signatures and effect rows; (2) a **raw-source parser** for `import` edges and the internal-function **call graph**. Emit CSVs → load into ClickHouse → reuse the existing `load.py` and SVG pipeline.
-- **Headline feature:** an effect graph — "which functions can reach `Net`/`FS`/`Env`" — computed over the real call graph, which the C# graph structurally cannot express.
+- **How (two sources):** (1) `ailang iface` per module for exported types/functions with type signatures and effect rows; (2) a **raw-source parser** for `import` edges and the internal-function **call graph**. Emit CSVs → query in-process with embedded **chDB** (ClickHouse SQL, `file(...)` over the CSVs) → reuse the SVG pipeline.
+- **Headline feature:** an effect graph — "which functions can reach `Net`/`FS`/`Env`" — computed over the **approximate source-parsed call graph** and validated against `iface`'s authoritative declared effects, which the C# graph structurally cannot express.
 
 > **Review comment (GPT-5.5):** "Real call graph" overclaims the v1 source. The ADR later says the graph is heuristic, source-parsed, and approximate, with known false positives and false negatives. Use "approximate source-parsed call graph" here and in any query output so agents do not treat the results as compiler-derived facts.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** "Real" → "approximate source-parsed call graph" here and throughout; the CLI surface labels call-graph and effect-reachability results as approximate (with coverage/staleness banners) so agents do not mistake them for compiler-derived facts.
 
-- **Consumers:** Claude Code and Codex, via an agent-agnostic CLI and/or MCP surface documented in `AGENTS.md` (not a harness-specific plugin). The `.agent/tools/*.ts` scripts are reference-only.
+- **Consumers:** Claude Code and Codex, via an agent-agnostic **CLI-first** surface documented in `AGENTS.md` (MCP may wrap it later; not a harness-specific plugin). The `.agent/tools/*.ts` scripts are reference-only.
 - **v1 scope:** module/import edges, exported types/signatures/effects (from `iface`), **and an approximate internal-function call graph from source parsing** — no longer blocked on upstream. A PoC over `src/` produced 1058 call-edges across 415 functions in 0.1s with zero hydration, including modules `iface` cannot load.
-- **Preconditions:** the call/import graph needs neither hydration nor `clickhouse` (pure text). The `iface`-derived type/effect layer needs full package hydration (shared with ADR-001); loading into ClickHouse needs the `clickhouse` binary.
+- **Preconditions:** the call/import graph is pure text (no hydration). The `iface`-derived type/effect layer needs full package hydration (shared with ADR-001). The query engine is embedded **chDB** (`pip install chdb`, ~712 MB) — no server/binary, but a new prerequisite to add.
 - **Serves ADR-001 (DST):** answers import-reachability (R3/R13), the effect inventory (R7), and — now that the call graph ships in v1 — the internal call-seam questions (R8 `dispatch_step`, R15 `try_emergency_compaction`), approximately.
 - **Upstream `ailang debug ast --json`:** demoted from a blocker to a future *precision* upgrade for the call graph (its current ANF text dump is too shallow to parse).
 
@@ -37,7 +39,9 @@ All capability claims below were verified directly against the local binary. The
 - **`iface` requires full dependency resolution.** Verified: `iface src/core/agent_loop_v2.ail` fails with `registry package … cache not found` / `requires ailang.toml and ailang.lock` unless every transitive registry package is hydrated. The heaviest, most interesting modules are exactly the ones that fail without hydration — this is the *same* precondition as ADR-001 (DST).
 - **`iface` exits 0 even on failure.** Verified: a failed extraction prints an error and empty/partial stdout but returns exit code 0. Failure detection must parse output, not trust the exit code.
 - **`pure` is NOT "effect-free".** Verified: `print_version` reports `pure: true` *and* `effects: ["IO"]`, type `(())->()!{IO}`. The effect graph must be built from the `effects` array; the `pure` flag means something else and must not be used as an effect signal.
-> **Review comment (GLM 5.2):** `pure` is dismissed without investigation. In many effect systems `pure` denotes referential transparency modulo tracked effects, or absence of heap mutation — either would be a useful additional graph signal (e.g. distinguishing `!{IO}`-tagged but otherwise-pure functions). Either verify its meaning against the binary/docs and use it, or file an upstream question via `ailang-feedback` and note it as a future signal. Don't drop a compiler-emitted field unexamined.
+> **Review comment (GLM 5.2):** `pure` is dismissed without investigation... Either verify its meaning against the binary/docs and use it, or file an upstream question via `ailang-feedback` and note it as a future signal. Don't drop a compiler-emitted field unexamined.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted; investigated.** Empirically `pure: true` on all 78 exported functions sampled (incl. the `!{IO}` `print_version`) → zero variance, no discriminating power today. Not dropped: it is carried as a passthrough column in `funcs` so it becomes usable if a future version makes it vary, and an `ailang-feedback` question on its exact semantics is filed. Full detail in the Constraints `pure` bullet.
 - **`ailang debug ast <file>`** — Core AST (ANF), **text output, not JSON**, and **too shallow to parse** (confirmed on both v0.24.2 and v0.26.0): it prints only top-level `*core.LetRec [#id]` nodes with no body or call detail, `--show-types` does not expand them, and `--json` is silently ignored (it is only wired for `debug cycles`). So the ANF dump is not a viable call-graph source.
 - **Raw-source call-graph parsing is viable (PoC validated).** A heuristic source parser — segment top-level `func` decls (all at column 0), strip `--` comments and string literals, match `name(` calls, resolve against locally-defined and imported names — produced **1058 resolved call-edges across 415 functions in `src/` in 0.1s**, with **no compilation and no hydration**. It runs on `agent_loop_v2.ail`, which `iface` cannot load, and captures internal seams `iface` hides (`loop_v2 → dispatch_step`; `compact_step → try_emergency_compaction`). Known approximations: constructor calls (`Ok`/`Err`) appear as edges unless filtered via `iface` ctors; calls inside string interpolation (`${show(x)}`) are dropped; higher-order and type-class-dispatched calls resolve to the name, not the concrete target.
 - **`ailang tree`** — works here; emits the package dependency tree (`local/motoko_agent` → `sunholo/*`). Package-level deps are available for free.
@@ -49,7 +53,7 @@ All capability claims below were verified directly against the local binary. The
 
 Distinct from, and complementary to, the two graphs already in the repo.
 
-**`code-graph/` (structural, C#/Zeus).** Same *artifact shape* (types + edges → ClickHouse → Mermaid), different *target*. This ADR reuses the language-agnostic downstream pieces that genuinely exist here — `load.py`, the `schema.sql`/ClickHouse model, the SVG-render path, and the view-and-query mechanism documented by the reference query script — and replaces the Roslyn extractor (`Program.cs`). The agent surface is a CLI/MCP usable by Claude Code and Codex (see Phase 2), not a port of the reference `.ts` scripts.
+**`code-graph/` (structural, C#/Zeus).** Same *artifact shape* (types + edges → ClickHouse SQL → Mermaid) and **same dialect** (embedded chDB instead of `code-graph`'s `clickhouse local`), different *target*. The genuinely reused pieces are the SVG-render path and the ClickHouse query idioms; the server-oriented `load.py`/`schema.sql` are not needed (chDB queries the CSVs directly). The Roslyn extractor (`Program.cs`) is replaced by the `iface`+source extractor, and the agent surface is a CLI usable by Claude Code and Codex (see Phase 3), not a port of the reference `.ts` scripts.
 
 **`omnigraph/` (decision/architecture).** `omnigraph/schema.pg` defines `Decision`, `Component`, `Governs`, `Supersedes`, `DependsOn` — an ADR/architecture knowledge graph populated from docs and sessions. It captures *intent*, not code structure. They meet at the `Component` node: a future edge can link an omnigraph `Component` to the `.ail` modules realizing it, but that is out of scope for v1.
 
@@ -62,14 +66,22 @@ The extractor will:
 1. Enumerate Motoko `.ail` modules under configured roots (`src`, `scripts`, `examples`).
 2. Run `ailang iface` per module to collect **exported** types (with constructors) and **exported** functions (with type signatures, effect rows). Detect and record extraction failures by parsing output, not exit code.
 3. Parse raw source for `import` statements (filtering `std/*`, handling aliases/symbol lists) → module-dependency graph, and for `func` definitions and `name(` call sites → the **internal-function call graph** (`invokes`). Source parsing needs no compilation, so it covers every module including those `iface` cannot load, and every function including internal ones.
-4. Derive a **type-use graph** from exported function signatures; build the **effect graph** from `iface` effect rows as sources, propagated over the call graph so internal functions inherit reachable effects.
+4. Build the **effect graph** with the corrected model below (declared effects from `iface`; reachable effects seeded at stdlib-primitive call sites and propagated **backward** over `invokes`; `iface` rows used as a validation oracle). Derive a **type-use graph** from exported function signatures.
 
 > **Review comment (GPT-5.5):** Effect propagation is underspecified and may be directionally wrong. If `invokes` means `caller -> callee`, reachable effects normally propagate from callee back to caller: if `A` calls `B` and `B` can perform `Net`, then `A` reaches `Net`. Propagating exported `iface` effects forward to internal callees can falsely mark pure helpers as effectful. Define declared effects vs. reachable effects, call-edge direction, and the propagation algorithm before implementation.
-> **Review comment (GLM 5.2):** The effect graph has a structural blind spot beyond call-graph heuristics. Effect *sources* are only exported functions whose `iface` `effects` array lists the effect — internal functions that directly call a `std/net`/`fs`/`env` primitive have no `iface` row and are not sources, so they (and their callers) are invisible to "reaches `{Net}`" unless reverse-reachable from an exported function that already declares the effect. This yields systematic false negatives even when `iface` succeeds on every module, independent of call-graph precision. Separately, the ADR never establishes whether `iface` effect rows are direct-only or transitive — a load-bearing unknown that determines whether forward propagation double-counts (if transitive, an exported row already carries the helper's effect, so propagating it forward to the helper's other callers is double-counting). A Phase 0 experiment resolves it: take an exported function reaching an effect through an internal helper, and check whether the helper's effect appears in the exported row. This must happen before implementation, not during it.
+> **Review comment (GLM 5.2):** The effect graph has a structural blind spot beyond call-graph heuristics. Effect *sources* are only exported functions whose `iface` `effects` array lists the effect — internal functions that directly call a `std/net`/`fs`/`env` primitive have no `iface` row and are not sources... [whether `iface` effect rows are direct-only or transitive] determines whether forward propagation double-counts... A Phase 0 experiment resolves it... before implementation, not during it.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted; both correct, model rewritten.** I ran the Phase-0 experiment. A module with exported `pub_calls_helper` reaching `IO` only through an *internal* `helper` reports `effects: ["IO"]` on the exported function — so **`iface` effect rows are transitive** (the type system forces effects up). Consequences:
+> - **Direction (GPT):** correct — the original "forward-propagate exported effects to callees" was backwards and would falsely taint pure helpers. Propagation is **backward over `invokes` (callee → caller)**.
+> - **Sources (GLM):** effect *sources* are **stdlib effect primitives**, not exported functions. The seed catalog comes from `ailang builtins list --by-effect` plus `iface` on stdlib modules (each stdlib fn carries its own transitive effect row). A source-parsed call to such a primitive seeds the effect on the calling function; it then propagates backward. This covers internal functions that call primitives directly.
+> - **Double-counting (GLM):** since `iface` rows are transitive, we do **not** also propagate exported rows forward — that would double-count. Instead the exported row is the **oracle**: a function's *computed* backward-reachable effects must equal its `iface` `effects` array. Divergence is a measurable signal of call-graph incompleteness (this is the precision metric — see Acceptance).
+> - **Residual blind spot (GLM):** effects confined entirely to internal-only call chains never reached by any exported function, *and* primitives the seed catalog misses. The oracle bounds the first; the catalog must be kept complete for the second. Stated in Constraints.
 
-5. Emit CSVs in the `code-graph` schema, plus new `invokes` / `effects` / `effect_edges` tables, plus an `extraction_status` table recording per-module `iface` success/failure (source-derived edges are independent of it).
-> **Review comment (GLM 5.2):** No staleness or migration story. For agents treating this graph as the codebase map, staleness is a correctness bug, not cosmetics. The `extraction_status` table should carry a build timestamp and `ailang_version`, and the query surface should warn or refuse on stale graphs. CSV format versioning is also unspecified — what happens to loaded data when `ailang.iface/v1` bumps?
-6. Load via the reused ClickHouse pipeline; expose the graph to Claude Code and Codex through an agent-agnostic surface (CLI and/or MCP) documented in `AGENTS.md`.
+5. Emit CSVs, plus new `invokes` / `effects` / `effect_edges` tables, plus an `extraction_status` table recording per-module `iface` result **and a build timestamp + `ailang_version`** (source-derived edges are independent of `iface`).
+> **Review comment (GLM 5.2):** No staleness or migration story... `extraction_status` should carry a build timestamp and `ailang_version`, and the query surface should warn or refuse on stale graphs. CSV format versioning is also unspecified...
+>
+> **Author response — accepted.** `extraction_status` carries `built_at`, `ailang_version`, and a `graph_schema` integer. The CLI surface compares `built_at` against the newest `.ail` mtime and the recorded `ailang_version` against the live binary, and prints a `STALE` banner (and refuses definitive effect answers) when either drifts. A `graph_schema` bump invalidates the cache and forces a refresh; `ailang.iface/v1` is recorded per-row so a future `v2` can be migrated or rejected rather than silently mixed.
+6. Query in-process with embedded **chDB** (ClickHouse SQL over the CSVs); expose the graph to Claude Code and Codex through a **CLI-first** surface documented in `AGENTS.md` (MCP may wrap the CLI later).
 
 Scoping decisions following validation:
 
@@ -81,7 +93,7 @@ Upstream `ailang debug ast --json` is **demoted from a blocker to a future preci
 
 ## Decision Drivers
 
-- The language-agnostic downstream pieces already exist: `load.py` and the ClickHouse/`schema.sql` model reuse directly; `visualize.py`'s SVG-render path reuses, though its namespace-based graph-building needs replacing for AILANG's path-based modules.
+- The downstream is light: chDB reads the CSVs directly (`file(...)`, no load step) using the ClickHouse dialect the operator already knows, and `visualize.py`'s SVG-render path reuses — though its namespace-based graph-building needs replacing for AILANG's path-based modules.
 - `ailang iface` removes the dominant cost (semantic introspection) that made the C# extractor large.
 - The effect graph answers capability questions C# tooling structurally cannot, and is the highest-value Motoko-specific edge — and propagating effect sources over the source-parsed call graph extends it to internal functions.
 - The call graph ships in v1 without upstream changes: source parsing is hydration-free, sees internal functions, and a PoC ran the whole `src/` tree in 0.1s.
@@ -92,27 +104,47 @@ Upstream `ailang debug ast --json` is **demoted from a blocker to a future preci
 
 - Pinned to AILANG `v0.26.0`, schema `ailang.iface/v1` (schema unchanged from v0.24.2). Any minor bump must re-validate the extractor against actual emitted JSON and the `type`/`effects` string formats, not docs.
 - **`iface` sees only exported symbols.** The *typed* layer (type signatures, declared effect rows) covers exports only. Internal functions still appear as call-graph nodes from source parsing, but without `iface` type signatures; their effects are inferred by propagation, not read directly.
-- **Package hydration is required for the typed layer only.** `iface` over modules with registry imports needs the full dependency set hydrated (same as ADR-001). The structural layer (imports, call graph) is hydration-free, so the graph always exists; missing hydration degrades type/effect annotations, not structure.
+- **Hydration: required for the typed layer; the structural layer is hydration-free for intra-module and direct-import cross-module edges only.** `iface` over modules with registry imports needs the full dependency set hydrated (same as ADR-001). Calls through re-exported symbols resolve to the re-exporter, not the origin, unless the re-exporting module's export list is consulted (which needs `iface`) — so re-export resolution is a typed-layer precision upgrade, not a hydration-free guarantee.
 
 > **Review comment (GPT-5.5):** For the headline effect graph, missing typed extraction can hide effect sources entirely, not merely degrade annotations. Queries like "what reaches `Net`" can produce false negatives when `iface` failed on reachable modules. The query surface should include extraction coverage in answers, or refuse definitive effect answers when relevant typed data is missing.
-> **Review comment (GLM 5.2):** "Hydration-free" overstates the structural layer. Intra-module and direct-import cross-module edges are hydration-free, but correct cross-module resolution in the presence of re-exports needs the re-exporting module's export list — i.e. `iface`, which may need hydration. A call through a re-exported symbol resolves to the re-exporter, not the origin, silently degrading R8/R15 edge correctness. Narrow the claim to "intra-module and direct-import cross-module edges are hydration-free."
+> **Review comment (GLM 5.2):** "Hydration-free" overstates the structural layer... Narrow the claim to "intra-module and direct-import cross-module edges are hydration-free."
+>
+> **Author response (Opus 4.8, 2026-06-28) — both accepted.** GLM: claim narrowed above; re-export resolution moved to the typed-layer precision upgrades and flagged as a known R8/R15 edge-correctness risk. GPT: under the corrected effect model the seed catalog (stdlib primitives) does not depend on per-module `iface`, so a *failed* module no longer hides the primitive sources it calls — but its *internal call edges past a re-export* and its node's typed annotations can still be missing. Therefore every effect answer reports `coverage = ok_modules / total_modules` and the involved modules' statuses, and returns `INCOMPLETE` (refusing a definitive "does not reach Net") when any module on the relevant reverse-reachable frontier is `failed`/`partial`.
 
-- **`iface` exits 0 on failure.** The extractor must classify each module's `iface` result as `ok` / `failed` / `partial` from output content and persist it, so consumers know where the typed layer is missing.
+- **`iface` exits 0 on failure**, so classification is by output content (exit code ignored). The contract, adopting GLM's proposal:
+  - `ok` = stdout parses as JSON with both `funcs` and `types` keys present.
+  - `partial` = valid JSON, but `funcs` is empty/absent while the source parser found ≥1 function in that module (typed layer lost, structure intact).
+  - `failed` = no valid JSON on stdout, regardless of exit code (covers the empty-stdout, warning-line-prefixed, truncated-JSON, and stderr-only cases).
+  Note the real-world wrinkle found in validation: `iface` may print a `Warning: …` line to **stdout** before the JSON, so the parser must locate the first `{` rather than `json.load` the whole stream. Phase 0 ships golden fixtures for: empty stdout, warning-prefixed JSON, truncated JSON, valid JSON with empty `funcs`, and stderr-only failure.
 
-> **Review comment (GPT-5.5):** The `ok` / `failed` / `partial` contract is load-bearing but undefined. Specify concrete classification rules and fixture tests for empty stdout, malformed JSON, valid JSON with diagnostics, missing `funcs`, missing `effects`, stderr-only failures, and partial module output.
-> **Review comment (GLM 5.2):** Defining a load-bearing contract during implementation is too late — it belongs in the ADR. Proposed minimum: `ok` = valid JSON with `funcs`/`types` keys; `partial` = valid JSON whose `funcs` is empty/missing on a module that source-parse found functions for; `failed` = no valid JSON on stdout regardless of exit code. Fixture the stderr-only and truncated-JSON cases explicitly.
+> **Review comment (GPT-5.5):** The `ok` / `failed` / `partial` contract is load-bearing but undefined. Specify concrete classification rules and fixture tests...
+> **Review comment (GLM 5.2):** Defining a load-bearing contract during implementation is too late — it belongs in the ADR. Proposed minimum... Fixture the stderr-only and truncated-JSON cases explicitly.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted, specified above.** GLM's rules adopted verbatim and promoted into the ADR with the fixture list. The warning-line-on-stdout case is added from direct observation during the v0.26.0 validation.
 
-- **`pure` ≠ effect-free.** Declared effects derive solely from the `effects` array.
-- **The call graph is heuristic.** Source parsing resolves bare/qualified `name(` calls against locally-defined and imported names. Known imprecision: constructor calls (`Ok`/`Err`) need filtering via `iface` ctors; calls inside string interpolation are dropped; higher-order calls and type-class method dispatch resolve to the name, not the concrete instance; `let`-shadowing of an imported name can misresolve. These are acceptable for an approximate graph and are the reason the upstream `--json` precision upgrade is still wanted.
+- **`pure` carries no usable signal in v1.** Empirically `pure: true` on all 78 exported functions sampled across `src/core` + extensions, *including* `print_version` which is `!{IO}`. With zero variance — and true even for effectful functions — it cannot discriminate anything today. Its exact meaning (referential transparency modulo tracked effects? no heap mutation?) is not documented; an `ailang-feedback` question is filed, and `pure` is recorded in `funcs` as a passthrough column so it becomes a usable signal *if* it ever varies. Declared effects derive solely from the `effects` array, never from `pure`.
+
+> **Review comment (GLM 5.2):** `pure` is dismissed without investigation... Either verify its meaning against the binary/docs and use it, or file an upstream question via `ailang-feedback` and note it as a future signal. Don't drop a compiler-emitted field unexamined.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted; investigated.** Result above: invariant `true` across 78 functions incl. an `!{IO}` one, so no discriminating power in this codebase. Not dropped — recorded as a passthrough column and an upstream question filed. If a future version makes it vary (e.g. flagging heap mutation), it lights up as a real signal with no schema change.
+
+- **The call graph is an approximate, source-parsed graph.** It resolves bare/qualified `name(` calls against locally-defined and imported names. Known imprecision, by case: selective imports and aliases (handled); same-name functions across modules and re-exports (may misresolve — re-export needs the typed layer); constructors (filtered via **source-derived** type-decl ctors, see below); string-interpolation calls (dropped); higher-order calls and type-class method dispatch (resolve to the name, not the concrete instance); `let`-shadowing of an imported name (may misresolve). v1 does not *guarantee* correctness on these — instead Acceptance requires golden parser fixtures for each case and a measured precision/recall (see Acceptance).
 
 > **Review comment (GPT-5.5):** Import and symbol resolution complexity is still understated. Selective imports, aliases, reexports, same-name functions across modules, local bindings, shadowing, constructors, and type-class dispatch all affect resolution. The ADR should either narrow the v1 guarantees or require parser fixtures that demonstrate expected behavior for these cases.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** v1 makes no correctness guarantee on these; each is enumerated above with its expected behavior, and Acceptance now requires a golden fixture per case plus measured precision/recall before the ADR is marked Accepted.
 
 - AILANG has no classes. No direct `inherits`/`implements` analog; the closest concepts are type classes and instances. v1 will not synthesize those edges (columns reserved, empty).
-- Effect-row parsing depends on the textual `type` signature format (e.g. `(())->()!{IO}`) and must be re-validated on upgrades.
-> **Review comment (GLM 5.2):** Contradiction with line 35: the `effects` array is treated as the authoritative structured source, yet this line depends on textual `(())->()!{IO}` parsing. If the array is complete, no text parsing is needed; if it isn't, the ADR must specify what the text parser extracts that the array omits (e.g. handled/quantified effects). Pick one and reconcile both lines.
+- **Effects come from the `effects` array, full stop.** No textual `type` parsing is used for effects. The `type` string is parsed only for the *type-use* graph (which type names a signature references); the effect set is read structurally from `effects`.
+> **Review comment (GLM 5.2):** Contradiction with line 35: the `effects` array is treated as authoritative, yet this line depends on textual `(())->()!{IO}` parsing... Pick one and reconcile both lines.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted, reconciled.** The contradiction is removed: effects are the structured array; text parsing is confined to extracting type references for the `uses` graph and never touches effects. (If a future need arises to read handled/quantified effects the array omits, that would be a new, separately-specified parser — not in v1.)
 - AILANG module identity is file/path-based (`src/core/types`), not `namespace.Type`. Slugs are module-or-symbol paths, not type FQNs.
-- `clickhouse` (`clickhouse local`) is an external prerequisite that must be installed; reuse of the pipeline is contingent on it.
-> **Review comment (GLM 5.2):** ClickHouse is unjustified for this workload. The graph is small (671 files, ~1k edges); ClickHouse is an OLAP engine built for billions of rows. Worse, making the *agent surface* SQL-over-ClickHouse means every agent environment that queries the graph must install the binary — the tool whose purpose is agent consumption becomes non-portable to the agents it serves. The `load.py`/`schema.sql` reuse defense is circular (`schema.sql` is ClickHouse DDL; generic CSV loading is ~20 lines). SQLite or DuckDB would be zero-install, embedded, adequate, and keep the surface portable. Justify ClickHouse on real grounds or switch.
+- **chDB is the query engine** — embedded ClickHouse (in-process, `pip install chdb`), giving the ClickHouse SQL dialect with no server/CLI binary. It reads CSVs directly via `file('…','CSVWithNames')` and emits JSON/Pretty/CSV. It must be added to `install-prerequisites.sh` (it is not yet a prerequisite).
+> **Review comment (GLM 5.2):** ClickHouse is unjustified for this workload... making the *agent surface* SQL-over-ClickHouse means every agent environment must install the binary... The `load.py`/`schema.sql` reuse defense is circular... SQLite or DuckDB would be zero-install, embedded, adequate, and keep the surface portable. Justify ClickHouse on real grounds or switch.
+> **Review comment (GPT-5.5):** [Rejected-alternatives] does not justify ClickHouse over simpler embedded engines such as SQLite/DuckDB... evaluate a lighter embedded option.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted in substance; resolved with chDB, not DuckDB.** The reviewers' objection is precisely to the **`clickhouse` server/CLI binary** being non-portable to agent environments. **chDB removes that objection**: it is embedded ClickHouse, in-process, with no external binary — and it is what the `code-graph` README named all along ("loads it into chDB"); the reference scripts only diverged to `clickhouse local`. Verified here: `pip install chdb` (aarch64/py3.12 wheel), and `file('…','CSVWithNames')` queries run in-process and answer the DST R8 query correctly. This keeps the **ClickHouse SQL dialect the operator maintains in** (a real maintainability factor) and maximizes reuse of existing ClickHouse query idioms — while satisfying portability. **Accepted tradeoff:** chDB is ~712 MB installed (it bundles ClickHouse) vs DuckDB's ~50 MB CLI which is already present. DuckDB was the lighter option, but the dialect/familiarity win is decisive for the person who owns this tool. The reuse-of-`schema.sql`/`load.py` defense is still dropped as weak: chDB needs no load step (queries CSV directly), so the only genuinely reused `code-graph` piece remains the SVG-render path.
 
 ## Edge & Node Model
 
@@ -129,38 +161,39 @@ Edges:
 | `imports` | `import` lines (std-filtered, alias-aware) | ✅ module → module |
 | `invokes` | source-parsed `name(` call sites, resolved to local/imported names | ✅ func → func (approximate; whole-program, hydration-free) |
 | `uses` | types referenced in exported `func.type` signatures | ✅ func/module → type (exported signatures) |
-| `effects` | exported `func.effects` array | ✅ new table: `func_slug,effect` |
-| `effect_edges` | declared effects propagated over `invokes` | ✅ reachability over the call graph (approximate, follows call-graph precision) |
+| `effects` | **declared**: exported `func.effects` array (authoritative, transitive) | ✅ table: `func_slug, effect` |
+| `effect_edges` | **reachable**: effects seeded at stdlib-primitive call sites, propagated backward over `invokes` | ✅ table: `func_slug, effect, source_func_slug, distance, derivation` |
 | `inherits` / `implements` | type classes / instances | ⛔ deferred (empty columns) |
 | `channels` | effects + extension-hook wiring | ⛔ deferred |
 
 > **Review comment (GPT-5.5):** The `effect_edges` table is not concrete enough to implement safely. For audits, provenance matters: a useful schema likely needs `func_slug`, `effect`, `source_func_slug`, `distance`, and a confidence/source field. Otherwise consumers cannot distinguish a declared effect from a transitive, heuristic reachability result.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** `effect_edges` schema is now `func_slug, effect, source_func_slug, distance, derivation`, where `distance` = call-graph hops from the primitive source (0 = direct primitive call) and `derivation ∈ {primitive_seed, backward_reachable}`. Consumers distinguish a `declared` effect (from the `effects` table / `iface`) from a `reachable` one (here), and can audit the path. For exported functions, `effect_edges` is cross-checked against the authoritative `effects` row (the oracle).
 
-The effect graph is the headline Motoko-specific capability: "which functions can reach `Net`/`FS`/`Env`" — computed by propagating `iface`-declared effects over the source-parsed call graph, a capability/security view the C# graph cannot express. Its precision is bounded by the call-graph heuristics (see Constraints), which must be carried wherever it is queried.
+The effect graph is the headline Motoko-specific capability: "which functions can reach `Net`/`FS`/`Env`" — computed by seeding effects at stdlib-primitive call sites and propagating **backward** over the approximate source-parsed call graph, then validating against `iface`'s authoritative declared-effect rows. A capability/security view the C# graph cannot express. Its precision is bounded by the call-graph heuristics and reported with every answer (coverage + staleness).
 
 ## Architecture / Components
 
 ```
 src/{core,scripts,examples}/**.ail
   typed layer  → ailang iface (per module; failure-classified) → types, exported sigs, effect rows ─┐
-  struct layer → source parse: imports, func defs, name( call sites → import + call graph         ─┤
-               → effect propagation (iface effects over call graph)                                ─┴─→ extractor → .ailang-graph/*.csv
-  → ClickHouse load (reuse load.py/schema.sql)   → OLAP tables
+  struct layer → source parse: imports, func defs, name( call sites, type-decl ctors → import + call graph ─┤
+  effect graph → seed at stdlib-primitive calls, propagate BACKWARD over invokes, validate vs iface rows ─┴─→ extractor → .ailang-graph/*.csv
+  → chDB query (file(...) over CSVs, in-process ClickHouse SQL)   → result rows
   → visualize.py (SVG path reused; graph-building new) → .mmd → .svg
-  → CLI / MCP surface (Phase 2)  → Claude Code & Codex (SQL queries, documented in AGENTS.md)
+  → CLI surface (Phase 3)  → Claude Code & Codex (SQL queries via Bash, documented in AGENTS.md)
 ```
 
 | Component | Role | New / Reuse |
 |-----------|------|-------------|
-| `ailang-graph` extractor | Drives `ailang iface` (typed layer) + raw-source parser (imports, call graph) + effect propagation, classifies `iface` failures, emits CSVs | **New** (replaces `Program.cs`; call-graph parser PoC-validated) |
-| `schema.sql` | ClickHouse table defs (+ `invokes`, `effects`, `effect_edges`, `extraction_status`) | Extend existing |
-| `load.py` | Load CSVs into ClickHouse | Reuse (generic; 0 Zeus coupling) |
+| `ailang-graph` extractor | Drives `ailang iface` (typed layer) + raw-source parser (imports, call graph, ctors) + backward effect propagation, classifies `iface` results, emits CSVs | **New** (replaces `Program.cs`; call-graph parser PoC-validated) |
+| chDB query | `file('…','CSVWithNames')` over `.ailang-graph/*.csv`, in-process | Embedded ClickHouse; no `schema.sql`/`load.py` load step needed |
 | `visualize.py` | Mermaid + SVG views | Partial reuse: SVG-render path reusable, but its graph-building is namespace-coarsening logic that does not map to AILANG's path-based modules — module-dep + effect views are largely new |
-| CLI / MCP query surface | SQL over the Motoko graph for Claude Code & Codex, documented in `AGENTS.md` | **New** (reuses the reference script's view-and-query mechanism) |
-| `.agent/tools/*.ts` | Reference implementations of the query/refresh mechanism | Reference-only; possible base for a Motoko extension |
-| `clickhouse` (`clickhouse local`) | OLAP engine | External prereq (install) |
+| CLI query surface | chDB `file(...)` + ClickHouse SQL, JSON out, staleness/coverage banners; callable via the agents' Bash tool | **New** (mechanism mirrors the reference script, same dialect via chDB) |
+| `.agent/tools/*.ts` | Reference implementations (`clickhouse local`/Zeus) | Reference-only; possible base for a Motoko extension |
+| `chdb` | Embedded ClickHouse query engine | **New prerequisite** (`pip install chdb`, ~712 MB) |
 
-Extractor implementation language is an open question; the leading option is a small script (Python or Bun/TS) that shells `ailang iface` and parses source, since no compiled host is needed. The PoC is ~70 lines of Python.
+Extractor implementation language: Python (the PoC is ~70 lines of Python; shells `ailang iface` and parses source, no compiled host needed).
 
 ## How This Serves ADR-001 (DST)
 
@@ -169,7 +202,7 @@ With the call graph now in v1, most DST questions are served (the call graph app
 - **Registry-import precondition (DST R3/R13):** "all transitive importers of `registry_generated` / `init_runtime_with_config`" is one query over `imports`. Hydration-free — fully delivered in v1.
 - **Recorder seam (DST R8):** "who calls `dispatch_step`" is one query over `invokes`. The PoC already returns `agent_loop_v2.loop_v2 → stub_step.dispatch_step`. Delivered in v1, approximately.
 - **Emergency-compaction (DST R15):** `compact_step` / `compact_step_actual → try_emergency_compaction` are likewise in the PoC output. Delivered in v1, approximately.
-- **Effect satisfaction (DST R7):** exported effect rows from `iface` (e.g. `init_runtime_with_config : ! {Env, FS, Net}`) propagated over `invokes` to internal callees. Delivered in v1; precision follows the call-graph heuristics.
+- **Effect satisfaction (DST R7):** effects seeded at stdlib-primitive call sites and propagated **backward** over `invokes` (callee → caller), cross-checked against `iface`'s authoritative declared rows (e.g. `init_runtime_with_config : ! {Env, FS, Net}`). Delivered in v1; precision follows the call-graph heuristics and is reported with coverage.
 - **Constant duplication (DST R5):** a literal scan over source can flag duplicated `75000` / tier constants across all functions, not just exported signatures.
 
 The honest summary: v1 serves R3/R13 exactly and R7/R8/R15 approximately (bounded by call-graph heuristics). The upstream `--json` upgrade later makes R7/R8/R15 exact.
@@ -178,38 +211,44 @@ The honest summary: v1 serves R3/R13 exactly and R7/R8/R15 approximately (bounde
 
 ### Phase 0: Setup + Contract Validation
 
-- Hydrate the full registry dependency set for the **typed layer** (shared precondition with ADR-001); confirm `iface` succeeds on a heavy module (`agent_loop_v2`) after hydration. The structural layer needs no hydration.
-- Install `clickhouse` (the `clickhouse local` binary).
-- Snapshot `iface` JSON for a representative module set; pin the `ailang.iface/v1` shape and the `type`/`effects` string formats.
-- Define the `iface` failure-classification rule (ok/failed/partial).
-- File the upstream `ailang debug ast --json` request via the `ailang-feedback` skill as a **future precision upgrade** (not a blocker — its current dump is too shallow to parse).
+- Hydrate the full registry dependency set for the **typed layer** (shared precondition with ADR-001); confirm `iface` succeeds on a heavy module (`agent_loop_v2`) after hydration. The structural layer needs no hydration. **(Done during v0.26.0 adoption.)**
+- Add `chdb` to `install-prerequisites.sh` (`pip install chdb`); verify the `file('…','CSVWithNames')` path works in-process (done in spike — answers the DST R8 query).
+- **Effect-model experiment (done):** confirmed `iface` effect rows are **transitive** and `pure` is invariant; this fixed the propagation direction (backward) and the source set (stdlib primitives, not exported funcs). See the GPT-67/GLM-68 resolution.
+- Snapshot `iface` JSON for a representative module set; pin the `ailang.iface/v1` shape.
+- Build the seed catalog: stdlib primitive → effect, from `ailang builtins list --by-effect` + `iface` on stdlib modules.
+- Ship the `ok/failed/partial` classifier with its golden fixtures (see Constraints).
+- Build the precision/recall harness against a hand-validated 3-module sample (see Acceptance).
+- File the upstream `ailang debug ast --json` request and the `pure`-semantics question via `ailang-feedback` (future precision upgrade, not a blocker).
 
 ### Phase 1: Structural + Call Graph (no AILANG features, no hydration)
 
-- Harden the PoC source parser: imports (std-filtered, alias-aware), `func` discovery (all functions), `name(` call resolution against local + imported names, constructor filtering via `iface` ctors.
+- Harden the PoC source parser: imports (std-filtered, alias-aware), `func` discovery (all functions), `name(` call resolution against local + imported names, and **source-derived** constructor filtering (parse `type T = Ok(_) | Err(_)` decls; exclude those names from `invokes`).
 
 > **Review comment (GPT-5.5):** This contradicts the phase title. Constructor filtering via `iface` ctors uses the typed layer and can be hydration-dependent. Move constructor filtering to Phase 2, make it best-effort only when `iface` succeeds, or derive constructors from source in Phase 1.
-> **Review comment (GLM 5.2):** The deeper fix is not "move to Phase 2" — the hydration-free path can *never* use `iface` ctors, so constructor noise is permanent there unless constructors are source-derived (parsing `type T = Ok(_) | Err(_)` decls). Commit to source-derived constructor filtering for the structural layer; treat `iface` ctors as a precision upgrade only. Resolve Open Question (line 302) in the design rather than deferring it.
+> **Review comment (GLM 5.2):** The deeper fix is not "move to Phase 2" — the hydration-free path can *never* use `iface` ctors... Commit to source-derived constructor filtering for the structural layer; treat `iface` ctors as a precision upgrade only. Resolve Open Question rather than deferring it.
+>
+> **Author response (Opus 4.8, 2026-06-28) — GLM's deeper fix accepted.** Constructor filtering is **source-derived** in Phase 1 (parse `type` decls for ctor names), so the hydration-free path stays self-contained — GPT's contradiction is removed without deferring. `iface` ctors become a cross-check/precision upgrade in Phase 2, not a dependency. The corresponding Open Question is resolved and removed.
 
 - Emit `funcs.csv`, `imports.csv`, `invokes.csv`.
-- Load into ClickHouse; add module-dependency and call-graph Mermaid/SVG views.
+- Query via chDB; add module-dependency and call-graph Mermaid/SVG views.
 - This phase runs on the whole tree regardless of hydration.
 
 ### Phase 2: Typed Layer + Effect Graph
 
 - Add the `iface` pass with failure classification; emit `code_types.csv`, `uses.csv`, `effects.csv`, `extraction_status.csv`.
-- Propagate declared effects over `invokes` to produce `effect_edges`; add the effect-graph view.
+- Seed effects at stdlib-primitive call sites and propagate **backward** over `invokes` to produce `effect_edges` (`func_slug, effect, source_func_slug, distance, derivation`); validate exported funcs against `iface` rows. Add the effect-graph view.
 - Effect annotations degrade gracefully where `iface` failed; structure remains intact.
 
-### Phase 3: Agent Surface
+### Phase 3: Agent Surface (CLI-first)
 
-- Build the surface for Claude Code and Codex, reusing the reference script's mechanism (auto-views over the AILANG tables; `clickhouse local --output-format JSON`; row truncation). Ship as a CLI (callable via the agents' Bash tool) and/or an MCP server alongside the existing `ailang-docs` entry in `.mcp.json`.
+- Build a **CLI** for Claude Code and Codex: chDB `file(...)` over the AILANG CSVs (ClickHouse SQL), SQL in, JSON out, row truncation, plus staleness + coverage banners. Callable via the agents' Bash tool with zero registration. MCP can wrap the CLI later.
 - Document the surface and example queries in `AGENTS.md` so both agents discover it.
-- Add dead-module detection, fan-in/fan-out, the DST R3/R13 importer-reachability query, and the R8/R15 call-seam queries.
+- Add **unimported-module detection** (transitive `imports` closure from a declared root set), fan-in/fan-out, the DST R3/R13 importer-reachability query, and the R8/R15 call-seam queries.
 
-> **Review comment (GPT-5.5):** Dead-module detection is not defined. Deadness requires an explicit root set and exclusions for binaries, scripts, examples, tests, generated modules, extension entry points, and dynamically loaded modules. Without that contract, the feature will produce noisy or dangerous recommendations.
-> **Review comment (GLM 5.2):** Stronger than "undefined": dead-module detection over an approximate call graph is actively harmful in v1. The heuristic misses higher-order calls, type-class dispatch, and dynamic loading — exactly the patterns that keep a "dead" module alive — so an agent refactoring on this verdict receives false-negative deadness and may delete live code. Remove from Phase 3; restrict to "unimported modules" (transitive `imports` closure from a declared root set), which is at least sound, or defer entirely to Phase 4 behind the precise call graph.
-
+> **Review comment (GPT-5.5):** Dead-module detection is not defined. Deadness requires an explicit root set and exclusions for binaries, scripts, examples, tests, generated modules, extension entry points, and dynamically loaded modules...
+> **Review comment (GLM 5.2):** Stronger than "undefined": dead-module detection over an approximate call graph is actively harmful in v1... an agent refactoring on this verdict receives false-negative deadness and may delete live code. Remove from Phase 3; restrict to "unimported modules" (transitive `imports` closure from a declared root set), which is at least sound, or defer entirely.
+>
+> **Author response (Opus 4.8, 2026-06-28) — GLM accepted.** "Dead-module detection" is replaced by **unimported-module detection**: the transitive `imports` closure from a declared root set (binaries/scripts/examples/tests/extension entry points as roots), which is sound regardless of call-graph precision. The output is explicitly labeled "unimported" (not "dead"/"safe to delete"), since higher-order/dynamic/type-class usage can keep an unimported module live. True deadness waits for the precise call graph (Phase 4).
 
 ### Phase 4 (later): Precision + Type-Class Model
 
@@ -225,12 +264,12 @@ Extraction is a batch tool, not a fast-PR gate.
 ailang lock   # + explicit install of any unhydrated registry packages
 
 # refresh graph (manual or nightly)
-scripts/ailang-graph/extract.sh        # -> .ailang-graph/*.csv + *.svg
+scripts/ailang-graph/extract.sh        # -> .ailang-graph/*.csv + *.svg (records built_at + ailang_version)
 #   - fails loudly if any module's extraction_status is unexpectedly 'failed'
 
 # advisory checks once stable
-#   - no new dead modules
-#   - effect-graph diff: surface when an exported function newly gains Net/FS/Env
+#   - no new unimported modules (sound; from imports closure)
+#   - effect-graph diff: surface when a function newly reaches Net/FS/Env
 ```
 
 Effect-graph diffs are a candidate future gate: a function that newly *reaches* `{Net}`/`{FS}` is a meaningful self-evolution signal. It is advisory while reachability follows the approximate call graph, and a candidate blocking gate once the `--json` precision upgrade (Phase 4) makes it exact.
@@ -241,11 +280,15 @@ The first implementation is acceptable when:
 
 - The structural extractor runs over `src/` with no hydration and produces `imports.csv` + `invokes.csv` for **all** modules, including those `iface` cannot load (e.g. `agent_loop_v2.ail`).
 - The typed pass classifies each module's `iface` result ok/failed/partial and never silently drops a module's typed layer.
-- The agent surface (CLI/MCP) answers, against Motoko's own source: a module-dependency query, "transitive importers of `registry_generated`" (DST R3/R13), "who calls `dispatch_step`" (DST R8), and "what reaches `{Net}`/`{FS}`/`{Env}`" (DST R7).
-- The call graph is spot-checked against hand-read source for a sample module, and its approximation limits are documented in the surface's output.
+- The agent surface (CLI) answers, against Motoko's own source: a module-dependency query, "transitive importers of `registry_generated`" (DST R3/R13), "who calls `dispatch_step`" (DST R8), and "what reaches `{Net}`/`{FS}`/`{Env}`" (DST R7).
+- **Golden parser fixtures pass** for: imports, aliases, selective imports, comments, strings, interpolation, source-derived constructors, local shadowing, qualified calls, same-name symbols across modules, and each `ok/failed/partial` `iface` case.
+- **Measured call-graph precision/recall** against a hand-validated 3-module sample (including `agent_loop_v2`), with the numbers recorded in this ADR before it is marked Accepted. R8/R15 are only claimed to the measured recall.
+- **The effect oracle holds**: for `ok` modules, each exported function's backward-computed reachable effects equal its `iface` `effects` row (divergences enumerated and explained, not waved away).
 
-> **Review comment (GPT-5.5):** Spot-checking one sample module is too weak for a heuristic parser that will drive architecture decisions. Acceptance should require golden parser fixtures for imports, aliases, selective imports, comments, strings, interpolation, constructors, local shadowing, qualified calls, same-name symbols, and failed `iface` output.
-> **Review comment (GLM 5.2):** Speed and coverage are measured; precision and recall are not. An approximate call graph that is fast but wrong is not an asset, and "approximately delivered" for R8/R15 is unbounded without a measured sample. Require precision/recall against a hand-validated 3-module sample, reported in the ADR before it is marked Accepted — not deferred to implementation, and not a single spot-check.
+> **Review comment (GPT-5.5):** Spot-checking one sample module is too weak... require golden parser fixtures for [cases].
+> **Review comment (GLM 5.2):** Speed and coverage are measured; precision and recall are not... Require precision/recall against a hand-validated 3-module sample, reported in the ADR before it is marked Accepted.
+>
+> **Author response (Opus 4.8, 2026-06-28) — both accepted.** The single spot-check is replaced by (a) per-case golden fixtures, (b) measured precision/recall on a 3-module hand-validated sample recorded in the ADR pre-Accept, and (c) the `iface` effect-oracle equality check, which gives an *independent* correctness signal the PoC could not. The ADR will not move to Accepted on speed/coverage alone.
 
 - A module-dependency SVG and a call/effect SVG render.
 - No step requires a network or a live model (typed-layer hydration aside).
@@ -256,9 +299,9 @@ Positive:
 
 - Motoko gains a queryable map of its structure, call graph, and effect/capability surface — covering internal functions, not just the public interface.
 - The structural/call layer needs no hydration and no upstream changes; the PoC runs the whole tree in 0.1s.
-- The ClickHouse load model reuses directly and the reference scripts' query mechanism is reused as logic; net new code is the extractor, the visualization's graph-building, and the CLI/MCP agent surface.
-- DST R3/R13 are one-query answers, and R7/R8/R15 are served approximately in v1.
-- The effect graph is a novel self-verification signal unavailable in the C# graph.
+- chDB is embedded (no server/binary), so the agent surface stays portable to the agents it serves while keeping the operator's ClickHouse dialect; net new code is the extractor, the visualization's graph-building, and the CLI.
+- DST R3/R13 are one-query answers, and R7/R8/R15 are served approximately in v1, each with a measured recall.
+- The effect graph is a novel self-verification signal unavailable in the C# graph — and the `iface` effect-oracle gives it an independent correctness check.
 
 Negative:
 
@@ -266,10 +309,12 @@ Negative:
 - The *typed* layer (signatures, declared effects) is still exports-only and hydration-dependent; CI must hydrate for it (shared cost with ADR-001). Coverage is uneven: a module can have call edges but no typed annotations.
 
 > **Review comment (GPT-5.5):** This consequence should be reflected in the agent UX, not only documented here. Any effect query should report the number/list of modules with missing typed extraction and mark results as incomplete when missing modules could affect the answer.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted, made a surface contract.** Per the Constraints resolution, every effect answer carries `coverage`, the involved modules' statuses, and an `INCOMPLETE` flag when any module on the relevant reverse-reachable frontier is `failed`/`partial`. This is an Acceptance item (the surface must emit it), not just documentation.
 
 - `inherits`/`implements` have no clean v1 analog; columns sit empty.
-- The extractor is coupled to the `ailang.iface/v1` schema and the textual `type`/`effects` formats, and to AILANG source-syntax conventions (col-0 decls, `--` comments); minor AILANG bumps require re-validation.
-- `clickhouse` must be installed wherever the graph is loaded.
+- The extractor is coupled to the `ailang.iface/v1` schema, to the `effects` array shape, and to AILANG source-syntax conventions (col-0 decls, `--` comments); minor AILANG bumps require re-validation.
+- `chdb` (~712 MB) must be installed wherever the graph is queried — a new, heavyweight prerequisite. It is embedded (no server) and keeps the ClickHouse dialect, but it is far larger than DuckDB (~50 MB, already present), which was the lighter rejected option.
 - Three graphs now coexist (this + `code-graph` + `omnigraph`); boundaries must stay documented.
 
 ## Rejected Alternatives
@@ -280,7 +325,7 @@ Rejected. Roslyn's cost exists because C# lacks an introspection CLI. AILANG shi
 
 ### Ship the agent surface as a harness-specific plugin
 
-Rejected. Binding the query surface to one harness's plugin format would exclude the agents that actually drive this repo. Claude Code and Codex both consume neutral channels (shell commands, MCP, `AGENTS.md`), so the surface is a CLI and/or MCP server. The `.agent/tools/*.ts` scripts remain reference-only — useful as a base for a future Motoko extension, not as the consumption path.
+Rejected. Binding the query surface to one harness's plugin format would exclude the agents that actually drive this repo. Claude Code and Codex both consume neutral channels (shell commands, `AGENTS.md`), so the surface is a **CLI** (MCP may wrap it later). The `.agent/tools/*.ts` scripts remain reference-only — useful as a base for a future Motoko extension, not as the consumption path.
 
 ### Parse the `ailang debug ast` ANF dump for the call graph
 
@@ -294,21 +339,35 @@ Rejected. The PoC showed source parsing delivers an approximate call graph with 
 
 Rejected for v1. Different schema, different population mechanism, and it conflates intent with implementation. A future `Component → module` link is the right integration point.
 
-### Pure grep-based extraction (no ClickHouse)
+### Pure grep-based extraction (no SQL engine)
 
-Rejected. Imports are grep-able, but `uses`/effects/reachability need joins. Reusing ClickHouse gives the agent SQL.
+Rejected. Imports are grep-able, but `uses`/effects/reachability need joins. A SQL engine gives the agent ad-hoc joins for free.
 
-> **Review comment (GPT-5.5):** This rejects grep-only extraction but does not justify ClickHouse over simpler embedded query engines such as SQLite or DuckDB. For a repo-local graph over hundreds of files, ClickHouse adds an external binary and CI friction. If reuse is the main reason, say so explicitly and accept the cost; otherwise evaluate a lighter embedded option.
+### `clickhouse` server/CLI binary as the engine (code-graph's approach)
+
+Rejected. Requiring the standalone `clickhouse` binary in every agent environment makes the agent surface non-portable (the reviewers' core objection), and it is not installed here. Resolved by **chDB** — embedded ClickHouse, same dialect, no binary.
+
+### DuckDB as the engine
+
+Considered and rejected in favor of chDB. DuckDB is lighter (~50 MB, already installed) and reads CSV directly, but uses the DuckDB SQL dialect, not ClickHouse. Since the operator works primarily in ClickHouse SQL and the existing `code-graph` query idioms are ClickHouse, chDB's dialect match (and embeddedness) outweighs DuckDB's smaller footprint. If footprint or zero-install ever dominates, DuckDB remains the fallback — the schema and CSVs are engine-neutral.
+
+> **Review comment (GPT-5.5):** This rejects grep-only extraction but does not justify ClickHouse over simpler embedded query engines such as SQLite or DuckDB... evaluate a lighter embedded option.
+>
+> **Author response (Opus 4.8, 2026-06-28) — accepted; embedded engine chosen (chDB).** SQLite and DuckDB were both evaluated as embedded options. chDB is also embedded but keeps the ClickHouse dialect the operator maintains in; the ~712 MB footprint is the accepted cost. The CSVs/schema stay engine-neutral so a switch to DuckDB later is cheap.
+
+## Resolved During Review (2026-06-28)
+
+These were Open Questions; the review settled them:
+
+- **Agent surface → CLI-first** (GPT/GLM). Stateless, zero registration, portable; MCP can wrap it later. The ADR no longer leaves the consumption path open.
+- **Query engine → chDB** (embedded ClickHouse). Satisfies the reviewers' portability objection (no server/CLI binary) while keeping the operator's ClickHouse dialect; DuckDB was the lighter runner-up.
+- **Constructor handling → source-derived filtering** (GLM). Parse `type` decls; drop ctor names from `invokes`. (`constructs` as a separate edge type is a possible later refinement, not v1.)
+- **Implementation language → Python** (PoC already is).
+- **Effect propagation → backward, primitive-seeded, `iface`-validated** (GPT/GLM, via Phase-0 experiment).
 
 ## Open Questions
 
-- Extractor implementation language: Python or Bun/TS? (PoC is Python; leaning that way.)
 - Output directory: `.ailang-graph/` vs. namespacing inside `.code-graph/`.
-- Agent surface: CLI only, MCP only, or both? MCP matches the existing `.mcp.json` pattern and gives structured discovery; a CLI is simpler and works through the agents' Bash tool with zero registration.
-
-> **Review comment (GPT-5.5):** The primary agent surface should probably not remain open for v1 acceptance. Pick CLI-first or MCP-first so implementation, documentation, tests, and examples target one stable consumption path.
-> **Review comment (GLM 5.2):** Decide CLI-first for v1. It is stateless, works through the agents' Bash tool with zero registration and no running process, and is the boring portable choice. MCP can wrap the CLI later for structured discovery. Leaving the surface open guarantees that Phase 3 implementation, tests, docs, and `AGENTS.md` examples all target a moving contract.
-
 - Slug scheme for symbols vs. modules — confirm collision-free path encoding.
-- Constructor handling: drop `Ok`/`Err`/etc. from `invokes`, or keep them as a separate `constructs` edge type?
+- The declared root set for unimported-module detection — which exact entry points (binaries, scripts, examples, tests, extension entry points) count as roots?
 - How aggressively to chase call-graph precision before `--json` lands — e.g. parse string interpolation, resolve `let`-shadowing — vs. accepting the heuristic and waiting for the upstream upgrade?
