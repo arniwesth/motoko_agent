@@ -122,6 +122,10 @@ run: build
 install:
 	./scripts/install-prerequisites.sh	
 
+# Install all prerequisites (Go, Bun, Node, context-mode, AILANG, TUI deps, Lean 4)
+install_with_lean:
+	./scripts/install-prerequisites.sh --with-lean
+
 # Run all core runtime module tests
 test_core:
 	@echo "Running src/core/agents_md.ail tests..."
