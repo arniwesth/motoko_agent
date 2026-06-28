@@ -318,6 +318,25 @@ PY
   log_ok "polars installed"
 }
 
+chdb_ok() {
+  python3 - <<'PY' >/dev/null 2>&1
+import chdb
+PY
+}
+
+install_chdb() {
+  log_header "chDB embedded ClickHouse"
+
+  if chdb_ok; then
+    log_ok "chDB already installed"
+    return
+  fi
+
+  log_info "Installing chDB with pip for the current user (~712 MB installed footprint)..."
+  python3 -m pip install --user --break-system-packages chdb
+  log_ok "chDB installed"
+}
+
 # ---------------------------------------------------------------------------
 # macOS: Homebrew
 # ---------------------------------------------------------------------------
@@ -695,6 +714,7 @@ main() {
   if [[ "$OS" == "debian" ]]; then
     install_python_data_science_packages
   fi
+  install_chdb
   install_context_mode
   install_bun_deps
   install_ailang
