@@ -34,13 +34,27 @@ class ParsedModule:
     import_bindings: list[ImportBinding] = field(default_factory=list)
 
 
-def discover_files(repo_root: Path = config.REPO_ROOT) -> list[Path]:
+def _is_test_file(path: Path, repo_root: Path) -> bool:
+    rel = path.resolve().relative_to(repo_root.resolve()).as_posix()
+    return rel.endswith("_test.ail") or rel.startswith("src/core/test/")
+
+
+def discover_files(
+    repo_root: Path = config.REPO_ROOT,
+    profile: str = config.DEFAULT_PROFILE,
+    include_tests: bool = False,
+) -> list[Path]:
+    if profile not in config.PROFILES:
+        raise ValueError(f"unknown code-graph profile: {profile}")
     files: list[Path] = []
-    for root in config.SOURCE_ROOTS:
+    for root in config.PROFILES[profile]:
         base = repo_root / root
         if base.exists():
             files.extend(base.rglob("*.ail"))
-    return sorted(files)
+    uniq = sorted(set(files))
+    if not include_tests and profile == "core":
+        uniq = [p for p in uniq if not _is_test_file(p, repo_root)]
+    return uniq
 
 
 def parse_module_decl(text: str, fallback: str) -> str:

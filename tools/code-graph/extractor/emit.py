@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,13 +37,46 @@ def write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
             writer.writerow({field: row.get(field, "") for field in fields})
 
 
+def existing_full_cache(out: Path) -> bool:
+    status = out / "extraction_status.csv"
+    effects = out / "effects.csv"
+    if not status.exists():
+        return False
+    text = status.read_text(errors="ignore")
+    if "structural_only" in text:
+        return False
+    if effects.exists() and sum(1 for _ in effects.open()) > 1:
+        return True
+    return "iface_status" in text and ("ok" in text or "partial" in text)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--profile", choices=sorted(config.PROFILES), default=config.DEFAULT_PROFILE,
+                    help="source set to extract: core (default), all, or smoke")
+    ap.add_argument("--include-tests", action="store_true",
+                    help="include *_test.ail and src/core/test modules in the core profile")
     ap.add_argument("--structural-only", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="allow --structural-only to overwrite an existing full typed/effect cache")
     args = ap.parse_args()
     out = config.OUT_DIR
     out.mkdir(parents=True, exist_ok=True)
-    files = discover_files(config.REPO_ROOT)
+    if args.structural_only:
+        if existing_full_cache(out) and not args.force:
+            print(
+                "Refusing to overwrite a full code-graph cache with --structural-only.\n"
+                "Full extraction is fast here; run tools/code-graph/extract.sh for typed/effect data.\n"
+                "For diagnostic structural-only output, rerun with --structural-only --force.",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            "WARNING: --structural-only skips iface and overwrites typed/effect CSVs "
+            "(effects.csv/effect_edges.csv will be header-only).",
+            file=sys.stderr,
+        )
+    files = discover_files(config.REPO_ROOT, profile=args.profile, include_tests=args.include_tests)
     parsed = parse_all(files, config.REPO_ROOT)
     roots = assemble_roots(files)
 
@@ -110,7 +144,8 @@ def main() -> int:
     write_csv(out / "effects.csv", EFFECT_FIELDS, declared)
     write_csv(out / "effect_edges.csv", EFFECT_EDGE_FIELDS, effect_edges)
     write_csv(out / "extraction_status.csv", STATUS_FIELDS, status_rows)
-    print(f"wrote {out}: {len(modules)} modules, {len(funcs)} funcs, {len(invokes)} invokes, {len(std_calls)} std calls")
+    profile = args.profile + ("+tests" if args.include_tests else "")
+    print(f"wrote {out}: profile={profile}, {len(modules)} modules, {len(funcs)} funcs, {len(invokes)} invokes, {len(std_calls)} std calls")
     return 0
 
 

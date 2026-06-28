@@ -8,7 +8,12 @@ GRAPH_SCHEMA = 1
 SEED_GRANULARITY = "module"
 IFACE_SCHEMA = "ailang.iface/v1"
 
-SOURCE_ROOTS = ("src", "scripts", "examples")
+DEFAULT_PROFILE = "core"
+PROFILES = {
+    "core": ("src/core",),
+    "all": ("src", "scripts", "examples"),
+    "smoke": ("scripts", "examples", "src/examples"),
+}
 STD_EFFECT_MODULES = {"std/ai", "std/clock", "std/cognition", "std/dom", "std/debug",
                       "std/env", "std/fs", "std/io", "std/net", "std/process",
                       "std/trace", "std/game", "std/gzip", "std/package",
