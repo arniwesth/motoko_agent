@@ -55,7 +55,7 @@ import src/core/types (Msg, ToolBackend)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
-import src/core/compaction (compact_step, compact_step_actual)
+import src/core/compaction (compact_step_calibrated, message_chars)
 import src/core/context_usage (context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
@@ -167,11 +167,15 @@ type LoopTotals = {
   cache_creation: int,
   cost_millicents: int,
   cost_warned_pct: int,
-  last_input_tokens: int
+  last_input_tokens: int,
+  -- M-COMPACT-CALIBRATED: chars actually SENT to the provider last call (pinned prefix +
+  -- compacted conversation). With last_input_tokens this gives the provider's true chars->token
+  -- ratio, used to calibrate the CURRENT-history size estimate that gates compaction.
+  last_sent_chars: int
 }
 
 pure func zero_totals() -> LoopTotals {
-  { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0, last_input_tokens: 0 }
+  { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0, last_input_tokens: 0, last_sent_chars: 0 }
 }
 
 -- Emit a schema-v1 event: prepends schema_version + session_id + type to
@@ -1118,10 +1122,14 @@ func loop_v2(
     Ok(msgs_after_ext) => {
   -- DP0b: structural compaction as fallback
   -- compact_step is a no-op below 70% usage; elides old tool_result content
-  -- at 70-85% and 85-95%; at ≥95% tries emergency compaction. The elision LEVEL is
-  -- driven off the provider's ACTUAL last input_tokens (ground truth) rather than a
-  -- char-count estimate (the old chars/4 over-counted ~1.9x -> premature compaction).
-  match compact_step_actual(msgs_after_ext, model, totals.last_input_tokens) {
+  -- at 70-85% and 85-95%; at ≥95% tries emergency compaction. M-COMPACT-CALIBRATED: the level is
+  -- gated on est_send_tokens — the calibrated size of the CURRENT full history (pinned prefix +
+  -- conversation) = chars * provider-true ratio (last_input_tokens / last_sent_chars). NOT the
+  -- previous call's reported tokens: that reflected the COMPACTED call, so the step after every
+  -- compaction read a low count, skipped, and sent the full uncompacted history until it overflowed
+  -- (267365 > 262144). pinned_chars is counted because the prefix is always re-prepended + sent.
+  let pinned_chars = message_chars(sys_prefix);
+  match compact_step_calibrated(msgs_after_ext, model, pinned_chars, totals.last_input_tokens, totals.last_sent_chars) {
     Err(compaction_reason) => {
       let _ = emit_event(session_id, "compaction_exhausted", [
         kv("step", jnum(_int_to_float(step_idx))),
@@ -1222,7 +1230,11 @@ func loop_v2(
           cache_creation:  new_cache_creation,
           cost_millicents: new_total_cost,
           cost_warned_pct: new_warned_pct,
-          last_input_tokens: result.input_tokens
+          last_input_tokens: result.input_tokens,
+          -- M-COMPACT-CALIBRATED: chars of the call we just sent (pinned prefix + compacted
+          -- conversation). With last_input_tokens this is the provider's true chars->token ratio,
+          -- used next step to size the current history accurately and gate compaction.
+          last_sent_chars: message_chars(compacted_msgs)
         };
 
         -- M3 DP1a: response-intercept hook. Extensions can synthesize a
