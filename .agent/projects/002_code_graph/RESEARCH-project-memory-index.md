@@ -299,6 +299,165 @@ items are related, but ClickHouse should provide the inspectable evidence rows. 
 answer that implies causality should still point to explicit paths, sections, changed
 files, commits, and hunks.
 
+## Gemini Embedding 2 via OpenRouter
+
+Gemini Embedding 2 is available through OpenRouter as:
+
+```text
+google/gemini-embedding-2
+```
+
+This is not a local runtime like Ollama. It is a hosted API model exposed through
+OpenRouter's OpenAI-compatible embeddings endpoint. It should be treated as a hosted
+semantic backend with separate cache files from local EmbeddingGemma.
+
+Recommended command shape:
+
+```bash
+export OPENROUTER_API_KEY='...'
+
+python3 tools/code-graph/query/agent_semantic_poc.py \
+  --backend openrouter \
+  --model google/gemini-embedding-2 \
+  --dimension 768 \
+  --glob '.agent/**/*.md' \
+  --limit 10 \
+  "plans related to source_chunks and func_slug"
+```
+
+The cache path is backend/model/dimension-specific:
+
+```text
+tools/code-graph/.out/agent_section_embeddings_openrouter_google-gemini-embedding-2_768.jsonl
+```
+
+### OpenRouter/Gemini Cost and Timing
+
+Cold indexing all `.agent` Markdown with the v2 chunking strategy:
+
+```text
+Sections: 2,990
+Batch size: 64
+Embedding requests: 48
+Elapsed: 55.041s
+Embedded chars: 3,149,796
+OpenRouter tokens: 861,939
+Cost: $0.172388
+```
+
+Cached query over the same cache:
+
+```text
+Cache misses: 0
+Embedding requests: 1
+Elapsed: 1.544s
+Tokens: 12
+Cost: $0.0000024
+```
+
+This makes the operating model practical:
+
+- full cold rebuild is cheap enough to run manually;
+- cached semantic queries are effectively negligible in cost;
+- incremental indexing is still worth implementing later to avoid unnecessary hosted
+  calls when only a few docs change.
+
+Compared with local EmbeddingGemma:
+
+```text
+Local EmbeddingGemma v2 cold:
+  ~2,987 sections
+  ~2m05s with batch size 64
+  local/free
+
+OpenRouter Gemini Embedding 2 cold:
+  2,990 sections
+  55.041s with batch size 64
+  ~$0.17
+```
+
+Gemini was roughly 2.3x faster in this benchmark and appeared visually cleaner in the
+PCA notebook projection.
+
+### Semantic Benchmark
+
+A small benchmark was added:
+
+```text
+tools/code-graph/query/agent_semantic_benchmark.py
+tools/code-graph/query/agent_semantic_benchmark_queries.json
+```
+
+The benchmark evaluates expected-hit retrieval over `.agent/**/*.md`, reporting
+`recall@k`, `MRR@k`, per-query ranks, cache misses, timing, usage, and estimated cost.
+
+Warm-cache EmbeddingGemma baseline:
+
+```text
+Backend: ollama
+Model: embeddinggemma
+Sections: 2,990
+Queries: 12
+Recall@10: 1.0000
+MRR@10: 0.9028
+Elapsed: ~4.0s
+Cost: local/free
+```
+
+OpenRouter/Gemini Embedding 2:
+
+```text
+Backend: openrouter
+Model: google/gemini-embedding-2
+Sections: 2,990
+Queries: 12
+Recall@10: 1.0000
+MRR@10: 0.9583
+First benchmark query pass: 8.39s
+Query embedding cost: $0.0000402 for 12 query embeddings
+```
+
+Both models found relevant expected results in the top 10 for all benchmark queries,
+but Gemini placed expected results closer to rank 1 more often.
+
+Examples:
+
+```text
+source-index-joins:
+  EmbeddingGemma expected rank: 2
+  Gemini expected rank: 1
+
+project-memory-git:
+  EmbeddingGemma expected rank: 3
+  Gemini expected rank: 1
+
+source-staleness:
+  Gemini top hit: HANDOFF-source-index-implementation.md :: Test and fixture requirements
+```
+
+The ClickStack benchmark case exposed an important evaluation nuance. Gemini ranked an
+implementation summary above the original expected plan. That is arguably a useful
+result, not a failure. For project-memory retrieval, binary expected-hit labels are
+too crude.
+
+Future benchmark labels should support graded relevance:
+
+```text
+3 = exact expected ADR/plan/research section
+2 = implementation summary, handoff, or completion note for the same topic
+1 = adjacent but useful context
+0 = unrelated
+```
+
+The current evidence supports this working conclusion:
+
+- EmbeddingGemma is good enough, local, private, and free.
+- Gemini Embedding 2 via OpenRouter is measurably better on the current benchmark and
+  visually cleaner in projection.
+- Cache discipline makes hosted embeddings practical for this corpus.
+- Benchmarking needs graded relevance before it can be treated as a serious model
+  selection tool.
+
 ### Local PoC Results
 
 A quick local PoC ran EmbeddingGemma through Ollama on the Mac host and called it from
