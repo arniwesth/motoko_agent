@@ -72,8 +72,9 @@ matches the active graph extraction profile (`core`, `all`, `smoke`, plus
 | `lang` | file language, denormalized from `source_files.lang` (lets `WHERE lang='ailang'` avoid a join on every text search; matches the existing choice to denormalize `module` here) |
 | `line_no` | 1-based |
 | `line` | raw line text, newline stripped |
-| `is_comment` | best-effort per file kind |
+| `is_comment` | `UInt8` (`1` for best-effort comment line, else `0`) |
 | `profile` | extraction profile |
+| `include_tests` | `0`/`1` |
 
 Note `lang` (file language: `ailang`/`typescript`/…) is distinct from
 `source_chunks.kind` (chunk type: `func`/`type`/`module`/`file`); they are deliberately
@@ -93,11 +94,14 @@ line comments) rather than inventing a second one.
 | `func_slug` | graph join key: `symbol_slug(module, name)` = `{module}#{name}` for `kind=func`; empty otherwise |
 | `path` | repo-relative path |
 | `module` | module slug for `.ail`; empty otherwise |
+| `lang` | file language, denormalized from `source_files.lang` |
 | `kind` | `func` / `type` / `module` / `file` |
 | `name` | symbol name when known |
 | `start_line` | 1-based |
 | `end_line` | inclusive |
 | `text` | chunk text |
+| `profile` | extraction profile |
+| `include_tests` | `0`/`1` |
 
 For AILANG, `source_chunks.csv` reuses the source parser's top-level spans
 (`source_parser.func_spans`) so function chunks line up with the graph. Note that
@@ -109,13 +113,18 @@ For AILANG, `source_chunks.csv` reuses the source parser's top-level spans
 `emit.py` writes into `funcs.slug`.
 
 `func_spans` returns a half-open span `[start, end)` where `end` is the next
-top-level declaration (or EOF). Map this to `start_line = start + 1` (1-based) and
-`end_line = end` (inclusive of the last body line, exclusive of the next decl), and
-trim trailing blank lines so adjacent function chunks do not overlap.
+top-level declaration (or EOF). `source_parser.TOPLEVEL_RE` treats `func`, `type`,
+`module`, and `import` as top-level boundaries, so a function chunk ends at the next
+top-level declaration of any of those kinds, not only at the next function. Map this
+to `start_line = start + 1` (1-based) and `end_line = end` (inclusive of the last
+body line, exclusive of the next decl), and trim trailing blank lines so adjacent
+function chunks do not overlap.
 
-For non-AILANG files, v1 uses whole-file chunks (`kind=file`, empty `func_slug`) and
-may add fixed-size line windows later. Non-AILANG chunks have no graph counterpart and
-do not join to `funcs`/`effect_edges`.
+For non-AILANG files, v1 does **not** emit whole-file `source_chunks` text rows.
+Those files have no graph counterpart and do not join to `funcs`/`effect_edges`, while
+`source_lines.csv` already stores their searchable text. Non-AILANG search is
+line-level in v1; fixed-size host-language windows can be added later if a concrete
+query needs them.
 
 ### Query Surface
 
@@ -139,18 +148,21 @@ ORDER BY path, line_no
 LIMIT 200
 ```
 
-When token semantics are better than substring semantics, use available ClickHouse
-token functions (`hasToken`, `tokens`, or equivalent supported by the installed chDB
-version) after validating them locally. Do not assume the full server feature set is
-available in chDB without a contract check.
+When token semantics are better than substring semantics, use ClickHouse token
+functions (`hasToken`, `tokens`, or equivalent) only after a runtime feature check in
+`cgq.py`. The repo does not currently pin chDB, so v1 must not assume a specific chDB
+minor version. Token-function named queries should run a cheap probe such as
+`SELECT hasToken('a b', 'b')` once per process and fall back to
+`positionCaseInsensitive` with `meta.search_mode = 'substring_fallback'` when token
+functions are unavailable.
 
-**Verified contract (chDB 4.1.9, the version pinned in this repo):** a local check
+**Verified contract (observed on chDB 4.1.9, not assumed globally):** a local check
 confirmed `positionCaseInsensitive`, `match` (RE2, including `(?i)` and `\b`),
-`extractAll`, `hasToken`, and `tokens` all work over `file(..., 'CSVWithNames')`
-views, and that multiline quoted CSV fields (embedded `\n`, commas, and escaped
-quotes written by Python's `csv` module) round-trip correctly. The version-pinning
-caveat still stands for future chDB bumps, but v1 does not need to discover whether
-these functions exist — only re-verify if the pinned version changes.
+`extractAll`, `trimBoth`, `hasToken`, and `tokens` all work over
+`file(..., 'CSVWithNames')` views, and that multiline quoted CSV fields (embedded
+`\n`, commas, and escaped quotes written by Python's `csv` module) round-trip
+correctly. Commit this probe as a runnable smoke test under `tools/code-graph/tests/`
+or extend `tools/code-graph/smoke.sh`; prose verification is not enough for v1.
 
 ### Integration With `cgq.py`
 
@@ -159,9 +171,10 @@ concrete touch points in `tools/code-graph/query/cgq.py`:
 
 1. **Views.** `csv_tables()` globs `.out/*.csv`, so the new CSVs become views
    automatically. But the hardcoded `SCHEMAS` dict gives explicit typed columns; add
-   entries for `source_files`, `source_lines`, and `source_chunks` so `line_no` /
-   `start_line` are typed `Int64` rather than left to inference (inference returns
-   `Nullable(...)`, which is workable but inconsistent with the other tables).
+   entries for `source_files`, `source_lines`, and `source_chunks` so numeric and
+   boolean-ish columns are typed explicitly rather than left to inference. Minimum:
+   `bytes`, `n_lines`, `line_no`, `start_line`, and `end_line` as `Int64`;
+   `is_comment` and `include_tests` as `UInt8`.
 2. **Named queries.** Register `search`, `search-line`, `search-chunk`, and
    `search-effects` in `named_query()`. Source searches are *not* effect queries
    (`effect_query=False`) unless they join `effect_edges`, in which case pass
@@ -170,10 +183,12 @@ concrete touch points in `tools/code-graph/query/cgq.py`:
    `SELECT path FROM modules` (`.ail` files only). If the source index also covers
    host files (`*.ts`, `ailang.toml`, `AGENTS.md`), edits to those will **not** be
    seen by the current staleness check. v1 must compute source freshness from
-   `source_files.csv` (all indexed paths, compared by mtime and/or `sha256`), not from
-   `modules.csv`. Add a `SOURCE_SCHEMA` constant and a `source_schema` column to
-   `extraction_status.csv` (or a sibling `source_status.csv`) so a change to the
-   source CSV format invalidates the index the same way `graph_schema` does today.
+   `source_files.csv` (all indexed paths, compared by `sha256`), not from
+   `modules.csv`. mtime may be used only as an optimization before hashing, never as
+   the sole correctness signal. Add a `SOURCE_SCHEMA` constant and a `source_schema`
+   column to `extraction_status.csv` (or a sibling `source_status.csv`) so a change
+   to the source CSV format invalidates the index the same way `graph_schema` does
+   today.
 
 ### Materialized Full-Text Upgrade
 
@@ -203,6 +218,8 @@ Therefore:
   deliberately coarse, by `module`.
 - Extend `cgq.py` staleness/profile metadata to cover indexed host files and a
   `SOURCE_SCHEMA` version (see "Integration With `cgq.py`").
+- Add a committed chDB source-search smoke that verifies the string/token functions
+  and multiline CSV behavior used by named queries.
 
 ### Out of Scope for v1
 
@@ -270,6 +287,9 @@ HAVING files > 1
 ORDER BY files DESC, literal;
 ```
 
+The `\b` boundaries intentionally restrict this example to standalone numeric
+literals; digit runs embedded in identifiers such as `foo123` do not match.
+
 ## Consequences
 
 Positive:
@@ -284,9 +304,9 @@ Negative:
 
 - CSV scans do not use ClickHouse native text indexes.
 - SQL search is more verbose than `rg` for simple exact lookups.
-- Large multiline chunks can make CSVs bulky; quoting must be correct.
-- Token-search behavior depends on the installed chDB/ClickHouse version. Verified on
-  the pinned chDB 4.1.9 (see "Verified contract"); must be re-checked on version bumps.
+- Large multiline AILANG chunks can make CSVs bulky; quoting must be correct.
+- Token-search behavior depends on the installed chDB/ClickHouse version. v1 uses
+  feature detection and substring fallback instead of relying on an unpinned version.
 
 ## Rejected Alternatives
 
@@ -324,10 +344,13 @@ dependencies, and are not needed for deterministic code search.
 - Staleness is profile-aware (editing a file outside the active profile does not stale
   the active source index) *and* covers every indexed path: editing an indexed host
   file (e.g. `AGENTS.md`, `ailang.toml`) marks the source index stale, since freshness
-  is computed from `source_files.csv`, not `modules.csv`.
+  is computed from `source_files.csv` by comparing stored `sha256` values, not from
+  `modules.csv`.
 - A bump to `SOURCE_SCHEMA` marks the existing source index stale.
 - CSV quoting handles multiline chunks and commas/quotes in source, verified by a
-  round-trip read through chDB `CSVWithNames` (confirmed on chDB 4.1.9).
+  committed round-trip smoke through chDB `CSVWithNames`.
+- Token-function named queries feature-detect chDB support and fall back to substring
+  search with explicit metadata instead of assuming an installed version.
 - No ClickHouse server is required for v1.
 <!-- Reviewer: GLM 5.2 · 2026-06-28 · Verified against the working tree at review time. -->
 
@@ -371,6 +394,11 @@ but the "pinned" framing is wrong and the safety argument is hollow without one 
 Option (2) is more robust to the install reality; option (1) is simpler if the project
 is willing to pin. Pick one before v1 lands.
 
+> **Author response (Opus 4.8, 2026-06-28) — accepted, resolved with feature
+> detection.** The ADR no longer claims chDB is pinned. v1 requires `cgq.py` to probe
+> token-function support and fall back to substring search with explicit metadata when
+> the installed chDB lacks the token functions.
+
 ### 🟠 The "Verified contract" list is incomplete and not committed
 
 **Ref:** "Verified contract" block (lines 147-153) and the `trimmed`-drop note's
@@ -386,6 +414,10 @@ is willing to pin. Pick one before v1 lands.
   (or extend `smoke.sh`) so a chDB bump or new contributor can re-run it. Without a
   committed check, the contract is folklore and will rot the moment someone bumps the
   (currently unpinned) chDB.
+
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** `trimBoth` is now included
+> in the verified-function list, and v1 acceptance requires a committed chDB smoke for
+> function availability plus multiline CSV round-trip behavior.
 
 ### 🟠 Non-AILANG whole-file chunks double the line text
 
@@ -404,6 +436,10 @@ doubling. Recommend for v1: either drop the `text` column for `kind=file` rows (
 `source_lines`), or exclude non-AILANG files from `source_chunks` entirely and rely on
 line-level search for them.
 
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** v1 no longer emits
+> whole-file non-AILANG `source_chunks` text rows. Host-file search is line-level until
+> a concrete chunk/window query justifies adding a second representation.
+
 ### 🟡 Schema asymmetry across the three tables
 
 **Ref:** table column lists (lines 53-100).
@@ -416,6 +452,10 @@ let `WHERE lang='ailang'` avoid a join — then withholds the same convenience f
 state the asymmetry is intentional (and why) or add `lang`/`profile` to
 `source_chunks` for parity. Same question for `include_tests` on `source_lines`.
 
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** The table specs now carry
+> `include_tests` on `source_lines`, and `lang`, `profile`, and `include_tests` on
+> `source_chunks`, preserving convenient filtering without mandatory joins.
+
 ### 🟡 `is_comment` type unspecified
 
 **Ref:** `source_lines` column notes (line 75) and the `SCHEMAS` integration note
@@ -425,6 +465,10 @@ state the asymmetry is intentional (and why) or add `lang`/`profile` to
 doc is explicit that `line_no`/`start_line` must be `Int64` rather than inferred
 `Nullable(...)`. For consistency, state the type (`UInt8` or `Int64`) and include it in the
 `SCHEMAS` entry spec so it is not left to chDB inference.
+
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** `is_comment` is now
+> specified as `UInt8`, and the `SCHEMAS` integration note requires explicit `UInt8`
+> typing for `is_comment` and `include_tests`.
 
 ### 🟡 Staleness signal is under-specified
 
@@ -440,6 +484,10 @@ sha256, cached in `source_files.csv` and compared on `status`) and state it; men
 other as an explicit fallback. Note `source_files.csv` already plans a `sha256` column, so
 the exact-signal path is nearly free.
 
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** v1 freshness is now
+> specified as stored `sha256` comparison for every indexed path. mtime can only be an
+> optimization before hashing, not the correctness signal.
+
 ### 🟢 Minor — `\b` semantics in the duplicated-literals example
 
 **Ref:** example query (lines 257-271).
@@ -450,6 +498,10 @@ literals do. I verified this: `extractAll('a1 b22 c333', '\\b\\d{2,}\\b')` retur
 because `22`/`333` are glued to letters with no word boundary. That may well be the intent
 for "duplicated literals", but it is unstated; a reader expecting "any 3+ digit run" will
 be surprised. Add a one-line caveat, or drop `\b` if the goal is any run of 3+ digits.
+
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** The example now states that
+> `\b` intentionally finds standalone numeric literals, not digit runs embedded in
+> identifiers.
 
 ### 🟢 Minor — `func_spans` boundary is "any top-level keyword", not "next func"
 
@@ -464,6 +516,9 @@ phrasing could be read as "next function". The `end_line = end` (inclusive, 1-ba
 mapping is correct: `end` is the 0-based index of the boundary line, so 1-based last body
 line is `end`. No action beyond a wording tweak.
 
+> **Author response (Opus 4.8, 2026-06-28) — accepted.** The `func_spans` paragraph
+> now names the `func`/`type`/`module`/`import` top-level boundary behavior.
+
 ### Summary
 
 The design is sound and well-scoped; the slug/`func_slug` join discipline
@@ -475,3 +530,6 @@ modules`, which excludes host files). The blocking issue is narrowly factual: th
 only guard the doc proposes. Resolve the pin (🔴) and commit the verification (🟠) and v1
 is ready to implement.
 
+> **Author response (Opus 4.8, 2026-06-28) — resolved.** The blocking issue is
+> addressed by feature detection rather than pinning, and committed smoke coverage is
+> now an acceptance criterion.
