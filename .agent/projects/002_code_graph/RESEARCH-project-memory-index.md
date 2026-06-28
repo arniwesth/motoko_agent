@@ -236,6 +236,137 @@ The critical requirement is auditability: if a semantic layer claims "ADR-003 le
 this code," the ClickHouse evidence tables should show the ADR section, mentioned
 paths or symbols, relevant commit, and changed hunk.
 
+## EmbeddingGemma as a Semantic Recall Layer
+
+EmbeddingGemma is a plausible candidate for v3, the hybrid semantic layer. It should
+not replace ClickHouse. It should sit beside it as a recall layer for fuzzy similarity
+and candidate generation.
+
+Recommended shape:
+
+```text
+ClickHouse/chDB:
+  exact evidence tables
+  agent_doc_sections
+  source_chunks
+  git_hunks
+  git_commits
+  graph/effect tables
+
+EmbeddingGemma:
+  vector for each agent document section
+  vector for each AILANG source chunk
+  vector for each commit message or hunk summary
+
+Query flow:
+  1. Use embeddings to retrieve semantically related candidate records.
+  2. Join those candidates back to ClickHouse by stable ids.
+  3. Use ClickHouse metadata to show paths, lines, hashes, commits, graph joins,
+     source staleness, and effect coverage.
+```
+
+This fits questions such as:
+
+- Find plans conceptually related to ADR-003 even if they share few exact terms.
+- Find older research notes that overlap with a new implementation plan.
+- Find code chunks semantically related to a handoff summary.
+- Cluster `.agent` notes into themes.
+- Detect possible duplicate or overlapping plans written with different wording.
+
+For a first implementation, store vectors in a small local sidecar rather than forcing
+them into ClickHouse:
+
+```text
+agent_embeddings
+- item_id
+- item_kind       -- agent_section, source_chunk, git_hunk, commit
+- path
+- section_slug
+- func_slug
+- commit
+- sha256
+- model
+- embedding
+```
+
+Chunking matters. `.agent` documents should be embedded at section granularity, not as
+whole files. Source code should use `source_chunks` for AILANG functions. Git history
+should use commit messages, hunk-level text, or short generated hunk summaries rather
+than entire large diffs.
+
+The retrieval contract should remain evidence-first: EmbeddingGemma can propose that
+items are related, but ClickHouse should provide the inspectable evidence rows. Any
+answer that implies causality should still point to explicit paths, sections, changed
+files, commits, and hunks.
+
+## Local DeepSeek V4 Flash vs EmbeddingGemma
+
+If a local DeepSeek V4 Flash model is available and practically free to use, it should
+probably complement EmbeddingGemma rather than replace it.
+
+Expected split:
+
+```text
+EmbeddingGemma:
+  primary embedding model
+  cheap vector generation
+  semantic similarity
+  clustering
+  duplicate-plan detection
+  nearest-neighbor candidate retrieval
+
+ClickHouse:
+  exact evidence store
+  source paths, doc sections, hashes, commits, hunks, graph joins, freshness metadata
+
+DeepSeek V4 Flash:
+  query rewriting and expansion
+  hunk and section summarization
+  entity extraction
+  doc kind/status classification
+  reranking top semantic candidates
+  explaining overlap
+  judging whether evidence looks implemented, partial, or unrelated
+```
+
+DeepSeek V4 Flash is likely better for reasoning-heavy and synthesis-heavy tasks:
+
+- Turn a vague request into several exact source/doc/git search queries.
+- Extract mentioned files, symbols, ADR ids, plan ids, effects, and decision status
+  from `.agent` sections.
+- Summarize large git hunks before embedding them.
+- Generate short labels for clusters of related plans or research notes.
+- Rerank the top N EmbeddingGemma hits by actual relevance.
+- Explain why two plans overlap.
+- Compare a plan section against a changed hunk and classify the evidence as
+  `implemented`, `partial`, `related`, or `unrelated`.
+
+EmbeddingGemma is likely better for the primary vector index because it is
+purpose-built for embeddings. A chat/reasoning model should only become the primary
+embedding model if the local serving stack exposes a stable embeddings endpoint or a
+well-tested pooling strategy. Otherwise, using a chat model's hidden states directly
+risks creating a brittle, hard-to-compare vector space.
+
+Recommended combined flow:
+
+```text
+Index time:
+  .agent section -> DeepSeek summary/entities -> EmbeddingGemma vector
+  source chunk   -> EmbeddingGemma vector
+  git hunk       -> DeepSeek hunk summary -> EmbeddingGemma vector
+
+Query time:
+  user query -> DeepSeek query expansion
+             -> EmbeddingGemma nearest-neighbor retrieval
+             -> ClickHouse evidence joins
+             -> DeepSeek rerank/explanation over top candidates
+```
+
+Even with a strong local reasoning model, the audit boundary stays the same:
+DeepSeek can propose, summarize, classify, and explain, but durable claims should be
+backed by ClickHouse rows containing concrete paths, sections, commits, changed files,
+source chunks, and hunks.
+
 ## Suggested Progression
 
 1. v1: CSV + chDB
@@ -262,4 +393,3 @@ paths or symbols, relevant commit, and changed hunk.
 - How should scores be calibrated so they are useful without implying certainty?
 - Which named queries should be first-class in `cgq.py`, and which should remain raw
   SQL examples?
-
