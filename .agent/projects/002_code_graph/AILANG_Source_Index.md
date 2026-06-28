@@ -30,6 +30,8 @@ or host-language deep parser in v1.
   mtime may only be an optimization before hashing.
 - chDB version: not pinned. Token search must feature-detect support and fall back to
   substring search with explicit metadata.
+- Query metadata: source staleness and graph/effect incompleteness are distinct.
+  Do not collapse them back into the current single `meta.stale` flag.
 
 ## Exact CSV Schemas
 
@@ -84,9 +86,18 @@ Add these `cgq.py SCHEMAS` entries exactly.
 | `profile` | String | active profile |
 | `include_tests` | UInt8 | `0` or `1` |
 
+Update `extraction_status.csv` for source schema versioning:
+
+```python
+"extraction_status": "module String, iface_status String, iface_detail String, iface_error String, built_at String, ailang_version String, graph_schema Int64, source_schema Int64, iface_schema String, profile String, include_tests Int64",
+```
+
+`source_schema` is the `SOURCE_SCHEMA` value recorded on every status row. A schema
+bump must make the source index stale.
+
 ## Phase 0: Contracts And Smokes
 
-Goal: pin the source-index contract and prove the chDB functions used by named
+Goal: define the source-index contract and prove the chDB functions used by named
 queries before extraction is added.
 
 Ordered tasks:
@@ -94,18 +105,27 @@ Ordered tasks:
 1. Add source-index constants to `tools/code-graph/extractor/config.py`:
    - `SOURCE_SCHEMA = 1`
    - a small explicit host-file include set by active profile
-2. Decide the initial host-file set. Minimum:
-   - `AGENTS.md`
-   - `ailang.toml`
-   - `config.json`
-   - `scripts/install-prerequisites.sh`
-   - `tools/code-graph/README.md`
-   - `tools/code-graph/**/*.py`
-   - `tools/code-graph/**/*.sh`
-   - `src/tui/src/**/*.ts` when present
+2. Define the initial host-file set as profile-aware, not global:
+   - every profile includes root operational metadata:
+     - `AGENTS.md`
+     - `ailang.toml`
+     - `config.json`
+     - `scripts/install-prerequisites.sh`
+     - `tools/code-graph/README.md`
+     - `tools/code-graph/**/*.py`
+     - `tools/code-graph/**/*.sh`
+   - `core` additionally includes host files that affect core/root detection when
+     present, such as `src/tui/src/**/*.ts`
+   - `all` includes the `core` host set plus scripts/examples host files selected by
+     explicit globs
+   - `smoke` includes only smoke/example host files plus root operational metadata
+   - the extractor must record only the active set in `source_files.csv`; files not in
+     that active set cannot stale the active source index
 3. Extend extraction status with source schema metadata:
-   - preferred: add `source_schema Int64` to `extraction_status.csv`
-   - acceptable alternative: add sibling `source_status.csv`
+   - add `source_schema Int64` to `extraction_status.csv`
+   - update the `cgq.py SCHEMAS["extraction_status"]` entry at the same time
+   - add `SOURCE_SCHEMA = 1` to `cgq.py`, mirroring the existing standalone
+     `GRAPH_SCHEMA = 1` constant
 4. Add a committed chDB source smoke:
    - new file: `tools/code-graph/tests/smoke_chdb_source.py`
    - verify `positionCaseInsensitive`, `match` with `(?i)` and `\b`, `extractAll`,
@@ -115,10 +135,12 @@ Ordered tasks:
 5. Extend `tools/code-graph/smoke.sh` to run the new smoke.
 6. Specify token feature probing in `cgq.py`:
    - probe once per process with `SELECT hasToken('a b', 'b')`
-   - use token search only when the probe succeeds
+   - use token search only for named-query modes that intentionally request token
+     semantics; plain `search` and `search-line` may stay substring-based to preserve
+     expected code-symbol matches such as `dispatch_step`
    - otherwise fall back to `positionCaseInsensitive`
-   - metadata includes `search_mode = "token"` or `"substring_fallback"` and
-     `storage_mode = "csv_scan"`
+   - metadata includes `search_mode = "substring"`, `"token"`, or
+     `"substring_fallback"` and `storage_mode = "csv_scan"`
 
 Critical files:
 
@@ -168,6 +190,7 @@ Ordered tasks:
    - compute `bytes` from exact file bytes
    - set `module` only for `.ail`
    - carry active `profile` and `include_tests`
+   - sort rows by `path` for deterministic CSV output
 5. Emit `source_lines` rows:
    - one row per source line, 1-based `line_no`
    - strip only the line terminator
@@ -178,6 +201,7 @@ Ordered tasks:
      - TypeScript: left-trimmed line starts with `//`
      - shell/TOML: left-trimmed line starts with `#`
      - Markdown/JSON/other: `0`
+   - sort rows by `(path, line_no)`
 6. Emit AILANG `source_chunks` rows:
    - use `func_spans(text)` output
    - `kind = "func"`
@@ -186,6 +210,9 @@ Ordered tasks:
    - `start_line = start + 1`
    - `end_line` is inclusive after trailing blank trimming
    - `text` is the joined, trimmed chunk text
+   - skip zero-length chunks only if trailing-blank trimming would leave no function
+     declaration text, which should be treated as a fixture failure
+   - sort rows by `(path, start_line, chunk_slug)`
 7. Respect `func_spans` boundaries:
    - `TOPLEVEL_RE` treats top-level `func`, `type`, `module`, and `import` as
      boundaries
@@ -257,11 +284,18 @@ Ordered tasks:
 2. Keep using `csv_tables()` and `view_preamble()`; new CSVs become views
    automatically.
 3. Add source-aware status metadata:
+   - keep existing graph-oriented fields for backward compatibility:
+     - `stale`
+     - `stale_reason`
+     - `coverage`
+     - `incomplete`
    - `source_schema`
    - `source_stale`
    - `source_stale_reason`
    - `source_profile`
    - `source_row_counts`
+   - `row_counts` may continue to include all tables, but source counts must also be
+     easy to read without scanning unrelated graph tables
 4. Implement source freshness:
    - read indexed paths and stored hashes from `source_files`
    - compare current `sha256` for every indexed path
@@ -273,21 +307,36 @@ Ordered tasks:
    - effect/call graph answers still use ADR-002 metadata discipline
    - source search reports source staleness
    - `search-effects` reports both
+   - for backward compatibility, `meta.stale` remains the graph stale flag used by
+     existing graph/effect named queries
+   - source named queries check `meta.source_stale` and print a source-specific
+     banner; do not set graph `meta.stale` merely because source text is stale
 6. Add named queries:
    - `search TERM`: default line-level source search
    - `search-line TERM`: explicit line search
    - `search-chunk TERM`: AILANG chunk search
    - `search-effects EFFECT TERM`: function-level chunk search joined to
      `effect_edges` through `source_chunks.func_slug`
-7. Add SQL literal escaping for user arguments. Do not interpolate raw args directly.
-8. Add chunk result previews:
+7. Extend the `cgq.py` query plumbing so source metadata is not lost:
+   - replace the current `named_query() -> tuple[str, bool]` contract with either a
+     small query descriptor or `tuple[str, QueryFlags]`
+   - flags must cover at least `effect_query`, `source_query`, and `search_mode`
+   - `wrap(...)` passes those flags to `status_meta(...)`
+   - `main()` uses those flags for stale and incomplete banners
+   - raw `sql` still reports source metadata in `status_meta`, even though it cannot
+     always know whether the SQL semantically depends on source tables
+8. Add SQL literal escaping for user arguments. Do not interpolate raw args directly.
+9. Add chunk result previews:
    - return `left(text, 500) AS text_preview` or truncate in Python
    - keep `--limit` row truncation behavior and metadata
-9. Add source stale banners:
+10. Add source stale banners:
    - source query on stale source index prints `STALE: source index ...`
    - `search-effects` passes `effect_query=True`, preserving the existing
      `INCOMPLETE` banner when typed/effect data is stale, failed, or partial
-10. Add token fallback metadata:
+   - `search-effects` also marks the source side stale when `source_stale=True`; it
+     must not present a fresh text/effect join when either side is stale
+11. Add token fallback metadata:
+    - plain substring search: `meta.search_mode = "substring"`
     - success: `meta.search_mode = "token"`
     - fallback: `meta.search_mode = "substring_fallback"`
 
@@ -325,8 +374,11 @@ Expected:
 
 - SQL joins through `source_chunks.func_slug = effect_edges.func_slug`
 - query is marked as an effect query
+- query is also marked as a source query
 - existing `INCOMPLETE` behavior fires when typed/effect coverage is failed,
   partial, or stale
+- source stale metadata and banner fire independently when indexed source text is
+  stale
 
 Fallback acceptance:
 
@@ -364,7 +416,9 @@ Ordered tasks:
    - run `q search-effects Net httpGet`
    - run the chDB source smoke
 4. Add stale detection smoke:
-   - edit an indexed host fixture such as `AGENTS.md`
+   - run against a temporary fixture repo or temporary copy of `.out/`, not by
+     modifying the real workspace's `AGENTS.md`
+   - include an indexed host fixture named `AGENTS.md`
    - verify `cgq.py status` reports source stale by hash mismatch
    - edit an unindexed file outside the active profile
    - verify active source index is not stale
