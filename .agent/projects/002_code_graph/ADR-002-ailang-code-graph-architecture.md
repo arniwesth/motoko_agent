@@ -151,8 +151,8 @@ Upstream `ailang debug ast --json` is **demoted from a blocker to a future preci
 Nodes:
 
 - **module** — one per `.ail` file. Slug = repo-relative module path (`src/core/agent_loop_v2`). Carries `extraction_status`.
-- **type** — exported ADTs/records via `iface`, with constructors. Slug = `{module}.{TypeName}`.
-- **func** — all top-level functions (exported and internal), discovered by source parsing. Slug = `{module}.{func_name}`. Exported funcs additionally carry the `iface` signature and declared effects; internal funcs carry call edges and propagated effects only.
+- **type** — exported ADTs/records via `iface`, with constructors. Slug = `{module}#{TypeName}` (see Slug Scheme).
+- **func** — all top-level functions (exported and internal), discovered by source parsing. Slug = `{module}#{func_name}`. Exported funcs additionally carry the `iface` signature and declared effects; internal funcs carry call edges and propagated effects only.
 
 Edges:
 
@@ -178,7 +178,7 @@ The effect graph is the headline Motoko-specific capability: "which functions ca
 src/{core,scripts,examples}/**.ail
   typed layer  → ailang iface (per module; failure-classified) → types, exported sigs, effect rows ─┐
   struct layer → source parse: imports, func defs, name( call sites, type-decl ctors → import + call graph ─┤
-  effect graph → seed at stdlib-primitive calls, propagate BACKWARD over invokes, validate vs iface rows ─┴─→ extractor → .ailang-graph/*.csv
+  effect graph → seed at stdlib-primitive calls, propagate BACKWARD over invokes, validate vs iface rows ─┴─→ extractor → tools/code-graph/.out/*.csv
   → chDB query (file(...) over CSVs, in-process ClickHouse SQL)   → result rows
   → visualize.py (SVG path reused; graph-building new) → .mmd → .svg
   → CLI surface (Phase 3)  → Claude Code & Codex (SQL queries via Bash, documented in AGENTS.md)
@@ -187,7 +187,7 @@ src/{core,scripts,examples}/**.ail
 | Component | Role | New / Reuse |
 |-----------|------|-------------|
 | `ailang-graph` extractor | Drives `ailang iface` (typed layer) + raw-source parser (imports, call graph, ctors) + backward effect propagation, classifies `iface` results, emits CSVs | **New** (replaces `Program.cs`; call-graph parser PoC-validated) |
-| chDB query | `file('…','CSVWithNames')` over `.ailang-graph/*.csv`, in-process | Embedded ClickHouse; no `schema.sql`/`load.py` load step needed |
+| chDB query | `file('…','CSVWithNames')` over `tools/code-graph/.out/*.csv`, in-process | Embedded ClickHouse; no `schema.sql`/`load.py` load step needed |
 | `visualize.py` | Mermaid + SVG views | Partial reuse: SVG-render path reusable, but its graph-building is namespace-coarsening logic that does not map to AILANG's path-based modules — module-dep + effect views are largely new |
 | CLI query surface | chDB `file(...)` + ClickHouse SQL, JSON out, staleness/coverage banners; callable via the agents' Bash tool | **New** (mechanism mirrors the reference script, same dialect via chDB) |
 | `.agent/tools/*.ts` | Reference implementations (`clickhouse local`/Zeus) | Reference-only; possible base for a Motoko extension |
@@ -264,7 +264,7 @@ Extraction is a batch tool, not a fast-PR gate.
 ailang lock   # + explicit install of any unhydrated registry packages
 
 # refresh graph (manual or nightly)
-scripts/ailang-graph/extract.sh        # -> .ailang-graph/*.csv + *.svg (records built_at + ailang_version)
+tools/code-graph/extract.sh            # -> tools/code-graph/.out/*.csv + *.svg (records built_at + ailang_version)
 #   - fails loudly if any module's extraction_status is unexpectedly 'failed'
 
 # advisory checks once stable
@@ -364,10 +364,70 @@ These were Open Questions; the review settled them:
 - **Constructor handling → source-derived filtering** (GLM). Parse `type` decls; drop ctor names from `invokes`. (`constructs` as a separate edge type is a possible later refinement, not v1.)
 - **Implementation language → Python** (PoC already is).
 - **Effect propagation → backward, primitive-seeded, `iface`-validated** (GPT/GLM, via Phase-0 experiment).
+- **Slug scheme → `{module}#{name}`, case-preserving, kind-separated tables** (see the Slug Scheme section). Module slug = file path; ctor names payload-stripped; uniqueness + duplicate-import asserted at emit.
+- **Unimported-module roots → derived programmatically** from the dynamic-load sources (TS-host path scan, `registry_generated.ail` + `[extensions]`, `scripts/`/`examples/`/test globs); output labeled "unimported," never "dead" (see the Root Set section).
+- **Location → `tools/code-graph/`.** Tooling (extractor, CLI, viz) lives at `tools/code-graph/` — the canonical home the user is establishing (alongside `tools/mmd2svg/`), which also matches the path the reference `.ts` scripts already expect (`tools/code-graph/bin`, `extract-only.sh`). Generated artifacts go to `tools/code-graph/.out/` (gitignored), not a root-level `.ailang-graph/`/`.code-graph/`. Consequence to confirm: the existing C# `code-graph/` at repo root should move under `tools/code-graph/` too for consistency (separate action, not done here).
+
+## Slug Scheme (Decided)
+
+Every node (module, type, func, constructor) needs a slug that is **unique** and **join-safe** — `invokes.to_slug` must resolve to exactly one func, `uses.to_slug` to exactly one type, etc. The naïve `{module}.{name}` the PoC uses has four collision/ambiguity modes, three of them grounded in this repo:
+
+1. **Separator overload (`.`).** `.` is already AILANG's qualified-access and field-access operator in source (`List.length`, `Trace.event`, `m.content`), so reusing it as the module→symbol boundary is confusing and marginally unsafe. Module *paths* here are all `/`-separated and dot-free (verified), so the immediate risk is low — but the operator clash alone argues against `.`.
+2. **Case folding.** `code-graph` lowercased every slug (`zeus.core.itradingengine`). AILANG types are PascalCase and funcs snake/camelCase, so lowercasing would fold a type `Message` and a hypothetical func `message` together.
+3. **Cross-kind name reuse.** A type, a function, and a data constructor in the same module can share a base name space (e.g. constructor `Done` vs. a func `done`). A single global slug table would collide across kinds.
+4. **Resolution-side ambiguity.** A duplicate unqualified import (`import a (f)` and `import b (f)`) or a `module` declaration that disagrees with the file path can silently mis-resolve an edge.
+
+**Decision:**
+
+- **Separator `#`** between module path and symbol — a character that cannot appear in AILANG paths (`[A-Za-z0-9_/]`) or identifiers: `src/core/compaction#compact_step`, `src/core/types#StepOutcome`, `std/trace#event`.
+- **Case-preserving** slugs, always (never lowercase).
+- **Kind-separated tables** (`modules`, `funcs`, `types`, `ctors`), each with its own slug space; edges join to the correct table *by edge type*, so cross-kind reuse (mode 3) cannot collide. A unified `nodes` view carries a `kind` column for convenience.
+- **Module slug = repo-relative file path** (authoritative, one per file), with the `module` declaration validated to match it (catches mode 4's path mismatch).
+- **Constructor names stripped of payload**: `iface` reports `Continue(AgentState)` / `BashExec({...})`; the slug is the bare ctor (`...#Continue`). (Source-derived ctors parse the same way.)
+- **Extractor asserts uniqueness** of `(table, slug)` at emit time and **flags duplicate unqualified imports** within a module — turning a silent mis-join into a loud build error.
+
+(Whether constructors also get a first-class `constructs` *edge* — vs. just being filtered out of `invokes` — remains the v1 "dropped" decision in Resolved During Review; this scheme reserves the `ctors` table either way.)
+
+## Root Set for Unimported-Module Detection (Decided)
+
+A module is "unimported" if it is not in the transitive `imports` closure from a declared **root set**. The detection is only as sound as that root set — and in Motoko the root set is unusually hard, because **the load graph is mostly dynamic, not static `import`**. Two mechanisms (both verified) bypass AILANG imports entirely:
+
+- **The TypeScript host loads core modules by string path.** `src/tui/src/runtime-process.ts` loads `src/core/supervisor.ail` and `src/core/config.ail`; `index.ts` loads `src/core/rpc.ail` and `src/core/version.ail`; the comment block in `run-agent.sh` confirms `supervisor.ail`, `agent_loop_v2.ail`, and `ext/*.ail` are "loaded dynamically by the TS host." None of these are reachable by a static `import` from a single `main`.
+- **Extensions load by name via the registry.** `src/core/ext/registry_generated.ail` (generated) wires the 9 extensions in the active profile's `[extensions].order`; they are dispatched through `register_with_config`, not statically imported from the runtime.
+
+So a naïve "imports-closure from `main`" would mark almost the entire codebase unimported. The root set is therefore **assembled programmatically from the same sources that do the dynamic loading**, not hand-maintained. Roots are:
+
+1. **Runtime entry modules the TS host loads by path** — `supervisor`, `config`, `rpc`, `version`, `agent_loop_v2`, `ext/runtime`, … — derived by scanning the host's `src/core/*.ail` string literals (or a single canonical loader manifest if one is introduced; see Open Questions).
+2. **Extension entry modules** — from `registry_generated.ail` plus `ailang.toml [extensions]` / the profile `config.json` `order`.
+3. **`func main` modules** under `scripts/` and `examples/` — each is its own CLI entry point run via `ailang run --entry main`.
+4. **Test modules** — `*_test.ail`, `src/core/test/*`, and any module containing test functions (run by `ailang test <module>`).
+5. **Generated modules** — `registry_generated.ail` itself.
+
+**Decision:** derive the root set programmatically from these authoritative sources (host string-literal scan, `ailang.toml`/`config.json`, `registry_generated.ail`, and `scripts/`+`examples/`+test globs), record it with provenance in the output, and **label results "unimported (not reachable via static imports from declared roots)" — never "dead" or "safe to delete."** Two unsoundness sources remain even with a complete root set: a module loaded dynamically by a path/name the root scan missed (false positive), and liveness via higher-order or type-class dispatch (invisible to `imports`). True deadness waits for the precise call graph (Phase 4).
 
 ## Open Questions
 
-- Output directory: `.ailang-graph/` vs. namespacing inside `.code-graph/`.
-- Slug scheme for symbols vs. modules — confirm collision-free path encoding.
-- The declared root set for unimported-module detection — which exact entry points (binaries, scripts, examples, tests, extension entry points) count as roots?
-- How aggressively to chase call-graph precision before `--json` lands — e.g. parse string interpolation, resolve `let`-shadowing — vs. accepting the heuristic and waiting for the upstream upgrade?
+- Whether the TS host should expose a single machine-readable load manifest, so runtime-entry roots aren't scraped from scattered `.ts` string literals (brittle). Small change in the host; would make root category 1 authoritative rather than heuristic.
+- Policy for a module that has test functions but no importer and no `main` — auto-treat as a test root, or flag for review?
+
+### Call-graph precision: how far to chase the heuristic before `--json`
+
+Every precision fix to the source parser is **throwaway** once upstream `ailang debug ast --json` lands and replaces the heuristic call graph with a type-resolved one. So the question is ROI under uncertainty about that timeline. Three principles guide it:
+
+- **False positives hurt more than false negatives.** A *wrong* edge misleads an agent making a decision; a *missing* edge is honestly labeled "approximate." Prioritize eliminating wrong edges even when rare; tolerate misses.
+- **If a fix needs type information, it *is* `--json`'s job** — don't reimplement type inference heuristically.
+- **Decide by measurement, not guesswork.** The Acceptance precision/recall on the 3-module sample plus the `iface` effect-oracle divergence are the stopping signal: fix only what moves those numbers; stop when the oracle matches on the sample and recall clears the agreed bar.
+
+Grounded cut line for this repo (frequencies measured):
+
+| Case | Kind | Measured here | Verdict |
+|------|------|---------------|---------|
+| Alias-only-qualified import resolution (don't map aliased imports to bare names) | wrong edge | — | **Do** (cheap; prevents false positives) |
+| Source-derived constructor filtering | wrong edge | — | **Do** (already decided) |
+| String-interpolation call scanning (`${ … f(x) … }`) | missing edge | 69 sites, **27 non-`show`** real edges (`substring`, `process_error_to_string`, `join_lines`, …) | **Do** (cheap, localized; recovers real edges) |
+| `let`/lambda shadowing of imported names | wrong edge | **0 occurrences** | **Skip** (add only a guard; revisit if it ever appears) |
+| Higher-order calls (function-valued params) | missing edge | pervasive by nature | **Wait for `--json`** (needs dataflow/types) |
+| Type-class method dispatch → concrete instance | missing/wrong | — | **Wait for `--json`** (needs type resolution) |
+| Re-export origin resolution | wrong edge | — | **Typed layer only** (use `iface` export lists; no deeper heuristic) |
+
+So: do the three cheap, high-value fixes (alias semantics, ctor filtering, interpolation scanning); skip shadowing (zero occurrences); explicitly **defer the type-dependent cases to `--json`** rather than approximating them. Re-measure after these and stop unless the sample shows a real gap.
