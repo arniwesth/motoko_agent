@@ -14,6 +14,9 @@ tools/code-graph/extract.sh --profile=all
 python3 tools/code-graph/query/cgq.py status
 python3 tools/code-graph/query/cgq.py q callers dispatch_step
 python3 tools/code-graph/query/cgq.py q reaches Net
+python3 tools/code-graph/query/cgq.py q failures
+python3 tools/code-graph/viz/visualize.py --core-extensions
+tools/code-graph/smoke.sh
 ```
 
 Default extraction uses the `core` profile: `src/core/**`, excluding smoke scripts,

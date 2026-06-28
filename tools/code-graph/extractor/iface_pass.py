@@ -14,6 +14,7 @@ class Verdict:
     status: str
     detail: str
     data: dict | None = None
+    error: str = ""
 
 
 def classify(stdout: str, source_func_count: int) -> Verdict:
@@ -23,7 +24,7 @@ def classify(stdout: str, source_func_count: int) -> Verdict:
     try:
         data = json.loads(stdout[start:])
     except json.JSONDecodeError:
-        return Verdict("failed", "invalid_json", None)
+        return Verdict("failed", "invalid_json", None, "invalid JSON in iface stdout")
     has_funcs = "funcs" in data
     has_types = "types" in data
     funcs = data.get("funcs") or []
@@ -31,7 +32,7 @@ def classify(stdout: str, source_func_count: int) -> Verdict:
         return Verdict("partial", "empty_funcs", data)
     if has_funcs and has_types:
         return Verdict("ok", "warning_prefixed" if start > 0 else "ok", data)
-    return Verdict("failed", "missing_keys", data)
+    return Verdict("failed", "missing_keys", data, "iface JSON missing funcs/types keys")
 
 
 def ailang_version() -> str:
@@ -45,6 +46,15 @@ def run_iface(module: str) -> tuple[str, str]:
     result = subprocess.run(["ailang", "iface", module], capture_output=True, text=True, check=False,
                             cwd=config.REPO_ROOT)
     return result.stdout, result.stderr
+
+
+def first_error_line(stdout: str, stderr: str) -> str:
+    for text in (stderr, stdout):
+        for line in text.splitlines():
+            line = line.strip()
+            if line:
+                return line[:500]
+    return ""
 
 
 def type_refs(type_sig: str) -> set[str]:
@@ -61,10 +71,13 @@ def apply_iface(parsed_modules: list) -> tuple[list[dict], list[dict], list[dict
     status_rows: list[dict] = []
     verdicts: dict[str, Verdict] = {}
     for p in parsed_modules:
-        stdout, _stderr = run_iface(p.slug)
+        stdout, stderr = run_iface(p.slug)
         verdict = classify(stdout, len(p.funcs))
+        if verdict.status == "failed" and not verdict.error:
+            verdict.error = first_error_line(stdout, stderr)
         verdicts[p.slug] = verdict
-        status_rows.append({"module": p.slug, "iface_status": verdict.status, "iface_detail": verdict.detail})
+        status_rows.append({"module": p.slug, "iface_status": verdict.status, "iface_detail": verdict.detail,
+                            "iface_error": verdict.error})
         for f in p.funcs:
             funcs_by_slug[f["slug"]]["module_iface_status"] = verdict.status
         data = verdict.data if verdict.status in {"ok", "partial"} else None

@@ -25,7 +25,8 @@ STD_FIELDS = ["from_slug", "std_module", "symbol", "resolution"]
 USES_FIELDS = ["from_slug", "type_slug", "resolved"]
 EFFECT_FIELDS = ["func_slug", "effect"]
 EFFECT_EDGE_FIELDS = ["func_slug", "effect", "source_func_slug", "distance", "derivation"]
-STATUS_FIELDS = ["module", "iface_status", "iface_detail", "built_at", "ailang_version", "graph_schema", "iface_schema"]
+STATUS_FIELDS = ["module", "iface_status", "iface_detail", "iface_error", "built_at", "ailang_version",
+                 "graph_schema", "iface_schema", "profile", "include_tests"]
 
 
 def write_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
@@ -106,13 +107,15 @@ def main() -> int:
     built_at = datetime.now(timezone.utc).isoformat()
     if args.structural_only:
         for m in modules:
-            status_rows.append({"module": m["slug"], "iface_status": "failed", "iface_detail": "structural_only"})
+            status_rows.append({"module": m["slug"], "iface_status": "failed",
+                                "iface_detail": "structural_only", "iface_error": ""})
     else:
         funcs, typed_types, typed_ctors, uses, declared, status_rows = apply_iface(parsed)
         ctors.extend(typed_ctors)
     for row in status_rows:
         row.update({"built_at": built_at, "ailang_version": version, "graph_schema": config.GRAPH_SCHEMA,
-                    "iface_schema": config.IFACE_SCHEMA})
+                    "iface_schema": config.IFACE_SCHEMA, "profile": args.profile,
+                    "include_tests": int(args.include_tests)})
     status_by_module = {r["module"]: r["iface_status"] for r in status_rows}
     for f in funcs:
         if not f.get("module_iface_status"):

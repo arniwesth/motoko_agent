@@ -59,6 +59,42 @@ def module_deps(scope: str = "", coarsen_dir: str = "src/core/ext") -> Path:
     return path
 
 
+def core_extensions() -> Path:
+    modules = {
+        r["slug"]: r for r in rows("modules")
+        if r["slug"].startswith("src/core/")
+    }
+    edges = set()
+    for edge in rows("imports"):
+        a, b = edge["from_module"], edge["to_module"]
+        if a in modules and b in modules:
+            edges.add((a, b))
+
+    def label(slug: str) -> str:
+        if slug.startswith("src/core/ext/"):
+            return "ext/" + slug.removeprefix("src/core/ext/")
+        if slug.startswith("src/core/test/"):
+            return "test/" + slug.removeprefix("src/core/test/")
+        return slug.removeprefix("src/core/")
+
+    lines = [
+        "graph LR",
+        "  classDef ext fill:#fff4cc,stroke:#b58900,color:#111;",
+        "  classDef core fill:#eef7ff,stroke:#2474a6,color:#111;",
+        "  classDef test fill:#f2f2f2,stroke:#777,color:#111;",
+        "",
+    ]
+    for slug in sorted(modules):
+        klass = "ext" if slug.startswith("src/core/ext/") else "test" if slug.startswith("src/core/test/") else "core"
+        lines.append(f'  {node_id(slug)}["{label(slug)}"]:::{klass}')
+    lines.append("")
+    for a, b in sorted(edges):
+        lines.append(f"  {node_id(a)} --> {node_id(b)}")
+    path = OUT_DIR / "core_modules_extensions.mmd"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
 def calls(scope: str = "") -> Path:
     edges = rows("invokes")
     nodes = set()
@@ -101,6 +137,7 @@ def effects(effect: str = "Net") -> Path:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--module-deps", action="store_true")
+    ap.add_argument("--core-extensions", action="store_true")
     ap.add_argument("--calls", action="store_true")
     ap.add_argument("--effect", default="")
     ap.add_argument("--scope", default="")
@@ -108,8 +145,10 @@ def main() -> int:
     ns = ap.parse_args()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     paths = []
-    if ns.module_deps or (not ns.calls and not ns.effect):
+    if ns.module_deps or (not ns.calls and not ns.effect and not ns.core_extensions):
         paths.append(module_deps(ns.scope))
+    if ns.core_extensions:
+        paths.append(core_extensions())
     if ns.calls:
         paths.append(calls(ns.scope))
     if ns.effect:

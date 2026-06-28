@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +24,7 @@ SCHEMAS = {
     "uses": "from_slug String, type_slug String, resolved Int64",
     "effects": "func_slug String, effect String",
     "effect_edges": "func_slug String, effect String, source_func_slug String, distance Int64, derivation String",
-    "extraction_status": "module String, iface_status String, iface_detail String, built_at String, ailang_version String, graph_schema Int64, iface_schema String",
+    "extraction_status": "module String, iface_status String, iface_detail String, iface_error String, built_at String, ailang_version String, graph_schema Int64, iface_schema String, profile String, include_tests Int64",
 }
 
 
@@ -63,10 +62,13 @@ def status_meta(effect_query: bool = False) -> dict:
         "built_at": None,
         "ailang_version": None,
         "graph_schema": None,
+        "profile": None,
+        "include_tests": False,
         "stale": True,
         "stale_reason": "missing extraction_status",
         "approximate": True,
         "coverage": {"ok": 0, "failed": 0, "partial": 0, "total": 0},
+        "row_counts": {},
         "incomplete": False,
         "incomplete_modules": [],
     }
@@ -81,6 +83,8 @@ def status_meta(effect_query: bool = False) -> dict:
     meta["built_at"] = first.get("built_at")
     meta["ailang_version"] = first.get("ailang_version")
     meta["graph_schema"] = int(first.get("graph_schema") or 0)
+    meta["profile"] = first.get("profile") or "unknown"
+    meta["include_tests"] = bool(int(first.get("include_tests") or 0))
     counts = {"ok": 0, "failed": 0, "partial": 0, "total": len(rows)}
     incomplete = []
     for row in rows:
@@ -90,11 +94,19 @@ def status_meta(effect_query: bool = False) -> dict:
         if st in {"failed", "partial"}:
             incomplete.append(row.get("module"))
     meta["coverage"] = counts
+    for table in csv_tables():
+        if table == "extraction_status":
+            meta["row_counts"][table] = len(rows)
+            continue
+        try:
+            meta["row_counts"][table] = int(run_sql(f"SELECT count() AS n FROM {table}")["data"][0]["n"])
+        except Exception:
+            pass
     newest = 0.0
-    for base in ("src", "scripts", "examples"):
-        root = REPO_ROOT / base
-        if root.exists():
-            newest = max([newest] + [p.stat().st_mtime for p in root.rglob("*.ail")])
+    for path in run_sql("SELECT path FROM modules")["data"]:
+        source = REPO_ROOT / path["path"]
+        if source.exists():
+            newest = max(newest, source.stat().st_mtime)
     stale_reason = None
     try:
         built_ts = __import__("datetime").datetime.fromisoformat(meta["built_at"]).timestamp()
@@ -179,6 +191,13 @@ SELECT m.slug AS module,
        (SELECT count() FROM imports WHERE to_module = m.slug) AS fan_in,
        (SELECT count() FROM imports WHERE from_module = m.slug) AS fan_out
 FROM modules m WHERE m.slug = '{mod}'
+""", False
+    if name == "failures":
+        return """
+SELECT module, iface_status, iface_detail, iface_error
+FROM extraction_status
+WHERE iface_status IN ('partial', 'failed')
+ORDER BY iface_status, module
 """, False
     raise SystemExit(f"unknown named query: {name}")
 
