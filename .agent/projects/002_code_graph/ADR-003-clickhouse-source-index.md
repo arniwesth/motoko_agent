@@ -56,7 +56,7 @@ matches the active graph extraction profile (`core`, `all`, `smoke`, plus
 |---|---|
 | `path` | repo-relative path with extension |
 | `module` | module slug for `.ail`; empty for non-AILANG files |
-| `kind` | `ailang` / `typescript` / `markdown` / `toml` / `json` / `shell` / `other` |
+| `lang` | `ailang` / `typescript` / `markdown` / `toml` / `json` / `shell` / `other` |
 | `bytes` | file size |
 | `sha256` | content hash |
 | `n_lines` | line count |
@@ -69,17 +69,28 @@ matches the active graph extraction profile (`core`, `all`, `smoke`, plus
 |---|---|
 | `path` | repo-relative path |
 | `module` | module slug for `.ail`; empty otherwise |
+| `lang` | file language, denormalized from `source_files.lang` (lets `WHERE lang='ailang'` avoid a join on every text search; matches the existing choice to denormalize `module` here) |
 | `line_no` | 1-based |
 | `line` | raw line text, newline stripped |
-| `trimmed` | stripped line text |
 | `is_comment` | best-effort per file kind |
 | `profile` | extraction profile |
+
+Note `lang` (file language: `ailang`/`typescript`/…) is distinct from
+`source_chunks.kind` (chunk type: `func`/`type`/`module`/`file`); they are deliberately
+different columns, not two spellings of one concept.
+
+A `trimmed` column was dropped: it is fully derivable in SQL via `trimBoth(line)` and
+doubles the largest table for no query power. `is_comment` is kept because it is *not*
+cheaply derivable in SQL — it is computed per file kind during extraction. For AILANG,
+reuse the existing comment rule in `source_parser._strip_comments_keep_newlines` (`--`
+line comments) rather than inventing a second one.
 
 **`source_chunks.csv`**
 
 | column | notes |
 |---|---|
-| `chunk_slug` | stable slug, e.g. `{module}#func:{name}` or `{path}#lines:{start}-{end}` |
+| `chunk_slug` | stable, human-readable slug, e.g. `{module}#func:{name}` or `{path}#lines:{start}-{end}` |
+| `func_slug` | graph join key: `symbol_slug(module, name)` = `{module}#{name}` for `kind=func`; empty otherwise |
 | `path` | repo-relative path |
 | `module` | module slug for `.ail`; empty otherwise |
 | `kind` | `func` / `type` / `module` / `file` |
@@ -88,9 +99,23 @@ matches the active graph extraction profile (`core`, `all`, `smoke`, plus
 | `end_line` | inclusive |
 | `text` | chunk text |
 
-For AILANG, `source_chunks.csv` should reuse the source parser's top-level spans so
-function chunks join cleanly to `funcs.slug`. For non-AILANG files, v1 can use
-whole-file chunks and optional fixed-size line windows later.
+For AILANG, `source_chunks.csv` reuses the source parser's top-level spans
+(`source_parser.func_spans`) so function chunks line up with the graph. Note that
+`chunk_slug` is **not** the graph key: `funcs.slug` is `{module}#{name}` (see
+`extractor/slugs.py:symbol_slug`), while a readable `chunk_slug` like
+`{module}#func:{name}` deliberately differs. Joins to the graph must use the separate
+`func_slug` column, which is emitted as exactly `symbol_slug(module, name)`. Emitting
+`func_slug` from the same `func_spans` output guarantees it equals the value
+`emit.py` writes into `funcs.slug`.
+
+`func_spans` returns a half-open span `[start, end)` where `end` is the next
+top-level declaration (or EOF). Map this to `start_line = start + 1` (1-based) and
+`end_line = end` (inclusive of the last body line, exclusive of the next decl), and
+trim trailing blank lines so adjacent function chunks do not overlap.
+
+For non-AILANG files, v1 uses whole-file chunks (`kind=file`, empty `func_slug`) and
+may add fixed-size line windows later. Non-AILANG chunks have no graph counterpart and
+do not join to `funcs`/`effect_edges`.
 
 ### Query Surface
 
@@ -119,6 +144,37 @@ token functions (`hasToken`, `tokens`, or equivalent supported by the installed 
 version) after validating them locally. Do not assume the full server feature set is
 available in chDB without a contract check.
 
+**Verified contract (chDB 4.1.9, the version pinned in this repo):** a local check
+confirmed `positionCaseInsensitive`, `match` (RE2, including `(?i)` and `\b`),
+`extractAll`, `hasToken`, and `tokens` all work over `file(..., 'CSVWithNames')`
+views, and that multiline quoted CSV fields (embedded `\n`, commas, and escaped
+quotes written by Python's `csv` module) round-trip correctly. The version-pinning
+caveat still stands for future chDB bumps, but v1 does not need to discover whether
+these functions exist — only re-verify if the pinned version changes.
+
+### Integration With `cgq.py`
+
+The source layer is not free-standing; it must slot into the existing query CLI. Three
+concrete touch points in `tools/code-graph/query/cgq.py`:
+
+1. **Views.** `csv_tables()` globs `.out/*.csv`, so the new CSVs become views
+   automatically. But the hardcoded `SCHEMAS` dict gives explicit typed columns; add
+   entries for `source_files`, `source_lines`, and `source_chunks` so `line_no` /
+   `start_line` are typed `Int64` rather than left to inference (inference returns
+   `Nullable(...)`, which is workable but inconsistent with the other tables).
+2. **Named queries.** Register `search`, `search-line`, `search-chunk`, and
+   `search-effects` in `named_query()`. Source searches are *not* effect queries
+   (`effect_query=False`) unless they join `effect_edges`, in which case pass
+   `True` so the existing INCOMPLETE banner fires on stale/partial typed coverage.
+3. **Staleness.** `status_meta()` currently derives freshness only from
+   `SELECT path FROM modules` (`.ail` files only). If the source index also covers
+   host files (`*.ts`, `ailang.toml`, `AGENTS.md`), edits to those will **not** be
+   seen by the current staleness check. v1 must compute source freshness from
+   `source_files.csv` (all indexed paths, compared by mtime and/or `sha256`), not from
+   `modules.csv`. Add a `SOURCE_SCHEMA` constant and a `source_schema` column to
+   `extraction_status.csv` (or a sibling `source_status.csv`) so a change to the
+   source CSV format invalidates the index the same way `graph_schema` does today.
+
 ### Materialized Full-Text Upgrade
 
 The ClickHouse full-text-search blog is a good direction for later, but native text
@@ -143,8 +199,10 @@ Therefore:
   `src/tui/src/*.ts`, `ailang.toml`, `config.json`, `AGENTS.md`, and selected scripts.
 - Emit `source_files.csv`, `source_lines.csv`, and `source_chunks.csv`.
 - Add named queries for line/chunk search.
-- Join search results to graph tables by `module` and `func_slug` where available.
-- Reuse `cgq.py` staleness/profile metadata.
+- Join search results to graph tables by `func_slug` (function granularity) and, where
+  deliberately coarse, by `module`.
+- Extend `cgq.py` staleness/profile metadata to cover indexed host files and a
+  `SOURCE_SCHEMA` version (see "Integration With `cgq.py`").
 
 ### Out of Scope for v1
 
@@ -165,17 +223,26 @@ WHERE positionCaseInsensitive(line, 'dispatch_step') > 0
 ORDER BY path, line_no;
 ```
 
-Join text hits to the effect graph:
+Join text hits to the effect graph. Do this at **chunk/function granularity** via
+`func_slug`, not at module granularity. A line-to-module join
+(`source_lines.module = funcs.module`) attributes every line in a module to every
+effect-reaching function in that module — it answers "this module mentions `httpGet`
+*and somewhere* reaches `Net`", which is usually not what the caller means:
 
 ```sql
-SELECT DISTINCT l.path, l.line_no, l.line, e.effect
-FROM source_lines l
-JOIN funcs f ON l.module = f.module
-JOIN effect_edges e ON e.func_slug = f.slug
-WHERE positionCaseInsensitive(l.line, 'httpGet') > 0
+-- Functions whose own body text mentions httpGet AND that reach Net.
+SELECT DISTINCT c.func_slug, c.path, c.start_line, e.effect
+FROM source_chunks c
+JOIN effect_edges e ON e.func_slug = c.func_slug
+WHERE c.kind = 'func'
+  AND positionCaseInsensitive(c.text, 'httpGet') > 0
   AND e.effect = 'Net'
-ORDER BY l.path, l.line_no;
+ORDER BY c.path, c.start_line;
 ```
+
+The coarse module-level join is still occasionally useful ("which modules mention X and
+reach Net") but should be written deliberately and labeled as module-level, since it
+does not locate the specific function.
 
 Inventory TODO/FIXME by module:
 
@@ -195,7 +262,7 @@ FROM
 (
   SELECT path, extractAll(line, '\\b[0-9]{3,}\\b') AS literals
   FROM source_lines
-  WHERE kind = 'ailang'
+  WHERE lang = 'ailang'
 )
 ARRAY JOIN literals AS literal
 GROUP BY literal
@@ -218,8 +285,8 @@ Negative:
 - CSV scans do not use ClickHouse native text indexes.
 - SQL search is more verbose than `rg` for simple exact lookups.
 - Large multiline chunks can make CSVs bulky; quoting must be correct.
-- Token-search behavior depends on the installed chDB/ClickHouse version and must be
-  validated locally.
+- Token-search behavior depends on the installed chDB/ClickHouse version. Verified on
+  the pinned chDB 4.1.9 (see "Verified contract"); must be re-checked on version bumps.
 
 ## Rejected Alternatives
 
@@ -251,9 +318,15 @@ dependencies, and are not needed for deterministic code search.
   `source_chunks.csv` for the active profile.
 - `cgq.py status` reports source row counts and the active profile.
 - `cgq.py q search dispatch_step` returns line hits with path and line number.
-- A source search can join to `funcs`/`effect_edges` in one SQL query.
-- Staleness is profile-aware: editing a file outside the active profile does not stale
-  the active source index.
-- CSV quoting handles multiline chunks and commas/quotes in source.
+- A function-level source search joins to `funcs`/`effect_edges` in one SQL query via
+  `source_chunks.func_slug = funcs.slug` (= `effect_edges.func_slug`), with no rows
+  lost to the `{module}#func:{name}` vs `{module}#{name}` slug mismatch.
+- Staleness is profile-aware (editing a file outside the active profile does not stale
+  the active source index) *and* covers every indexed path: editing an indexed host
+  file (e.g. `AGENTS.md`, `ailang.toml`) marks the source index stale, since freshness
+  is computed from `source_files.csv`, not `modules.csv`.
+- A bump to `SOURCE_SCHEMA` marks the existing source index stale.
+- CSV quoting handles multiline chunks and commas/quotes in source, verified by a
+  round-trip read through chDB `CSVWithNames` (confirmed on chDB 4.1.9).
 - No ClickHouse server is required for v1.
 
