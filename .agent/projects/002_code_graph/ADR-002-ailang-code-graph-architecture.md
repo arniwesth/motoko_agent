@@ -37,6 +37,7 @@ All capability claims below were verified directly against the local binary. The
 - **`iface` requires full dependency resolution.** Verified: `iface src/core/agent_loop_v2.ail` fails with `registry package … cache not found` / `requires ailang.toml and ailang.lock` unless every transitive registry package is hydrated. The heaviest, most interesting modules are exactly the ones that fail without hydration — this is the *same* precondition as ADR-001 (DST).
 - **`iface` exits 0 even on failure.** Verified: a failed extraction prints an error and empty/partial stdout but returns exit code 0. Failure detection must parse output, not trust the exit code.
 - **`pure` is NOT "effect-free".** Verified: `print_version` reports `pure: true` *and* `effects: ["IO"]`, type `(())->()!{IO}`. The effect graph must be built from the `effects` array; the `pure` flag means something else and must not be used as an effect signal.
+> **Review comment (GLM 5.2):** `pure` is dismissed without investigation. In many effect systems `pure` denotes referential transparency modulo tracked effects, or absence of heap mutation — either would be a useful additional graph signal (e.g. distinguishing `!{IO}`-tagged but otherwise-pure functions). Either verify its meaning against the binary/docs and use it, or file an upstream question via `ailang-feedback` and note it as a future signal. Don't drop a compiler-emitted field unexamined.
 - **`ailang debug ast <file>`** — Core AST (ANF), **text output, not JSON**, and **too shallow to parse** (confirmed on both v0.24.2 and v0.26.0): it prints only top-level `*core.LetRec [#id]` nodes with no body or call detail, `--show-types` does not expand them, and `--json` is silently ignored (it is only wired for `debug cycles`). So the ANF dump is not a viable call-graph source.
 - **Raw-source call-graph parsing is viable (PoC validated).** A heuristic source parser — segment top-level `func` decls (all at column 0), strip `--` comments and string literals, match `name(` calls, resolve against locally-defined and imported names — produced **1058 resolved call-edges across 415 functions in `src/` in 0.1s**, with **no compilation and no hydration**. It runs on `agent_loop_v2.ail`, which `iface` cannot load, and captures internal seams `iface` hides (`loop_v2 → dispatch_step`; `compact_step → try_emergency_compaction`). Known approximations: constructor calls (`Ok`/`Err`) appear as edges unless filtered via `iface` ctors; calls inside string interpolation (`${show(x)}`) are dropped; higher-order and type-class-dispatched calls resolve to the name, not the concrete target.
 - **`ailang tree`** — works here; emits the package dependency tree (`local/motoko_agent` → `sunholo/*`). Package-level deps are available for free.
@@ -64,8 +65,10 @@ The extractor will:
 4. Derive a **type-use graph** from exported function signatures; build the **effect graph** from `iface` effect rows as sources, propagated over the call graph so internal functions inherit reachable effects.
 
 > **Review comment (GPT-5.5):** Effect propagation is underspecified and may be directionally wrong. If `invokes` means `caller -> callee`, reachable effects normally propagate from callee back to caller: if `A` calls `B` and `B` can perform `Net`, then `A` reaches `Net`. Propagating exported `iface` effects forward to internal callees can falsely mark pure helpers as effectful. Define declared effects vs. reachable effects, call-edge direction, and the propagation algorithm before implementation.
+> **Review comment (GLM 5.2):** The effect graph has a structural blind spot beyond call-graph heuristics. Effect *sources* are only exported functions whose `iface` `effects` array lists the effect — internal functions that directly call a `std/net`/`fs`/`env` primitive have no `iface` row and are not sources, so they (and their callers) are invisible to "reaches `{Net}`" unless reverse-reachable from an exported function that already declares the effect. This yields systematic false negatives even when `iface` succeeds on every module, independent of call-graph precision. Separately, the ADR never establishes whether `iface` effect rows are direct-only or transitive — a load-bearing unknown that determines whether forward propagation double-counts (if transitive, an exported row already carries the helper's effect, so propagating it forward to the helper's other callers is double-counting). A Phase 0 experiment resolves it: take an exported function reaching an effect through an internal helper, and check whether the helper's effect appears in the exported row. This must happen before implementation, not during it.
 
 5. Emit CSVs in the `code-graph` schema, plus new `invokes` / `effects` / `effect_edges` tables, plus an `extraction_status` table recording per-module `iface` success/failure (source-derived edges are independent of it).
+> **Review comment (GLM 5.2):** No staleness or migration story. For agents treating this graph as the codebase map, staleness is a correctness bug, not cosmetics. The `extraction_status` table should carry a build timestamp and `ailang_version`, and the query surface should warn or refuse on stale graphs. CSV format versioning is also unspecified — what happens to loaded data when `ailang.iface/v1` bumps?
 6. Load via the reused ClickHouse pipeline; expose the graph to Claude Code and Codex through an agent-agnostic surface (CLI and/or MCP) documented in `AGENTS.md`.
 
 Scoping decisions following validation:
@@ -92,10 +95,12 @@ Upstream `ailang debug ast --json` is **demoted from a blocker to a future preci
 - **Package hydration is required for the typed layer only.** `iface` over modules with registry imports needs the full dependency set hydrated (same as ADR-001). The structural layer (imports, call graph) is hydration-free, so the graph always exists; missing hydration degrades type/effect annotations, not structure.
 
 > **Review comment (GPT-5.5):** For the headline effect graph, missing typed extraction can hide effect sources entirely, not merely degrade annotations. Queries like "what reaches `Net`" can produce false negatives when `iface` failed on reachable modules. The query surface should include extraction coverage in answers, or refuse definitive effect answers when relevant typed data is missing.
+> **Review comment (GLM 5.2):** "Hydration-free" overstates the structural layer. Intra-module and direct-import cross-module edges are hydration-free, but correct cross-module resolution in the presence of re-exports needs the re-exporting module's export list — i.e. `iface`, which may need hydration. A call through a re-exported symbol resolves to the re-exporter, not the origin, silently degrading R8/R15 edge correctness. Narrow the claim to "intra-module and direct-import cross-module edges are hydration-free."
 
 - **`iface` exits 0 on failure.** The extractor must classify each module's `iface` result as `ok` / `failed` / `partial` from output content and persist it, so consumers know where the typed layer is missing.
 
 > **Review comment (GPT-5.5):** The `ok` / `failed` / `partial` contract is load-bearing but undefined. Specify concrete classification rules and fixture tests for empty stdout, malformed JSON, valid JSON with diagnostics, missing `funcs`, missing `effects`, stderr-only failures, and partial module output.
+> **Review comment (GLM 5.2):** Defining a load-bearing contract during implementation is too late — it belongs in the ADR. Proposed minimum: `ok` = valid JSON with `funcs`/`types` keys; `partial` = valid JSON whose `funcs` is empty/missing on a module that source-parse found functions for; `failed` = no valid JSON on stdout regardless of exit code. Fixture the stderr-only and truncated-JSON cases explicitly.
 
 - **`pure` ≠ effect-free.** Declared effects derive solely from the `effects` array.
 - **The call graph is heuristic.** Source parsing resolves bare/qualified `name(` calls against locally-defined and imported names. Known imprecision: constructor calls (`Ok`/`Err`) need filtering via `iface` ctors; calls inside string interpolation are dropped; higher-order calls and type-class method dispatch resolve to the name, not the concrete instance; `let`-shadowing of an imported name can misresolve. These are acceptable for an approximate graph and are the reason the upstream `--json` precision upgrade is still wanted.
@@ -104,8 +109,10 @@ Upstream `ailang debug ast --json` is **demoted from a blocker to a future preci
 
 - AILANG has no classes. No direct `inherits`/`implements` analog; the closest concepts are type classes and instances. v1 will not synthesize those edges (columns reserved, empty).
 - Effect-row parsing depends on the textual `type` signature format (e.g. `(())->()!{IO}`) and must be re-validated on upgrades.
+> **Review comment (GLM 5.2):** Contradiction with line 35: the `effects` array is treated as the authoritative structured source, yet this line depends on textual `(())->()!{IO}` parsing. If the array is complete, no text parsing is needed; if it isn't, the ADR must specify what the text parser extracts that the array omits (e.g. handled/quantified effects). Pick one and reconcile both lines.
 - AILANG module identity is file/path-based (`src/core/types`), not `namespace.Type`. Slugs are module-or-symbol paths, not type FQNs.
 - `clickhouse` (`clickhouse local`) is an external prerequisite that must be installed; reuse of the pipeline is contingent on it.
+> **Review comment (GLM 5.2):** ClickHouse is unjustified for this workload. The graph is small (671 files, ~1k edges); ClickHouse is an OLAP engine built for billions of rows. Worse, making the *agent surface* SQL-over-ClickHouse means every agent environment that queries the graph must install the binary — the tool whose purpose is agent consumption becomes non-portable to the agents it serves. The `load.py`/`schema.sql` reuse defense is circular (`schema.sql` is ClickHouse DDL; generic CSV loading is ~20 lines). SQLite or DuckDB would be zero-install, embedded, adequate, and keep the surface portable. Justify ClickHouse on real grounds or switch.
 
 ## Edge & Node Model
 
@@ -182,6 +189,7 @@ The honest summary: v1 serves R3/R13 exactly and R7/R8/R15 approximately (bounde
 - Harden the PoC source parser: imports (std-filtered, alias-aware), `func` discovery (all functions), `name(` call resolution against local + imported names, constructor filtering via `iface` ctors.
 
 > **Review comment (GPT-5.5):** This contradicts the phase title. Constructor filtering via `iface` ctors uses the typed layer and can be hydration-dependent. Move constructor filtering to Phase 2, make it best-effort only when `iface` succeeds, or derive constructors from source in Phase 1.
+> **Review comment (GLM 5.2):** The deeper fix is not "move to Phase 2" — the hydration-free path can *never* use `iface` ctors, so constructor noise is permanent there unless constructors are source-derived (parsing `type T = Ok(_) | Err(_)` decls). Commit to source-derived constructor filtering for the structural layer; treat `iface` ctors as a precision upgrade only. Resolve Open Question (line 302) in the design rather than deferring it.
 
 - Emit `funcs.csv`, `imports.csv`, `invokes.csv`.
 - Load into ClickHouse; add module-dependency and call-graph Mermaid/SVG views.
@@ -200,6 +208,7 @@ The honest summary: v1 serves R3/R13 exactly and R7/R8/R15 approximately (bounde
 - Add dead-module detection, fan-in/fan-out, the DST R3/R13 importer-reachability query, and the R8/R15 call-seam queries.
 
 > **Review comment (GPT-5.5):** Dead-module detection is not defined. Deadness requires an explicit root set and exclusions for binaries, scripts, examples, tests, generated modules, extension entry points, and dynamically loaded modules. Without that contract, the feature will produce noisy or dangerous recommendations.
+> **Review comment (GLM 5.2):** Stronger than "undefined": dead-module detection over an approximate call graph is actively harmful in v1. The heuristic misses higher-order calls, type-class dispatch, and dynamic loading — exactly the patterns that keep a "dead" module alive — so an agent refactoring on this verdict receives false-negative deadness and may delete live code. Remove from Phase 3; restrict to "unimported modules" (transitive `imports` closure from a declared root set), which is at least sound, or defer entirely to Phase 4 behind the precise call graph.
 
 
 ### Phase 4 (later): Precision + Type-Class Model
@@ -236,6 +245,7 @@ The first implementation is acceptable when:
 - The call graph is spot-checked against hand-read source for a sample module, and its approximation limits are documented in the surface's output.
 
 > **Review comment (GPT-5.5):** Spot-checking one sample module is too weak for a heuristic parser that will drive architecture decisions. Acceptance should require golden parser fixtures for imports, aliases, selective imports, comments, strings, interpolation, constructors, local shadowing, qualified calls, same-name symbols, and failed `iface` output.
+> **Review comment (GLM 5.2):** Speed and coverage are measured; precision and recall are not. An approximate call graph that is fast but wrong is not an asset, and "approximately delivered" for R8/R15 is unbounded without a measured sample. Require precision/recall against a hand-validated 3-module sample, reported in the ADR before it is marked Accepted — not deferred to implementation, and not a single spot-check.
 
 - A module-dependency SVG and a call/effect SVG render.
 - No step requires a network or a live model (typed-layer hydration aside).
@@ -297,6 +307,7 @@ Rejected. Imports are grep-able, but `uses`/effects/reachability need joins. Reu
 - Agent surface: CLI only, MCP only, or both? MCP matches the existing `.mcp.json` pattern and gives structured discovery; a CLI is simpler and works through the agents' Bash tool with zero registration.
 
 > **Review comment (GPT-5.5):** The primary agent surface should probably not remain open for v1 acceptance. Pick CLI-first or MCP-first so implementation, documentation, tests, and examples target one stable consumption path.
+> **Review comment (GLM 5.2):** Decide CLI-first for v1. It is stateless, works through the agents' Bash tool with zero registration and no running process, and is the boring portable choice. MCP can wrap the CLI later for structured discovery. Leaving the surface open guarantees that Phase 3 implementation, tests, docs, and `AGENTS.md` examples all target a moving contract.
 
 - Slug scheme for symbols vs. modules — confirm collision-free path encoding.
 - Constructor handling: drop `Ok`/`Err`/etc. from `invokes`, or keep them as a separate `constructs` edge type?
