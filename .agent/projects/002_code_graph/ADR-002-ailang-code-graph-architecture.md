@@ -293,6 +293,11 @@ The first implementation is acceptable when:
 - A module-dependency SVG and a call/effect SVG render.
 - No step requires a network or a live model (typed-layer hydration aside).
 
+Current implementation measurement (2026-06-28): sample3 precision/recall is 1.0/1.0
+(3/3 expected edges, no false positives/negatives). The global effect oracle is **not
+yet accepted**: reachable effects cover declared effects for 74/108 ok exported funcs;
+divergences are enumerated in `tools/code-graph/.out/oracle_report.json`.
+
 ## Consequences
 
 Positive:

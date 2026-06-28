@@ -913,11 +913,11 @@ speed/coverage alone):
 
 | Metric | Target / note | Value (TBD) |
 |---|---|---|
-| Call-graph **precision** on `sample3/` | high bar — false edges mislead agents (ADR: "false positives hurt more") | _to measure_ |
-| Call-graph **recall** on `sample3/` | bar agreed before Accept; R8/R15 claimed only to this | _to measure_ |
-| Oracle: `ok` modules where reachable ⊇ declared | report as N/M + divergence list | _to measure_ |
-| Over-seed rate (reachable ⊋ declared) | FLAG-1 cost; informs per-symbol upgrade ROI | _to measure_ |
-| `sample3/` composition | `agent_loop_v2` (failed/hydration-free proof) + one `ok` module **with ≥1 declared effect** (non-trivial oracle) + one `partial`/`failed` | _to fix_ |
+| Call-graph **precision** on `sample3/` | high bar — false edges mislead agents (ADR: "false positives hurt more") | 1.0 (3/3 true positives; 0 false positives) |
+| Call-graph **recall** on `sample3/` | bar agreed before Accept; R8/R15 claimed only to this | 1.0 (3/3 true positives; 0 false negatives) |
+| Oracle: `ok` modules where reachable ⊇ declared | report as N/M + divergence list | 74/108 ok exported funcs on 2026-06-28; **not accepted**, divergences in `tools/code-graph/.out/oracle_report.json` |
+| Over-seed rate (reachable ⊋ declared) | FLAG-1 cost; informs per-symbol upgrade ROI | 0/108 over-reached funcs in current run; missing-declared is the blocker |
+| `sample3/` composition | `agent_loop_v2` (failed/hydration-free proof) + one `ok` module **with ≥1 declared effect** (non-trivial oracle) + one `partial`/`failed` | Fixture corpus under `tools/code-graph/tests/fixtures/sample3/`: `agent_loop_v2`, `stub_step`, `ok_effect` |
 
 ---
 
