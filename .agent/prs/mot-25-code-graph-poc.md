@@ -9,11 +9,6 @@ This branch adds a proof-of-concept AILANG code graph and source index under
 metadata into CSVs, queries them through embedded chDB, and adds project-memory
 semantic/concept graph experiments for `.agent` documentation.
 
-The branch also includes compaction hardening in the agent loop: system messages are
-pinned outside compaction, compaction tiers can use provider-reported input token
-counts, and token estimates account for serialized tool-call payloads plus output
-headroom.
-
 ## Changes
 
 - Adds `tools/code-graph/` with:
@@ -32,22 +27,28 @@ headroom.
   wrappers for refreshing and querying the code graph from agent workflows.
 - Adds code-graph ADRs, handoff notes, research notes, and session summaries covering
   the architecture, ClickHouse/chDB source index, embeddings, and concept-edge work.
+- Adds the `.agent` semantic search PoC (`agent_semantic_poc.py`) and semantic
+  benchmark queries for embedding-backed project-memory retrieval.
 - Adds `tools/mmd2svg/`, a small Bun/Mermaid utility for rendering Mermaid diagrams
   to SVG.
-- Updates install prerequisites to require AILANG `0.26.0` and install `chdb`.
-- Updates `.gitignore` and `.marimo.toml` for code-graph outputs, Python caches,
-  Marimo artifacts, and local visualization state.
-- Hardens runtime compaction by:
-  - separating system messages from mutable conversation history before extension and
-    structural compaction;
-  - re-prepending the system prefix before provider calls;
-  - tracking the provider's last `input_tokens`;
-  - using actual input-token usage for compaction thresholds when available;
-  - counting tool-call argument payloads in fallback token estimates;
-  - reserving output headroom when computing usage percentage.
-- Adds an Ollama compaction profile at `.motoko/config/ollama/compaction_ai.json`.
-- Includes MOT-24 deterministic simulation testing research/ADR material that is
-  present on this branch.
+- Updates the project AILANG requirement and lockfile to `0.26.0`.
+- Updates install prerequisites to install `chdb` for embedded ClickHouse queries.
+- Adds `.marimo.toml` for large graph/notebook visualization output.
+
+## Notes
+
+- Runtime `src/core/` compaction changes are intentionally not part of this PR.
+- `.motoko/config/ollama/` changes are intentionally not part of this PR.
+- Agents currently need to be pointed at `tools/code-graph/AGENTS.md` to know how
+  to use the code-graph tooling.
+- There are pending AILANG feature requests that would improve precision: structured
+  `ailang debug ast --json` output for replacing the heuristic source-parsed call
+  graph, and public stdlib iface/per-symbol effect data for finer effect seeding.
+  These are called out in
+  `.agent/projects/002_code_graph/AILANG_Code_Graph.md` under "Upstream feature
+  request" and "Phase 4: AST/JSON Upgrade", and the stdlib iface ask is also noted
+  in `tools/code-graph/extractor/seed_catalog.py`. Until those land, call/effect
+  answers are explicitly approximate and carry coverage metadata.
 
 ## Verification
 
