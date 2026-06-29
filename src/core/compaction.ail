@@ -6,7 +6,7 @@
 -- Works on [Message] (upstream typed shape) so tool_call_id correlation
 -- is preserved — the provider needs those IDs for conversation continuation.
 --
--- Thresholds (usage = estimated_tokens / loaded context limit):
+-- Thresholds (usage = estimated_tokens / context_limit_for(model)):
 --   < 70%  → PassThrough (no compaction needed)
 --   70-85% → Elide tool_result content older than last 10 turns
 --   85-95% → Elide tool_result content older than last 5 turns
@@ -17,12 +17,12 @@
 -- loop iteration) always retains the original unelided messages. The
 -- compacted view is a transient input to step() for this step only.
 --
--- For unknown models (context limit is 0), compaction is skipped
+-- For unknown models (context_limit_for returns 0), compaction is skipped
 -- entirely — fail open rather than incorrectly refusing a valid step.
 
 module src/core/compaction
 
-import std/ai (Message)
+import std/ai (Message, ToolCall)
 import std/string (length, substring)
 import std/list (foldl)
 import std/result (Result, Ok, Err)
@@ -31,21 +31,35 @@ import src/core/context_usage (context_limit_for)
 -- Token estimate for [Message]: sum all content-field lengths, divide by 4.
 -- Same approximation as estimate_tokens for [Msg] in context_usage.ail.
 -- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order)
+-- Sum the serialized size of a message's tool_calls (name + arguments). WriteFile/EditFile carry the FULL
+-- file content in `arguments`, re-sent every turn — counting only `content` (as before) massively undercounts
+-- those turns, so compaction fires too late -> context overflow (docx hit input 263259 > 262144).
+pure func tool_calls_chars(tcs: [ToolCall]) -> int {
+  foldl(\acc tc. acc + length(tc.name) + length(tc.arguments), 0, tcs)
+}
+
 export pure func estimate_tokens_messages(msgs: [Message]) -> int {
-  let total = foldl(\acc m. acc + length(m.content), 0, msgs);
-  (total + 3) / 4
+  let total = foldl(\acc m. acc + length(m.content) + tool_calls_chars(m.tool_calls), 0, msgs);
+  -- chars/7: MEASURED ratio for AILANG code + DOCX XML is ~7.5 chars/token (ollama
+  -- actual 74K vs old chars/4 estimate 138K at the same step -> the old /4 over-counted
+  -- ~1.9x, firing compaction at ~31% of the real 262144 window -> working-set thrash).
+  -- Slightly conservative (/7 > real 7.5) so we compact just BEFORE the true limit.
+  (total + 6) / 7
 }
 
 -- Context usage as integer percent (0-100). Returns 0 for unknown models.
 -- Uses integer arithmetic throughout to avoid float precision issues.
 -- contracts: SKIPPED — depends on foldl-based estimate_tokens_messages
-export pure func usage_percent_with_limit(msgs: [Message], limit: int) -> int {
-  if limit == 0 then 0
-  else (estimate_tokens_messages(msgs) * 100) / limit
-}
-
 export pure func usage_percent(msgs: [Message], model: string) -> int {
-  usage_percent_with_limit(msgs, context_limit_for(model))
+  let limit = context_limit_for(model);
+  -- Reserve ~75k headroom for the model's OUTPUT. context_limit is the TOTAL input+output window,
+  -- so compaction must keep INPUT well below it. docx overflowed at input 263259 > 262144 because
+  -- usage was measured against the FULL window — compaction never reserved output room and let input
+  -- crowd the hard limit. 75k covers the 65536 output cap + estimate margin. Small (rotation)
+  -- contexts stay ~0% so this only bites large-context tasks (compacts them earlier, as intended).
+  let effective = limit - 75000;
+  if limit == 0 || effective <= 0 then 0
+  else (estimate_tokens_messages(msgs) * 100) / effective
 }
 
 -- Count tool-role messages in the list.
@@ -106,15 +120,15 @@ export pure func elide_old_tool_results(msgs: [Message], keep_last: int) -> [Mes
 
 -- Apply emergency compaction for ≥95% usage.
 -- Returns Ok(compacted) if we can get below 95%, otherwise Err.
-pure func try_emergency_compaction_with_limit(msgs: [Message], model: string, limit: int) -> Result[[Message], string] {
+pure func try_emergency_compaction(msgs: [Message], model: string) -> Result[[Message], string] {
   -- Try keeping only last 3 tool results
   let emergency1 = elide_old_tool_results(msgs, 3);
-  let pct1 = usage_percent_with_limit(emergency1, limit);
+  let pct1 = usage_percent(emergency1, model);
   if pct1 < 95 then Ok(emergency1)
   else {
     -- Try keeping only last 1 tool result
     let emergency2 = elide_old_tool_results(msgs, 1);
-    let pct2 = usage_percent_with_limit(emergency2, limit);
+    let pct2 = usage_percent(emergency2, model);
     if pct2 < 95 then Ok(emergency2)
     else {
       -- Even extreme compaction failed
@@ -123,24 +137,35 @@ pure func try_emergency_compaction_with_limit(msgs: [Message], model: string, li
   }
 }
 
-pure func try_emergency_compaction(msgs: [Message], model: string) -> Result[[Message], string] {
-  try_emergency_compaction_with_limit(msgs, model, context_limit_for(model))
-}
-
 -- Apply the default structural compaction policy for one step.
 -- Returns Ok(msgs) — possibly with elided tool content — or
 -- Err("compaction_exhausted") when the window is critically full.
 -- At ≥95%, attempts emergency compaction before failing.
-export pure func compact_step_with_limit(msgs: [Message], model: string, limit: int) -> Result[[Message], string] {
-  let pct = usage_percent_with_limit(msgs, limit);
-  if pct >= 95 then try_emergency_compaction_with_limit(msgs, model, limit)
+export pure func compact_step(msgs: [Message], model: string) -> Result[[Message], string] {
+  let pct = usage_percent(msgs, model);
+  if pct >= 95 then try_emergency_compaction(msgs, model)
   else if pct >= 85 then Ok(elide_old_tool_results(msgs, 5))
   else if pct >= 70 then Ok(elide_old_tool_results(msgs, 10))
   else Ok(msgs)
 }
 
-export pure func compact_step(msgs: [Message], model: string) -> Result[[Message], string] {
-  compact_step_with_limit(msgs, model, context_limit_for(model))
+-- M-MOTOKO-ACTUAL-COMPACT: drive elision off the PROVIDER's ACTUAL input_tokens (last step)
+-- instead of a chars-ratio estimate. The estimate failed both ways — chars/4 over-counted ~1.9x
+-- (premature thrash); chars/7 under-counted (never fired -> 260K overflow). The real count is
+-- ground truth. Proactive tiers (start gentle well before the limit so a one-step jump can't
+-- overflow): keep_last=10 at 60%, 5 at 75%, emergency at 85% of effective(=limit-75000). Elides
+-- only OLD tool_results (the measured 96K bloat = BashExec/cat XML dumps); recent working set stays.
+-- Falls back to the estimate-based compact_step when actual is unknown (step 0).
+export pure func compact_step_actual(msgs: [Message], model: string, actual_input: int) -> Result[[Message], string] {
+  if actual_input <= 0 then compact_step(msgs, model)
+  else {
+    let effective = context_limit_for(model) - 75000;
+    let pct = if effective > 0 then (actual_input * 100) / effective else 0;
+    if pct >= 85 then try_emergency_compaction(msgs, model)
+    else if pct >= 75 then Ok(elide_old_tool_results(msgs, 5))
+    else if pct >= 60 then Ok(elide_old_tool_results(msgs, 10))
+    else Ok(msgs)
+  }
 }
 
 -- Unknown model → usage 0% → no compaction.
@@ -232,3 +257,4 @@ func emergency_compaction_tries_elision() -> bool
       Err(_) => false
     }
   }
+
