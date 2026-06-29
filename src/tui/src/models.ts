@@ -1,36 +1,110 @@
 // tui/src/models.ts
 //
-// Canonical list of known model identifiers shown in the /model SelectList.
-// Format: "provider/model-name" — matches what AILANG passes to --ai.
+// Load the baseline model identifiers shown in the /model SelectList.
+// Motoko keeps provider-like routing prefixes for most providers, but direct
+// Google Gemini / Vertex uses bare "gemini-*" ids. In AILANG, "google/..."
+// means an OpenRouter vendor/model id, not the direct Google provider.
+//
+// Static model ids live in .motoko/model-catalog.json so provider/catalog updates do
+// not require TypeScript changes. Set MOTOKO_MODELS_FILE to point at an
+// alternate JSON file.
 //
 // OpenRouter models are prefixed with "openrouter/" and can be fetched live
 // from the OpenRouter API when OPENROUTER_API_KEY is set.
 // Local OpenAI-compatible models are prefixed with "openai/" and fetched from
 // OPENAI_BASE_URL when set.
 
-export const KNOWN_MODELS: string[] = [
-  "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-haiku-4-5",
-  "openai/gpt-4o",
-  "openai/gpt-4o-mini",
-  "google/gemini-2.5-flash",
-  "google/gemini-2.5-pro",
-];
+import { existsSync, readFileSync } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-// Static fallback shown when OPENROUTER_API_KEY is set but the live fetch fails.
-export const OPENROUTER_FALLBACK_MODELS: string[] = [
-  "openrouter/anthropic/claude-sonnet-4-5",
-  "openrouter/anthropic/claude-opus-4-5",
-  "openrouter/openai/gpt-4o",
-  "openrouter/openai/gpt-4o-mini",
-  "openrouter/google/gemini-2.5-pro",
-  "openrouter/google/gemini-2.5-flash",
-  "openrouter/meta-llama/llama-3.3-70b-instruct",
-  "openrouter/mistralai/mixtral-8x7b-instruct",
-  "openrouter/deepseek/deepseek-r1",
-  "openrouter/qwen/qwen-2.5-72b-instruct",
-];
+export type ModelsConfig = {
+  known_models: string[];
+  openrouter_fallback_models: string[];
+  context_limits: Record<string, number>;
+};
+
+export const DEFAULT_RUNTIME_MODEL = "anthropic/claude-sonnet-4-6";
+
+const EMPTY_MODELS_CONFIG: ModelsConfig = {
+  known_models: [],
+  openrouter_fallback_models: [],
+  context_limits: {},
+};
+
+export function resolveRuntimeModel(
+  env: NodeJS.ProcessEnv = process.env,
+  profileModel?: string,
+): string {
+  const envModel = (env["MODEL"] ?? "").trim();
+  if (envModel !== "") return envModel;
+
+  const configuredModel = (profileModel ?? "").trim();
+  if (configuredModel !== "") return configuredModel;
+
+  return DEFAULT_RUNTIME_MODEL;
+}
+
+function stringArrayField(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function positiveNumberRecordField(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, limit] of Object.entries(value)) {
+    if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+      out[key] = limit;
+    }
+  }
+  return out;
+}
+
+function parseModelsConfig(raw: string): ModelsConfig {
+  const parsed = JSON.parse(raw) as {
+    known_models?: unknown;
+    openrouter_fallback_models?: unknown;
+    context_limits?: unknown;
+  };
+  return {
+    known_models: stringArrayField(parsed.known_models),
+    openrouter_fallback_models: stringArrayField(parsed.openrouter_fallback_models),
+    context_limits: positiveNumberRecordField(parsed.context_limits),
+  };
+}
+
+function defaultModelsConfigCandidates(): string[] {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return [
+    path.join(process.cwd(), ".motoko", "model-catalog.json"),
+    path.resolve(here, "..", "..", "..", ".motoko", "model-catalog.json"),
+  ];
+}
+
+export function resolveModelsConfigPath(env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicit = (env["MOTOKO_MODELS_FILE"] ?? "").trim();
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+
+  for (const candidate of defaultModelsConfigCandidates()) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function loadModelsConfig(env: NodeJS.ProcessEnv = process.env): ModelsConfig {
+  const filePath = resolveModelsConfigPath(env);
+  if (!filePath) return EMPTY_MODELS_CONFIG;
+  try {
+    return parseModelsConfig(readFileSync(filePath, "utf8"));
+  } catch {
+    return EMPTY_MODELS_CONFIG;
+  }
+}
 
 /**
  * Normalize OPENAI_BASE_URL for local OpenAI-compatible endpoints.
@@ -83,9 +157,9 @@ export function mergeUniqueModels(...lists: string[][]): string[] {
 
 /**
  * Fetch the live model list from OpenRouter and return model ids prefixed
- * with "openrouter/".  Falls back to OPENROUTER_FALLBACK_MODELS on error.
+ * with "openrouter/". Falls back to the configured OpenRouter models on error.
  */
-export async function fetchOpenRouterModels(apiKey: string): Promise<string[]> {
+export async function fetchOpenRouterModels(apiKey: string, fallbackModels: string[] = []): Promise<string[]> {
   try {
     const res = await fetch("https://openrouter.ai/api/v1/models", {
       headers: {
@@ -93,15 +167,15 @@ export async function fetchOpenRouterModels(apiKey: string): Promise<string[]> {
       },
     });
     if (!res.ok) {
-      return OPENROUTER_FALLBACK_MODELS;
+      return fallbackModels;
     }
     const json = (await res.json()) as { data?: Array<{ id: string }> };
     if (!Array.isArray(json.data)) {
-      return OPENROUTER_FALLBACK_MODELS;
+      return fallbackModels;
     }
     return json.data.map((m) => `openrouter/${m.id}`);
   } catch {
-    return OPENROUTER_FALLBACK_MODELS;
+    return fallbackModels;
   }
 }
 
@@ -134,11 +208,12 @@ export async function fetchDynamicModelsFromEnv(
 ): Promise<string[]> {
   const openRouterKey = env["OPENROUTER_API_KEY"] ?? "";
   const openAIBaseURL = env["OPENAI_BASE_URL"] ?? "";
+  const modelsConfig = loadModelsConfig(env);
 
   const [localOpenAIModels, openRouterModels] = await Promise.all([
     openAIBaseURL ? fetchLocalOpenAIModels(openAIBaseURL) : Promise.resolve([]),
-    openRouterKey ? fetchOpenRouterModels(openRouterKey) : Promise.resolve([]),
+    openRouterKey ? fetchOpenRouterModels(openRouterKey, modelsConfig.openrouter_fallback_models) : Promise.resolve([]),
   ]);
 
-  return mergeUniqueModels(KNOWN_MODELS, localOpenAIModels, openRouterModels);
+  return mergeUniqueModels(modelsConfig.known_models, localOpenAIModels, openRouterModels);
 }

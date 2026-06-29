@@ -1,0 +1,60 @@
+-- scripts/smoke_catalog_compaction.ail
+--
+-- Runtime smoke for catalog-backed context limits and structural compaction.
+--
+-- This deliberately exercises the effectful path:
+--   .motoko/model-catalog.json -> catalog_context_limit_for -> compact_step_with_limit
+--
+-- Setup:
+--   ailang run --caps IO,FS,Env --entry main scripts/smoke_catalog_compaction.ail
+
+module scripts/smoke_catalog_compaction
+
+import std/ai (Message)
+import std/io (println, exit)
+import std/result (Ok, Err)
+import std/string (repeat)
+import src/core/context_usage (catalog_context_limit_for)
+import src/core/compaction (compact_step_with_limit)
+
+func msg(role: string, content: string, tool_call_id: string) -> Message {
+  {
+    role: role,
+    content: content,
+    tool_calls: [],
+    tool_call_id: tool_call_id
+  }
+}
+
+func fail(message: string) -> () ! {IO} {
+  let _ = println("FAIL: ${message}");
+  exit(1)
+}
+
+export func main() -> () ! {IO, FS, Env} {
+  let model = "test/tiny";
+  let limit = catalog_context_limit_for(model);
+  let _ =
+    if limit == 100 then println("PASS: catalog_context_limit_for(test/tiny)=100")
+    else fail("expected catalog limit 100 for test/tiny, got ${show(limit)}");
+
+  -- A large user message cannot be structurally elided. With the catalog's
+  -- 100-token test limit, compact_step_with_limit must report exhaustion.
+  let oversized_history: [Message] = [
+    msg("user", repeat("x", 390), ""),
+    msg("tool", "short tool result", "call-smoke")
+  ];
+  let _ = match compact_step_with_limit(oversized_history, model, limit) {
+    Err(reason) => println("PASS: compaction exhausted with catalog limit: ${reason}"),
+    Ok(_) => fail("expected compaction_exhausted for oversized history")
+  };
+
+  -- Unknown models have no hardcoded provider-family fallback. They should
+  -- resolve to 0 and therefore skip compaction rather than guessing.
+  let unknown = catalog_context_limit_for("anthropic/unlisted-future-model");
+  let _ =
+    if unknown == 0 then println("PASS: uncatalogued model has no guessed limit")
+    else fail("uncatalogued model unexpectedly got limit ${show(unknown)}");
+
+  println("--- catalog compaction smoke complete ---")
+}

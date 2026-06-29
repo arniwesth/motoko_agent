@@ -26,6 +26,7 @@ import { RuntimeProcess, resolveDelegatedExec } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
 import { SessionLogger } from "./session-logger.js";
 import { activeProfile } from "./config.js";
+import { resolveRuntimeModel } from "./models.js";
 import type { AgentEvent, DelegatedCall } from "./runtime-process.js";
 import type { ScratchpadCellResult } from "./scratchpad/frames.js";
 
@@ -237,6 +238,10 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
+function envOrProfileString(envKey: string, profileValue: string | undefined): string {
+  return nonEmptyString(process.env[envKey]) ?? profileValue ?? "";
+}
+
 function positiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
@@ -256,7 +261,10 @@ function applyClickStackProfileConfig(
   clickstack: ProfileAgentConfig["clickstack"],
   protectedKeys: Set<string>,
 ): void {
-  if (!clickstack?.enabled) return;
+  if (!clickstack?.enabled) {
+    disableOtelExport();
+    return;
+  }
   // ClickStack/HyperDX rejects OTLP ingestion without an authorization header,
   // so without a key the AILANG runtime would emit `traces export: failed to
   // send ... 401 (missing or empty authorization header)` on every span. The
@@ -289,13 +297,12 @@ function clickStackAuthHeaderPresent(): boolean {
   return /authorization\s*=/i.test(headers);
 }
 
-// Prevent every AILANG child (the version probe and the agent runtime) from
-// attempting trace export. AILANG only initializes its OTLP exporter when
-// OTEL_EXPORTER_OTLP_ENDPOINT is set — and crucially AILANG_TRACE=off does NOT
-// stop it, only removing the endpoint does. The endpoint is injected into the
-// process env by docker-compose (observability stack), so deleting it here is
-// the only reliable way to silence export. The version probe inherits
-// process.env directly; the runtime is additionally gated on MOTOKO_OTEL.
+// Prevent AILANG children (the version probe and the agent runtime) from
+// attempting trace export unless the selected profile explicitly enables
+// ClickStack. AILANG initializes its OTLP exporter when
+// OTEL_EXPORTER_OTLP_ENDPOINT is set, and AILANG_TRACE=off does not stop it.
+// The endpoint can be inherited from docker-compose or the shell, so deleting
+// it here is the only reliable way to keep normal runs quiet.
 function disableOtelExport(): void {
   delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
@@ -704,9 +711,10 @@ async function main(): Promise<void> {
   // the agent name instead of the underlying runtime ("bun.exe" /
   // "node"). OSC 0 sets both icon and window title; ST is BEL (\x07) for
   // maximal compatibility (some terminals don't recognise ST = \x1b\\).
-  // Skip when TTY detection fails (piped output, JSONL mode) so we don't
-  // pollute log streams with the escape bytes.
-  if (process.stdout.isTTY && process.env.MOTOKO_JSONL_OUTPUT !== "1") {
+  // Skip in non-interactive output modes so we don't pollute log streams with
+  // escape bytes.
+  const headlessOutput = process.env.MOTOKO_HEADLESS === "1";
+  if (process.stdout.isTTY && process.env.MOTOKO_JSONL_OUTPUT !== "1" && !headlessOutput) {
     process.stdout.write("\x1b]0;[λ] motoko\x07");
   }
 
@@ -751,13 +759,13 @@ async function main(): Promise<void> {
   const profileAgent = resolveProfileAgentConfig(workdir, profile);
   applyToolProfileConfig(profileAgent, shellEnvKeys);
   applyClickStackProfileConfig(profileAgent.clickstack, shellEnvKeys);
-  const model =
-    process.env.MODEL ??
-    profileAgent.model ??
-    "anthropic/claude-sonnet-4-6";
+  const model = resolveRuntimeModel(process.env, profileAgent.model);
+  // Publish the resolved runtime model once so helper paths (env-server,
+  // scratchpad, subagents) observe the same default as the AILANG runtime.
+  process.env.MODEL = model;
   const systemPrompt = systemPromptForWorkspace(projectRoot, workdir);
-  const openaiBaseUrl = process.env.OPENAI_BASE_URL ?? profileAgent.openaiBaseUrl ?? "";
-  const aiOptionsJson = process.env.MOTOKO_AI_OPTIONS_JSON ?? profileAgent.aiOptionsJson ?? "";
+  const openaiBaseUrl = envOrProfileString("OPENAI_BASE_URL", profileAgent.openaiBaseUrl);
+  const aiOptionsJson = envOrProfileString("MOTOKO_AI_OPTIONS_JSON", profileAgent.aiOptionsJson);
 
   let brainVersion = "unknown";
   try {
@@ -788,7 +796,7 @@ async function main(): Promise<void> {
   } catch {}
 
   // Future improvement: regenerate/reflow banner on terminal resize events.
-  if (!jsonlOutput) {
+  if (!jsonlOutput && !headlessOutput) {
     const bannerLines = renderBanner({ columns: process.stdout.columns });
     process.stdout.write(
       bannerLines.join("\n") +
@@ -817,9 +825,13 @@ async function main(): Promise<void> {
   // CI is NOT treated as a TUI blocker — devcontainers and CI runners
   // often set CI=1 even when the user is running interactively.
   const isTTY =
-    Boolean(process.stdout.isTTY) ||
-    Boolean(process.stdout.columns) ||
-    Boolean(process.env.FORCE_TTY);
+    !headlessOutput &&
+    !jsonlOutput &&
+    (
+      Boolean(process.stdout.isTTY) ||
+      Boolean(process.stdout.columns) ||
+      Boolean(process.env.FORCE_TTY)
+    );
 
   // runtime process handle is declared mutable because abort()/setModel() fire from
   // callbacks, and spawnRuntimeProcess() may be called again on model switch.
@@ -844,7 +856,10 @@ async function main(): Promise<void> {
     const logger = new SessionLogger(projectRoot, pkgVersion);
     sessionLogger = logger;
     logger.logUserInput(task);
-    ui.onModelChange = (newModel) => runtimeProcess!.setModel(newModel);
+    ui.onModelChange = (newModel) => {
+      process.env.MODEL = newModel;
+      runtimeProcess!.setModel(newModel);
+    };
     ui.onAbort = () => runtimeProcess!.abort();
     ui.onUserMessage = (content) => {
       logger.logUserInput(content);
@@ -949,7 +964,10 @@ async function main(): Promise<void> {
     ui.runtimeProcess = runtimeProcess;
   }
 
-  ui.onModelChange = (newModel) => runtimeProcess?.setModel(newModel);
+  ui.onModelChange = (newModel) => {
+    process.env.MODEL = newModel;
+    runtimeProcess?.setModel(newModel);
+  };
   ui.onUserMessage = (content) => {
     sessionLogger?.logUserInput(content);
     runtimeProcess?.sendUserMessage(content);
