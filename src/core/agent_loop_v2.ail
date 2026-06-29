@@ -55,21 +55,45 @@ import src/core/types (Msg, ToolBackend)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
-import src/core/compaction (compact_step, compact_step_actual)
-import src/core/context_usage (context_limit_for)
+import src/core/compaction (compact_step_with_limit)
+import src/core/context_usage (catalog_context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
 import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 
--- Strip the "openrouter/" model prefix before forwarding to upstream step().
--- OpenRouter's API rejects the prefixed name. The fork's old code stored the
--- prefix as part of the model identifier for routing-style dispatch; with
--- upstream step() the AI handler is configured at --ai time, so the prefix
--- is redundant noise that breaks the upstream API call.
-func strip_provider_prefix(model: string) -> string {
-  if startsWith(model, "openrouter/") then
+-- Convert Motoko's UI/profile model identifier to the provider API model id
+-- expected by upstream stepWithStream(). The --ai flag already selected the
+-- handler/provider; the model argument passed to step is forwarded to the
+-- upstream API body.
+--
+-- Important: OpenRouter's API model ids are themselves vendor/model strings
+-- such as "anthropic/claude-sonnet-4-6" and "openai/gpt-4o". Strip the
+-- explicit Motoko/OpenRouter routing prefix only for pinned vendor/model ids;
+-- keep "openrouter/auto" intact because AILANG/OpenRouter use it as the
+-- routing-policy model.
+--
+-- Direct provider prefixes are Motoko routing syntax and are stripped before
+-- the provider request. AILANG itself treats vendor/model strings such as
+-- "openai/..." and "anthropic/..." as OpenRouter, so the TS launcher also
+-- strips those prefixes for --ai provider selection.
+pure func provider_api_model(model: string, openai_base_url: string) -> string {
+  if model == "openrouter/auto" then
+    model
+  else if startsWith(model, "openrouter/") then
     let prefix_len = Str.length("openrouter/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "openai/") then
+    let prefix_len = Str.length("openai/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "anthropic/") then
+    let prefix_len = Str.length("anthropic/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "google/") then
+    let prefix_len = Str.length("google/") in
     let total = Str.length(model) in
     substring(model, prefix_len, total)
   else
@@ -166,12 +190,11 @@ type LoopTotals = {
   cache_read: int,
   cache_creation: int,
   cost_millicents: int,
-  cost_warned_pct: int,
-  last_input_tokens: int
+  cost_warned_pct: int
 }
 
 pure func zero_totals() -> LoopTotals {
-  { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0, last_input_tokens: 0 }
+  { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0 }
 }
 
 -- Emit a schema-v1 event: prepends schema_version + session_id + type to
@@ -399,6 +422,54 @@ pure func test_cap_tool_message_content_truncates_oversized_content() -> bool
     Str.length(capped) == 65536 && contains(capped, "...[truncated; original ")
   }
 
+pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openrouter/deepseek/deepseek-v4-flash", "") == "deepseek/deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_openrouter_auto_stays_intact() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openrouter/auto", "") == "openrouter/auto"
+  }
+
+pure func test_provider_api_model_local_openai_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/deepseek-v4-flash", "http://127.0.0.1:8000/v1") == "deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_local_openai_preserves_slashful_id() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/google/gemma-4-26B-A4B-it", "http://127.0.0.1:8000/v1") == "google/gemma-4-26B-A4B-it"
+  }
+
+pure func test_provider_api_model_direct_openai_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/gpt-4o", "") == "gpt-4o"
+  }
+
+pure func test_provider_api_model_direct_anthropic_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("anthropic/claude-sonnet-4-6", "") == "claude-sonnet-4-6"
+  }
+
+pure func test_provider_api_model_direct_google_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("google/gemini-2.5-flash", "") == "gemini-2.5-flash"
+  }
+
+pure func test_provider_api_model_ollama_keeps_routing_prefix_for_provider() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("ollama/qwen3.5:35b-a3b-mxfp8", "") == "ollama/qwen3.5:35b-a3b-mxfp8"
+  }
+
 func result_env_model_content(result: ToolResultEnvelope) -> string {
   cap_tool_message_content(encode(result_to_model_json(result)))
 }
@@ -441,7 +512,8 @@ func mk_v2_ext_ctx(
   env_url: string,
   hybrid_tools: bool,
   budget: BudgetPlan,
-  history: [Message]
+  history: [Message],
+  context_limit: int
 ) -> ExtCtx {
   let remaining = if budget.total - step_idx < 0 then 0 else budget.total - step_idx;
   {
@@ -457,7 +529,7 @@ func mk_v2_ext_ctx(
     budget_remaining: remaining,
     history_slice: messages_to_msgs(history),
     state_key: "core:ext:v2",
-    context_limit: context_limit_for(model)
+    context_limit: context_limit
   }
 }
 
@@ -1032,22 +1104,6 @@ func any_writefile_attempt(msgs: [Message]) -> bool {
   }
 }
 
--- Partition out ALL system messages (the AILANG reference / instructions) from the
--- conversation. AI 101: the system prompt is a CONSTANT, not mutable history — it must
--- never be subject to compaction. We split it off before BOTH compaction layers and
--- re-prepend it for the provider call, so no compaction strategy can drop or reorder it.
-type MsgSysSplit = { sys: [Message], conv: [Message] }
-func partition_system_msgs(msgs: [Message]) -> MsgSysSplit {
-  match msgs {
-    [] => { sys: [], conv: [] },
-    m :: tail => {
-      let r = partition_system_msgs(tail);
-      if m.role == "system" then { sys: m :: r.sys, conv: r.conv }
-      else { sys: r.sys, conv: m :: r.conv }
-    }
-  }
-}
-
 func loop_v2(
   rt: ExtRuntime,
   task: string,
@@ -1090,19 +1146,12 @@ func loop_v2(
     })
   }
   else {
+  let context_limit = catalog_context_limit_for(model);
   -- Build extension context for this step (needed for dispatch_pre_step)
-  let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs);
+  let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs, context_limit);
   
-  -- AI 101: the system message (AILANG reference) is a CONSTANT, never mutable history.
-  -- Split it off so NEITHER compaction layer can drop/reorder it; re-prepended below for
-  -- the provider call. Without this the model loses its syntax reference after compaction
-  -- and drifts into invalid syntax.
-  let sys_split = partition_system_msgs(msgs);
-  let sys_prefix = sys_split.sys;
-  let conv_msgs = sys_split.conv;
-
-  -- DP0a: let extensions compact first (e.g., AI summarization) — on the conversation only
-  let after_ext = match dispatch_pre_step(rt, ctx, messages_to_msgs(conv_msgs)) {
+  -- DP0a: let extensions compact first (e.g., AI summarization)
+  let after_ext = match dispatch_pre_step(rt, ctx, messages_to_msgs(msgs)) {
     Compacted(compacted_msgs, note) => {
       let _ = emit_event(session_id, "compaction_extension", [
         kv("step", jnum(_int_to_float(step_idx))),
@@ -1110,7 +1159,7 @@ func loop_v2(
       ]);
       Ok(msgs_to_messages(compacted_msgs))
     },
-    PassThrough => Ok(conv_msgs)
+    PassThrough => Ok(msgs)
   };
   
   match after_ext {
@@ -1118,10 +1167,8 @@ func loop_v2(
     Ok(msgs_after_ext) => {
   -- DP0b: structural compaction as fallback
   -- compact_step is a no-op below 70% usage; elides old tool_result content
-  -- at 70-85% and 85-95%; at ≥95% tries emergency compaction. The elision LEVEL is
-  -- driven off the provider's ACTUAL last input_tokens (ground truth) rather than a
-  -- char-count estimate (the old chars/4 over-counted ~1.9x -> premature compaction).
-  match compact_step_actual(msgs_after_ext, model, totals.last_input_tokens) {
+  -- at 70-85% and 85-95%; at ≥95% tries emergency compaction.
+  match compact_step_with_limit(msgs_after_ext, model, context_limit) {
     Err(compaction_reason) => {
       let _ = emit_event(session_id, "compaction_exhausted", [
         kv("step", jnum(_int_to_float(step_idx))),
@@ -1135,10 +1182,7 @@ func loop_v2(
         retryable: false
       })
     },
-    Ok(conv_compacted) => {
-    -- Re-prepend the pinned system message (split off above) for the provider call and
-    -- carry-forward, so the AILANG reference is ALWAYS present and never compacted.
-    let compacted_msgs = sys_prefix ++ conv_compacted;
+    Ok(compacted_msgs) => {
     let stream_id = "step-${show(step_idx)}";
     let _ = emit_event(session_id, "thinking_stream_start", [
       kv("step", jnum(_int_to_float(step_idx))),
@@ -1155,7 +1199,7 @@ func loop_v2(
     -- Match-in-lambda is a known AILANG parser bug, so the match lives in
     -- the top-level emit_stream_chunk helper.
     let on_chunk: (StreamChunk) -> () ! {IO} = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
-    let dispatched = dispatch_step(provider, model, compacted_msgs, rt, on_chunk);
+    let dispatched = dispatch_step(provider, provider_api_model(model, getEnvOr("OPENAI_BASE_URL", "")), compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
       Err(e) => {
@@ -1164,8 +1208,22 @@ func loop_v2(
           kv("stream_id", js(stream_id)),
           kv("status", js("errored"))
         ]);
-        let _ = emit_run_summary(session_id, model, totals, step_idx, 5, e.message, started_at_ms);
-        Err(e)
+        -- M-MOTOKO-STREAM-RETRY: a stream/parse error mid-step (e.g. AILANG std/xml
+        -- choking on malformed DOCX XML in the model's work -> "XML syntax error ...
+        -- unexpected EOF") is RECOVERABLE. Re-issue the step (fresh generation)
+        -- instead of KILLING the whole run with finish=error. Same pattern as #13
+        -- (length) / #19 (empty). Bounded by step_budget. Disable: MOTOKO_RETRY_STREAM_ERROR=0.
+        let retry_stream = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
+        if retry_stream && step_budget > 1 then {
+          let _ = emit_event(session_id, "stream_error_retry", [
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("error", js(e.message))
+          ]);
+          loop_v2(rt, task, env_url, hybrid_tools, budget, model, msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, totals, next_provider, session_id, started_at_ms)
+        } else {
+          let _ = emit_run_summary(session_id, model, totals, step_idx, 5, e.message, started_at_ms);
+          Err(e)
+        }
       },
       Ok(result) => {
         let n_calls = List.length(result.tool_calls);
@@ -1190,7 +1248,7 @@ func loop_v2(
 
         let assistant_msg = step_result_to_message(result);
         let msgs_with_assistant = msgs ++ [assistant_msg];
-        let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant);
+        let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit);
 
         let new_total_cost = totals.cost_millicents + step_cost;
         let new_input  = totals.input_tokens  + result.input_tokens;
@@ -1221,8 +1279,7 @@ func loop_v2(
           cache_read:      new_cache_read,
           cache_creation:  new_cache_creation,
           cost_millicents: new_total_cost,
-          cost_warned_pct: new_warned_pct,
-          last_input_tokens: result.input_tokens
+          cost_warned_pct: new_warned_pct
         };
 
         -- M3 DP1a: response-intercept hook. Extensions can synthesize a
@@ -1451,12 +1508,11 @@ export func run_v2(
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
 	  let messages = msgs_to_messages(initial_msgs);
-	  let resolved_model = strip_provider_prefix(model);
 	  let session_id = derive_session_id();
 	  let started_at_ms = now();
 	  let session_span = "motoko.session.${session_id}";
 	  Trace.spanStart(session_span);
-	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
+	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
 	  Trace.spanEnd(session_span);
 	  result
 	}
@@ -1481,12 +1537,11 @@ export func run_v2_from_messages(
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-	  let resolved_model = strip_provider_prefix(model);
 	  let session_id = derive_session_id();
 	  let started_at_ms = now();
 	  let session_span = "motoko.session.${session_id}";
 	  Trace.spanStart(session_span);
-	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, resolved_model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
+	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
 	  Trace.spanEnd(session_span);
 	  result
 	}
@@ -1554,8 +1609,7 @@ export func conversation_loop_v2(
       if cmd_type == "abort" || cmd_type == "exit" then ()
       else if cmd_type == "model_change" then {
         let new_model = msg_get_str(obj, "model");
-        let resolved_new = strip_provider_prefix(new_model);
-        conversation_loop_v2(rt, env_url, hybrid_tools, budget, resolved_new, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+        conversation_loop_v2(rt, env_url, hybrid_tools, budget, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
       }
       else if cmd_type == "restart" then {
         -- Emit session_suspend event and exit cleanly; TUI will respawn
