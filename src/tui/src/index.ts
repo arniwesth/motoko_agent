@@ -743,6 +743,20 @@ async function main(): Promise<void> {
       process.env.SYSTEM_MD = materialized;
     }
   }
+  // SYSTEM_MD pointing OUTSIDE the workspace is silently unreadable: the AILANG runtime is
+  // FS-sandboxed to workdir (AILANG_FS_SANDBOX), so rpc.ail's readFile returns empty and the
+  // model runs with NO system prompt (observed via the system_prompt_built event: chars=0).
+  // Materialize an external path into the workspace — the same treatment --system-prompt gets —
+  // so any harness that writes a prompt to /tmp (e.g. the AILANG eval scripts) just works,
+  // instead of every caller having to remember to place it inside the workspace.
+  const sysMdPath = (process.env.SYSTEM_MD ?? "").trim();
+  if (sysMdPath !== "") {
+    const rel = path.relative(path.resolve(workdir), path.resolve(sysMdPath));
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      const materialized = materializeSystemPromptArg(sysMdPath, workdir);
+      if (materialized !== null) process.env.SYSTEM_MD = materialized;
+    }
+  }
   // M-MOTOKO-EVAL-HARNESS-HARDENING follow-up (2026-05-08): default
   // ENV_PORT to 0 = let the kernel pick a free port atomically when
   // startEnvServer binds. The wrapper used to do its own pick_free_port
