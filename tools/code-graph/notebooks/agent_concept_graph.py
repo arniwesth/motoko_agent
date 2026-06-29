@@ -80,7 +80,7 @@ def _(DEFAULT_CACHE, mo):
     min_chars = mo.ui.slider(0, 600, value=200, step=25, label="Merge sections shorter than")
     max_chars = mo.ui.slider(1000, 12000, value=6000, step=500, label="Max chars per embedded section")
     max_points = mo.ui.slider(100, 3000, value=900, step=50, label="Max graphed nodes")
-    projection = mo.ui.dropdown(options=["pca", "tsne"], value="tsne", label="3D projection")
+    projection = mo.ui.dropdown(options=["pca", "tsne", "dag (hierarchical)"], value="tsne", label="3D projection")
     tsne_perplexity = mo.ui.slider(5, 80, value=30, step=5, label="t-SNE perplexity")
     color_by = mo.ui.dropdown(
         options=["concept (k-means)", "concept (graph community)", "area", "project", "kind"],
@@ -98,6 +98,13 @@ def _(DEFAULT_CACHE, mo):
     k_neighbors = mo.ui.slider(1, 15, value=5, step=1, label="Edges per node (k)")
     edge_threshold = mo.ui.slider(0.0, 0.95, value=0.55, step=0.01, label="Min cosine similarity for an edge")
     show_edges = mo.ui.checkbox(value=True, label="Show edges")
+    edges_cache = mo.ui.text(
+        value="tools/code-graph/.out/agent_concept_edges_llm.jsonl",
+        label="Directed-edges cache (for DAG layout)",
+    )
+    min_edge_conf = mo.ui.slider(0.0, 1.0, value=0.4, step=0.05, label="Min relation confidence (DAG)")
+    max_edges_per_node = mo.ui.slider(0, 12, value=3, step=1, label="Max edges per node (DAG, 0 = all)")
+    node_size = mo.ui.slider(2, 16, value=5, step=1, label="Node size")
     mo.vstack([
         mo.hstack([backend, model_input, dimension]),
         mo.hstack([glob_input, cache_input]),
@@ -106,6 +113,8 @@ def _(DEFAULT_CACHE, mo):
         mo.hstack([projection, tsne_perplexity]),
         mo.hstack([k_neighbors, edge_threshold, show_edges, n_concepts]),
         mo.hstack([community_algo, resolution, community_seed]),
+        mo.hstack([edges_cache, min_edge_conf]),
+        mo.hstack([max_edges_per_node, node_size]),
     ])
     return (
         backend,
@@ -115,14 +124,18 @@ def _(DEFAULT_CACHE, mo):
         community_seed,
         dimension,
         edge_threshold,
+        edges_cache,
         filter_input,
         glob_input,
         k_neighbors,
         max_chars,
+        max_edges_per_node,
         max_points,
         min_chars,
+        min_edge_conf,
         model_input,
         n_concepts,
+        node_size,
         projection,
         resolution,
         show_edges,
@@ -182,6 +195,7 @@ def _(Path, backend, cache_input, default_cache_path, dimension, json, mo, model
         kind = path_parts[1] if len(path_parts) > 1 else "other"
         rows.append({
             "item_id": section.item_id,
+            "sha": section.sha256,
             "path": section.path,
             "heading": section.heading,
             "start_line": section.start_line,
@@ -216,15 +230,21 @@ def _(
     KMeans,
     NearestNeighbors,
     PCA,
+    Path,
+    REPO_ROOT,
     TSNE,
     TfidfVectorizer,
     color_by,
     community_algo,
     community_seed,
     edge_threshold,
+    edges_cache,
     filter_input,
+    json,
     k_neighbors,
+    max_edges_per_node,
     max_points,
+    min_edge_conf,
     n_concepts,
     np,
     nx,
@@ -245,7 +265,8 @@ def _(
             + " " + df["kind"].astype(str)
         ).str.lower()
         df = df[_haystack.str.contains(_needle, regex=False)].reset_index(drop=True)
-    if len(df) > max_points.value:
+    # DAG mode needs the whole hierarchy; random sampling would gut it.
+    if len(df) > max_points.value and not projection.value.startswith("dag"):
         df = df.sample(max_points.value, random_state=7).reset_index(drop=True)
 
     edges = []  # list of (i, j, similarity)
@@ -267,6 +288,8 @@ def _(
         else:
             _coords = PCA(n_components=3, random_state=7).fit_transform(_vectors)
         df["x"], df["y"], df["z"] = _coords[:, 0], _coords[:, 1], _coords[:, 2]
+        # 1D ordering used to place same-concept nodes next to each other on DAG rings
+        _pca1 = PCA(n_components=1, random_state=7).fit_transform(_vectors).ravel()
 
         # kNN graph in cosine space (independent of the 3D layout)
         _k = min(int(k_neighbors.value) + 1, len(df))
@@ -339,21 +362,134 @@ def _(
             df["concept"] = [_label_text[int(x)] for x in _labels]
         else:
             df["concept"] = ""
+
+        # Hierarchical (DAG) layout from LLM-extracted directed relations.
+        # Overrides the embedding projection: y = topological depth, nodes spread
+        # on a ring per level, ordered so same-concept nodes sit together.
+        if projection.value == "dag (hierarchical)":
+            _edges_path = Path(edges_cache.value)
+            if not _edges_path.is_absolute():
+                _edges_path = REPO_ROOT / edges_cache.value
+            _sha_to_idx = {df.at[_i, "sha"]: _i for _i in range(len(df))}
+            _cand = []  # (from, to, confidence, similarity)
+            if _edges_path.exists():
+                for _line in _edges_path.read_text(errors="replace").splitlines():
+                    if not _line.strip():
+                        continue
+                    _row = json.loads(_line)
+                    _fs, _ts = _row.get("from_sha"), _row.get("to_sha")
+                    if not _fs or not _ts:
+                        continue  # references/none carry no direction
+                    if float(_row.get("confidence", 0.0)) < min_edge_conf.value:
+                        continue
+                    _fi, _ti = _sha_to_idx.get(_fs), _sha_to_idx.get(_ts)
+                    if _fi is None or _ti is None or _fi == _ti:
+                        continue
+                    _cand.append((_fi, _ti, float(_row.get("confidence", 0.5)),
+                                  float(_row.get("similarity", 0.0))))
+
+            # Cap to each node's strongest incident edges (by similarity) to cut the
+            # visual mush. Union rule: keep an edge if it is in the top-N of either
+            # endpoint, so every node keeps its best links and hubs can exceed N.
+            if max_edges_per_node.value > 0 and _cand:
+                _topn = int(max_edges_per_node.value)
+                _incident = {}
+                for _ei, (_f, _t, _c, _s) in enumerate(_cand):
+                    _incident.setdefault(_f, []).append((_s, _ei))
+                    _incident.setdefault(_t, []).append((_s, _ei))
+                _keep = set()
+                for _lst in _incident.values():
+                    _lst.sort(reverse=True)
+                    for _s, _ei in _lst[:_topn]:
+                        _keep.add(_ei)
+                _dedges = [_cand[_ei] for _ei in sorted(_keep)]
+            else:
+                _dedges = _cand
+
+            # Topological level via SCC condensation (robust to cycles from the LLM).
+            _dg = nx.DiGraph()
+            _dg.add_nodes_from(range(len(df)))
+            for _f, _t, _c, _s in _dedges:
+                _dg.add_edge(_f, _t)
+            _cond = nx.condensation(_dg)
+            _clevel = {_n: 0 for _n in _cond.nodes}
+            for _n in nx.topological_sort(_cond):
+                for _p in _cond.predecessors(_n):
+                    _clevel[_n] = max(_clevel[_n], _clevel[_p] + 1)
+            _level = {}
+            for _cn in _cond.nodes:
+                for _m in _cond.nodes[_cn]["members"]:
+                    _level[_m] = _clevel[_cn]
+
+            # Only nodes that participate in a relation get placed; the rest are
+            # left at NaN so Plotly hides them (keeps the hierarchy uncluttered).
+            _connected = sorted({_f for _f, _, _, _ in _dedges} | {_t for _, _t, _, _ in _dedges})
+            _by_level = {}
+            for _i in _connected:
+                _by_level.setdefault(_level.get(_i, 0), []).append(_i)
+            _xs = np.full(len(df), np.nan)
+            _ys = np.full(len(df), np.nan)
+            _zs = np.full(len(df), np.nan)
+            _max_n = max((len(_v) for _v in _by_level.values()), default=1)
+            for _lvl, _members in _by_level.items():
+                _members.sort(key=lambda _m: (str(df.at[_m, "concept"]), float(_pca1[_m])))
+                _n = len(_members)
+                _radius = 1.0 + 6.0 * (_n / _max_n) ** 0.5
+                for _o, _m in enumerate(_members):
+                    _ang = 2.0 * np.pi * _o / max(_n, 1)
+                    _xs[_m] = _radius * np.cos(_ang)
+                    _zs[_m] = _radius * np.sin(_ang)
+                    _ys[_m] = -float(_lvl) * 3.0
+            df["x"], df["y"], df["z"] = _xs, _ys, _zs
+            df["degree"] = 0
+            for _f, _t, _c, _s in _dedges:
+                df.at[_f, "degree"] += 1
+                df.at[_t, "degree"] += 1
+            edges = [(_f, _t, _c) for _f, _t, _c, _s in _dedges]
     else:
         for _col in ("x", "y", "z", "degree", "concept"):
             df[_col] = []
     color_col = "concept" if color_by.value.startswith("concept") else color_by.value
     groups = sorted(df[color_col].fillna("unknown").unique().tolist()) if len(df) else []
+    # Trim float precision so large graphs don't blow up the serialized figure.
+    for _coord in ("x", "y", "z"):
+        if _coord in df.columns and len(df):
+            df[_coord] = df[_coord].round(3)
     len(df), len(edges)
     return color_col, df, edges, groups
 
 
 @app.cell
-def _(color_by, color_col, df, edges, go, groups, mo, projection, show_edges):
+def _(color_by, color_col, df, edges, go, groups, mo, node_size, projection, show_edges):
     import plotly.express as px
 
+    plot = None  # mo.ui.plotly handle, read by the focus cell to capture clicks
     if not len(df):
         _graph_output = mo.md("No cached sections match the current filters.")
+    elif projection.value.startswith("dag") and not edges:
+        _graph_output = mo.md(
+            """
+            **No directed relations found for the DAG layout.**
+
+            Generate them first (free structural baseline):
+
+            ```bash
+            python3 tools/code-graph/query/agent_concept_edges.py \\
+              --strategy structural \\
+              --cache tools/code-graph/.out/agent_concept_edges.jsonl
+            ```
+
+            or LLM-extracted (richer, needs OPENROUTER_API_KEY):
+
+            ```bash
+            python3 tools/code-graph/query/agent_concept_edges.py \\
+              --strategy llm --backend openrouter --model deepseek/deepseek-chat
+            ```
+
+            Then point the *Directed-edges cache* box at that file, or lower
+            *Min relation confidence*.
+            """
+        )
     else:
         _palette = px.colors.qualitative.Light24
         _color_map = {g: _palette[i % len(_palette)] for i, g in enumerate(groups)}
@@ -379,7 +515,7 @@ def _(color_by, color_col, df, edges, go, groups, mo, projection, show_edges):
         # Node traces: one per color group for a clickable legend.
         for _g in groups:
             _sub = df[df[color_col].fillna("unknown") == _g]
-            _sizes = 4.0 + 1.6 * (_sub["degree"].clip(upper=12))
+            _sizes = node_size.value + 0.5 * (_sub["degree"].clip(upper=12))
             _text = [
                 f"{_p}:{_sl}<br>{_h}<br>{color_by.value}: {_g}<br>degree: {_d}"
                 for _p, _sl, _h, _d in zip(
@@ -392,6 +528,7 @@ def _(color_by, color_col, df, edges, go, groups, mo, projection, show_edges):
                 marker=dict(size=_sizes, color=_color_map[_g], opacity=0.85, line=dict(width=0)),
                 name=str(_g),
                 text=_text,
+                customdata=list(_sub.index),  # df row index, so clicks map back to a node
                 hoverinfo="text",
             ))
 
@@ -409,14 +546,112 @@ def _(color_by, color_col, df, edges, go, groups, mo, projection, show_edges):
             height=760,
             margin=dict(l=0, r=0, t=48, b=0),
         )
+        plot = mo.ui.plotly(_fig)
         _graph_output = mo.vstack([
-            _fig,
+            plot,
             mo.md(
-                "Drag to rotate, scroll to zoom. Node size scales with degree (number of "
-                "semantic neighbours). Click legend entries to hide groups or the edge layer."
+                "Drag to rotate, scroll to zoom. **Click a node** to focus its connections "
+                "below (or use the Focus node picker). Click legend entries to hide groups "
+                "or the edge layer."
             ),
         ])
     _graph_output
+    return (plot,)
+
+
+@app.cell
+def _(df, mo, projection):
+    # Searchable picker; a reliable fallback for clicking when 3D click capture
+    # is finicky. Lists the nodes currently visible in the graph.
+    if not len(df) or "x" not in df.columns:
+        _options = {}
+    else:
+        _visible = df[df["x"].notna()] if projection.value.startswith("dag") else df
+        _options = {
+            f"{_r['path']} :: {_r['heading']} [{_i}]": int(_i)
+            for _i, _r in _visible.iterrows()
+        }
+    focus_pick = mo.ui.dropdown(options=_options, label="Focus node (or click one in the graph)")
+    focus_pick
+    return (focus_pick,)
+
+
+@app.cell
+def _(df, edges, focus_pick, go, mo, node_size, plot, projection):
+    # Resolve the focused node: a click on the graph wins, else the dropdown.
+    _pv = plot.value if plot is not None else None
+    _pts = _pv.get("points") if isinstance(_pv, dict) else (_pv if isinstance(_pv, list) else None)
+    _focus = None
+    if _pts:
+        _p = _pts[0]
+        _cd = _p.get("customdata")
+        if isinstance(_cd, (list, tuple)):
+            _cd = _cd[0] if _cd else None
+        try:
+            _focus = int(_cd) if _cd is not None else None
+        except (TypeError, ValueError):
+            _focus = None
+        if _focus is None and _p.get("x") is not None and "x" in df.columns:
+            _d2 = (df["x"] - _p["x"]) ** 2 + (df["y"] - _p["y"]) ** 2 + (df["z"] - _p["z"]) ** 2
+            _focus = int(_d2.idxmin())
+    if _focus is None and focus_pick.value is not None:
+        _focus = int(focus_pick.value)
+
+    if _focus is None or _focus not in df.index:
+        _focus_output = mo.md("*Click a node in the graph above (or pick one) to see only its connections.*")
+    else:
+        _inc = [(a, b, w) for (a, b, w) in edges if a == _focus or b == _focus]
+        _neigh = sorted({(b if a == _focus else a) for (a, b, w) in _inc})
+        _xe, _ye, _ze = [], [], []
+        for _a, _b, _w in _inc:
+            _xe += [df.at[_a, "x"], df.at[_b, "x"], None]
+            _ye += [df.at[_a, "y"], df.at[_b, "y"], None]
+            _ze += [df.at[_a, "z"], df.at[_b, "z"], None]
+        _ftraces = []
+        if _xe:
+            _ftraces.append(go.Scatter3d(
+                x=_xe, y=_ye, z=_ze, mode="lines",
+                line=dict(color="rgba(180,180,200,0.55)", width=2),
+                hoverinfo="skip", showlegend=False,
+            ))
+        _nb = df.loc[_neigh] if _neigh else df.iloc[0:0]
+        _ftraces.append(go.Scatter3d(
+            x=_nb["x"], y=_nb["y"], z=_nb["z"], mode="markers",
+            marker=dict(size=node_size.value + 2, color="#60a5fa", opacity=0.9),
+            text=[f"{_p2}<br>{_h2}" for _p2, _h2 in zip(_nb["path"], _nb["heading"])],
+            hoverinfo="text", name="connected",
+        ))
+        _fr = df.loc[_focus]
+        _ftraces.append(go.Scatter3d(
+            x=[_fr["x"]], y=[_fr["y"]], z=[_fr["z"]], mode="markers",
+            marker=dict(size=node_size.value + 8, color="#f43f5e",
+                        line=dict(width=1, color="white")),
+            text=[f"{_fr['path']}<br>{_fr['heading']}"], hoverinfo="text", name="focus",
+        ))
+        _ffig = go.Figure(data=_ftraces)
+        _ffig.update_layout(
+            template="plotly_dark", paper_bgcolor="#111113", height=520, showlegend=False,
+            title=f"Connections of: {_fr['heading']}  ({len(_inc)} edges, {len(_neigh)} neighbours)",
+            margin=dict(l=0, r=0, t=48, b=0),
+            scene=dict(
+                xaxis=dict(backgroundcolor="#111113", gridcolor="#27272a"),
+                yaxis=dict(backgroundcolor="#111113", gridcolor="#27272a"),
+                zaxis=dict(backgroundcolor="#111113", gridcolor="#27272a"),
+            ),
+        )
+
+        def _lbl(i):
+            return f"{df.at[i, 'path'].split('/')[-1]} :: {df.at[i, 'heading']}"
+
+        if projection.value.startswith("dag"):
+            _down = [b for (a, b, w) in _inc if a == _focus]
+            _up = [a for (a, b, w) in _inc if b == _focus]
+            _md = ["**Downstream (depend on this):**"] + ([f"- {_lbl(i)}" for i in _down] or ["- none"])
+            _md += ["", "**Upstream (this depends on):**"] + ([f"- {_lbl(i)}" for i in _up] or ["- none"])
+        else:
+            _md = ["**Connected (semantic neighbours):**"] + ([f"- {_lbl(i)}" for i in _neigh] or ["- none"])
+        _focus_output = mo.vstack([_ffig, mo.md("\n".join(_md))])
+    _focus_output
     return
 
 

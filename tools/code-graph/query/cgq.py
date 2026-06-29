@@ -32,6 +32,7 @@ SCHEMAS = {
     "source_lines": "path String, module String, lang String, line_no Int64, line String, is_comment UInt8, profile String, include_tests UInt8",
     "source_chunks": "chunk_slug String, func_slug String, path String, module String, lang String, kind String, name String, start_line Int64, end_line Int64, text String, profile String, include_tests UInt8",
     "extraction_status": "module String, iface_status String, iface_detail String, iface_error String, built_at String, ailang_version String, graph_schema Int64, source_schema Int64, iface_schema String, profile String, include_tests Int64",
+    "concept_edges": "relation String, confidence Nullable(Float64), similarity Nullable(Float64), from_path String, from_heading String, to_path String, to_heading String, a_path String, b_path String, from_sha String, to_sha String, a_sha String, b_sha String, model String, strategy String",
 }
 _TOKEN_SUPPORT: bool | None = None
 
@@ -40,6 +41,7 @@ _TOKEN_SUPPORT: bool | None = None
 class QueryFlags:
     effect_query: bool = False
     source_query: bool = False
+    concept_query: bool = False
     search_mode: str | None = None
 
 
@@ -211,6 +213,10 @@ def wrap(parsed: dict, limit: int, flags: QueryFlags | None = None) -> dict:
     data = rows[:limit]
     meta = status_meta(flags)
     meta.update({"rows_returned": len(data), "rows_total": total, "truncated": total > len(data)})
+    if flags.concept_query:
+        meta["model_derived"] = True
+        meta["model_caveat"] = ("concept_edges are LLM-extracted relations: confidence-scored "
+                                "approximations, not facts. Audit low-confidence rows before relying on them.")
     return {"data": data, "meta": meta}
 
 
@@ -310,6 +316,33 @@ WHERE e.effect = {effect}
   AND {pred}
 ORDER BY c.path, c.start_line
 """, QueryFlags(effect_query=True, source_query=True, search_mode=mode)
+    if name == "edges":
+        like = sql_lit("%" + args[0] + "%")
+        return f"""
+SELECT relation, confidence, similarity,
+       if(from_path != '', from_path, a_path) AS source,
+       if(to_path != '', to_path, b_path) AS target
+FROM concept_edges
+WHERE from_path LIKE {like} OR to_path LIKE {like}
+   OR a_path LIKE {like} OR b_path LIKE {like}
+ORDER BY confidence DESC, relation
+""", QueryFlags(concept_query=True)
+    if name == "prereqs":
+        like = sql_lit("%" + args[0] + "%")
+        return f"""
+SELECT from_path AS prerequisite, from_heading, to_path AS needed_for, to_heading, confidence
+FROM concept_edges
+WHERE relation = 'prerequisite' AND to_path LIKE {like}
+ORDER BY confidence DESC, prerequisite
+""", QueryFlags(concept_query=True)
+    if name in {"implements", "supersedes"}:
+        like = sql_lit("%" + args[0] + "%")
+        return f"""
+SELECT from_path AS source, from_heading, to_path AS target, to_heading, confidence
+FROM concept_edges
+WHERE relation = {sql_lit(name)} AND (from_path LIKE {like} OR to_path LIKE {like})
+ORDER BY confidence DESC, source
+""", QueryFlags(concept_query=True)
     raise SystemExit(f"unknown named query: {name}")
 
 
@@ -327,18 +360,22 @@ def main() -> int:
     qp.add_argument("args", nargs="*")
     ns = ap.parse_args()
     limit = max(0, min(ns.limit, 1000))
+    flags = QueryFlags()
     if ns.cmd == "status":
-        result = {"data": [], "meta": status_meta(QueryFlags())}
+        result = {"data": [], "meta": status_meta(flags)}
     elif ns.cmd == "sql":
-        result = wrap(run_sql(ns.sql), limit, QueryFlags())
+        result = wrap(run_sql(ns.sql), limit, flags)
     else:
         sql, flags = named_query(ns.name, ns.args)
         result = wrap(run_sql(sql), limit, flags)
-    if not ns.no_banner and result["meta"].get("stale"):
-        print(f"STALE: {result['meta'].get('stale_reason')}", file=sys.stderr)
-    if not ns.no_banner and result["meta"].get("source_stale") and result["meta"].get("search_mode"):
-        print(f"STALE: source index {result['meta'].get('source_stale_reason')}", file=sys.stderr)
-    if not ns.no_banner and result["meta"].get("incomplete"):
+    meta = result["meta"]
+    if not ns.no_banner and flags.concept_query:
+        print(f"MODEL-DERIVED: {meta.get('model_caveat')}", file=sys.stderr)
+    if not ns.no_banner and not flags.concept_query and meta.get("stale"):
+        print(f"STALE: {meta.get('stale_reason')}", file=sys.stderr)
+    if not ns.no_banner and meta.get("source_stale") and meta.get("search_mode"):
+        print(f"STALE: source index {meta.get('source_stale_reason')}", file=sys.stderr)
+    if not ns.no_banner and meta.get("incomplete"):
         print("INCOMPLETE: effect answer is unknown where typed coverage is failed/partial or stale", file=sys.stderr)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

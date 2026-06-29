@@ -45,3 +45,42 @@ must treat `incomplete=true` as "unknown", not "no".
 
 The `unimported` query means "not reachable via static imports from declared roots";
 it never means dead or safe to delete.
+
+## Project-memory concept edges (`concept_edges`)
+
+`concept_edges` is a directed relation graph between `.agent` Markdown sections,
+extracted by an LLM over semantic-nearest-neighbour candidate pairs. It answers
+project-memory questions ("which plan implements this?", "what supersedes this
+ADR?", "what is a prerequisite of this design?") rather than code questions.
+
+Generate (embeddings must exist first; see `agent_semantic_poc.py`):
+
+```bash
+# directed relations -> JSONL cache (OpenRouter; ~$1.6, ~25 min for all .agent)
+python3 tools/code-graph/query/agent_concept_edges.py --strategy llm \
+  --backend openrouter --model deepseek/deepseek-chat \
+  --cache tools/code-graph/.out/agent_concept_edges_llm.jsonl
+# flatten the cache into the chDB-queryable CSV table
+python3 tools/code-graph/query/agent_concept_edges.py \
+  --cache tools/code-graph/.out/agent_concept_edges_llm.jsonl \
+  --export-csv tools/code-graph/.out/concept_edges.csv
+```
+
+Query:
+
+```bash
+python3 tools/code-graph/query/cgq.py q implements source-index
+python3 tools/code-graph/query/cgq.py q prereqs ADR-003
+python3 tools/code-graph/query/cgq.py q supersedes Native_Tool_Calling
+python3 tools/code-graph/query/cgq.py q edges dst
+python3 tools/code-graph/query/cgq.py sql "SELECT from_path, to_path, confidence FROM concept_edges WHERE relation='implements' AND from_path != to_path ORDER BY confidence DESC LIMIT 20"
+```
+
+`concept_edges` rows are MODEL-DERIVED, not facts: each carries `relation`,
+`confidence`, and `similarity`. cgq.py prints a `MODEL-DERIVED` banner and sets
+`meta.model_derived`. Treat low-confidence rows as suggestions and audit before
+relying on them. Relations are `prerequisite`, `implements`, `supersedes`,
+`references` (undirected; `from_path`/`to_path` blank), and `none`. Many edges
+are intra-document section pairs; add `from_path != to_path` for document-level
+provenance. The table is a separate artifact from the AILANG graph and source
+index — its freshness is not tracked by `extraction_status`.
