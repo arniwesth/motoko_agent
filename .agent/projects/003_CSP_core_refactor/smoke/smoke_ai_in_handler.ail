@@ -1,0 +1,51 @@
+-- Smoke test: can an `AI`-effect call (std/ai.call) run INSIDE an `onEvent`
+-- handler during a live `runEventLoop`, and transmit its result back?
+--
+-- This closes the residual from the Net-in-handler smoke: that proved `Net`
+-- (the transport the AI effect rides on); this proves the `AI` *capability*
+-- itself dispatches inside a handler. Run under `-ai-stub` so it needs no
+-- provider credentials — the question is whether the {AI} effect's runtime
+-- handler can be invoked re-entrantly inside runEventLoop, not whether a real
+-- model answers. Combined with the (real, networked) Net-in-handler proof, an
+-- in-handler real `agent()`/LLM call is covered modulo credentials.
+--
+-- Run with:
+--   RESULT_FILE=/tmp/ws_ai_result.txt PORT=8791 bun run ws_server.ts          # terminal 1
+--   ailang run --caps IO,Stream -ai-stub \
+--     --stream-allow-http --stream-allow-localhost smoke_ai_in_handler.ail    # terminal 2
+--   # expect: server prints "SERVER_RECEIVED: AI_REPLY::<stub response>"
+
+module smoke_ai_in_handler
+
+import std/stream (connect, transmit, onEvent, runEventLoop, StreamConn, StreamEvent)
+import std/ai (call)
+import std/io (println)
+import std/result (Result)
+
+export func main() -> () ! {Stream, AI, IO} {
+  println("CLIENT: connecting");
+  match connect("ws://127.0.0.1:8791", {headers: []}) {
+    Err(_) => println("CLIENT: connect failed"),
+    Ok(conn) => {
+      onEvent(conn, \event. match event {
+        Message(prompt) => {
+          println("CLIENT_GOT_PROMPT: ${prompt}");
+          -- THE TEST: perform an AI effect (call) from inside the handler.
+          let reply = call(prompt);
+          println("CLIENT_AI_REPLY: ${reply}");
+          -- ...and transmit the effect's result back on the same live socket.
+          match transmit(conn, "AI_REPLY::${reply}") {
+            Ok(_)  => println("CLIENT: ai-then-transmit-in-handler Ok"),
+            Err(_) => println("CLIENT: ai-then-transmit-in-handler Err")
+          };
+          false
+        },
+        Opened(_) => { println("CLIENT: opened"); true },
+        Closed(_, _) => { println("CLIENT: closed"); false },
+        _ => true
+      });
+      runEventLoop(conn);
+      println("CLIENT: event loop done")
+    }
+  }
+}
