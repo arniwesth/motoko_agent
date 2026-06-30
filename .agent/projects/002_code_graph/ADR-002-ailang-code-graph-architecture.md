@@ -5,7 +5,7 @@ Status: Proposed
 
 ## TL;DR
 
-Build `ailang-graph`: a structural and effect graph of Motoko's own ~671 `.ail` source files, modeled on the existing C#/Zeus `code-graph` but thin, because AILANG ships the semantic layer (`ailang iface`) that C# lacked.
+Build `ailang-graph`: a structural and effect graph of Motoko's own ~671 `.ail` source files, modeled on the existing C# `code-graph` shape but thin, because AILANG ships the semantic layer (`ailang iface`) that C# lacked.
 
 - **How (two sources):** (1) `ailang iface` per module for exported types/functions with type signatures and effect rows; (2) a **raw-source parser** for `import` edges and the internal-function **call graph**. Emit CSVs → query in-process with embedded **chDB** (ClickHouse SQL, `file(...)` over the CSVs) → reuse the SVG pipeline.
 - **Headline feature:** an effect graph — "which functions can reach `Net`/`FS`/`Env`" — computed over the **approximate source-parsed call graph** and validated against `iface`'s authoritative declared effects, which the C# graph structurally cannot express.
@@ -24,7 +24,7 @@ Build `ailang-graph`: a structural and effect graph of Motoko's own ~671 `.ail` 
 
 Motoko's own source is ~671 `.ail` files with ~2848 `import` lines across `src/core`, `src/tui`, `src/core/ext`, `scripts`, and `examples`. As the harness self-evolves, no human-curated map of that structure exists. Recurring development questions — "who imports `registry_generated`?", "which exported functions carry `{Env, FS, Net}` effects?", "is this module dead?" — are answered today by ad-hoc grep, which is slow, lossy, and not queryable.
 
-A working precedent exists in this repo: `code-graph/` extracts a type-level dependency graph from the *external* Zeus C# codebase using Roslyn, loads it into ClickHouse, and renders Mermaid/SVG. Two reference tool scripts, `code-graph-query.ts` and `code-graph-refresh.ts`, sit at `.agent/tools/`. They are **reference-only** and Zeus-targeted (refresh extracts `src/Zeus.csproj`; query views a Zeus table list), but they document a reusable *query mechanism*: auto-create ClickHouse views over whatever CSVs exist in a directory, then run `clickhouse local --output-format JSON`. That mechanism — not the scripts themselves — is what this design borrows, and it could equally seed a future Motoko extension. There is still no structural code graph of Motoko's own AILANG source.
+A working precedent exists in this repo: `code-graph/` extracts a type-level dependency graph from a separate C# codebase using Roslyn, loads it into ClickHouse, and renders Mermaid/SVG. Two reference tool scripts, `code-graph-query.ts` and `code-graph-refresh.ts`, sit at `.agent/tools/`. They are **reference-only** and C#-targeted, but they document a reusable *query mechanism*: auto-create ClickHouse views over whatever CSVs exist in a directory, then run `clickhouse local --output-format JSON`. That mechanism — not the scripts themselves — is what this design borrows, and it could equally seed a future Motoko extension. There is still no structural code graph of Motoko's own AILANG source.
 
 The graph must be consumable by the coding agents that drive this repo — **Claude Code and Codex** — not by any one harness's plugin format. Both consume tools through the same neutral channels already present here: shell commands (their Bash tool), MCP servers (`.mcp.json` already wires `ailang-docs`), and instructions in `AGENTS.md`. The agent surface for `ailang-graph` is therefore a small CLI and/or an MCP server documented in `AGENTS.md` — deliberately agent-agnostic.
 
@@ -47,13 +47,13 @@ All capability claims below were verified directly against the local binary. The
 - **`ailang tree`** — works here; emits the package dependency tree (`local/motoko_agent` → `sunholo/*`). Package-level deps are available for free.
 - **`import` lines** are explicit, one per line, grep-able. They include `std/*` (filtered out for the module graph) and support aliases / selective symbol lists (`import std/list as List (length)`), which the parser must handle.
 - **`clickhouse` is an *external prerequisite*** — the reference query script spawns `clickhouse local` (the README's "chDB" wording notwithstanding). Verified: no `clickhouse` binary on PATH here. The pipeline is contingent on installing it.
-- **The query mechanism is the reusable part.** In the reference script only the table list and CSV directory are Zeus-specific; view creation, the `clickhouse local` invocation, JSON parsing, and row truncation are target-agnostic. Re-implementing that mechanism over the AILANG-graph CSVs is straightforward; the refresh script's Zeus extraction has no reusable core and is superseded by the extractor this ADR proposes.
+- **The query mechanism is the reusable part.** In the reference script only the table list and CSV directory are legacy-C# specific; view creation, the `clickhouse local` invocation, JSON parsing, and row truncation are target-agnostic. Re-implementing that mechanism over the AILANG-graph CSVs is straightforward; the refresh script's C# extraction has no reusable core and is superseded by the extractor this ADR proposes.
 
 ## Relationship To Existing Graph Tooling
 
 Distinct from, and complementary to, the two graphs already in the repo.
 
-**`code-graph/` (structural, C#/Zeus).** Same *artifact shape* (types + edges → ClickHouse SQL → Mermaid) and **same dialect** (embedded chDB instead of `code-graph`'s `clickhouse local`), different *target*. The genuinely reused pieces are the SVG-render path and the ClickHouse query idioms; the server-oriented `load.py`/`schema.sql` are not needed (chDB queries the CSVs directly). The Roslyn extractor (`Program.cs`) is replaced by the `iface`+source extractor, and the agent surface is a CLI usable by Claude Code and Codex (see Phase 3), not a port of the reference `.ts` scripts.
+**`code-graph/` (structural, legacy C#).** Same *artifact shape* (types + edges → ClickHouse SQL → Mermaid) and **same dialect** (embedded chDB instead of `code-graph`'s `clickhouse local`), different *target*. The genuinely reused pieces are the SVG-render path and the ClickHouse query idioms; the server-oriented `load.py`/`schema.sql` are not needed (chDB queries the CSVs directly). The Roslyn extractor (`Program.cs`) is replaced by the `iface`+source extractor, and the agent surface is a CLI usable by Claude Code and Codex (see Phase 3), not a port of the reference `.ts` scripts.
 
 **`omnigraph/` (decision/architecture).** `omnigraph/schema.pg` defines `Decision`, `Component`, `Governs`, `Supersedes`, `DependsOn` — an ADR/architecture knowledge graph populated from docs and sessions. It captures *intent*, not code structure. They meet at the `Component` node: a future edge can link an omnigraph `Component` to the `.ail` modules realizing it, but that is out of scope for v1.
 
@@ -190,7 +190,7 @@ src/{core,scripts,examples}/**.ail
 | chDB query | `file('…','CSVWithNames')` over `tools/code-graph/.out/*.csv`, in-process | Embedded ClickHouse; no `schema.sql`/`load.py` load step needed |
 | `visualize.py` | Mermaid + SVG views | Partial reuse: SVG-render path reusable, but its graph-building is namespace-coarsening logic that does not map to AILANG's path-based modules — module-dep + effect views are largely new |
 | CLI query surface | chDB `file(...)` + ClickHouse SQL, JSON out, staleness/coverage banners; callable via the agents' Bash tool | **New** (mechanism mirrors the reference script, same dialect via chDB) |
-| `.agent/tools/*.ts` | Reference implementations (`clickhouse local`/Zeus) | Reference-only; possible base for a Motoko extension |
+| `.agent/tools/*.ts` | Reference implementations (`clickhouse local`/legacy C# graph) | Reference-only; possible base for a Motoko extension |
 | `chdb` | Embedded ClickHouse query engine | **New prerequisite** (`pip install chdb`, ~712 MB) |
 
 Extractor implementation language: Python (the PoC is ~70 lines of Python; shells `ailang iface` and parses source, no compiled host needed).
@@ -378,7 +378,7 @@ These were Open Questions; the review settled them:
 Every node (module, type, func, constructor) needs a slug that is **unique** and **join-safe** — `invokes.to_slug` must resolve to exactly one func, `uses.to_slug` to exactly one type, etc. The naïve `{module}.{name}` the PoC uses has four collision/ambiguity modes, three of them grounded in this repo:
 
 1. **Separator overload (`.`).** `.` is already AILANG's qualified-access and field-access operator in source (`List.length`, `Trace.event`, `m.content`), so reusing it as the module→symbol boundary is confusing and marginally unsafe. Module *paths* here are all `/`-separated and dot-free (verified), so the immediate risk is low — but the operator clash alone argues against `.`.
-2. **Case folding.** `code-graph` lowercased every slug (`zeus.core.itradingengine`). AILANG types are PascalCase and funcs snake/camelCase, so lowercasing would fold a type `Message` and a hypothetical func `message` together.
+2. **Case folding.** The legacy graph lowercased every slug (for example, `legacy.core.itradingengine`). AILANG types are PascalCase and funcs snake/camelCase, so lowercasing would fold a type `Message` and a hypothetical func `message` together.
 3. **Cross-kind name reuse.** A type, a function, and a data constructor in the same module can share a base name space (e.g. constructor `Done` vs. a func `done`). A single global slug table would collide across kinds.
 4. **Resolution-side ambiguity.** A duplicate unqualified import (`import a (f)` and `import b (f)`) or a `module` declaration that disagrees with the file path can silently mis-resolve an edge.
 

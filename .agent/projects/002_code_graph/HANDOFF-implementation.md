@@ -31,7 +31,7 @@ against the local binary if you touch that behavior.
 4. **`.agent/tools/code-graph-query.ts`** — reference-only. Borrow the *query
    mechanism* (auto-create a view per CSV, query, JSON-parse, truncate) for `cgq.py`;
    swap `clickhouse local` for in-process `chdb.query(sql, "JSON")`.
-5. **`code-graph/visualize.py`** (repo root, C#/Zeus) — reuse **only** its
+5. **`code-graph/visualize.py`** (repo root, legacy C# graph) — reuse **only** its
    `render_svg(mmd_path)` path (it shells `bun tools/mmd2svg/mmd2svg.ts`); the
    namespace-coarsening graph-building does **not** apply to path-based AILANG modules.
 

@@ -1,7 +1,7 @@
 /**
  * code-graph-refresh — OpenCode Custom Tool
  *
- * Re-extracts the code graph from src/Zeus.csproj.
+ * Re-extracts the legacy code graph.
  * Runs extract-only.sh (build extractor, extract CSVs, compute metrics).
  * Takes up to 2 minutes.
  */
@@ -54,7 +54,7 @@ function execScript(
 
 export default tool({
   description:
-    "Re-extract the code graph from src/Zeus.csproj. " +
+    "Re-extract the legacy code graph. " +
     "Run when codebase has changed and you need updated graph data. Takes up to 2 minutes.",
   args: {},
   async execute(_args, context) {

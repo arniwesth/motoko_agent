@@ -14,7 +14,7 @@ You are **planning, not implementing**. Produce phased, ordered tasks with criti
 
 1. `.agent/projects/002_code_graph/ADR-002-ailang-code-graph-architecture.md` — the authoritative design. Read it **fully**. The load-bearing sections: **Resolved During Review**, **Slug Scheme (Decided)**, **Root Set for Unimported-Module Detection (Decided)**, **Implementation Plan** (Phases 0–4), **Acceptance Criteria**, **Constraints**, **Edge & Node Model**, **How This Serves ADR-001 (DST)**.
 2. `.agent/projects/002_code_graph/poc_callgraph.py` — the ~70-line validated PoC source parser (run it: `python3 .agent/projects/002_code_graph/poc_callgraph.py $(find src/core -name '*.ail')` → ~1019 edges, 0.1s, zero hydration). Phase 1 hardens this.
-3. `.agent/tools/code-graph-query.ts`, `code-graph-refresh.ts` — **reference-only** (Zeus/ClickHouse-targeted, stale `tools/code-graph/` paths). Borrow the *query mechanism* idea, not the code.
+3. `.agent/tools/code-graph-query.ts`, `code-graph-refresh.ts` — **reference-only** (legacy C#/ClickHouse-targeted, stale `tools/code-graph/` paths). Borrow the *query mechanism* idea, not the code.
 4. `code-graph/` (repo root) — the C# precedent: `visualize.py` (SVG-render path is reusable; namespace-coarsening graph-building is not), `tools/mmd2svg/`. `load.py`/`schema.sql` are ClickHouse-server-oriented and **not** reused.
 5. ADR-001 (`.agent/projects/001_DST/`) — DST is the primary consumer; the graph must answer its R3/R7/R8/R13/R15 questions.
 

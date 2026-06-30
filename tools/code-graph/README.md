@@ -87,5 +87,6 @@ ADR-002 `INCOMPLETE` metadata when typed extraction is failed, partial, or stale
 The `unimported` query means "not reachable via static imports from declared roots";
 it never means dead or safe to delete.
 
-The existing root-level `code-graph/` is the external Zeus/C# graph. It is intentionally
-not moved by this tool; a future `tools/code-graph-csharp/` move is separate work.
+The existing root-level `code-graph/` is a separate legacy C# graph. It is
+intentionally not moved by this tool; a future `tools/code-graph-csharp/` move is
+separate work.

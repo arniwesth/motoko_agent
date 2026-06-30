@@ -251,7 +251,7 @@ tools/code-graph/
 
 **Existing `code-graph/` (C#) migration (ADR flags this as a separate action):**
 This plan **does not** move it. Add a one-line task to Phase 3 docs: note in
-`tools/code-graph/README.md` that the root `code-graph/` is the *external Zeus/C#*
+`tools/code-graph/README.md` that the root `code-graph/` is a separate legacy C#
 graph and a future move to `tools/code-graph-csharp/` is tracked separately. Moving
 it now would touch `.agent/tools/*.ts` path assumptions and is out of scope.
 
