@@ -199,7 +199,11 @@ mutually exclusive paths:**
 **Consequence for the ADR (refines Phase 1, doesn't break it):** do **not** claim in-brain
 LLM-as-source for Phase 1. The model call stays a **blocking `std/ai` step** (with `on_chunk`
 rendering, as today), and `selectEvents` multiplexes **tools + control + cancel** *around* it — which
-matches §2 (AI effect lives at `run_v2`, not `loop_v2`). Three ways to get a true LLM source later:
+matches the real control flow: the model call is the blocking `dispatch_step(provider, …)` inside
+`loop_v2`'s per-step recursion (§12), with `selectEvents` wrapping the *tool* phase around it.
+(Correction: `loop_v2` **does** carry `AI` via the `StepProvider` seam — `agent_loop_v2.ail:1125`;
+code-graph missed that edge because `dispatch_step` is a provider-record call.) Three ways to get a
+true LLM source later:
 
 | Option | Keeps `std/ai`? | Cost |
 |---|---|---|
@@ -442,17 +446,87 @@ coordinator-threads-state discipline in-process; encode protocols as frame ADTs 
 a tightening, not a rewrite.** This answers the ADR's "refactor or rewrite?" → refactor: the
 channels and the loop template already exist.
 
-## 12. Open questions / next steps
+## 12. Phase-1 sketch: `loop_v2` on `selectEvents` (the "refactor not rewrite" evidence)
+
+Grounded in the real source (`agent_loop_v2.ail`: `run_v2:1494`, `loop_v2:1107`, `dispatch_calls:731`).
+
+**What's already CSP-shaped (the good news).** `loop_v2` is a **tail-recursive coordinator** that
+threads all state as explicit values — `msgs, step_idx, step_budget, totals, provider` — and
+recurses; **no shared mutable loop state**. That already satisfies §11's coordinator discipline. It
+has exactly two channels:
+- **model channel:** `dispatch_step(provider, model, msgs, rt, on_chunk) -> {result, next_provider}`
+  — blocking `std/ai` step behind the `StepProvider` seam (also the DST recorder seam). `on_chunk`
+  (`! {IO}`) renders tokens. Stays blocking (§5 XOR).
+- **tool channel:** `dispatch_calls(rt, ctx, calls, …) -> [Message]` — today a **sequential fold**
+  (`call :: rest`), one tool at a time.
+
+`run_v2` is just setup (build provider/msgs/`zero_totals()`, trace span, call `loop_v2`).
+
+**The localized change.** Keep the entire recursion, the model call, all four hook points
+(`dispatch_pre_step`, `dispatch_response_intercept`, `dispatch_solver_candidate`, plus
+`dispatch_tool_policy/handle` inside dispatch), compaction, cost/usage, events — **unchanged**. The
+CSP increment replaces **one function**: `dispatch_calls` → `run_tool_select`, multiplexing tools +
+a control source via `selectEvents`.
+
+```text
+loop_v2(state{rt, msgs, step_idx, step_budget, totals, provider, control, …}):
+  guards(step_budget, cost_cap)                         -- unchanged
+  m1 = dispatch_pre_step(rt, ctx, msgs)                 -- unchanged (ext compaction)
+  m2 = compact_step_with_limit(m1, model)               -- unchanged
+  {result, provider'} = dispatch_step(provider, m2, on_chunk)   -- BLOCKING model step (§5 XOR)
+  m3 = m2 ++ [assistant_of(result)] ; totals' = accumulate(totals, result)
+  match dispatch_response_intercept(rt, ctx, result.content):   -- unchanged
+    InterceptHandled(env) -> recurse with env appended
+    NoIntercept:
+      if result.finish_reason != "tool_calls":
+        dispatch_solver_candidate(…) -> Accept(done) | Continue(recurse) | NoDecision(done)  -- unchanged
+      else:
+        tool_msgs = run_tool_select(rt, ctx, result.tool_calls, control)   -- <== THE ONLY CHANGE
+        recurse loop_v2(state{ msgs: m3 ++ tool_msgs, step_idx+1, step_budget-1, totals', provider' })
+
+run_tool_select(rt, ctx, calls, control):                  -- generalizes dispatch_calls + ws_loopback
+  sources = [ source_for(call) | call <- calls ] ++ [ control ]
+            -- native subprocess tool -> asyncExecProcess source (live stdout)
+            -- delegated/FS/AI tool    -> deferred dispatch_tool_envelope (ws_loopback shape, §4)
+  selectEvents(sources, \event. match event {
+    SourceBytes/Text(tool_i, chunk) -> render + accumulate; stop when all tools done
+    Control(Cancel)                 -> tear down sources; emit cancellation tool-results; stop
+    ToolRequest(frame)              -> deferred dispatch_tool_envelope(rt, ctx, frame); transmit back
+  })
+  -> [Message]   -- one tool-role msg per call (ordered by tool_call_id), or cancellation msgs
+```
+
+**What Phase 1 buys** (vs. today's sequential `dispatch_calls` fold): concurrent tool execution with
+live streamed output; **mid-batch cancellation** via the control source (today there is none — a
+batch runs to completion); the re-entrant tool loopback generalized from `ws_loopback` (§4);
+deterministic ordering (`selectEvents` priority + round-robin) → DST-replayable (§9).
+
+**Honest caveats / sub-questions (feed the ADR's risks):**
+- **Result ordering:** concurrent tools must still emit tool-results in `tool_call_id` order
+  (DST invariant "tool-call IDs preserved") — collect by id, emit in call order.
+- **Not all tools are subprocesses:** `asyncExecProcess` only sources a subprocess's stdout
+  (read-only, dies with the loop). FS/env-delegated/AI-subagent tools go through the **deferred
+  envelope** path, not a process source — `run_tool_select` is really two arms (process sources vs.
+  deferred dispatch) multiplexed under one control source.
+- **Cancellation is cooperative/coarse:** a mid-flight blocking `dispatch_tool_envelope` can't be
+  preempted by the select — cancel takes effect at select boundaries (open #3).
+- **Concurrency must be opt-in:** some tool batches have ordering/safety dependencies; default to
+  sequential unless the batch is known-independent.
+
+**Conclusion:** the migration is a **localized refactor** (`dispatch_calls → run_tool_select`), not a
+rewrite — the coordinator, state threading, model call, and every hook are untouched. This closes
+pre-ADR research item #2.
+
+## 13. Open questions / next steps
 
 1. **Real-model in-handler call** — run the `-ai <model>` + keys variant to convert the ⚠ to ✅
    literally (currently covered by composition only). *Lower priority:* production uses deferred
    dispatch (§4), so a real in-handler model call is a nice-to-have, not on the critical path.
-2. **`selectEvents` shape of `loop_v2`** — sketch the concrete mapping of `agent_loop_v2` functions
-   onto a prioritized select over **{tool outputs, control/cancel}** *around a blocking `std/ai`
-   step* (the LLM is **not** an in-brain source in Phase 1 — §5 XOR, resolved). **Start from the
-   shipped template:** generalize `motoko_scratchpad/ws_loopback.ail`'s `loop_until_done` (bounded
-   yield → `dispatch_tool_envelope` → `transmit` → re-enter) from one source to many. (This is the
-   one remaining pre-ADR research item; LLM-as-source was gap #1, now closed in §5.)
+2. ~~**`selectEvents` shape of `loop_v2`**~~ **RESOLVED — see §12.** The migration is a localized
+   refactor (`dispatch_calls → run_tool_select`); `loop_v2` is already a state-threading coordinator,
+   the model call stays a blocking `dispatch_step` (§5 XOR), and `selectEvents` wraps only the tool
+   phase + a control source. Both pre-ADR research gaps (#1 LLM-as-source §5, #2 loop sketch §12) are
+   now closed — the Phase-1 ADR can be drafted.
 3. **Cancellation/abort semantics** across the loop (priority of a control source; teardown of async
    sources — `asyncExecProcess` dies with the loop, so mid-flight tool subprocesses need explicit
    handling).

@@ -21,10 +21,12 @@ no `selectEvents` multiplexer; cross-agent state is a shared `SharedMem` blackbo
 `AI`-effect attribution are **code-graph** facts (`q callers loop_v2`; `invokes`/`effects`
 tables — note the graph was STALE and call/effect edges are source-parsed *approximations*). The
 stdlib call sites (`httpPost` routes, `httpGet /health`, `_sharedmem_get`/`get_hint`) are
-**source-grounded** (grep), not from the graph. Two things code-graph does **not** establish and
-are therefore *inferred*: (a) the per-step pipeline **ordering** (`invokes` is an unordered set),
-and (b) that the model call is "per step" — code-graph places the `AI` effect on `run_v2` /
-`conversation_loop_v2`, **not** on `loop_v2`.
+**source-grounded** (grep), not from the graph. (a) The per-step pipeline **ordering** is *inferred*
+(`invokes` is an unordered set). (b) **Correction (source-verified):** the model call **is** per
+step — `loop_v2` makes the blocking `dispatch_step(provider, …)` call inside its recursion and
+**carries the `AI` effect** (`agent_loop_v2.ail:1125`). Code-graph wrongly attributed `AI` only to
+`run_v2`/`conversation_loop_v2` because `dispatch_step` is a `StepProvider`-record call its parser
+didn't resolve — a concrete example of the "edges are approximations" caveat.
 
 ```mermaid
 flowchart TB
@@ -48,7 +50,7 @@ flowchart TB
   end
 
   SUP -->|"start_or_connect_backend / run_with_config"| BRAIN
-  CONV -->|"AI call: run_v2 carries the AI effect (BLOCKS) [graph]"| PROV["LLM provider<br/>AI effect"]
+  STEPLOOP -->|"AI call: loop_v2 dispatch_step(provider) per step (BLOCKS) [source]"| PROV["LLM provider<br/>AI effect"]
   STEPLOOP -->|"dispatch_calls -> dispatch_one -> run_native_batch: native FS / Process (BLOCKS) [graph]"| TOOLS["tool_runtime<br/>run_native_batch"]
   STEPLOOP -->|"env_client.httpPost (BLOCKING) [source]"| EX
   SUP -->|"httpGet /health [source]"| BE
