@@ -9,9 +9,9 @@ Relates to:
 - `tools/code-graph/AGENTS.md` (how the architecture facts below were derived)
 - AILANG docs MCP (`.mcp.json` → `https://mcp.ailang.sunholo.com/mcp/`)
 Smoke evidence (this project): `./smoke/` (`smoke_net_in_handler.ail` + `ws_net_server.ts`,
-`smoke_ai_in_handler.ail` + `ws_server.ts`, `smoke_ai_toplevel.ail`). Prior substrate proofs
-remain in `.agent/research/omp-style-python-eval/smoke/` (`smoke_transmit.ail`,
-`smoke_deferred_dispatch.ail`).
+`smoke_ai_in_handler.ail` + `ws_server.ts`, `smoke_ai_toplevel.ail`, `smoke_cognition_msg.ail`).
+Prior substrate proofs remain in `.agent/research/omp-style-python-eval/smoke/`
+(`smoke_transmit.ail`, `smoke_deferred_dispatch.ail`).
 
 ---
 
@@ -50,14 +50,18 @@ an option, not a requirement — and not the one the only shipped precedent took
 | Layer | Shipped? | Primitives | Effect | Notes |
 |---|---|---|---|---|
 | `std/stream` event loop | ✅ v0.7.0+ | `selectEvents`, `onEvent`/`runEventLoop`, `asyncExecProcess`, `asyncReadStdinLines`, `sourceOfConn`, `connect`/`transmit`/`disconnect`, `ssePost`/`sseConnect`/`ndjsonPost` | `Stream` | Sources are **I/O-backed**, not arbitrary AILANG functions. Deterministic: priority-ordered, same-priority round-robin. Handler `(StreamEvent)->bool` (false = stop). |
-| `m-csp-session-types` | ❌ planned v1.0.0 | `newChan[Protocol]`, `send`/`recv`/`close`, `spawn`; `protocol P = …` | `Chan` (new) | In-language peers, static session-type protocol checking, dual computed by compiler. Binary sessions only (multiparty deferred). Go-backed cooperative scheduler, replayable. |
+| `std/cognition` mailbox fabric | ⚠️ **API shipped v0.21.x, not usable in Motoko's CLI** | `sendMsg`/`recvMsg`, `sendMsgResult`/`recvMsgResult`, `subscribeMsg`/`drain` | `Msg`, `Cog` (new) | Actor/mailbox message passing (named mailboxes, Lamport clocks, blocking `recvMsg`). **But:** native CLI returns `Err(NO_HANDLER)` — transport is **browser/WASM-wired** (`cmd/wasm/effects.go`); only a `StubMsgHandler` exists natively. **And** `Msg`/`Cog` are **outside Motoko's effect ceiling** (`ailang.toml`). Verified §8/smoke. |
+| `m-csp-session-types` | ❌ planned v1.0/1.1 | `newChan[Protocol]`, `send`/`recv`/`close`, `spawn`; `protocol P = …` | `Chan` (new) | In-language peers, static session-type protocol checking, dual computed by compiler. Binary sessions only (multiparty deferred). Go-backed cooperative scheduler, replayable. (`std/cognition` reserves `sendMsg`/`recvMsg` names *because* `send`/`recv` are held for this.) |
 | `std/agent` | ❌ planned | `invoke`, `invokeStreaming` | `AI`-ish | **Not CSP.** Synchronous sub-agent governance (budgets, tool allowlists, `resumeSessionId`). |
 
-AILANG compiler tree confirms (2) is real-but-stubbed: `internal/channels/ (todo)`,
-`internal/session/ (todo)`. Implementation-status page lists "csp concurrency (deferred)".
-AILANG effects are **capability-permission tracking**, not algebraic effect handlers (no
-resumable continuations) — so channels can't be built in-language; they need the host-backed
-`Chan` effect from (2).
+AILANG compiler tree confirms (3, `m-csp-session-types`) is real-but-stubbed: `internal/channels/
+(todo)`, `internal/session/ (todo)`; implementation-status lists "csp concurrency (deferred)".
+**So "channels" splits two ways:** *typed in-language session channels* (`send`/`recv`/`Chan`) are
+**not shipped** (v1.0/1.1), while *mailbox message passing* (`std/cognition`, `Msg`) is a **shipped
+API but has no native-CLI transport and is out-of-ceiling** for Motoko — usable today only in the
+browser/WASM Cognitive-OS runtime or with a stub. AILANG effects are
+**capability-permission tracking**, not algebraic effect handlers, so typed channels can't be built
+in-language; they need the host-backed `Chan` effect.
 
 ---
 
@@ -92,18 +96,21 @@ the graph was **STALE** at read time. Re-run `tools/code-graph/extract.sh` befor
 | Tool round-trip `ToolCallEnvelope → ToolResultEnvelope` (`tool_contract`) | session-typed protocol `ToolCall -> !ToolResult -> end`, statically enforced (needs v1.0.0) |
 | RPC host↔core (`rpc.ail`) | a typed channel session instead of convention |
 | 9 extension hooks (`ext/runtime` dispatch_*) | each hook a typed sub-protocol |
-| `loop_v2` step pipeline | `selectEvents([llm, tools, control], handler)` — multiplex LLM SSE/NDJSON stream, async tool subprocess output, and control/cancel |
-| LLM call (`ai_compat`) | an `ssePost`/`ndjsonPost` `StreamSource` (token events) |
+| `loop_v2` step pipeline | `selectEvents([tools, control], handler)` — multiplex async tool output + control/cancel *around* a blocking `std/ai` step (LLM is **not** an in-brain source in Phase 1 — see §5 XOR) |
+| LLM call (`ai_compat`) | stays a **blocking `std/ai.stepWithStream`** (provider abstraction preserved). Raw `ssePost`/`ndjsonPost` *would* give a source but loses `std/ai` (§5 XOR); true LLM-source = peer process (§5 option B) |
 | Tool subprocess (`tool_runtime`, sync `Process`) | `asyncExecProcess` source — streamed/concurrent |
-| **`SharedMem` blackboard** (`cache`, `ext/runtime`) | **the philosophical inversion** — replace shared KV with channel messages. *Needs v1.0.0 channels;* shipped `std/stream` does **not** give inter-function channels. |
+| **`SharedMem` blackboard** (`cache`, `ext/runtime`) | **the philosophical inversion** — replace shared KV with messages. Two candidate substrates, **both gated today:** (a) `std/cognition` mailboxes (`Msg`) — shipped API but no native-CLI handler + out-of-ceiling (§1, §8); (b) typed `Chan` channels — not shipped (v1.0/1.1). `std/stream` gives WebSocket channels but no inter-*function* channels. |
 
 **Two-phase feasibility:**
 - **Phase 1 (today, v0.26.0):** restructure `loop_v2` around `selectEvents`. The substrate exists,
   the in-handler effectful-dispatch question is answered (§5), **and a faithful canonical-dispatch
   re-entrant loop already ships** (`packages/motoko_scratchpad/ws_loopback.ail`, via deferred
-  dispatch — §4). Phase 1 generalizes existing, working code rather than inventing a loop.
-- **Phase 2 (v1.0.0):** session-typed channels for the internal protocols + `spawn` for real
-  in-language peer processes (solvers/sub-agents) + the SharedMem→channel inversion.
+  dispatch — §4). Phase 1 generalizes existing, working code rather than inventing a loop — see
+  §11 for the concrete mechanism (CSP on socket channels + coordinator discipline, no typed `Chan`).
+- **Phase 2 (v1.0/1.1):** session-typed channels for the internal protocols + `spawn` for real
+  in-language peer processes (solvers/sub-agents) + the SharedMem→message inversion (via typed
+  `Chan`, or via `std/cognition` mailboxes *if* a native Msg handler is wired and the effect ceiling
+  is widened — see §1/§8).
 
 ---
 
@@ -176,6 +183,30 @@ ailang run --caps IO,Stream,AI -ai-stub \
 Gotcha: do **not** `pkill -f ws_server.ts` / `pkill -f PORT=8791` — the pattern self-matches the
 killing shell (exit 144). Kill by PID.
 
+### LLM-as-`selectEvents`-source: a verified XOR (keeps `std/ai` **XOR** multiplexes)
+
+Investigated this session (installed stdlib + `ai_compat.callStreamResult`). **On 0.26.0 the LLM
+call cannot be a `selectEvents` source *and* keep `std/ai`'s provider abstraction — they are
+mutually exclusive paths:**
+- `std/ai.stepWithStream(model, msgs, tools, cache, on_chunk: (StreamChunk)->() ! {IO}) ->
+  Result[StepResult, AIError] ! {AI}` is a **self-contained blocking call** that owns its internal
+  streaming loop and yields **no `StreamSource`**. Its `on_chunk` is `! {IO}` only (can't `transmit`,
+  dispatch, or poll other sources) and returns `()` (no mid-stream cancel).
+- The only path that yields a source — `ssePost(url,body,headers)` + `sourceOfConn` — is **raw
+  SSE**, losing `std/ai`: model routing (`model_for_provider`/OpenRouter), auth, per-provider
+  shapes, tool-call deltas, `StepResult` usage/cost, prompt caching, thinking deltas.
+
+**Consequence for the ADR (refines Phase 1, doesn't break it):** do **not** claim in-brain
+LLM-as-source for Phase 1. The model call stays a **blocking `std/ai` step** (with `on_chunk`
+rendering, as today), and `selectEvents` multiplexes **tools + control + cancel** *around* it — which
+matches §2 (AI effect lives at `run_v2`, not `loop_v2`). Three ways to get a true LLM source later:
+
+| Option | Keeps `std/ai`? | Cost |
+|---|---|---|
+| **A.** blocking step + multiplex tools/control (Phase 1) | ✅ | none — status quo for the model call |
+| **B.** move the `std/ai` call to a **peer process** (env-server/LLM proc); stream tokens to the brain over WS; brain consumes via `sourceOfConn` | ✅ (runs in peer) | extra process + socket hop — the *genuinely CSP* answer (provider = peer behind a channel) |
+| **C.** upstream: a `std/ai` → `StreamSource` adapter | ✅ | AILANG-gated (feature request) |
+
 ---
 
 ## 6. Two operational gotchas (load-bearing for a CSP core)
@@ -221,7 +252,10 @@ killing shell (exit 144). Kill by PID.
 | **`Net`-in-handler, `AI`-in-handler, `ailang check` effect-poly handler** | **v0.26.0 (this doc)** |
 | Shipped B′ deferred-dispatch loopback (canonical `dispatch_tool_envelope`) | `packages/motoko_scratchpad/ws_loopback.ail` (read 2026-06-30) |
 | `std/process`/`std/stream`/`std/net`/`std/ai` module surfaces | latest docs MCP (queried 2026-06-30) |
-| CSP/session-types roadmap placement (v1.0.0), "deferred" status | docs MCP roadmap + implementation-status (2026-06-30) |
+| CSP/session-types roadmap placement (v1.0/1.1), "deferred" status | docs MCP roadmap + implementation-status (2026-06-30) |
+| **`std/cognition` mailbox (`Msg`/`Cog`) shipped but `NO_HANDLER` in native CLI; transport is browser/WASM (`cmd/wasm/effects.go`)** | **v0.26.0 installed stdlib + `smoke/smoke_cognition_msg.ail` (2026-06-30)** |
+| **Motoko effect ceiling = `IO,Env,AI,Net,FS,Process,SharedMem,Clock,Stream,SharedIndex,Rand,Trace`** (excludes `Msg`/`Cog`) | **`ailang.toml:47`** |
+| **Correction:** MCP `effects_catalog` was stale — missed `Msg`, `Cog`, `SharedIndex`, `Rand`, `Trace`; installed stdlib is ground truth | installed `~/.local/share/ailang/std` (2026-06-30) |
 
 ---
 
@@ -354,21 +388,79 @@ heavy, stateful, untrusted ones (the full-effect-row hooks). That is exactly the
 in-process-hook / peer-process-execution split extensions already drift toward, and (Phase 2) makes
 the hook boundary typed, capability-scoped, and observable.
 
-## 11. Open questions / next steps
+## 11. Implementing CSP on 0.26.0 without typed channels
+
+The reframe: Motoko is **not** without channels — it lacks *typed in-language* channels
+(`Chan`/`send`/`recv`/session types, v1.0/1.1). It already has transport-backed channels. "CSP
+without channels" = use the channels you have + supply the rest as discipline. Three layers.
+
+**1. The OS-process boundaries already ARE channels.** A channel is two endpoints exchanging typed
+messages with no shared state — which Motoko's process boundaries already are:
+
+| CSP channel | Shipped mechanism (0.26.0) |
+|---|---|
+| brain ↔ env-server | **WebSocket** (`connect`/`transmit`/`onEvent`/`runEventLoop`) — the `ws_loopback.ail` precedent (§4) |
+| brain ↔ LLM provider | **blocking `std/ai` step** in Phase 1 (keeps provider abstraction). Raw `ssePost`/`ndjsonPost` is a source but loses `std/ai` (§5 XOR); LLM-as-source = peer process (§5 B) |
+| brain ↔ tools | `asyncExecProcess` source / dispatch envelopes |
+| brain ↔ backend | `spawnProcess` + `httpGet`/`httpPost` |
+
+Processes (brain, env-server, backend, kernels) are already OS-isolated; `selectEvents` is the
+`select`. So **between OS processes you have full CSP today** — sockets are the channels.
+
+**2. In-*language* "processes": CSP as discipline, not concurrency.** Two AILANG functions can't
+`send`/`recv` in-process without a socket or shared memory. Substitute the **coordinator pattern**
+(`loop_v2` already half-is one):
+- one owner of mutable state (the coordinator); sub-processes are sequential pure-ish functions;
+- communication = explicit message *values* threaded through the coordinator, never shared
+  mutation — extension hooks already do this (`Handled | Delegate`, `PassThrough | Compacted`);
+- **no `SharedMem` for coordination** (the very thing CSP drops) — keep it for genuine cache only.
+
+This buys CSP's *reasoning* (isolation, communicate-don't-share, compositional) without its
+*concurrency* (cooperative/sequential, loop-scheduled). Fine for I/O-bound work; real parallelism
+still comes from the separate OS processes.
+
+**3. Protocols as runtime-checked frames (poor-man's session types).** Static sessions aren't
+shipped; encode the protocol as **typed frame ADTs + a runtime validator** (`ws_loopback`'s
+`run`/`tool-request`/`tool-result`/`done` already does this):
+- message sum types (`type Frame = Run(..) | ToolRequest(..) | ToolResult(..) | Done(..)`);
+- validate transitions at runtime (handler `match`es frame type, rejects out-of-protocol);
+- optionally **Z3-contract the pure transition function** — the §9 three-way split (Z3 = value
+  props · runtime = trace props · session types = shape props) covers what static sessions would,
+  minus compile-time totality.
+
+**What you give up (state it in the ADR):** no static deadlock/protocol checking (runtime/Z3 only);
+no cheap `spawn` of arbitrary functions as peers (in-language peers are sequential-cooperative; true
+peers are OS processes or wait for v1.0/1.1); no compiler-computed protocol dual (you hand-write and
+keep both ends in sync).
+
+**One-line strategy.** Implement **CSP-the-architecture** (isolated sequential processes, socket
+channels, deterministic `selectEvents`, no shared mutable state, runtime-checked frame protocols)
+**without CSP-the-language-feature.** Concretely: generalize `ws_loopback.ail`'s `loop_until_done`
+into the core loop (§4); treat the env-server/LLM/tool sockets as channels; impose the
+coordinator-threads-state discipline in-process; encode protocols as frame ADTs (+ Z3 where pure).
+**Phase 2 upgrades these hand-rolled frame protocols to compiler-checked session-typed channels —
+a tightening, not a rewrite.** This answers the ADR's "refactor or rewrite?" → refactor: the
+channels and the loop template already exist.
+
+## 12. Open questions / next steps
 
 1. **Real-model in-handler call** — run the `-ai <model>` + keys variant to convert the ⚠ to ✅
    literally (currently covered by composition only). *Lower priority:* production uses deferred
    dispatch (§4), so a real in-handler model call is a nice-to-have, not on the critical path.
 2. **`selectEvents` shape of `loop_v2`** — sketch the concrete mapping of `agent_loop_v2` functions
-   onto a single prioritized select over {LLM stream, tool outputs, control/cancel}. **Start from
-   the shipped template:** generalize `motoko_scratchpad/ws_loopback.ail`'s `loop_until_done`
-   (bounded yield → `dispatch_tool_envelope` → `transmit` → re-enter) from one source to many. (This
-   is option (c) from the discussion thread.)
+   onto a prioritized select over **{tool outputs, control/cancel}** *around a blocking `std/ai`
+   step* (the LLM is **not** an in-brain source in Phase 1 — §5 XOR, resolved). **Start from the
+   shipped template:** generalize `motoko_scratchpad/ws_loopback.ail`'s `loop_until_done` (bounded
+   yield → `dispatch_tool_envelope` → `transmit` → re-enter) from one source to many. (This is the
+   one remaining pre-ADR research item; LLM-as-source was gap #1, now closed in §5.)
 3. **Cancellation/abort semantics** across the loop (priority of a control source; teardown of async
    sources — `asyncExecProcess` dies with the loop, so mid-flight tool subprocesses need explicit
    handling).
-4. **SharedMem→channel inversion** — design once v1.0.0 `Chan` lands; scope which `cache`/`ext/runtime`
-   uses are coordination (→ channels) vs. genuine shared cache (may stay).
+4. **SharedMem→message inversion** — scope which `cache`/`ext/runtime` uses are coordination
+   (→ messages) vs. genuine shared cache (may stay). Two substrates, both gated: typed `Chan`
+   (v1.0/1.1), or `std/cognition` mailboxes **iff** someone wires a native Msg handler (today
+   `NO_HANDLER` in CLI) and widens the effect ceiling. **Pre-ADR probe:** is a native `StubMsgHandler`
+   reachable from `ailang run`, or is the fabric browser-only? (§1, §8.)
 5. **Determinism/replay** — both shipped `selectEvents` and planned channels are deterministic; confirm
    this composes with DST/trace tooling (`001_DST`).
 6. **DST channel-recorder spike (today, no v1.0.0 needed)** — per §9, prove the cheap partial win:

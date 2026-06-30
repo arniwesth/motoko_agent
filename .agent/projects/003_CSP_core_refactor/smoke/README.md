@@ -13,6 +13,7 @@ result back; the server records it. Verified on AILANG **v0.26.0**.
 | `smoke_net_in_handler.ail` + `ws_net_server.ts` | `Net` (`httpGet`) inside the handler — real network round-trip |
 | `smoke_ai_in_handler.ail` + `ws_server.ts` | `AI` (`std/ai.call`) inside the handler — stub handler, no creds |
 | `smoke_ai_toplevel.ail` | control: AI stub works at top level (isolates "AI in handler" from "AI stub broken") |
+| `smoke_cognition_msg.ail` | probes `std/cognition` mailbox fabric (`Msg` effect). **Result: `NO_HANDLER` in native CLI** — the `Msg` transport is browser/WASM-wired (`cmd/wasm/effects.go`); `Msg`/`Cog` are also outside Motoko's effect ceiling (`ailang.toml`). Not usable for core messaging today. |
 
 ## Run
 
@@ -34,6 +35,12 @@ ailang run --caps IO,Stream,AI -ai-stub \
 # Control (no server needed)
 ailang run --caps IO,AI -ai-stub smoke_ai_toplevel.ail
 # expect: TOPLEVEL_AI_REPLY: {"kind":"Wait"}
+
+# Cognition mailbox probe — NOTE: blocked by Motoko's effect ceiling inside the repo
+# (ailang.toml [effects].max excludes Msg/Cog). Copy to a standalone dir whose
+# ailang.toml has max = ["IO","Msg","Cog"], then:
+ailang run --caps Msg,IO --entry main main.ail
+# expect: COG_SEND_ERR / COG_RECV_ERR: NO_HANDLER  (browser/WASM-only transport)
 ```
 
 ## Gotchas
