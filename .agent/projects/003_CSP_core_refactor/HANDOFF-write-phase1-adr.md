@@ -29,10 +29,11 @@ Your job is to turn it into a decision record that is **review-proof** (see "Avo
 
 **IN (Phase 1, no AILANG language dependency):**
 - Generalize `loop_v2`'s `dispatch_calls` into a `run_tool_select` that multiplexes tool sources +
-  a control/cancel source via `selectEvents` (the localized refactor — RESEARCH §12).
-- Deferred dispatch (the `ws_loopback` / `loop_until_done` shape — §4).
-- The model call **stays a blocking `std/ai.stepWithStream`** (§5 XOR).
-- Protocols as runtime-checked frame ADTs (poor-man's session types — §11).
+  a control/cancel source via `selectEvents` (the localized refactor — RESEARCH §12). This is the
+  central thing the ADR adopts-or-not.
+- Within that, the **dispatch mode** (deferred vs in-handler), the **model-call treatment**, and the
+  **protocol encoding** are **open decisions for the ADR** (see "Decisions" below). The research
+  surfaces the tradeoffs and a lean for each, but does **not** pre-decide them here.
 
 **OUT (defer to a separate Phase-2 ADR, gated on AILANG v1.0/1.1):**
 - Typed `Chan` / `send`/`recv` / session types; peer-process extensions; the SharedMem→message
@@ -60,14 +61,24 @@ Your job is to turn it into a decision record that is **review-proof** (see "Avo
 - **Code-graph correction (§12, source-verified):** `loop_v2` *does* carry the `AI` effect
   (`agent_loop_v2.ail:1125`) via the `StepProvider` seam — code-graph missed the edge. Trust source.
 
-## Decisions the ADR should record (proposed — confirm or revise)
+## Decisions for the ADR to make (evidence + a lean surfaced; the ADR owns every call)
 
-1. Adopt the Phase-1 `selectEvents` / `run_tool_select` model as the core's tool-execution
-   mechanism, generalizing `ws_loopback.ail`.
-2. Keep the model call blocking (`std/ai`), preserving the provider abstraction.
-3. Use **deferred dispatch** (not in-handler) as the default, for error-surfacing.
-4. Encode tool/control/loopback protocols as runtime-checked frame ADTs.
-5. Defer all typed-channel / session-type / peer-process / SharedMem-inversion work to a Phase-2 ADR.
+The research surfaces tradeoffs and, where noted, a **non-binding lean** — recommendations are
+*inputs*, not mandates. If the ADR diverges from a lean, it should say why; that's a feature.
+
+1. **Central decision — adopt the Phase-1 `selectEvents` / `run_tool_select` model** (generalizing
+   `ws_loopback.ail`) as the core's tool-execution mechanism: yes / no / partial.
+   *Lean: yes — it's a localized refactor (§12), no language dependency.*
+2. **Model-call treatment.** Constrained by the §5 XOR: a **blocking `std/ai`** step (keeps the
+   provider abstraction), or raw `ssePost` (loses `std/ai`), or a **peer-process** source (§5 B).
+   *Lean: blocking for Phase 1; peer-source is Phase-2+. The ADR decides.*
+3. **Dispatch mode — deferred vs in-handler.** Both verified to work (§5); production
+   (`ws_loopback`) uses **deferred** because handler-side effect errors exit 0 silently (§6 gotcha 2).
+   *Lean: deferred — but weigh latency/complexity and decide.*
+4. **Protocol encoding.** Runtime-checked frame ADTs (poor-man's session types, §11) vs alternatives.
+   *Lean: frame ADTs (upgradeable to session types in Phase 2).*
+5. **Scope boundary (firm).** Defer typed channels / session types / peer-process extensions /
+   SharedMem→message inversion / in-brain LLM-as-source to a **Phase-2 ADR** (gated on v1.0/1.1).
 
 ## Decision drivers (motivation — lead with these, not "feasibility")
 
