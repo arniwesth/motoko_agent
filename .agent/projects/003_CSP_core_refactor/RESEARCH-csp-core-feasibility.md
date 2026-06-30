@@ -225,7 +225,56 @@ killing shell (exit 144). Kill by PID.
 
 ---
 
-## 9. Open questions / next steps
+## 9. CSP × DST — would CSP improve Deterministic Simulation Testing?
+
+Cross-ref: [`../001_DST/ADR-001-deterministic-simulation-testing-architecture.md`](../001_DST/ADR-001-deterministic-simulation-testing-architecture.md).
+**Yes — and specifically on the two problems that ADR flags as unresolved (R7 effect
+satisfaction, R8 the recorder self-contradiction).** DST's premise is "failures occur across
+boundaries → record boundary traces → assert invariants." CSP's premise is "all communication is
+explicit messages over channels." Same seam, opposite sides: DST wants every boundary observable
+and controllable; CSP makes every boundary a channel.
+
+**Mechanism.** Today boundaries are *implicit* effects (`std/ai.step`, tool exec, env read), so
+observing/controlling them needs either a scripted stub (a *fork* of the real path, e.g.
+`run_v2_with_stub`) or effect-handler mocking AILANG lacks (R7). As channels, the same boundaries
+give DST three things structurally:
+- **record = tee the channel** (production processes byte-identical with/without the recorder);
+- **fake = swap the peer** (run the *real* `loop_v2`, connect its provider channel to a scripted
+  provider process);
+- **replay = the scheduler** (planned `Chan` scheduler is cooperative/deterministic/replayable;
+  shipped `selectEvents` is deterministic — message order reproducible by construction).
+
+| ADR-001 item | How CSP helps |
+|---|---|
+| **R8** — recorder "must not change prod behavior" vs "seams must be added" (self-contradiction) | **Dissolved** — recorder is a process on the channel, not a seam in `dispatch_step`. |
+| **R7** — satisfy `{Env,FS,Net}` deterministically without effect mocking (the hardest part) | **Sidestepped** — substitute the channel *peer*, not the effect handler. |
+| Decision #2 — "drive real production transition code where feasible" | Maximized — drive the **real** `run_v2`/`loop_v2`, swap only peers (vs. the `run_v2_with_stub` fork that can drift). |
+| Canonical trace events (`provider_call_prepared`, `provider_result`, `tool_policy_decision`, …) | These **are** the channel messages; the normalized trace = serialized channel log; recorder = a logging process. |
+| Open question — virtual time for `std/clock` | A deterministic scheduler *is* the clock; `Clock` becomes a channel to a time process you advance. |
+
+**Three-way complementarity** (extends the ADR's Z3-vs-DST framing). Session types (Phase 2) add a
+third axis — protocol/shape properties checked at compile time:
+- `on_pre_step never receives system messages` → a **type guarantee** if that channel's message
+  type excludes `SystemMsg`; step/turn ordering → encoded in the session protocol. **Static.** ✅
+- Value invariants stay runtime/Z3: `tool-call IDs survive elision`, `payload contains pinned
+  system prefix`, `last_input_tokens carries forward`, the 60/75/85 tier arithmetic. ❌
+- So: **Z3 = pure value props · DST-runtime = trace value props · session types = protocol/shape
+  props.** A slice of today's DST scenarios become free static checks; the rest stay runtime but
+  cheaper to observe.
+
+**Honest limits.**
+- **DST Layer 2 (harness boundary)** — child env prep, sandbox paths, spawn args, env forwarding —
+  is TS-host + OS-process, *before* AILANG starts. CSP in the core does nothing for it.
+- **Biggest wins are Phase 2 (v1.0.0)** — in-language channel interposition + session-typed
+  invariants. *But* a real partial win exists **today**: the shipped `ws_loopback.ail` frames
+  (`run`/`tool-request`/`tool-result`/`done`) and the env-server `httpPost` boundary are already
+  message boundaries a recorder can tee, and the LLM channel can be pointed at a scripted local
+  server on current `std/stream`.
+- **DST Layer 0** (pure helpers) is unaffected — no boundaries.
+- You would not rewrite to CSP *for* DST, but DST is a strong *additional* argument: it attacks
+  exactly R7 and R8, which the DST ADR could not cleanly resolve.
+
+## 10. Open questions / next steps
 
 1. **Real-model in-handler call** — run the `-ai <model>` + keys variant to convert the ⚠ to ✅
    literally (currently covered by composition only). *Lower priority:* production uses deferred
@@ -242,6 +291,9 @@ killing shell (exit 144). Kill by PID.
    uses are coordination (→ channels) vs. genuine shared cache (may stay).
 5. **Determinism/replay** — both shipped `selectEvents` and planned channels are deterministic; confirm
    this composes with DST/trace tooling (`001_DST`).
+6. **DST channel-recorder spike (today, no v1.0.0 needed)** — per §9, prove the cheap partial win:
+   point `loop_v2`'s provider path at a scripted local server and tee the `ws_loopback.ail` frames as
+   a normalized DST trace. Directly attacks ADR-001 R7/R8. (See §9.)
 
 ---
 
@@ -255,4 +307,6 @@ killing shell (exit 144). Kill by PID.
   `.agent/plans/omp-style-python-eval/02-design-b-prime-reentrant-websocket.md`
 - Planned CSP: AILANG `design_docs/planned/v1_0_0/m-csp-session-types.md`,
   `m-agent-orchestration.md`
+- DST (§9 cross-ref): `.agent/projects/001_DST/ADR-001-deterministic-simulation-testing-architecture.md`
+  (esp. R7 effect satisfaction, R8 recorder seam, the canonical trace-event list)
 - Architecture facts: `tools/code-graph/` (core profile), `tools/code-graph/AGENTS.md`
