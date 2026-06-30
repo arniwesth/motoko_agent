@@ -274,7 +274,87 @@ third axis — protocol/shape properties checked at compile time:
 - You would not rewrite to CSP *for* DST, but DST is a strong *additional* argument: it attacks
   exactly R7 and R8, which the DST ADR could not cleanly resolve.
 
-## 10. Open questions / next steps
+## 10. CSP × the extension system
+
+Cross-ref: §4 (the `motoko_scratchpad` precedent), §9 (DST). The whole tool path runs through
+`src/core/ext/runtime.ail`'s hooks, so CSP must coexist with extensions. The boundary that matters
+is **already CSP-shaped**, so Phase 1 needs no ABI change and Phase 2 formalizes what extensions
+already drift toward.
+
+**What an extension is today.** A package registers an `ExtensionHooks` record — ordered,
+synchronous closures the loop folds over: `{ id, provided_tools, on_describe_tools,
+on_build_system_prompt, on_budget_plan, on_pre_step, on_tool_policy, on_tool_handle,
+on_response_intercept, on_solver_candidate }`. Three load-bearing facts:
+- **Returns are already messages:** `on_tool_handle -> Handled(ToolResultEnvelope) | Delegate`,
+  `on_tool_policy -> Allow | Deny | NoOpinion | Pending`, `on_pre_step -> PassThrough | Compacted`.
+- **Dispatch is an ordered fold + short-circuit:** `dispatch_tool_handle` walks `registry.hooks`
+  in `parse_core_ext_order`; `Delegate` → next, `Handled` → stop.
+- **Effectful hooks carry the ENTIRE effect row** `{IO,Process,FS,AI,Env,Net,SharedMem,Clock,
+  Stream}` — a third-party hook runs in the core process with ambient access to everything (the
+  README's "extensions outside the capability model" concern).
+
+**Phase 1 (today, no ABI break).** The `selectEvents` loop calls `dispatch_tool_handle`
+synchronously at the dispatch point — exactly as shipped `ws_loopback.ail` does
+(`dispatch_tool_envelope → dispatch_tool_handle`). Extensions are unchanged. And because the hook
+effect row already includes `Stream`, an extension can opt into CSP *internally*:
+`motoko_scratchpad`'s `on_tool_handle` already opens a WebSocket and runs its own `runEventLoop` to
+its env-server kernels (§4). So today is already a hybrid — **light hook in-AILANG, heavy execution
+in a peer process over a channel.**
+
+**Phase 1 per-package change: none.** The repo's extension packages with AILANG hooks are
+`motoko-ext-context-mode` and `motoko_scratchpad` (`motoko-ext-autoresearch` has no `.ail` hooks;
+ABI types live in `pkg/sunholo/motoko_ext_abi`). None need code changes in Phase 1 because: (a) the
+hook signatures **already declare `Stream`** (e.g. `context-mode/register.ail:71,74`), so a loop
+carrying the `Stream` effect invokes them unchanged; (b) dispatch is the same `parse_core_ext_order`
+fold; (c) both packages' hooks **block** (`context-mode` `on_tool_handle` = `exec`; `scratchpad`
+`on_tool_handle` = `exec_scratchpad_cell` httpPost) and blocking is safe under deferred dispatch (the
+loop has already yielded). The Phase-1 work is **core-side**: carry `Stream` at hook call sites, and
+use **deferred dispatch** so a hook that hosts its own `runEventLoop` (`scratchpad`'s flagged
+`ws_loopback`) is never entered inside the core's handler (no nested loops).
+
+| Package | Real hook work | Phase-1 required | Optional opt-in |
+|---|---|---|---|
+| `motoko-ext-context-mode` | prompt/budget/policy + `on_tool_handle` = blocking `exec` | **none** | cancellation for its `exec` |
+| `motoko_scratchpad` | `on_tool_handle` = blocking `exec_scratchpad_cell`; `ws_loopback` = flagged WS re-entrant | **none** | streaming cell output (additive ABI); dedup its loop vs the core's |
+| `motoko-ext-autoresearch` | — (no `.ail` hooks) | n/a | — |
+
+The optional items are **additive, not migration**: a streaming-result hook variant (one change in
+`motoko_ext_abi`, consumed only by `scratchpad`) and cooperative cancellation. Neither is required to
+keep existing extensions working.
+
+**Phase 2 (v1.0.0 `Chan` + session types).** Hooks become typed channel protocols; each extension
+a peer process.
+
+| Today (closure) | CSP (channel protocol) |
+|---|---|
+| `on_tool_policy : (Ctx,Call) -> Decision` | `protocol Policy = send (Ctx,Call) -> recv Decision -> end` |
+| `on_tool_handle : … -> Handled \| Delegate` | `protocol Tool = send (Ctx,Call) -> recv (Handled \| Delegate) -> end` |
+| ordered fold + short-circuit | a **coordinator** querying extension processes in registry order, stopping on `Handled`/`Deny` |
+| `registry_generated` static load | load **+ `spawn`** the extension process, establish its channel |
+
+Wins specific to extensions: **capability containment** (an extension runs scoped and talks only
+over its channel — the broad effect row becomes the protocol, real sandboxing of third-party
+packages); **session-typed hook contracts** (e.g. `on_pre_step never receives SystemMsg` becomes a
+type — ties to §9 DST static invariants); **independent failure** (a crashing/looping extension is
+contained); **observable hook boundaries** (the seam ADR-001 flags as a failure class).
+
+**Honest constraints.**
+- **Serialization:** envelope hooks are easy (`call_to_json`/`result_to_model_json` exist);
+  `[Msg]`-based hooks (`on_pre_step`, `ExtCtx.history_slice`) are heavier to send across a channel.
+- **Binary sessions only (v1):** N extensions = N binary sessions a coordinator multiplexes —
+  matches the ordered registry, a fit not a fight.
+- **Loader change:** `parse_core_ext_order` must also spawn + handshake
+  (`provided_tools`/`on_describe_tools` = the handshake); gated on v1.0.0 `spawn`.
+- **Latency:** a round-trip per hook per step; cheap hooks (`on_tool_policy`: `IO,Clock`) aren't
+  worth processifying.
+
+**Realistic shape — a gradient, not a flip.** Keep cheap/pure hooks in-process; processify the
+heavy, stateful, untrusted ones (the full-effect-row hooks). That is exactly the split
+`motoko_scratchpad` already embodies. CSP doesn't replace the extension system — it formalizes the
+in-process-hook / peer-process-execution split extensions already drift toward, and (Phase 2) makes
+the hook boundary typed, capability-scoped, and observable.
+
+## 11. Open questions / next steps
 
 1. **Real-model in-handler call** — run the `-ai <model>` + keys variant to convert the ⚠ to ✅
    literally (currently covered by composition only). *Lower priority:* production uses deferred
@@ -294,6 +374,14 @@ third axis — protocol/shape properties checked at compile time:
 6. **DST channel-recorder spike (today, no v1.0.0 needed)** — per §9, prove the cheap partial win:
    point `loop_v2`'s provider path at a scripted local server and tee the `ws_loopback.ail` frames as
    a normalized DST trace. Directly attacks ADR-001 R7/R8. (See §9.)
+7a. **Extension Phase-1 — confirm zero per-package changes** (per §10). Verify the two core
+   guarantees (carry `Stream` at hook call sites; deferred dispatch so hook-owned `runEventLoop`s
+   don't nest). Existing packages (`context-mode`, `scratchpad`) keep working unchanged; the
+   streaming-result hook variant + cooperative cancellation are additive opt-ins, not migration.
+7b. **Extension Phase-2 channel ABI** (per §10) — which hooks processify first, and how
+   `ExtCtx`/`[Msg]` serialize across a channel (envelopes are JSON-ready via
+   `call_to_json`/`result_to_model_json`; `history_slice` is not). Decide the in-process-vs-peer
+   gradient before any extension is processified.
 
 ---
 
