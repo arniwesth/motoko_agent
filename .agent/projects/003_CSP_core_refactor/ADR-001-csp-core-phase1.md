@@ -642,9 +642,43 @@ rejected-alternatives sections need no change — those are the ADR's strongest 
 
 _**Reviewer: GPT-5.5 - 2026-07-01. Review status: done by GPT-5.5.**
 Additional critique, intentionally not repeating the GLM 5.2 findings except where the consequence is
-different. Grounded against this ADR, `src/core/agent_loop_v2.ail`,
-`src/core/tool_runtime.ail`, `src/core/tool_dispatch_adapter.ail`,
-`src/core/tool_envelope_dispatch.ail`, and `packages/motoko_scratchpad/ws_loopback.ail`._
+different. Grounded first through `tools/code-graph` per `tools/code-graph/AGENTS.md`, then through
+source-index lines where the graph cannot prove ordering, multiplicity, or package-local details._
+
+**Code-graph grounding used by GPT-5.5.** Queries were run with
+`python3 tools/code-graph/query/cgq.py` against the default `core` graph. Metadata: `stale=false`,
+`source_stale=false`, `incomplete=false`, `coverage 24/24 ok`, `profile=core`,
+`include_tests=false`, built `2026-06-30T19:43:41Z`, AILANG v0.26.0 commit `3b52a24`, row counts
+`funcs=388`, `invokes=486`, `effect_edges=516`, `std_calls=558`, `source_chunks=388`,
+`source_lines=28253`. Per `tools/code-graph/AGENTS.md`, call/effect rows are source-parsed
+approximations, not compiler facts; `invokes` is unordered and cannot prove call-site multiplicity or
+temporal ordering. Those facts are grounded with source-index hits instead.
+
+Graph/source-index facts this review relies on:
+
+- `dispatch_calls` invokes `dispatch_tool_policy`, `dispatch_tool_handle`, `dispatch_one`,
+  `tool_call_to_envelope`, `backend_for_v2`, `delegated_deferred_message`, scratchpad helpers,
+  `emit_event`, `emit_scratchpad_result_if_present`, and message builders (`invokes` query on
+  `src/core/agent_loop_v2#dispatch_calls`).
+- `dispatch_one` invokes `run_native_batch` and `tool_result_item_to_json`; `dispatch_tool_envelope`
+  also invokes `run_native_batch`, `tool_result_item_to_json`, `dispatch_tool_policy`, and
+  `dispatch_tool_handle` (`invokes` query on both functions).
+- Source-index hits find `dispatch_calls` at `agent_loop_v2.ail:731`, recursive arms at
+  `:756/:807/:828/:841/:857/:892/:915/:942/:962`, and external call sites at `:1341` and `:1454`.
+- Source-index hits find `Pending` handling in `dispatch_calls` (`agent_loop_v2.ail:758-760`) and
+  `Pending` merge/return behavior in `ext/runtime.ail:182-196,449-471`; graph `callers
+  dispatch_tool_policy` shows `dispatch_calls` and `dispatch_tool_envelope` as direct callers.
+- Source-index hits find scratchpad fast-path import/call in `agent_loop_v2.ail:63,869` and
+  `dispatch_tool_envelope`'s recursive-loopback error in `tool_envelope_dispatch.ail:38`.
+- Source-index hits find provider/tool-result correlation warnings and TUI result-shape comments in
+  `agent_loop_v2.ail:362-365,477-499,610-615,637-640,660,692-705`.
+- Source-index hits find `tool_result_item_to_json` at `tool_dispatch_adapter.ail:66,178` and
+  `tool_envelope_dispatch.ail:5,48`; they find `mk_meta` and stdout/stderr truncation metadata at
+  `tool_runtime.ail:183,851,869,908,917`.
+- `effect_edges` under-approximate some declared rows, as GLM already noted; for example graph rows
+  for `dispatch_calls` show only `Clock/FS/IO/Process/Trace` despite the source signature declaring
+  more effects. This review uses graph reachability to identify contracts and source signatures for
+  exact effect ceilings.
 
 Overall: I agree with the Phase-1 direction, but the ADR still reads more like a feasible architecture
 than an implementation contract. The risky missing piece is not "can Motoko call `selectEvents`?" It
@@ -654,103 +688,111 @@ tool execution from a recursive call-list fold into an event loop.
 ### Blocking (must address before `Accepted`)
 
 **G1. The ADR treats "native subprocess tool" as if it were equivalent to today's native tool
-dispatcher, but it is not.** Current native execution is not just `bash` stdout. `dispatch_one`
-(`agent_loop_v2.ail:850,955`; `tool_dispatch_adapter.ail:174`) calls `run_native_batch`, which
-routes a mixed ADT of tools through `tool_runtime.ail`: file reads/writes/edits, search, bash, tests,
-path validation, truncation metadata, `stdout`/`stderr` hashes, exit codes, and tool-specific JSON
-shapes. The ADR's `asyncExecProcess` source only explains live stdout for subprocess-like tools; it
-does not explain how `ReadFile`/`WriteFile`/`EditFile`/`Search` remain synchronous, how stderr and
-exit code are captured for live process tools, or how the final model-facing JSON remains byte-for-byte
-compatible with `tool_result_item_to_json`. Until that split is explicit, "replace `dispatch_calls`
-with `run_tool_select`" is underspecified and risks silently bypassing `tool_runtime`'s validation and
-result normalization. Required fix: define the Phase-1 dispatch matrix per tool kind: unchanged
-synchronous local tools, live-process tools, extension-handled tools, delegated tools, and cancelled
-tools; for each, state the final `Message.content` shape and whether it is expected to match today's
-`dispatch_one` output.
+dispatcher, but it is not.** Current native execution is not just `bash` stdout. Graph grounding:
+`invokes` shows `dispatch_calls -> dispatch_one`, `dispatch_one -> run_native_batch`, and
+`dispatch_one -> tool_result_item_to_json`; source-index hits show `tool_result_item_to_json` and
+`mk_meta`/stdout/stderr metadata. That means the current path routes a mixed ADT of tools through
+`tool_runtime.ail`: file reads/writes/edits, search, bash, tests, path validation, truncation
+metadata, `stdout`/`stderr` hashes, exit codes, and tool-specific JSON shapes. The ADR's
+`asyncExecProcess` source only explains live stdout for subprocess-like tools; it does not explain
+how `ReadFile`/`WriteFile`/`EditFile`/`Search` remain synchronous, how stderr and exit code are
+captured for live process tools, or how the final model-facing JSON remains compatible with
+`tool_result_item_to_json`. Required fix: define the Phase-1 dispatch matrix per tool kind:
+unchanged synchronous local tools, live-process tools, extension-handled tools, delegated tools, and
+cancelled tools; for each, state the final `Message.content` shape and whether it is expected to
+match today's `dispatch_one` output.
 
 **G2. `Pending` policy decisions are incompatible with the advertised concurrent select phase unless
-they are resolved before source startup.** `dispatch_calls` handles `Pending` by emitting
-`tool_pending` and then blocking on `readLine()` (`agent_loop_v2.ail:762-794`). If `run_tool_select`
-starts other tool sources first and then hits a pending approval path, the whole event loop is blocked
-in stdin approval and the control/cancel source cannot be observed. If it asks policy before source
-startup, then policy evaluation remains a sequential preflight and only approved calls enter the
-select. The ADR currently says all four hook points stay unchanged, but this is a real sequencing
-decision. Required fix: specify a policy preflight stage, or explicitly state that `Pending` pauses
-all in-flight concurrency and why that is acceptable. The preflight design is cleaner and preserves
-the cancellation story.
+they are resolved before source startup.** Graph grounding: `callers dispatch_tool_policy` shows
+`dispatch_calls` and `dispatch_tool_envelope` as direct callers; source-index hits show the
+`Pending` arm in `dispatch_calls` and the `Pending` merge contract in `ext/runtime`. `dispatch_calls`
+handles `Pending` by emitting `tool_pending` and then blocking on `readLine()`
+(`agent_loop_v2.ail:762-794`; blocking is source/stdlib-grounded, not graph-proven). If
+`run_tool_select` starts other tool sources first and then hits a pending approval path, the whole
+event loop is blocked in stdin approval and the control/cancel source cannot be observed. Required
+fix: specify a policy preflight stage, or explicitly state that `Pending` pauses all in-flight
+concurrency and why that is acceptable.
 
 **G3. The scratchpad fast path will regress if `run_tool_select` uses `dispatch_tool_envelope`
-naively.** `dispatch_calls` special-cases scratchpad before normal `dispatch_tool_handle`
-(`agent_loop_v2.ail:864-893`) and calls `exec_scratchpad_cell_ws`. `dispatch_tool_envelope`, however,
-explicitly returns an error for `scratchpad`/`Scratchpad` (`tool_envelope_dispatch.ail:36-39`) to
-prevent recursive loopback. The ADR's sketch uses `dispatch_tool_envelope` for the deferred arm, so
-the most literal implementation changes scratchpad behavior from "handled through the existing WS
-cell path" to "recursive scratchpad loopback is disabled." This is not just pseudocode looseness; it
-changes a user-visible tool. Required fix: either keep the scratchpad special case in `run_tool_select`
-or state that Phase 1 intentionally disables/replaces it, with a migration plan.
+naively.** Graph grounding: `invokes` for `dispatch_calls` includes `is_scratchpad_tool_name`,
+`scratchpad_extension_active`, `scratchpad_cells_arg`, and `emit_scratchpad_result_if_present`.
+Source-index hits also find the `exec_scratchpad_cell_ws` import/call and
+`dispatch_tool_envelope`'s recursive-loopback error. `dispatch_calls` special-cases scratchpad before
+normal `dispatch_tool_handle` (`agent_loop_v2.ail:864-893`) and calls `exec_scratchpad_cell_ws`;
+`dispatch_tool_envelope` explicitly returns an error for `scratchpad`/`Scratchpad`
+(`tool_envelope_dispatch.ail:36-39`). The ADR's sketch uses `dispatch_tool_envelope` for the
+deferred arm, so the most literal implementation changes scratchpad behavior from "handled through
+the existing WS cell path" to "recursive scratchpad loopback is disabled." Required fix: keep the
+scratchpad special case in `run_tool_select` or state that Phase 1 intentionally disables/replaces it.
 
 **G4. Cancellation needs a provider-valid transcript contract, not just "emit cancellation
-tool-results."** The code comments around `agent_loop_v2.ail:1319-1324` already document that some
-providers reject orphaned or mismatched tool results. On cancellation, the loop still has an assistant
-message containing N `tool_calls`; the next model step must receive exactly the tool-role messages
-that provider expects. The ADR should define whether completed results are preserved, whether
-cancelled-but-not-started and cancelled-in-flight calls each get synthetic tool-role messages, what
-`exit_code/stdout/stderr/error` shape those messages use, and whether the final list is serialized in
-the original call order. Without this, cancellation can create provider 4xx failures or replay traces
-that cannot be fed back into the model.
+tool-results."** Graph/source-index grounding: source-index search for `tool_call_id` finds the
+provider-correlation comments and message builders in `agent_loop_v2.ail`; `invokes` shows
+`dispatch_calls -> tool_result_message`, `policy_denied_message`, and `delegated_deferred_message`.
+Because `invokes` is unordered, final message ordering must be specified from source/design, not
+inferred from the graph. On cancellation, the loop still has an assistant message containing N
+`tool_calls`; the next model step must receive exactly the tool-role messages that provider expects.
+The ADR should define whether completed results are preserved, whether cancelled-but-not-started and
+cancelled-in-flight calls each get synthetic tool-role messages, what `exit_code/stdout/stderr/error`
+shape those messages use, and whether the final list is serialized in original call order.
 
 ### Should-address
 
-**G5. The rollout plan is too abrupt for a core-loop change.** The ADR is scoped as a localized
-refactor, but it touches the tool phase, event stream, TUI assumptions, extension handling, provider
-tool-result sequencing, and DST traces. Phase 1 should require a feature flag or config switch with
-sequential `dispatch_calls` as the fallback until parity tests pass. The current text says the default
-must stay sequential unless a batch is known-independent, but it does not say whether the new engine
-ships behind a runtime gate, how to force old behavior, or what telemetry proves parity.
+**G5. The rollout plan is too abrupt for a core-loop change.** Graph grounding: `callers
+dispatch_one` shows the current dispatch path reaches `loop_v2`, `run_v2`, `run_v2_from_messages`,
+`run_v2_with_stub`, `conversation_loop_v2`, RPC entrypoints, and `supervisor#main`, so the blast
+radius is core-entry-wide even if the direct edit is local. Phase 1 should require a feature flag or
+config switch with sequential `dispatch_calls` as the fallback until parity tests pass.
 
-**G6. The ADR needs an explicit parity test list.** The version-pin section points to smoke tests for
-AILANG capabilities, not Motoko behavior. Acceptance should include scripted/provider-stub tests for:
-two independent BashExec calls; mixed BashExec plus ReadFile; policy Deny and Pending; extension
+**G6. The ADR needs an explicit parity test list.** Graph grounding: the test cases come from
+`dispatch_calls` outgoing edges (`dispatch_tool_policy`, `dispatch_tool_handle`, `backend_for_v2`,
+`dispatch_one`, `delegated_deferred_message`, scratchpad helpers) plus source-index hits for batched
+TUI events and `tool_call_id` correlation. Acceptance should include scripted/provider-stub tests
+for: two independent BashExec calls; mixed BashExec plus ReadFile; policy Deny and Pending; extension
 Handled; scratchpad; delegated/ohmy_pi behavior; cancellation before start and during live process
 output; TUI `native_tool_calls`/`native_tool_results` request pairing; and provider replay with
-ordered `tool_call_id`s. Without this list, the design can be "implemented" while losing existing
-contracts.
+ordered `tool_call_id`s.
 
-**G7. "Live tool output" needs a model-vs-UI boundary.** Today's model receives one final tool
-message per call. The ADR says chunks are rendered and accumulated, but it should explicitly forbid
-feeding partial stdout chunks into the model transcript unless a separate provider protocol is
-defined. Otherwise implementers may conflate UI live output with model-visible tool results and break
-the one-assistant-tool_calls to one-set-of-tool-results contract.
+**G7. "Live tool output" needs a model-vs-UI boundary.** Source-index grounding: hits show
+`tool_result_message` and `envelope_to_tool_message` preserve model-facing `tool_call_id`, while TUI
+comments describe separately rendered event payloads. Graph edges do not encode payload data flow.
+The ADR should explicitly forbid feeding partial stdout chunks into the model transcript unless a
+separate provider protocol is defined.
 
-**G8. Backpressure and output limits are not optional implementation details.** `tool_runtime` already
-tracks truncation and byte counts for stdout/stderr. A streamed process source can emit unbounded
-chunks before completion. The ADR should name the per-tool and per-batch byte limits, how truncation is
-represented in the final result, and whether chunks beyond the UI limit are dropped, summarized, or
-only omitted from the live stream. This belongs in the decision because it affects memory safety and
-DST trace size.
+**G8. Backpressure and output limits are not optional implementation details.** Graph/source-index
+grounding: source-index search finds `mk_meta` in `tool_runtime.ail` and its use in Bash/Test/process
+result construction; `invokes` shows `dispatch_one` and `dispatch_tool_envelope` both route through
+`run_native_batch` and `tool_result_item_to_json`. A streamed process source can emit unbounded
+chunks before completion. The ADR should name per-tool and per-batch byte limits, truncation
+representation, and whether chunks beyond the UI limit are dropped, summarized, or only omitted from
+the live stream.
 
 ### Minor / framing
 
-**G9. "Protocol encoding - runtime-checked frame ADTs" needs a failure mode.** The ADR names frame
-ADTs but does not say what happens on malformed, duplicate, out-of-order, or unknown frames. A
-runtime-checked protocol is only useful if invalid frames deterministically produce a tool-result
-error or a loop error. Add the error-state transition and include it in the DST trace vocabulary.
+**G9. "Protocol encoding - runtime-checked frame ADTs" needs a failure mode.** Graph/source-index
+grounding: source-index hits show existing `error_result` machinery in `tool_envelope_dispatch` and
+existing denial/delegated synthetic tool messages in `agent_loop_v2`; the new frame protocol has no
+corresponding `run_tool_select` function in the graph today. Add malformed, duplicate, out-of-order,
+and unknown-frame transitions to the protocol.
 
-**G10. The ADR should distinguish "unchanged hook APIs" from "unchanged hook scheduling."** Hook
-function signatures may stay the same, but policy/handle hooks will no longer necessarily run in
-call-list order once select/deferred frames drive dispatch. That is observable if hooks mutate
-`SharedMem`, emit events, consume budgets, or depend on ordering. Reword the "all four hook points
-unchanged" claim to "APIs unchanged; scheduling contract defined below."
+**G10. The ADR should distinguish "unchanged hook APIs" from "unchanged hook scheduling."** Graph
+grounding: `dispatch_calls` outgoing edges include both hook calls and `emit_event`; `effect_edges`
+for `dispatch_calls` include observable effects (`IO`, `Trace`, `FS`, `Process`, `Clock`) and
+under-approximate the source signature. The graph confirms observability but cannot prove order.
+Reword the claim to "APIs unchanged; scheduling contract defined below."
 
 **G11. `selectEvents` determinism should be scoped to the AILANG scheduler, not to wall-clock I/O.**
-The ADR mostly says this later, but the positive consequence still invites over-reading. External
-process output timing, WebSocket peer timing, and approval input timing remain outside the scheduler
-unless captured and replayed as trace input.
+Graph grounding: `std_calls` in the core graph has no current `selectEvents`/`runEventLoop`/
+`asyncExecProcess` usage in `src/core/**`, so the determinism claim is about proposed new core calls
+plus cited research, not established current core behavior. External process output timing,
+WebSocket peer timing, and approval input timing remain outside the scheduler unless captured and
+replayed as trace input.
 
-**G12. The implementation sketch should stop implying a single generic `source_for(call)`.** That
-helper hides most of the design. A more honest sketch would show `policy_preflight(calls)`,
-`partition(process_live, local_sync, extension_or_deferred, denied)`, and a final
-`assemble_tool_messages_in_call_order(...)`.
+**G12. The implementation sketch should stop implying a single generic `source_for(call)`.** Graph
+grounding: the `dispatch_calls` outgoing edge set fans out to policy, extension, backend choice,
+scratchpad special cases, native dispatch, delegated synthetic results, event emission, and message
+conversion. A more honest sketch would show `policy_preflight(calls)`, `partition(process_live,
+local_sync, extension_or_deferred, denied)`, and `assemble_tool_messages_in_call_order(...)`.
 
 **Revise and re-circulate (stay in `Proposed`).** The decision can remain "adopt Phase-1
 `run_tool_select`," but the ADR should not advance to `Accepted` until it specifies dispatcher
