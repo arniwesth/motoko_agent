@@ -706,8 +706,34 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
   }
 }
 
+func cancelled_tool_message(call: ToolCall, reason: string) -> Message {
+  let payload = encode(jo([
+    kv("error", jb(true)),
+    kv("cancelled", jb(true)),
+    kv("tool", js(call.name)),
+    kv("reason", js(reason))
+  ]));
+  {
+    role: "tool",
+    content: payload,
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+func cancelled_tool_messages(calls: [ToolCall], reason: string) -> [Message] {
+  match calls {
+    [] => [],
+    call :: rest => cancelled_tool_message(call, reason) :: cancelled_tool_messages(rest, reason)
+  }
+}
+
 func run_tool_select_enabled() -> bool ! {Env} {
   getEnvOr("MOTOKO_RUN_TOOL_SELECT", "0") == "1"
+}
+
+func run_tool_select_cancel_requested() -> bool ! {Env} {
+  getEnvOr("MOTOKO_RUN_TOOL_SELECT_CANCEL", "0") == "1"
 }
 
 type ToolSelectPreflight
@@ -920,11 +946,34 @@ func run_tool_select(
   session_id: string
 ) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
   if run_tool_select_enabled() then {
-    let preflight = policy_preflight(rt, ctx, calls, step_idx, stream_id, session_id);
-    run_preflighted_tools(rt, ctx, preflight, workdir, step_idx, stream_id, ohmy_pi, session_id)
+    if run_tool_select_cancel_requested() then
+      cancelled_tool_messages(calls, "cancelled before tool dispatch started")
+    else {
+      let preflight = policy_preflight(rt, ctx, calls, step_idx, stream_id, session_id);
+      run_preflighted_tools(rt, ctx, preflight, workdir, step_idx, stream_id, ohmy_pi, session_id)
+    }
   } else
     dispatch_calls(rt, ctx, calls, workdir, step_idx, stream_id, ohmy_pi, session_id)
 }
+
+pure func test_cancelled_tool_messages_preserve_ids_and_order() -> bool
+  tests [((), true)]
+  {
+    let calls: [ToolCall] = [
+      { id: "a", name: "ReadFile", arguments: "{}" },
+      { id: "b", name: "Search", arguments: "{}" }
+    ];
+    match cancelled_tool_messages(calls, "cancel") {
+      [m1, m2] =>
+        m1.role == "tool"
+          && m2.role == "tool"
+          && m1.tool_call_id == "a"
+          && m2.tool_call_id == "b"
+          && List.length(m1.tool_calls) == 0
+          && List.length(m2.tool_calls) == 0,
+      _ => false
+    }
+  }
 
 -- Dispatch each ToolCall through the full per-call rpc_loop pipeline:
 --   1. Convert ToolCall → ToolCallEnvelope (M1 adapter)
