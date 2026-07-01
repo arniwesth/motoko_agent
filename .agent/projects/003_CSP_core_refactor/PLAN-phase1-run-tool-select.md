@@ -86,6 +86,71 @@ diverge.
 
 ---
 
+## Architecture (the new tool phase)
+
+The coordinator, model call, and hooks are unchanged; the diagram details only what
+`run_tool_select` replaces. Numbered stages ①–④ map to the work items; `#N` tags the contract each
+stage holds. Note the two **separate** stages (native concurrent vs. deferred sequential) — forced by
+`std/stream.ail:166` (exiting `selectEvents` to deferred-dispatch would kill live process sources).
+
+```mermaid
+flowchart TD
+    CS1["loop_v2 tool-calls arm<br/>agent_loop_v2.ail:1454<br/>(result.tool_calls)"]
+    CS2["loop_v2 hybrid arm<br/>agent_loop_v2.ail:1341<br/>(single synth_call)"]
+    CS1 --> RTS
+    CS2 --> RTS
+    RTS(["run_tool_select(rt, ctx, calls, ..., control)<br/>flag MOTOKO_RUN_TOOL_SELECT (default off to dispatch_calls)"])
+
+    RTS --> PF["1. policy_preflight  #2 / WI-1<br/>resolve dispatch_tool_policy for whole batch first<br/>Pending blocks on readLine() :769 up front"]
+    PF -->|Deny or Pending-denied| DEN["denied: policy_denied_message"]
+    PF -->|"Allow / NoOpinion"| PART
+
+    PART{"2. partition calls  #1 #3 #8 / WI-2<br/>split by tool kind"}
+    PART -->|"ReadFile/Write/Edit/Search"| SYNC["local-sync arm<br/>synchronous, NOT a source<br/>dispatch_one :174 (result shape identical)"]
+    PART -->|"scratchpad"| SCR["scratchpad special-case :868<br/>exec_scratchpad_cell_ws<br/>NOT dispatch_tool_envelope :37-38"]
+    PART -->|"bash: streaming / parallel_safe"| SEL
+    PART -->|"extension Handled / delegated / FS"| DEF_IN
+
+    subgraph STAGEA["3a. NATIVE concurrent stage  #6 / WI-3, WI-5"]
+      SEL["selectEvents(sources + control) :160<br/>handler (StreamEvent) -> bool<br/>stop on false / idle / max-duration :159"]
+      SRC1["asyncExecProcess :173<br/>name = tool_call_id"]
+      SRC2["asyncExecProcess :173<br/>name = tool_call_id"]
+      CTRL["control / cancel source<br/>MAX priority :171 (higher = checked first)"]
+      SRC1 -->|"SourceBytes(name, bytes)"| SEL
+      SRC2 -->|"SourceBytes(name, bytes)"| SEL
+      CTRL -->|Cancel| SEL
+    end
+
+    subgraph STAGEB["3b. DEFERRED sequential stage  #1 #7 / WI-3"]
+      DEF_IN["one blocking dispatch at a time<br/>(deferred-yield; never nested in the native select)"]
+      DTE["dispatch_tool_envelope :36<br/>dispatch_tool_handle :811<br/>delegated_deferred_message :675"]
+      DEF_IN --> DTE
+    end
+
+    SEL -->|"live stdout, distinct stream_id (NOT model's :1196-1201)"| TUI["TUI only<br/>never appended to model transcript  #6"]
+    SEL -->|per-call result| ASM
+    SEL -.->|"Cancel: handler->false, disconnect(conn) :126, exit reaps sources :166"| CANCEL["synthesize cancelled msgs<br/>for every call w/o result  #4 / WI-6"]
+
+    DTE --> ASM
+    SYNC --> ASM
+    SCR --> ASM
+    DEN --> ASM
+    CANCEL --> ASM
+
+    ASM["4. assemble  #4 #5 / WI-4<br/>collect by tool_call_id, emit in call order<br/>every call -> 1 tool-role msg, non-empty id"]
+    ASM --> OUT(["[Message] back to loop_v2<br/>provider-valid transcript (id-correlation, no empty id -> 422)"])
+    OUT -.->|"batched native_tool_calls / native_tool_results request_id :1447-1455"| TUI
+```
+
+*Reading it:* the batch is **preflighted** (①), **partitioned** (②) into arms, the native arm streams
+concurrently under one `selectEvents` while the deferred arm runs sequentially in the enclosing
+context (③a/③b — separate stages), and all per-call results (native, deferred, sync, scratchpad,
+denied, cancelled) are **collected by `tool_call_id` and emitted in call order** (④) into a
+provider-valid `[Message]`. Live stdout is a UI-only side channel keyed by a per-`tool_call_id`
+`stream_id`, never fed to the model transcript.
+
+---
+
 ## Work breakdown
 
 The spine is 9 work items (WI-0…WI-8), each **independently shippable behind the flag with the old
