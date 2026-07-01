@@ -710,6 +710,202 @@ func run_tool_select_enabled() -> bool ! {Env} {
   getEnvOr("MOTOKO_RUN_TOOL_SELECT", "0") == "1"
 }
 
+type ToolSelectPreflight
+  = PreflightAllowed(ToolCall)
+  | PreflightReady(Message)
+
+func resolve_pending_denial(raw: string, default: PolicyDefault) -> Option[string] {
+  if raw == "" then
+    match default {
+      AllowAfterTimeout => None,
+      DenyAfterTimeout => Some("timeout — no approval received")
+    }
+  else
+    match decode(raw) {
+      Err(_) =>
+        match default {
+          AllowAfterTimeout => None,
+          DenyAfterTimeout => Some("unparseable response — default deny applied")
+        },
+      Ok(obj) => {
+        let cmd_type = msg_get_str(obj, "type");
+        if cmd_type == "approve" then None
+        else if cmd_type == "deny" then {
+          let r = msg_get_str(obj, "reason");
+          Some(if r == "" then "denied by operator" else r)
+        }
+        else
+          match default {
+            AllowAfterTimeout => None,
+            DenyAfterTimeout => Some("unknown approval command — default deny applied")
+          }
+      }
+    }
+}
+
+func emit_tool_denied_event(session_id: string, step_idx: int, stream_id: string, call: ToolCall, reason: string) -> () ! {IO, Trace} {
+  emit_event(session_id, "native_tool_denied", [
+    kv("step", jnum(_int_to_float(step_idx))),
+    kv("stream_id", js(stream_id)),
+    kv("tool", js(call.name)),
+    kv("id", js(call.id)),
+    kv("reason", js(reason))
+  ])
+}
+
+func policy_preflight(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  calls: [ToolCall],
+  step_idx: int,
+  stream_id: string,
+  session_id: string
+) -> [ToolSelectPreflight] ! {IO, Clock, Trace} {
+  match calls {
+    [] => [],
+    call :: rest => {
+      let envelope = tool_call_to_envelope(call);
+      let policy = dispatch_tool_policy(rt, ctx, envelope);
+      let head = match policy {
+        Deny(reason) => {
+          let _ = emit_tool_denied_event(session_id, step_idx, stream_id, call, reason);
+          PreflightReady(policy_denied_message(call, reason))
+        },
+        Pending(reason, default) => {
+          let _ = emit_event(session_id, "tool_pending", [
+            kv("step", jnum(_int_to_float(step_idx))),
+            kv("stream_id", js(stream_id)),
+            kv("tool", js(call.name)),
+            kv("id", js(call.id)),
+            kv("reason", js(reason))
+          ]);
+          let raw = readLine();
+          match resolve_pending_denial(raw, default) {
+            Some(denial_reason) => {
+              let _ = emit_tool_denied_event(session_id, step_idx, stream_id, call, denial_reason);
+              PreflightReady(policy_denied_message(call, denial_reason))
+            },
+            None => PreflightAllowed(call)
+          }
+        },
+        _ => PreflightAllowed(call)
+      };
+      head :: policy_preflight(rt, ctx, rest, step_idx, stream_id, session_id)
+    }
+  }
+}
+
+func dispatch_allowed_call(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  call: ToolCall,
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  session_id: string
+) -> Message ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+  let envelope = tool_call_to_envelope(call);
+  if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
+    let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
+    let result_env: ToolResultEnvelope = {
+      tool_call_id: envelope.id,
+      tool: "scratchpad",
+      exit_code: result_cell.exit_code,
+      stdout: result_cell.stdout,
+      stderr: result_cell.stderr,
+      metadata: result_cell.metadata
+    };
+    let _ = emit_event(session_id, "ext_tool_handled", [
+      kv("step", jnum(_int_to_float(step_idx))),
+      kv("stream_id", js(stream_id)),
+      kv("tool", js(call.name)),
+      kv("id", js(call.id)),
+      kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
+    ]);
+    let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+    {
+      role: "tool",
+      content: result_env_model_content(result_env),
+      tool_calls: [],
+      tool_call_id: call.id
+    }
+  } else {
+    let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+    match handle_decision {
+      Handled(result_env) => {
+        let _ = emit_event(session_id, "ext_tool_handled", [
+          kv("step", jnum(_int_to_float(step_idx))),
+          kv("stream_id", js(stream_id)),
+          kv("tool", js(call.name)),
+          kv("id", js(call.id)),
+          kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
+        ]);
+        let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+        {
+          role: "tool",
+          content: result_env_model_content(result_env),
+          tool_calls: [],
+          tool_call_id: call.id
+        }
+      },
+      Delegate => {
+        let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
+        match backend {
+          Delegated => {
+            let _ = emit_event(session_id, "delegated_tool_deferred", [
+              kv("step", jnum(_int_to_float(step_idx))),
+              kv("stream_id", js(stream_id)),
+              kv("tool", js(call.name)),
+              kv("id", js(call.id))
+            ]);
+            delegated_deferred_message(call)
+          },
+          Native => {
+            let _ = emit_event(session_id, "v2_tool_dispatch_start", [
+              kv("step", jnum(_int_to_float(step_idx))),
+              kv("stream_id", js(stream_id)),
+              kv("tool", js(call.name)),
+              kv("id", js(call.id))
+            ]);
+            let result_content = dispatch_one(workdir, call);
+            let _ = emit_event(session_id, "v2_tool_dispatch_complete", [
+              kv("step", jnum(_int_to_float(step_idx))),
+              kv("stream_id", js(stream_id)),
+              kv("id", js(call.id))
+            ]);
+            tool_result_message(call, result_content)
+          }
+        }
+      }
+    }
+  }
+}
+
+func run_preflighted_tools(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  items: [ToolSelectPreflight],
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  session_id: string
+) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+  match items {
+    [] => [],
+    item :: rest =>
+      match item {
+        PreflightReady(msg) =>
+          msg :: run_preflighted_tools(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id),
+        PreflightAllowed(call) => {
+          let msg = dispatch_allowed_call(rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, session_id);
+          msg :: run_preflighted_tools(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
+        }
+      }
+  }
+}
+
 -- Phase-1 scaffold for the CSP tool phase. WI-0 intentionally preserves the
 -- old sequential dispatcher for both flag states; later WIs fill in the
 -- flagged branch while the flag-off path remains the revert boundary.
@@ -723,9 +919,10 @@ func run_tool_select(
   ohmy_pi: bool,
   session_id: string
 ) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
-  if run_tool_select_enabled() then
-    dispatch_calls(rt, ctx, calls, workdir, step_idx, stream_id, ohmy_pi, session_id)
-  else
+  if run_tool_select_enabled() then {
+    let preflight = policy_preflight(rt, ctx, calls, step_idx, stream_id, session_id);
+    run_preflighted_tools(rt, ctx, preflight, workdir, step_idx, stream_id, ohmy_pi, session_id)
+  } else
     dispatch_calls(rt, ctx, calls, workdir, step_idx, stream_id, ohmy_pi, session_id)
 }
 
