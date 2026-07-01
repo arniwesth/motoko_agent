@@ -675,6 +675,9 @@ Graph/source-index facts this review relies on:
 - Source-index hits find `tool_result_item_to_json` at `tool_dispatch_adapter.ail:66,178` and
   `tool_envelope_dispatch.ail:5,48`; they find `mk_meta` and stdout/stderr truncation metadata at
   `tool_runtime.ail:183,851,869,908,917`.
+- Source-index hits find process capability flags `streaming`, `needs_stderr_live`, and
+  `needs_hard_cancel` in `tool_runtime.ail:118-120,881-886`; today's native runtime returns a
+  delegated-backend error for those features rather than implementing them in-process.
 - `effect_edges` under-approximate some declared rows, as GLM already noted; for example graph rows
   for `dispatch_calls` show only `Clock/FS/IO/Process/Trace` despite the source signature declaring
   more effects. This review uses graph reachability to identify contracts and source signatures for
@@ -696,22 +699,24 @@ dispatcher, but it is not.** Current native execution is not just `bash` stdout.
 metadata, `stdout`/`stderr` hashes, exit codes, and tool-specific JSON shapes. The ADR's
 `asyncExecProcess` source only explains live stdout for subprocess-like tools; it does not explain
 how `ReadFile`/`WriteFile`/`EditFile`/`Search` remain synchronous, how stderr and exit code are
-captured for live process tools, or how the final model-facing JSON remains compatible with
-`tool_result_item_to_json`. Required fix: define the Phase-1 dispatch matrix per tool kind:
+captured for live process tools, or how this relates to today's `streaming`/`needs_stderr_live`/
+`needs_hard_cancel` flags, which `tool_runtime` currently classifies as delegated-supervisor features
+rather than native in-process features. It also does not state how the final model-facing JSON remains
+compatible with `tool_result_item_to_json`. Required fix: define the Phase-1 dispatch matrix per tool kind:
 unchanged synchronous local tools, live-process tools, extension-handled tools, delegated tools, and
 cancelled tools; for each, state the final `Message.content` shape and whether it is expected to
 match today's `dispatch_one` output.
 
-**G2. `Pending` policy decisions are incompatible with the advertised concurrent select phase unless
-they are resolved before source startup.** Graph grounding: `callers dispatch_tool_policy` shows
+**G2. The current `Pending` approval mechanism is incompatible with the advertised concurrent select
+phase unless approvals are resolved before source startup or moved onto a nonblocking source.** Graph grounding: `callers dispatch_tool_policy` shows
 `dispatch_calls` and `dispatch_tool_envelope` as direct callers; source-index hits show the
 `Pending` arm in `dispatch_calls` and the `Pending` merge contract in `ext/runtime`. `dispatch_calls`
 handles `Pending` by emitting `tool_pending` and then blocking on `readLine()`
 (`agent_loop_v2.ail:762-794`; blocking is source/stdlib-grounded, not graph-proven). If
 `run_tool_select` starts other tool sources first and then hits a pending approval path, the whole
 event loop is blocked in stdin approval and the control/cancel source cannot be observed. Required
-fix: specify a policy preflight stage, or explicitly state that `Pending` pauses all in-flight
-concurrency and why that is acceptable.
+fix: specify a policy preflight stage, make approval input a proper select source, or explicitly
+state that `Pending` pauses all in-flight concurrency and why that is acceptable.
 
 **G3. The scratchpad fast path will regress if `run_tool_select` uses `dispatch_tool_envelope`
 naively.** Graph grounding: `invokes` for `dispatch_calls` includes `is_scratchpad_tool_name`,
