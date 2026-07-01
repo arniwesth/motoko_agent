@@ -45,8 +45,8 @@ Per ADR Decision + Open Questions, treat as **decided**, not design space:
 - Protocol = **runtime-checked frame ADTs** (`run` / `tool-request` / `tool-result` / `done`).
 - Q2 tool-result ordering → contract #4 (id-correlation is the hard rule; call-order is soft).
 - Q3 concurrency opt-in → contract #8 (`parallel_safe` flag; default sequential).
-- Only **Open Q #1** (control-source priority value + `disconnect`/loop-exit interleave) stays open,
-  pinned by the cancellation smoke (WI-7 / G6(g)).
+- Only **Open Q #1** (control-source priority value + `disconnect`/`selectEvents`-exit interleave)
+  stays open, pinned by the cancellation smoke (WI-6 implements; G6(g) validates).
 
 If implementation surfaces a *genuinely new* gap (not a re-litigation), record it under
 "Plan notes / ADR feedback" below and flag it for the ADR's `## Review Comments` — do not silently
@@ -113,7 +113,10 @@ control source can't be observed while stdin blocks).
   for every call; `Deny`/`Pending` are settled before the select; only `Allow`/`NoOpinion` calls
   enter the partition.
 - **Contracts satisfied:** **#2** (policy preflight — no stdin deadlock). Making approval its own
-  select source is explicitly Phase-2 (contract #2, non-goals).
+  select source is explicitly Phase-2 (contract #2, non-goals) — and is *grounded*: the substrate
+  primitive already exists (`asyncReadStdinLines(name, priority) -> StreamSource`,
+  `std/stream.ail:151`), so Phase 2's "approval as a select source" is a real, not speculative, path.
+  Phase 1 keeps the simpler preflight.
 - **Test:** G6(c) — a `Deny` and a `Pending` (approve, deny, and EOF→default) each resolve before any
   source starts; assert the control source is observable throughout (no stdin block during select).
 - **Revert:** flag off.
@@ -170,33 +173,61 @@ special-case ahead of the deferred arm.
 
 ### WI-3 — The select loop + frame ADTs (contract #7)
 
-Generalize `loop_until_done` (`ws_loopback.ail:194`) into the core: native-subprocess arm as
-concurrent `asyncExecProcess` sources with live stdout; deferred arm as **one-at-a-time**
-`dispatch_tool_envelope`-style dispatch in the enclosing context; the control source present (inert
-until WI-6). This is the first WI that makes the core call `selectEvents`/`runEventLoop` — today
-**zero** `std/stream` primitives exist in `src/core/**` (ADR M3; grep-confirmed).
+Generalize the shipped loop into the core. `ws_loopback` uses **single-connection** `runEventLoop`
+(`std/stream.ail:120`, one WS `conn`); `run_tool_select` needs the **multi-source** multiplexer
+`selectEvents(sources: [StreamSource], handler: (StreamEvent) -> bool)` (`std/stream.ail:160`). This is
+the first WI that makes the core call `std/stream` — today **zero** `std/stream` primitives exist in
+`src/core/**` (ADR M3; grep-confirmed). All primitives named here are **verified present in the
+installed `std/stream.ail` on v0.26.0** (see the Substrate-primitive log at the end): `selectEvents:160`,
+`asyncExecProcess:173`, `sourceOfConn:143`, `disconnect:126`, `transmit:99`, `StreamEvent` type `:53`.
 
 - **Files touched:** `src/core/run_tool_select.ail` (the `selectEvents` handler + the frame ADTs);
   new frame types (suggest `src/core/tool_select_frames.ail`).
-- **Frame ADTs (contract #7, runtime-checked).** Define `run` / `tool-request` / `tool-result` /
-  `done` as sum types, and **transitions for malformed / duplicate / out-of-order / unknown frames**,
-  reusing the existing `error_result` machinery (`tool_envelope_dispatch.ail:13`,
-  `error_result(call, message)`) so out-of-protocol frames are **rejected**, not silently accepted.
-  Any unavoidable handler-side error surfaces via a `done{status:error}` frame / result sentinel —
-  **process exit cannot be relied on** (RESEARCH §6 gotcha 2; ADR Constraints).
-- **Deferred arm discipline.** Do the effectful dispatch **outside** the `selectEvents` handler
-  (deferred-yield: capture frame in handler → exit loop → dispatch in enclosing function → `transmit`
-  → re-enter), exactly as `ws_loopback` does (`collect_one:154`, `dispatch_deferred_request:183`,
-  `loop_until_done:194`). Two deferred tools do **not** run concurrently (ADR B3): the deferred arm is
-  sequential by construction.
-- **Native arm.** `asyncExecProcess` sources stream stdout concurrently (read-only, die with the
-  loop — RESEARCH §7). No per-source `kill` exists; that constraint is load-bearing for WI-6.
+- **Frame ADTs (contract #7, runtime-checked) — scoped to the *deferred loopback* protocol.** The
+  `run` / `tool-request` / `tool-result` / `done` frames are the **deferred-arm** WS loopback protocol
+  (the ws_loopback shape), **not** the native arm — native process sources deliver `StreamEvent`
+  (`SourceBytes`/`SourceText`, `std/stream.ail:53`) directly, no frame layer. Define the frame sum
+  types + **transitions for malformed / duplicate / out-of-order / unknown frames**, reusing the
+  existing `error_result` machinery (`tool_envelope_dispatch.ail:13`, `error_result(call, message)`) so
+  out-of-protocol frames are **rejected**, not silently accepted. Any unavoidable handler-side error
+  surfaces via a `done{status:error}` frame / result sentinel — **process exit cannot be relied on**
+  (RESEARCH §6 gotcha 2; ADR Constraints).
+- **Chunk→tool routing is by source *name*, not index (corrects the ADR §12 sketch).** The real event
+  is `SourceBytes(name, bytes)` / `SourceText(name, string)` (`std/stream.ail:53`), and
+  `asyncExecProcess(cmd, args, name, priority, chunkSize)` (`:173`) matches chunks by the `name` string
+  — **not** by the `tool_i` index the sketch shows. **Decision:** set each native source's `name =
+  tool_call_id` (or a bijective key), so `SourceBytes(name, …)` routes to the right call. This also
+  supplies the per-`tool_call_id` separation contract #6 needs (WI-5).
+- **Native arm = concurrent process sources under ONE `selectEvents`.** `asyncExecProcess` sources
+  (`:173`, read-only stdout in `chunkSize`-byte events) stream concurrently; same-priority sources
+  round-robin (`:158`). The handler returns **`false`** to stop (`selectEvents` "stops when handler
+  returns false, idle timeout, or max duration", `:159`).
+- **Deferred arm = sequential blocking, in the enclosing context — NOT interleaved into the concurrent
+  select (new finding, `std/stream.ail:166`).** The `ws_loopback` deferred-yield discipline (capture →
+  exit loop → dispatch effectfully in the enclosing function → `transmit` → re-enter;
+  `collect_one:154`, `dispatch_deferred_request:183`, `loop_until_done:194`) **exits the loop to
+  dispatch** — but exiting `selectEvents` **kills every live process source** ("the subprocess is
+  killed when the source is closed or `selectEvents` exits", `std/stream.ail:166`). Therefore a mixed
+  batch **cannot** deferred-yield while native sources stream, or it reaps them mid-stream.
+  **Decision:** run the two arms as **separate stages**, never one interleaved select — the concurrent
+  native-process stage under `selectEvents` to completion/cancellation, and the deferred arm as
+  one-blocking-dispatch-at-a-time in the enclosing sequential context (its own single-conn
+  `runEventLoop`/`transmit` per `ws_loopback`, or a direct blocking `dispatch_tool_envelope`). Two
+  deferred tools never run concurrently (ADR B3); a deferred dispatch never nests inside the native
+  select.
+- **`selectEvents` self-stop conditions affect completeness (contract #4).** Because `selectEvents`
+  can also stop on **idle timeout / max duration** (`:159`), not only handler-`false`, WI-4 assembly
+  must synthesize a result for **every** call still unfinished when the select returns for *any*
+  reason — a hung/slow tool must not orphan a `tool_call_id`.
 - **Iteration bound.** Seed `ws_loopback`'s `remaining` cap (32, `loop_until_done` at
-  `ws_loopback.ail:194-195`) to bound the loop.
+  `ws_loopback.ail:194-195`) to bound the deferred re-entry loop.
 - **Contracts satisfied:** **#7** (frame failure modes). Lays the substrate for #4/#5/#6.
-- **Test:** G6(a) two independent `BashExec` calls run concurrently (native arm); a frame-protocol
-  unit test drives malformed/duplicate/out-of-order/unknown frames and asserts rejection via
-  `error_result`.
+- **Test:** G6(a) two independent `BashExec` calls produce **correct, id-correlated results** through
+  `run_tool_select` (the parity floor). *Concurrency* of the two is asserted only once (i) the
+  live-process arm is validated (Plan-notes 4 substrate smoke) **and** (ii) they are `parallel_safe`
+  (bash is not read-only, so contract #8 keeps them sequential by default — WI-8 widening). Also: a
+  frame-protocol unit test drives malformed/duplicate/out-of-order/unknown frames and asserts
+  rejection via `error_result`.
 - **Revert:** flag off.
 - **Dependency:** WI-1 (no live `Pending`), WI-2 (partition feeds the two arms).
 
@@ -234,13 +265,18 @@ Wire live tool stdout to the **UI only**, and preserve the batched TUI event bra
 - **Model-vs-UI boundary (contract #6, G7).** Partial stdout chunks are **never** appended to the
   model transcript — the model still receives **one final tool-role message per call** (contract #1);
   live chunks render to the TUI exclusively.
-- **`stream_id` allocation (contract #6, S2).** Tool stdout gets a **distinct `stream_id` per
-  `tool_call_id`**, **not** the model's `stream_id` (which keys `thinking_delta`/`text_delta` at
-  `agent_loop_v2.ail:1196-1201` via `emit_stream_chunk`). Prevents conflating tool output with model
-  tokens in the TUI per-`stream_id` buffer.
-- **Backpressure / truncation (contract #6, G8).** Carry per-tool and per-batch **byte limits +
-  truncation** from `mk_meta` (`tool_runtime.ail:183`). Chunks beyond the live-stream limit are
-  omitted from the UI stream, but the **final message still reports the truncation metadata**.
+- **Two `tool_call_id`-keyed namespaces (contract #6, S2).** There are **two** distinct ids to derive
+  from `tool_call_id`, not one: (a) the `selectEvents` **source `name`** passed to `asyncExecProcess`
+  (`std/stream.ail:173`), which routes `SourceBytes(name, …)` chunks to the right tool (WI-3); and
+  (b) the TUI **`stream_id`** on the emitted chunk event. Both must be per-`tool_call_id`, and the TUI
+  `stream_id` must **not** be the model's `stream_id` (which keys `thinking_delta`/`text_delta` at
+  `agent_loop_v2.ail:1196-1201` via `emit_stream_chunk`) — otherwise tool output and model tokens
+  collide in the TUI per-`stream_id` buffer.
+- **Backpressure / truncation (contract #6, G8).** The live event granularity is `asyncExecProcess`'s
+  `chunkSize` bytes-per-event (`std/stream.ail:173`); set it deliberately (the stdlib suggests 4096–65536).
+  Carry per-tool and per-batch **byte limits + truncation** from `mk_meta` (`tool_runtime.ail:183`).
+  Chunks beyond the live-stream limit are omitted from the UI stream, but the **final message still
+  reports the truncation metadata**.
 - **Event ordering & TUI pairing (contract #5, S1/G10).** Keep the batched `native_tool_calls` (pre,
   `:1448`) / `native_tool_results` (post, `:1455`) pair **bracketing** `run_tool_select`, keyed by
   `request_id = "step-${step_idx}"` (`:1447`) — the TUI's `request_id` pairing is preserved. The
@@ -257,19 +293,32 @@ Wire live tool stdout to the **UI only**, and preserve the batched TUI event bra
 
 ### WI-6 — Cancellation (contract #4; pins Open Q #1)
 
-Make the control source real and implement the reap sequence.
+Make the control source real and implement the reap sequence. Cancellation is **two-stage** because
+the two arms are separate stages (WI-3): during the **native concurrent stage** the control source
+lives inside `selectEvents`; during the **deferred sequential stage** the control is checked *between*
+dispatches (an in-flight deferred dispatch cannot be preempted).
 
 - **Files touched:** `src/core/run_tool_select.ail` (control-source priority, teardown, synthetic
   cancelled messages); reuse the `delegated_deferred_message` envelope shape (`:675`) for the
   cancelled sentinel.
-- **Reap sequence (ADR contract #4 "Recommended reap sequence").** (i) control source at **highest
-  `selectEvents` priority** so `Cancel` is seen at the next boundary; (ii) stop admitting new deferred
-  dispatches; (iii) `disconnect` each WebSocket source; (iv) exit `runEventLoop`, which reaps **all**
-  `asyncExecProcess` process sources together (they die with the loop — RESEARCH §7); (v) synthesize a
-  cancelled tool-role message for **every** call without a result. Bound teardown with the
-  `remaining=32` cap (`ws_loopback.ail:194`).
-- **Substrate-forced limits (not choices).** **No per-source `kill`** (RESEARCH §7) ⇒ loop-exit is
-  all-or-nothing: reaping one subprocess ends its siblings, which take the synthetic-cancelled path.
+- **Control source = a real `StreamSource` at max priority.** `selectEvents` priority is an `int`,
+  **"higher = checked first"** (`std/stream.ail:171`), so the control source gets a priority strictly
+  greater than any tool source's — `Cancel` is then seen at the next select boundary. This is the
+  concrete form of Open Q #1's "exact priority value."
+- **Reap sequence (ADR contract #4).** (i) control source at max priority (above); (ii) stop admitting
+  new deferred dispatches; (iii) **`disconnect` the underlying `StreamConn`** of each WS source —
+  `disconnect` takes a `StreamConn` (`std/stream.ail:126`), and WS sources are built from a conn via
+  `sourceOfConn(conn, name, priority)` (`:143`), so you disconnect the conn, not the source handle;
+  (iv) **have the handler return `false` so `selectEvents` exits**, which reaps **all**
+  `asyncExecProcess` process sources together ("the subprocess is killed when the source is closed or
+  `selectEvents` exits", `std/stream.ail:166`) — note this is `selectEvents` exiting, **not**
+  `runEventLoop`; (v) synthesize a cancelled tool-role message for **every** call without a result.
+  Bound the deferred re-entry with the `remaining=32` cap (`ws_loopback.ail:194`).
+- **Substrate-forced limits (not choices).** **No per-`StreamSource` `kill`** — verified against the
+  `std/stream.ail` export surface: the only teardown primitives are `disconnect(conn: StreamConn)`
+  (`:126`, WS-only) and `selectEvents` exit (`:166`); there is no `close(source)` for a process source
+  (RESEARCH §7 confirmed at the stdlib). ⇒ loop-exit is all-or-nothing: reaping one subprocess ends
+  its siblings, which take the synthetic-cancelled path.
   An in-flight **deferred** dispatch **cannot** be preempted — only pending (not-yet-dispatched)
   deferred tools are cancellable; a deferred call already mid-blocking runs to completion (kept if it
   returns before teardown, else marked cancelled). These are honest limits, surfaced in the ADR
@@ -278,8 +327,10 @@ Make the control source real and implement the reap sequence.
   in-flight-cancelled calls each get a synthetic tool-role message carrying an `error`/cancelled
   sentinel (same envelope shape as `delegated_deferred_message`), each with its non-empty
   `tool_call_id` so WI-4's hard invariant still holds.
-- **Open Q #1 (the one residual).** The **exact control-source priority value** and whether
-  `disconnect` must strictly precede loop-exit or may interleave is pinned empirically by the
+- **Open Q #1 (the one residual, now narrowed).** The mechanism is grounded (control = max-priority
+  `int` source, `:171`; reap = `selectEvents` exit, `:166`; WS teardown = `disconnect(conn)`, `:126`).
+  What stays empirical: the **exact priority value** (how far above the tool sources) and whether
+  `disconnect(conn)` must strictly precede the `selectEvents` exit or may interleave — pinned by the
   cancellation smoke (G6(g)).
 - **Contracts satisfied:** **#4** (cancellation transcript + reap policy). Resolves Open Q #1 via
   the smoke.
@@ -320,7 +371,8 @@ Author the parity suite as scripted/provider-stub tests, then flip the default o
   scripted harness under the project's test tree that runs each case with the flag **on** and asserts
   parity against the flag-**off** (`dispatch_calls`) baseline.
 - **Parity list (all scripted / provider-stub — no live network, no Ollama/OpenRouter):**
-  (a) two independent `BashExec` (concurrent native arm) · (b) mixed `BashExec` + `ReadFile` ·
+  (a) two independent `BashExec` (correct id-correlated results; concurrent only when `parallel_safe`
+  + live-process arm validated) · (b) mixed `BashExec` + `ReadFile` ·
   (c) policy `Deny` and `Pending` (preflight) · (d) extension `Handled` · (e) scratchpad cell ·
   (f) delegated / `ohmy_pi` routing · (g) cancellation before start **and** during live output ·
   (h) TUI `native_tool_calls`/`native_tool_results` `request_id` pairing · (i) provider replay with
@@ -406,7 +458,24 @@ the risk to `run_tool_select` + the 8 contracts, not the coordinator scaffold.
 - **Live-process arm is new in-brain territory.** Today `streaming`/`needs_stderr_live`/
   `needs_hard_cancel` return a delegated-backend error (`tool_runtime.ail:885-886`); WI-3/WI-5 are the
   first time those execute in-brain via `asyncExecProcess`. Verify the result still carries stderr +
-  exit code + truncation meta (matrix row, contract #1) — this is the highest-novelty seam.
+  exit code + truncation meta (matrix row, contract #1) — this is the highest-novelty seam. **Open
+  substrate question:** `asyncExecProcess` documents only **stdout as `SourceBytes`**
+  (`std/stream.ail:15,164`); how a process source surfaces **stderr and exit code** is *undocumented*
+  (a `Closed(int, string)` event exists, `:57`, but the docs describe it in the WS-close sense, not as
+  a process exit-code carrier). WI-3 must **empirically determine** how the live-process arm obtains
+  stderr + exit code (source event vs. a separate completion call); if the substrate cannot supply
+  them live, live-process tools may need to stay on the delegated backend for Phase 1. Pin this with a
+  small `asyncExecProcess` smoke before committing the live-process arm.
+- **Two-arm phasing is forced, not stylistic (`std/stream.ail:166`).** A mixed batch cannot interleave
+  concurrent native streaming with deferred-yield dispatch in one `selectEvents` (exiting the select
+  to dispatch kills the live process sources). WI-3 runs the arms as separate stages. Risk: the staging
+  changes wall-clock interleaving of a mixed batch vs today's strict call-order fold — acceptable under
+  contract #5 (per-call event sub-order is explicitly no longer call-order), but call it out in review.
+- **`selectEvents` self-stop (idle timeout / max duration, `:159`) can end the select before all tools
+  finish.** WI-4 assembly must synthesize a result for every unfinished `tool_call_id` on *any* select
+  return, not only on cancel — otherwise a slow/hung tool orphans an id and the next model step 422s
+  (contract #4). Confirm the idle-timeout/max-duration knobs (if configurable) are set sanely for
+  long-running bash.
 - **Code-graph is STALE-prone and under-approximates effect rows.** Trust source signatures for the
   effect ceiling (`:740`, `:1125`), not the graph (ADR provenance (b)). Re-run
   `tools/code-graph/extract.sh` before leaning on any `invokes`/`effect_edges` claim.
@@ -429,8 +498,10 @@ the risk to `run_tool_select` + the 8 contracts, not the coordinator scaffold.
 
 ## Plan notes / ADR feedback
 
-No settled decision is re-opened here. Two items for the ADR authors' attention (candidates for the
-ADR's `## Review Comments`, **not** silent divergence):
+No settled decision is re-opened here. Four items for the ADR authors' attention (candidates for the
+ADR's `## Review Comments`, **not** silent divergence) — items 3 and 4 are *new substrate findings*
+surfaced by reading the installed `std/stream.ail` this session, which the ADR's illustrative §12
+sketch does not account for:
 
 1. **`run_tool_select` argument list.** `dispatch_calls` takes
    `(rt, ctx, calls, workdir, step_idx, stream_id, ohmy_pi, session_id)` (`agent_loop_v2.ail:731`).
@@ -445,6 +516,21 @@ ADR's `## Review Comments`, **not** silent divergence):
    from the deferred/delegated/handle leaves and the events. `run_tool_select` must declare the full
    `dispatch_calls` row (it does the same leaf work); the local-sync arm's narrow row is a subset.
    Noted so WI-0 copies `:740`, not `:174`.
+3. **The §12 sketch's single-`selectEvents`-with-`ToolRequest`-arm is not implementable as drawn.**
+   The sketch shows one `selectEvents` whose handler both streams `SourceBytes` *and* does a deferred
+   `dispatch_tool_envelope` on a `ToolRequest` frame. But deferred dispatch requires **exiting** the
+   select (the ws_loopback discipline), and exiting `selectEvents` **kills every live process source**
+   (`std/stream.ail:166`). So a mixed batch cannot do both in one select — the native concurrent arm
+   and the deferred arm must be **separate stages** (WI-3 decision). This does not change the ADR
+   decision (deferred dispatch, two arms), but the sketch's shape misleads; recommend the ADR note
+   the arms are sequential *stages*, not one interleaved select.
+4. **`asyncExecProcess` stderr / exit-code delivery is undocumented — a live-process-arm viability
+   risk.** The stdlib documents only stdout→`SourceBytes` for process sources (`std/stream.ail:15,164`);
+   the matrix (contract #1) requires the live-process result to still carry stderr + exit code +
+   truncation meta. Whether the substrate can supply those *live* (vs. only via the delegated backend)
+   is unverified. If it cannot, live-process tools stay delegated in Phase 1 and the "concurrent live
+   output" Positive shrinks to read-only-query concurrency. Recommend the ADR flag this as a
+   validation gate (a small `asyncExecProcess` smoke), not an assumed capability.
 
 ---
 
@@ -456,12 +542,14 @@ code-graph, per `tools/code-graph/AGENTS.md`):
 | Claim | Anchor | ✓ |
 |---|---|---|
 | Two `dispatch_calls` call sites | `agent_loop_v2.ail:1341` (hybrid `[synth_call]`), `:1454` (`result.tool_calls`) | ✓ |
+| Hybrid arm synthesizes 1 call | `extract_bash` import `:51`; `synthesize_hybrid_bash_call:661`; `synth_call` built `:1315`, dispatched `:1341`; `hybrid_tools` param `:1111` | ✓ |
+| Extension-handled dispatch | `dispatch_tool_handle` import `:60`, called `:811`/`:894`; `Handled(result_env)` `:813` | ✓ |
 | `dispatch_calls` def + effect row | `:731`; row `{FS,Process,IO,Clock,AI,Env,Net,SharedMem,Stream,Trace}` `:740` | ✓ |
 | Sequential fold recursion | `call :: rest` `:743`(≈); recurses on `rest` `:756` (+ `:807,828,841,857,892,915,942,962`) | ✓ |
-| `Pending` blocks on `readLine()` | `Pending(reason, default)` `:758` → `readLine()` ~`:769` | ✓ |
+| `Pending` blocks on `readLine()` | `Pending(reason, default)` `:758` → `readLine()` `:769` (exact) | ✓ |
 | Scratchpad special-case | `is_scratchpad_tool_name && scratchpad_extension_active` → `exec_scratchpad_cell_ws` `:868`; import `:63` | ✓ |
 | Native/Delegated routing | `backend_for_v2(envelope, true) else Native` `:831` (mirror `:932`) | ✓ |
-| Provider id-correlation (Q2 hard rule) | empty `tool_call_id`→422 `msgs_to_messages` ~`:363-365`; `tool_result_message` id-correlation ~`:477-479` | ✓ |
+| Provider id-correlation (Q2 hard rule) | empty `tool_call_id`→422 comment `:365`, `msgs_to_messages` def `:366`; `tool_result_message` id-correlation comment `:479`, def `:480` | ✓ |
 | `delegated_deferred_message` | `agent_loop_v2.ail:675` | ✓ |
 | Batched TUI events + `request_id` | `request_id="step-${step_idx}"` `:1447`; `native_tool_calls` `:1448`; `native_tool_results` `:1455` | ✓ |
 | Model `stream_id`/`on_chunk`/`dispatch_step` | `emit_stream_chunk(...stream_id...)` `:1196-1201`; `dispatch_step(...)` `:1202` | ✓ |
@@ -475,6 +563,30 @@ code-graph, per `tools/code-graph/AGENTS.md`):
 | Zero `std/stream` in `src/core/**` today | grep confirms no `selectEvents`/`runEventLoop`/`asyncExecProcess` in `src/core/**` | ✓ |
 | Toolchain pin | `ailang --version` = v0.26.0 / `3b52a24`; `ailang.lock` `ailang_version:"v0.26.0"` | ✓ |
 
-*Approximate / to-verify-at-edit-time:* exact line of `readLine()` (~`:769`) and the `tool_result_message`
-comment (~`:477-479`) drift by a few lines; re-grep before editing. All Make/CI parity targets are
-**to-be-created** (none exist today).
+All Make/CI parity targets are **to-be-created** (none exist today). Line numbers in
+`agent_loop_v2.ail` are exact as of this read but re-grep before editing (the file is edited often).
+
+### Substrate-primitive log (`std/stream.ail`, installed v0.26.0)
+
+Read this session at `/home/motoko/.local/share/ailang/std/stream.ail` — every `run_tool_select`
+primitive named in this plan is verified present (closing the ADR's S3 "named a non-existent API"
+class of risk):
+
+| Primitive | Signature (abridged) | Line | Used by (WI) |
+|---|---|---|---|
+| `selectEvents` | `(sources: [StreamSource], handler: (StreamEvent) -> bool) -> unit ! {Stream}` | `:160` | WI-3 (multi-source multiplexer) |
+| stop conditions | "stops when handler returns false, idle timeout, or max duration" | `:159` | WI-3/WI-4/WI-6 |
+| same-priority order | "same-priority sources use round-robin to prevent starvation" | `:158` | WI-5 (event sub-order) |
+| `asyncExecProcess` | `(cmd, args, name, priority, chunkSize) -> StreamSource ! {Stream}`; stdout→`SourceBytes` | `:173` | WI-3/WI-5 (native arm) |
+| process kill semantics | "killed when the source is closed or `selectEvents` exits" | `:166` | WI-6 (reap); phasing note |
+| priority semantics | "priority: dispatch priority (higher = checked first)" | `:171` | WI-6 / Open Q #1 |
+| `StreamEvent` | `... | Closed(int,string) | SourceText(string,string) | SourceBytes(string,bytes)` | `:53` | WI-3 (frame handling); name-routing |
+| `sourceOfConn` | `(conn: StreamConn, name, priority) -> StreamSource ! {Stream}` | `:143` | WI-6 (WS source from conn) |
+| `disconnect` | `(conn: StreamConn) -> unit ! {Stream}` — **`StreamConn`-only, no per-`StreamSource` close** | `:126` | WI-6 (WS teardown) |
+| `runEventLoop` | `(conn: StreamConn) -> unit ! {Stream}` — single-conn (ws_loopback's) | `:120` | contrast to `selectEvents` |
+| `transmit` | `(conn: StreamConn, msg) -> Result[unit,_] ! {Stream}` | `:99` | WI-3 (deferred-yield transmit-back) |
+| `asyncReadStdinLines` | `(name, priority) -> StreamSource ! {Stream}` — the Phase-2 approval-source | `:151` | (Phase-2, not built) |
+
+*Two undocumented gaps* (Plan-notes 3/4): chunk→tool correlation is by **source name string**, not
+the `tool_i` index the ADR sketch shows (`:53,173`); and `asyncExecProcess` **stderr/exit-code**
+delivery is undocumented (`:15,164`) — both require a smoke before WI-3 commits the live-process arm.
