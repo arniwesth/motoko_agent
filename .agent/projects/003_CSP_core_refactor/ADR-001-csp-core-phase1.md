@@ -331,8 +331,8 @@ afterthoughts. Each is grounded in current source.
    | Delegated / `ohmy_pi` backend | deferred arm | unchanged `delegated_deferred_message` shape |
    | Cancelled | synthetic tool-role message (contract #4) | new, defined below |
 
-   The default for anything not proven independent stays the **unchanged synchronous** path (ties to
-   the opt-in-concurrency open question).
+   The default for anything not proven independent stays the **unchanged synchronous** path (see the
+   concurrency opt-in policy, contract #8).
 
 2. **Policy `Pending` must not deadlock the select (G2).** `dispatch_calls`'s `Pending` arm emits
    `tool_pending` then **blocks on `readLine()`** for operator approval (`agent_loop_v2.ail:758-769`).
@@ -350,20 +350,38 @@ afterthoughts. Each is grounded in current source.
    the scratchpad special-case (routing to `exec_scratchpad_cell_ws`) ahead of the deferred arm; Phase
    1 does **not** disable the scratchpad WS cell path.
 
-4. **Cancellation produces a provider-valid transcript (G4, B2, S3).** On cancel, the assistant
-   message still contains N `tool_calls`; the next model step must receive exactly the tool-role
-   messages the provider expects, in original `tool_call_id` order. **Decision:** completed results are
-   preserved; not-yet-started calls and in-flight-cancelled calls each get a **synthetic tool-role
-   message** carrying an `error`/cancelled sentinel (same envelope shape as
-   `delegated_deferred_message`), and the final list is assembled in **call order** regardless of
-   completion order. Cancellation is **arm-specific** (B2): a native-subprocess tool *can* be
-   cancelled mid-flight (the control source fires during `selectEvents`; exiting the loop reaps the
-   subprocess); an in-flight **deferred** dispatch **cannot** be preempted — only pending
-   (not-yet-dispatched) deferred tools are cancellable. The teardown primitive (S3) is `disconnect`
-   for WebSocket sources and "exit `runEventLoop` to reap the subprocess" for process sources — RESEARCH
-   §1/§7 name these; there is **no per-source `kill`**, so reaping one process source ends the loop and
-   forces the sibling in-flight tools onto the synthetic-cancelled path. The precise reap ordering is
-   Open Question #1.
+4. **Cancellation produces a provider-valid transcript (G4, B2, S3; resolves Q #2 ordering and the
+   cancellation *policy* — only the control-priority residual stays open as Q #1).** On cancel, the
+   assistant message still contains N `tool_calls`; the next model step must receive tool-role
+   messages the provider accepts.
+   - **Ordering — split into a hard and a soft invariant (Q2).** The **hard, provider-correctness**
+     rule is *completeness + id-correlation, not position*: every `tool_call` gets exactly one
+     tool-role message carrying its non-empty `tool_call_id`, all present before the next model step.
+     This is grounded in source — providers correlate `tool_use → tool_result` **by id, not order**,
+     and an empty `tool_call_id` is rejected 422 (`agent_loop_v2.ail:363-365` and the
+     `envelope_to_tool_message` comment at `~479`). The **soft, DST/readability** rule is emit in
+     original call order (collect-by-id, assemble-in-call-order) — free, and keeps the DST invariant
+     "tool-call IDs preserved" and trace stability. Consequence: **concurrency is provider-safe as
+     long as ids are preserved**; out-of-order completion is not a correctness hazard.
+   - **What each call becomes.** Completed results are preserved; not-yet-started and
+     in-flight-cancelled calls each get a **synthetic tool-role message** carrying an
+     `error`/cancelled sentinel (same envelope shape as `delegated_deferred_message`).
+   - **Cancellation is arm-specific (B2).** A native-subprocess tool *can* be cancelled mid-flight
+     (the control source fires during `selectEvents`); an in-flight **deferred** dispatch **cannot**
+     be preempted — only pending (not-yet-dispatched) deferred tools are cancellable.
+   - **Recommended reap sequence (Q1 — closes the policy; one residual left open).** (i) Put the
+     **control source at highest `selectEvents` priority** so `Cancel` is seen at the next boundary
+     (priority-ordered select, RESEARCH §1); (ii) stop admitting new deferred dispatches; (iii)
+     `disconnect` each WebSocket source; (iv) exit `runEventLoop`, which reaps **all**
+     `asyncExecProcess` process sources together (they die with the loop, RESEARCH §7); (v) synthesize
+     cancelled messages for every call without a result. Bound the teardown with `ws_loopback`'s
+     existing `remaining` iteration cap (seeded 32, RESEARCH §4). Two limits are **substrate-forced,
+     not choices**: there is **no per-source `kill`** (RESEARCH §7), so loop-exit is all-or-nothing
+     (reaping one subprocess ends its siblings → they take the synthetic-cancelled path); and a
+     deferred dispatch already mid-blocking-call runs to completion (kept if it returns before
+     teardown, else marked cancelled). The **one genuine residual** — the exact control-source
+     priority value and whether `disconnect` must strictly precede loop-exit or may interleave — stays
+     Open Question #1, to be pinned by the cancellation smoke.
 
 5. **Event ordering & TUI pairing (S1, G10).** Today `loop_v2` brackets dispatch with a batched
    `native_tool_calls` (pre, `agent_loop_v2.ail:1448`) / `native_tool_results` (post, `:1455`) pair
@@ -388,6 +406,18 @@ afterthoughts. Each is grounded in current source.
    **malformed**, **duplicate**, **out-of-order**, and **unknown** frames (reusing the existing
    `error_result` machinery in `tool_envelope_dispatch`), rejecting out-of-protocol frames rather than
    silently accepting them.
+
+8. **Concurrency opt-in policy (resolves Open Q #3).** The deferred arm is sequential by construction
+   (contract #1 / "two arms"), so concurrency is only ever available to the **native-subprocess arm** —
+   which already shrinks the question to "which subprocess batches parallelize." **Decision:** default
+   **sequential**; a batch runs concurrently only when **every** call in it is a **read-only query**
+   (e.g. `ReadFile` / `Search`) OR is a native-subprocess tool explicitly annotated **`parallel_safe`**.
+   Anything that mutates FS/state or runs unannotated bash stays sequential. Implement `parallel_safe`
+   as a **new per-tool capability flag alongside the existing pattern** — `streaming` /
+   `needs_stderr_live` / `needs_hard_cancel` are already parsed per-tool at `tool_runtime.ail:118-120`
+   and drive routing via `needs_delegation_for_process` (`tool_runtime.ail:15-18`); `parallel_safe`
+   joins them, making concurrency a first-class capability, not a heuristic. Rollout widens the policy
+   in order: read-only-only first (parity tests G6 a/b), then `parallel_safe`-annotated exec.
 
 ## Rollout & parity validation
 
@@ -478,22 +508,25 @@ Added in response to review (GPT-5.5 G5/G6). A core-loop change has a core-entry
 
 Only the genuinely open items are carried here. RESEARCH §13 #1 (LLM-as-source) and #2 (the
 `loop_v2` `selectEvents` sketch) are **resolved** — see §5 and §12; do not re-open them. The review
-round settled the *policy* of cancellation, event-ordering, dispatch-matrix, scratchpad, live-output,
-and frame-failure contracts (see "Behavioral contracts Phase 1 must preserve" #1–#7); what remains
-open is the residue those contracts could not fully pin down without implementation:
+round settled the *policy* of the dispatch-matrix, `Pending`, scratchpad, event-ordering, live-output,
+and frame-failure contracts (behavioral contracts #1–#7). The three previously-open design questions
+are now **decided** (with named validation), leaving a single residual:
 
-1. **Reap ordering on cancellation** (contract #4, S3). The transcript shape is decided (preserve
-   completed, synthesize cancelled, assemble in call order), but the exact reap sequence is not:
-   there is no per-source `kill`, so exiting `runEventLoop` to reap one process source ends the loop
-   for its siblings. What is the control-source priority relative to tool sources, and the precise
-   order of disconnect (sockets) vs. loop-exit (process sources)? (RESEARCH §7, §12, §13 #3.)
-2. **Tool-result ordering primitive under concurrency** (contract #5). The *contract* is decided
-   (collect-by-id, emit-in-call-order); still to confirm empirically is that the discipline holds
-   against both the DST invariant and the provider's tool-result sequencing expectations under the
-   new select-priority sub-order (RESEARCH §12).
-3. **Concurrency opt-in policy** (contract #1 default). Default stays synchronous/sequential; what
-   *promotes* a batch to concurrent — per-tool annotation, a known-independent allowlist, or
-   always-sequential until proven? (RESEARCH §12.)
+- **Q2 tool-result ordering — RESOLVED into contract #4.** The hard rule is completeness +
+  `tool_call_id` correlation (provider correlates by id, not position — `agent_loop_v2.ail:363-365`),
+  so out-of-order completion is not a correctness hazard; call-order emission is a free DST/readability
+  invariant. Closed by parity test G6(i).
+- **Q3 concurrency opt-in — RESOLVED into contract #8.** Default sequential; promote a batch only when
+  all calls are read-only queries or explicitly `parallel_safe` (a new per-tool capability flag
+  alongside `tool_runtime.ail:118-120`). Closed by parity tests G6(a)/(b).
+
+1. **Control-source priority + teardown interleave on cancellation** (the one residual of contract #4,
+   §13 #3). The reap *sequence* is recommended (control source at highest priority; stop-admit →
+   `disconnect` sockets → exit `runEventLoop` to reap process sources → synthesize cancelled; bound by
+   `ws_loopback`'s `remaining=32`), and the "no per-source `kill` / no deferred preempt" limits are
+   substrate-forced (RESEARCH §7). What stays open is the **exact control-source priority value** and
+   whether `disconnect` must strictly precede loop-exit or may interleave — to be pinned by the
+   cancellation smoke (parity test G6(g)).
 
 *(Lower priority, off the critical path: a literal real-model in-handler call (RESEARCH §13 #1) is
 covered only by composition today. Because Phase 1 uses deferred dispatch, this is a nice-to-have,
