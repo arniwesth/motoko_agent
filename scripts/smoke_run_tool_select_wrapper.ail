@@ -1,0 +1,51 @@
+module scripts/smoke_run_tool_select_wrapper
+
+import std/ai (Message)
+import std/io (println, exit)
+import std/result (Ok, Err)
+import std/string (contains)
+import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/config (CostRates)
+import src/core/test/stub_step (empty_rt, tool_step, prose_step)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+
+func has_wrapper_result(msgs: [Message]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "tool"
+        && contains(m.content, "\"stdout\":\"out\"")
+        && contains(m.content, "\"stderr\":\"err\"")
+        && contains(m.content, "\"exit_code\":7")
+        && contains(m.content, "\"stream_wrapper\":true")
+      then true
+      else has_wrapper_result(rest)
+  }
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
+  let rates: CostRates = { input_per_1m_millicents: 0, output_per_1m_millicents: 0 };
+  let initial: [Message] = [{
+    role: "user",
+    content: "run wrapped command",
+    tool_calls: [],
+    tool_call_id: ""
+  }];
+  let args = "{\"cmd\":\"sh\",\"args\":[\"-c\",\"printf out; printf err >&2; exit 7\"],\"needs_stderr_live\":true}";
+  match run_v2_with_stub(empty_rt(), "run wrapped command", "http://127.0.0.1:0", false, budget, "stub/model", initial, ".", 4, false, 0, rates, [
+    tool_step("BashExec", args, "wrapped-tool-1"),
+    prose_step("done")
+  ]) {
+    Ok(msgs) =>
+      if has_wrapper_result(msgs) then println("PASS_RUN_TOOL_SELECT_WRAPPER")
+      else {
+        println("FAIL_RUN_TOOL_SELECT_WRAPPER_MISSING_RESULT");
+        exit(1)
+      },
+    Err(_) => {
+      println("FAIL_RUN_TOOL_SELECT_WRAPPER_ERR");
+      exit(1)
+    }
+  }
+}

@@ -16,6 +16,7 @@ result back; the server records it. Verified on AILANG **v0.26.0**.
 | `smoke_cognition_msg.ail` | probes `std/cognition` mailbox fabric (`Msg` effect). **Result: `NO_HANDLER` in native CLI** — the `Msg` transport is browser/WASM-wired (`cmd/wasm/effects.go`); `Msg`/`Cog` are also outside Motoko's effect ceiling (`ailang.toml`). Not usable for core messaging today. |
 | `smoke_async_exec_name_routing.ail` | `asyncExecProcess(..., name, ...)` delivers `SourceBytes(name, bytes)` keyed by the supplied source name. |
 | `smoke_async_exec_stderr_exit.ail` | `asyncExecProcess` surfaces process exit code as `Closed(code, reason)`; stderr does **not** surface as `SourceBytes`/`SourceText`. |
+| `scripts/smoke_run_tool_select_wrapper.ail` | Repo-local wrapper path: `run_tool_select` runs a stderr-live `BashExec` through `scripts/tool_stream_wrapper.py` and returns stdout/stderr/exit_code in the transcript and batched TUI result. |
 
 ## Run
 
@@ -49,6 +50,12 @@ ailang run --caps Stream,Process,IO smoke_async_exec_name_routing.ail
 # expect: PASS_SOURCE_NAME_ROUTING
 ailang run --caps Stream,Process,IO smoke_async_exec_stderr_exit.ail
 # expect: PASS_CLOSED_EXIT_7_OBSERVED_STDERR_NOT_DELIVERED_AS_SOURCE
+
+# Wrapper-backed run_tool_select path (run from repo root)
+cd /workspaces/motoko_agent
+MOTOKO_RUN_TOOL_SELECT=1 ailang run --caps AI,FS,Process,IO,Env,Net,SharedMem,Clock,Stream,Trace \
+  -ai-stub scripts/smoke_run_tool_select_wrapper.ail
+# expect: PASS_RUN_TOOL_SELECT_WRAPPER
 ```
 
 ## Gotchas

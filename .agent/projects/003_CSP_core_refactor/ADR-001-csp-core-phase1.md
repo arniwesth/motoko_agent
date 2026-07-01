@@ -620,9 +620,11 @@ The required pre-WI-3 substrate smokes were run in
 `asyncExecProcess(cmd, args, name, ...)` delivers `SourceBytes(name, bytes)` keyed by the supplied
 source name; `smoke_async_exec_stderr_exit.ail` confirms process exit code surfaces as
 `Closed(exit_code, reason)` but stderr does **not** surface as a stream event. Phase-1 implementation
-therefore keeps live-process tools requiring stderr fidelity (`streaming` / `needs_stderr_live` /
-`needs_hard_cancel`) on the existing delegated/sequential backend instead of producing partial
-in-brain `asyncExecProcess` results._
+therefore runs live-process tools requiring stderr fidelity (`streaming` / `needs_stderr_live` /
+`needs_hard_cancel`) through the repo-local wrapper `scripts/tool_stream_wrapper.py`, which writes
+stdout/stderr/exit files while `run_tool_select` waits on wrapper closure. `scripts/smoke_run_tool_select_wrapper.ail`
+verifies final transcript and batched TUI-result fidelity. v0.26.0 `selectEvents` handlers are pure,
+so live chunk-to-TUI forwarding still needs a separate bridge._
 
 _**Reviewer: GLM 5.2 (`openrouter/z-ai/glm-5.2`) — 2026-07-01.**
 Grounded against current source (`src/core/agent_loop_v2.ail`, `packages/motoko_scratchpad/ws_loopback.ail`,

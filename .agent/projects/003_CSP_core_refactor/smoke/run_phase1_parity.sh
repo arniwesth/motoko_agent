@@ -16,3 +16,7 @@ ailang test src/core/tool_select_frames.ail
 cd "$SMOKE"
 ailang run --caps Stream,Process,IO smoke_async_exec_name_routing.ail
 ailang run --caps Stream,Process,IO smoke_async_exec_stderr_exit.ail
+
+cd "$ROOT"
+MOTOKO_RUN_TOOL_SELECT=1 ailang run --caps AI,FS,Process,IO,Env,Net,SharedMem,Clock,Stream,Trace \
+  -ai-stub scripts/smoke_run_tool_select_wrapper.ail
