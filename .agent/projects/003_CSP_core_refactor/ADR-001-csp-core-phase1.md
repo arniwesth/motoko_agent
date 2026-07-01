@@ -420,8 +420,10 @@ parameter, `agent_loop_v2.ail:1111`), not a dead path. The ADR must either (a) s
 synthesized batch (concurrency is moot; cancellation/live-output semantics still differ from the old
 sequential call), or (b) justify keeping the hybrid path on the old sequential dispatch while only the
 tool_calls arm becomes concurrent — which is a real design decision the ADR currently silently omits.
-As written, an implementer following the sketch would leave the hybrid arm on `dispatch_calls` and
-either keep two parallel code paths or break hybrid mode. *Severity: blocks the "risk is contained to
+The ADR flags the sketch as "illustrative pseudocode, not literal source" (line 237), and the decision
+text says "generalize `dispatch_calls`" (line 50) which implies all call sites — but neither makes the
+second site explicit. As written, an implementer following the sketch would leave the hybrid arm on
+`dispatch_calls` and either keep two parallel code paths or break hybrid mode. *Severity: blocks the
 `run_tool_select`" claim at line 277.* **Code-graph grounding:** the fresh core extract (`stale=false`,
 `coverage 24/24 ok`, `incomplete=false`, `approximate=true`, built 2026-06-30) confirms the
 `loop_v2 → dispatch_calls` edge in `invokes` (one row), and also shows `loop_v2 → synthesize_hybrid_bash_call`
@@ -432,56 +434,69 @@ records the relationship once and **cannot establish multiplicity** — it canno
 is invoked twice. Source (`:1341` and `:1454`) is the only way to establish the two call sites; this is
 the documented graph limitation, not a graph failure.
 
-**B2. The "mid-batch cancellation" Positive consequence (line 274) contradicts the Negative (lines
-292–294) and overstates the deferred-dispatch model.** Under the chosen **deferred** dispatch mode
-(Decision 2), an in-flight `dispatch_tool_envelope` runs as a **blocking call in the enclosing
-sequential context** (RESEARCH §4; `ws_loopback.ail:183,203` — `dispatch_deferred_request` blocks,
-`loop_until_done` does one deferred dispatch per iteration). The `selectEvents` control source can
-only be observed **between** deferred dispatches, never during one. So "mid-batch cancellation" is, in
-truth, "cancel tool calls that have not yet entered deferred dispatch" — an in-flight deferred tool
-cannot be cancelled at all. The Negative section says exactly this ("a mid-flight blocking dispatch
-cannot be preempted"), so the ADR contradicts itself. Worse, the sketch arm `Control(Cancel) -> tear
-down sources` (line 231) presents teardown as a known operation, while Open Question #1 (lines
-329–333) admits the teardown contract is unspecified — including that `asyncExecProcess` sources "die
-when the event loop exits" (RESEARCH §7), so "tear down" can only mean "exit the loop," which
-forfeits collecting results from the *other* still-running tools. The Positive bullet must be
-reworded to "cancel pending (not-yet-dispatched) tool calls in a batch" and the contradiction with
-the Negative reconciled.
+**B2. The "mid-batch cancellation" Positive consequence (line 274) overstates without the Negative's
+arm-specific qualification (lines 292–294).** The cancellation picture splits by arm:
+- **Process-source tools** (`asyncExecProcess`): the control source fires **during** `selectEvents`;
+  the handler can return `false` to stop the loop, reaping the subprocess (which "dies when the event
+  loop exits," RESEARCH §7). Mid-batch cancellation **IS real** for this arm.
+- **Deferred-dispatch tools**: an in-flight `dispatch_tool_envelope` runs as a **blocking call in the
+  enclosing sequential context** (RESEARCH §4; `ws_loopback.ail:183,203` — `dispatch_deferred_request`
+  blocks, `loop_until_done` does one deferred dispatch per iteration). The control source can only be
+  observed **between** deferred dispatches, never during one — an in-flight deferred tool **cannot** be
+  cancelled. Only not-yet-dispatched tools in the batch can be cancelled.
+The Positive bullet ("mid-batch cancellation via the control source") reads as applying to all tools;
+the Negative ("a mid-flight blocking dispatch cannot be preempted") qualifies only the deferred-dispatch
+case. These are not strictly contradictory — the Positive is general, the Negative is a qualifier — but
+the Positive's unqualified scope misleads. Reword to split by arm: "cancel in-flight process-source
+tools and pending (not-yet-dispatched) deferred-dispatch tools." (The teardown-primitive concern for the
+`Control(Cancel) -> tear down sources` sketch arm is tracked separately as S3 below.)
 
 **B3. "Concurrent tool execution" is true only for the `asyncExecProcess` (native-subprocess) arm;
 the deferred-dispatch arm is sequential.** The "two arms" section (lines 247–251) correctly
 distinguishes process-source tools from deferred-dispatch tools, but does not state the consequence:
 deferred dispatch is one blocking call at a time in the enclosing context, so two env-delegated /
 AI-subagent / FS tools cannot run concurrently with each other — only the native-subprocess tools
-concurrently stream stdout. For a typical batch (mostly delegated tools per `dispatch_calls`'s
-`backend_for == Delegated` path, `agent_loop_v2.ail:726–727`), the headline "concurrent tool
-execution" benefit is largely absent. The Positive bullet (line 274) should be split: "concurrent
-execution + live streamed output **for native-subprocess tools**; deferred-dispatch tools remain
-sequential in Phase 1." This also reframes the DST "deterministic by construction" argument: the
-non-determinism risk is lower than implied because most tools stay sequential.
+concurrently stream stdout. The proportion of process-source vs. deferred-dispatch tools in a typical
+batch depends on the tool mix and the `ohmy_pi`/`backend_for_v2` routing
+(`agent_loop_v2.ail:831`), so the ADR should not imply concurrency is universal. The Positive bullet
+(line 274) should be split: "concurrent execution + live streamed output **for native-subprocess
+tools**; deferred-dispatch tools remain sequential in Phase 1." Additionally, the sketch uses
+`dispatch_tool_envelope` (line 232) for the deferred-dispatch arm, but the current `dispatch_calls`
+does **not** call `dispatch_tool_envelope` — it uses `dispatch_one` (native, `agent_loop_v2.ail:850`),
+`dispatch_tool_handle` (extension-handled, `:811`), and `delegated_deferred_message` (delegated,
+`:840`). `dispatch_tool_envelope` is defined in `src/core/tool_envelope_dispatch.ail:36` and is called
+only by `ws_loopback.ail:188`. So the sketch does not merely rename `dispatch_calls` →
+`run_tool_select`; it also substitutes a different dispatch function for the deferred arm — further
+undermining "one function changes." The ADR's "illustrative pseudocode" disclaimer (line 237) covers
+this, but the scope gap should be named explicitly.
 
 ### Should-address
 
-**S1. The "deterministic by construction" claim (lines 256, 282) covers source ordering but NOT the
-`emit_event` side channel — and the TUI event contract is order-sensitive.** Today `loop_v2` emits a
-batched `native_tool_calls` event (`agent_loop_v2.ail:1448`, pre-dispatch, carrying `request_id`) and
-a paired `native_tool_results` event (`:1455`, post-dispatch, same `request_id`), with per-call
+**S1. The "deterministic by construction" claim (lines 256, 282) covers select ordering, but the
+per-call event *sequence* changes and the ADR should specify the new contract.** Today `loop_v2` emits
+a batched `native_tool_calls` event (`agent_loop_v2.ail:1448`, pre-dispatch, carrying `request_id`)
+and a paired `native_tool_results` event (`:1455`, post-dispatch, same `request_id`), with per-call
 events (`native_tool_denied`, `ext_tool_handled`, `delegated_tool_deferred`) fired **from inside**
-`dispatch_calls` between them. The TUI's `renderToolCalls`/`applyNativeToolResults` consumers pair on
-`request_id` (per the comment block at `:1440–1446`). `selectEvents`'s priority + round-robin makes
-**source-event** order reproducible, but `emit_event` is a `Trace`-effect side channel **outside the
-select**; its interleaving with concurrently-produced per-call events is NOT governed by
-`selectEvents` determinism. The ADR says events are "unchanged" (line 200) but does not specify
-whether per-call events may fire mid-`select` (they would, from the deferred-dispatch arm) and how
-they correlate to the batched `request_id` pair. This is exactly the class of "implicit boundary
-becomes explicit" the ADR wants for DST — but it must be made explicit *here*, or the DST replay claim
-is unsupported on the event surface. Recommend: state the event-ordering contract for
-`run_tool_select` (when per-call events may fire relative to the batched pair) and mark it as a
-DST-trace invariant to preserve. **Code-graph grounding:** `q callers emit_event` confirms `emit_event`
-is called at distance 1 from **both** `loop_v2` (the batched pair) **and** `dispatch_calls` (the
-per-call events) — so the graph sees both emitters but, `invokes` being an unordered set, cannot
-express their *temporal* ordering. The ordering hazard this finding raises is invisible to the graph;
-source + the TUI consumer contract (`:1440–1446`) are the only evidence.
+`dispatch_calls` in call-list order. The TUI's `renderToolCalls`/`applyNativeToolResults` consumers
+pair on `request_id` (per the comment block at `:1440–1446`). Under deferred dispatch, per-call
+events still fire **outside** the `selectEvents` handler (during `dispatch_tool_envelope` between
+select iterations), so the `emit_event` `Trace`-effect side channel is NOT interleaved with select
+events. The real, narrower concern is that the per-call event *sequence* changes from today's
+call-list order (the `call :: rest` recursion at `:743,756`) to select-priority/round-robin order
+(whichever
+tool-request frame the select processes first). For deferred-dispatch tools backed by external
+WebSocket sources, frame *arrival* order depends on the env-server's response timing — external to
+`selectEvents`'s determinism, which governs only the ordering of already-arrived events. So
+"deterministic by construction" is true for the select layer but does not extend to external
+peer-timing. The ADR says events are "unchanged" (line 200) but should specify: (a) the per-call
+event sequence under `run_tool_select` (select-priority order, not call-list order); (b) that DST
+replay requires controlling the peer (env-server) for deferred-dispatch tools, not just the select;
+(c) that the batched `native_tool_calls`/`native_tool_results` pair still brackets
+`run_tool_select` (preserving the TUI's `request_id` pairing). **Code-graph grounding:** `q callers
+emit_event` confirms `emit_event` is called at distance 1 from **both** `loop_v2` (the batched pair)
+**and** `dispatch_calls` (the per-call events) — the graph sees both emitters but, `invokes` being an
+unordered set, cannot express their temporal ordering. Source + the TUI consumer contract
+(`:1440–1446`) are the only evidence for the ordering concern.
 
 **S2. `stream_id` namespace collision risk between model `text_delta` and live tool stdout.** The
 model's `on_chunk` (`agent_loop_v2.ail:1201`, `! {IO}`) renders `thinking_delta`/`text_delta` events
@@ -561,9 +576,11 @@ approximations**; `incomplete=false` means "fully extracted", not "compiler-true
   effect ceiling.
 - **`loop_v2 → AI` CONFIRMED** in `effect_edges` (via `LIKE '%loop_v2%'`); `loop_v2`'s graph effects =
   `{AI, Clock, Env, FS, IO, Process, Trace}`, **missing** `Net, SharedMem, Stream` vs source `:1125`.
-  The ADR's specific claim ("`loop_v2 → AI` now carried") holds; but the ADR notes the under-approximation
-  only for `dispatch_calls`, not for `loop_v2`'s own missing `{Net,SharedMem,Stream}` — a minor
-  provenance gap. *Query caveat:* an exact `WHERE func_slug = '...#loop_v2'` returned **empty** in the
+  The ADR's specific claim ("`loop_v2 → AI` now carried") holds; the ADR's phrasing "graph and source
+  agree on the **effect**" (line 185) is scoped to `AI` specifically, not full-row agreement, so the
+  missing `{Net,SharedMem,Stream}` for `loop_v2` is the same under-approximation pattern as
+  `dispatch_calls` — consistent with the graph's source-parsed nature, not an ADR oversight. Noted for
+  completeness. *Query caveat:* an exact `WHERE func_slug = '...#loop_v2'` returned **empty** in the
   chDB CSV scan while `LIKE` returned the rows — a `#`-slug equality-filter quirk, not a data absence.
   Anyone re-validating must use `LIKE` or the `q` subcommands, not raw `=` on `#`-slugs.
 - **`dispatch_step` invisible to the core graph CONFIRMED.** 0 rows in `funcs` (LIKE `%dispatch_step%`)
@@ -592,6 +609,11 @@ approximations**; `incomplete=false` means "fully extracted", not "compiler-true
   `invokes` edge). ✓
 - **Second `dispatch_calls` call site (hybrid_tools arm, NOT in the ADR's sketch):**
   `agent_loop_v2.ail:1341` (synthesized `[synth_call]` batch). ✓ — basis for B1.
+- `dispatch_tool_envelope` NOT called by `dispatch_calls`: grep confirmed 0 matches in
+  `agent_loop_v2.ail`; def at `src/core/tool_envelope_dispatch.ail:36`, called only by
+  `ws_loopback.ail:188`. The sketch's deferred arm uses it; current `dispatch_calls` uses
+  `dispatch_one` (`:850`), `dispatch_tool_handle` (`:811`), `delegated_deferred_message` (`:840`).
+  ✓ — basis for B3.
 - `finish_reason != "tool_calls"` branch + `dispatch_solver_candidate`: `agent_loop_v2.ail:1302,1352`. ✓
 - Batched event pair around dispatch: `native_tool_calls` `:1448`, `native_tool_results` `:1455`
   (both keyed by `request_id` `:1447`). ✓ — basis for S1.
@@ -606,12 +628,11 @@ approximations**; `incomplete=false` means "fully extracted", not "compiler-true
   outside core profile (0 rows) ✓. Query caveat: `=` on `#`-slugs returns empty in chDB CSV scan —
   use `LIKE` or `q` subcommands. ✓ — full table above.
 
-### Recommendation
-
-**Revise and re-circulate (stay in `Proposed`).** Address B1–B3 (two call sites; cancellation
-overclaim; concurrency-only-for-subprocess-arm), then S1–S3 (event-ordering contract; `stream_id`
-allocation; teardown primitive). The M-items are editorial. None of B1–B3 changes the *decision*
-(adopt `run_tool_select`); they correct the *scope/risk* representation so the implementer and the
+**Revise and re-circulate (stay in `Proposed`).** Address B1–B3 (two call sites + `dispatch_tool_envelope`
+conflation; cancellation scope by arm; concurrency-only-for-subprocess-arm), then S1–S3 (event-sequence
+contract + peer-timing caveat; `stream_id` allocation; teardown primitive). The M-items are editorial.
+None of B1–B3 changes the *decision* (adopt `run_tool_select`); they correct the *scope/risk*
+representation so the implementer and the
 DST ADR's readers aren't misled about what Phase 1 delivers. The provenance, version-pin, and
 rejected-alternatives sections need no change — those are the ADR's strongest parts.
 
