@@ -178,15 +178,25 @@ coordinator discipline of RESEARCH §11. It has exactly two channels:
 - **model channel:** `dispatch_step(provider, model, msgs, rt, on_chunk)` — a blocking `std/ai` step
   behind the `StepProvider` seam. `loop_v2` **does** carry the `AI` effect — verified at
   `src/core/agent_loop_v2.ail:1125` (the effect row of the `loop_v2` body includes `AI`). *Provenance
-  note: the `tools/code-graph` extract attributed `AI` only to `run_v2`/`conversation_loop_v2`
-  because `dispatch_step` is a `StepProvider`-record call its parser did not resolve. Source is
-  ground truth here; trust `agent_loop_v2.ail:1125` over the graph (RESEARCH §12, DIAGRAM §0
-  correction).*
-- **tool channel:** `dispatch_calls(rt, ctx, calls, …) -> [Message]` (`agent_loop_v2.ail:731`) —
-  today a **sequential fold** (`call :: rest`, `agent_loop_v2.ail:742-744`), one tool at a time.
+  note (re-grounded against a fresh `tools/code-graph` extract, 2026-06-30, v0.26.0 commit `3b52a24`;
+  the graph was STALE and was re-run per `tools/code-graph/AGENTS.md`): the fresh extract's
+  `effect_edges` table **now does carry** `loop_v2 → AI`, so graph and source agree on the **effect**
+  — the research's "code-graph missed that edge" (RESEARCH §12, DIAGRAM §0) was a stale-graph artifact
+  corrected by re-extraction. What the graph still cannot see is the **call**: `dispatch_step` is not
+  a resolved func node at all (0 invoke edges to it; it is a `StepProvider`-record field call), so the
+  model step is invisible to the `invokes` graph even though its effect is attributed. Source remains
+  ground truth for the call; trust `agent_loop_v2.ail:1125`.*
+- **tool channel:** `dispatch_calls(rt, ctx, calls, …) -> [Message]` (`agent_loop_v2.ail:731`;
+  graph-confirmed `loop_v2 → dispatch_calls` in `invokes`) — today a **sequential fold**
+  (`call :: rest`, `agent_loop_v2.ail:742-744`), one tool at a time.
 
 **The localized change.** Keep the entire recursion, the model call, all four hook points,
-compaction, cost/usage, and events **unchanged**. The CSP increment replaces **one function**:
+compaction, cost/usage, and events **unchanged**. The hook topology is graph-confirmed against the
+fresh extract: `loop_v2` invokes `dispatch_pre_step`, `dispatch_response_intercept`, and
+`dispatch_solver_candidate` (all `src/core/ext/runtime`) plus `dispatch_calls` directly; the fourth
+hook pair `dispatch_tool_policy` / `dispatch_tool_handle` is invoked **inside** `dispatch_calls`
+(graph-confirmed `dispatch_calls → {dispatch_tool_policy, dispatch_tool_handle, dispatch_one,
+tool_call_to_envelope}`). The CSP increment replaces **one function**:
 `dispatch_calls → run_tool_select`, multiplexing tools + a control source via `selectEvents`. The
 §12 sketch (grounded in `run_v2:1494`, `loop_v2:1107`, `dispatch_calls:731`):
 
@@ -340,11 +350,27 @@ is the validation harness; no new CI/Make target is assumed by this ADR — any 
   (`collect_one:154`/`dispatch_deferred_request:183`/`loop_until_done:194`); effect ceiling excludes
   `Msg`/`Cog` (`ailang.toml:47`); `std/cognition` `NO_HANDLER` in CLI
   (`smoke/smoke_cognition_msg.ail`).
-- **Inferred / approximate (flagged):** `tools/code-graph` call/effect edges are source-parsed
-  approximations and were STALE at read time — the `AI`-on-`loop_v2` edge was missed and corrected
-  against source (RESEARCH §12, DIAGRAM §0). The per-step pipeline *ordering* in DIAGRAM §0 is
-  inferred (`invokes` is an unordered set). The real-model in-handler call (RESEARCH §13 #1) and the
-  DST channel-recorder partial win (RESEARCH §9, §13 #6) are asserted by composition, not yet
+- **Graph-confirmed (re-grounded 2026-06-30 against a fresh `tools/code-graph` extract).** The graph
+  was STALE at read time; `tools/code-graph/extract.sh` was re-run (core profile, v0.26.0 commit
+  `3b52a24`; 388 funcs / 486 invokes / 472 effect edges; `coverage: 24/24 ok`, `incomplete: false`).
+  The fresh graph confirms, in `invokes`: the entry edges `run_v2 → loop_v2`,
+  `run_v2_from_messages → loop_v2`, `run_v2_with_conversation → conversation_loop_v2`; the tool
+  channel `loop_v2 → dispatch_calls`; the three direct hooks `loop_v2 → {dispatch_pre_step,
+  dispatch_response_intercept, dispatch_solver_candidate}`; and the in-dispatch hook pair
+  `dispatch_calls → {dispatch_tool_policy, dispatch_tool_handle}`. In `effect_edges` it confirms
+  `loop_v2 → AI` (agreeing with source `agent_loop_v2.ail:1125`).
+- **Inferred / approximate (flagged; AGENTS.md: "must not treat call/effect rows as compiler-derived
+  facts").** Two concrete, *persistent* graph approximations survive the re-extract and are the
+  reason source signatures stay ground truth: (a) the **model call is invisible to the `invokes`
+  graph** — `dispatch_step` is not a resolved func node (0 invoke edges to it; `StepProvider`-record
+  call), so `loop_v2`'s call to the model step does not appear even though its effect does; (b) the
+  **graph under-approximates `dispatch_calls`' effect row** — `effect_edges` lists only
+  `{Clock,FS,IO,Process,Trace}`, whereas the source signature declares
+  `{FS,Process,IO,Clock,AI,Env,Net,SharedMem,Stream,Trace}` (`agent_loop_v2.ail:739-740`), missing
+  `AI/Env/Net/SharedMem/Stream` (those effects are attributed to the deferred/delegated leaves
+  reached via `dispatch_one`/`dispatch_tool_handle`). The per-step pipeline *ordering* in DIAGRAM §0
+  remains inferred (`invokes` is an unordered set). The real-model in-handler call (RESEARCH §13 #1)
+  and the DST channel-recorder partial win (RESEARCH §9, §13 #6) are asserted by composition, not yet
   demonstrated end-to-end.
 
 ## Review Comments
