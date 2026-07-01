@@ -18,8 +18,8 @@ Relates to:
 Motoko's core today runs a **strictly sequential, blocking** agent loop. `loop_v2`
 (`src/core/agent_loop_v2.ail:1107`) processes one step at a time: each effect — the model call, each
 tool subprocess, each env-server request — blocks to completion before the next begins. Tool batches
-execute as a sequential fold (`dispatch_calls`, `agent_loop_v2.ail:731`; the recursion arm is
-literally `call :: rest`, `agent_loop_v2.ail:742-744`), there is **no mid-batch cancellation** (a
+execute as a sequential fold (`dispatch_calls`, `agent_loop_v2.ail:731`; the `call :: rest` arm at
+`agent_loop_v2.ail:743` recurses on `rest` at `:756`), there is **no mid-batch cancellation** (a
 batch runs to completion once started), and there is **no live tool output** (a tool's stdout is
 only observed after it exits). Cross-agent state is a shared `SharedMem` blackboard
 (`cache.ail`, `core:traj:<hash>` keys), not messages. This is the baseline drawn in
@@ -95,7 +95,7 @@ Motivation — leading with *why*, not bare feasibility:
 
 - **Concurrent tool execution + mid-batch cancellation + live tool output.** Today's loop is
   sequential, un-cancellable mid-batch, and shows tool output only post-exit (`dispatch_calls`
-  sequential fold, `agent_loop_v2.ail:731,742-744`). `run_tool_select` buys all three (RESEARCH §12,
+  sequential fold, `agent_loop_v2.ail:731,743,756`). `run_tool_select` buys all three (RESEARCH §12,
   "What Phase 1 buys").
 - **Deterministic Simulation Testing (DST).** This refactor turns implicit effect boundaries into
   explicit, tee-able message frames, which directly attacks the two problems the DST ADR could not
@@ -175,20 +175,26 @@ coordinator** threading all state as explicit values (`msgs, step_idx, step_budg
 provider`) with **no shared mutable loop state** (RESEARCH §12) — it already satisfies the
 coordinator discipline of RESEARCH §11. It has exactly two channels:
 
-- **model channel:** `dispatch_step(provider, model, msgs, rt, on_chunk)` — a blocking `std/ai` step
-  behind the `StepProvider` seam. `loop_v2` **does** carry the `AI` effect — verified at
-  `src/core/agent_loop_v2.ail:1125` (the effect row of the `loop_v2` body includes `AI`). *Provenance
-  note (re-grounded against a fresh `tools/code-graph` extract, 2026-06-30, v0.26.0 commit `3b52a24`;
-  the graph was STALE and was re-run per `tools/code-graph/AGENTS.md`): the fresh extract's
-  `effect_edges` table **now does carry** `loop_v2 → AI`, so graph and source agree on the **effect**
-  — the research's "code-graph missed that edge" (RESEARCH §12, DIAGRAM §0) was a stale-graph artifact
-  corrected by re-extraction. What the graph still cannot see is the **call**: `dispatch_step` is not
-  a resolved func node at all (0 invoke edges to it; it is a `StepProvider`-record field call), so the
-  model step is invisible to the `invokes` graph even though its effect is attributed. Source remains
-  ground truth for the call; trust `agent_loop_v2.ail:1125`.*
+- **model channel:** the step dispatcher `dispatch_step(provider, model, msgs, rt, on_chunk)` — a
+  real function at `src/core/test/stub_step.ail:110`, imported at `agent_loop_v2.ail:62` and called at
+  `agent_loop_v2.ail:1202`. It dispatches on the `StepProvider` ADT (`LiveAI => stepWithStream(...)`
+  is the blocking `std/ai` step; `Scripted` is the test path), so it *is* the `StepProvider` seam.
+  `loop_v2` **does** carry the `AI` effect — verified at `src/core/agent_loop_v2.ail:1125` (the effect
+  row of the `loop_v2` body includes `AI`). *Provenance note (re-grounded against a fresh
+  `tools/code-graph` extract, 2026-06-30, v0.26.0 commit `3b52a24`; the graph was STALE and was re-run
+  per `tools/code-graph/AGENTS.md`): the fresh extract's `effect_edges` table **now does carry**
+  `loop_v2 → AI`, so graph and source agree on the **effect** — the research's "code-graph missed that
+  edge" (RESEARCH §12, DIAGRAM §0) was a stale-graph artifact corrected by re-extraction. The `invokes`
+  graph still shows no edge to `dispatch_step`, but the **verified reason is the profile boundary, not
+  a record-field indirection**: `dispatch_step` is defined in `src/core/test/stub_step.ail`, and the
+  default **core profile excludes `src/core/test/**`** (`tools/code-graph/extract.sh`: "Core excludes …
+  src/core/test"), so the callee is filtered out of the core graph's func set. (This corrects the
+  research/DIAGRAM framing of it as a "`StepProvider`-record call the parser didn't resolve.") Source
+  is ground truth; trust `agent_loop_v2.ail:62,1202`.*
 - **tool channel:** `dispatch_calls(rt, ctx, calls, …) -> [Message]` (`agent_loop_v2.ail:731`;
-  graph-confirmed `loop_v2 → dispatch_calls` in `invokes`) — today a **sequential fold**
-  (`call :: rest`, `agent_loop_v2.ail:742-744`), one tool at a time.
+  graph-confirmed `loop_v2 → dispatch_calls` in `invokes`) — today a **sequential fold**: the
+  `call :: rest` arm (`agent_loop_v2.ail:743`) recurses on `rest` (`agent_loop_v2.ail:756`), one tool
+  at a time.
 
 **The localized change.** Keep the entire recursion, the model call, all four hook points,
 compaction, cost/usage, and events **unchanged**. The hook topology is graph-confirmed against the
@@ -227,6 +233,16 @@ run_tool_select(rt, ctx, calls, control):                  -- generalizes dispat
   })
   -> [Message]   -- one tool-role msg per call (ordered by tool_call_id), or cancellation msgs
 ```
+
+*The sketch is illustrative pseudocode, not literal source.* Its anchor functions are real and
+verified — `dispatch_pre_step` (`ext/runtime.ail:164`), `compact_step_with_limit`
+(`compaction.ail:134`), `dispatch_step` (`stub_step.ail:110`, called `agent_loop_v2.ail:1202`),
+`dispatch_response_intercept` (`ext/runtime.ail:252`), the `finish_reason != "tool_calls"` branch
+(`agent_loop_v2.ail:1302`), `dispatch_solver_candidate` (`ext/runtime.ail:303`), and `dispatch_calls`
+(`agent_loop_v2.ail:731`) — but binding names like `assistant_of` / `accumulate`, elided arguments
+(the real `compact_step_with_limit` takes a `context_limit`; `dispatch_pre_step` wraps
+`messages_to_msgs(msgs)`), and the `run_tool_select` body are schematic, standing in for the
+implementation this ADR authorizes, not naming existing symbols.
 
 **Two arms under one control source (be explicit about this — RESEARCH §12).** `run_tool_select` is
 not "every tool becomes a process source." `asyncExecProcess` only sources a subprocess's stdout
@@ -346,7 +362,8 @@ is the validation harness; no new CI/Make target is assumed by this ADR — any 
 - **Verified this session (v0.26.0), source/smoke-grounded:** `Net`-in-handler and `AI`-in-handler
   (`smoke/`, RESEARCH §5); the §5 XOR (installed stdlib + `ai_compat.callStreamResult`);
   `loop_v2` carries `AI` (`agent_loop_v2.ail:1125`); `dispatch_calls` is a sequential fold
-  (`agent_loop_v2.ail:731,742-744`); the `ws_loopback.ail` deferred template
+  (`agent_loop_v2.ail:731`; `call :: rest` arm `:743`, recursion `:756`); the `ws_loopback.ail`
+  deferred template
   (`collect_one:154`/`dispatch_deferred_request:183`/`loop_until_done:194`); effect ceiling excludes
   `Msg`/`Cog` (`ailang.toml:47`); `std/cognition` `NO_HANDLER` in CLI
   (`smoke/smoke_cognition_msg.ail`).
@@ -361,12 +378,14 @@ is the validation harness; no new CI/Make target is assumed by this ADR — any 
   `loop_v2 → AI` (agreeing with source `agent_loop_v2.ail:1125`).
 - **Inferred / approximate (flagged; AGENTS.md: "must not treat call/effect rows as compiler-derived
   facts").** Two concrete, *persistent* graph approximations survive the re-extract and are the
-  reason source signatures stay ground truth: (a) the **model call is invisible to the `invokes`
-  graph** — `dispatch_step` is not a resolved func node (0 invoke edges to it; `StepProvider`-record
-  call), so `loop_v2`'s call to the model step does not appear even though its effect does; (b) the
-  **graph under-approximates `dispatch_calls`' effect row** — `effect_edges` lists only
-  `{Clock,FS,IO,Process,Trace}`, whereas the source signature declares
-  `{FS,Process,IO,Clock,AI,Env,Net,SharedMem,Stream,Trace}` (`agent_loop_v2.ail:739-740`), missing
+  reason source signatures stay ground truth: (a) the **model step is invisible to the `invokes`
+  graph** — its dispatcher `dispatch_step` is defined in `src/core/test/stub_step.ail:110`, which the
+  **core profile excludes** (`extract.sh`: "Core excludes … src/core/test"), so it is filtered from
+  the core func set and no `loop_v2 → dispatch_step` edge appears even though `loop_v2`'s `AI` effect
+  does (verified reason = profile boundary, *not* a record-field call — correcting RESEARCH §12 /
+  DIAGRAM §0); (b) the **graph under-approximates `dispatch_calls`' effect row** — `effect_edges`
+  lists only `{Clock,FS,IO,Process,Trace}`, whereas the source signature declares
+  `{FS,Process,IO,Clock,AI,Env,Net,SharedMem,Stream,Trace}` (`agent_loop_v2.ail:740`), missing
   `AI/Env/Net/SharedMem/Stream` (those effects are attributed to the deferred/delegated leaves
   reached via `dispatch_one`/`dispatch_tool_handle`). The per-step pipeline *ordering* in DIAGRAM §0
   remains inferred (`invokes` is an unordered set). The real-model in-handler call (RESEARCH §13 #1)
