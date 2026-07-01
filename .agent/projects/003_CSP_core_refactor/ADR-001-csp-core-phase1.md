@@ -13,6 +13,34 @@ Relates to:
 
 ---
 
+## TL;DR
+
+**Decision:** replace `loop_v2`'s tool phase (`dispatch_calls`) with `run_tool_select` — a
+`std/stream.selectEvents` multiplexer over per-tool sources + a control/cancel source — generalizing
+the shipped `ws_loopback.ail` loop. **No AILANG language dependency** (v0.26.0 ships everything
+needed); the coordinator, model call, hooks, compaction, and cost/usage are untouched.
+
+**Three sub-decisions:** model call stays a **blocking `std/ai` step** (forced by the §5 XOR — you
+cannot make the LLM a `selectEvents` source *and* keep `std/ai`, so **no in-brain LLM-as-source**);
+tool dispatch is **deferred** (outside the handler, as production already does — handler-side effect
+errors exit 0 silently); protocol is **runtime-checked frame ADTs** (upgradeable to session types in
+Phase 2).
+
+**Why:** concurrent tool execution + live output + mid-batch cancellation (none exist today), and DST
+leverage against `001_DST` R7/R8 — all without waiting for AILANG v1.0.
+
+**What it costs (honest scope):** not "one function changes" — it touches **two** `dispatch_calls`
+call sites (`:1341`, `:1454`), swaps the deferred dispatcher, and must hold **8 behavioral contracts**
+(dispatch matrix, `Pending` preflight, scratchpad special-case, cancellation transcript, event
+ordering, live-output boundary, frame failure modes, concurrency opt-in). Concurrency is
+**native-subprocess-only**; the deferred arm stays sequential.
+
+**Status: Proposed.** Ships behind a feature flag with sequential `dispatch_calls` as fallback until
+the parity tests pass. Phase 2 (typed `Chan` / session types / SharedMem→message / LLM-as-source) is
+**deferred, gated on AILANG v1.0/1.1**.
+
+---
+
 ## Context
 
 Motoko's core today runs a **strictly sequential, blocking** agent loop. `loop_v2`
