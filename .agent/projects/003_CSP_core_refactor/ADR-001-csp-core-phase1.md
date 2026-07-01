@@ -47,11 +47,31 @@ It does not re-derive the research; it cites it.
 ## Decision
 
 **Adopt the Phase-1 `selectEvents` / `run_tool_select` model for the core's tool-execution
-mechanism.** Concretely: generalize `loop_v2`'s tool phase (`dispatch_calls`) into a
-`run_tool_select` function that multiplexes per-tool sources **plus a control/cancel source** via
+mechanism.** Concretely: replace `loop_v2`'s tool phase (`dispatch_calls`) with a `run_tool_select`
+function that multiplexes per-tool sources **plus a control/cancel source** via
 `std/stream.selectEvents`, generalizing the shipped `ws_loopback.ail` `loop_until_done` template
-(RESEARCH §4, §12). This is a **localized refactor of one function**, with no AILANG language
-dependency.
+(RESEARCH §4, §12), with no AILANG language dependency.
+
+**Scope of the edit, stated honestly (revised per review B1/B3/G1).** The *edit point* is localized —
+the coordinator, state threading, model call, hooks, compaction, and cost/usage are untouched (see
+"refactor, not rewrite" below) — but "one function changes" undersells the **behavioral** blast
+radius, and this ADR no longer claims it:
+
+- **`dispatch_calls` has two call sites in `loop_v2`, not one:** the tool-calls arm
+  (`agent_loop_v2.ail:1454`, the one the §12 sketch shows) **and** the `hybrid_tools` arm
+  (`agent_loop_v2.ail:1341`), which dispatches a single synthesized `BashExec` call through the *same*
+  pipeline (`hybrid_tools` is a `loop_v2` parameter, `agent_loop_v2.ail:1111`; a shipped, default-capable
+  path). **Decision:** `run_tool_select` replaces `dispatch_calls` at **both** sites; for the
+  single-element hybrid batch, concurrency is moot but the cancellation / live-output / event-ordering
+  contracts below still apply. (`invokes` records `loop_v2 → dispatch_calls` once and, being an
+  unordered set, cannot show the multiplicity — source `:1341` and `:1454` establish the two sites.)
+- **`run_tool_select` is not a rename of `dispatch_calls`.** Today `dispatch_calls` routes tools
+  through `dispatch_one` (native, via `tool_dispatch_adapter`), `dispatch_tool_handle` (extension),
+  and `delegated_deferred_message` (delegated) — it does **not** call `dispatch_tool_envelope` (that
+  function lives in `tool_envelope_dispatch.ail:36` and is called only by `ws_loopback.ail:188`). The
+  §12 sketch's deferred arm substitutes `dispatch_tool_envelope`, so the change also swaps the
+  deferred dispatcher. Both the tool-kind routing and the scratchpad special-case must be carried
+  forward deliberately — see **"Behavioral contracts Phase 1 must preserve"** below.
 
 Within that decision, the three sub-decisions the research left open resolve as:
 
@@ -101,17 +121,20 @@ Motivation — leading with *why*, not bare feasibility:
   explicit, tee-able message frames, which directly attacks the two problems the DST ADR could not
   cleanly resolve — `001_DST/ADR-001` R7 (satisfy `{Env,FS,Net}` deterministically without effect
   mocking) and R8 (the recorder "must not change prod behavior" vs "seams must be added"
-  self-contradiction). CSP **dissolves R8** (recorder = a process teeing the channel, not a seam in
-  `dispatch_step`) and **sidesteps R7** (substitute the channel *peer*, not the effect handler)
-  (RESEARCH §9). See "Observability mechanism" below.
+  self-contradiction). CSP is *positioned to* **dissolve R8** (recorder = a process teeing the
+  channel, not a seam in `dispatch_step`) and **sidestep R7** (substitute the channel *peer*, not the
+  effect handler) (RESEARCH §9) — *composition-only argument; the recorder spike is pending, RESEARCH
+  §9 / §13 #6.* See "Observability mechanism" below.
 - **Extension-sandboxing trajectory.** The tool path already runs through `ext/runtime`'s hooks, and
   the hook boundary is already CSP-shaped (returns are already messages: `Handled | Delegate`,
   `Allow | Deny | NoOpinion | Pending`) (RESEARCH §10). Phase 1 needs **zero** extension changes
   (RESEARCH §10, "Phase 1 per-package change: none"); Phase 2 is where capability-scoped, observable
   hook channels pay off.
-- **No language dependency.** Phase 1 generalizes shipped, working code (`selectEvents` +
-  `ws_loopback.ail`); the capability ledger (RESEARCH §5) de-risks every seam on the current
-  toolchain. Phase 2's wins are gated on the unshipped `Chan` effect (v1.0/1.1).
+
+Feasibility note (not itself a driver — revised per review M5): Phase 1 has **no AILANG language
+dependency** — it generalizes shipped, working code (`selectEvents` + `ws_loopback.ail`) and the
+capability ledger (RESEARCH §5) de-risks every seam on the current toolchain. This is what makes the
+drivers above *achievable now*; Phase 2's wins are gated on the unshipped `Chan` effect (v1.0/1.1).
 
 ## Scope
 
@@ -121,10 +144,14 @@ Motivation — leading with *why*, not bare feasibility:
   control/cancel source via `selectEvents` (RESEARCH §12). **This is the central thing adopted.**
 - The dispatch mode (**deferred**), model-call treatment (**blocking `std/ai`**), and protocol
   encoding (**frame ADTs**) decided above.
-- Carry the `Stream` effect at extension hook call sites; rely on deferred dispatch so a hook that
-  hosts its own `runEventLoop` (`scratchpad`'s flagged `ws_loopback`) is never entered inside the
-  core's handler (no nested loops) (RESEARCH §10). **No per-package extension code change**
-  (`context-mode`, `scratchpad`; `autoresearch` has no `.ail` hooks) (RESEARCH §10).
+- **The core begins calling `selectEvents`/`runEventLoop`** (today only extension hooks like
+  `ws_loopback` do — `std_calls` shows *zero* `std/stream` primitives in `src/core/**`). This needs
+  **no new effect-ceiling grant** (revised per review M3): `loop_v2`'s effect row already includes
+  `Stream` (`agent_loop_v2.ail:1125`) and `dispatch_calls` already declares it (`:740`), so the hook
+  call sites already carry `Stream`. Rely on deferred dispatch so a hook that hosts its own
+  `runEventLoop` (`scratchpad`'s flagged `ws_loopback`) is never entered inside the core's handler
+  (no nested loops) (RESEARCH §10). **No per-package extension code change** (`context-mode`,
+  `scratchpad`; `autoresearch` has no `.ail` hooks) (RESEARCH §10).
 
 ### Phase 2 — OUT (defer to a separate Phase-2 ADR, gated on AILANG v1.0/1.1)
 
@@ -196,15 +223,19 @@ coordinator discipline of RESEARCH §11. It has exactly two channels:
   `call :: rest` arm (`agent_loop_v2.ail:743`) recurses on `rest` (`agent_loop_v2.ail:756`), one tool
   at a time.
 
-**The localized change.** Keep the entire recursion, the model call, all four hook points,
-compaction, cost/usage, and events **unchanged**. The hook topology is graph-confirmed against the
-fresh extract: `loop_v2` invokes `dispatch_pre_step`, `dispatch_response_intercept`, and
+**The localized change.** Keep the entire recursion, the model call, all four hook **APIs**,
+compaction, cost/usage, and the event *envelope* **unchanged**. The hook topology is graph-confirmed
+against the fresh extract: `loop_v2` invokes `dispatch_pre_step`, `dispatch_response_intercept`, and
 `dispatch_solver_candidate` (all `src/core/ext/runtime`) plus `dispatch_calls` directly; the fourth
 hook pair `dispatch_tool_policy` / `dispatch_tool_handle` is invoked **inside** `dispatch_calls`
 (graph-confirmed `dispatch_calls → {dispatch_tool_policy, dispatch_tool_handle, dispatch_one,
-tool_call_to_envelope}`). The CSP increment replaces **one function**:
-`dispatch_calls → run_tool_select`, multiplexing tools + a control source via `selectEvents`. The
-§12 sketch (grounded in `run_v2:1494`, `loop_v2:1107`, `dispatch_calls:731`):
+tool_call_to_envelope}`). The CSP increment introduces **`run_tool_select`** in place of
+`dispatch_calls` at its **two call sites** (`agent_loop_v2.ail:1341,1454`; see "Scope of the edit"
+above), multiplexing tools + a control source via `selectEvents` — a localized *edit point*, but one
+that carries the seven behavioral contracts below (it is not a pure rename; per review B3 it also
+swaps the deferred dispatcher and must preserve tool-kind routing, the scratchpad special-case, policy
+`Pending`, cancellation-transcript, and event-ordering behavior). The §12 sketch (grounded in
+`run_v2:1494`, `loop_v2:1107`, `dispatch_calls:731`):
 
 ```text
 loop_v2(state{rt, msgs, step_idx, step_budget, totals, provider, control, …}):
@@ -244,22 +275,31 @@ verified — `dispatch_pre_step` (`ext/runtime.ail:164`), `compact_step_with_lim
 `messages_to_msgs(msgs)`), and the `run_tool_select` body are schematic, standing in for the
 implementation this ADR authorizes, not naming existing symbols.
 
-**Two arms under one control source (be explicit about this — RESEARCH §12).** `run_tool_select` is
-not "every tool becomes a process source." `asyncExecProcess` only sources a subprocess's stdout
-(read-only, dies with the loop). FS / env-delegated / AI-subagent tools go through the **deferred
-envelope** path (`dispatch_tool_envelope`, the `ws_loopback` shape), **not** a process source. So the
-function is two arms — process sources vs. deferred dispatch — multiplexed under one control source.
+**Two arms under one control source, and `source_for` is really a partition (revised per review
+B3/G12).** `run_tool_select` is not "every tool becomes a process source," and it is not one generic
+`source_for(call)`. The honest shape is **`policy_preflight(calls)` → `partition(calls)` →
+`select + assemble_in_call_order`**, where `partition` splits the batch by tool kind (below). Only the
+**native-subprocess arm** (`asyncExecProcess`, read-only stdout, dies with the loop) runs
+**concurrently** with live streamed output. The **deferred arm** (FS / env-delegated / AI-subagent /
+scratchpad, the `ws_loopback` shape) is **one blocking dispatch at a time** in the enclosing context —
+so two deferred tools do **not** run concurrently with each other in Phase 1; only native-subprocess
+tools stream concurrently. The proportion of each depends on the tool mix and `ohmy_pi`/`backend_for_v2`
+routing (`agent_loop_v2.ail`), so the ADR does not claim universal concurrency.
 
 **Observability mechanism (named, per the R8 lesson).** The frames `run_tool_select` exchanges
 (`run` / `tool-request` / `tool-result` / `done`) **are** the DST trace events: a recorder is a
 process that **tees the frame stream**, and `selectEvents`' deterministic priority + same-priority
-round-robin ordering makes the message order reproducible by construction (RESEARCH §9). This is the
-"tee the channel" mechanism of RESEARCH §9, and it is what dissolves the R8 self-contradiction —
-there is no observation seam inside `dispatch_step`; the frames already exist on the wire. *Caveat
-(verified-vs-inferred): the cheap DST partial win — point the provider path at a scripted local
-server and tee the frames as a normalized trace — is asserted by composition from shipped pieces
-(RESEARCH §9, §13 #6), not yet demonstrated end-to-end. It is a Phase-1 spike, listed as such, not a
-completed result.*
+round-robin ordering makes the *ordering of already-arrived events* reproducible by construction
+(RESEARCH §9). *Two scoping caveats (revised per review S1/G11):* (1) **determinism is scoped to the
+AILANG scheduler, not wall-clock I/O** — external process-output timing, WebSocket peer timing, and
+approval-input timing stay outside the scheduler unless captured and replayed as trace input; so DST
+replay of deferred-dispatch tools requires **controlling the peer** (the env-server), not just the
+select. (2) The per-call event *sequence* changes from today's call-list order (the `call :: rest`
+recursion at `:743,756`) to **select-priority/round-robin order** — the ADR does *not* claim this
+sub-order is unchanged (see the event-ordering contract below). The cheap DST partial win — point the
+provider path at a scripted local server and tee the frames — is asserted by composition from shipped
+pieces (RESEARCH §9, §13 #6), **not yet demonstrated end-to-end**; it is a Phase-1 spike, not a
+completed result.
 
 **Why deferred, restated as the call.** In-handler effectful dispatch is **verified possible** on
 v0.26.0 (the `Net`-in-handler and `AI`-in-handler smokes, RESEARCH §5 / `smoke/README.md`) — but the
@@ -267,35 +307,147 @@ only shipped precedent (`ws_loopback.ail`) deliberately uses **deferred** becaus
 errors exit 0 silently (RESEARCH §6, gotcha 2). This ADR follows production: deferred is the robust
 default. In-handler dispatch is an available option, not a requirement, and not the one chosen.
 
+## Behavioral contracts Phase 1 must preserve
+
+Added in response to review (GPT-5.5 G1–G4, G7–G9; GLM 5.2 B2, S1–S3). `run_tool_select` changes
+*how* tools execute; it must not change the contracts today's `dispatch_calls` satisfies with the
+provider, the extension system, and the TUI. These are **binding sub-decisions**, not implementation
+afterthoughts. Each is grounded in current source.
+
+1. **Dispatch matrix by tool kind (G1).** "Native subprocess tool" is not today's whole native path.
+   `dispatch_calls → dispatch_one → run_native_batch` routes a *mixed* ADT — file read/write/edit,
+   search, bash, tests, path validation, truncation metadata, stdout/stderr hashes, exit codes,
+   tool-specific JSON — and `tool_runtime` classifies `streaming` / `needs_stderr_live` /
+   `needs_hard_cancel` as **delegated-backend** features today, returning "requires delegated backend"
+   for them (`tool_runtime.ail:118-120,885-886`). Phase 1 must define, per kind, the final
+   `Message.content` shape and whether it matches today's `dispatch_one` output
+   (`tool_result_item_to_json`):
+
+   | Tool kind | Phase-1 execution | Result shape |
+   |---|---|---|
+   | Local synchronous (ReadFile/WriteFile/EditFile/Search) | **unchanged**, synchronous, not a source | identical to today's `dispatch_one` |
+   | Live-process (bash w/ `streaming`/`needs_stderr_live`) | `asyncExecProcess` source arm (concurrent, live stdout) | must still carry stderr + exit code + truncation meta |
+   | Extension-handled (`on_tool_handle → Handled`) | deferred arm, `dispatch_tool_handle` | unchanged envelope |
+   | Delegated / `ohmy_pi` backend | deferred arm | unchanged `delegated_deferred_message` shape |
+   | Cancelled | synthetic tool-role message (contract #4) | new, defined below |
+
+   The default for anything not proven independent stays the **unchanged synchronous** path (ties to
+   the opt-in-concurrency open question).
+
+2. **Policy `Pending` must not deadlock the select (G2).** `dispatch_calls`'s `Pending` arm emits
+   `tool_pending` then **blocks on `readLine()`** for operator approval (`agent_loop_v2.ail:758-769`).
+   If `run_tool_select` starts other tool sources and then hits `Pending`, the whole event loop is
+   blocked in stdin approval and the control/cancel source cannot be observed. **Decision:** run a
+   **policy preflight** — resolve `dispatch_tool_policy` for every call in the batch (including any
+   `Pending` approval) **before** starting any source. Deny/Pending are settled up front; only
+   Allow-ed calls enter the select. (Making approval its own select source is deferred to Phase 2.)
+
+3. **Scratchpad special-case must be carried forward (G3).** `dispatch_calls` special-cases scratchpad
+   *before* normal handling — `is_scratchpad_tool_name(...) && scratchpad_extension_active(rt)` →
+   `exec_scratchpad_cell_ws(...)` (`agent_loop_v2.ail:868-869`, import `:63`). The deferred dispatcher
+   the sketch names, `dispatch_tool_envelope`, **hard-errors** on scratchpad ("recursive scratchpad
+   loopback is disabled", `tool_envelope_dispatch.ail:37-38`). **Decision:** `run_tool_select` keeps
+   the scratchpad special-case (routing to `exec_scratchpad_cell_ws`) ahead of the deferred arm; Phase
+   1 does **not** disable the scratchpad WS cell path.
+
+4. **Cancellation produces a provider-valid transcript (G4, B2, S3).** On cancel, the assistant
+   message still contains N `tool_calls`; the next model step must receive exactly the tool-role
+   messages the provider expects, in original `tool_call_id` order. **Decision:** completed results are
+   preserved; not-yet-started calls and in-flight-cancelled calls each get a **synthetic tool-role
+   message** carrying an `error`/cancelled sentinel (same envelope shape as
+   `delegated_deferred_message`), and the final list is assembled in **call order** regardless of
+   completion order. Cancellation is **arm-specific** (B2): a native-subprocess tool *can* be
+   cancelled mid-flight (the control source fires during `selectEvents`; exiting the loop reaps the
+   subprocess); an in-flight **deferred** dispatch **cannot** be preempted — only pending
+   (not-yet-dispatched) deferred tools are cancellable. The teardown primitive (S3) is `disconnect`
+   for WebSocket sources and "exit `runEventLoop` to reap the subprocess" for process sources — RESEARCH
+   §1/§7 name these; there is **no per-source `kill`**, so reaping one process source ends the loop and
+   forces the sibling in-flight tools onto the synthetic-cancelled path. The precise reap ordering is
+   Open Question #1.
+
+5. **Event ordering & TUI pairing (S1, G10).** Today `loop_v2` brackets dispatch with a batched
+   `native_tool_calls` (pre, `agent_loop_v2.ail:1448`) / `native_tool_results` (post, `:1455`) pair
+   keyed by `request_id` (`:1447`), and per-call events (`native_tool_denied`, `ext_tool_handled`,
+   `delegated_tool_deferred`) fire in call-list order from inside `dispatch_calls`. **Decision:** the
+   batched `native_tool_calls`/`native_tool_results` pair still **brackets** `run_tool_select` (the
+   TUI's `request_id` pairing is preserved), but the *per-call* event sub-order becomes
+   select-priority order, not call-list order. The claim is **"hook and event APIs unchanged;
+   scheduling/ordering contract defined here"** (G10) — not "events unchanged."
+
+6. **Live output: model-vs-UI boundary, `stream_id`, backpressure (G7, S2, G8).** Live tool stdout is
+   a **UI stream only**. **Decision:** partial stdout chunks are **never** appended to the model
+   transcript — the model still receives one final tool-role message per call (contract #1); live
+   chunks render to the TUI exclusively. Tool stdout gets a **distinct `stream_id` per `tool_call_id`**
+   (not the model's `stream_id`, which keys `thinking_delta`/`text_delta` at `agent_loop_v2.ail:1196-1201`)
+   to avoid conflating tool output with model tokens in the per-stream buffer. Per-tool and per-batch
+   **byte limits + truncation** carry over from `tool_runtime`'s `mk_meta` truncation contract; chunks
+   beyond the live-stream limit are omitted from the UI stream but the final message still reports the
+   truncation metadata.
+
+7. **Frame-protocol failure modes (G9).** The runtime-checked frame ADTs must define transitions for
+   **malformed**, **duplicate**, **out-of-order**, and **unknown** frames (reusing the existing
+   `error_result` machinery in `tool_envelope_dispatch`), rejecting out-of-protocol frames rather than
+   silently accepting them.
+
+## Rollout & parity validation
+
+Added in response to review (GPT-5.5 G5/G6). A core-loop change has a core-entry-wide blast radius
+(the current dispatch path reaches `loop_v2` / `run_v2` / `conversation_loop_v2` / RPC entry /
+`supervisor#main`).
+
+- **Feature-flag gating (G5).** Ship `run_tool_select` behind a flag/config switch with the existing
+  **sequential `dispatch_calls` as the fallback**, defaulting to the old path until parity tests pass
+  — mirroring how `ws_loopback` itself ships (`MOTOKO_SCRATCHPAD_WS_LOOPBACK=1`, default off,
+  `ws_loopback.ail:211`).
+- **Parity test list (G6), scripted/provider-stub (no live network).** Acceptance requires passing:
+  (a) two independent `BashExec` calls; (b) mixed `BashExec` + `ReadFile`; (c) policy `Deny` and
+  `Pending` (preflight); (d) extension `Handled`; (e) scratchpad cell; (f) delegated / `ohmy_pi`
+  routing; (g) cancellation before start **and** during live process output; (h) TUI
+  `native_tool_calls`/`native_tool_results` `request_id` pairing; (i) provider replay with ordered
+  `tool_call_id`s. These are **to-be-created** (no such Make/CI target exists yet — R12 discipline).
+
 ## Consequences
 
 ### Positive
 
-- **Concurrent tool execution with live streamed output** and **mid-batch cancellation** via the
-  control source — neither exists today (RESEARCH §12).
-- **Refactor, not rewrite:** the coordinator, state threading, model call, and every hook are
-  untouched; one function changes (RESEARCH §12). Risk is contained to `run_tool_select`.
-- **DST leverage now:** the loop's frames become a tee-able trace, attacking `001_DST` R7/R8 without
-  waiting for v1.0.0 (RESEARCH §9). A genuine partial win is available on current `std/stream`.
+- **Concurrent execution + live streamed output for native-subprocess tools** (revised per review
+  B3): the `asyncExecProcess` arm streams stdout concurrently; deferred-dispatch tools remain
+  sequential in Phase 1. Neither concurrency nor live output exists today (RESEARCH §12).
+- **Mid-batch cancellation, arm-scoped** (revised per review B2): cancel in-flight *process-source*
+  tools and *pending (not-yet-dispatched)* deferred tools via the control source — none exists today.
+  In-flight deferred dispatches are not preemptible (see Negatives / contract #4).
+- **Localized *edit*, honest about behavioral blast radius:** the coordinator, state threading, model
+  call, and every hook API are untouched (RESEARCH §12) — but the change touches **two** `dispatch_calls`
+  call sites and swaps the deferred dispatcher, and must honor the seven behavioral contracts above.
+  Risk is contained to `run_tool_select` + those contracts, not to the loop scaffold.
+- **DST leverage now:** the loop's frames become a tee-able trace, positioned to attack `001_DST`
+  R7/R8 without waiting for v1.0.0 (RESEARCH §9) — *composition-only; recorder spike pending.*
 - **Zero extension churn in Phase 1**, and a clean Phase-2 trajectory toward capability-scoped,
   observable hook channels (RESEARCH §10).
-- **Deterministic by construction:** `selectEvents` priority + round-robin ordering is replayable,
-  composing with the DST/trace tooling direction (RESEARCH §9, §12).
+- **Deterministic at the scheduler layer:** `selectEvents` priority + round-robin ordering is
+  replayable for already-arrived events (RESEARCH §9, §12); external peer/process/approval timing is
+  *not* scheduler-governed and needs trace capture for full DST replay (see contract #5).
 
 ### Negative
 
 - **Tool-result ordering becomes a real obligation.** Concurrent tools must still emit tool-results
   in `tool_call_id` order to preserve the DST invariant "tool-call IDs preserved" — collect by id,
-  emit in call order (RESEARCH §12; Open Question #2).
-- **Two-arm complexity.** `run_tool_select` multiplexes process sources and deferred dispatch under
-  one control source — more moving parts than the sequential fold it replaces (RESEARCH §12).
-- **Cancellation is cooperative/coarse** — a mid-flight blocking dispatch cannot be preempted; cancel
-  lands at select boundaries (RESEARCH §7, §12; Open Question #1). This is weaker than a user might
-  expect from "cancel."
+  emit in call order (RESEARCH §12; contracts #4/#5; Open Question #2).
+- **New behavioral surface to hold.** `run_tool_select` multiplexes process sources and deferred
+  dispatch under one control source, and must honor the seven contracts above (dispatch matrix,
+  policy preflight, scratchpad, cancellation transcript, event ordering, live-output boundary, frame
+  failure modes) — materially more than the sequential fold it replaces (RESEARCH §12).
+- **Cancellation is cooperative/coarse and arm-specific** — an in-flight *deferred* dispatch cannot
+  be preempted (only pending deferred tools are cancellable); a *process-source* tool is reaped by
+  exiting the loop, which forces siblings onto the synthetic-cancelled path (RESEARCH §7, §12;
+  contract #4; Open Question #1). This is weaker than a user might expect from "cancel."
 - **Concurrency must be opt-in.** Some tool batches have ordering/safety dependencies; the default
   must stay sequential unless a batch is known-independent (RESEARCH §12; Open Question #3).
-- **The XOR is permanent for Phase 1:** no streamed multiplexing *of the model call itself*; token
-  rendering stays via the blocking step's `on_chunk` (RESEARCH §5). A true LLM source is Phase 2.
+- **The XOR holds while `std/ai`'s current surface holds** (revised per review M2 — it is an
+  AILANG-API fact, not a Motoko choice): no streamed multiplexing *of the model call itself*; token
+  rendering stays via the blocking step's `on_chunk` (RESEARCH §5). It dissolves the moment AILANG
+  ships a `std/ai`→`StreamSource` adapter (RESEARCH §5 option C), independent of Phase 2's
+  peer-process work — re-checked per the re-validation trigger below.
 
 ## Rejected Alternatives
 
@@ -309,8 +461,9 @@ default. In-handler dispatch is an available option, not a requirement, and not 
   `StepResult` usage/cost, prompt caching (RESEARCH §5 XOR). The cost is not worth a streamed model
   source in Phase 1.
 - **Full rewrite of the core loop into a CSP architecture.** Rejected: unnecessary. `loop_v2` is
-  already a state-threading coordinator with no shared mutable loop state (RESEARCH §12); the change
-  is one function. A rewrite would discard verified, working hook/compaction/cost machinery for no
+  already a state-threading coordinator with no shared mutable loop state (RESEARCH §12); the edit is
+  localized to the tool phase (two call sites + the behavioral contracts above). A rewrite would
+  discard verified, working hook/compaction/cost machinery for no
   Phase-1 gain.
 - **`std/cognition` mailboxes (`Msg`/`Cog`) for core messaging.** Rejected: shipped API but returns
   `Err(NO_HANDLER)` in the native CLI (transport is browser/WASM-wired, `cmd/wasm/effects.go`), and
@@ -324,20 +477,23 @@ default. In-handler dispatch is an available option, not a requirement, and not 
 ## Open Questions
 
 Only the genuinely open items are carried here. RESEARCH §13 #1 (LLM-as-source) and #2 (the
-`loop_v2` `selectEvents` sketch) are **resolved** — see §5 and §12; do not re-open them.
+`loop_v2` `selectEvents` sketch) are **resolved** — see §5 and §12; do not re-open them. The review
+round settled the *policy* of cancellation, event-ordering, dispatch-matrix, scratchpad, live-output,
+and frame-failure contracts (see "Behavioral contracts Phase 1 must preserve" #1–#7); what remains
+open is the residue those contracts could not fully pin down without implementation:
 
-1. **Cancellation teardown semantics.** A control `Cancel` must tear down in-flight sources, but
-   `asyncExecProcess` sources die with the loop and a mid-flight blocking `dispatch_tool_envelope`
-   cannot be preempted (RESEARCH §7, §12, §13 #3). What is the precise teardown contract — which
-   tool-results are emitted as "cancelled," what the control source's priority is relative to tool
-   sources, and how a partially-run subprocess tool is reaped?
-2. **Tool-result ordering under concurrency.** Concurrent completion must still serialize to
-   `tool_call_id` order (RESEARCH §12). Confirm the collect-by-id / emit-in-call-order discipline
-   holds against the DST invariant and against the provider's expectations for tool-result message
-   sequencing.
-3. **Concurrency opt-in policy.** What decides a batch is safe to run concurrently vs. must stay
-   sequential (default)? Per-tool annotation, a known-independent allowlist, or always-sequential
-   until proven? (RESEARCH §12.)
+1. **Reap ordering on cancellation** (contract #4, S3). The transcript shape is decided (preserve
+   completed, synthesize cancelled, assemble in call order), but the exact reap sequence is not:
+   there is no per-source `kill`, so exiting `runEventLoop` to reap one process source ends the loop
+   for its siblings. What is the control-source priority relative to tool sources, and the precise
+   order of disconnect (sockets) vs. loop-exit (process sources)? (RESEARCH §7, §12, §13 #3.)
+2. **Tool-result ordering primitive under concurrency** (contract #5). The *contract* is decided
+   (collect-by-id, emit-in-call-order); still to confirm empirically is that the discipline holds
+   against both the DST invariant and the provider's tool-result sequencing expectations under the
+   new select-priority sub-order (RESEARCH §12).
+3. **Concurrency opt-in policy** (contract #1 default). Default stays synchronous/sequential; what
+   *promotes* a batch to concurrent — per-tool annotation, a known-independent allowlist, or
+   always-sequential until proven? (RESEARCH §12.)
 
 *(Lower priority, off the critical path: a literal real-model in-handler call (RESEARCH §13 #1) is
 covered only by composition today. Because Phase 1 uses deferred dispatch, this is a nice-to-have,
@@ -353,9 +509,12 @@ is ground truth) and `std/ai` signatures churned across recent minors (RESEARCH 
 **Re-validation trigger:** on **any minor AILANG bump** (v0.27+, or v1.0), before relying on this
 ADR, re-run the `./smoke/` capability proofs and re-confirm the §5 XOR (the shape of
 `stepWithStream` / `ssePost` is the load-bearing fact) and the `selectEvents` source/handler
-surface. A patch bump (v0.26.x) does not trigger re-validation. The smoke suite (`smoke/README.md`)
-is the validation harness; no new CI/Make target is assumed by this ADR — any such target is
-**to-be-created** as part of Phase-1 implementation, not a precondition of the decision.
+surface. A **patch bump (v0.26.x) re-validates only if the `std/ai` or `std/stream` module hash
+changed** (revised per review M4 — RESEARCH §8 documents `std/ai` signature churn and a stale MCP
+`effects_catalog`, so a blanket patch exemption is too optimistic; gate on the stdlib module hash
+rather than the version field). The smoke suite (`smoke/README.md`) is the validation harness; no new
+CI/Make target is assumed by this ADR — any such target is **to-be-created** as part of Phase-1
+implementation, not a precondition of the decision.
 
 ## Verified vs. inferred (provenance summary)
 
@@ -805,3 +964,42 @@ parity, policy sequencing, scratchpad behavior, cancellation transcript shape, r
 behavioral tests.
 
 - GPT-5.5
+
+---
+
+### Author response — disposition (2026-07-01)
+
+Every comment was verified against source before acting (the reviewers were correct on all
+load-bearing claims — two `dispatch_calls` call sites at `:1341`/`:1454`; `dispatch_calls` uses
+`dispatch_one`/`dispatch_tool_handle`/`delegated_deferred_message`, not `dispatch_tool_envelope`;
+`dispatch_tool_envelope` hard-errors on scratchpad at `tool_envelope_dispatch.ail:37-38`; `Pending`
+blocks on `readLine()` at `:769`; scratchpad special-case at `:868-869`). The **decision is
+unchanged** (adopt `run_tool_select`); the scope/risk representation and the implementation contract
+were tightened. Status stays **Proposed**. The `Stream`-already-in-row (M3), two-call-sites (B1),
+and `dispatch_step` profile-boundary facts were re-confirmed against the fresh core extract.
+
+| # | Where addressed |
+|---|---|
+| **B1** two call sites / blast radius | Decision → "Scope of the edit, stated honestly"; both `:1341`+`:1454` named, hybrid arm decided |
+| **B2** cancellation scope by arm | Positive bullet 2 (arm-scoped); contract #4; Negative "arm-specific" bullet |
+| **B3** concurrency only for subprocess arm; not a rename | Decision bullet 2; "Two arms … `source_for` is a partition"; Positive bullet 1 |
+| **S1** event-sequence contract + peer-timing | Observability caveats (1)(2); contract #5 |
+| **S2** `stream_id` allocation | Contract #6 (distinct `stream_id` per `tool_call_id`) |
+| **S3** teardown primitive | Contract #4 (`disconnect` / loop-exit; no per-source `kill`); Open Question #1 |
+| **M1** DST driver caveat | Decision Drivers DST bullet ("composition-only; spike pending") |
+| **M2** XOR "permanent" → API-gated | Negative "XOR holds while `std/ai`'s surface holds" |
+| **M3** `Stream` already granted | Scope IN bullet ("core begins calling `selectEvents` … no new grant") |
+| **M4** patch-bump re-validation | Re-validation trigger (gate on `std/ai`/`std/stream` module hash) |
+| **M5** no-language-dependency framing | Moved to a "Feasibility note (not a driver)" |
+| **G1** dispatch matrix per tool kind | Contract #1 (matrix table) |
+| **G2** `Pending` deadlock | Contract #2 (policy preflight) |
+| **G3** scratchpad regression | Contract #3 (keep `exec_scratchpad_cell_ws` special-case) |
+| **G4** provider-valid cancellation transcript | Contract #4 |
+| **G5** rollout gating | "Rollout & parity validation" (feature flag, sequential fallback) |
+| **G6** parity test list | "Rollout & parity validation" (a)–(i), to-be-created |
+| **G7** live-output model-vs-UI boundary | Contract #6 (never append partial stdout to transcript) |
+| **G8** backpressure / output limits | Contract #6 (byte limits + truncation via `mk_meta`) |
+| **G9** frame failure modes | Contract #7 (malformed/duplicate/out-of-order/unknown) |
+| **G10** APIs vs scheduling | Contract #5 ("APIs unchanged; scheduling contract defined") |
+| **G11** determinism scoped to scheduler | Observability caveat (1); Positive "at the scheduler layer" |
+| **G12** partition, not one `source_for` | "Two arms … `source_for` is a partition" |
