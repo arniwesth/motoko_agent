@@ -15,6 +15,38 @@ Relates to:
 
 ---
 
+## TL;DR
+
+**What:** the ordered, flag-gated implementation of the ADR's settled decision — replace `loop_v2`'s
+tool phase (`dispatch_calls`, `agent_loop_v2.ail:731`) with **`run_tool_select`**, a
+`std/stream.selectEvents` multiplexer (verified present, `std/stream.ail:160`) over per-tool sources +
+a control/cancel source, at **both** call sites (`:1341` hybrid, `:1454` tool-calls). No AILANG
+language dependency; buildable on v0.26.0.
+
+**How (9 work items, WI-0…WI-8):** WI-0 scaffolds `run_tool_select` behind
+`MOTOKO_RUN_TOOL_SELECT` (default off) as a pass-through to the old `dispatch_calls` fold → then
+WI-1 policy preflight (contract #2) → WI-2 partition + dispatch matrix + `parallel_safe` flag
+(#1/#3/#8) → WI-3 the select loop + frame ADTs (#7) → WI-4 collect-by-id / emit-in-call-order (#4/#5)
+→ WI-5 live output + TUI events (#5/#6) → WI-6 cancellation + reap (#4, pins Open Q #1) → WI-7
+startup assertions → WI-8 parity suite G6(a)–(i) + flag flip. **Every step is independently
+shippable and revertible with the old path as the default fallback** until parity is green.
+
+**Guarantees:** all **8 behavioral contracts** map to concrete testable work items (traceability
+table); both call sites addressed; parity suite is scripted/provider-stub (no live network), marked
+to-be-created; flag-flip gated on it passing.
+
+**Two arms, honestly:** only the **native-subprocess arm** (`asyncExecProcess`, `:173`) runs
+concurrently with live stdout; the **deferred arm** stays sequential. They must run as **separate
+stages** — exiting `selectEvents` to deferred-dispatch would kill live process sources
+(`std/stream.ail:166`), a new substrate finding the ADR's illustrative sketch doesn't account for.
+
+**Open / at-risk:** Open Q #1 (control-source priority value + teardown interleave) is pinned by the
+cancellation smoke (WI-6/G6(g)); Q2/Q3 are **decided** (contracts #4/#8) — not re-opened. Two new
+substrate risks flagged for the ADR: chunk→tool routing is by source *name* not index; and
+`asyncExecProcess` stderr/exit-code delivery is undocumented (a live-process-arm viability gate).
+
+---
+
 ## Goal
 
 Turn the ADR's settled decision — replace `loop_v2`'s tool phase (`dispatch_calls`,
@@ -431,6 +463,65 @@ Re-use, don't reinvent: the `./smoke/` proofs already validate the load-bearing 
 
 ---
 
+## Blast radius
+
+The **edit** is localized; the **behavioral reach** is core-entry-wide. The flag (WI-0) is what
+converts the second into a contained, revertible risk. Three concentric rings:
+
+**Ring 1 — Direct edit surface (what actually changes).** Small and enumerable:
+
+| Change | File:line | WI |
+|---|---|---|
+| Swap `dispatch_calls` → `run_tool_select` at **both** call sites | `agent_loop_v2.ail:1341`, `:1454` | WI-0 |
+| New `run_tool_select` module (select loop, partition, assembly, cancel) | `src/core/run_tool_select.ail` (new) | WI-0…WI-6 |
+| New frame ADTs (deferred loopback protocol) | `src/core/tool_select_frames.ail` (new) | WI-3 |
+| New `parallel_safe` per-tool flag | `tool_runtime.ail:118-120` (alongside existing flags) | WI-2 |
+| Startup cap assertions (`AI`/`Stream`) | brain launch path (`supervisor`/`rpc`) | WI-7 |
+| Thread `control` value through the coordinator | `loop_v2` state (`agent_loop_v2.ail:1107`) | WI-0 |
+
+Everything else in `loop_v2` — the tail-recursive coordinator, the ~8 recursion sites
+(`:1222,1299,1343,1371,1387,1410,1426,1462`), the model call, all four hook APIs, compaction,
+cost/usage — is **untouched** (ADR "refactor, not rewrite").
+
+**Ring 2 — Caller reach (why a local edit has core-wide reach), source-verified.** The dispatch path
+is reached by every agent entry point, up to the process `main`:
+
+```
+supervisor.ail:main:43
+  └─ rpc.run_with_config  (rpc.ail:157)          (imports run_v2_with_conversation, rpc.ail:14)
+       └─ run_v2_with_conversation  (called rpc.ail:239; def agent_loop_v2.ail:1662)
+            └─ run_v2_from_messages  (def :1524) ──┐
+   run_v2  (def :1494) ──────────────────────────────┤ (each → loop_v2)
+   conversation_loop_v2  (def :1576) → run_v2_from_messages (~:1637)
+   run_v2_with_stub  (def :1693, test entry)         │
+                                                     └─ loop_v2  (def :1107; entered from run_v2 :1515, run_v2_from_messages :1544)
+                                                          └─ dispatch_calls → run_tool_select  (:1341, :1454)
+```
+
+So a defect in `run_tool_select` is observable from the TUI (`src/tui/src/runtime-process.ts`,
+`ui.ts` drive it over the process/RPC boundary), the one-shot `run_v2` path, the interactive
+`conversation_loop_v2` path, and the stub path — i.e. **every** way the agent runs. This is why the
+change is flag-gated rather than shipped directly.
+
+**Ring 3 — Behavioral surfaces at risk (the 8 contracts are the risk map).** Even with an untouched
+scaffold, `run_tool_select` sits on five external contracts that a naive edit would silently break:
+
+| Surface | Consumer | Guarded by |
+|---|---|---|
+| Provider transcript (id-correlation, no empty `tool_call_id`→422) | Anthropic/OpenAI/Gemini (`agent_loop_v2.ail:365,479`) | contract #4 / WI-4 |
+| Policy + approval (`Deny`/`Pending` `readLine()` `:769`) | operator/extension policy | contract #2 / WI-1 |
+| Extension system (`Handled`/`Delegate`, scratchpad `:868`) | `ext/runtime`, scratchpad `ws_loopback` | contracts #1/#3 / WI-2 |
+| TUI events (`native_tool_calls`/`native_tool_results` `request_id` `:1447-1455`; `stream_id` `:1196-1201`) | `src/tui` renderer | contracts #5/#6 / WI-5 |
+| Effect ceiling (`run_tool_select` must declare `:740`'s full row, not the graph's under-approx) | compiler | WI-0 |
+
+**Containment.** The flag (`MOTOKO_RUN_TOOL_SELECT`, default off) confines all three rings: with it
+off, every ring behaves exactly as today (WI-0 pass-through delegates to `dispatch_calls`); the new
+path is exercised only under the flag, and the flag-flip is gated on the full parity suite
+(G6 a–i) + startup + cancellation smokes. Revert at any point is a flag flip, not a code restore
+(the old path stays in-tree ≥1 release post-flip).
+
+---
+
 ## Rollout & flag-flip criteria
 
 1. Land WI-0…WI-7 incrementally, **flag default off** the whole time; each WI independently
@@ -441,9 +532,7 @@ Re-use, don't reinvent: the `./smoke/` proofs already validate the load-bearing 
 4. Widen `parallel_safe` concurrency **after** flip, in order: read-only-only → `parallel_safe`-exec.
 5. Keep `dispatch_calls` in-tree ≥1 release post-flip (revert = flag flip, not code restore).
 
-Blast radius to watch (ADR "Rollout"): the dispatch path reaches `loop_v2` / `run_v2` /
-`run_v2_from_messages` / `conversation_loop_v2` / RPC entry / `supervisor#main` — the flag confines
-the risk to `run_tool_select` + the 8 contracts, not the coordinator scaffold.
+Blast radius is confined by the flag — see the dedicated **Blast radius** section below.
 
 ---
 
