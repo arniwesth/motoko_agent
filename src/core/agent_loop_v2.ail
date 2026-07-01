@@ -706,6 +706,29 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
   }
 }
 
+func run_tool_select_enabled() -> bool ! {Env} {
+  getEnvOr("MOTOKO_RUN_TOOL_SELECT", "0") == "1"
+}
+
+-- Phase-1 scaffold for the CSP tool phase. WI-0 intentionally preserves the
+-- old sequential dispatcher for both flag states; later WIs fill in the
+-- flagged branch while the flag-off path remains the revert boundary.
+func run_tool_select(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  calls: [ToolCall],
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  session_id: string
+) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+  if run_tool_select_enabled() then
+    dispatch_calls(rt, ctx, calls, workdir, step_idx, stream_id, ohmy_pi, session_id)
+  else
+    dispatch_calls(rt, ctx, calls, workdir, step_idx, stream_id, ohmy_pi, session_id)
+}
+
 -- Dispatch each ToolCall through the full per-call rpc_loop pipeline:
 --   1. Convert ToolCall → ToolCallEnvelope (M1 adapter)
 --   2. M4 — dispatch_tool_policy: Allow/Deny/NoOpinion/Pending
@@ -1338,7 +1361,7 @@ func loop_v2(
                     tool_call_id: ""
                   };
                   let msgs_with_augmented = msgs ++ [augmented_assistant_msg];
-                  let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
+                  let tool_msgs = run_tool_select(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
                   let next_msgs = msgs_with_augmented ++ tool_msgs;
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
@@ -1451,7 +1474,7 @@ func loop_v2(
                 kv("stream_id", js(stream_id)),
                 kv("tool_calls", ja(tool_calls_to_envelope_jsons(result.tool_calls)))
               ]);
-              let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi, session_id);
+              let tool_msgs = run_tool_select(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi, session_id);
               let _ = emit_event(session_id, "native_tool_results", [
                 kv("request_id", js(request_id)),
                 kv("step", jnum(_int_to_float(step_idx))),
