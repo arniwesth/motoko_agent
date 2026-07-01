@@ -394,7 +394,225 @@ is the validation harness; no new CI/Make target is assumed by this ADR — any 
 
 ## Review Comments
 
-_(Reserved for reviewer. Please ground findings against current source — `src/core/agent_loop_v2.ail`,
-`packages/motoko_scratchpad/ws_loopback.ail`, `ailang.toml`, `ailang.lock` — and the `./smoke/`
-proofs, and cite real `file:line` / commits rather than invented PR numbers, per the lessons from
-`001_DST/ADR-001` R1–R15.)_
+_**Reviewer: GLM 5.2 (`openrouter/z-ai/glm-5.2`) — 2026-07-01.**
+Grounded against current source (`src/core/agent_loop_v2.ail`, `packages/motoko_scratchpad/ws_loopback.ail`,
+`src/core/test/stub_step.ail`, `ailang.toml`), the `./smoke/` proofs, and RESEARCH §1–§13. Every
+`file:line` below was re-read this session; no PR numbers invented._
+
+Overall: the decision is sound and the provenance discipline is the best I have reviewed — the
+verified-vs-inferred split, the stale-graph re-extraction, and the §5 XOR are exactly the kind of
+load-bearing honesty `001_DST/ADR-001` R1–R15 demanded. I am not asking for a rewrite. But the
+"refactor, not rewrite / one function changes" framing understates the blast radius, and two of the
+headline Positive consequences overstate what the deferred-dispatch model actually delivers. These
+should be tightened before the ADR leaves `Proposed`.
+
+### Blocking (must address before `Accepted`)
+
+**B1. "One function changes" is false as stated — `dispatch_calls` has TWO call sites in `loop_v2`,
+and the sketch shows only one.** The §12/§"Phase-1 change" pseudocode substitutes
+`run_tool_select` only in the `finish_reason == "tool_calls"` arm. But `loop_v2` calls
+`dispatch_calls` at **two** sites: `agent_loop_v2.ail:1454` (the tool_calls arm, the one sketched)
+**and** `agent_loop_v2.ail:1341` (the `hybrid_tools` arm — `extract_bash` synthesizes a single
+`BashExec` `ToolCall` from a fenced shell block and dispatches it through the *same* `dispatch_calls`
+pipeline). The hybrid path is a real, shipped, default-capable branch (`hybrid_tools` is a `loop_v2`
+parameter, `agent_loop_v2.ail:1111`), not a dead path. The ADR must either (a) state explicitly that
+`run_tool_select` replaces `dispatch_calls` at **both** sites and what that means for a single-element
+synthesized batch (concurrency is moot; cancellation/live-output semantics still differ from the old
+sequential call), or (b) justify keeping the hybrid path on the old sequential dispatch while only the
+tool_calls arm becomes concurrent — which is a real design decision the ADR currently silently omits.
+As written, an implementer following the sketch would leave the hybrid arm on `dispatch_calls` and
+either keep two parallel code paths or break hybrid mode. *Severity: blocks the "risk is contained to
+`run_tool_select`" claim at line 277.* **Code-graph grounding:** the fresh core extract (`stale=false`,
+`coverage 24/24 ok`, `incomplete=false`, `approximate=true`, built 2026-06-30) confirms the
+`loop_v2 → dispatch_calls` edge in `invokes` (one row), and also shows `loop_v2 → synthesize_hybrid_bash_call`
+and `loop_v2 → extract_bash` (the hybrid arm's helpers) as real outgoing invokes — so the graph *sees*
+the hybrid code path. But per `tools/code-graph/AGENTS.md`, `invokes` is an **unordered set** of
+source-parsed approximations ("must not treat call/effect rows as compiler-derived facts"), so it
+records the relationship once and **cannot establish multiplicity** — it cannot tell me `dispatch_calls`
+is invoked twice. Source (`:1341` and `:1454`) is the only way to establish the two call sites; this is
+the documented graph limitation, not a graph failure.
+
+**B2. The "mid-batch cancellation" Positive consequence (line 274) contradicts the Negative (lines
+292–294) and overstates the deferred-dispatch model.** Under the chosen **deferred** dispatch mode
+(Decision 2), an in-flight `dispatch_tool_envelope` runs as a **blocking call in the enclosing
+sequential context** (RESEARCH §4; `ws_loopback.ail:183,203` — `dispatch_deferred_request` blocks,
+`loop_until_done` does one deferred dispatch per iteration). The `selectEvents` control source can
+only be observed **between** deferred dispatches, never during one. So "mid-batch cancellation" is, in
+truth, "cancel tool calls that have not yet entered deferred dispatch" — an in-flight deferred tool
+cannot be cancelled at all. The Negative section says exactly this ("a mid-flight blocking dispatch
+cannot be preempted"), so the ADR contradicts itself. Worse, the sketch arm `Control(Cancel) -> tear
+down sources` (line 231) presents teardown as a known operation, while Open Question #1 (lines
+329–333) admits the teardown contract is unspecified — including that `asyncExecProcess` sources "die
+when the event loop exits" (RESEARCH §7), so "tear down" can only mean "exit the loop," which
+forfeits collecting results from the *other* still-running tools. The Positive bullet must be
+reworded to "cancel pending (not-yet-dispatched) tool calls in a batch" and the contradiction with
+the Negative reconciled.
+
+**B3. "Concurrent tool execution" is true only for the `asyncExecProcess` (native-subprocess) arm;
+the deferred-dispatch arm is sequential.** The "two arms" section (lines 247–251) correctly
+distinguishes process-source tools from deferred-dispatch tools, but does not state the consequence:
+deferred dispatch is one blocking call at a time in the enclosing context, so two env-delegated /
+AI-subagent / FS tools cannot run concurrently with each other — only the native-subprocess tools
+concurrently stream stdout. For a typical batch (mostly delegated tools per `dispatch_calls`'s
+`backend_for == Delegated` path, `agent_loop_v2.ail:726–727`), the headline "concurrent tool
+execution" benefit is largely absent. The Positive bullet (line 274) should be split: "concurrent
+execution + live streamed output **for native-subprocess tools**; deferred-dispatch tools remain
+sequential in Phase 1." This also reframes the DST "deterministic by construction" argument: the
+non-determinism risk is lower than implied because most tools stay sequential.
+
+### Should-address
+
+**S1. The "deterministic by construction" claim (lines 256, 282) covers source ordering but NOT the
+`emit_event` side channel — and the TUI event contract is order-sensitive.** Today `loop_v2` emits a
+batched `native_tool_calls` event (`agent_loop_v2.ail:1448`, pre-dispatch, carrying `request_id`) and
+a paired `native_tool_results` event (`:1455`, post-dispatch, same `request_id`), with per-call
+events (`native_tool_denied`, `ext_tool_handled`, `delegated_tool_deferred`) fired **from inside**
+`dispatch_calls` between them. The TUI's `renderToolCalls`/`applyNativeToolResults` consumers pair on
+`request_id` (per the comment block at `:1440–1446`). `selectEvents`'s priority + round-robin makes
+**source-event** order reproducible, but `emit_event` is a `Trace`-effect side channel **outside the
+select**; its interleaving with concurrently-produced per-call events is NOT governed by
+`selectEvents` determinism. The ADR says events are "unchanged" (line 200) but does not specify
+whether per-call events may fire mid-`select` (they would, from the deferred-dispatch arm) and how
+they correlate to the batched `request_id` pair. This is exactly the class of "implicit boundary
+becomes explicit" the ADR wants for DST — but it must be made explicit *here*, or the DST replay claim
+is unsupported on the event surface. Recommend: state the event-ordering contract for
+`run_tool_select` (when per-call events may fire relative to the batched pair) and mark it as a
+DST-trace invariant to preserve. **Code-graph grounding:** `q callers emit_event` confirms `emit_event`
+is called at distance 1 from **both** `loop_v2` (the batched pair) **and** `dispatch_calls` (the
+per-call events) — so the graph sees both emitters but, `invokes` being an unordered set, cannot
+express their *temporal* ordering. The ordering hazard this finding raises is invisible to the graph;
+source + the TUI consumer contract (`:1440–1446`) are the only evidence.
+
+**S2. `stream_id` namespace collision risk between model `text_delta` and live tool stdout.** The
+model's `on_chunk` (`agent_loop_v2.ail:1201`, `! {IO}`) renders `thinking_delta`/`text_delta` events
+keyed by `session_id`/`stream_id` into a per-`stream_id` TUI buffer (`:1196–1197`). "Live tool
+output" introduces a *second* stream of chunks on the same `session_id`. The ADR does not specify
+`stream_id` allocation for tool stdout (a distinct id per tool_call_id? a shared "tool" stream?).
+Without it, tool stdout and model tokens can be conflated in the TUI's per-stream buffer. Minor for
+the decision, but it gates the "live streamed output" benefit and should be a named sub-decision, not
+an implementation afterthought.
+
+**S3. "Tear down sources" (sketch, line 231) names an operation no cited API provides.** RESEARCH §7
+lists `asyncExecProcess` (read-only, dies with the loop) and WebSocket `connect`/`disconnect`
+(disconnect is named in RESEARCH §1's substrate table). There is no per-source `cancel`/`close`/`kill`
+primitive cited for a process source — only `disconnect` for a socket. The sketch should either name
+the primitive (`disconnect` for sockets; "exit `runEventLoop` to reap the subprocess" for process
+sources, with the consequence that sibling in-flight tools' results are lost) or move the arm to
+Open Question #1's scope. As written the arm reads as resolved.
+
+### Minor / framing
+
+**M1. Decision Drivers (lines 100–106) states the DST R7/R8 wins as motivation without the body's
+"asserted by composition, not yet demonstrated" caveat** (lines 261–262, 391–393). A reader of
+Decision Drivers alone over-weights a still-unproven claim. Add a one-line "(composition-only; spike
+pending, RESEARCH §9/§13 #6)" qualifier to the R7/R8 bullet.
+
+**M2. "The XOR is permanent for Phase 1" (line 297) conflates an AILANG-API fact with a Phase-1
+scoping decision.** The XOR is a property of `std/ai`'s current surface, not a choice Motoko makes;
+it dissolves the moment AILANG ships a `std/ai`→`StreamSource` adapter (RESEARCH §5 option C),
+independent of Phase 2's peer-process work. The version-pin re-validation section (lines 353–357)
+correctly treats it as a re-checkable fact; the Negative bullet should match that framing ("gated on
+`std/ai`'s current surface, re-confirmed per the trigger below") rather than "permanent."
+
+**M3. "Carry the `Stream` effect at extension hook call sites" (lines 124–127) is already satisfied,
+not a new obligation.** `loop_v2`'s effect row already includes `Stream` (`agent_loop_v2.ail:1125`)
+and `dispatch_calls`' already declares `Stream` (`:740`, sourced from `on_tool_handle`'s declared
+effects per the comment at `:729–730`). The genuinely new obligation is that the **core itself**
+calls `selectEvents`/`runEventLoop` (today only extension hooks like `ws_loopback` do). Reword to
+"the core begins calling `selectEvents`/`runEventLoop` (already permitted by the existing `Stream`
+in `loop_v2`'s row)" so the reader doesn't infer a new effect-ceiling grant is needed. **Code-graph
+grounding:** `std_calls` for the core profile returns **zero** rows for `selectEvents`/`runEventLoop`/
+`asyncExecProcess`/`transmit`/`sourceOfConn` — `src/core/**` calls no `std/stream` primitives today.
+The only shipped usage is `ws_loopback.ail`, which is outside the core profile (0 rows in `funcs` for
+`ws_loopback`/`loop_until_done`/`collect_one`). So the graph corroborates that Phase 1 *introduces*
+`std/stream` into the core; the ADR's shipped-precedent evidence is source-only, not graph-verifiable
+in the default profile.
+
+**M4. Re-validation trigger exempts patch bumps (lines 356–357) despite documented `std/ai` churn.**
+RESEARCH §8 notes `std/ai` signatures "churned across recent minors" and that the MCP
+`effects_catalog` was stale. A patch bump *can* ship a stdlib change. The patch exemption is
+reasonable but optimistic; consider "patch bumps re-validate only if the `std/ai` or `std/stream`
+module hash changed" rather than blanket exemption.
+
+**M5. The "no AILANG language dependency" driver (lines 112–114) is slightly circular as a
+*motivation*.** It is a true *constraint* (Phase 1 is buildable on v0.26.0) but as motivation it
+reads as "we chose Phase 1 because Phase 1 needs no new language." The substantive motivation is the
+concurrency/cancellation/DST leverage above it; the no-language-dependency line is better framed as a
+risk/feasibility note than a driver.
+
+### Code-graph grounding (per `tools/code-graph/AGENTS.md`)
+
+All queries against the fresh core extract (meta: `stale=false`, `source_stale=false`,
+`coverage 24/24 ok`, `incomplete=false`, `approximate=true`, `profile=core`, `include_tests=false`,
+built 2026-06-30, AILANG v0.26.0 commit `3b52a24`). `row_counts`: `funcs 388`, `invokes 486`,
+`effect_edges 516`, `std_calls 558`. Per AGENTS.md, call/effect rows are **source-parsed
+approximations**; `incomplete=false` means "fully extracted", not "compiler-true"; `invokes` is an
+**unordered set** (records a relationship, never a count or ordering).
+
+- **`loop_v2 → dispatch_calls`** confirmed in `invokes` (one row). The graph also shows `loop_v2 →
+  synthesize_hybrid_bash_call` and `loop_v2 → extract_bash` (from `src/core/parse`) — the hybrid arm's
+  helpers — so the graph sees the hybrid code path. It **cannot** establish that `dispatch_calls` is
+  invoked *twice* (unordered set); source `:1341` and `:1454` does. → grounds B1.
+- **`dispatch_calls` effect under-approximation CONFIRMED.** `effect_edges` for `dispatch_calls` =
+  `{Clock, FS, IO, Process, Trace}` (duplicated per reachability path), **missing** `AI, Env, Net,
+  SharedMem, Stream` vs the source signature at `:740` (`{FS,Process,IO,Clock,AI,Env,Net,SharedMem,
+  Stream,Trace}`). This exactly matches the ADR's provenance note (b). *Implication:* the graph would
+  mislead an implementer about `run_tool_select`'s required effect row — source is mandatory for the
+  effect ceiling.
+- **`loop_v2 → AI` CONFIRMED** in `effect_edges` (via `LIKE '%loop_v2%'`); `loop_v2`'s graph effects =
+  `{AI, Clock, Env, FS, IO, Process, Trace}`, **missing** `Net, SharedMem, Stream` vs source `:1125`.
+  The ADR's specific claim ("`loop_v2 → AI` now carried") holds; but the ADR notes the under-approximation
+  only for `dispatch_calls`, not for `loop_v2`'s own missing `{Net,SharedMem,Stream}` — a minor
+  provenance gap. *Query caveat:* an exact `WHERE func_slug = '...#loop_v2'` returned **empty** in the
+  chDB CSV scan while `LIKE` returned the rows — a `#`-slug equality-filter quirk, not a data absence.
+  Anyone re-validating must use `LIKE` or the `q` subcommands, not raw `=` on `#`-slugs.
+- **`dispatch_step` invisible to the core graph CONFIRMED.** 0 rows in `funcs` (LIKE `%dispatch_step%`)
+  and 0 `loop_v2 → dispatch_step` invokes edges — because the core profile excludes `src/core/test/**`
+  (`extract.sh`; AGENTS.md). The model channel is invisible to `invokes` by construction; the ADR's
+  profile-boundary explanation (lines 188–193) is correct, and the earlier "record-field indirection"
+  framing in RESEARCH §12 / DIAGRAM §0 was indeed the wrong diagnosis.
+- **`emit_event` called from both `loop_v2` (d=1) and `dispatch_calls` (d=1)** — `q callers emit_event`.
+  The graph sees both emitters but cannot express their temporal ordering (unordered set). → grounds S1.
+- **Zero `std/stream` usage in `src/core/**`** — `std_calls` returns no `selectEvents`/`runEventLoop`/
+  `asyncExecProcess`/`transmit`/`sourceOfConn`. The shipped precedent (`ws_loopback.ail`) is **outside
+  the core profile** (0 rows in `funcs`). → grounds M3; also: the ADR's single strongest evidence point
+  (the shipped loopback) is **not graph-verifiable** in the default profile — only source can vouch for it.
+- **Hook topology CONFIRMED.** `loop_v2 → {dispatch_pre_step, dispatch_response_intercept,
+  dispatch_solver_candidate}` (all `src/core/ext/runtime`); `dispatch_calls → {dispatch_tool_policy,
+  dispatch_tool_handle, dispatch_one, tool_call_to_envelope}` — matches the ADR's "four hook points"
+  claim (lines 200–205) exactly.
+
+### Verified this review (ground truth re-read)
+
+- `dispatch_calls` sequential fold, `call :: rest` recursion: `agent_loop_v2.ail:731,743,756`. ✓
+- `dispatch_calls` full effect row incl. `Stream`: `agent_loop_v2.ail:740`. ✓
+- `loop_v2` effect row incl. `AI`: `agent_loop_v2.ail:1125`. ✓
+- `dispatch_step` call + import: `agent_loop_v2.ail:1202`, import `:62`; def `src/core/test/stub_step.ail:110`
+  (confirms the ADR's "core profile excludes `src/core/test/**`" explanation for the missing
+  `invokes` edge). ✓
+- **Second `dispatch_calls` call site (hybrid_tools arm, NOT in the ADR's sketch):**
+  `agent_loop_v2.ail:1341` (synthesized `[synth_call]` batch). ✓ — basis for B1.
+- `finish_reason != "tool_calls"` branch + `dispatch_solver_candidate`: `agent_loop_v2.ail:1302,1352`. ✓
+- Batched event pair around dispatch: `native_tool_calls` `:1448`, `native_tool_results` `:1455`
+  (both keyed by `request_id` `:1447`). ✓ — basis for S1.
+- Deferred-dispatch template: `ws_loopback.ail:154,183,194,210`; flag
+  `MOTOKO_SCRATCHPAD_WS_LOOPBACK=1` default off at `:211`. ✓ — basis for B2/B3.
+- Effect ceiling excludes `Msg`/`Cog`: `ailang.toml:47`. ✓
+- Code-graph (fresh, core profile): `loop_v2 → dispatch_calls` ✓; `dispatch_calls` effects
+  under-approximated to `{Clock,FS,IO,Process,Trace}` (missing `AI,Env,Net,SharedMem,Stream`) ✓;
+  `loop_v2 → AI` ✓ (but `loop_v2` effects also miss `Net,SharedMem,Stream`); `dispatch_step` absent
+  from `funcs`/`invokes` (profile excludes `src/core/test/**`) ✓; `emit_event` called from both
+  `loop_v2` and `dispatch_calls` (d=1) ✓; zero `std/stream` calls in `src/core/**` ✓; `ws_loopback`
+  outside core profile (0 rows) ✓. Query caveat: `=` on `#`-slugs returns empty in chDB CSV scan —
+  use `LIKE` or `q` subcommands. ✓ — full table above.
+
+### Recommendation
+
+**Revise and re-circulate (stay in `Proposed`).** Address B1–B3 (two call sites; cancellation
+overclaim; concurrency-only-for-subprocess-arm), then S1–S3 (event-ordering contract; `stream_id`
+allocation; teardown primitive). The M-items are editorial. None of B1–B3 changes the *decision*
+(adopt `run_tool_select`); they correct the *scope/risk* representation so the implementer and the
+DST ADR's readers aren't misled about what Phase 1 delivers. The provenance, version-pin, and
+rejected-alternatives sections need no change — those are the ADR's strongest parts.
+
+— GLM 5.2
