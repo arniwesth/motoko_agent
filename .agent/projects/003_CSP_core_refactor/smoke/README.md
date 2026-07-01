@@ -14,6 +14,8 @@ result back; the server records it. Verified on AILANG **v0.26.0**.
 | `smoke_ai_in_handler.ail` + `ws_server.ts` | `AI` (`std/ai.call`) inside the handler — stub handler, no creds |
 | `smoke_ai_toplevel.ail` | control: AI stub works at top level (isolates "AI in handler" from "AI stub broken") |
 | `smoke_cognition_msg.ail` | probes `std/cognition` mailbox fabric (`Msg` effect). **Result: `NO_HANDLER` in native CLI** — the `Msg` transport is browser/WASM-wired (`cmd/wasm/effects.go`); `Msg`/`Cog` are also outside Motoko's effect ceiling (`ailang.toml`). Not usable for core messaging today. |
+| `smoke_async_exec_name_routing.ail` | `asyncExecProcess(..., name, ...)` delivers `SourceBytes(name, bytes)` keyed by the supplied source name. |
+| `smoke_async_exec_stderr_exit.ail` | `asyncExecProcess` surfaces process exit code as `Closed(code, reason)`; stderr does **not** surface as `SourceBytes`/`SourceText`. |
 
 ## Run
 
@@ -41,6 +43,12 @@ ailang run --caps IO,AI -ai-stub smoke_ai_toplevel.ail
 # ailang.toml has max = ["IO","Msg","Cog"], then:
 ailang run --caps Msg,IO --entry main main.ail
 # expect: COG_SEND_ERR / COG_RECV_ERR: NO_HANDLER  (browser/WASM-only transport)
+
+# asyncExecProcess substrate probes for Phase-1 run_tool_select
+ailang run --caps Stream,Process,IO smoke_async_exec_name_routing.ail
+# expect: PASS_SOURCE_NAME_ROUTING
+ailang run --caps Stream,Process,IO smoke_async_exec_stderr_exit.ail
+# expect: PASS_CLOSED_EXIT_7_OBSERVED_STDERR_NOT_DELIVERED_AS_SOURCE
 ```
 
 ## Gotchas

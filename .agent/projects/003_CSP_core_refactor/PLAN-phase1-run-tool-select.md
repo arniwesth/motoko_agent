@@ -678,13 +678,18 @@ sketch does not account for:
    and the deferred arm must be **separate stages** (WI-3 decision). This does not change the ADR
    decision (deferred dispatch, two arms), but the sketch's shape misleads; recommend the ADR note
    the arms are sequential *stages*, not one interleaved select.
-4. **`asyncExecProcess` stderr / exit-code delivery is undocumented — a live-process-arm viability
-   risk.** The stdlib documents only stdout→`SourceBytes` for process sources (`std/stream.ail:15,164`);
-   the matrix (contract #1) requires the live-process result to still carry stderr + exit code +
-   truncation meta. Whether the substrate can supply those *live* (vs. only via the delegated backend)
-   is unverified. If it cannot, live-process tools stay delegated in Phase 1 and the "concurrent live
-   output" Positive shrinks to read-only-query concurrency. Recommend the ADR flag this as a
-   validation gate (a small `asyncExecProcess` smoke), not an assumed capability.
+4. **`asyncExecProcess` stderr / exit-code delivery smoke result (2026-07-01, v0.26.0/`3b52a24`).**
+   Two smokes were added under `smoke/` before WI-3 as required:
+   `smoke_async_exec_name_routing.ail` and `smoke_async_exec_stderr_exit.ail`. Outcome:
+   `SourceBytes(name, bytes)` is keyed by the `name` string supplied to `asyncExecProcess`, and process
+   completion surfaces as `Closed(exit_code, reason)` (`exit 7` produced `Closed(7, _)`). Stderr did
+   **not** surface as `SourceBytes` or `SourceText`; only stdout did. Therefore the substrate cannot
+   satisfy the live-process matrix row's required `stderr + exit_code + truncation meta` by itself.
+   **Phase-1 implementation adjustment:** live-process tools that require stderr fidelity
+   (`streaming` / `needs_stderr_live` / `needs_hard_cancel`) stay on the existing delegated/sequential
+   backend path for Phase 1; do not build an in-brain `asyncExecProcess` arm for them. The
+   source-name finding remains usable for later work, but the live-process arm is not a Phase-1
+   production path on v0.26.0.
 
 ---
 
@@ -741,6 +746,9 @@ class of risk):
 | `transmit` | `(conn: StreamConn, msg) -> Result[unit,_] ! {Stream}` | `:99` | WI-3 (deferred-yield transmit-back) |
 | `asyncReadStdinLines` | `(name, priority) -> StreamSource ! {Stream}` — the Phase-2 approval-source | `:151` | (Phase-2, not built) |
 
-*Two undocumented gaps* (Plan-notes 3/4): chunk→tool correlation is by **source name string**, not
-the `tool_i` index the ADR sketch shows (`:53,173`); and `asyncExecProcess` **stderr/exit-code**
-delivery is undocumented (`:15,164`) — both require a smoke before WI-3 commits the live-process arm.
+*Retired substrate gaps* (Plan-notes 3/4): chunk→tool correlation is by **source name string**, not
+the `tool_i` index the ADR sketch shows (`:53,173`), verified by
+`smoke_async_exec_name_routing.ail`; `asyncExecProcess` delivers stdout as `SourceBytes` and exit code
+as `Closed(code, reason)`, but **does not deliver stderr** as a stream event, verified by
+`smoke_async_exec_stderr_exit.ail`. Consequence: live-process tools requiring stderr fidelity remain
+delegated/sequential in Phase 1.

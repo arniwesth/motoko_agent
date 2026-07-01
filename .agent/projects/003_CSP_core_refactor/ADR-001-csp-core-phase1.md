@@ -614,6 +614,16 @@ implementation, not a precondition of the decision.
 
 ## Review Comments
 
+_**Implementer note — 2026-07-01 (AILANG v0.26.0 / `3b52a24`).**
+The required pre-WI-3 substrate smokes were run in
+`.agent/projects/003_CSP_core_refactor/smoke/`: `smoke_async_exec_name_routing.ail` confirms
+`asyncExecProcess(cmd, args, name, ...)` delivers `SourceBytes(name, bytes)` keyed by the supplied
+source name; `smoke_async_exec_stderr_exit.ail` confirms process exit code surfaces as
+`Closed(exit_code, reason)` but stderr does **not** surface as a stream event. Phase-1 implementation
+therefore keeps live-process tools requiring stderr fidelity (`streaming` / `needs_stderr_live` /
+`needs_hard_cancel`) on the existing delegated/sequential backend instead of producing partial
+in-brain `asyncExecProcess` results._
+
 _**Reviewer: GLM 5.2 (`openrouter/z-ai/glm-5.2`) — 2026-07-01.**
 Grounded against current source (`src/core/agent_loop_v2.ail`, `packages/motoko_scratchpad/ws_loopback.ail`,
 `src/core/test/stub_step.ail`, `ailang.toml`), the `./smoke/` proofs, and RESEARCH §1–§13. Every
