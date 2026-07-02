@@ -419,3 +419,202 @@ probes fail with `IMP010`; `scripts/smoke_ports_record.ail` checks and its fake 
 6. Turn the conformance kit and registry gate into concrete files/commands.
 7. Narrow the ABI migration-cost claim and list constructor updates for compactors.
 8. Split no-hydration core DST gates from registry-hydrated conformance gates.
+
+---
+
+## Review Comments (Independent Review, Pass 2)
+
+_Reviewer: GLM 5.2 (`openrouter/z-ai/glm-5.2`), 2026-07-02. Grounded against current source
+(`src/core/agent_loop_v2.ail`, `src/core/compaction.ail`, `src/core/rpc.ail`,
+`src/core/ext/runtime.ail`, `src/core/test/stub_step.ail`, the registry cache
+`motoko_ext_abi/2.2.0/types.ail` and `motoko_ext_compaction_ai/0.2.0/compaction_ai.ail`), the
+pinned local toolchain (`ailang --version` -> `AILANG v0.26.0`, commit `3b52a24`), the phase-core
+research/sketch artifacts (all re-run), the why-not-CSP note, and DST ADR-001's R1-R15 review
+style. Every `file:line` citation in the ADR body was verified; artifacts were re-run._
+
+### R1. The Phase A compaction-constant gate references tiers and constants that no longer exist in source
+
+The ADR's Phase A deliverable and acceptance gate cite "exported compaction constants
+(`OUTPUT_HEADROOM`, actual tiers 60/75/85, estimate tiers 70/85/95 -- DST ADR-001 R5)" (lines
+206-208), inherited from DST ADR-001 R5 (grounded 2026-06-27). Against current source (2026-07-02)
+these are stale: `src/core/compaction.ail` has a **single** tier table -- 70/85/95 with emergency
+at >=95 (`compaction.ail:136-138`) -- and no `compact_step_actual` function, no `OUTPUT_HEADROOM`
+literal (no `75000` anywhere in `src/core`), and no actual/estimate distinction. The loop calls
+`compact_step_with_limit(msgs_after_ext, model, context_limit)` in one place
+(`agent_loop_v2.ail:1171`); a grep for `last_input_tokens|actual|estimate` across
+`agent_loop_v2.ail` returns zero hits, so the `last_input_tokens`-gated "actual token" path the
+DST review described is gone. This is load-bearing: Phase C's L1 scenario list (lines 224-227)
+includes `actual_tokens_drive_next_step` and `emergency_exhaustion_estimate_gated`, which
+presuppose the actual/estimate split. **Action:** re-ground Phase A against current
+`compaction.ail`: export the single 70/85/95 tier table (or confirm whether the actual/estimate
+split was intentionally collapsed and update DST ADR-001 R5/R15 accordingly); strike
+`OUTPUT_HEADROOM=75000` unless it is re-introduced; and reconcile the Phase C scenario list with
+the source's current behavior (the `actual_tokens_*` scenarios may be unrepresentable as written).
+
+### R2. The "28 event types" gate is wrong: production emits 29, and the sketch inventory omits `reasoning_delta`
+
+The ADR (line 123) and Phase B gate (line 217) require "all 28 production schema-v1 event types,
+inventoried in `sketch/sketch_vocabulary.ail`." Re-running the inventory against source: there are
+**27** distinct `emit_event` name strings in `agent_loop_v2.ail` (verified by extracting every
+`emit_event(..., "NAME", ...` call and de-duplicating) plus **2** direct stream-JSON `type` values
+emitted by `emit_stream_chunk` via `emit_json` -- `thinking_delta` (`agent_loop_v2.ail:255`) and
+`reasoning_delta` (`agent_loop_v2.ail:265`) -- for **29** distinct JSONL `type` values. The sketch's
+comment inventory (`sketch_vocabulary.ail:221-228`) lists 28 names: it includes `thinking_delta`
+but **omits `reasoning_delta`**. The `to_schema_v1` projection in the sketch (lines 263-276) has no
+constructor mapping to `reasoning_delta` either. A byte-compatibility gate built on the wrong
+membership will pass while missing a live event type the TUI already renders. **Action:** generate
+the production event inventory mechanically (grep `emit_event` + `emit_json` `type` fields across
+`src/core`), add `reasoning_delta` to both the sketch inventory and the `LedgerEvent`/
+`to_schema_v1` projection, and make the Phase B gate compare the projection's emitted `type` set
+against that generated inventory, not a hand-maintained count.
+
+### R3. The sealed-type opacity result forces `step_machine.ail` to co-locate too, not just `phase_vocab.ail` and `model_phase.ail`
+
+The ADR's opacity claim (lines 137-142) is verified: `probe_sealed_forge.ail` fails with
+`IMP010: symbol 'MkSealed' not exported by 'hist_opaque'`; `probe_sealed_name.ail` fails with
+`IMP010: symbol 'Sealed' not exported by 'hist_opaque'`; `probe_sealed_thread.ail` runs (values
+thread without naming the type). The co-location consequence is therefore real for any module that
+must name `History`, `CompactableSegment`, or `ProviderPayload` in a signature or record field. The
+ADR's module table (lines 163-169) lists `step_machine.ail` as a separate module, but
+`decide(StepState, StepPolicy) -> StepDecision` must name `StepState` (embeds sealed `History`) and
+`StepDecision` (whose `CallModel(ProviderPayload)` variant names sealed `ProviderPayload`) -- both
+unimportable type names per the probe. So `step_machine.ail` cannot be a separate file unless those
+types are relaxed to exported (and thus forgeable). This widens the co-location consequence beyond
+the `model_phase.ail` case the prior review (R1) raised: the **pure decision logic the ADR wants as
+its L0/Z3 target is itself trapped in the vocabulary module**. **Action:** either co-locate
+`decide` (and `model_phase`'s signature) inside `phase_vocab.ail`, accepting that the L0 pure core
+is one large module; or relax `ProviderPayload`/`History` to exported validated types and rely on
+the transcript gate (not opacity) for integrity -- and state which choice is taken before Phase A.
+
+### R4. Single-point ledger emission cannot be byte-compatible with live streaming timing
+
+The ADR (lines 120-126) says phases return `PhaseResult` with an `events` list and "exactly one
+place (the driver) appends and emits events," and Phase B's gate (line 217) requires
+byte-compatibility with current TUI/eval consumers. But today's stream events are emitted
+**during** the blocking `dispatch_step` call, via the per-chunk callback installed at
+`agent_loop_v2.ail:1201` (`let on_chunk = \chunk. emit_stream_chunk(...)`), which calls `emit_json`
+immediately on each `ContentDelta`/`ThinkingDelta` (lines 249-270) -- before the model call returns.
+The TUI appends `text_delta` in arrival order (comment at `:1196-1198`). A post-call
+`PhaseResult.events` batch emitted by the driver **after** the model phase returns cannot reproduce
+that inter-chunk timing: either the deltas are buffered (changing observable byte order and
+breaking live render) or the model phase emits directly (violating the single-emission-authority
+claim at lines 120-126). **Action:** specify a streaming-sink protocol: the driver hands the model
+phase a ledger append handle (or the model phase returns a streaming-event stream distinct from the
+batched `events` list) that writes `thinking_delta`/`reasoning_delta` JSONL in arrival order while
+the call is in flight, and add a byte-parity test asserting `thinking_stream_start` -> N x
+`thinking_delta` -> `thinking_stream_end` ordering against current production output.
+
+### R5. `AwaitApproval` as a decision does not specify the ordering invariants the live approval protocol depends on
+
+The ADR (line 177) maps the mid-dispatch `readLine()` (`agent_loop_v2.ail:769`) to an
+`AwaitApproval` decision "performed by the driver" but does not specify the required ordering. In
+the current code the approval flow is: emit `tool_pending` (`:760-766`), immediately block on
+`readLine()` (`:769`), resolve `AllowAfterTimeout`/`DenyAfterTimeout` on EOF or unparseable input
+(`:770-790`), then **continue dispatching the remaining tool calls in the same `dispatch_calls`
+recursion** (`:856-857`). Inverting this into a decision returned to the driver means the partially
+executed `ToolPlan` must be suspendable and resumable, the `tool_pending` event must precede the
+read (not be batched into `PhaseResult.events`), and the default-deny/default-allow semantics must
+carry through the decision payload. The ADR's `AwaitApproval(ApprovalRequest)` (line 87) has no
+fields for the default policy, the stream_id, or the continuation state. **Action:** extend
+`ApprovalRequest` to carry `default_allow: bool` (or `PolicyDefault`), `stream_id`, and `call_id`;
+specify that `tool_pending` is emitted by the driver before blocking (preserving event-before-read
+ordering); define how a partially executed `ToolPlan` is represented across the decision boundary
+(e.g., `RunTools` re-issued with the remaining entries); and gate this with a scripted TUI approval
+scenario before Phase C inverts the dispatch recursion.
+
+### R6. The checkpoint digest-chain is a placeholder with no enforcement, and the return-type trick does not force event append
+
+The ADR (lines 150-154) states "History is rewritten only by `checkpoint`, and every rewrite has a
+matching ledger event" and that `checkpoint(History, CheckpointPlan) -> {history, event}` makes the
+invariant "nearly hold by construction." Verified against the sketch: `history_digest` is
+`"h${show(length(xs))}"` (`sketch_vocabulary.ail:53`) -- purely length-based and trivially forgeable
+(two different histories of the same length produce the same digest); the demo emits
+`before_digest:"h2", after_digest:"h1"` (line 337). Returning `{history, event}` from `checkpoint`
+hands the caller both values but **does not force the caller to append the event** -- a driver that
+discards the `event` field and uses only `history` has a rewritten history with no ledger record,
+undetectable by the type system. The research doc itself concedes "DST then only verifies the digest
+chain" (`RESEARCH-phase-core-dst-design.md:652-654`), i.e. enforcement is a test obligation, not a
+type-level guarantee. **Action:** define a real content hash for `history_digest` (not length);
+include the previous checkpoint/event digest in each `CheckpointTaken` event so the chain is
+verifiable; expose a single atomic driver path `apply_checkpoint` that appends the event and applies
+the history rewrite in one step (so there is no code path that takes the history without the event);
+and require session-entry (`history_from_seed`) to validate the chain before accepting a resumed
+`History`.
+
+### R7. The conformance-kit acceptance criterion names no verifiable package, scenario, or command
+
+Acceptance criterion 3 (lines 240-242) requires "failing conformance scenarios *before* the v0.3.0
+fix and pass after," but the ADR names no package path, no scenario files, and no `ailang` commands
+that would make that gate executable. A grep for `motoko_ext_conformance|ext_compaction_invalid_rejected|
+system_messages_hidden_from_compactors` across `src`, `scripts`, and `Makefile` finds no current
+implementation targets. The ABI track (lines 231-233) says only "ABI 3.0 + conformance kit 3.0 +
+`compaction_ai` 0.3.0; gate: kit rejects v0.2.0, accepts v0.3.0; registry runs the kit." DST
+ADR-001's R12 treated phantom CI targets (`make test_dst`) as a finding for the same reason: an
+acceptance criterion that cannot be located cannot gate. **Action:** add concrete future
+deliverables: the package path (e.g. `packages/motoko_ext_conformance/`), the scenario ids that
+must fail-then-pass (name them -- they correspond to section 7.0's two live bugs), the exact
+`ailang check/run/test` commands, and the `registry_generated.ail` probe that must execute the kit
+for installed extensions.
+
+### R8. The ABI v3 "constructor-only / zero code changes" migration claim is too broad for compactor packages
+
+The ADR (lines 184-187) says ABI v3 migration is "constructor-only" and "packages that ignore ports
+recompile with zero code changes." But the same bullet (lines 181-183) adds an `artifacts` field to
+`Compacted`, which is a variant constructor -- any extension that constructs `Compacted(...)` breaks.
+Verified: ABI 2.2.0 defines `Compacted(msgs: [Msg], note: string)` (`types.ail:124-127`); the
+shipped compactor constructs it at `compaction_ai.ail:146-148` (`Compacted(compacted, "AI-summarized
+...")`). Adding a field to a variant constructor is a source-level break for every compactor
+package, not a "zero code change" recompile. The claim holds only for non-compactor packages whose
+hooks don't construct `Compacted`. **Action:** narrow the claim to "non-compactor packages that do
+not construct `Compacted` recompile with zero code changes"; explicitly list the constructor update
+required for compactor packages (`Compacted(msgs, note, artifacts)` with `artifacts: Json` or
+`Option[Json]`); and note that `compaction_ai` v0.3.0 is the first package that must make this
+change.
+
+### R9. "No registry hydration" is asserted for all DST but the conformance track requires it
+
+Decision drivers (lines 66-67) say "Layer 0/1 DST tests must run with zero or minimal capabilities,
+no network, no registry hydration." This holds for the pure-core L0/L1 tests (proven by
+`smoke_ports_record.ail` running under `--caps IO` alone). But the ABI v3 track (lines 231-233)
+requires "registry runs the kit for every package in `registry_generated.ail`" -- that gate needs
+hydrated registry packages, the opposite precondition. DST ADR-001's constraints (lines 53-54) warn
+that generated-registry imports can block Layer 1/3 until package hydration is fixed. The ADR does
+not operationally separate these two gates. **Action:** split the acceptance criteria into
+"core L0/L1 DST -- no registry hydration, `--caps IO` or less" and "registry/conformance --
+hydration required, runs in core CI against hydrated extensions," and make the CI target names
+reflect that separation so a no-hydration gate is not conflated with a hydration-required one.
+
+### What is accurate
+
+Every `file:line` citation in the ADR body verified against current source: the ten-effect row at
+`agent_loop_v2.ail:1125`; `StepProvider` at `stub_step.ail:42`; persist-nudge marker scanning at
+`:1062-1063`; the system message built into the init list at `rpc.ail:230-232` and forwarded
+unfiltered to `dispatch_pre_step` at `:1154`; first-`Compacted`-wins at `ext/runtime.ail:143-164`;
+the Bedrock correlation comment at `:1316-1333`; scratchpad hard-coded dispatch at `:868`;
+mid-dispatch `readLine()` at `:769`; the `compaction_ai` v0.2.0 live bugs (`split_msgs` at `:101`,
+`compact_with_ai` at `:126-148`, direct `std/ai.step` at `:89-91`, `Compacted` construction at
+`:145-148`); the ABI 2.2.0 hook effect-row differentiation (`types.ail:128-142`); and
+`conversation_loop_v2`'s history preservation at `:1520-1523`. All required artifacts reproduced
+exactly: `ailang check`/`run --caps IO`/`test` pass on `sketch_vocabulary.ail`; the forge probes
+fail with `IMP010` (`probe_sealed_forge`: `MkSealed`; `probe_sealed_name`: `Sealed`);
+`probe_sealed_thread`, `probe_opacity_legal`, `probe_rec_structural`, and `probe_opacity_forge`
+run/check as claimed; `scripts/smoke_ports_record.ail` checks and its `main` entry runs under
+`--caps IO` alone while `main_live` fails with `effect 'Clock' requires capability`. The core
+design thesis (functional core, imperative shell; ports-as-values; ledger-as-trace; sealed
+transcript types) is sound and substrate-proven. The compaction-ephemerality-by-dataflow and
+system-message-hiding gap findings are accurate and verified.
+
+### Recommended pre-implementation actions
+
+1. Re-ground Phase A's compaction constants against current `compaction.ail` (R1) -- the
+   actual/estimate split and `OUTPUT_HEADROOM` do not exist in source.
+2. Generate the production event inventory mechanically and fix the 28->29 gate before Phase B (R2).
+3. Resolve the sealed-type co-location for `step_machine.ail` and `model_phase.ail` before creating
+   `phase_vocab.ail` -- decide co-location vs. relaxed-validated-types (R3).
+4. Specify the streaming ledger protocol before centralizing event emission (R4).
+5. Add the approval-protocol contract and a scripted approval scenario before moving `readLine` (R5).
+6. Define checkpoint digest-chain mechanics, atomic `apply_checkpoint`, and resume validation
+   before blessing `TakeCheckpoint` (R6).
+7. Turn the conformance kit and registry gate into concrete files, scenario ids, and commands (R7).
+8. Narrow the ABI migration-cost claim and list constructor updates for compactor packages (R8).
+9. Split no-hydration core DST gates from registry-hydrated conformance gates in CI (R9).
