@@ -254,16 +254,24 @@ testability:
    internals enter the same DST trace as core behavior.
 2. **The caps result compounds** (§4 Q5): an extension's DST harness with fake ports runs under
    minimal caps — no sandbox, no network.
-3. **A path to honest effect rows**: every `ExtensionHooks` field currently declares the maximal
-   9-effect row (e.g. `motoko-ext-context-mode/register.ail:71` declares it for a body that
-   returns `PassThrough`). Ports enable eventual narrowing; `on_tool_policy` arguably should be
-   *pure* — a policy decision that isn't a deterministic function of `(ctx, envelope)` is a bug.
+3. **A path to honest effect rows** — CORRECTED (2026-07-02, after reading ABI 2.2.0 source):
+   the ABI is already partially narrowed. `on_describe_tools`, `on_build_system_prompt`, and
+   `on_tool_policy` are **already pure**; `on_budget_plan` is already `{Env, FS}`. Only four
+   hooks carry the maximal 9-effect row: `on_pre_step`, `on_tool_handle`,
+   `on_response_intercept`, `on_solver_candidate` — precisely the "extension does real work"
+   hooks. Analysis in the O1 discussion: once ports exist, further row-narrowing buys little
+   (calling an effectful port requires the effect in the caller's row anyway; DST fake-ability
+   comes from ports + caps-at-performance-time, not from narrow rows).
 
-Cost: an ABI major version bump and touching every extension (mechanical). §7.3 adds one more
-item to the same bump: an artifact channel for compaction caches.
+Cost: an ABI major version bump. Migration is cheaper than it looks: with ports placed *inside
+`ExtCtx`*, hook signatures do not change — extension packages that ignore ports need no code
+changes (record readers don't break when a field is added; only constructors do, i.e. core's
+`mk_v2_ext_ctx` and extension test fixtures). §7.3 adds one more item to the same bump: an
+artifact channel for compaction caches (`Compacted` gains an artifacts field — touches only
+compactor packages).
 
-**Open decision**: ABI v3 scope — ports-in-ExtCtx only, or also narrow hook rows in the same
-bump (recommendation: ports + narrow only `on_tool_policy`; defer the rest to reduce churn).
+**Open decision**: ABI v3 scope — see O1 in §9 (recommendation revised: ports + artifact
+channel; no row changes in v3).
 
 ---
 
@@ -271,10 +279,32 @@ bump (recommendation: ports + narrow only `on_tool_policy`; defer the rest to re
 
 Compaction is the one behavior living on *both* sides of the extension boundary: structural
 compaction in core (`src/core/compaction.ail` — **entirely pure already**, including tiers and
-emergency), and AI-summarization via `on_pre_step`/`Compacted` (ABI surface + dispatch exists at
-`ext/runtime.ail:143`, "first Compacted wins"; **no real in-repo implementation yet** — the seat
-is empty, so the summarizer can be born ports-native as the conformance kit's reference
-extension).
+emergency), and AI-summarization via `on_pre_step`/`Compacted` (ABI surface + dispatch at
+`ext/runtime.ail:143`, "first Compacted wins").
+
+CORRECTION (2026-07-02): an AI compactor **does exist** — `motoko_ext_compaction_ai` v0.2.0, a
+registry package wired into `registry_generated.ail:17`. (No *in-repo* implementation; the
+original "empty seat" claim conflated the two.) Reading its source made the pressure-test
+concrete — it exhibits **every failure mode this design targets**:
+
+1. **Live bug — destroys the system prefix**: `split_msgs` (`compaction_ai.ail:101`) splits by
+   position only; the system message is the oldest, so above the threshold it always lands in
+   `old_turns`, is summarized into `[CONTEXT SUMMARY]` prose, and the provider payload for that
+   step **loses its system message** (violates ADR-001 `provider_calls_have_system_prefix`).
+2. **Live bug class — can sever tool pairs**: `keep_recent` counts messages, not turn groups, so
+   the cut can separate an assistant-with-tool_calls from its tool results → provider 422 (the
+   exact class the ABI's own M-ABI-MSG-WIRE-PARITY comment warns about). §7.1 case 2's
+   post-validation catches both bugs at the gate.
+3. **No caching**: re-summarizes (one blocking AI call) on *every step* above threshold —
+   §7.1 case 3's cost blow-up is live, not hypothetical.
+4. **Untestable deterministically**: `summarize_with_ai` calls blocking `std/ai.step` directly
+   (`compaction_ai.ail:89-91`) — no seam; needs the AI port.
+5. **Duplicated policy**: reimplements `estimate_tokens`/`usage_percent` (chars/4 heuristic)
+   locally — the constant-duplication ADR-001 R5 warns about.
+
+`compaction_ai` v0.3.0 is therefore the designated **reference migration** for ABI v3 and the
+first conformance-kit consumer. Note the system-prefix fix does NOT wait for v3: core-side
+hiding (passing the segment, not the full list, to `dispatch_pre_step`) has zero ABI cost.
 
 Compaction is already ephemeral *by accident of dataflow*: `loop_v2` sends `compacted_msgs` to
 `dispatch_step` but recurses on `msgs ++ [assistant_msg]` from the **original** history
@@ -411,9 +441,9 @@ Open:
 
 | # | Decision | Recommendation |
 |---|---|---|
-| O1 | ABI v3 scope | Ports-in-ExtCtx + compaction artifact channel + narrow only `on_tool_policy`; defer broad row-narrowing |
+| O1 | ABI v3 scope | Ports-in-ExtCtx + `artifacts` channel; **no row changes** (`on_tool_policy` is already pure in 2.2.0; narrowing the four max-row hooks buys ~nothing once ports exist). Conformance kit as a **separate package** (`motoko_ext_conformance`), keeping the ABI dependency-light per its own design. Reference migration: `compaction_ai` v0.3.0 |
 | O2 | `Checkpoint` seam in v1 types | Yes — one decision variant + one invariant now |
-| O3 | Conformance kit in ABI package | Yes (Surface C, §6); build alongside ABI v3 |
+| O3 | Conformance kit | Yes (Surface C, §6); separate package versioned in lockstep with ABI v3 |
 
 ## 10. ADR-001 review comments resolved by this design
 
@@ -436,9 +466,23 @@ Open:
 4. `func()` zero-arg anonymous functions do not parse; anonymous `func` cannot sit directly in
    record literals (§4).
 5. Extension compactors currently receive system messages — ADR-001's hiding invariant does not
-   hold today (`rpc.ail:231` + `agent_loop_v2.ail:1154`; §7.0).
+   hold today (`rpc.ail:231` + `agent_loop_v2.ail:1154`; §7.0). **Exploitable now**: with
+   `compaction_ai` active, above its threshold the provider payload loses its system message
+   entirely (§7, correction block).
 6. Compaction ephemerality currently holds only by dataflow accident (`agent_loop_v2.ail:1250`).
 7. Structural compaction (`src/core/compaction.ail`) is already fully pure — L0-ready.
-8. No in-repo extension implements `Compacted` pre-step yet; the AI summarizer seat is empty.
+8. `motoko_ext_compaction_ai` v0.2.0 (registry package, wired in `registry_generated.ail:17`)
+   implements `Compacted` pre-step; it has two live bug classes (system-prefix loss, tool-pair
+   severing), no summary caching, a direct blocking `std/ai.step` call, and duplicated token
+   policy (§7). No *in-repo* implementation exists.
 9. Persist-nudge stores its state in transcript marker strings because `loop_v2`'s signature
    makes new state prohibitively expensive (`agent_loop_v2.ail:1063`).
+10. ABI 2.2.0 already has differentiated hook effect rows: `on_describe_tools`,
+    `on_build_system_prompt`, `on_tool_policy` are pure; `on_budget_plan` is `{Env, FS}`; only
+    the four "real work" hooks (`on_pre_step`, `on_tool_handle`, `on_response_intercept`,
+    `on_solver_candidate`) carry the maximal 9-effect row (registry cache
+    `sunholo/motoko_ext_abi/2.2.0/types.ail:128-142`).
+11. `ExtCtx` is pure data and is never serialized across a process boundary (no JSON encoding of
+    ctx found in core or packages) — function-valued ports can live inside it safely.
+12. The extension ecosystem is entirely external packages: 12 registered in
+    `registry_generated.ail`; the `src/core/ext/*` subdirectories are empty placeholders.
