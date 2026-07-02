@@ -10,6 +10,10 @@ that CSP is wrong permanently. It is a claim that, on AILANG v0.26.0 and given t
 moving functionality from TypeScript into AILANG core, a CSP-first rewrite would spend too much
 complexity budget fighting the substrate instead of improving the core's correctness.
 
+This is a direction note after the implementation revert, not a rewrite of the historical ADR/plan
+documents. Read it as superseding the current implementation direction for this branch: preserve the
+research, do not continue the Phase-1 `run_tool_select` production path as the next architecture.
+
 ---
 
 ## Summary
@@ -25,12 +29,12 @@ The Phase-1 CSP work proved several useful things:
 It also proved the more important negative result:
 
 - raw `asyncExecProcess` does **not** surface stderr as stream data on v0.26.0.
-- select handlers are too constrained to be a comfortable home for effectful core dispatch.
+- select handlers are too constrained to be a comfortable home for general effectful core dispatch.
 - process-source cancellation is coarse; exiting `selectEvents` is the kill/reap boundary.
 - deferred extension/scratchpad dispatch still has to run sequentially outside the select loop.
 - the model call remains blocking `std/ai`, so the core cannot become a clean end-to-end CSP graph.
 
-The resulting implementation was not a true CSP core. It was a CSP-shaped tool seam inside the
+The reverted implementation was not a true CSP core. It was a CSP-shaped tool seam inside the
 existing sequential loop. That seam was useful as a spike, but it is not the architecture we should
 build around now.
 
@@ -70,9 +74,10 @@ specific phases, not the global architecture of the core.
 ### 1. The model call is still blocking
 
 The model step remains a blocking `std/ai` operation in v0.26.0. A true CSP core would naturally make
-the model a source of token, tool-call, usage, and completion events. That is not available without
-changing the provider path or moving orchestration out of AILANG, which is explicitly not the
-long-term direction of this project.
+the model a source of token, tool-call, usage, and completion events. Raw streaming HTTP primitives
+exist, but using them would bypass the existing `std/ai` provider abstraction; preserving that
+abstraction keeps the model phase blocking. Moving orchestration out of AILANG would also solve this
+mechanically, but that is explicitly not the long-term direction of this project.
 
 If the model call remains blocking, the outer architecture is still:
 
@@ -101,11 +106,17 @@ missing, a CSP process arm either has to:
 The wrapper approach can work, but it is a workaround, not evidence that the substrate is ready to be
 the core architecture.
 
-### 3. Handler-side effects are risky
+### 3. Handler-side effects are possible, but risky
 
-The research and smokes showed that effectful work inside stream handlers is the wrong place to put
-core dispatch. Failures can be hard to surface correctly, and the safe pattern is to capture an event,
-exit the loop, run effectful dispatch in the enclosing sequential context, then re-enter.
+The research and smokes showed that selected effectful work can run inside live stream handlers:
+`Net` and stubbed `AI` both worked in the local probes. That positive result matters. It means the
+substrate is capable enough for experiments and small loopback protocols.
+
+The same research also showed why handler-side dispatch is the wrong default for production core
+logic. Missing caps or effect failures inside the handler can abort the handler, return from the
+event loop, and still leave the process exiting 0 with little or no stderr. The safer production
+pattern is to capture an event, exit the loop, run effectful dispatch in the enclosing sequential
+context where failures surface normally, then re-enter if needed.
 
 That pattern is valuable, but it is no longer the simple CSP story of "everything is a process
 handling messages." It is a staged sequential interpreter with stream islands.
@@ -160,7 +171,7 @@ central event ledger would address them more directly.
 
 ### The implementation would become larger before it becomes simpler
 
-The reverted Phase-1 implementation was intentionally small, but it still added:
+The reverted Phase-1 implementation was intentionally small and flag-gated, but it still added:
 
 - feature-flag pathing;
 - policy preflight plumbing;
@@ -318,9 +329,10 @@ requiring a full CSP scheduler today.
 
 Use `std/stream.selectEvents` where it is actually useful:
 
-- native tools that need live stdout;
+- native tools that need live stdout and do not require native stderr fidelity, or tools whose
+  stderr/exit protocol has been explicitly wrapped and tested;
 - WebSocket loopback patterns that are already proven;
-- future provider streaming if the substrate becomes suitable.
+- future provider streaming if the `std/ai` provider abstraction grows a source/event surface.
 
 Do not make every hook, approval, deferred tool, model call, or memory operation a source just to
 fit the architecture.
@@ -337,4 +349,3 @@ transcript invariants, explicit phase results, an append-only ledger, and normal
 
 This path better serves the project's long-term goal: moving functionality from TypeScript into
 AILANG core while staying honest about what AILANG v0.26.0 can express cleanly today.
-
