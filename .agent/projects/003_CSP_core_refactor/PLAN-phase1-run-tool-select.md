@@ -685,14 +685,11 @@ sketch does not account for:
    completion surfaces as `Closed(exit_code, reason)` (`exit 7` produced `Closed(7, _)`). Stderr did
    **not** surface as `SourceBytes` or `SourceText`; only stdout did. Therefore the substrate cannot
    satisfy the live-process matrix row's required `stderr + exit_code + truncation meta` by itself.
-   **Phase-1 implementation adjustment:** raw `asyncExecProcess` is insufficient, so live-process
-   tools that require stderr fidelity (`streaming` / `needs_stderr_live` / `needs_hard_cancel`) run
-   through the repo-local wrapper `scripts/tool_stream_wrapper.py`. The wrapper runs the real command,
-   writes stdout/stderr/exit files, and emits framed stdout on its own stdout for future live UI
-   plumbing. `run_tool_select` waits for wrapper closure and reads the files to build the final
-   provider transcript. Verified by `scripts/smoke_run_tool_select_wrapper.ail`. Remaining limitation:
-   v0.26.0 `selectEvents` handlers are pure, so wrapper frames cannot yet be converted into TUI events
-   directly inside the handler; final transcript/TUI-result fidelity is restored first.
+   **Phase-1 implementation adjustment:** live-process tools that require stderr fidelity
+   (`streaming` / `needs_stderr_live` / `needs_hard_cancel`) stay on the existing delegated/sequential
+   backend path for Phase 1; do not build an in-brain `asyncExecProcess` arm for them. The
+   source-name finding remains usable for later work, but the live-process arm is not a Phase-1
+   production path on v0.26.0.
 
 ---
 
@@ -753,6 +750,5 @@ class of risk):
 the `tool_i` index the ADR sketch shows (`:53,173`), verified by
 `smoke_async_exec_name_routing.ail`; `asyncExecProcess` delivers stdout as `SourceBytes` and exit code
 as `Closed(code, reason)`, but **does not deliver stderr** as a stream event, verified by
-`smoke_async_exec_stderr_exit.ail`. Consequence: live-process tools requiring stderr fidelity use the
-repo-local wrapper `scripts/tool_stream_wrapper.py`; final stdout/stderr/exit fidelity is verified by
-`scripts/smoke_run_tool_select_wrapper.ail`.
+`smoke_async_exec_stderr_exit.ail`. Consequence: live-process tools requiring stderr fidelity remain
+delegated/sequential in Phase 1.

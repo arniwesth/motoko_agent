@@ -117,8 +117,7 @@ func parse_exec_from_args(args: Json) -> ProcessExecReq {
     cwd: cwd_opt,
     streaming: arg_bool(args, "streaming", false),
     needs_stderr_live: arg_bool(args, "needs_stderr_live", false),
-    needs_hard_cancel: arg_bool(args, "needs_hard_cancel", false),
-    parallel_safe: arg_bool(args, "parallel_safe", false)
+    needs_hard_cancel: arg_bool(args, "needs_hard_cancel", false)
   }
 }
 
@@ -892,7 +891,7 @@ func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolRe
         None    => ""
       };
       let wrapped_cmd = "${prefix}${req.cmd}";
-      { cmd: "bash", args: ["-lc", wrapped_cmd], cwd: req.cwd, streaming: false, needs_stderr_live: false, needs_hard_cancel: false, parallel_safe: req.parallel_safe }
+      { cmd: "bash", args: ["-lc", wrapped_cmd], cwd: req.cwd, streaming: false, needs_stderr_live: false, needs_hard_cancel: false }
     } else req;
     match exec(effective.cmd, effective.args) {
       Err(err) =>

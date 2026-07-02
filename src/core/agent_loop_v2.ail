@@ -38,15 +38,13 @@ import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError, StreamC
 import std/io (println, readLine)
 import std/clock (now)
 import std/env (getEnvOr)
-import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString, asBool, asArray, asNumber)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
-import std/string (trim, startsWith, substring, toLower, contains, replace)
+import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
 import std/process (exec, ProcessError, ProcessOutput)
-import std/fs (mkdirAllResult, readFileResult, removeFileResult)
 import std/bytes (toString)
-import std/stream (asyncExecProcess, selectEvents)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_model_json)
@@ -609,16 +607,6 @@ func json_field_bool_true(obj: Json, key: string) -> bool {
   }
 }
 
-func json_field_int(obj: Json, key: string, fallback: int) -> int {
-  match get(obj, key) {
-    None => fallback,
-    Some(j) => match asNumber(j) {
-      Some(n) => _float_to_int(n),
-      None => fallback
-    }
-  }
-}
-
 -- Each tool-role Message produced by dispatch_calls has a JSON-encoded
 -- payload in its content (either dispatch_one's tool_result_item JSON,
 -- a policy_denied_message JSON, or a delegated_deferred_message JSON).
@@ -636,13 +624,18 @@ func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
       };
       let stdout_str = json_field_str(inner, "stdout", "");
       let stderr_str = json_field_str(inner, "stderr", "");
-      -- Prefer payload exit_code when present; fall back to the boolean
-      -- error gate used by policy/delegated synthetic messages.
+      -- If the payload flags itself as an error (policy_denied_message
+      -- or delegated_deferred_message both set `error: true`), drive
+      -- the TUI's "failed" rendering by emitting exit_code: 1; otherwise
+      -- treat as success (exit_code: 0). dispatch_one's payloads always
+      -- include exit_code on the wire but parsing JSON numbers from
+      -- typed Json values requires a different accessor than we use here;
+      -- the boolean error gate is a simpler proxy that gets the TUI
+      -- coloring right for the v2-emitted shapes.
       let is_error = json_field_bool_true(inner, "error");
-      let exit_code = json_field_int(inner, "exit_code", if is_error then 1 else 0);
       let normalized = jo([
         kv("tool_call_id", js(m.tool_call_id)),
-        kv("exit_code", jnum(_int_to_float(exit_code))),
+        kv("exit_code", jnum(if is_error then 1.0 else 0.0)),
         kv("stdout", js(stdout_str)),
         kv("stderr", js(stderr_str)),
         kv("truncated", jb(false)),
@@ -712,396 +705,6 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
     tool_call_id: call.id
   }
 }
-
-func cancelled_tool_message(call: ToolCall, reason: string) -> Message {
-  let payload = encode(jo([
-    kv("error", jb(true)),
-    kv("cancelled", jb(true)),
-    kv("tool", js(call.name)),
-    kv("reason", js(reason))
-  ]));
-  {
-    role: "tool",
-    content: payload,
-    tool_calls: [],
-    tool_call_id: call.id
-  }
-}
-
-func cancelled_tool_messages(calls: [ToolCall], reason: string) -> [Message] {
-  match calls {
-    [] => [],
-    call :: rest => cancelled_tool_message(call, reason) :: cancelled_tool_messages(rest, reason)
-  }
-}
-
-func run_tool_select_enabled() -> bool ! {Env} {
-  getEnvOr("MOTOKO_RUN_TOOL_SELECT", "0") == "1"
-}
-
-func run_tool_select_cancel_requested() -> bool ! {Env} {
-  getEnvOr("MOTOKO_RUN_TOOL_SELECT_CANCEL", "0") == "1"
-}
-
-type ToolSelectPreflight
-  = PreflightAllowed(ToolCall)
-  | PreflightReady(Message)
-
-func resolve_pending_denial(raw: string, default: PolicyDefault) -> Option[string] {
-  if raw == "" then
-    match default {
-      AllowAfterTimeout => None,
-      DenyAfterTimeout => Some("timeout — no approval received")
-    }
-  else
-    match decode(raw) {
-      Err(_) =>
-        match default {
-          AllowAfterTimeout => None,
-          DenyAfterTimeout => Some("unparseable response — default deny applied")
-        },
-      Ok(obj) => {
-        let cmd_type = msg_get_str(obj, "type");
-        if cmd_type == "approve" then None
-        else if cmd_type == "deny" then {
-          let r = msg_get_str(obj, "reason");
-          Some(if r == "" then "denied by operator" else r)
-        }
-        else
-          match default {
-            AllowAfterTimeout => None,
-            DenyAfterTimeout => Some("unknown approval command — default deny applied")
-          }
-      }
-    }
-}
-
-func emit_tool_denied_event(session_id: string, step_idx: int, stream_id: string, call: ToolCall, reason: string) -> () ! {IO, Trace} {
-  emit_event(session_id, "native_tool_denied", [
-    kv("step", jnum(_int_to_float(step_idx))),
-    kv("stream_id", js(stream_id)),
-    kv("tool", js(call.name)),
-    kv("id", js(call.id)),
-    kv("reason", js(reason))
-  ])
-}
-
-func arg_bool_json(args: Json, key: string, fallback: bool) -> bool {
-  match get(args, key) {
-    Some(j) => match asBool(j) { Some(v) => v, None => fallback },
-    None => fallback
-  }
-}
-
-func arg_string_json(args: Json, key: string, fallback: string) -> string {
-  match get(args, key) {
-    Some(j) => match asString(j) { Some(v) => v, None => fallback },
-    None => fallback
-  }
-}
-
-func arg_string_list_json(args: Json, key: string) -> [string] {
-  match get(args, key) {
-    Some(j) =>
-      match asArray(j) {
-        Some(xs) => arg_string_list_json_rec(xs),
-        None => []
-      },
-    None => []
-  }
-}
-
-func arg_string_list_json_rec(xs: [Json]) -> [string] {
-  match xs {
-    [] => [],
-    x :: rest =>
-      match asString(x) {
-        Some(v) => v :: arg_string_list_json_rec(rest),
-        None => arg_string_list_json_rec(rest)
-      }
-  }
-}
-
-func live_process_requested(args: Json) -> bool {
-  arg_bool_json(args, "streaming", false)
-    || arg_bool_json(args, "needs_stderr_live", false)
-    || arg_bool_json(args, "needs_hard_cancel", false)
-}
-
-func safe_tool_call_id(id: string) -> string {
-  replace(replace(replace(id, "/", "_"), ":", "_"), " ", "_")
-}
-
-func read_file_or(path: string, fallback: string) -> string ! {FS} {
-  match readFileResult(path) {
-    Ok(s) => s,
-    Err(_) => fallback
-  }
-}
-
-func wrapped_exit_code(path: string) -> int ! {FS} {
-  match _stringToInt(trim(read_file_or(path, "1"))) {
-    Some(n) => n,
-    None => 1
-  }
-}
-
-func wrapped_stream_process_message(call: ToolCall, envelope_args: Json, workdir: string) -> Message ! {FS, Env, Stream} {
-  let safe_id = safe_tool_call_id(call.id);
-  let dir = "${workdir}/.motoko_tool_select/${safe_id}";
-  let stdout_path = "${dir}/stdout.bin";
-  let stderr_path = "${dir}/stderr.bin";
-  let exit_path = "${dir}/exit.txt";
-  let _ = mkdirAllResult(dir);
-  let _ = removeFileResult(stdout_path);
-  let _ = removeFileResult(stderr_path);
-  let _ = removeFileResult(exit_path);
-  let cmd = arg_string_json(envelope_args, "cmd", "");
-  let cmd_args = arg_string_list_json(envelope_args, "args");
-  let wrapper = getEnvOr("MOTOKO_TOOL_STREAM_WRAPPER", "scripts/tool_stream_wrapper.py");
-  let source = asyncExecProcess("python3", [
-    wrapper,
-    "--stdout-file", stdout_path,
-    "--stderr-file", stderr_path,
-    "--exit-file", exit_path,
-    "--",
-    cmd
-  ] ++ cmd_args, call.id, 10, 4096);
-  selectEvents([source], \event. match event {
-    Closed(_, _) => false,
-    StreamError(_) => false,
-    _ => true
-  });
-  let stdout = read_file_or(stdout_path, "");
-  let stderr = read_file_or(stderr_path, "");
-  let exit_code = wrapped_exit_code(exit_path);
-  let payload = encode(jo([
-    kv("tool", js(call.name)),
-    kv("cmd", js(cmd_string_for_message(cmd, cmd_args))),
-    kv("exit_code", jnum(_int_to_float(exit_code))),
-    kv("stdout", js(stdout)),
-    kv("stderr", js(stderr)),
-    kv("truncated", jb(false)),
-    kv("stream_wrapper", jb(true))
-  ]));
-  tool_result_message(call, payload)
-}
-
-func cmd_string_for_message(cmd: string, args: [string]) -> string {
-  match args {
-    [] => cmd,
-    a :: rest => "${cmd} ${a}${cmd_args_suffix_for_message(rest)}"
-  }
-}
-
-func cmd_args_suffix_for_message(args: [string]) -> string {
-  match args {
-    [] => "",
-    a :: rest => " ${a}${cmd_args_suffix_for_message(rest)}"
-  }
-}
-
-func policy_preflight(
-  rt: ExtRuntime,
-  ctx: ExtCtx,
-  calls: [ToolCall],
-  step_idx: int,
-  stream_id: string,
-  session_id: string
-) -> [ToolSelectPreflight] ! {IO, Clock, Trace} {
-  match calls {
-    [] => [],
-    call :: rest => {
-      let envelope = tool_call_to_envelope(call);
-      let policy = dispatch_tool_policy(rt, ctx, envelope);
-      let head = match policy {
-        Deny(reason) => {
-          let _ = emit_tool_denied_event(session_id, step_idx, stream_id, call, reason);
-          PreflightReady(policy_denied_message(call, reason))
-        },
-        Pending(reason, default) => {
-          let _ = emit_event(session_id, "tool_pending", [
-            kv("step", jnum(_int_to_float(step_idx))),
-            kv("stream_id", js(stream_id)),
-            kv("tool", js(call.name)),
-            kv("id", js(call.id)),
-            kv("reason", js(reason))
-          ]);
-          let raw = readLine();
-          match resolve_pending_denial(raw, default) {
-            Some(denial_reason) => {
-              let _ = emit_tool_denied_event(session_id, step_idx, stream_id, call, denial_reason);
-              PreflightReady(policy_denied_message(call, denial_reason))
-            },
-            None => PreflightAllowed(call)
-          }
-        },
-        _ => PreflightAllowed(call)
-      };
-      head :: policy_preflight(rt, ctx, rest, step_idx, stream_id, session_id)
-    }
-  }
-}
-
-func dispatch_allowed_call(
-  rt: ExtRuntime,
-  ctx: ExtCtx,
-  call: ToolCall,
-  workdir: string,
-  step_idx: int,
-  stream_id: string,
-  ohmy_pi: bool,
-  session_id: string
-) -> Message ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
-  let envelope = tool_call_to_envelope(call);
-  if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
-    let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
-    let result_env: ToolResultEnvelope = {
-      tool_call_id: envelope.id,
-      tool: "scratchpad",
-      exit_code: result_cell.exit_code,
-      stdout: result_cell.stdout,
-      stderr: result_cell.stderr,
-      metadata: result_cell.metadata
-    };
-    let _ = emit_event(session_id, "ext_tool_handled", [
-      kv("step", jnum(_int_to_float(step_idx))),
-      kv("stream_id", js(stream_id)),
-      kv("tool", js(call.name)),
-      kv("id", js(call.id)),
-      kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
-    ]);
-    let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-    {
-      role: "tool",
-      content: result_env_model_content(result_env),
-      tool_calls: [],
-      tool_call_id: call.id
-    }
-  } else {
-    let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
-    match handle_decision {
-      Handled(result_env) => {
-        let _ = emit_event(session_id, "ext_tool_handled", [
-          kv("step", jnum(_int_to_float(step_idx))),
-          kv("stream_id", js(stream_id)),
-          kv("tool", js(call.name)),
-          kv("id", js(call.id)),
-          kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
-        ]);
-        let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-        {
-          role: "tool",
-          content: result_env_model_content(result_env),
-          tool_calls: [],
-          tool_call_id: call.id
-        }
-      },
-      Delegate => {
-        let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
-        match backend {
-          Delegated => {
-            let _ = emit_event(session_id, "delegated_tool_deferred", [
-              kv("step", jnum(_int_to_float(step_idx))),
-              kv("stream_id", js(stream_id)),
-              kv("tool", js(call.name)),
-              kv("id", js(call.id))
-            ]);
-            delegated_deferred_message(call)
-          },
-          Native => {
-            let _ = emit_event(session_id, "v2_tool_dispatch_start", [
-              kv("step", jnum(_int_to_float(step_idx))),
-              kv("stream_id", js(stream_id)),
-              kv("tool", js(call.name)),
-              kv("id", js(call.id))
-            ]);
-            let msg =
-              if (call.name == "BashExec" || call.name == "RunTests") && live_process_requested(envelope.arguments) then
-                wrapped_stream_process_message(call, envelope.arguments, workdir)
-              else {
-                let result_content = dispatch_one(workdir, call);
-                tool_result_message(call, result_content)
-              };
-            let _ = emit_event(session_id, "v2_tool_dispatch_complete", [
-              kv("step", jnum(_int_to_float(step_idx))),
-              kv("stream_id", js(stream_id)),
-              kv("id", js(call.id))
-            ]);
-            msg
-          }
-        }
-      }
-    }
-  }
-}
-
-func run_preflighted_tools(
-  rt: ExtRuntime,
-  ctx: ExtCtx,
-  items: [ToolSelectPreflight],
-  workdir: string,
-  step_idx: int,
-  stream_id: string,
-  ohmy_pi: bool,
-  session_id: string
-) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
-  match items {
-    [] => [],
-    item :: rest =>
-      match item {
-        PreflightReady(msg) =>
-          msg :: run_preflighted_tools(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id),
-        PreflightAllowed(call) => {
-          let msg = dispatch_allowed_call(rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, session_id);
-          msg :: run_preflighted_tools(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
-        }
-      }
-  }
-}
-
--- Phase-1 scaffold for the CSP tool phase. WI-0 intentionally preserves the
--- old sequential dispatcher for both flag states; later WIs fill in the
--- flagged branch while the flag-off path remains the revert boundary.
-func run_tool_select(
-  rt: ExtRuntime,
-  ctx: ExtCtx,
-  calls: [ToolCall],
-  workdir: string,
-  step_idx: int,
-  stream_id: string,
-  ohmy_pi: bool,
-  session_id: string
-) -> [Message] ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
-  if run_tool_select_enabled() then {
-    if run_tool_select_cancel_requested() then
-      cancelled_tool_messages(calls, "cancelled before tool dispatch started")
-    else {
-      let preflight = policy_preflight(rt, ctx, calls, step_idx, stream_id, session_id);
-      run_preflighted_tools(rt, ctx, preflight, workdir, step_idx, stream_id, ohmy_pi, session_id)
-    }
-  } else
-    dispatch_calls(rt, ctx, calls, workdir, step_idx, stream_id, ohmy_pi, session_id)
-}
-
-pure func test_cancelled_tool_messages_preserve_ids_and_order() -> bool
-  tests [((), true)]
-  {
-    let calls: [ToolCall] = [
-      { id: "a", name: "ReadFile", arguments: "{}" },
-      { id: "b", name: "Search", arguments: "{}" }
-    ];
-    match cancelled_tool_messages(calls, "cancel") {
-      [m1, m2] =>
-        m1.role == "tool"
-          && m2.role == "tool"
-          && m1.tool_call_id == "a"
-          && m2.tool_call_id == "b"
-          && List.length(m1.tool_calls) == 0
-          && List.length(m2.tool_calls) == 0,
-      _ => false
-    }
-  }
 
 -- Dispatch each ToolCall through the full per-call rpc_loop pipeline:
 --   1. Convert ToolCall → ToolCallEnvelope (M1 adapter)
@@ -1735,7 +1338,7 @@ func loop_v2(
                     tool_call_id: ""
                   };
                   let msgs_with_augmented = msgs ++ [augmented_assistant_msg];
-                  let tool_msgs = run_tool_select(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
+                  let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
                   let next_msgs = msgs_with_augmented ++ tool_msgs;
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
@@ -1848,7 +1451,7 @@ func loop_v2(
                 kv("stream_id", js(stream_id)),
                 kv("tool_calls", ja(tool_calls_to_envelope_jsons(result.tool_calls)))
               ]);
-              let tool_msgs = run_tool_select(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi, session_id);
+              let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi, session_id);
               let _ = emit_event(session_id, "native_tool_results", [
                 kv("request_id", js(request_id)),
                 kv("step", jnum(_int_to_float(step_idx))),
