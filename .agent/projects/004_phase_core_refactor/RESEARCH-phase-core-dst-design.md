@@ -131,6 +131,68 @@ resolving ADR-001's "no virtual time in `std/clock`" constraint: only the driver
 Scripted-state style: external threading (script state lives in `StepState`; ports stay stateless
 values), not self-replacing recursive ports, although both are expressible (§4).
 
+#### Definition: what a port is (and is not)
+
+A **port** is a function passed in as a value, standing in the place where code would otherwise
+name an effectful operation directly. The term is from ports-and-adapters (hexagonal
+architecture): the *port* is the function signature the core needs fulfilled; an *adapter* is
+whatever gets plugged in. No language feature is involved — it is a plain record field with a
+function type. Precedents already in production: `ExtensionHooks` (a record of effectful
+function fields) and `StepProvider`'s `Scripted` variant (a single-purpose port in variant
+clothing).
+
+The contrast, concretely. Hardwired (today, `compaction_ai.ail:89-91` — no seam; cannot be
+tested without a provider, observed, or replayed):
+
+```ailang
+func summarize_with_ai(prompt: string, model: string) -> string ! {AI, ...} {
+  match step(model, msgs, []) { ... }        -- std/ai.step, the real thing, always
+}
+```
+
+Ported (the callee is identical in production and DST; only the record passed in differs):
+
+```ailang
+type ExtPorts = {
+  ai_step:   (string, [Msg]) -> Result[StepResult, AIError] ! {AI},
+  http_get:  (string) -> Result[string, NetError] ! {Net},
+  clock_now: () -> int ! {Clock}
+}
+
+func summarize(ports: ExtPorts, prompt: string, model: string) -> string ! {AI} {
+  match ports.ai_step(model, [user_msg(prompt)]) { ... }
+}
+
+-- production adapter (driver builds once at session init):
+func live_ai_step(model: string, msgs: [Msg]) -> ... ! {AI} { step(model, msgs, []) }
+-- DST adapter (scenario builds instead — pure, deterministic, no network):
+func fake_ai_step(model: string, msgs: [Msg]) -> ... { Ok(canned_summary_result()) }
+```
+
+Three properties make this the right tool (all verified by `scripts/smoke_ports_record.ail`, §4):
+
+1. **It is just a value.** No mocking framework, no effect-handler interception (which AILANG
+   lacks and ADR-001 refuses to bet on).
+2. **The effect row stays honest but costless when faked.** The callee still declares `! {AI}` —
+   the type system tracks what *could* happen — but capabilities are charged when an effect is
+   *performed* (§4 Q5), so a test wiring `fake_ai_step` needs no `AI` cap, network, or sandbox.
+3. **Ports are stateless; scripts thread state.** A scripted port returning different answers on
+   successive calls doesn't mutate — its script lives in `StepState` and advances by threading,
+   like `Scripted(rest)` in `stub_step.ail` today.
+
+Beyond testing: because every effect flows through a known function value, the driver can
+**wrap** live adapters with a recorder — same signature, appends a ledger event, delegates.
+That is how extension effect calls enter the DST trace
+(`extension_effect{ext_id, port, args_digest}`) without the extension knowing or cooperating.
+
+Fencing the concept — a port is **not**: a CSP channel or process (no concurrency; calls are
+ordinary blocking calls); an effect handler (nothing intercepted — the callee cooperates by
+accepting the argument); or a service locator (nothing global — the record is passed explicitly
+down the call tree, which is exactly what makes replay deterministic). "Ports in `ExtCtx`" (§6)
+means precisely: `ExtCtx` gains one field holding this record; the core fills it with live or
+recorder-wrapped adapters; a DST harness fills it with fakes; extensions call
+`ctx.ports.ai_step(...)` instead of `std/ai.step(...)`.
+
 ### P4. The transcript builder is a pure module and the only provider-message gate
 
 `transcript.ail` is the single place provider-facing messages are built, enforcing: no empty tool
