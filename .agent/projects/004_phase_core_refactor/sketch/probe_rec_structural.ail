@@ -1,0 +1,8 @@
+-- Are exported record types structurally forgeable (literal of same shape,
+-- type not imported)? Expected yes => records cannot be opaque.
+module probe_rec_structural
+import std/io (println)
+import hist_opaque (use_recbox)
+export func main() -> () ! {IO} {
+  println("forged recbox=${show(use_recbox({ n: 5 }))}")
+}

@@ -253,6 +253,34 @@ Parser gotchas to carry into design docs:
 - Known since v0.21: unused function-typed parameters get their effect row narrowed to `{}`;
   pin with `let _ = f in` (see `stub_step.ail:127`).
 
+### 4.1 Vocabulary sketch (pre-ADR substrate validation, 2026-07-02)
+
+`sketch/` in this project directory: `sketch_vocabulary.ail` (checks, runs, inline tests pass)
+plus five opacity probes. Full answers in `sketch/README.md`; summary of the four questions it
+was built to retire:
+
+1. **D7's opacity assumption holds, with a co-location constraint.** `export type` exports
+   constructors (forgeable); an *unexported* variant type with exported ops is truly sealed —
+   constructor import fails `IMP010`, values still thread through consumers. But the unexported
+   *type name* is not importable either, so **records embedding `History` (`StepState`) must be
+   co-located in the defining module** — the phase core needs a single vocabulary module
+   (working name `src/core/phase_vocab.ail`; final home an ADR detail). Exported record types
+   are structurally forgeable, so sealed types must be single-constructor variants. The
+   self-auditing `checkpoint -> {history, event}` shape runs end-to-end.
+2. **One `LedgerEvent` type serves both event vocabularies.** Typed variant + `to_schema_v1`
+   projection onto the existing production wire contract; the 28 production schema-v1 event
+   types are inventoried in the sketch; representative 11-constructor subset proven, including
+   payload-dependent legacy-name mapping. **Full 28-name projection coverage is a Phase B ship
+   gate.** ADR-001 canonical names map 1:1 to constructors.
+3. **`state_delta` is a patch record with one application point.** `Option` fields (absent =
+   unchanged) applied only by `apply_state_delta` — the state mirror of single-point event
+   emission and itself a DST invariant site. Full-state returns rejected: the delta IS the
+   observation DST wants recorded.
+4. **`StepDecision` variants carry named record payloads cleanly**, and the pure
+   `decide(StepState, StepPolicy) -> StepDecision` skeleton composes with the sealed projection
+   pipeline. `PhaseResult` drops the note's `continuation` field — the step machine re-derives
+   the next decision from applied state.
+
 ---
 
 ## 5. Where `agent_loop_v2.ail`'s residual logic goes
@@ -675,7 +703,8 @@ resume-from-checkpoint reproduces the digest chain.
 1. **Phase A — pure foundations, zero behavior change**: ledger event types, envelope types,
    transcript builder extracted from current helpers (`step_result_to_message`,
    `envelope_to_tool_message`, `tool_result_message`, ...); export compaction constants
-   (ADR-001 R5); Ports substrate smoke (**done** — `scripts/smoke_ports_record.ail`).
+   (ADR-001 R5); Ports substrate smoke (**done** — `scripts/smoke_ports_record.ail`);
+   vocabulary sketch (**done** — `sketch/`, §4.1; seeds the real vocabulary module).
 2. **Phase B — split `loop_v2` into phases returning `PhaseResult`**; driver keeps the current
    recursive shape. Scattered emission centralizes; ADR-001's required first seam (provider-call
    recording) lands naturally as ledger events around the model phase.
@@ -747,3 +776,13 @@ this research into an ADR (the decision log is its skeleton).
     ctx found in core or packages) — function-valued ports can live inside it safely.
 12. The extension ecosystem is entirely external packages: 12 registered in
     `registry_generated.ail`; the `src/core/ext/*` subdirectories are empty placeholders.
+13. Type opacity is enforceable on v0.26.0, but only for variants and only by *not exporting*
+    the type: `export type` exports constructors; unexported variant + exported ops is sealed
+    (`IMP010` on constructor import); the unexported type name is not importable either, so
+    embedding records must be co-located; exported record types are structurally forgeable
+    (sketch probes, §4.1).
+14. Production emits 28 schema-v1 event types (inventoried in
+    `sketch/sketch_vocabulary.ail`); the TUI and eval harnesses consume them, so the ledger's
+    `to_schema_v1` projection must cover all 28 before Phase B ships.
+15. Imports must lexically precede all declarations in an AILANG module (parse error
+    otherwise).
