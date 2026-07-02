@@ -34,9 +34,10 @@ Decisions settled in this research (with the operator, 2026-07-02):
    nothing stays "in the loop" because there is no loop file anymore.
 
 Later settled same day: **ABI v3 scope** (D6 — ports-in-ExtCtx + artifacts channel, no row
-changes, conformance kit as separate package) and the **`Checkpoint` seam** (D7, elaborated in
-§7.4 — blessed in v1 types with a never-emit cage). Remaining open: O3 (conformance kit
-details), largely shaped by D6.
+changes, conformance kit as separate package), the **`Checkpoint` seam** (D7, elaborated in
+§7.4 — blessed in v1 types with a never-emit cage), and the **conformance kit details** (D8,
+elaborated in §6.1 — two-module package, caps-as-conformance, fault-isolation split). No open
+decisions remain; this research is ready to seed the ADR.
 
 ---
 
@@ -337,6 +338,126 @@ compactor packages).
 **Settled (D6, 2026-07-02)**: ABI v3 scope = ports-in-ExtCtx + artifact channel; no row changes
 in v3; conformance kit as a separate lockstep package. See §9.
 
+### 6.1 The conformance kit (D8, settled 2026-07-02)
+
+#### Three deliverables in one package (`motoko_ext_conformance`)
+
+1. **Contract law** — pure invariant functions over hook inputs/outputs
+   (`pairing_preserved`, `ids_preserved`, `no_system_in_output`, `envelope_well_formed`, ...).
+   Pure ⇒ L0: any extension runs them under `ailang test` with no caps.
+2. **Harness** — a scenario runner driving one extension's `ExtensionHooks` with synthetic
+   `ExtCtx` values, fixture histories, and fake `ExtPorts` builders (per the §4 smoke
+   conventions: named funcs, let-bound lambdas, script state threaded). Surface B (§6) made
+   concrete: the extension-side mirror of `run_v2_with_stub`.
+3. **Reporting** — the ADR-001 failure contract verbatim (scenario id, seed where applicable,
+   first failed invariant, normalized trace), emitted in the same JSONL shape as the core
+   ledger projection, so extension conformance failures and core DST failures read identically.
+
+#### Caps-as-conformance: ports discipline enforced by the runtime
+
+Falls directly out of §4 Q5. "This extension is ports-native" sounds like it needs static
+analysis AILANG cannot express; behaviorally it is free: **the harness runs hook scenarios with
+fake ports under minimal caps** (e.g. `--caps IO`). An extension that bypasses ports and calls
+`std/ai.step` or `Net.httpGet` raw fails the capability check at the moment of performance —
+the scenario fails without any analysis. Extensions with legitimate raw-effect use
+(pre-migration `SharedMem` frames in context-mode) get a **per-extension declared-caps
+allowance** in their conformance config — an honest, machine-readable record of exactly which
+effects they still perform outside ports; shrinking that list to empty IS the migration
+progress metric.
+
+#### Dependency inversion: one source of contract law
+
+Naively, pairing/id invariants would exist twice (core's `transcript.ail` gate + the kit) and
+drift. Instead the package splits into two modules with different audiences:
+
+- `motoko_ext_conformance/invariants` — pure contract law, no test machinery, depends only on
+  the ABI. **Core's `transcript.ail` imports this too**: the production gate validating a
+  `Compacted` result (§7.1 case 2) and the kit scenario an extension runs in its own CI execute
+  the *same function*. Disagreement is impossible by construction.
+- `motoko_ext_conformance/harness` — runner, fixtures, fake ports, reporting. Test-only; core
+  never imports it.
+
+#### Per-hook obligations catalog (v1 scope)
+
+| Hook | Extension-owned obligations |
+|---|---|
+| `register_with_config` | total for any `RuntimeConfig`; pure (ABI law); `id` non-empty; `provided_tools` consistent with `on_describe_tools` |
+| `on_describe_tools` | schema names unique + non-empty; `parameters` parses as JSON |
+| `on_build_system_prompt` | pure (ABI law); patch bounded; deterministic given ctx |
+| `on_tool_policy` | pure (ABI law); total over arbitrary envelopes |
+| `on_pre_step` / `Compacted` | pairing preserved; ids preserved; no system-role messages in output; deterministic given (segment, artifacts, ports script); artifacts round-trip stable |
+| `on_tool_handle` / `on_response_intercept` | result envelope well-formed; `tool_call_id` echoes the call's id; exit_code/stdout/stderr semantics respected |
+| `on_solver_candidate` | `ContinueWithFeedback` carries non-empty feedback; deterministic given (ctx, text, ports script) |
+
+Core-owned obligations (tested core-side, *stated* in the kit so both parties read one
+document): the segment never contains system messages; first-`Compacted`-wins order is
+ledger-recorded; every hook output passes the transcript gate before touching a provider
+payload.
+
+#### First invariant set: hardened by the `compaction_ai` v0.3.0 migration
+
+Per the D6 reference-migration plan, the catalog is not designed speculatively — the migration
+needs exactly: `pairing_preserved`, `ids_preserved`, `no_system_in_output`,
+`deterministic_replay` (same segment + artifacts + port script ⇒ identical decision), and
+`artifact_cache_effective` — the caching assertion done behaviorally: run the scenario twice
+with run-one's artifacts; run-two's fake `ai_step` port is an empty script returning a poison
+sentinel, so any re-summarization surfaces in output and fails. **The kit's acceptance test:
+it must reject `compaction_ai` v0.2.0 for its two live bugs (§7) — the kit is correct when it
+rejects the shipped compactor for the right reasons.**
+
+#### Versioning and CI mechanics
+
+Lockstep majors (kit `3.x` certifies against ABI `3.x`); the kit exports
+`conformance_abi_version()` and the harness refuses an ABI mismatch loudly. Extension CI runs
+its own scenarios (fast, caps-minimal, no network — ADR-001-compatible by construction). Core
+CI runs the harness against every extension in `registry_generated.ail`, turning "certified
+against conformance v3" into a checkable registry-inclusion gate rather than a README claim.
+
+#### What the kit deliberately cannot check — and why that is a design, not a gap
+
+Out of scope: cross-extension composition (registry order, arbitration, hook interaction) —
+core-side L1; provider acceptance of final payloads — core's transcript gate; cross-package
+`id` uniqueness — the registry; resource/time budgets — v1 out of scope.
+
+The composition exclusion is structural, for three reasons:
+
+1. **The kit's vantage point is one package in an open world.** It runs in the extension's CI,
+   where sibling extensions are not in the dependency closure and cannot be: the composition
+   set is a *deployment* property (`registry_generated.ail` is generated per install from
+   `RuntimeConfig`), not a package property. A test needing the composed set can only run where
+   that set exists — the core side.
+2. **The behavior under test in composition is core's fold, not the extension's.**
+   First-`Compacted`-wins lives in `dispatch_pre_step`'s recursion (`ext/runtime.ail:143-164`);
+   the ABI deliberately does not specify arbitration. A kit asserting arbitration would have to
+   reimplement the fold — a mirror that drifts the day core changes arbitration, leaving two
+   authorities on composition semantics. The correct subject of an arbitration test is the
+   dispatcher driven by scripted hooks — core Surface A / L1, already in the design.
+3. **Combinatorics close only at the deployment boundary.** A fake of a sibling extension is
+   just a scripted hook; a kit test using one *is* a core L1 scenario wearing a kit costume,
+   run from a worse place to debug.
+
+**The fault-isolation principle that makes the split sound**: the obligations catalog is chosen
+to be **composition-closed** — if every compactor preserves pairing, ids, and system-hiding,
+then *whichever one wins arbitration*, the winning output is safe; the invariant survives the
+fold without the kit ever seeing the fold. Every composition failure then decomposes:
+
+- an extension violated its contract → kit's job; one identifiable party; reproducible in that
+  extension's own CI; or
+- all contracts met, composed result still wrong → core's arbitration bug → core L1 scenario.
+
+If a bug ever fits neither branch — contracts met, fold correct, still broken — the contract
+itself was too weak, and the fix is a new obligation in the kit's next version. The boundary is
+the feedback loop that hardens the contract.
+
+**Honest residual gap**: *real-pair* emergent interactions — two actual extensions coupling
+through side channels the contract does not model (colliding `SharedMem` keys; two individually
+bounded prompt patches that are jointly contradictory). The kit cannot see pairs (reason 1) and
+core L1 uses scripted hooks, so real pairs are exercised only by the registry gate in core CI
+(harness against hydrated extensions) and L3. Mitigations already in the design: the ports
+migration shrinks side channels, recorder-wrapped ports make residual couplings *visible* in
+the ledger even where not prevented, and declared-caps allowances make "which pairs could even
+interact outside the contract" a queryable question rather than archaeology.
+
 ---
 
 ## 7. Compaction: pure projection pipeline, pressure-tested
@@ -580,12 +701,10 @@ Settled (operator + research, 2026-07-02):
 | D5 | Ledger/trace unification | One artifact; typed records in memory, JSONL projection at driver (resolves ADR-001 R4/R8) |
 | D6 | ABI v3 scope (was O1; settled 2026-07-02) | Ports-in-ExtCtx + `artifacts` channel; **no row changes** (`on_tool_policy` is already pure in 2.2.0; narrowing the four max-row hooks buys ~nothing once ports exist). Conformance kit as a **separate package** (`motoko_ext_conformance`), lockstep-versioned with the ABI. Reference migration: `compaction_ai` v0.3.0 |
 | D7 | `Checkpoint` seam in v1 types (was O2; settled 2026-07-02) | Yes — `Checkpoint(CheckpointPlan)` decision variant; `History` opaque with a single self-auditing rebuild op returning `{history, event}`; invariant "rewritten only with a matching ledger event"; v1 never emits it, enforced by scenario. Full design §7.4 |
+| D8 | Conformance kit details (was O3; settled 2026-07-02) | Two-module package: `invariants` (pure contract law, imported by core's transcript gate — one source of law) + `harness` (test-only). Caps-as-conformance with per-extension declared-caps allowances. Per-hook obligations catalog per §6.1; invariant set frozen only after `compaction_ai` v0.3.0 passes; lockstep majors with loud version handshake; acceptance test: the kit must reject v0.2.0's two live bugs. Full design §6.1 |
 
-Open:
-
-| # | Decision | Recommendation |
-|---|---|---|
-| O3 | Conformance kit details (existence + placement settled via D6) | Scope the invariant set from the `compaction_ai` v0.3.0 migration; version in lockstep with ABI v3 |
+No open decisions remain — all decisions raised by this research are settled. Next step: promote
+this research into an ADR (the decision log is its skeleton).
 
 ## 10. ADR-001 review comments resolved by this design
 
