@@ -618,3 +618,158 @@ system-message-hiding gap findings are accurate and verified.
 7. Turn the conformance kit and registry gate into concrete files, scenario ids, and commands (R7).
 8. Narrow the ABI migration-cost claim and list constructor updates for compactor packages (R8).
 9. Split no-hydration core DST gates from registry-hydrated conformance gates in CI (R9).
+
+---
+
+## Review Comments (Independent Review, Pass 3)
+
+_Reviewer: Claude Opus 4.8 (`claude-opus-4-8`), 2026-07-02. Grounded against current source, the
+pinned local toolchain (`ailang --version` → `AILANG v0.26.0`, commit `3b52a24`, built
+`2026-07-02_15:03:57`), and the phase-core research/sketch artifacts (all re-run). This pass reads
+the two prior passes (GPT-5 Codex, GLM 5.2) and does not restate their nine findings except to
+confirm reproduction (see "Convergent with prior passes" below). The five findings numbered here are
+the ones the prior two passes did not surface — three of them are defects **inside the artifacts the
+ADR cites as its substrate proofs**, which is where an independent re-run earns its keep._
+
+### R1. The one concrete `checkpoint` implementation destroys the system prefix — the exact bug class the design exists to prevent
+
+D7's `checkpoint` is cited as substrate-proven ("the self-auditing checkpoint shape runs end-to-end",
+`sketch/README.md:37-38`; ADR line 150-154). But the sketch's `checkpoint` rebuilds history as
+`MkHistory([summary_msg])` where `summary_msg` is a single **assistant**-role message
+(`sketch_vocabulary.ail:112-114`) — it discards the entire prior history including the pinned system
+message. Re-running the demo confirms it: `history after cp: len=1` where the seed was
+`[system, user]` (length 2), so the system message is gone. This is byte-for-byte the same failure
+mode as `compaction_ai` v0.2.0's live bug #1 (system-prefix loss, research §7.0), which this
+architecture is built to make unrepresentable. The research assigns checkpoint the obligation
+"checkpoint output passes the same transcript-builder gate (system prefix preserved, pairing
+preserved)" (`RESEARCH-phase-core-dst-design.md:677-679`) but defers it to v2
+(`:695-697`), and the ADR's Phase C gates for checkpoint are only
+`history_rewrite_requires_checkpoint_event` and `checkpoint_never_emitted_in_v1` (lines 227, 694) —
+**neither asserts the rewritten history is a valid transcript.** So a checkpoint that corrupts the
+system prefix or severs a tool pair passes every stated v1 gate, and "runs end-to-end" is doing more
+rhetorical work than the artifact supports (running ≠ preserving invariants). **Action:** add a v1
+transcript-validity obligation on `checkpoint` output (system-prefix-preserved, pairing-preserved,
+ids-preserved) enforced by the same gate as ext compaction, and a scenario
+`checkpoint_output_is_valid_transcript` that fails against the current sketch shape; and correct
+`sketch/README.md:37-38` so "runs end-to-end" is not read as "preserves the checkpoint obligations."
+
+### R2. The projection artifact cited as the byte-compat proof actually emits four non-production event names and mis-maps `ProviderResult`
+
+The ADR says `to_schema_v1` "preserves the existing production wire contract (28 event types … )
+consumed by the TUI and eval harnesses" and that "ADR-001 canonical trace names map 1:1 to
+constructors" (lines 123-126). Re-running the sketch, the projection emits **four `type` strings that
+are not in the 28-event production inventory it lists**: `provider_call_prepared`,
+`loop_totals_updated`, `history_checkpoint`, and `ext_compaction_rejected`
+(`sketch_vocabulary.ail:265,273,274,270`; demo prints `{"type":"history_checkpoint",…}`). These are
+DST-canonical / new names, not production schema-v1 names (cf. the inventory at
+`sketch_vocabulary.ail:221-228`, which contains none of them). Worse, `ProviderResult` maps to
+`"thinking"` (`:266`), not `provider_result` as the comment at `:230-235` claims. So the single
+artifact the ADR points to as evidence that projection *preserves* the wire contract in fact
+demonstrates a projection that (a) is a **superset** — it injects new event types into the same JSONL
+stream the TUI reads — and (b) contains a mis-route. "Byte-compatible with current TUI/eval consumers"
+(line 218) cannot be asserted from this artifact; it is untested whether the TUI tolerates unknown
+`type` values interleaved with the 28 it knows. This is distinct from the prior passes' count finding
+(28 vs 29): the count is a *membership* error; this is a *direction* error (the projection adds names
+and mislabels one). **Action:** separate the two wire contracts explicitly — the production schema-v1
+stream (the 28/29 names the TUI consumes) vs. the DST/ledger canonical names — and state which stream
+`to_schema_v1` targets; fix the `ProviderResult → thinking` mis-map; and make the Phase B gate assert
+the projection's emitted `type` set is a **subset** of (not merely overlapping with) the generated
+production inventory.
+
+### R3. The rejection of a `continuation` field is not substrate-proven — the sketch smuggles one and never exercises re-derivation
+
+The ADR rejects a `continuation` field in `PhaseResult` on the grounds that "the step machine
+re-derives the next decision from applied state" (lines 130, 270; Q4, `sketch/README.md:62-64`). The
+cited proof is `decide` in `sketch_vocabulary.ail:285-294` — but that `decide` **only ever returns
+`CallModel`** (or `Fail`); it never returns `RunTools`, `AwaitApproval`, `TakeCheckpoint`,
+`InjectUserMessage`, or `Finalize`. The load-bearing re-derivations — "the last model result carried
+tool_calls ⇒ `RunTools`" vs "… carried a final answer ⇒ `Finalize`" — are exactly the transitions a
+`continuation` field would have carried, and none is demonstrated. Tellingly, `StepState` carries a
+field `pending_decision_seed: string` explicitly annotated "placeholder for continuation-ish data"
+(`sketch_vocabulary.ail:153`) — the artifact reintroduces continuation state under another name while
+the ADR claims it was eliminated. Whether the post-model decision is truly re-derivable from
+`StepState` (which has no typed field for "last response kind" or "pending tool calls" beyond digging
+into the sealed `History` tail) is unproven. Per the review constraints this attacks the
+*justification* of a settled decision with artifact evidence, not the decision itself. **Action:**
+either extend the sketch's `decide` to derive `RunTools`/`Finalize` from `StepState` (retiring
+`pending_decision_seed`), proving re-derivation, or add the typed state field(s) re-derivation needs
+and drop the "no continuation" claim to "continuation is state, not a separate result field."
+
+### R4. Confirmed and sharpened: the compaction actual/estimate split the ADR builds on no longer exists in source
+
+I independently reproduce Pass-2 R1: `src/core/compaction.ail` has a **single** 70/85/95 tier table
+with emergency at ≥95 (`compaction.ail:136-138`), no `compact_step_actual`, no `OUTPUT_HEADROOM`, and
+no `75000` literal anywhere in `src/core`; the only entry point is
+`compact_step_with_limit`/`compact_step` (`:134,:142`), and `grep -n 'actual\|estimate\|
+last_input_tokens' src/core/compaction.ail` finds only the tier *comments*, not an actual-token code
+path. The additional consequence the prior pass did not draw: this ADR opens by claiming it "resolves
+[DST ADR-001's] review comments R4, R5, R7, R8" (line 16), but DST R5's remedy was "export
+`ACTUAL_TIERS={60,75,85}` and `ESTIMATE_TIERS={70,85,95}`" — **half of which no longer has a
+referent.** So the ADR inherits a resolution built on a premise that has since been deleted from
+source, and Phase C's `actual_tokens_drive_next_step` / `emergency_exhaustion_estimate_gated`
+scenarios (lines 224-227) are unrepresentable against the current single-tier compactor. **Action:**
+before Phase A, resolve whether the actual-token path was intentionally collapsed (update DST ADR-001
+R5/R15 and this ADR's line-16 claim accordingly) or regressed and must be restored; do not carry the
+`actual_tokens_*` scenarios into Phase C until the source path they name exists.
+
+### R5. Minor: the "~30 scattered emit call sites" figure understates the actual surface by ~60%
+
+The Context section motivates the rewrite partly on "~30 scattered
+`emit_event`/`emit_run_summary`/`emit_stream_chunk` call sites" (line 51; research §1 "~30 inline").
+Actual counts in `src/core/agent_loop_v2.ail`: **39** `emit_event`, **7** `emit_run_summary`, **2**
+`emit_stream_chunk` = **48** call sites (plus 4 direct `emit_json`). The argument is if anything
+stronger than stated, but a load-bearing motivating number should be right. **Action:** replace "~30"
+with the measured figure (48 emission call sites), or cite the exact command so it stays honest as the
+file changes.
+
+### Convergent with prior passes (independently reproduced, not re-numbered)
+
+I re-ran every artifact and re-checked every prior-pass citation; the following prior findings hold
+and I reproduce their grounding, so they should be treated as confirmed by a third independent tool,
+not as single-reviewer opinion: sealed-type co-location extends to `step_machine.ail`/`model_phase.ail`
+(probes fail `IMP010`: `MkSealed`, `Sealed`; `probe_sealed_thread` runs) — Pass-1 R1 / Pass-2 R3;
+the 28→29 event membership error incl. omitted `reasoning_delta` (`agent_loop_v2.ail:265`) — Pass-1
+R2 / Pass-2 R2; live-streaming timing cannot be byte-compatible with post-call batched emission
+(`emit_stream_chunk` fires per-chunk mid-call at `:249-270`, callback at `:1201`) — Pass-1 R3 /
+Pass-2 R4; the checkpoint digest is length-based and forgeable (`sketch_vocabulary.ail:52-53`; demo
+`before_digest:"h2"`) and the `{history,event}` return does not force append — Pass-1 R4 / Pass-2 R6;
+`AwaitApproval`/`ApprovalRequest` lacks `stream_id`/`call_id` that the live flow uses
+(`agent_loop_v2.ail:760-790` emits `tool_pending` with `stream_id`+`id` then blocks on `readLine`) —
+Pass-1 R5 / Pass-2 R5; conformance-kit acceptance names no package/scenario/command
+(`rg motoko_ext_conformance` empty) — Pass-1 R6 / Pass-2 R7; ABI v3 "constructor-only" is false for
+compactors because `Compacted(msgs, note)` gains a field (`types.ail:124-127`;
+`compaction_ai.ail:145-148`) — Pass-1 R7 / Pass-2 R8; and "no registry hydration" conflates the
+core-L0/L1 gate with the registry-wide conformance gate — Pass-1 R8 / Pass-2 R9.
+
+### What is accurate
+
+The design thesis and its harder-to-check claims survive independent attack. Every ADR-body
+`file:line` citation I checked is correct: the ten-effect row at `agent_loop_v2.ail:1125`;
+persist-nudge marker scanning at `:1062-1063`; the system message built into the init list at
+`rpc.ail:230-232` and forwarded unfiltered to `dispatch_pre_step` at `:1154`; the mid-dispatch
+approval `readLine` at `:769` (preceded by the `tool_pending` emit at `:760-766`); scratchpad
+hard-coded dispatch at `:868`; ephemerality-by-dataflow-accident (recurses on `msgs ++
+[assistant_msg]` at `:1250`); `conversation_loop_v2` history preservation via `run_v2_from_messages`
+(`:1518-1523`). The ABI substrate claims are exactly right: `on_describe_tools`,
+`on_build_system_prompt`, `on_tool_policy` are already pure and `on_budget_plan` is `{Env, FS}` in
+2.2.0, only the four "real work" hooks carry the 9-effect row (`types.ail:128-142`) — so D6's "no
+row changes" justification is well-grounded. All substrate proofs reproduce on v0.26.0: sketch
+`check`/`run`/`test` pass; forge/name probes fail `IMP010` while `probe_sealed_thread`,
+`probe_opacity_forge`, `probe_rec_structural` behave as documented; `smoke_ports_record.ail` runs its
+fake entry under `--caps IO` while `main_live` fails with `effect 'Clock' requires capability` —
+confirming the caps-at-performance-time result (R7-killer) that the whole L1 story rests on. The
+functional-core/imperative-shell direction, ports-as-values, ledger-as-trace, and
+compaction-ephemerality-and-system-hiding-by-construction are sound and substrate-proven; the two
+`compaction_ai` v0.2.0 live bugs are real and correctly characterized.
+
+### Recommended pre-implementation actions (additive to prior passes)
+
+1. Add a v1 transcript-validity gate on `checkpoint` output and a scenario that fails the current
+   system-prefix-dropping sketch shape; stop citing "runs end-to-end" as invariant evidence (R1).
+2. State which wire contract `to_schema_v1` targets, fix the `ProviderResult → thinking` mis-map, and
+   make the Phase B gate assert `subset-of` the generated production inventory (R2).
+3. Prove decision re-derivation in the sketch (or add the typed state fields it needs) before rejecting
+   a `continuation` field; retire `pending_decision_seed` (R3).
+4. Reconcile the ADR's "resolves DST R5" claim and the `actual_tokens_*` scenarios with the current
+   single-tier `compaction.ail` — the actual/estimate split is gone from source (R4).
+5. Replace the "~30 emit sites" figure with the measured 48 (R5).
