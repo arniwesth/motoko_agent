@@ -33,8 +33,10 @@ Decisions settled in this research (with the operator, 2026-07-02):
 4. **`agent_loop_v2.ail` residual logic**: every squatter mapped to exactly one home (§5);
    nothing stays "in the loop" because there is no loop file anymore.
 
-Open decisions: ABI v3 scope (ports-in-ExtCtx only, vs. also narrowing hook effect rows), and
-final sign-off on the `Checkpoint` seam (recommended: yes).
+Later settled same day: **ABI v3 scope** (D6 — ports-in-ExtCtx + artifacts channel, no row
+changes, conformance kit as separate package) and the **`Checkpoint` seam** (D7, elaborated in
+§7.4 — blessed in v1 types with a never-emit cage). Remaining open: O3 (conformance kit
+details), largely shaped by D6.
 
 ---
 
@@ -332,8 +334,8 @@ changes (record readers don't break when a field is added; only constructors do,
 artifact channel for compaction caches (`Compacted` gains an artifacts field — touches only
 compactor packages).
 
-**Open decision**: ABI v3 scope — see O1 in §9 (recommendation revised: ports + artifact
-channel; no row changes in v3).
+**Settled (D6, 2026-07-02)**: ABI v3 scope = ports-in-ExtCtx + artifact channel; no row changes
+in v3; conformance kit as a separate lockstep package. See §9.
 
 ---
 
@@ -410,8 +412,7 @@ The `CompactableSegment` type below **fixes a bug-in-waiting**, not a formality.
    explicit — *History is rewritten only by an explicit `Checkpoint` decision of the step
    machine, recorded in the ledger.* v1 never emits `Checkpoint`; the types just leave the driver
    a legal construction path. The DST invariant stays checkable (history rewrite without a
-   matching ledger event = failure). **Open decision** (recommended: yes — one decision variant +
-   one invariant now vs. retrofitting against a "never rewritten" assumption later).
+   matching ledger event = failure). **Settled (D7)** — full design in §7.4.
 5. **Tier telemetry is a function input and measures the payload, not the history.**
    `last_input_tokens` is the actual token count of the previous **compacted payload** — correct
    (it measures what the provider sees) but subtle enough to be "fixed" wrongly someday.
@@ -467,6 +468,85 @@ the wiring uses the segment type). New scenarios from the pressure test:
 - `compaction.summary_cache_replay_stable`
 - `compaction.history_rewrite_requires_checkpoint_event`
 
+### 7.4 The `Checkpoint` seam (D7, settled 2026-07-02)
+
+#### The problem it exists for
+
+Ephemeral compaction re-derives the provider payload from raw `History` every step, and
+`History` only ever grows. Elision shrinks tool-result *content*, but message scaffolding,
+user/assistant prose, and the summary-resistant recent turns accumulate — so the **minimum
+achievable payload** (full elision, emergency tier) grows monotonically with history length.
+When that floor crosses the context limit, every projection path returns `Err`, the step
+machine's only legal move is `Fail(ContextExhausted)`, and the session is dead — not degraded,
+dead, because the design deliberately gives nothing the power to make `History` smaller. Bounded
+task runs usually hit the step budget first; `conversation_loop_v2` explicitly preserves
+accumulated history across tasks (`agent_loop_v2.ail:1520-1523`), so long-lived sessions walk
+toward the ceiling **by design**. The ceiling is reachable today, not hypothetical.
+
+#### What the seam concretely is
+
+Three small things; the second is the load-bearing one:
+
+1. **A decision variant**: `Checkpoint(CheckpointPlan)` in `StepDecision`. Pure policy in the
+   step machine decides when (e.g. "estimated fully-elided payload exceeds N% of the limit") —
+   L0-testable like every other decision.
+2. **One legal constructor, and it is self-auditing.** `History` is opaque in `transcript.ail`
+   (unexported constructor), with exported ops `append`, `project`, and exactly one function
+   that can produce a *rebuilt* history:
+
+   ```ailang
+   checkpoint : (History, CheckpointPlan) -> { history: History, event: LedgerEvent }
+   ```
+
+   Returning the rebuilt history **together with its ledger event** makes the invariant nearly
+   hold by construction: you cannot obtain a rewritten `History` without being handed the event
+   that must be appended. DST then only verifies the digest chain — each checkpoint event
+   records `before_digest`/`after_digest`; any history whose digest doesn't chain back through
+   recorded events is a failure.
+3. **The invariant, restated.** "History is never rewritten" becomes "**History is rewritten
+   only by `checkpoint`, and every rewrite has a matching ledger event.**" The v1 behavior —
+   never rewritten — holds as a corollary, checkable as: *the v1 step machine never emits
+   `Checkpoint`* (a one-line L0 scenario, and the cage that prevents scope creep).
+
+#### Why decide now instead of retrofitting
+
+The asymmetry is stark. Cost now: one variant, one opaque-type discipline, one invariant
+phrasing, zero implementation. Cost later: by the time the ceiling bites, the invariant library,
+the compaction scenario family, the Z3 contracts on `transcript.ail`, and every exhaustive
+`match` on `StepDecision` will have "never rewritten" baked in as an *axiom* rather than a
+corollary. Retrofitting means weakening a load-bearing assumption across tests specifically
+designed to catch exactly this mutation — the DST suite would correctly fight the change,
+turning its full strength into a penalty for not leaving a door. Provenance argument: every
+long-lived agent system ends up with persistent summarization/compaction, so "never" was always
+going to become "almost never, explicitly" — better the types say what is true long-term.
+
+#### The synergy that makes v2 nearly free
+
+The artifacts channel (D6) means ext compaction's summary cache already lives in `StepState` as
+replayable data. When the ceiling approaches, `CheckpointPlan` can **promote the existing
+summary artifact** into the rebuilt history — summarization work done for ephemeral projection
+is ratified, not recomputed. Checkpoint output passes the same transcript-builder gate as ext
+compaction (system prefix preserved, pairing preserved), so the validation machinery already
+exists. Bonus: `checkpoint` + the ledger is most of a session persist/resume story.
+
+#### Steelman against, and responses
+
+- **"YAGNI — task runs never hit it."** True for task mode; conversation mode exists and
+  accumulates. And the "it" is a seam, not a feature — YAGNI's cost argument assumes nontrivial
+  cost.
+- **"A blessed seam invites premature implementation."** The cage is explicit: v1 policy never
+  emits it, enforced by scenario (`checkpoint_never_emitted_in_v1`), not convention.
+- **"The weakened invariant is weaker."** Yes — and it is the *true* one. "Rewritten only with
+  an audit event" is defensible forever; "never rewritten" was a v1-policy statement wearing an
+  invariant's clothes. Separating invariant from policy corollary is more honest, not less safe.
+
+#### DST scenarios
+
+v1-active: `compaction.history_rewrite_requires_checkpoint_event` (digest-chain check),
+`compaction.checkpoint_never_emitted_in_v1`. Reserved for v2: checkpoint output satisfies
+transcript invariants; replay across a checkpoint is deterministic given plan + artifacts;
+resume-from-checkpoint reproduces the digest chain.
+
 ---
 
 ## 8. Migration plan (strangler, not big-bang)
@@ -498,14 +578,14 @@ Settled (operator + research, 2026-07-02):
 | D3 | Compaction design | Pure projection pipeline (§7.2); pressure-tested; types enforce ephemerality + system-hiding |
 | D4 | `agent_loop_v2` residual logic | All six squatters mapped (§5); no successor loop file keeps any |
 | D5 | Ledger/trace unification | One artifact; typed records in memory, JSONL projection at driver (resolves ADR-001 R4/R8) |
+| D6 | ABI v3 scope (was O1; settled 2026-07-02) | Ports-in-ExtCtx + `artifacts` channel; **no row changes** (`on_tool_policy` is already pure in 2.2.0; narrowing the four max-row hooks buys ~nothing once ports exist). Conformance kit as a **separate package** (`motoko_ext_conformance`), lockstep-versioned with the ABI. Reference migration: `compaction_ai` v0.3.0 |
+| D7 | `Checkpoint` seam in v1 types (was O2; settled 2026-07-02) | Yes — `Checkpoint(CheckpointPlan)` decision variant; `History` opaque with a single self-auditing rebuild op returning `{history, event}`; invariant "rewritten only with a matching ledger event"; v1 never emits it, enforced by scenario. Full design §7.4 |
 
 Open:
 
 | # | Decision | Recommendation |
 |---|---|---|
-| O1 | ABI v3 scope | Ports-in-ExtCtx + `artifacts` channel; **no row changes** (`on_tool_policy` is already pure in 2.2.0; narrowing the four max-row hooks buys ~nothing once ports exist). Conformance kit as a **separate package** (`motoko_ext_conformance`), keeping the ABI dependency-light per its own design. Reference migration: `compaction_ai` v0.3.0 |
-| O2 | `Checkpoint` seam in v1 types | Yes — one decision variant + one invariant now |
-| O3 | Conformance kit | Yes (Surface C, §6); separate package versioned in lockstep with ABI v3 |
+| O3 | Conformance kit details (existence + placement settled via D6) | Scope the invariant set from the `compaction_ai` v0.3.0 migration; version in lockstep with ABI v3 |
 
 ## 10. ADR-001 review comments resolved by this design
 
