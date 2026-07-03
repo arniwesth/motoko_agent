@@ -18,6 +18,7 @@ import src/core/phase_vocab (
   Finalize,
   Fail,
   InjectUserMessage,
+  AwaitApproval,
   TakeCheckpoint,
   ToolPlanEntry,
   ToolPlan,
@@ -46,13 +47,29 @@ pure func dp7_rejection_message(text: string) -> Message {
   }
 }
 
+pure func await_approval_from_calls(calls: [ToolCall]) -> StepDecision {
+  match calls {
+    [] => Fail({ code: "Internal", message: "approval requested without pending call", retryable: false }),
+    c :: rest => AwaitApproval({
+      call: c,
+      default_allow: false,
+      reason: "tool approval required",
+      stream_id: "step-${show(0)}",
+      remaining: plan_native(rest)
+    })
+  }
+}
+
 export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   if pol.step_budget > 0 && s.step_idx >= pol.step_budget
   then Fail({ code: "Internal", message: "step budget exhausted", retryable: false })
   else if pol.max_cost_millicents > 0 && s.totals.cost_millicents >= pol.max_cost_millicents
   then Fail({ code: "BudgetExceeded", message: "cost cap reached", retryable: false })
   else if List.length(s.pending_tool_calls) > 0
-  then RunTools({ entries: plan_native(s.pending_tool_calls) })
+  then {
+    if s.last_finish_reason == "await_approval" then await_approval_from_calls(s.pending_tool_calls)
+    else RunTools({ entries: plan_native(s.pending_tool_calls) })
+  }
   else if s.last_finish_reason == "dp7_rejected"
   then InjectUserMessage(dp7_rejection_message(s.last_response_text))
   else if s.last_finish_reason == "persist_nudge"
@@ -117,6 +134,13 @@ func is_inject(d: StepDecision) -> bool {
   }
 }
 
+func is_await_approval(d: StepDecision, remaining: int) -> bool {
+  match d {
+    AwaitApproval(req) => List.length(req.remaining) == remaining,
+    _ => false
+  }
+}
+
 func is_call_model(d: StepDecision) -> bool {
   match d {
     CallModel(_) => true,
@@ -158,6 +182,17 @@ pure func test_decide_pending_tools() -> bool
     let call: ToolCall = { id: "tc", name: "ReadFile", arguments: "{}" };
     match mk_state("tool_calls", "", [call], 0, 0, 0) {
       Ok(s) => is_run_tools(decide(s, mk_policy(0)), 1),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_pending_approval() -> bool
+  tests [((), true)]
+  {
+    let c1: ToolCall = { id: "tc1", name: "ReadFile", arguments: "{}" };
+    let c2: ToolCall = { id: "tc2", name: "ReadFile", arguments: "{}" };
+    match mk_state("await_approval", "", [c1, c2], 0, 0, 0) {
+      Ok(s) => is_await_approval(decide(s, mk_policy(0)), 1),
       Err(_) => false
     }
   }

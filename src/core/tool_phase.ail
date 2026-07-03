@@ -1,0 +1,172 @@
+-- src/core/tool_phase.ail
+--
+-- Phase C approval-planning surface. Full native/delegated execution moves
+-- here later; WI-C4 only inverts the pending-approval protocol into data.
+
+module src/core/tool_phase
+
+import std/ai (Message, ToolCall)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import src/core/phase_vocab (
+  ApprovalRequest,
+  ToolPlan,
+  ToolPlanEntry,
+  ToolPending,
+  ToolDeniedInfo,
+  LedgerEvent,
+  ExecNative
+)
+import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied)
+
+export type PendingApprovalPlan = {
+  event: LedgerEvent,
+  request: ApprovalRequest
+}
+
+export type ApprovalCommand = ParsedApprove | ParsedDeny(string) | ParsedInvalid
+
+export pure func tool_pending_event(step: int, stream_id: string, call: ToolCall, reason: string) -> LedgerEvent {
+  ToolPending({ step: step, stream_id: stream_id, tool: call.name, id: call.id, reason: reason })
+}
+
+export pure func plan_pending_approval(step: int, stream_id: string, plan: ToolPlan, default_allow: bool, reason: string) -> Option[PendingApprovalPlan] {
+  match plan.entries {
+    [] => None,
+    first :: rest => Some({
+      event: tool_pending_event(step, stream_id, first.call, reason),
+      request: {
+        call: first.call,
+        default_allow: default_allow,
+        reason: reason,
+        stream_id: stream_id,
+        remaining: rest
+      }
+    })
+  }
+}
+
+export pure func plan_pending_approval_from_calls(step: int, stream_id: string, calls: [ToolCall], default_allow: bool, reason: string) -> Option[PendingApprovalPlan] {
+  plan_pending_approval(step, stream_id, native_plan(calls), default_allow, reason)
+}
+
+export pure func parse_approval_command(raw: string) -> ApprovalCommand {
+  if raw == "approve" || raw == "{\"type\":\"approve\"}" then ParsedApprove
+  else if raw == "deny" || raw == "{\"type\":\"deny\"}" then ParsedDeny("denied")
+  else ParsedInvalid
+}
+
+export pure func resolve_approval(raw: string, default_allow: bool, eof: bool) -> ApprovalResolution {
+  if eof then {
+    if default_allow then ApprovalAllowed else ApprovalDenied("default deny")
+  } else match parse_approval_command(raw) {
+    ParsedApprove => ApprovalAllowed,
+    ParsedDeny(reason) => ApprovalDenied(reason),
+    ParsedInvalid => if default_allow then ApprovalAllowed else ApprovalDenied("default deny")
+  }
+}
+
+export pure func denial_message(call: ToolCall, reason: string) -> Message {
+  {
+    role: "tool",
+    content: "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"${call.name}\",\"reason\":\"${reason}\"}",
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+export pure func approval_resume_plan(req: ApprovalRequest) -> ToolPlan {
+  { entries: req.remaining }
+}
+
+export pure func execution_order_after_approval(req: ApprovalRequest) -> [string] {
+  req.call.id :: plan_entry_ids(req.remaining)
+}
+
+pure func plan_entry_ids(entries: [ToolPlanEntry]) -> [string] {
+  match entries {
+    [] => [],
+    e :: rest => e.call.id :: plan_entry_ids(rest)
+  }
+}
+
+export pure func native_plan_entry(call: ToolCall) -> ToolPlanEntry {
+  { call: call, executor: ExecNative }
+}
+
+export pure func native_plan(calls: [ToolCall]) -> ToolPlan {
+  match calls {
+    [] => { entries: [] },
+    c :: rest => {
+      let tail = native_plan(rest);
+      { entries: native_plan_entry(c) :: tail.entries }
+    }
+  }
+}
+
+pure func call(id: string, name: string) -> ToolCall {
+  { id: id, name: name, arguments: "{}" }
+}
+
+pure func entry(id: string) -> ToolPlanEntry {
+  native_plan_entry(call(id, "BashExec"))
+}
+
+pure func test_plan_pending_approval_preserves_tail() -> bool
+  tests [((), true)]
+  {
+    let plan: ToolPlan = { entries: [entry("a"), entry("b")] };
+    match plan_pending_approval(1, "s", plan, false, "why") {
+      Some(p) => p.request.call.id == "a" && List.length(p.request.remaining) == 1,
+      None => false
+    }
+  }
+
+pure func test_native_plan_builds_entries() -> bool
+  tests [((), true)]
+  {
+    List.length(native_plan([call("a", "BashExec"), call("b", "BashExec")]).entries) == 2
+  }
+
+pure func test_plan_pending_approval_from_calls() -> bool
+  tests [((), true)]
+  {
+    match plan_pending_approval_from_calls(1, "s", [call("a", "BashExec"), call("b", "BashExec")], true, "why") {
+      Some(p) => p.request.call.id == "a" && List.length(p.request.remaining) == 1,
+      None => false
+    }
+  }
+
+pure func test_resolve_approval_defaults() -> bool
+  tests [((), true)]
+  {
+    match resolve_approval("", true, true) {
+      ApprovalAllowed =>
+        match resolve_approval("not-json", false, false) {
+          ApprovalDenied(_) => true,
+          _ => false
+        },
+      _ => false
+    }
+  }
+
+pure func test_denial_message_uses_tool_role_and_call_id() -> bool
+  tests [((), true)]
+  {
+    let m = denial_message(call("tc", "BashExec"), "no");
+    m.role == "tool" && m.tool_call_id == "tc" && List.length(m.tool_calls) == 0
+  }
+
+pure func test_execution_order_after_approval() -> bool
+  tests [((), true)]
+  {
+    let plan: ToolPlan = { entries: [entry("a"), entry("b"), entry("c")] };
+    match plan_pending_approval(1, "s", plan, true, "why") {
+      Some(p) =>
+        match execution_order_after_approval(p.request) {
+          "a" :: "b" :: "c" :: [] => true,
+          _ => false
+        },
+      None => false
+    }
+  }
