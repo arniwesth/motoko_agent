@@ -726,12 +726,7 @@ func dispatch_calls(
                     kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
                   ]);
                   let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-                  let handled_msg: Message = {
-                    role: "tool",
-                    content: PhaseVocab.result_env_model_content(result_env),
-                    tool_calls: [],
-                    tool_call_id: call.id
-                  };
+                  let handled_msg = PhaseVocab.handled_tool_message(call.id, result_env);
                   handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 },
                 Delegate => {
@@ -790,12 +785,7 @@ func dispatch_calls(
               kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
             ]);
             let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-            let handled_msg: Message = {
-              role: "tool",
-              content: PhaseVocab.result_env_model_content(result_env),
-              tool_calls: [],
-              tool_call_id: call.id
-            };
+            let handled_msg = PhaseVocab.handled_tool_message(call.id, result_env);
             handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
           } else {
             let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
@@ -809,16 +799,7 @@ func dispatch_calls(
                 kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
               ]);
               let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-              -- Use the call.id (model's typed tool_call_id) instead of the
-              -- envelope's id for the tool-role Message correlation —
-              -- providers correlate by the model-emitted id, not the
-              -- extension-internal id.
-              let handled_msg: Message = {
-                role: "tool",
-                content: PhaseVocab.result_env_model_content(result_env),
-                tool_calls: [],
-                tool_call_id: call.id
-              };
+              let handled_msg = PhaseVocab.handled_tool_message(call.id, result_env);
               handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
             },
             Delegate => {

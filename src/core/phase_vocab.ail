@@ -1,4 +1,4 @@
--- src/core/phase_vocab.ail
+-- Phase vocab module
 --
 -- Phase-oriented core vocabulary. Phase A lands this module unused by
 -- production: sealed history/payload types, state/delta/checkpoint shapes,
@@ -405,6 +405,18 @@ export func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
   }
 }
 
+-- Build a tool-role Message for a tool result handled by an extension. Use the
+-- model-emitted call_id instead of the envelope's id for provider correlation;
+-- providers correlate by the model-emitted id, not the extension-internal id.
+export func handled_tool_message(call_id: string, env: ToolResultEnvelope) -> Message {
+  {
+    role: "tool",
+    content: result_env_model_content(env),
+    tool_calls: [],
+    tool_call_id: call_id
+  }
+}
+
 -- ============================================================================
 -- Inline pure tests.
 -- ============================================================================
@@ -507,6 +519,24 @@ pure func test_envelope_to_tool_message_uses_envelope_id() -> bool
     let m = envelope_to_tool_message(env);
     m.role == "tool"
       && m.tool_call_id == "env-1"
+      && List.length(m.tool_calls) == 0
+      && contains(m.content, "\"tool\":\"FakeTool\"")
+  }
+
+pure func test_handled_tool_message_uses_model_call_id() -> bool
+  tests [((), true)]
+  {
+    let env: ToolResultEnvelope = {
+      tool_call_id: "extension-id",
+      tool: "FakeTool",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      metadata: jo([])
+    };
+    let m = handled_tool_message("model-call-id", env);
+    m.role == "tool"
+      && m.tool_call_id == "model-call-id"
       && List.length(m.tool_calls) == 0
       && contains(m.content, "\"tool\":\"FakeTool\"")
   }
