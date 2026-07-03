@@ -1,7 +1,8 @@
 # ADR-001: A phase-oriented core designed for Deterministic Simulation Testing
 
-Date: 2026-07-02
-Status: Proposed (pending independent review — see `HANDOFF-review-adr.md`)
+Date: 2026-07-02; revised 2026-07-03 after three independent review passes (see Review
+Comments and the Author Response & Disposition log at the end)
+Status: Proposed (review findings addressed; dispositions recorded)
 Pinned toolchain: AILANG **v0.26.0** (commit `3b52a24`); `ailang.lock` → `ailang_version: "v0.26.0"`
 
 Relates to:
@@ -13,7 +14,10 @@ Relates to:
 - `../003_CSP_core_refactor/NOTE-why-not-csp-now.md` — the direction note this ADR executes;
   its rejections are incorporated here as non-goals.
 - `../001_DST/ADR-001-deterministic-simulation-testing-architecture.md` — DST requirements this
-  architecture satisfies by construction; resolves its review comments R4, R5, R7, R8, R11.
+  architecture satisfies by construction; resolves its review comments R4, R7, R8, R11. Its R5
+  (export compaction constants) is resolved **in amended form**: the actual/estimate tier split
+  R5 described has since been removed from source (verified 2026-07-03; see Phase A and Open
+  Questions), so the export applies to the current single tier table.
 
 ---
 
@@ -48,8 +52,9 @@ The current loop demonstrates why a rewrite (not a cleanup) is needed (§1 of th
 
 - `loop_v2` carries the effect row `{AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream,
   Trace}` (`src/core/agent_loop_v2.ail:1125`); every test driving it must satisfy ten effects.
-- ~30 scattered `emit_event`/`emit_run_summary`/`emit_stream_chunk` call sites make trace
-  ordering unreproducible.
+- 48 scattered emission call sites (39 `emit_event`, 7 `emit_run_summary`, 2
+  `emit_stream_chunk`, plus 4 direct `emit_json`; measured 2026-07-03 via
+  `grep -c` on `src/core/agent_loop_v2.ail`) make trace ordering unreproducible.
 - The only DST seam (`StepProvider`, `src/core/test/stub_step.ail:42`) covers the model call
   alone; clock, env reads, tools, and hooks are live effects.
 - Features store state steganographically in the transcript because threading new state through
@@ -117,13 +122,28 @@ PhaseResult = { delta: StateDelta, transcript_append: [Message],
                 events: [LedgerEvent], cost_delta_millicents: int }
 ```
 
-Exactly one place (the driver) appends and emits events; exactly one function
-(`apply_state_delta`) applies state changes. `LedgerEvent` is a typed variant; a
-`to_schema_v1 : (LedgerEvent) -> Json` projection preserves the existing production wire
-contract (28 event types, inventoried in `sketch/sketch_vocabulary.ail`) consumed by the TUI
-and eval harnesses. ADR-001 canonical trace names map 1:1 to constructors. In-memory typed
-events are what DST invariants consume; JSONL is the failure-report projection (resolves DST
-R4; the recorder-vs-production tension of DST R8 dissolves because the ledger is always-on).
+The driver is the single **logical emission authority**; exactly one function
+(`apply_state_delta`) applies state changes. `LedgerEvent` is a typed variant whose
+constructor names are the DST-canonical layer; a `to_schema_v1 : (LedgerEvent) -> Json`
+projection targets the **production wire stream** — **29** event types (27 `emit_event` names
+plus `thinking_delta` and `reasoning_delta` emitted directly via `emit_json`,
+`agent_loop_v2.ail:255,:265`; inventory regenerated mechanically, never hand-counted) consumed
+by the TUI and eval harnesses. Projected names fall in two classes (normative): **[prod]**
+constructors project onto existing production names and must be byte-compatible; **[NEW]**
+constructors (`provider_call_prepared`, `loop_totals_updated`, `history_checkpoint`,
+`ext_compaction_rejected`) introduce additive names, admitted only after a TUI unknown-type
+tolerance check. In-memory typed events are what DST invariants consume; JSONL is the
+failure-report projection (resolves DST R4; the recorder-vs-production tension of DST R8
+dissolves because the ledger is always-on).
+
+**Streaming protocol** (review P1-R3/P2-R4): stream-delta events (`thinking_delta`,
+`reasoning_delta`) are emitted *during* the blocking model call today, in arrival order the
+TUI depends on. A post-call `PhaseResult.events` batch cannot reproduce that timing. Normative
+resolution: the driver hands the model phase a **ledger append handle** (a port) scoped to
+stream-delta events only; deltas are appended through it in arrival order while the call is in
+flight. The handle is driver-constructed, so single logical authority holds; batched
+`PhaseResult.events` remains the path for all non-streaming events. Phase B carries a
+byte-parity test for the `thinking_stream_start → N×delta → thinking_stream_end` sequence.
 
 Normative deltas: `StateDelta` is a patch record (`Option` fields, absent = unchanged); the
 delta is itself the observation DST records. `PhaseResult` has **no continuation field** — the
@@ -136,22 +156,42 @@ step machine re-derives the next decision from applied state.
 
 - **`History`** — sealed: a single-constructor variant whose constructor is *not exported*.
   Substrate proof (`sketch/README.md` Q1): unexported variant constructors are unimportable
-  (`IMP010`); values still thread through consumers. Consequence (normative): records embedding
-  `History` — `StepState` — are **co-located in the vocabulary module**, because unexported
-  type names cannot be imported. Exported record types are structurally forgeable, so sealed
-  types must be variants.
+  (`IMP010`); values still thread through consumers. Consequence (normative, scope corrected
+  2026-07-03 after review adjudication): co-location applies to **definers only** — the
+  vocabulary module defines the sealed types *and* every exported wrapper that names them
+  (`StepState`, `StepDecision`, `ModelRequest`). Consumer modules (`step_machine.ail`,
+  `model_phase.ail`) import the exported wrappers and operate freely; sealing holds
+  transitively (proven: `sketch/vocab_probe.ail` + `sketch/probe_consumer_decide.ail` — a
+  separate module defines `decide` over wrapper types, constructs decision variants, and
+  pattern-matches sealed payloads). Bare sealed-type parameters in foreign signatures remain
+  impossible — sealed values cross module boundaries only inside exported wrappers. Exported
+  record types are structurally forgeable, so sealed types must be variants.
 - **The compaction projection** (pure): `project(History, TokenTelemetry, CompactionPolicy) ->
   Result[{payload, events}, string]`, pipeline per research doc §7.2: pin head system prefix →
   `CompactableSegment` (sealed; cannot contain system messages) → normalize → extension
   compaction (validated output; invalid ⇒ rejected + ledger event + structural fallback) →
-  structural tiers → emergency. `ProviderPayload` is sealed and is the **only** type
-  `model_phase` accepts. Ephemerality is by construction: nothing can write a payload back into
-  history.
-- **The checkpoint seam** (D7): `checkpoint(History, CheckpointPlan) -> {history, event}` is
-  the sole op producing a rebuilt `History`, returning it together with its audit event
-  (digest-chained). Invariant: *History is rewritten only by `checkpoint`, and every rewrite
-  has a matching ledger event.* v1 policy **never emits** `TakeCheckpoint` — enforced by
-  scenario, not convention.
+  structural tiers → emergency. `ProviderPayload` is sealed; `model_phase` receives it inside
+  the exported `ModelRequest` wrapper (it cannot name the sealed type — see co-location scope
+  above) and there is no other way to obtain one than `project()`. Ephemerality is by
+  construction: nothing can write a payload back into history. Note (P2-R1/P3-R4): the tier
+  table in current source is a **single** 70/85/95 elide/emergency ladder
+  (`compaction.ail:134-141`); the actual/estimate split described in DST ADR-001's 2026-06-27
+  review has since been removed from source, and `TokenTelemetry`-gated actual-token tiers are
+  a **reintroduction decision** (Open Questions), not current behavior.
+- **The checkpoint seam** (D7), mechanics tightened per review (P1-R4/P2-R6/P3-R1):
+  `checkpoint(History, CheckpointPlan) -> {history, event}` is the sole op producing a rebuilt
+  `History`. Normative mechanics: (a) `history_digest` is a **content hash** (the sketch's
+  length-based digest is a labeled placeholder); (b) each `CheckpointTaken` event carries the
+  **previous** digest so the chain is verifiable end-to-end; (c) the driver's only rewrite path
+  is the atomic `apply_checkpoint(StepState, CheckpointPlan) -> {state, event}` — no code path
+  takes the rebuilt history without its event (shape proven in the sketch); (d)
+  `history_from_seed` validates the digest chain before accepting a resumed `History`; (e)
+  **checkpoint output carries the same transcript-validity obligations as ext compaction**
+  (system prefix preserved, pairing preserved, ids preserved), enforced by the same gate and by
+  scenario `checkpoint_output_is_valid_transcript` — a v1 obligation, not deferred to v2.
+  Invariant: *History is rewritten only by `checkpoint`, and every rewrite has a matching
+  ledger event.* v1 policy **never emits** `TakeCheckpoint` — enforced by scenario, not
+  convention.
 - **Transcript invariants**: no empty tool ids; exactly one result per call; ids preserved;
   tool_use/tool_result correlation (the Bedrock rule — currently a 20-line comment at
   `agent_loop_v2.ail:1316-1333`, here an enforced property); no live chunks in the transcript;
@@ -176,15 +216,28 @@ correlation patch → transcript invariants; scratchpad's hard-coded dispatch
 (`Native | Delegated | HandledByExt | WsLoopback | StreamIsland`); the mid-dispatch approval
 `readLine()` (`:769`) → `AwaitApproval` decision performed by the driver.
 
+**Approval protocol contract** (review P1-R5/P2-R5 — the live flow's ordering invariants,
+`agent_loop_v2.ail:758-790`, are preserved normatively): `ApprovalRequest` carries the
+`PolicyDefault` (`default_allow`), the `stream_id` and `call_id` the `tool_pending` event
+correlates on, and the **suspended tail** of the `ToolPlan` (`remaining`). The driver emits
+`tool_pending` *before* blocking on input (event-before-read ordering); EOF/unparseable input
+resolves via the carried default; on resolution the driver appends the denial or approval
+result and re-issues `RunTools` with the remaining entries, preserving call order. Gated by a
+scripted TUI approval scenario before Phase C inverts the dispatch recursion.
+
 ### 6. Extension ABI v3 and conformance kit (D6, D8)
 
 - **ABI v3**: `ExtCtx` gains `ports: ExtPorts` (ai_step, http, proc_exec, kv, clock_now,
   env_get) and `artifacts: Json`; `Compacted` gains an artifacts field. **No effect-row
   changes** (`on_tool_policy`/`on_describe_tools`/`on_build_system_prompt` are already pure in
   ABI 2.2.0; narrowing the four max-row hooks buys nothing once ports exist — calling an
-  effectful port still requires the effect in the row). Migration cost is constructor-only:
-  hook signatures are unchanged, so packages that ignore ports recompile with zero code
-  changes.
+  effectful port still requires the effect in the row). Migration cost (narrowed per review
+  P1-R7/P2-R8): hook signatures are unchanged, so **non-compactor packages that do not
+  construct `Compacted`** recompile with zero code changes (constructor-only breaks: core's
+  `mk_v2_ext_ctx` + extension test fixtures). **Compactor packages break at the source level**:
+  `Compacted(msgs, note)` gains an artifacts field, so every `Compacted(...)` construction site
+  must be updated — `compaction_ai` v0.3.0 is the first and currently only such package
+  (`compaction_ai.ail:146-148`).
 - **Conformance kit** (`motoko_ext_conformance`, separate package, lockstep majors with the
   ABI): `invariants` module (pure contract law — **imported by the core transcript gate**, one
   source of law) + `harness` module (test-only). Enforcement is behavioral
@@ -195,6 +248,18 @@ correlation patch → transcript invariants; scratchpad's hard-coded dispatch
   (`src/core/ext/runtime.ail:143-164`).
 - **Reference migration**: `compaction_ai` v0.3.0 — ports-native, artifact-cached, and the
   kit's acceptance test is that it **rejects v0.2.0's two live bugs for the right reasons**.
+- **Concrete targets** (review P1-R6/P2-R7 — no phantom gates; these are *future deliverables*
+  named now so the gate is executable when it arrives):
+  - package: `packages/motoko_ext_conformance/` (modules `invariants.ail`, `harness.ail`);
+  - fail-then-pass scenario ids: `conformance.compactor.system_prefix_preserved` (v0.2.0 live
+    bug 1) and `conformance.compactor.tool_pairing_preserved` (live bug 2), plus
+    `conformance.compactor.deterministic_replay` and
+    `conformance.compactor.artifact_cache_effective`;
+  - commands: `ailang check packages/motoko_ext_conformance/harness.ail`, then
+    `ailang run --caps IO --entry main packages/motoko_ext_conformance/harness.ail` pointed at
+    the package under test (exact arg convention frozen with the kit);
+  - registry probe: a generated `scripts/conformance_registry_probe.ail` that imports
+    `registry_generated.ail`'s package list and runs the harness per package in core CI.
 
 ---
 
@@ -204,9 +269,12 @@ Strangler-style; each phase leaves the system shippable.
 
 **Phase A — pure foundations, zero behavior change.**
 Deliverables: vocabulary module (seeded from `sketch/sketch_vocabulary.ail`); exported
-compaction constants (`OUTPUT_HEADROOM`, actual tiers 60/75/85, estimate tiers 70/85/95 —
-DST ADR-001 R5); transcript builder extracted from `step_result_to_message` /
-`envelope_to_tool_message` / `tool_result_message`.
+compaction constants **re-grounded on current source** (P2-R1/P3-R4): the single tier table
+`ELIDE_TIER_PCT=70`, `ELIDE_HARD_TIER_PCT=85`, `EMERGENCY_PCT=95` and the keep-last counts
+(10/5) from `compaction.ail:134-141` — `OUTPUT_HEADROOM` and the 60/75/85 actual tiers are
+**struck** (no referent in source; DST ADR-001 R5/R15 need a corresponding amendment);
+transcript builder extracted from `step_result_to_message` / `envelope_to_tool_message` /
+`tool_result_message`.
 Gate: `ailang check` + existing smokes green; no event-stream diff.
 
 **Phase B — phases return `PhaseResult`; driver keeps current control flow.**
@@ -214,34 +282,55 @@ Deliverables: all event emission through the ledger + `to_schema_v1`; provider-c
 seam (DST ADR-001's required first seam) as ledger events around the model phase; core-side
 system-prefix fix (pass `CompactableSegment`, not the raw list, to `dispatch_pre_step` — zero
 ABI cost, closes the live gap).
-Gate: **all 28 production schema-v1 event types** emitted via projection only, byte-compatible
-with current TUI/eval consumers; DST scenario `system_messages_hidden_from_compactors` goes
-from unrepresentable-in-new-code to verified-in-wiring.
+Gate (per review R2-family): the projection's emitted `type` set for [prod] constructors is a
+**byte-compatible subset of the mechanically generated 29-name production inventory**
+(regenerated from source, never hand-counted; includes `reasoning_delta`); [NEW] names admitted
+only after the TUI unknown-type tolerance check; the streaming byte-parity test
+(`thinking_stream_start → N×delta → thinking_stream_end` in arrival order) passes; DST scenario
+`system_messages_hidden_from_compactors` goes from unrepresentable-in-new-code to
+verified-in-wiring.
 
 **Phase C — full inversion.**
 Deliverables: pure `decide`; driver executes decisions; `run_v2_with_stub` superseded by
-scripted ports; Layer 1 compaction scenario family live
-(`actual_tokens_drive_next_step`, `emergency_exhaustion_estimate_gated`,
-`provider_payload_vs_uncompacted_history_pressure`, `telemetry_reflects_payload_not_history`,
+scripted ports; the scripted TUI approval scenario (approval contract above); Layer 1
+compaction scenario family live
+(`provider_payload_vs_uncompacted_history_pressure`, `single_tier_ladder_selects_correctly`,
 `ext_compaction_invalid_rejected`, `summary_cache_replay_stable`,
-`history_rewrite_requires_checkpoint_event`, `checkpoint_never_emitted_in_v1`).
+`history_rewrite_requires_checkpoint_event`, `checkpoint_never_emitted_in_v1`,
+`checkpoint_output_is_valid_transcript`).
+The previously listed `actual_tokens_drive_next_step` / `emergency_exhaustion_estimate_gated` /
+`telemetry_reflects_payload_not_history` scenarios are **deferred**: they presuppose the
+actual-token path that no longer exists in source (P2-R1/P3-R4) and are reinstated only if
+that path is reintroduced (Open Questions).
 Gate: L1 scenarios pass under minimal caps with no network; every DST failure prints scenario
 id, first failed invariant, and normalized trace.
 
 **ABI v3 track (parallel to B/C):** ABI 3.0 + conformance kit 3.0 + `compaction_ai` 0.3.0;
-gate: kit rejects v0.2.0, accepts v0.3.0; registry runs the kit for every package in
-`registry_generated.ail`.
+gate: kit rejects v0.2.0, accepts v0.3.0 (scenario ids and commands in Decision detail 6);
+registry probe runs the kit for every package in `registry_generated.ail`.
+
+**Gate separation** (review P1-R8/P2-R9): the migration gates split into two operationally
+distinct classes with distinct CI targets — **core DST gates** (Phases A–C: no registry
+hydration, `--caps IO` or less, no network) and **registry/conformance gates** (ABI track:
+hydration *required*, runs in core CI against hydrated extensions). The decision driver "no
+registry hydration" applies to the former only; a no-hydration gate must never be conflated
+with a hydration-required one.
 
 ## Acceptance criteria
 
 1. Phase A lands with zero behavior change (existing smokes + event-stream parity).
-2. Phase B's 28-event projection gate passes; the provider-call recording seam emits
-   `provider_call_prepared`/`provider_result` ledger events consumed by at least one L1 test.
+2. Phase B's projection gate passes against the mechanically generated 29-name inventory
+   (subset for [prod], tolerance-checked for [NEW]); the provider-call recording seam emits
+   `provider_call_prepared` ledger events (typed `ProviderResult` projecting to production
+   `thinking`) consumed by at least one L1 test; the streaming byte-parity test passes.
 3. The two `compaction_ai` v0.2.0 live bugs are demonstrated by failing conformance scenarios
-   *before* the v0.3.0 fix and pass after (mirrors DST ADR-001's PR-#76-style criterion, but
-   against bugs verified in this research).
-4. Phase C: `decide` is pure (no effect row), and the compaction L1 family runs with
-   `--caps IO` or less, no Ollama/OpenRouter/network.
+   (`conformance.compactor.system_prefix_preserved`,
+   `conformance.compactor.tool_pairing_preserved`) *before* the v0.3.0 fix and pass after
+   (mirrors DST ADR-001's PR-#76-style criterion, but against bugs verified in this research).
+   Requires registry hydration (registry/conformance gate class).
+4. Phase C: `decide` is pure (no effect row), and the compaction L1 family — including
+   `checkpoint_output_is_valid_transcript` — runs with `--caps IO` or less, no
+   Ollama/OpenRouter/network (core DST gate class).
 5. No DST gate depends on effect-handler mocking or real providers.
 
 ## Consequences
@@ -286,6 +375,12 @@ a wide compatibility surface that must be maintained until consumers migrate; fu
    artifact consumer exists.
 3. Exact `ExtPorts` field list — freeze during the `compaction_ai` v0.3.0 migration, not
    before.
+4. **Reintroduce actual-token compaction gating?** (raised by review P2-R1/P3-R4): the
+   actual/estimate tier split DST ADR-001 documented (2026-06-27) has been removed from source;
+   `TokenTelemetry` in the vocabulary is forward design for its possible return. Decide —
+   with a git-history read of when/why the path was removed — whether to reintroduce it in the
+   projection (restoring the deferred `actual_tokens_*` scenarios) or to amend DST ADR-001
+   R5/R15 to the single-table reality. Blocks nothing in Phases A–B.
 
 ## Review Comments
 
@@ -773,3 +868,115 @@ compaction-ephemerality-and-system-hiding-by-construction are sound and substrat
 4. Reconcile the ADR's "resolves DST R5" claim and the `actual_tokens_*` scenarios with the current
    single-tier `compaction.ail` — the actual/estimate split is gone from source (R4).
 5. Replace the "~30 emit sites" figure with the measured 48 (R5).
+
+---
+
+## Author Response & Disposition Log
+
+_Author: Claude Fable 5 (authoring session), 2026-07-03. Every finding was re-verified
+empirically before disposition — greps re-run, all sketch/probe artifacts re-executed, and one
+NEW probe written where the reviews' shared assumption needed testing. Dispositions: ACCEPTED
+(defect real, fix applied), PARTIALLY ACCEPTED (real defect, but the finding's conclusion or
+remedy needed correction), REFUTED (with evidence). Converged findings are dispositioned once,
+citing all passes._
+
+### Converged findings
+
+**Sealed-type co-location (P1-R1, P2-R3) — PARTIALLY ACCEPTED; conclusion REFUTED by new
+probe.** The contradiction both passes identified was real: the ADR's "`ProviderPayload` is the
+only type `model_phase` accepts" required naming an unimportable type. But both passes'
+conclusion — that `step_machine.ail`/`model_phase.ail` cannot be separate modules — rested on
+an untested assumption: neither pass (nor the original probes) tested whether a separate module
+can consume **exported wrapper types** that embed/carry sealed types. New probes
+`sketch/vocab_probe.ail` + `sketch/probe_consumer_decide.ail` (2026-07-03) settle it: a
+separate module imports `StateP { hist: SealedH }` and `DecisionP = CallModelP(SealedP)`,
+defines `decide` over them, constructs and pattern-matches decision variants — runs clean;
+sealing holds transitively (payloads obtainable only via ops). **Fix applied**: co-location
+scope corrected to definers-only (Decision detail 4); `ModelRequest` wrapper introduced for the
+model phase; the module table stands.
+
+**Event inventory 28 → 29, `reasoning_delta` omitted (P1-R2, P2-R2, sharpened by P3-R2) —
+ACCEPTED.** Re-verified: `reasoning_delta` at `agent_loop_v2.ail:265`, 27 `emit_event` names.
+**Fix applied**: sketch inventory corrected to 29 with the regeneration command inline;
+`StreamDelta` constructor + projection added (covers both delta kinds); Phase B gate now
+compares against the mechanically generated inventory.
+
+**Streaming timing vs. single-point emission (P1-R3, P2-R4) — ACCEPTED.** The finding is
+correct that post-call batching cannot reproduce mid-call delta timing. **Fix applied**: the
+ADR now specifies the driver-issued **ledger append handle** (a port scoped to stream-delta
+events, arrival-order writes, driver-constructed so single logical authority holds) and a Phase
+B streaming byte-parity test.
+
+**Checkpoint enforcement gaps (P1-R4, P2-R6) — ACCEPTED.** The `{history, event}` return
+indeed does not force the append, and the sketch digest is a placeholder. **Fix applied**:
+normative mechanics added (content-hash digest; previous-digest chaining in `CheckpointTaken`;
+atomic `apply_checkpoint` as the driver's only rewrite path — shape now proven in the sketch;
+seed-time chain validation in `history_from_seed`).
+
+**`AwaitApproval` protocol underspecified (P1-R5, P2-R5) — ACCEPTED.** **Fix applied**:
+`ApprovalRequest` extended (`default_allow`, `stream_id`, suspended `remaining` plan tail) in
+sketch and ADR; event-before-read ordering, default resolution, and RunTools-reissue semantics
+specified; scripted TUI approval scenario added to Phase C deliverables.
+
+**Conformance gate names no targets (P1-R6, P2-R7) — ACCEPTED.** **Fix applied**: package
+path, four scenario ids, commands, and the registry probe named in Decision detail 6 as future
+deliverables, mirroring the remedy DST ADR-001 R12 demanded.
+
+**ABI "constructor-only / zero code changes" too broad (P1-R7, P2-R8) — ACCEPTED.** The
+`Compacted` field addition is a source break for compactor packages. **Fix applied**: claim
+narrowed to non-compactor packages; compactor constructor update explicitly listed with
+`compaction_ai.ail:146-148` as the affected site.
+
+**No-hydration conflated with registry gate (P1-R8, P2-R9) — ACCEPTED.** **Fix applied**:
+gate-separation paragraph added (core DST gates vs. registry/conformance gates, distinct CI
+target classes); acceptance criteria 3 and 4 now name their gate class.
+
+### Pass-2/Pass-3 compaction finding
+
+**Actual/estimate split gone from source (P2-R1, P3-R4) — ACCEPTED; highest-value finding of
+the review.** Re-verified 2026-07-03: single 70/85/95 ladder at `compaction.ail:134-141`; no
+`OUTPUT_HEADROOM`, no `75000`, no `last_input_tokens` anywhere in `src/core`. The ADR had
+inherited DST ADR-001 R5's constants from its 2026-06-27 grounding without re-verifying against
+moved source — exactly the staleness class this project's own discipline should have caught.
+**Fix applied**: Phase A constants re-grounded (single table); `OUTPUT_HEADROOM`/60-75-85
+struck; `actual_tokens_*` scenarios deferred with reinstatement condition; new Open Question 4
+(reintroduce-or-amend, with git-history read); relates-to note amends the "resolves R5" claim;
+sketch `CompactionPolicy` re-grounded; research doc corrected.
+
+### Pass-3 findings
+
+**P3-R1 (sketch checkpoint destroys system prefix) — ACCEPTED; the sharpest catch of the
+review.** The original sketch's checkpoint reproduced the exact bug class (system-prefix loss)
+the architecture exists to prevent, and no stated v1 gate would have caught it. **Fix
+applied**: sketch checkpoint now pins and preserves the system prefix (demo re-run:
+`len=2 (system prefix retained)`); transcript-validity of checkpoint output promoted to a v1
+obligation with scenario `checkpoint_output_is_valid_transcript` (Phase C list + Decision
+detail 4e); `sketch/README.md` wording corrected ("runs" ≠ "preserves invariants").
+
+**P3-R2 (projection emits non-production names; `ProviderResult → thinking` mis-map) —
+PARTIALLY ACCEPTED.** The direction error was real: the ADR claimed the projection "preserves
+the existing production wire contract" while the artifact injected four new names. **Fix
+applied**: two name classes made normative ([prod] = byte-compatible subset; [NEW] = additive,
+tolerance-gated), constructors annotated in the sketch, Phase B gate asserts subset for [prod].
+On the "mis-map": REFUTED as a routing error — production's `thinking` event *is* the
+provider-result event (there is no production `provider_result`), so `ProviderResult →
+"thinking"` is the correct [prod] projection; the defect was the sketch comment implying
+canonical names appear on the wire. Comment rewritten to state the two-layer naming explicitly.
+
+**P3-R3 (continuation rejection not proven; `pending_decision_seed` smuggles it) —
+ACCEPTED.** Fair hit: the claimed proof never exercised the load-bearing transitions. **Fix
+applied**: `pending_decision_seed` retired; typed re-derivation fields added
+(`pending_tool_calls`, `last_finish_reason`, `last_response_text`); `decide` extended and the
+demo now drives `CallModel → RunTools → Finalize` purely from applied state (re-run output:
+`d0=CallModel d1=RunTools(1) d2=Finalize(model_stop)`). The ADR claim is retained in its
+proven form: continuation is state, not a result field.
+
+**P3-R5 (~30 emit sites → 48) — ACCEPTED.** Re-measured: 39 + 7 + 2 (+4 `emit_json`).
+**Fix applied**: Context states 48 with the measurement method.
+
+### Artifacts re-verified after all fixes (2026-07-03)
+
+`sketch_vocabulary.ail`: check ✓, run ✓ (new demo output above), test ✓.
+`vocab_probe.ail`/`probe_consumer_decide.ail`: run ✓. All prior probes unchanged and behaving
+as documented. `scripts/smoke_ports_record.ail`: unchanged, previously verified by all three
+reviewers.

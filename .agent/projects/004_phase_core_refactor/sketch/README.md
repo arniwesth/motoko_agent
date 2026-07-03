@@ -1,64 +1,76 @@
 # Vocabulary sketch — pre-ADR substrate validation
 
-Date: 2026-07-02. Toolchain: AILANG v0.26.0 (commit `3b52a24`).
-Companion to `../RESEARCH-phase-core-dst-design.md`. These files are **validation
-artifacts, not implementation** — the deliverable is that they check/run and that the
-four pre-ADR questions below have empirical answers.
+Date: 2026-07-02, revised 2026-07-03 in response to the three-pass ADR review.
+Toolchain: AILANG v0.26.0 (commit `3b52a24`).
+Companion to `../RESEARCH-phase-core-dst-design.md` and `../ADR-001-phase-oriented-core.md`.
+These files are **validation artifacts, not implementation** — the deliverable is that they
+check/run and the questions below have empirical answers.
 
 ## Run
 
 ```bash
 cd .agent/projects/004_phase_core_refactor/sketch
 ailang check sketch_vocabulary.ail                       # passes
-ailang run --caps IO --entry main sketch_vocabulary.ail  # demo: decide + checkpoint
+ailang run --caps IO --entry main sketch_vocabulary.ail  # demo: re-derivation, checkpoint, stream projection
 ailang test sketch_vocabulary.ail                        # inline pure tests
 ailang run --caps IO --entry main probe_opacity_legal.ail
-ailang check probe_opacity_forge.ail                     # PASSES (see Q1 — export type exports ctors)
-ailang check probe_sealed_forge.ail                      # FAILS with IMP010 (opacity enforced)
-ailang run --caps IO --entry main probe_sealed_name.ail  # FAILS with IMP010 (type name not importable)
+ailang check probe_opacity_forge.ail                     # PASSES (export type exports ctors)
+ailang check probe_sealed_forge.ail                      # FAILS IMP010 (ctor sealed)
+ailang run --caps IO --entry main probe_sealed_name.ail  # FAILS IMP010 (type name not importable)
 ailang run --caps IO --entry main probe_rec_structural.ail # runs (records forgeable)
+ailang run --caps IO --entry main probe_consumer_decide.ail # runs (REVIEW ADJUDICATION — see Q1)
 ```
 
-## Q1 — Is D7's opacity assumption real? YES, with a co-location constraint
+## Q1 — Is D7's opacity assumption real? YES; co-location applies to DEFINERS only
 
-- `export type T = C(...)` exports the constructor too → forgeable (`probe_opacity_forge`
-  checks clean). Do NOT export sealed types this way.
-- An **unexported** variant type with exported ops is truly sealed: consumers can hold and
-  thread values, but importing the constructor fails with `IMP010`
-  (`probe_sealed_forge`).
-- The unexported **type name** is also not importable (`probe_sealed_name` fails IMP010),
-  so consumers cannot write signatures or record fields naming the type. Consequence:
-  **records embedding `History` (i.e. `StepState`) must be co-located in the defining
-  module.** The phase-core needs a single vocabulary module (working name
-  `src/core/phase_vocab.ail`; final home decided in the ADR — could be `transcript.ail`).
-- Exported **record** types are structurally forgeable (`probe_rec_structural`: a literal
-  of the same shape passes without importing the type). Records can never be opaque —
-  sealed types must be single-constructor **variants** (`MkHistory([Message])`).
-- D7's self-auditing checkpoint shape — `checkpoint(h, plan) -> {history, event}` as the
-  only rebuild op — type-checks and runs end-to-end (`sketch_vocabulary.ail` demo).
+- `export type T = C(...)` exports the constructor too → forgeable (`probe_opacity_forge`).
+- An **unexported** variant type with exported ops is truly sealed: constructor import fails
+  `IMP010` (`probe_sealed_forge`); values still thread (`probe_sealed_thread`).
+- The unexported **type name** is not importable (`probe_sealed_name`), so any type that NAMES
+  a sealed type in its definition must be co-located with it.
+- **Review adjudication (2026-07-03, refutes Pass-1 R1 / Pass-2 R3's conclusion):**
+  `vocab_probe.ail` + `probe_consumer_decide.ail` prove that a *separate* module can import
+  **exported wrapper types** that embed or carry sealed types (`StateP { hist: SealedH }`,
+  `DecisionP = CallModelP(SealedP)`), define functions over them, construct decision variants
+  (payload obtainable only via ops), and pattern-match binding sealed payloads. Sealing holds
+  transitively. So `step_machine.ail` / `model_phase.ail` CAN be separate modules; only the
+  **vocabulary module that defines the sealed types and the exported wrappers naming them**
+  is co-located. Bare sealed-type parameters in foreign signatures remain impossible — hence
+  the exported `ModelRequest` wrapper for the model phase.
+- Exported **record** types are structurally forgeable (`probe_rec_structural`) — sealed types
+  must be single-constructor **variants**.
+- D7's `checkpoint`/`apply_checkpoint` shape runs end-to-end **and preserves the pinned system
+  prefix** (revised per Pass-3 R1; the original sketch dropped it — a real catch). Note: "runs"
+  demonstrates the SHAPE; transcript-validity of checkpoint output is a stated v1 obligation
+  gated by scenario `checkpoint_output_is_valid_transcript`, not something this sketch proves.
+  The digest remains a labeled placeholder (length-based, forgeable); the real design is a
+  content hash with previous-digest chaining and seed-time chain validation.
 
-## Q2 — Can one LedgerEvent type serve both event vocabularies? YES
+## Q2 — Can one LedgerEvent type serve both event vocabularies? YES, with two name classes
 
-`LedgerEvent` is a typed variant; `to_schema_v1 : (LedgerEvent) -> Json` projects onto the
-existing production wire contract. The 28 production schema-v1 event types are inventoried
-in `sketch_vocabulary.ail`'s comment block (from `agent_loop_v2.ail` emit sites,
-2026-07-02); the sketch proves the projection pattern on a representative 11-constructor
-subset, including cases where one constructor maps to different legacy names by payload
-(`ToolPolicyDecided` → `native_tool_denied` | `tool_pending`). **Full 28-name coverage is a
-Phase B ship gate**, not a sketch goal. ADR-001 canonical names map 1:1 to constructors.
+`LedgerEvent` constructors are the typed/DST-canonical layer; `to_schema_v1` targets the
+**production wire stream**. Corrected inventory (Pass-1/2/3 R2): **29** JSONL `type` values —
+27 `emit_event` names + `thinking_delta` + `reasoning_delta` (both emitted directly via
+`emit_json`, `agent_loop_v2.ail:255,:265`). Regeneration command is in the sketch's comment
+block; the Phase B gate compares against the *generated* inventory, not a hand count.
+Every constructor is classified `[prod]` (projects to an existing production name —
+byte-compatible-subset gate) or `[NEW]` (additive name, e.g. `history_checkpoint`,
+`provider_call_prepared` — gated by a TUI unknown-type tolerance check). `StreamDelta` covers
+both delta types by payload kind.
 
 ## Q3 — How is state_delta expressed? Patch-record with one application point
 
 `StateDelta` = record of `Option` fields (absent = unchanged), applied ONLY by
-`apply_state_delta` — the state mirror of single-point event emission, and itself a DST
-invariant site. Checks and is ergonomic on v0.26.0; the alternative (full-state returns)
-was rejected because the delta IS the observation DST wants to record.
+`apply_state_delta`. `apply_checkpoint` is the one additional state path — atomic
+history-rewrite + event pairing (Pass-1 R4 / Pass-2 R6).
 
-## Q4 — Do StepDecision variants carry what they need? YES
+## Q4 — Do StepDecision variants carry what they need? YES — and re-derivation is now PROVEN
 
-Variants with named record payloads (`CallModel(ProviderPayload)`, `RunTools(ToolPlan)`,
-`AwaitApproval(ApprovalRequest)`, `TakeCheckpoint(CheckpointPlan)`, ...) all check; the
-pure `decide(StepState, StepPolicy) -> StepDecision` skeleton composes with the sealed
-projection pipeline and runs. `PhaseResult` carries no `continuation` field — the step
-machine re-derives the next decision from applied state, which is simpler and keeps all
-control flow in `decide`.
+Revised per Pass-3 R3: `StepState` carries typed re-derivation fields
+(`pending_tool_calls`, `last_finish_reason`, `last_response_text`); the placeholder
+`pending_decision_seed` is retired. The demo drives `decide` through
+`CallModel → RunTools → Finalize` purely from applied state — continuation is state, there is
+no continuation field. `ApprovalRequest` now carries the live protocol's needs
+(`default_allow`, `stream_id`, suspended `remaining` plan tail — Pass-1 R5 / Pass-2 R5).
+`CompactionPolicy` is re-grounded on current source's single 70/85/95 tier table
+(Pass-2 R1 / Pass-3 R4).

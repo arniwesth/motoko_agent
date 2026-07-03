@@ -64,7 +64,7 @@ phase contracts **are** the DST seams. The organizing principle for both is
 - `loop_v2`'s effect row is `{AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace}`
   (`agent_loop_v2.ail:1125`). Every test driving the real loop must satisfy all ten effects even
   when the provider is scripted — ADR-001 review comment R7 in one line.
-- Event emission is scattered: ~30 inline `emit_event`/`emit_run_summary`/`emit_stream_chunk`
+- Event emission is scattered: 48 inline `emit_event`/`emit_run_summary`/`emit_stream_chunk`/`emit_json`
   call sites inside the loop. Replay and deterministic trace ordering are impossible to reason
   about.
 - The existing DST seam (`StepProvider` with `Scripted`, `src/core/test/stub_step.ail:42`,
@@ -259,27 +259,35 @@ Parser gotchas to carry into design docs:
 plus five opacity probes. Full answers in `sketch/README.md`; summary of the four questions it
 was built to retire:
 
-1. **D7's opacity assumption holds, with a co-location constraint.** `export type` exports
-   constructors (forgeable); an *unexported* variant type with exported ops is truly sealed —
-   constructor import fails `IMP010`, values still thread through consumers. But the unexported
-   *type name* is not importable either, so **records embedding `History` (`StepState`) must be
-   co-located in the defining module** — the phase core needs a single vocabulary module
-   (working name `src/core/phase_vocab.ail`; final home an ADR detail). Exported record types
-   are structurally forgeable, so sealed types must be single-constructor variants. The
-   self-auditing `checkpoint -> {history, event}` shape runs end-to-end.
+1. **D7's opacity assumption holds, with a co-location constraint — scope corrected
+   2026-07-03.** `export type` exports constructors (forgeable); an *unexported* variant type
+   with exported ops is truly sealed — constructor import fails `IMP010`, values still thread.
+   The unexported *type name* is not importable either, so types NAMING sealed types co-locate
+   in the vocabulary module. **Scope correction (review adjudication)**: co-location binds
+   *definers only* — `sketch/vocab_probe.ail` + `probe_consumer_decide.ail` prove a separate
+   module can import exported wrappers embedding/carrying sealed types (`StepState`,
+   `StepDecision`, `ModelRequest`), define `decide` over them, and pattern-match sealed
+   payloads; sealing holds transitively. So `step_machine.ail`/`model_phase.ail` stay separate
+   modules. Exported record types are structurally forgeable, so sealed types must be
+   single-constructor variants. The self-auditing `checkpoint -> {history, event}` shape runs
+   end-to-end and (revised per review P3-R1) preserves the pinned system prefix.
 2. **One `LedgerEvent` type serves both event vocabularies.** Typed variant + `to_schema_v1`
-   projection onto the existing production wire contract; the 28 production schema-v1 event
-   types are inventoried in the sketch; representative 11-constructor subset proven, including
-   payload-dependent legacy-name mapping. **Full 28-name projection coverage is a Phase B ship
-   gate.** ADR-001 canonical names map 1:1 to constructors.
+   projection onto the existing production wire contract; **29** production schema-v1 event
+   types (corrected 2026-07-03 per ADR review — 27 `emit_event` names + `thinking_delta` +
+   `reasoning_delta`) are inventoried in the sketch; representative subset proven, including
+   payload-dependent legacy-name mapping and both stream-delta kinds. **Full 29-name projection
+   coverage against a mechanically generated inventory is a Phase B ship gate.** Canonical
+   names live at the constructor layer; [NEW] additive wire names are tolerance-gated.
 3. **`state_delta` is a patch record with one application point.** `Option` fields (absent =
    unchanged) applied only by `apply_state_delta` — the state mirror of single-point event
    emission and itself a DST invariant site. Full-state returns rejected: the delta IS the
    observation DST wants recorded.
 4. **`StepDecision` variants carry named record payloads cleanly**, and the pure
    `decide(StepState, StepPolicy) -> StepDecision` skeleton composes with the sealed projection
-   pipeline. `PhaseResult` drops the note's `continuation` field — the step machine re-derives
-   the next decision from applied state.
+   pipeline. `PhaseResult` drops the note's `continuation` field — and (revised per review
+   P3-R3) the re-derivation is now *proven*, not asserted: typed state fields
+   (`pending_tool_calls`, `last_finish_reason`, `last_response_text`) drive the sketch demo
+   through `CallModel → RunTools → Finalize` from applied state alone.
 
 ---
 
@@ -563,19 +571,23 @@ The `CompactableSegment` type below **fixes a bug-in-waiting**, not a formality.
    a legal construction path. The DST invariant stays checkable (history rewrite without a
    matching ledger event = failure). **Settled (D7)** — full design in §7.4.
 5. **Tier telemetry is a function input and measures the payload, not the history.**
-   `last_input_tokens` is the actual token count of the previous **compacted payload** — correct
-   (it measures what the provider sees) but subtle enough to be "fixed" wrongly someday.
-   Signature makes it explicit:
-   `project(History, TokenTelemetry, CompactionPolicy, model_limits) -> ProviderPayload`, with
-   telemetry in `StepState` (also ADR-001's `last_input_tokens` carry-forward observation point).
-   Guard scenario: `compaction.telemetry_reflects_payload_not_history`.
+   CORRECTION (2026-07-03, ADR review P2-R1/P3-R4): this case was written against DST
+   ADR-001's 2026-06-27 grounding, but the actual-token path (`last_input_tokens` in
+   `LoopTotals`, `compact_step_actual`, 60/75/85 tiers) has since been **removed from
+   source** — current compaction is a single estimate-based 70/85/95 ladder
+   (`compaction.ail:134-141`) and no `last_input_tokens` exists in `src/core`. The projection
+   signature keeps `TokenTelemetry` as *forward design*; whether to reintroduce actual-token
+   gating is ADR Open Question 4, and the guard scenario
+   `compaction.telemetry_reflects_payload_not_history` is deferred until that decision.
 6. **First-`Compacted`-wins makes registry order load-bearing** (`ext/runtime.ail:143`). Not
    wrong, but must be visible: hook order is a DST scenario input; the ledger records which
    extension won; conformance obligation: compactor deterministic given (segment, cache, ports).
 7. **Normalization ordering owned in one place**: cap tool output (`cap_tool_message_content`) →
-   estimate → tiers, explicit inside `transcript.ail`'s projection, using exported constants
-   (ADR-001 R5 — still a Phase 0 deliverable: `OUTPUT_HEADROOM=75000`, actual tiers 60/75/85,
-   estimate tiers 70/85/95).
+   estimate → tiers, explicit inside `transcript.ail`'s projection, using exported constants.
+   CORRECTION (2026-07-03): the constants to export are the current single tier table —
+   `ELIDE_TIER_PCT=70`, `ELIDE_HARD_TIER_PCT=85`, `EMERGENCY_PCT=95`, keep-last 10/5
+   (`compaction.ail:134-141`); `OUTPUT_HEADROOM=75000` and the 60/75/85 actual tiers named by
+   DST ADR-001 R5 no longer exist in source (see case 5 correction).
 8. **The pure core earns property tests / Z3 obligations**: projection idempotence; monotone
    shrinkage (payload tokens ≤ raw tokens at every tier); elision preserves message count and all
    ids; emergency implies tiers were insufficient. `elide_preserves_length` already exists inline
@@ -593,7 +605,7 @@ CompactableSegment (no system messages, by type)
   │  normalize (caps) → estimate
   │  ext compaction: f(segment, summary_cache, ports) → Compacted | PassThrough
   │       └─ output VALIDATED by transcript invariants; invalid ⇒ rejected + ledger event, fall back
-  │  structural tiers (pure; actual-gated via TokenTelemetry from StepState)
+  │  structural tiers (pure; single 70/85/95 ladder today — actual-token gating is Open Q4)
   │  emergency (pure) ⇒ Err becomes step-machine Fail decision
   ▼
 ProviderPayload (distinct type; the only thing model_phase accepts)
@@ -781,8 +793,20 @@ this research into an ADR (the decision log is its skeleton).
     (`IMP010` on constructor import); the unexported type name is not importable either, so
     embedding records must be co-located; exported record types are structurally forgeable
     (sketch probes, §4.1).
-14. Production emits 28 schema-v1 event types (inventoried in
-    `sketch/sketch_vocabulary.ail`); the TUI and eval harnesses consume them, so the ledger's
-    `to_schema_v1` projection must cover all 28 before Phase B ships.
+14. Production emits **29** schema-v1 event types (corrected 2026-07-03: 27 `emit_event` names
+    + `thinking_delta` + `reasoning_delta` via direct `emit_json`,
+    `agent_loop_v2.ail:255,:265`); the TUI and eval harnesses consume them, so the ledger's
+    `to_schema_v1` projection must cover all 29 (mechanically generated inventory) before
+    Phase B ships.
 15. Imports must lexically precede all declarations in an AILANG module (parse error
     otherwise).
+16. (2026-07-03, ADR review) The actual/estimate compaction split documented in DST ADR-001's
+    2026-06-27 review has been **removed from source**: current `compaction.ail` is a single
+    70/85/95 elide/emergency ladder (`:134-141`); no `compact_step_actual`, no
+    `OUTPUT_HEADROOM`/`75000`, no `last_input_tokens` anywhere in `src/core`. DST ADR-001
+    R5/R15 rest on a premise that no longer holds; reintroduction is ADR Open Question 4.
+17. (2026-07-03) Exported wrapper types embedding sealed types cross module boundaries freely
+    with transitive sealing (`vocab_probe.ail`/`probe_consumer_decide.ail`) — co-location
+    binds definers only; bare sealed-type parameters in foreign signatures remain impossible.
+18. (2026-07-03) Emission call sites measured: 39 `emit_event` + 7 `emit_run_summary` +
+    2 `emit_stream_chunk` + 4 `emit_json` = 48 in `agent_loop_v2.ail`.

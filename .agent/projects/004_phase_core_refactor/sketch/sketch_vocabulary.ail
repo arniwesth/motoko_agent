@@ -1,19 +1,33 @@
 -- sketch_vocabulary.ail — substrate validation for the phase-core type vocabulary.
--- Companion to RESEARCH-phase-core-dst-design.md (D1-D8). NOT the implementation:
--- the deliverable is that this file CHECKS and the four pre-ADR questions have
--- answers (see ../RESEARCH-phase-core-dst-design.md and probe_* files here).
+-- Companion to RESEARCH-phase-core-dst-design.md (D1-D8) and the ADR. NOT the
+-- implementation: the deliverable is that this file CHECKS/RUNS and the pre-ADR
+-- questions have answers (see README.md and probe_* files here).
 --
--- Q1 (opacity, answered by probes): variants with UNEXPORTED constructors are
---     sealed (IMP010 on constructor import); unexported TYPE NAMES are also not
---     importable, so records embedding History (StepState) must be CO-LOCATED in
---     the defining module. Exported record types are structurally forgeable, so
---     opacity requires a variant wrapper. Hence this single vocabulary module.
--- Q2 (event vocabularies): LedgerEvent is the typed superset; to_schema_v1
---     projects onto the existing production event contract (28 event types
---     inventoried below); ADR-001 canonical names map via ledger constructors.
--- Q3 (state_delta): patch-record style with Option fields + ONE application
---     point (apply_state_delta), mirroring single-point event emission.
--- Q4 (decision payloads): StepDecision variants carry named record types.
+-- REVISED 2026-07-03 in response to the three-pass ADR review:
+--   - checkpoint now preserves the pinned system prefix (Pass-3 R1) and an
+--     atomic apply_checkpoint pairs history-rewrite with its event.
+--   - decide now re-derives RunTools/Finalize from typed state; the
+--     pending_decision_seed placeholder is retired (Pass-3 R3).
+--   - event inventory corrected to 29 incl. reasoning_delta; the projection
+--     documents which names are production vs NEW/additive (Pass-1/2/3 R2).
+--   - CompactionPolicy re-grounded on current source: a SINGLE 70/85/95 tier
+--     table (compaction.ail:134-141); the actual/estimate split described in
+--     DST ADR-001's review (2026-06-27) no longer exists in source (Pass-2 R1,
+--     Pass-3 R4).
+--   - Cross-module consumption of exported wrappers embedding sealed types is
+--     proven by vocab_probe.ail + probe_consumer_decide.ail (refutes the
+--     co-location CONCLUSION of Pass-1 R1 / Pass-2 R3; see README Q1).
+--
+-- Q1 (opacity): variants with UNEXPORTED constructors are sealed (IMP010);
+--     unexported TYPE NAMES are not importable, so types NAMING sealed types in
+--     their definitions co-locate here; consumer modules import exported
+--     wrappers (StepState, StepDecision, ModelRequest) and work freely.
+-- Q2 (events): LedgerEvent is the typed layer; to_schema_v1 projects onto the
+--     production wire stream (29 types); DST-canonical names live at the
+--     constructor layer, NOT in the projection.
+-- Q3 (state_delta): patch-record with Option fields + ONE application point.
+-- Q4 (decisions): decide re-derives RunTools/Finalize/CallModel from typed
+--     StepState fields — continuation is state, there is no continuation field.
 --
 -- Toolchain: AILANG v0.26.0 (commit 3b52a24).
 
@@ -34,7 +48,9 @@ import std/result (Result, Ok, Err)
 type History = MkHistory([Message])
 
 export func history_from_seed(msgs: [Message]) -> Result[History, string] {
-  -- session-entry gate: system messages must form a head prefix (§7.1 case 1)
+  -- session-entry gate: system messages must form a head prefix (§7.1 case 1).
+  -- Real impl also validates the checkpoint digest chain for resumed
+  -- histories (review Pass-1 R4 / Pass-2 R6).
   if system_is_head_prefix(msgs, true)
   then Ok(MkHistory(msgs))
   else Err("history seed: system messages must form a head prefix")
@@ -48,7 +64,11 @@ export func history_len(h: History) -> int {
   match h { MkHistory(xs) => length(xs) }
 }
 
--- placeholder digest: real one hashes content; enough to prove the D7 shape
+-- PLACEHOLDER digest (length-based, forgeable — flagged by review Pass-1 R4 /
+-- Pass-2 R6). The real implementation is a content hash, and each
+-- CheckpointTaken event also carries the PREVIOUS digest so the chain is
+-- verifiable end-to-end. Kept simple here because the sketch validates
+-- SHAPES, not cryptography.
 export func history_digest(h: History) -> string {
   match h { MkHistory(xs) => "h${show(length(xs))}" }
 }
@@ -60,6 +80,13 @@ pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
       if m.role == "system"
       then still_head && system_is_head_prefix(rest, true)
       else system_is_head_prefix(rest, false)
+  }
+}
+
+pure func take_system_prefix(msgs: [Message]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "system" then m :: take_system_prefix(rest) else []
   }
 }
 
@@ -75,16 +102,30 @@ export func payload_messages(p: ProviderPayload) -> [Message] {
   match p { MkPayload(xs) => xs }
 }
 
+-- Exported wrapper so a SEPARATE model_phase module can receive the sealed
+-- payload without naming ProviderPayload (see probe_consumer_decide.ail for
+-- the pattern proof).
+export type ModelRequest = { payload: ProviderPayload, model: string }
+
+-- Forward design: StepResult already carries usage telemetry per step, but
+-- CURRENT compaction does not consume it — the actual-token path described in
+-- DST ADR-001's review no longer exists in source (verified 2026-07-03:
+-- no `last_input_tokens` in src/core). Whether to reintroduce actual-token
+-- gating is an explicit ADR open question.
 export type TokenTelemetry = {
-  last_input_tokens: int,          -- actual tokens of the PREVIOUS payload (§7.1 case 5)
+  last_input_tokens: int,
   last_output_tokens: int
 }
 
+-- Re-grounded on current compaction.ail:134-141: ONE tier table.
+--   >= emergency_pct       -> emergency compaction (Err on failure)
+--   >= elide_hard_tier_pct -> elide keep-last-5
+--   >= elide_tier_pct      -> elide keep-last-10
 export type CompactionPolicy = {
   context_limit: int,
-  output_headroom: int,            -- exported constant per ADR-001 R5, not a literal
-  actual_tiers: [int],             -- 60/75/85
-  estimate_tiers: [int]            -- 70/85/95
+  elide_tier_pct: int,       -- 70 in source
+  elide_hard_tier_pct: int,  -- 85 in source
+  emergency_pct: int         -- 95 in source
 }
 
 -- The pure projection (§7.2). Sketch body: pin + passthrough; the real one
@@ -103,15 +144,20 @@ export func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
 }
 
 -- D7: the ONE op producing a rebuilt History, self-auditing (§7.4).
+-- REVISED (Pass-3 R1): the rebuilt history preserves the pinned system
+-- prefix. Checkpoint output carries the same transcript-validity obligations
+-- as ext compaction (system prefix, pairing, ids) — enforced by the gate and
+-- by scenario checkpoint_output_is_valid_transcript.
 export type CheckpointPlan = { reason: string, summary: string }
 
 export func checkpoint(h: History, plan: CheckpointPlan)
   -> { history: History, event: LedgerEvent } {
   match h {
     MkHistory(xs) => {
+      let pinned = take_system_prefix(xs);
       let summary_msg: Message =
         { role: "assistant", content: "[CHECKPOINT] ${plan.summary}", tool_calls: [], tool_call_id: "" };
-      let rebuilt = MkHistory([summary_msg]);
+      let rebuilt = MkHistory(pinned ++ [summary_msg]);
       {
         history: rebuilt,
         event: CheckpointTaken({
@@ -125,7 +171,8 @@ export func checkpoint(h: History, plan: CheckpointPlan)
 }
 
 -- ============================================================================
--- StepState (co-located because it embeds sealed History — Q1 consequence)
+-- StepState (co-located because it EMBEDS sealed History — Q1). Consumers
+-- import StepState itself (exported) and never need the History name.
 -- ============================================================================
 
 export type LoopTotals = {
@@ -143,6 +190,9 @@ export type StepPolicy = {
   compaction: CompactionPolicy
 }
 
+-- Typed re-derivation fields (Pass-3 R3): what decide() needs to choose
+-- RunTools vs Finalize vs CallModel after a model result — carried as STATE,
+-- not as a continuation field. pending_decision_seed is retired.
 export type StepState = {
   step_idx: int,
   history: History,
@@ -150,7 +200,9 @@ export type StepState = {
   totals: LoopTotals,
   nudges_used: int,                -- replaces transcript marker scanning (§5)
   ext_artifacts: Json,             -- compaction summary cache etc. (§7.1 case 3)
-  pending_decision_seed: string    -- placeholder for continuation-ish data
+  pending_tool_calls: [ToolCall],  -- non-empty => the model asked for tools
+  last_finish_reason: string,      -- "" | "stop" | "tool_calls" | ...
+  last_response_text: string
 }
 
 -- Q3: patch-style delta with ONE application point. Absent field = unchanged.
@@ -158,11 +210,15 @@ export type StateDelta = {
   telemetry: Option[TokenTelemetry],
   totals: Option[LoopTotals],
   nudges_used: Option[int],
-  ext_artifacts: Option[Json]
+  ext_artifacts: Option[Json],
+  pending_tool_calls: Option[[ToolCall]],
+  last_finish_reason: Option[string],
+  last_response_text: Option[string]
 }
 
 export pure func empty_delta() -> StateDelta {
-  { telemetry: None, totals: None, nudges_used: None, ext_artifacts: None }
+  { telemetry: None, totals: None, nudges_used: None, ext_artifacts: None,
+    pending_tool_calls: None, last_finish_reason: None, last_response_text: None }
 }
 
 -- The single place state changes are applied (mirror of single-point emission).
@@ -174,7 +230,31 @@ export func apply_state_delta(s: StepState, d: StateDelta) -> StepState {
     totals: match d.totals { Some(t) => t, None => s.totals },
     nudges_used: match d.nudges_used { Some(n) => n, None => s.nudges_used },
     ext_artifacts: match d.ext_artifacts { Some(a) => a, None => s.ext_artifacts },
-    pending_decision_seed: s.pending_decision_seed
+    pending_tool_calls: match d.pending_tool_calls { Some(c) => c, None => s.pending_tool_calls },
+    last_finish_reason: match d.last_finish_reason { Some(f) => f, None => s.last_finish_reason },
+    last_response_text: match d.last_response_text { Some(t) => t, None => s.last_response_text }
+  }
+}
+
+-- Atomic checkpoint application (Pass-1 R4 / Pass-2 R6): the ONLY path that
+-- swaps a rebuilt history into state, returning the event alongside — no code
+-- path takes the history without the event.
+export func apply_checkpoint(s: StepState, plan: CheckpointPlan)
+  -> { state: StepState, event: LedgerEvent } {
+  let cp = checkpoint(s.history, plan);
+  {
+    state: {
+      step_idx: s.step_idx,
+      history: cp.history,
+      telemetry: s.telemetry,
+      totals: s.totals,
+      nudges_used: s.nudges_used,
+      ext_artifacts: s.ext_artifacts,
+      pending_tool_calls: s.pending_tool_calls,
+      last_finish_reason: s.last_finish_reason,
+      last_response_text: s.last_response_text
+    },
+    event: cp.event
   }
 }
 
@@ -187,12 +267,23 @@ export type ExecutorKind = ExecNative | ExecDelegated | ExecHandledByExt | ExecW
 export type ToolPlanEntry = { call: ToolCall, executor: ExecutorKind }
 export type ToolPlan = { entries: [ToolPlanEntry] }
 
-export type ApprovalRequest = { call: ToolCall, default_allow: bool, reason: string }
+-- REVISED (Pass-1 R5 / Pass-2 R5): carries what the live approval protocol
+-- needs — correlation ids and the extension-supplied default. The driver
+-- emits tool_pending BEFORE blocking; on resolution it re-issues RunTools
+-- with the remaining plan entries.
+export type ApprovalRequest = {
+  call: ToolCall,
+  default_allow: bool,             -- PolicyDefault: AllowAfterTimeout/DenyAfterTimeout
+  reason: string,
+  stream_id: string,
+  remaining: [ToolPlanEntry]       -- suspended tail of the ToolPlan
+}
+
 export type FinalizeInfo = { reason: string, output: string }
 export type FailInfo = { code: string, message: string, retryable: bool }
 
 export type StepDecision
-  = CallModel(ProviderPayload)
+  = CallModel(ModelRequest)
   | RunTools(ToolPlan)
   | AwaitApproval(ApprovalRequest)
   | InjectUserMessage(Message)
@@ -202,7 +293,8 @@ export type StepDecision
 
 -- ============================================================================
 -- PhaseResult (P2): what every phase returns. No 'continuation' field — the
--- step machine re-derives the next decision from applied state (see decide).
+-- step machine re-derives the next decision from applied state (decide below
+-- PROVES the re-derivation for RunTools/Finalize/CallModel).
 -- ============================================================================
 
 export type PhaseResult = {
@@ -213,26 +305,27 @@ export type PhaseResult = {
 }
 
 -- ============================================================================
--- LedgerEvent (Q2): typed superset of BOTH vocabularies.
+-- LedgerEvent (Q2): the TYPED layer. Constructor names are DST-canonical.
+-- to_schema_v1 targets the PRODUCTION wire stream.
 --
--- Existing production schema-v1 event types (inventoried 2026-07-02 from
--- agent_loop_v2.ail emit_event sites; the projection below must cover ALL of
--- these before Phase B ships — sketch covers a representative subset):
---   compaction_exhausted compaction_extension cost_exhausted cost_warning
---   delegated_tool_deferred done dp7_verifier_rejected error
---   ext_intercept_handled ext_solver_feedback ext_tool_handled
---   hybrid_bash_extracted native_tool_calls native_tool_denied
---   native_tool_results persist_nudge run_summary scratchpad_result
---   session_start session_suspend stream_error_retry thinking
---   thinking_delta thinking_stream_end thinking_stream_start tool_pending
---   v2_tool_dispatch_complete v2_tool_dispatch_start
+-- Production schema-v1 inventory — 29 JSONL `type` values (regenerate with:
+--   grep -o 'emit_event(session_id, "[a-z_]*"' src/core/agent_loop_v2.ail
+--   plus the two direct emit_json stream types at :255 and :265):
+--   27 emit_event names:
+--     compaction_exhausted compaction_extension cost_exhausted cost_warning
+--     delegated_tool_deferred done dp7_verifier_rejected error
+--     ext_intercept_handled ext_solver_feedback ext_tool_handled
+--     hybrid_bash_extracted native_tool_calls native_tool_denied
+--     native_tool_results persist_nudge run_summary scratchpad_result
+--     session_start session_suspend stream_error_retry thinking
+--     thinking_stream_end thinking_stream_start tool_pending
+--     v2_tool_dispatch_complete v2_tool_dispatch_start
+--   +2 stream-chunk types emitted via emit_json: thinking_delta reasoning_delta
 --
--- ADR-001 canonical trace events map to constructors here:
---   provider_call_prepared -> ProviderCallPrepared
---   provider_result        -> ProviderResult
---   tool_policy_decision   -> ToolPolicyDecided
---   tool_result_appended   -> ToolResultAppended
---   loop_totals_updated    -> TotalsUpdated
+-- Projection name classes (Pass-3 R2): constructors marked [prod] project to
+-- an EXISTING production name (Phase B gate: byte-compatible subset);
+-- constructors marked [NEW] introduce additive names (gated separately by a
+-- TUI unknown-type tolerance check before Phase B ships).
 -- ============================================================================
 
 export type ProviderCallInfo = { step: int, msg_count: int, payload_digest: string }
@@ -243,23 +336,22 @@ export type CompactionInfo = { step: int, tier: int, note: string }
 export type CostWarningInfo = { step: int, threshold_pct: int, total_millicents: int }
 export type CheckpointInfo = { reason: string, before_digest: string, after_digest: string }
 export type DoneInfo = { step: int, output: string, source: string }
+export type StreamDeltaInfo = { step: int, stream_id: string, seq: int, kind: string, text: string }
 
 export type LedgerEvent
-  = ProviderCallPrepared(ProviderCallInfo)
-  | ProviderResult(ProviderResultInfo)
-  | ToolPolicyDecided(PolicyInfo)
-  | ToolResultAppended(ToolResultInfo)
-  | CompactionApplied(CompactionInfo)
-  | ExtCompactionRejected(CompactionInfo)
-  | CostWarning(CostWarningInfo)
-  | PersistNudge(CompactionInfo)
-  | TotalsUpdated(ProviderResultInfo)
-  | CheckpointTaken(CheckpointInfo)
-  | DoneEvent(DoneInfo)
+  = ProviderCallPrepared(ProviderCallInfo)   -- [NEW]  provider_call_prepared
+  | ProviderResult(ProviderResultInfo)       -- [prod] thinking (canonical: provider_result)
+  | ToolPolicyDecided(PolicyInfo)            -- [prod] native_tool_denied | tool_pending
+  | ToolResultAppended(ToolResultInfo)       -- [prod] native_tool_results
+  | CompactionApplied(CompactionInfo)        -- [prod] compaction_extension
+  | ExtCompactionRejected(CompactionInfo)    -- [NEW]  ext_compaction_rejected
+  | CostWarning(CostWarningInfo)             -- [prod] cost_warning
+  | PersistNudge(CompactionInfo)             -- [prod] persist_nudge
+  | TotalsUpdated(ProviderResultInfo)        -- [NEW]  loop_totals_updated
+  | CheckpointTaken(CheckpointInfo)          -- [NEW]  history_checkpoint
+  | StreamDelta(StreamDeltaInfo)             -- [prod] thinking_delta | reasoning_delta
+  | DoneEvent(DoneInfo)                      -- [prod] done
 
--- Projection onto the existing schema-v1 wire contract (event names MUST
--- match production strings — this is the compatibility gate for the TUI and
--- eval harnesses).
 export func to_schema_v1(e: LedgerEvent) -> Json {
   match e {
     ProviderCallPrepared(i) => jo([kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("payload_digest", js(i.payload_digest))]),
@@ -272,24 +364,40 @@ export func to_schema_v1(e: LedgerEvent) -> Json {
     PersistNudge(i) => jo([kv("type", js("persist_nudge")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))]),
     TotalsUpdated(i) => jo([kv("type", js("loop_totals_updated")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))]),
     CheckpointTaken(i) => jo([kv("type", js("history_checkpoint")), kv("reason", js(i.reason)), kv("before_digest", js(i.before_digest)), kv("after_digest", js(i.after_digest))]),
+    StreamDelta(i) => jo([kv("type", js(if i.kind == "reasoning" then "reasoning_delta" else "thinking_delta")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("seq", jnum(_int_to_float(i.seq))), kv("text", js(i.text))]),
     DoneEvent(i) => jo([kv("type", js("done")), kv("step", jnum(_int_to_float(i.step))), kv("output", js(i.output)), kv("source", js(i.source))])
   }
 }
 
 -- ============================================================================
--- Pure step machine skeleton (P1): decide is a pure function of StepState.
--- Real policy is richer; this proves decisions-as-data composes with the
--- sealed projection pipeline.
+-- Pure step machine (P1): decide is a pure function of StepState. REVISED
+-- (Pass-3 R3): now PROVES post-model re-derivation — RunTools when the state
+-- carries pending tool calls, Finalize when the model stopped with prose,
+-- CallModel otherwise.
 -- ============================================================================
+
+pure func plan_native(calls: [ToolCall]) -> [ToolPlanEntry] {
+  match calls {
+    [] => [],
+    c :: rest => {
+      let entry: ToolPlanEntry = { call: c, executor: ExecNative };
+      entry :: plan_native(rest)
+    }
+  }
+}
 
 export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   if pol.step_budget > 0 && s.step_idx >= pol.step_budget
   then Fail({ code: "Internal", message: "step budget exhausted", retryable: false })
   else if pol.max_cost_millicents > 0 && s.totals.cost_millicents >= pol.max_cost_millicents
   then Fail({ code: "BudgetExceeded", message: "cost cap reached", retryable: false })
+  else if length(s.pending_tool_calls) > 0
+  then RunTools({ entries: plan_native(s.pending_tool_calls) })
+  else if s.last_finish_reason == "stop"
+  then Finalize({ reason: "model_stop", output: s.last_response_text })
   else match project(s.history, s.telemetry, pol.compaction) {
     Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
-    Ok(projection) => CallModel(projection.payload)
+    Ok(projection) => CallModel({ payload: projection.payload, model: "sketch-model" })
   }
 }
 
@@ -307,6 +415,18 @@ func mk_msg(role: string, content: string) -> Message {
   { role: role, content: content, tool_calls: [], tool_call_id: "" }
 }
 
+func decision_name(d: StepDecision) -> string {
+  match d {
+    CallModel(_) => "CallModel",
+    RunTools(p) => "RunTools(${show(length(p.entries))})",
+    AwaitApproval(_) => "AwaitApproval",
+    InjectUserMessage(_) => "InjectUserMessage",
+    TakeCheckpoint(_) => "TakeCheckpoint",
+    Finalize(f) => "Finalize(${f.reason})",
+    Fail(f) => "Fail(${f.code})"
+  }
+}
+
 export func main() -> () ! {IO} {
   let seed = [mk_msg("system", "you are motoko"), mk_msg("user", "fix the bug")];
   match history_from_seed(seed) {
@@ -317,25 +437,40 @@ export func main() -> () ! {IO} {
         max_cost_millicents: 0,
         persist_retries: 0,
         retry_stream_errors: true,
-        compaction: { context_limit: 200000, output_headroom: 75000, actual_tiers: [60, 75, 85], estimate_tiers: [70, 85, 95] }
+        compaction: { context_limit: 200000, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
       };
-      let s: StepState = {
+      let s0: StepState = {
         step_idx: 0,
         history: h,
         telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
         totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
         nudges_used: 0,
         ext_artifacts: jo([]),
-        pending_decision_seed: ""
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
       };
-      match decide(s, pol) {
-        CallModel(payload) => println("decision=CallModel msgs=${show(length(payload_messages(payload)))}"),
-        Fail(f) => println("decision=Fail ${f.code}"),
-        _ => println("decision=other")
-      };
-      let cp = checkpoint(h, { reason: "sketch-demo", summary: "2 msgs" });
+      -- fresh state -> CallModel
+      println("d0=${decision_name(decide(s0, pol))}");
+      -- model returned tool calls -> RunTools (re-derived from state, no continuation)
+      let tc: ToolCall = { id: "call-1", name: "BashExec", arguments: "{\"cmd\":\"true\"}" };
+      let s1 = apply_state_delta(s0, {
+        telemetry: None, totals: None, nudges_used: None, ext_artifacts: None,
+        pending_tool_calls: Some([tc]), last_finish_reason: Some("tool_calls"), last_response_text: None
+      });
+      println("d1=${decision_name(decide(s1, pol))}");
+      -- model stopped with prose -> Finalize (re-derived from state)
+      let s2 = apply_state_delta(s1, {
+        telemetry: None, totals: None, nudges_used: None, ext_artifacts: None,
+        pending_tool_calls: Some([]), last_finish_reason: Some("stop"), last_response_text: Some("done: fixed")
+      });
+      println("d2=${decision_name(decide(s2, pol))}");
+      -- atomic checkpoint: system prefix preserved (Pass-3 R1 fix)
+      let cp = apply_checkpoint(s2, { reason: "sketch-demo", summary: "1 exchange" });
       println("checkpoint event: ${encode(to_schema_v1(cp.event))}");
-      println("history after cp: len=${show(history_len(cp.history))} digest=${history_digest(cp.history)}")
+      println("history after cp: len=${show(history_len(cp.state.history))} (system prefix retained)");
+      -- stream delta projection incl. reasoning_delta (29-event inventory fix)
+      println("stream: ${encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "step-0", seq: 1, kind: "reasoning", text: "hmm" })))}")
     }
   }
 }
