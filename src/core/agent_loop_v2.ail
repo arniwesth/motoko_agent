@@ -61,11 +61,13 @@ import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candid
 import src/core/phase_vocab (
   LedgerEvent,
   to_schema_v1_kvs,
+  payload_digest,
   msgs_to_messages,
   step_result_to_message,
   envelope_to_tool_message,
   handled_tool_message,
   tool_result_message,
+  ProviderCallPrepared,
   ScratchpadResult,
   RunSummary,
   NativeToolDenied,
@@ -507,6 +509,13 @@ func messages_to_msgs(msgs: [Message]) -> [Msg] {
       tool_calls: m.tool_calls,
       tool_call_id: m.tool_call_id
     } :: messages_to_msgs(rest))
+  }
+}
+
+func count_system_prefix(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => if m.role == "system" then 1 + count_system_prefix(rest) else 0
   }
 }
 
@@ -1140,6 +1149,13 @@ func loop_v2(
     -- Match-in-lambda is a known AILANG parser bug, so the match lives in
     -- the top-level emit_stream_chunk helper.
     let on_chunk: (StreamChunk) -> () ! {IO, Trace} = \chunk. append_stream_delta(session_id, step_idx, stream_id, chunk);
+    let _ = ledger_emit(session_id, ProviderCallPrepared({
+      step: step_idx,
+      msg_count: List.length(compacted_msgs),
+      system_prefix_count: count_system_prefix(compacted_msgs),
+      payload_digest: payload_digest(compacted_msgs),
+      model: model
+    }));
     let dispatched = dispatch_step(provider, provider_api_model(model, getEnvOr("OPENAI_BASE_URL", "")), compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {

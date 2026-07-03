@@ -45,6 +45,16 @@ filter_new_types() {
   fi
 }
 
+combined_capture() {
+  local name="$1"
+  local out="$out_dir/${name}.jsonl"
+  local new_out="$new_dir/${name}.jsonl"
+  cat "$out"
+  if [ -f "$new_out" ]; then
+    cat "$new_out"
+  fi
+}
+
 run_json_smoke() {
   local name="$1"
   local file="$2"
@@ -87,9 +97,23 @@ run_json_smoke() {
     grep -q '"type":"ext_solver_feedback"' "$out"
     grep -q '"type":"ext_intercept_handled"' "$out"
     grep -q '"type":"compaction_extension".*"note":"fixture_prestep sys=1"' "$out"
+    [ "$(combined_capture "$name" | grep -c '"type":"provider_call_prepared"')" -eq 4 ]
+    combined_capture "$name" | awk '
+      /"type":"provider_call_prepared"/ {
+        if ($0 !~ /"system_prefix_count":1/) exit 1;
+        if ($0 !~ /"payload_digest":"[^"]+"/) exit 1;
+      }
+    '
   fi
 
   if [ "$name" = "smoke_v2_stream_parity" ]; then
+    [ "$(combined_capture "$name" | grep -c '"type":"provider_call_prepared"')" -eq 1 ]
+    combined_capture "$name" | awk '
+      /"type":"provider_call_prepared"/ {
+        if ($0 !~ /"system_prefix_count":1/) exit 1;
+        if ($0 !~ /"payload_digest":"[^"]+"/) exit 1;
+      }
+    '
     awk '
       /"type":"thinking_stream_start"/ { if (state != 0) exit 1; state = 1; next }
       /"type":"thinking_delta"/ {

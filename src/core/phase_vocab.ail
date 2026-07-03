@@ -99,9 +99,23 @@ export func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
       then Err("context exhausted")
       else Ok({
         payload: MkPayload(xs),
-        events: [ProviderCallPrepared({ step: 0, msg_count: List.length(xs), payload_digest: "p${show(List.length(xs))}" })]
+        events: [ProviderCallPrepared({ step: 0, msg_count: List.length(xs), system_prefix_count: 0, payload_digest: "p${show(List.length(xs))}", model: "" })]
       })
   }
+}
+
+pure func payload_digest_len(msgs: [Message], n: int, bytes: int) -> string {
+  match msgs {
+    [] => "pd-${show(n)}-${show(bytes)}",
+    m :: rest => payload_digest_len(rest, n + 1, bytes + Str.length(m.role) + Str.length(m.content) + Str.length(m.tool_call_id))
+  }
+}
+
+-- PLACEHOLDER digest: deterministic bounded projection over provider payload
+-- role/content/id lengths. This is not a content hash; checkpoint hashing
+-- replaces it when the real digest lands.
+export pure func payload_digest(msgs: [Message]) -> string {
+  payload_digest_len(msgs, 0, 0)
 }
 
 -- ============================================================================
@@ -266,7 +280,7 @@ export type PhaseResult = {
 -- constructors introduce additive names gated in Phase B.
 -- ============================================================================
 
-export type ProviderCallInfo = { step: int, msg_count: int, payload_digest: string }
+export type ProviderCallInfo = { step: int, msg_count: int, system_prefix_count: int, payload_digest: string, model: string }
 export type ThinkingInfo = {
   step: int,
   text: string,
@@ -390,7 +404,7 @@ func done_kvs(i: DoneInfo) -> [{key: string, value: Json}] {
 
 export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
   match e {
-    ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("payload_digest", js(i.payload_digest))],
+    ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("system_prefix_count", jnum(_int_to_float(i.system_prefix_count))), kv("payload_digest", js(i.payload_digest)), kv("model", js(i.model))],
     ScratchpadResult(i) => [kv("type", js("scratchpad_result")), kv("tool_call_id", js(i.tool_call_id)), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("cells_json", js(i.cells_json))],
     RunSummary(i) => [kv("type", js("run_summary")), kv("model", js(i.model)), kv("motoko_commit", js(i.motoko_commit)), kv("finish_reason", js(i.finish_reason)), kv("steps_executed", jnum(_int_to_float(i.steps_executed))), kv("usage", jo(usage_kvs(i.input_tokens, i.output_tokens, i.cache_read_input_tokens, i.cache_creation_input_tokens))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("duration_ms", jnum(_int_to_float(i.duration_ms))), kv("error", js(i.error))],
     NativeToolDenied(i) => [kv("type", js("native_tool_denied")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("reason", js(i.reason))],
@@ -601,7 +615,7 @@ pure func golden(e: LedgerEvent, want: string) -> bool {
 pure func test_ledger_projection_golden_bytes() -> bool
   tests [((), true)]
   {
-    golden(ProviderCallPrepared({ step: 1, msg_count: 2, payload_digest: "p2" }), "{\"type\":\"provider_call_prepared\",\"step\":1,\"msg_count\":2,\"payload_digest\":\"p2\"}")
+    golden(ProviderCallPrepared({ step: 1, msg_count: 2, system_prefix_count: 1, payload_digest: "p2", model: "m" }), "{\"type\":\"provider_call_prepared\",\"step\":1,\"msg_count\":2,\"system_prefix_count\":1,\"payload_digest\":\"p2\",\"model\":\"m\"}")
     && golden(ScratchpadResult({ tool_call_id: "tc", request_id: "step-1", step: 1, cells_json: "[]" }), "{\"type\":\"scratchpad_result\",\"tool_call_id\":\"tc\",\"request_id\":\"step-1\",\"step\":1,\"cells_json\":\"[]\"}")
     && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "" }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"\"}")
     && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 5, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "err" }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"cache_read_input_tokens\":5,\"cache_creation_input_tokens\":0,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"err\"}")
