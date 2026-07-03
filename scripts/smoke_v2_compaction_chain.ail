@@ -1,0 +1,201 @@
+module scripts/smoke_v2_compaction_chain
+
+import std/io (println, exit)
+import std/result (Result, Ok, Err)
+import std/ai (Message)
+import std/option (None)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/types (Msg)
+import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/ext/runtime (
+  dispatch_pre_step_chain,
+  StageApplied,
+  StageRejected,
+  PreStepStage
+)
+import src/core/test/stub_step (ScriptedStep, prose_step)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  ExtRuntime,
+  ExtensionHooks,
+  FinalizeDecision,
+  NoDecision,
+  NoIntercept,
+  PassThrough,
+  PreStepDecision,
+  Compacted,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolCallEnvelope,
+  ToolHandleDecision,
+  ToolPolicyDecision
+)
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 4, solver: 4, verifier: 0 }
+}
+
+func mk_ctx() -> ExtCtx {
+  {
+    task: "chain",
+    step: 0,
+    model: "m",
+    context_limit: 0,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: mk_budget(),
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 4,
+    history_slice: [],
+    state_key: "chain",
+    context_limit: 0
+  }
+}
+
+func mk_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func call_msg(id: string) -> Msg {
+  { role: "assistant", content: "call", tool_calls: [{ id: id, name: "T", arguments: "{}" }], tool_call_id: "" }
+}
+
+func tool_msg(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func seed_msgs() -> [Msg] {
+  [mk_msg("user", "seed"), call_msg("tc-chain"), tool_msg("tc-chain", "original")]
+}
+
+func seed_history() -> [Message] {
+  [
+    { role: "system", content: "chain system prefix", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "seed", tool_calls: [], tool_call_id: "" },
+    { role: "assistant", content: "call", tool_calls: [{ id: "tc-chain", name: "T", arguments: "{}" }], tool_call_id: "" },
+    { role: "tool", content: "original", tool_calls: [], tool_call_id: "tc-chain" }
+  ]
+}
+
+func rewrite_tool(msgs: [Msg]) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" && m.tool_call_id == "tc-chain" then
+        { role: "tool", content: "rewritten", tool_calls: [], tool_call_id: "tc-chain" } :: rewrite_tool(rest)
+      else m :: rewrite_tool(rest)
+  }
+}
+
+func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+  {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    on_pre_step: pre,
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate },
+    on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
+    on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+  }
+}
+
+func hook_a() -> ExtensionHooks {
+  base_hook("chain_A", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    Compacted(msgs ++ [mk_msg("user", "chain-A")], "A")
+  })
+}
+
+func hook_b_bad() -> ExtensionHooks {
+  base_hook("chain_B", func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    Compacted([call_msg("tc-chain")], "B")
+  })
+}
+
+func hook_c() -> ExtensionHooks {
+  base_hook("chain_C", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    Compacted(rewrite_tool(msgs), "C")
+  })
+}
+
+func chain_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { hooks: [hook_a(), hook_b_bad(), hook_c()] }, strict_mode: false, verification: v }
+}
+
+func stages_ok(stages: [PreStepStage]) -> bool {
+  match stages {
+    a :: b :: c :: [] =>
+      a.ext_id == "chain_A"
+        && b.ext_id == "chain_B"
+        && c.ext_id == "chain_C"
+        && match a.outcome { StageApplied(note) => note == "A", _ => false }
+        && match b.outcome { StageRejected(reason) => reason != "", _ => false }
+        && match c.outcome { StageApplied(note) => note == "C", _ => false },
+    _ => false
+  }
+}
+
+func direct_section() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let result = dispatch_pre_step_chain(chain_rt(), mk_ctx(), seed_msgs());
+  let msgs_ok = match result.msgs {
+    user :: call :: tool :: marker :: [] =>
+      user.role == "user"
+        && call.role == "assistant"
+        && tool.role == "tool"
+        && tool.content == "rewritten"
+        && marker.content == "chain-A",
+    _ => false
+  };
+  msgs_ok && stages_ok(result.stages)
+}
+
+func full_loop_section() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let script: [ScriptedStep] = [prose_step("done")];
+  match run_v2_with_stub(
+    chain_rt(),
+    "phase-b-compaction-chain",
+    "",
+    false,
+    mk_budget(),
+    "anthropic/claude-sonnet-4-6",
+    seed_history(),
+    "/tmp",
+    4,
+    false,
+    0,
+    no_rates(),
+    script
+  ) {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+func report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${name}") else println("  ✗ ${name}");
+  ok
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  println("=== smoke_v2_compaction_chain ===");
+  let direct_ok = report("direct_chain_fold", direct_section());
+  let full_ok = report("full_loop_chain_events", full_loop_section());
+  if direct_ok && full_ok then println("smoke_v2_compaction_chain PASS")
+  else {
+    let _ = println("smoke_v2_compaction_chain FAIL");
+    exit(1)
+  }
+}

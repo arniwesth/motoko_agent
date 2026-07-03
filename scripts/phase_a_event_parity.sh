@@ -132,6 +132,33 @@ run_json_smoke() {
       END { exit(state == 6 ? 0 : 1) }
     ' "$out"
   fi
+
+  if [ "$name" = "smoke_v2_compaction_chain" ]; then
+    [ "$(combined_capture "$name" | grep -c '"type":"compaction_extension"')" -eq 2 ]
+    [ "$(combined_capture "$name" | grep -c '"type":"ext_compaction_rejected"')" -eq 1 ]
+    [ "$(combined_capture "$name" | grep -c '"type":"provider_call_prepared"')" -eq 1 ]
+    awk '
+      /"type":"compaction_extension".*"note":"A"/ { if (state != 0) exit 1; state = 1; next }
+      /"type":"ext_compaction_rejected"/ { if (state != 1) exit 1; state = 2; next }
+      /"type":"compaction_extension".*"note":"C"/ {
+        if (state != 1 && state != 2) exit 1;
+        state = 3;
+        next
+      }
+      /"type":"provider_call_prepared"/ {
+        if (state != 3) exit 1;
+        if ($0 !~ /"msg_count":5/) exit 1;
+        if ($0 !~ /"system_prefix_count":1/) exit 1;
+        state = 4;
+        next
+      }
+      END { exit(state == 4 ? 0 : 1) }
+    ' "$out"
+    if [ -n "${PARITY_STRIP_TYPES:-}" ]; then
+      cat "$out" >> "$new_dir/${name}.jsonl"
+      rm "$out"
+    fi
+  fi
 }
 
 bash scripts/setup_dp7_smoke_workdirs.sh >/dev/null
@@ -142,6 +169,7 @@ run_json_smoke smoke_v2_pending_full_loop scripts/smoke_v2_pending_full_loop.ail
 run_json_smoke smoke_v2_dp7_gate scripts/smoke_v2_dp7_gate.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_phase_a_tool_parity scripts/smoke_phase_a_tool_parity.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_ext_fixture_parity scripts/smoke_v2_ext_fixture_parity.ail "$FULL_CAPS" full normal
+run_json_smoke smoke_v2_compaction_chain scripts/smoke_v2_compaction_chain.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_stream_parity scripts/smoke_v2_stream_parity.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_handle scripts/smoke_v2_handle.ail "IO,Env,Clock" unit normal
 run_json_smoke smoke_v2_hybrid scripts/smoke_v2_hybrid.ail "IO,Env,Clock" unit normal
