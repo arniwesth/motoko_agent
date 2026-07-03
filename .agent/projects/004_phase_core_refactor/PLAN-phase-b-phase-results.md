@@ -256,10 +256,27 @@ config-profile data: `.motoko/config/{default,dogfood,local,openrouter}/config.j
 `.extensions.order` (all four currently start with `compaction_ai`; none has a structural
 entry). `make sync_packages` mirrors `src/core/ext/<name>` dirs into `.packages/` and is
 **not** the mechanism for `packages/`-resident path deps (all `src/core/ext/*/` dirs are
-empty at HEAD — fact 12 confirmed). **Risk, probed in WI-7**: no existing `packages/`
-package depends on `sunholo/motoko_core`, and `src/core/ailang.toml` `[exports]` lists only
-`compress`, `config`, `tool_contract`, `types` — importing core's measurement primitives
-from the new package is unproven substrate territory.
+empty at HEAD — fact 12 confirmed). **The `motoko_core`-dependency shape was probed this
+session (G-B7, resolved positive)** — three facts a throwaway probe package established on
+v0.26.0:
+1. The path-dep target must be a directory whose **root** holds `ailang.toml` with
+   `src/core/*.ail` beneath it — i.e. `.packages/motoko_core` (the sync mirror), **not**
+   `../../src/core` (the resolver roots module lookup at the path target:
+   `path = "src/core"` made it try `src/core/src/core/types.ail`). Consequence: the
+   structural package's dep is `{ path = "../../.packages/motoko_core" }`, which requires
+   `make sync_packages` to have run (the mirror is gitignored, `.gitignore:11`) — already
+   ordered inside `make build` before `check_core`.
+2. The `[exports] modules` list **gates** cross-package imports (verified error: "module …
+   is not exported by package") — adding `src/core/compaction` is genuinely required.
+3. **Transitively imported modules must also be exported**: with only `compaction`
+   exported, loading it failed (`LDR001` on `src/core/context_usage`, its `:29` import);
+   exporting `context_usage` too made the probe import of `estimate_tokens_messages` +
+   `usage_percent_with_limit` check clean (rc=0, measured pipe-free). Note the interaction
+   with WI-7d: retiring `context_limit_for` drops `compaction.ail`'s only `context_usage`
+   import, so the *end state* needs only `compaction` in the exports list — but the list
+   must carry both for any intermediate state where the import still exists.
+`ailang lock` run inside the package dir resolves the path dep (probe output:
+`sunholo/motoko_core@0.1.0 (path: …/.packages/motoko_core)`).
 
 ### Wrapper-retirement blast radius (G3c, WI-7)
 
@@ -710,15 +727,19 @@ Added to the harness list (`ailang check`-gated like every member).
 
 ### WI-7 — Ladder extraction + registration + G3c retirement (the relocation WI)
 
-**7a — probe (must pass before anything moves):** add
-`"sunholo/motoko_core" = { path = "../../src/core" }` to a skeleton
-`packages/motoko-ext-compaction-structural/ailang.toml`, add `"src/core/compaction"` to
-`src/core/ailang.toml [exports] modules`, and `ailang check` a one-line module importing
-`pkg/sunholo/motoko_core/core/compaction (estimate_tokens_messages)`. This dependency shape
-is **unproven** (no `packages/` package depends on `motoko_core` today — survey). If the
-probe fails: fallback is an in-package copy of the two measurement primitives with a pure
-parity test against core's (the D9 anti-duplication tension recorded and flagged to the
-ABI-v3 track), and the probe result goes in "ADR gaps found" either way.
+**7a — re-verify the probed dependency shape (proven this session; see the packaging
+survey and G-B7):** the structural package's `ailang.toml` declares
+`"sunholo/motoko_core" = { path = "../../.packages/motoko_core" }` (**the sync mirror, not
+`src/core`** — the resolver roots module lookup at the path target); add
+`"src/core/compaction"` **and** `"src/core/context_usage"` to `src/core/ailang.toml`
+`[exports] modules` (the transitive-export rule — `context_usage` can be dropped again
+after 7d removes `compaction.ail:29`'s import); run `make sync_packages` (propagates the
+manifest to the mirror; also the reason fresh clones must sync before checking the
+package), then `ailang lock` in the package dir and `ailang check` a module importing
+`pkg/sunholo/motoko_core/core/compaction (estimate_tokens_messages,
+usage_percent_with_limit)` — this exact sequence checked clean this session on a throwaway
+probe package (deleted after; mirror manifest restored). The in-package-copy fallback
+previously carried here is retired.
 
 **7b — the package** (`packages/motoko-ext-compaction-structural/`, name
 `sunholo/motoko_ext_compaction_structural`, version **1.0.0** per the ADR's ABI-track
@@ -760,8 +781,9 @@ model-keyed, dead per fact 19), keeping `estimate_tokens_messages`,
 - `compaction.ail` inline tests: model-keyed cases rewritten to `_with_limit` /
   measurement-only; ladder cases move to the package (7b).
 - `integration_tests.ail:27-45` `test_compaction_fires_above_70pct`: retargeted at the
-  package's ladder entry (or, if the 7a probe forced the fallback, at the package via a
-  script-level test — `ailang test` targets the file it is given).
+  package's ladder entry via a `pkg/sunholo/motoko_ext_compaction_structural/...` import
+  (src-tree modules already import path-dep pkg modules — `registry_generated.ail`
+  precedent).
 - `scripts/smoke_v2_compaction_tiers.ail`: imports retargeted to the package module; its
   ✓/✗ stdout (`tiers.txt` in the harness) must be byte-identical — the ladder logic is a
   move, not a rewrite.
@@ -890,11 +912,18 @@ while producing this plan. None blocks Phase B; each has a plan-level resolution
   `rpc.ail:235-239` emits a raw `v2_mode` event (no envelope), and `src/core/ai_compat.ail`
   emits call-stream events. Both untouched by Phase B; the ADR may want the inventory's
   scope ("the loop's wire stream") stated explicitly.
-- **G-B7 — the `motoko_core`-dependency shape for bundled extensions is unproven substrate.**
-  D9 requires the structural package to import core's measurement primitives rather than
-  duplicate them, but no `packages/` package depends on `sunholo/motoko_core`, and
-  `src/core/ailang.toml` exports only four modules. WI-7a probes it before relying on it;
-  outcome to be recorded here either way.
+- **G-B7 — the `motoko_core`-dependency shape for bundled extensions — RESOLVED (probed
+  this session, positive).** D9 requires the structural package to import core's
+  measurement primitives rather than duplicate them; no `packages/` package depended on
+  `sunholo/motoko_core`, so the shape was unproven. A throwaway probe package established
+  it works, with three non-obvious mechanics now specified in WI-7a and the packaging
+  survey: the path target is the `.packages/motoko_core` sync mirror (not `src/core`);
+  the `[exports]` list gates cross-package imports; and transitively imported modules must
+  be exported too. The in-package-duplication fallback is retired. Residual note for the
+  ADR: a committed package manifest now depends on a **generated, gitignored** directory —
+  benign because `make sync_packages` precedes `check_core` in `make build`, but the
+  registry-publication story for `motoko_ext_compaction_structural` (ABI track) will need
+  a published `motoko_core` or vendored primitives at that point.
 
 ---
 
@@ -910,6 +939,8 @@ while producing this plan. None blocks Phase B; each has a plan-level resolution
 | Script fleet | `ailang check` per file, no pipes | **11 fail** at HEAD: `smoke_v2_compaction_ai`, `smoke_v2_compaction_ai_registry`, `smoke_v2_conversation`, `smoke_v2_factual`, `smoke_v2_intercept`, `smoke_v2_pending`, `smoke_v2_policy`, `smoke_v2_policy_denial`, `smoke_v2_tool_build`, `smoke_v2_tool_read`, `smoke_v2_tool_write` (= G8's 13 minus the two WI-0 repairs; Phase B resolves the two compaction-AI ones by replacement) |
 | Emission counts | `grep -c` + full site enumeration | 39/7/2/4 grep hits = 38+6+1+3 call sites + defs (grounding item 4) |
 | `test/tiny` limit | `jq '.context_limits["test/tiny"]' .motoko/model-catalog.json` | 100 |
+| G-B7 dep-shape probe | throwaway `packages/probe_core_dep` (path dep on `.packages/motoko_core`, `ailang lock`, `ailang check`) | **passes** once the mirror is the target and `compaction`+`context_usage` are in the mirror's exports; exports-gating and transitive-export rule both observed (details in the packaging survey); artifacts deleted, mirror manifest restored |
+| LedgerEvent arity probe | 29-constructor variant + full projection match, `ailang check` + `ailang test` | clean (rc=0, 1 test pass) — WI-1's constructor count is substrate-safe; probe file deleted |
 
 ## Anchor re-verification log (HEAD `d0d5b7e`, 2026-07-03)
 
