@@ -268,8 +268,8 @@ Verified consumers of the dead model-keyed path: `compaction.ail`'s own inline t
 `scripts/smoke_v2_compaction_tiers.ail` (uses `_with_limit` + the ladder — moves with it);
 `src/core/test/integration_tests.ail:42` (`compact_step_with_limit("test/tiny", 100)`);
 `context_usage.ail:70-79` (`catalog_context_limit_for`'s fallback arms). Production uses
-only `compact_step_with_limit` (`agent_loop_v2.ail:59,:1059`). `test/tiny` = 100 tokens in
-`.motoko/model-catalog.json` `context_limits` (verified).
+only `compact_step_with_limit` (import `agent_loop_v2.ail:58`, call `:1059`). `test/tiny` =
+100 tokens in `.motoko/model-catalog.json` `context_limits` (verified).
 
 ### Scripted-stub facts (WI-0/WI-3/WI-4)
 
@@ -277,9 +277,14 @@ only `compact_step_with_limit` (`agent_loop_v2.ail:59,:1059`). `test/tiny` = 100
 step_budget, ohmy_pi, max_cost_millicents, cost_rates, script)` (`agent_loop_v2.ail:1581`)
 accepts an arbitrary `ExtRuntime` — the fixture-extension seam. `stub_step.ail`'s `Scripted`
 branch **never invokes `on_chunk`** (`:121-135`, deliberate) — deterministic streaming
-coverage requires extending `ScriptedStep` (D-B8). Constructors to update live only in
-`stub_step.ail` (`prose_step`, `tool_step`, `token_step`, `continuing_token_step`,
-`terminal_step`).
+coverage requires extending `ScriptedStep` (D-B8). Constructors: five in `stub_step.ail`
+(`prose_step`, `tool_step`, `token_step`, `continuing_token_step`, `terminal_step`) plus
+exactly one inline record literal in the fleet (`smoke_v2_pending_full_loop.ail:112-118` —
+grep-verified; every other smoke uses the helpers). A second load-bearing stub fact:
+**compaction is per-step ephemeral** (`compaction.ail:16-18`; the loop recurses on the
+original `msgs`, `agent_loop_v2.ail:1138`) — chain output is observable only via the
+provider payload (`provider_call_prepared.msg_count` after WI-4), the emitted stage events,
+or a direct `dispatch_pre_step_chain` call, never via the loop's returned history.
 
 ---
 
@@ -317,11 +322,17 @@ returns **data**; the driver converts outcomes to events (`StageApplied` →
 JSONL event — see gap G-B1). The gate predicate `validate_compactor_output(msgs_in, msgs_out)
 -> Result[(), string]` lives in `phase_vocab.ail` operating on `[Msg]` (no import cycle:
 `phase_vocab` imports only std + `tool_contract` + `types`); v1 checks: (a) no system-role
-messages in output, (b) every tool-role message has a non-empty `tool_call_id`, (c) tool-id
-correlation preserved — output tool-result ids ⊆ output assistant `tool_calls` ids, at most
-one result per id, and no ids invented relative to input. These predicates migrate into the
-conformance kit's `invariants.ail` when the ABI track builds it (one source of law, per D8);
-until then `phase_vocab` is their home.
+messages in output, (b) every tool-role message has a non-empty `tool_call_id`, (c) pairing
+preserved **relative to input**, not as absolute well-formedness: no `tool_call_id` appears
+in output that was absent from input, and for every id present in output, the presence of
+its assistant call and of its tool result each match input's — a compactor may drop a pair
+entirely but may not sever one or invent one. The relative form is load-bearing: valid
+production transcripts contain **orphan** tool-result messages by design
+(intercept-synthesized envelopes, `envelope_to_tool_message` — the model never emitted the
+call, `agent_loop_v2.ail:1178-1187`), so an absolute "every result pairs with a call" check
+would reject an identity pass-through of a legal transcript. These predicates migrate into
+the conformance kit's `invariants.ail` when the ABI track builds it (one source of law, per
+D8); until then `phase_vocab` is their home.
 
 **D-B4 — What `project()` becomes.** The scaffold body is replaced by the pure parts of the
 pipeline it always advertised: pin head prefix → `CompactableSegment`. Because the chain is
@@ -336,16 +347,22 @@ boundaries per the settled co-location adjudication (fact 17); `MkSegment` stays
 Open Question 4 remnant, following its recorded lean. The structural extension implements
 the full ladder including both emergency tiers (it *cannot* signal failure —
 `PreStepDecision` has no error arm, ABI 2.2.0 `types.ail:124-127` — so it returns its best
-effort). Core's scaffold keeps exactly one policy value: `exhaustion_pct() = 95`, a new
-named export in `compaction.ail`, applied **after** the chain:
-`usage_percent_with_limit(final_msgs, limit) >= exhaustion_pct()` (and `limit > 0`) ⇒
-`Err(ContextExhausted)` with reason
-`"compaction_exhausted: context at ${pct}% of ${model} limit after compactor chain"`.
+effort), and returns **`PassThrough` whenever elision changed nothing** (below the first
+tier, or all tool messages inside the keep-last window) — matching today's semantics where
+an unchanged `Ok(msgs)` from `compact_step_with_limit` is silent, and keeping no-op stages
+out of the event stream. Core's scaffold keeps exactly one policy value:
+`exhaustion_pct() = 95`, a new named export in `compaction.ail`, applied **after** the
+chain and measured over the **re-pinned full list against the catalog limit** (today's
+exact safety basis): `limit > 0 && usage_percent_with_limit(repinned, limit) >=
+exhaustion_pct()` ⇒ `Err(ContextExhausted)` with reason
+`"compaction_exhausted: context at ${pct}% of ${model} limit after compactor chain"`;
+`limit == 0` stays fail-open (unknown models — `compaction_full_loop` case 4 pins this).
 Zero-compactor behavior is honest exhaustion at the same threshold. The 95 in core
-(exhaustion gate) and the 95 in the extension (emergency tier trigger) are semantically
-distinct and numerically coupled; both docs cross-reference. Byte-level residue: the reason
-string changes (today's says "after emergency compaction", `compaction.ail:135`) — a
-documented expected diff (gap G-B3), visible only on the exhaustion path.
+(exhaustion gate, full-list basis) and the 95 in the extension (emergency tier trigger,
+segment basis — see the effective-limit convention in WI-5) are semantically distinct and
+numerically coupled; both docs cross-reference. Byte-level residue: the reason string
+changes (today's says "after emergency compaction", `compaction.ail:135`) — a documented
+expected diff (gap G-B3), visible only on the exhaustion path.
 
 **D-B6 — `payload_digest` is a labeled interim digest.** WI-4 needs a deterministic digest
 of the provider payload. AILANG v0.26.0 has no vetted content-hash in this repo's stdlib
@@ -355,16 +372,20 @@ ships a cheap pure rolling digest over role/content bytes in `phase_vocab`
 resistance is not claimed; DST ADR-001's contract explicitly allows "bounded projection plus
 hashes". The checkpoint content-hash work replaces both labels at once.
 
-**D-B7 — Parity protocol for a phase that intentionally adds events.** The harness gains an
-additive mode: `PARITY_STRIP_TYPES="provider_call_prepared,ext_compaction_rejected"` (env,
-consumed by `phase_a_event_parity.sh`) splits lines whose `type` matches into a side file
-`<name>.new.jsonl` before the main capture, and the harness asserts every stripped line's
-`type` is in the allowlist. `diff -r` against the baseline then stays byte-exact for the
-[prod] stream while the [NEW] stream is verified additive-only. For the two WIs whose
+**D-B7 — Parity protocol for a phase that intentionally adds events.** The harness gains a
+**transient admission mode**: `PARITY_STRIP_TYPES="provider_call_prepared,
+ext_compaction_rejected"` (env, consumed by `phase_a_event_parity.sh`) diverts lines whose
+`type` matches into a **sibling directory** `<out_dir>.new/` (not into `<out_dir>` — the
+`smoke_parity` target's `diff -r` must see only the main captures), and the harness asserts
+every diverted line's `type` is in the allowlist. At the WI that admits a [NEW] name
+(WI-4, WI-6): verify strip-mode diff vs. the old baseline is empty (proves the [prod]
+stream untouched and the additions allowlisted), then **re-bless a new baseline captured
+without strip mode** — i.e. blessed baselines always include the [NEW] lines, and every
+subsequent WI (and the final WI-8 gate) runs a **strict** byte diff. For the two WIs whose
 expected diffs touch [prod] bytes (WI-5's fixture note flip; WI-7's compaction-smoke
-changes), the protocol is: run the diff, check it against the WI's **expected-diff table**
-(committed in this plan), record the verified diff in the commit message, re-bless the
-baseline. Never re-bless without the table check.
+changes), the protocol is: run the strict diff, check it line-for-line against the WI's
+**expected-diff table** (committed in this plan), record the verified diff in the commit
+message, re-bless. Never re-bless without the table check.
 
 **D-B8 — Deterministic streaming via the stub.** `ScriptedStep` gains `chunks: [string]`;
 the `Scripted` branch of `dispatch_step` plays each entry as `ContentDelta` through
@@ -372,7 +393,11 @@ the `Scripted` branch of `dispatch_step` plays each entry as `ContentDelta` thro
 `chunks: []` — zero behavior change for existing smokes (`on_chunk` currently unused in the
 Scripted branch, `stub_step.ail:121-135`). New constructor
 `chunked_prose_step(text, chunks)`. This is what makes the ADR's streaming byte-parity test
-scripted and hermetic instead of live-provider-dependent.
+scripted and hermetic instead of live-provider-dependent. Blast radius of the record-field
+addition (grep-verified this session): the five constructors in `stub_step.ail` itself plus
+**exactly one** inline `ScriptedStep` record literal in the fleet —
+`smoke_v2_pending_full_loop.ail:112-118` — which gains `chunks: []` in the same commit
+(every other smoke builds steps via the constructor helpers).
 
 **D-B9 — Replace, don't repair, the two compaction-AI smokes.** `smoke_v2_compaction_ai.ail`
 imports `src/core/ext/compaction_ai` and `smoke_v2_compaction_ai_registry.ail` imports
@@ -424,7 +449,9 @@ is byte-identical or matches that WI's expected-diff table exactly.
   - `src/core/test/ext_fixture.ail` — the G7 fixture extension (D-B10 shape).
   - `scripts/smoke_v2_ext_fixture_parity.ail` — scripted full-loop smoke:
     `run_v2_with_stub(fixture_rt(), …, "anthropic/claude-sonnet-4-6", …)` (200k catalog
-    limit — compaction never triggers) with script
+    limit — tier compaction never triggers), **history seeded `[system, user]`** — no
+    existing parity smoke seeds a system message (survey), and both the `sys=1` assertion
+    here and WI-4's `system_prefix_count` assertion need one — with script
     `[tool_step("FixtureEcho", "{}", "call-fix-1"), prose_step("[FIXTURE_CONTINUE] draft"),
     prose_step("[FIXTURE_INTERCEPT] trip"), prose_step("done")]`. Asserts `Ok`; the harness
     asserts the event bracket: `ext_tool_handled`, `ext_solver_feedback`,
@@ -433,8 +460,9 @@ is byte-identical or matches that WI's expected-diff table exactly.
     This closes G7: all three extension-path message constructors
     (`handled_tool_message`, `envelope_to_tool_message`, plus the feedback path) are now
     e2e-parity-covered before emission rewires.
-  - `scripts/smoke_v2_stream_parity.ail` — scripted smoke using `chunked_prose_step("full
-    text", ["chunk-a","chunk-b","chunk-c"])`; the harness asserts the exact line sequence
+  - `scripts/smoke_v2_stream_parity.ail` — scripted smoke, history seeded `[system, user]`
+    (same reason), using `chunked_prose_step("full text",
+    ["chunk-a","chunk-b","chunk-c"])`; the harness asserts the exact line sequence
     `thinking_stream_start` → 3× `thinking_delta` (with `text_delta` values in script
     order) → `thinking_stream_end` (status completed) → `thinking`. This is the ADR's
     streaming byte-parity instrument, captured **before** WI-3 flips the emission path.
@@ -447,7 +475,8 @@ is byte-identical or matches that WI's expected-diff table exactly.
 - **Files touched (edited, test-only):**
   - `src/core/test/stub_step.ail` — `ScriptedStep` gains `chunks: [string]`; `Scripted`
     branch plays chunks through `on_chunk`; five existing constructors gain `chunks: []`;
-    new `chunked_prose_step`. (Verified: constructors live only in this file.)
+    new `chunked_prose_step`. Plus the one inline literal outside this file:
+    `smoke_v2_pending_full_loop.ail:112-118` gains `chunks: []` (D-B8 blast radius).
   - `scripts/phase_a_event_parity.sh` — adds the two new smokes to the fixed list; adds the
     `PARITY_STRIP_TYPES` additive mode (D-B7); adds the fixture/stream assertion blocks
     (same pattern as the existing `smoke_phase_a_tool_parity` grep block `:44-48`).
@@ -476,9 +505,13 @@ site while writing). Structural points:
   the info record carries the four token ints and the projection reproduces
   `per_step_usage_kvs`'s conditional shape, `done` drops `source`, tool events gain
   `stream_id`).
-- Json-valued fields (`native_tool_calls.tool_calls`, `native_tool_results.results`,
-  `run_summary.usage`, `scratchpad_result.cells_json`) are carried as `Json` in the info
-  records — the driver builds them with the existing helpers, the projection embeds them.
+- Genuinely structural payloads (`native_tool_calls.tool_calls`,
+  `native_tool_results.results`, `scratchpad_result.cells_json`) are carried as `Json` in
+  the info records — the driver builds them with the existing helpers, the projection
+  embeds them. **Conditionally shaped** payloads (`thinking`'s usage kvs, `run_summary`'s
+  nested `usage` object — both with omit-when-absent cache fields) are carried as typed
+  ints and the projection reproduces the conditional shape, so the layout logic lives in
+  exactly one place and the golden tests can pin both branches.
 - `run_summary`'s `duration_ms` is **data** in the info record (the driver computes it from
   Clock); the projection stays pure.
 - Constructor classes annotated [prod]/[NEW] as now; `TotalsUpdated`/`CheckpointTaken`
@@ -566,31 +599,52 @@ the result-side fields (tokens, finish_reason, tool-call count) are already carr
 `compacted_msgs` — the *actual* payload `dispatch_step` receives. Info record extended in
 `phase_vocab` accordingly (`ProviderCallInfo` gains `system_prefix_count`, `model`).
 
-The **L1 consumer** (ADR acceptance criterion 2): the harness gains an assertion block for
-the fixture and stream smokes — count of `provider_call_prepared` lines equals the scripted
-step count, each with `system_prefix_count` ≥ 1 and a non-empty digest; plus a golden pure
-test pinning the projection. (A scripted smoke consuming the seam *is* an L1 test: scripted
-provider, no network, fake-free ports pending Phase C.)
+The **L1 consumer** (ADR acceptance criterion 2): the harness gains an assertion block
+**scoped to the two WI-0 smokes** (the only ones with system-seeded histories — survey) —
+count of `provider_call_prepared` lines equals the scripted step count, each with
+`system_prefix_count` = 1 and a non-empty digest; plus a golden pure test pinning the
+projection. (A scripted smoke consuming the seam *is* an L1 test: scripted provider, no
+network, fake-free ports pending Phase C.) The legacy smokes' histories have no system
+prefix; their `provider_call_prepared` lines are verified additive-only by the strip mode,
+not field-asserted.
 
 - **Files touched:** `src/core/agent_loop_v2.ail`, `src/core/phase_vocab.ail`,
   `scripts/phase_a_event_parity.sh` (assertion block).
 - **Verification:** WI-2 command set; `make smoke_parity` with
-  `PARITY_STRIP_TYPES=provider_call_prepared` — [prod] stream byte-identical, side files
-  contain only the allowed name, assertion block green. TUI tolerance test (WI-0) is the
-  admission evidence for the [NEW] name.
-- **Rollback:** revert the commit; the harness assertion block reverts with it.
+  `PARITY_STRIP_TYPES=provider_call_prepared` — strict diff vs. the WI-0 baseline empty,
+  diverted lines contain only the allowed name, assertion block green; then **re-bless**
+  the baseline without strip mode (D-B7 — the blessed stream now includes the [NEW]
+  lines). TUI tolerance test (WI-0) is the admission evidence for the [NEW] name.
+- **Rollback:** revert the commit + re-bless the prior baseline; the harness assertion
+  block reverts with it.
 
 ### WI-5 — Core-side system-prefix fix (closes the §7.0 live gap)
 
 In `phase_vocab.ail`: `PinnedSplit` + `split_for_compaction` + `segment_messages` (D-B4);
 `project()`'s scaffold body is replaced by delegation to the split (its
-"real pipeline in Phase B" header promise, kept honest). In `agent_loop_v2.ail` (`:1039-1051`):
-split before the pre-step dispatch; pass `messages_to_msgs(segment_messages(split.segment))`
-to `dispatch_pre_step`; on `Compacted`, validate via `validate_compactor_output` (landed
-here, used fully by WI-6) and **re-pin**: `split.pinned ++ msgs_to_messages(compacted)`.
-The structural stage (`compact_step_with_limit`, `:1059`) now also operates on the
-re-pinned list exactly as today (elision never touches non-tool messages — behavior
-unchanged). `ExtCtx.history_slice` is deliberately not touched (out of scope; gap G-B5).
+"real pipeline in Phase B" header promise, kept honest); `validate_compactor_output` lands
+here as **pure code + tests only** — its rejection wiring is WI-6's (no
+`ext_compaction_rejected` is emitted before the chain exists; a `Compacted` result is
+applied unvalidated in WI-5 exactly as today). In `agent_loop_v2.ail` (`:1039-1051`): split
+before the pre-step dispatch; pass `messages_to_msgs(segment_messages(split.segment))` to
+`dispatch_pre_step`; on `Compacted`, **re-pin**:
+`split.pinned ++ msgs_to_messages(compacted)`. The structural stage
+(`compact_step_with_limit`, `:1059`) operates on the re-pinned list exactly as today
+(elision never touches non-tool messages — behavior unchanged).
+
+**Effective-limit convention (lands here, because this WI changes what compactors can
+measure):** compactors now see only the segment, so a threshold measured as
+`segment_tokens / catalog_limit` under-reads by the pinned prefix's share, deferring
+compaction relative to today. Compensation: the pre-step `ExtCtx` (`:1039`) gets
+`context_limit = catalog_limit − estimate_tokens_messages(split.pinned)` (floor 0) — "the
+limit available to the compactable segment". This is core scaffold measurement, not policy;
+the per-purpose ctx at `:1039` feeds only `dispatch_pre_step` (the ctx at `:1139` for
+intercept/solver hooks is separate and keeps the raw catalog limit). Exactness note: with a
+pinned-prefix share `s` of the limit, a compactor tier `t` now fires at total usage
+`t + s(1−t)` instead of `t` — identical when `s = 0`, slightly later otherwise; all current
+parity smokes have `s = 0` (no system messages in their histories — survey), so this is
+byte-invisible in the harness and recorded as a designed deviation in G-B3.
+`ExtCtx.history_slice` is deliberately not touched (out of scope; gap G-B5).
 
 - **Expected diff (the only one):** the fixture smoke's `compaction_extension` note flips
   `fixture_prestep sys=1` → `fixture_prestep sys=0` — this **is** the
@@ -599,10 +653,13 @@ unchanged). `ExtCtx.history_slice` is deliberately not touched (out of scope; ga
   baseline re-blessed per D-B7.
 - **Files touched:** `src/core/phase_vocab.ail`, `src/core/agent_loop_v2.ail`,
   `scripts/phase_a_event_parity.sh` (assertion flip).
-- **Verification:** WI-2 command set; parity diff = exactly the note flip (table above);
-  new pure tests: `split_for_compaction` pins/rejoins correctly, segment never contains
-  system messages, `validate_compactor_output` accepts identity and rejects a
-  system-injecting / pair-severing / id-inventing output (three negative fixtures).
+- **Verification:** WI-2 command set; strict parity diff = exactly the note flip
+  (`fixture_prestep sys=1` → `sys=0` in the fixture smoke's `compaction_extension` lines,
+  nothing else); new pure tests: `split_for_compaction` pins/rejoins correctly, segment
+  never contains system messages, `validate_compactor_output` accepts identity — including
+  identity over a segment containing an **orphan** intercept-synthesized tool message
+  (D-B3's relative-pairing rationale, pinned as a test) — and rejects a system-injecting /
+  pair-severing / id-inventing output (three negative fixtures).
 - **Rollback:** revert the commit + re-bless the previous baseline (recorded in the WI's
   commit message).
 
@@ -621,10 +678,21 @@ until WI-7 relocates it (chain(ext…, structural-last) ≡ today's sequential c
 §7.5; with at most one registered compactor, fold-through ≡ first-wins).
 
 New deterministic chain smoke `scripts/smoke_v2_compaction_chain.ail` (replaces the two
-dead compaction-AI smokes, D-B9): three inline fixture compactors — A appends a marker note
-and rewrites nothing, B returns a **pair-severing** output (gate must reject:
-`ext_compaction_rejected`, chain continues), C compacts validly — asserting: final msgs
-show A∘C composition (B skipped), stage events in registry order, rejected stage present.
+dead compaction-AI smokes, D-B9). Compaction is per-step ephemeral (survey), so the smoke
+has two sections with different observation channels:
+- **Direct section** — calls the exported `dispatch_pre_step_chain` itself with a
+  constructed rt of three inline fixture compactors: A returns
+  `Compacted(msgs ++ [user-role marker "chain-A"], "A")` (gate-clean: no system role, no
+  tool ids invented), B returns a **pair-severing** output (gate must reject; chain
+  continues on A's output), C rewrites tool content validly. Asserts on the returned
+  record: `msgs` show C applied *on top of* A's marker (fold-through, B skipped), `stages`
+  in registry order with `[Applied, Rejected, Applied]` outcomes. ✓/✗ report + `exit(1)`,
+  tiers-smoke style.
+- **Full-loop section** — `run_v2_with_stub` with the same rt, so the harness JSONL carries
+  the driver's view: per step, two `compaction_extension` events (notes `A`, then C's) and
+  one `ext_compaction_rejected`, in registry order; after WI-4 the
+  `provider_call_prepared.msg_count` reflects the chain's output (marker added), pinning
+  that the compacted view actually reached the provider payload.
 Added to the harness list (`ailang check`-gated like every member).
 
 - **Files touched:** `src/core/ext/runtime.ail`, `src/core/agent_loop_v2.ail`,
@@ -632,10 +700,12 @@ Added to the harness list (`ailang check`-gated like every member).
   strip-type `ext_compaction_rejected`), deletion of `scripts/smoke_v2_compaction_ai.ail` +
   `scripts/smoke_v2_compaction_ai_registry.ail`.
 - **Verification:** WI-2 command set + `ailang test src/core/ext/runtime.ail` (its inline
-  dispatch tests updated to the chain API); `make smoke_parity` with strip-types — [prod]
-  stream byte-identical everywhere (the fixture smoke's single valid compactor behaves
-  identically under fold-through); chain smoke green; baseline re-blessed (adds the chain
-  smoke's capture).
+  dispatch tests updated to the chain API); `make smoke_parity` with
+  `PARITY_STRIP_TYPES=ext_compaction_rejected` — strict diff vs. the **WI-5** baseline
+  (the current blessed one) empty for all pre-existing smokes (the fixture smoke's single
+  valid compactor behaves identically under fold-through; the rejected name appears only
+  in the new chain smoke); chain smoke green (both sections); then re-bless without strip
+  mode, adding the chain smoke's capture (D-B7).
 - **Rollback:** revert the commit (restores first-wins + the two deleted smokes).
 
 ### WI-7 — Ladder extraction + registration + G3c retirement (the relocation WI)
@@ -652,15 +722,18 @@ ABI-v3 track), and the probe result goes in "ADR gaps found" either way.
 
 **7b — the package** (`packages/motoko-ext-compaction-structural/`, name
 `sunholo/motoko_ext_compaction_structural`, version **1.0.0** per the ADR's ABI-track
-naming, dep `"sunholo/motoko_ext_abi" = "2.2.0"`, `[effects] max = []`-adjacent — the hooks
-are pure but must satisfy the ABI 2.2.0 row signatures):
+naming, dep `"sunholo/motoko_ext_abi" = "2.2.0"`, `[effects] max` mirroring the ABI hook
+row (scratchpad precedent) — the hook *bodies* are pure and subsume into the declared rows,
+fact 2):
 - `compaction_structural.ail` — the relocated ladder: `elide_content`, `elide_walk`,
   `elide_old_tool_results`, `count_tool_msgs`, both emergency tiers, and the tier selection
   from `compact_step_with_limit` (`compaction.ail:78-154`), rewritten over `[Msg]` (the
   hook's type; structurally identical fields) with the limit taken from
-  `ctx.context_limit`; returns `PassThrough` below `elide_tier_pct()`, else
+  `ctx.context_limit` (the WI-5 effective limit); returns `PassThrough` below
+  `elide_tier_pct()` **or whenever elision changed nothing** (D-B5 — e.g. all tool
+  messages inside the keep-last window, today's silent no-op), else
   `Compacted(elided, "structural: tier=<t> keep_last=<k>")` — best effort at ≥95%, no
-  error arm (D-B5). The **seven named constants** relocate here as exports.
+  error arm. The **seven named constants** relocate here as exports.
 - `register.ail` — `register_with_config` (scratchpad precedent,
   `packages/motoko_scratchpad/register.ail`).
 - In-package pure tests: the relocated `compaction.ail` ladder tests plus
@@ -697,16 +770,26 @@ model-keyed, dead per fact 19), keeping `estimate_tokens_messages`,
   currently type-checks but tests a vestigial path).
 - `scripts/smoke_v2_compaction_full_loop.ail`: registers the structural package's hooks in
   its `rt` (imports `pkg/sunholo/motoko_ext_compaction_structural/...`; replaces
-  `empty_rt()` at `:73,:90` for the tier cases) so it exercises the relocated ladder
-  through the chain — the e2e evidence for behavior preservation.
+  `empty_rt()` for the tier cases) so it exercises the relocated ladder through the chain
+  — the e2e evidence for behavior preservation. **Grounding caveat that shapes the
+  expected diffs**: its histories are `[user, tool×1]` (`mk_history`, verified this
+  session), and a single tool message sits inside *every* keep-last window (10/5/3/1) —
+  today's elision changes nothing at any tier, so under D-B5's PassThrough-when-unchanged
+  the relocated ladder emits **no** `compaction_extension` for the existing cases either.
+  The exhaustion case (385 chars ≈ 96%) Errs today because emergency elision cannot touch
+  the lone kept tool message — same decision post-relocation via core's exhaustion check.
+  To get a *positive* elision case into parity coverage, the smoke gains a **new case 5**:
+  a multi-tool-message history (e.g. 12 tool messages, ~80% usage) where tier-1 elision
+  genuinely rewrites — asserting `Ok` plus, in the harness, a `compaction_extension` line
+  with a `structural:` note.
 
 **Expected diffs (the WI-7 table; re-bless per D-B7):** in
-`smoke_v2_compaction_full_loop.jsonl` only — (1) tier cases gain `compaction_extension`
-events with `structural: …` notes (today's silent core elision becomes a recorded stage —
-[prod] name, layout unchanged, new occurrences); (2) the exhaustion case's
+`smoke_v2_compaction_full_loop.jsonl` only — (1) the exhaustion case's
 `compaction_exhausted.reason`, the `error` copy, and `run_summary.error` change bytes to
-the "after compactor chain" wording with the post-chain percentage (D-B5). Every other
-smoke: byte-identical ([prod]) + allowed [NEW] side files.
+the "after compactor chain" wording with the post-chain percentage (D-B5); (2) the **new
+case 5** appends its event block (including the first `compaction_extension` with a
+`structural:` note — a new occurrence of a [prod] name with unchanged layout, from a new
+test case). Every other smoke: byte-identical.
 
 - **Files touched:** the new package (3+ files), root `ailang.toml`, `ailang.lock`,
   `src/core/ailang.toml`, `src/core/ext/registry_generated.ail` (regenerated), 4×
@@ -722,7 +805,9 @@ smoke: byte-identical ([prod]) + allowed [NEW] side files.
   src/core --include=*.ail` hits only `_with_limit` forms; `grep -n context_limit_for
   src/core/context_usage.ail` hits nothing.
 - **Rollback:** revert the commit set (7b–7e are one logical relocation and revert
-  together; 7a's export-list line is harmless standalone). Baseline re-bless recorded.
+  together; in particular **7c and 7d land in the same commit** — registering the ladder
+  extension while the core shim still runs would elide twice per step; 7a's export-list
+  line is harmless standalone). Baseline re-bless recorded.
 
 ### WI-8 — Gate checklist (final; all must pass on the finished branch)
 
@@ -735,8 +820,10 @@ ailang test packages/motoko-ext-compaction-structural/compaction_structural.ail
 ailang check scripts/probe_phase_vocab_sealed.ail   # MUST FAIL IMP010 (sealing holds)
 (cd src/tui && npm test)                            # incl. unknown-type tolerance test
 bash scripts/setup_dp7_smoke_workdirs.sh
-PARITY_STRIP_TYPES=provider_call_prepared,ext_compaction_rejected \
-  PARITY_BASELINE=/tmp/phase_b_blessed make smoke_parity   # [prod] byte-identical
+PARITY_BASELINE=/tmp/phase_b_blessed make smoke_parity     # STRICT byte diff (D-B7:
+                                                           # blessed baselines include the
+                                                           # [NEW] lines; strip mode was
+                                                           # transient, WI-4/WI-6 only)
 ./scripts/phase_b_projection_gate.sh                # see below
 ```
 
@@ -774,12 +861,19 @@ while producing this plan. None blocks Phase B; each has a plan-level resolution
   shape-complete; the mismatch list (grounding item 2, incl. the `text`-vs-`text_delta`
   stream field) is exactly the WI-1 work. No doc change strictly required; noted so the
   next reader does not mistake the scaffold for the contract.
-- **G-B3 — "behavior-preserving relocation" is result-level, not byte-level.** Two residues
-  the ADR does not mention: (1) core elision is silent today, so the relocated ladder's
-  applied stages add `compaction_extension` occurrences (type-set subset holds — the gate's
-  wording — but the handoff's "none for [prod]" summary reads stricter than the ADR gate);
-  (2) the exhaustion `reason` string changes wording/percentage (D-B5). Both confined to
-  the compaction smokes, both in WI-7's expected-diff table.
+- **G-B3 — "behavior-preserving relocation" is result-level, not byte-level.** Three
+  residues the ADR does not mention: (1) core elision is silent today, so the relocated
+  ladder's genuinely-applied stages add `compaction_extension` occurrences (type-set subset
+  holds — the gate's wording — but the handoff's "none for [prod]" summary reads stricter
+  than the ADR gate); (2) the exhaustion `reason` string changes wording/percentage
+  (D-B5); (3) compactors now measure the **segment** — with the WI-5 effective-limit
+  compensation, a tier `t` fires at total usage `t + s(1−t)` where `s` is the pinned
+  prefix's share of the limit, i.e. slightly later than today when a large system prompt
+  is in play (exact at `s=0`, which covers every parity smoke), and in the narrow band
+  this opens, exhaustion can fire where today's emergency keep-last-3/1 would have
+  recovered. Designed, bounded (by `s`·5% of the limit at the 95 threshold), and confined
+  to large-prefix sessions; recorded here for the ADR's attention rather than silently
+  shipped.
 - **G-B4 — G7's fixture wording under-covers the envelope path.** The ADR names "scripted
   `Handled` + `ContinueWithFeedback`", but `envelope_to_tool_message`'s only call site is
   the `InterceptHandled` path (`agent_loop_v2.ail:1185`); a fixture without an intercept
