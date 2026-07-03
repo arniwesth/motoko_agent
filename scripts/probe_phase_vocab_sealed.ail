@@ -1,0 +1,13 @@
+-- This probe is expected to FAIL with IMP010: phase_vocab's sealed
+-- constructors must not be importable outside src/core/phase_vocab.ail.
+
+module scripts/probe_phase_vocab_sealed
+
+import src/core/phase_vocab (MkHistory, MkPayload)
+import std/io (println)
+
+export func main() -> () ! {IO} {
+  let _ = MkHistory([]);
+  let _ = MkPayload([]);
+  println("unexpected: sealed constructors imported")
+}

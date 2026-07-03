@@ -1,0 +1,357 @@
+-- src/core/phase_vocab.ail
+--
+-- Phase-oriented core vocabulary. Phase A lands this module unused by
+-- production: sealed history/payload types, state/delta/checkpoint shapes,
+-- the typed ledger vocabulary, and schema-v1 projection scaffolding.
+
+module src/core/phase_vocab
+
+import std/ai (Message, ToolCall)
+import std/json (Json, jo, kv, js, jnum, encode)
+import std/list (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (contains)
+
+-- ============================================================================
+-- History: sealed. MkHistory is deliberately NOT exported.
+-- ============================================================================
+
+type History = MkHistory([Message])
+
+export func history_from_seed(msgs: [Message]) -> Result[History, string] {
+  if system_is_head_prefix(msgs, true)
+  then Ok(MkHistory(msgs))
+  else Err("history seed: system messages must form a head prefix")
+}
+
+export func history_append(h: History, m: Message) -> History {
+  match h { MkHistory(xs) => MkHistory(xs ++ [m]) }
+}
+
+export func history_len(h: History) -> int {
+  match h { MkHistory(xs) => length(xs) }
+}
+
+-- PLACEHOLDER digest: length-based and forgeable. The real digest is a Phase
+-- B/C obligation before anything consumes this value.
+export func history_digest(h: History) -> string {
+  match h { MkHistory(xs) => "h${show(length(xs))}" }
+}
+
+pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest =>
+      if m.role == "system"
+      then still_head && system_is_head_prefix(rest, true)
+      else system_is_head_prefix(rest, false)
+  }
+}
+
+pure func take_system_prefix(msgs: [Message]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "system" then m :: take_system_prefix(rest) else []
+  }
+}
+
+-- ============================================================================
+-- Compaction pipeline types: both sealed.
+-- ============================================================================
+
+type CompactableSegment = MkSegment([Message])
+type ProviderPayload = MkPayload([Message])
+
+export func payload_messages(p: ProviderPayload) -> [Message] {
+  match p { MkPayload(xs) => xs }
+}
+
+export type ModelRequest = { payload: ProviderPayload, model: string }
+
+export type TokenTelemetry = {
+  last_input_tokens: int,
+  last_output_tokens: int
+}
+
+-- Re-grounded on current compaction.ail. The Phase-A source of truth is the
+-- named exports in src/core/compaction.ail: elide_tier_pct(),
+-- elide_hard_tier_pct(), emergency_pct(), elide_keep_last(),
+-- elide_hard_keep_last(), emergency_keep_last(), emergency_final_keep_last().
+export type CompactionPolicy = {
+  context_limit: int,
+  elide_tier_pct: int,
+  elide_hard_tier_pct: int,
+  emergency_pct: int
+}
+
+-- Scaffold only: Phase B replaces this body with the real
+-- pin -> normalize -> compactor-chain -> tiers projection. It is not called
+-- from production in Phase A.
+export func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
+  -> Result[{ payload: ProviderPayload, events: [LedgerEvent] }, string] {
+  match h {
+    MkHistory(xs) =>
+      if pol.context_limit > 0 && t.last_input_tokens >= pol.context_limit
+      then Err("context exhausted")
+      else Ok({
+        payload: MkPayload(xs),
+        events: [ProviderCallPrepared({ step: 0, msg_count: length(xs), payload_digest: "p${show(length(xs))}" })]
+      })
+  }
+}
+
+-- ============================================================================
+-- Checkpoint seam.
+-- ============================================================================
+
+export type CheckpointPlan = { reason: string, summary: string }
+
+export func checkpoint(h: History, plan: CheckpointPlan)
+  -> { history: History, event: LedgerEvent } {
+  match h {
+    MkHistory(xs) => {
+      let pinned = take_system_prefix(xs);
+      let summary_msg: Message =
+        { role: "assistant", content: "[CHECKPOINT] ${plan.summary}", tool_calls: [], tool_call_id: "" };
+      let rebuilt = MkHistory(pinned ++ [summary_msg]);
+      {
+        history: rebuilt,
+        event: CheckpointTaken({
+          reason: plan.reason,
+          before_digest: history_digest(h),
+          after_digest: history_digest(rebuilt)
+        })
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- StepState and deltas.
+-- ============================================================================
+
+export type LoopTotals = {
+  input_tokens: int,
+  output_tokens: int,
+  cost_millicents: int,
+  cost_warned_pct: int
+}
+
+export type StepPolicy = {
+  step_budget: int,
+  max_cost_millicents: int,
+  persist_retries: int,
+  retry_stream_errors: bool,
+  compaction: CompactionPolicy
+}
+
+export type StepState = {
+  step_idx: int,
+  history: History,
+  telemetry: TokenTelemetry,
+  totals: LoopTotals,
+  nudges_used: int,
+  ext_artifacts: Json,
+  pending_tool_calls: [ToolCall],
+  last_finish_reason: string,
+  last_response_text: string
+}
+
+export type StateDelta = {
+  telemetry: Option[TokenTelemetry],
+  totals: Option[LoopTotals],
+  nudges_used: Option[int],
+  ext_artifacts: Option[Json],
+  pending_tool_calls: Option[[ToolCall]],
+  last_finish_reason: Option[string],
+  last_response_text: Option[string]
+}
+
+export pure func empty_delta() -> StateDelta {
+  { telemetry: None, totals: None, nudges_used: None, ext_artifacts: None,
+    pending_tool_calls: None, last_finish_reason: None, last_response_text: None }
+}
+
+export func apply_state_delta(s: StepState, d: StateDelta) -> StepState {
+  {
+    step_idx: s.step_idx,
+    history: s.history,
+    telemetry: match d.telemetry { Some(t) => t, None => s.telemetry },
+    totals: match d.totals { Some(t) => t, None => s.totals },
+    nudges_used: match d.nudges_used { Some(n) => n, None => s.nudges_used },
+    ext_artifacts: match d.ext_artifacts { Some(a) => a, None => s.ext_artifacts },
+    pending_tool_calls: match d.pending_tool_calls { Some(c) => c, None => s.pending_tool_calls },
+    last_finish_reason: match d.last_finish_reason { Some(f) => f, None => s.last_finish_reason },
+    last_response_text: match d.last_response_text { Some(t) => t, None => s.last_response_text }
+  }
+}
+
+export func apply_checkpoint(s: StepState, plan: CheckpointPlan)
+  -> { state: StepState, event: LedgerEvent } {
+  let cp = checkpoint(s.history, plan);
+  {
+    state: {
+      step_idx: s.step_idx,
+      history: cp.history,
+      telemetry: s.telemetry,
+      totals: s.totals,
+      nudges_used: s.nudges_used,
+      ext_artifacts: s.ext_artifacts,
+      pending_tool_calls: s.pending_tool_calls,
+      last_finish_reason: s.last_finish_reason,
+      last_response_text: s.last_response_text
+    },
+    event: cp.event
+  }
+}
+
+-- ============================================================================
+-- StepDecision and phase result.
+-- ============================================================================
+
+export type ExecutorKind = ExecNative | ExecDelegated | ExecHandledByExt | ExecWsLoopback | ExecStreamIsland
+
+export type ToolPlanEntry = { call: ToolCall, executor: ExecutorKind }
+export type ToolPlan = { entries: [ToolPlanEntry] }
+
+export type ApprovalRequest = {
+  call: ToolCall,
+  default_allow: bool,
+  reason: string,
+  stream_id: string,
+  remaining: [ToolPlanEntry]
+}
+
+export type FinalizeInfo = { reason: string, output: string }
+export type FailInfo = { code: string, message: string, retryable: bool }
+
+export type StepDecision
+  = CallModel(ModelRequest)
+  | RunTools(ToolPlan)
+  | AwaitApproval(ApprovalRequest)
+  | InjectUserMessage(Message)
+  | TakeCheckpoint(CheckpointPlan)
+  | Finalize(FinalizeInfo)
+  | Fail(FailInfo)
+
+export type PhaseResult = {
+  delta: StateDelta,
+  transcript_append: [Message],
+  events: [LedgerEvent],
+  cost_delta_millicents: int
+}
+
+-- ============================================================================
+-- LedgerEvent: typed/DST-canonical layer. to_schema_v1 targets production wire.
+--
+-- Production schema-v1 inventory — 29 JSONL `type` values (regenerate with:
+--   grep -o 'emit_event(session_id, "[a-z_]*"' src/core/agent_loop_v2.ail
+--   plus the two direct emit_json stream types at :255 and :265):
+--   27 emit_event names:
+--     compaction_exhausted compaction_extension cost_exhausted cost_warning
+--     delegated_tool_deferred done dp7_verifier_rejected error
+--     ext_intercept_handled ext_solver_feedback ext_tool_handled
+--     hybrid_bash_extracted native_tool_calls native_tool_denied
+--     native_tool_results persist_nudge run_summary scratchpad_result
+--     session_start session_suspend stream_error_retry thinking
+--     thinking_stream_end thinking_stream_start tool_pending
+--     v2_tool_dispatch_complete v2_tool_dispatch_start
+--   +2 stream-chunk types emitted via emit_json: thinking_delta reasoning_delta
+--
+-- [prod] constructors project to existing production names. [NEW]
+-- constructors introduce additive names gated in Phase B.
+-- ============================================================================
+
+export type ProviderCallInfo = { step: int, msg_count: int, payload_digest: string }
+export type ProviderResultInfo = { step: int, finish_reason: string, input_tokens: int, output_tokens: int }
+export type PolicyInfo = { step: int, tool: string, call_id: string, decision: string, reason: string }
+export type ToolResultInfo = { step: int, tool: string, call_id: string, exit_code: int }
+export type CompactionInfo = { step: int, tier: int, note: string }
+export type CostWarningInfo = { step: int, threshold_pct: int, total_millicents: int }
+export type CheckpointInfo = { reason: string, before_digest: string, after_digest: string }
+export type DoneInfo = { step: int, output: string, source: string }
+export type StreamDeltaInfo = { step: int, stream_id: string, seq: int, kind: string, text: string }
+
+export type LedgerEvent
+  = ProviderCallPrepared(ProviderCallInfo)   -- [NEW]  provider_call_prepared
+  | ProviderResult(ProviderResultInfo)       -- [prod] thinking
+  | ToolPolicyDecided(PolicyInfo)            -- [prod] native_tool_denied | tool_pending
+  | ToolResultAppended(ToolResultInfo)       -- [prod] native_tool_results
+  | CompactionApplied(CompactionInfo)        -- [prod] compaction_extension
+  | ExtCompactionRejected(CompactionInfo)    -- [NEW]  ext_compaction_rejected
+  | CostWarning(CostWarningInfo)             -- [prod] cost_warning
+  | PersistNudge(CompactionInfo)             -- [prod] persist_nudge
+  | TotalsUpdated(ProviderResultInfo)        -- [NEW]  loop_totals_updated
+  | CheckpointTaken(CheckpointInfo)          -- [NEW]  history_checkpoint
+  | StreamDelta(StreamDeltaInfo)             -- [prod] thinking_delta | reasoning_delta
+  | DoneEvent(DoneInfo)                      -- [prod] done
+
+export func to_schema_v1(e: LedgerEvent) -> Json {
+  match e {
+    ProviderCallPrepared(i) => jo([kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("payload_digest", js(i.payload_digest))]),
+    ProviderResult(i) => jo([kv("type", js("thinking")), kv("step", jnum(_int_to_float(i.step))), kv("finish_reason", js(i.finish_reason)), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))]),
+    ToolPolicyDecided(i) => jo([kv("type", js(if i.decision == "deny" then "native_tool_denied" else "tool_pending")), kv("step", jnum(_int_to_float(i.step))), kv("tool", js(i.tool)), kv("id", js(i.call_id)), kv("reason", js(i.reason))]),
+    ToolResultAppended(i) => jo([kv("type", js("native_tool_results")), kv("step", jnum(_int_to_float(i.step))), kv("tool", js(i.tool)), kv("id", js(i.call_id)), kv("exit_code", jnum(_int_to_float(i.exit_code)))]),
+    CompactionApplied(i) => jo([kv("type", js("compaction_extension")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))]),
+    ExtCompactionRejected(i) => jo([kv("type", js("ext_compaction_rejected")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))]),
+    CostWarning(i) => jo([kv("type", js("cost_warning")), kv("step", jnum(_int_to_float(i.step))), kv("threshold", js("${show(i.threshold_pct)}pct")), kv("total_cost_millicents", jnum(_int_to_float(i.total_millicents)))]),
+    PersistNudge(i) => jo([kv("type", js("persist_nudge")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))]),
+    TotalsUpdated(i) => jo([kv("type", js("loop_totals_updated")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))]),
+    CheckpointTaken(i) => jo([kv("type", js("history_checkpoint")), kv("reason", js(i.reason)), kv("before_digest", js(i.before_digest)), kv("after_digest", js(i.after_digest))]),
+    StreamDelta(i) => jo([kv("type", js(if i.kind == "reasoning" then "reasoning_delta" else "thinking_delta")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("seq", jnum(_int_to_float(i.seq))), kv("text", js(i.text))]),
+    DoneEvent(i) => jo([kv("type", js("done")), kv("step", jnum(_int_to_float(i.step))), kv("output", js(i.output)), kv("source", js(i.source))])
+  }
+}
+
+-- ============================================================================
+-- Inline pure tests.
+-- ============================================================================
+
+pure func mk_msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+pure func test_empty_delta_is_identity_shape() -> bool
+  tests [((), true)]
+  {
+    match empty_delta().telemetry { None => true, Some(_) => false }
+  }
+
+pure func test_history_from_seed_accepts_head_prefix() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Ok(h) => history_len(h) == 2,
+      Err(_) => false
+    }
+  }
+
+pure func test_history_from_seed_rejects_late_system() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("user", "u"), mk_msg("system", "s")]) {
+      Ok(_) => false,
+      Err(_) => true
+    }
+  }
+
+pure func test_checkpoint_preserves_system_prefix() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u"), mk_msg("assistant", "a")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        history_len(cp.history) == 2
+      }
+    }
+  }
+
+pure func test_stream_delta_projection_names() -> bool
+  tests [((), true)]
+  {
+    let thinking = encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "s", seq: 1, kind: "thinking", text: "t" })));
+    let reasoning = encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "s", seq: 2, kind: "reasoning", text: "r" })));
+    contains(thinking, "\"type\":\"thinking_delta\"") && contains(reasoning, "\"type\":\"reasoning_delta\"")
+  }
