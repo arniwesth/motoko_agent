@@ -6,12 +6,15 @@
 
 module src/core/phase_vocab
 
-import std/ai (Message, ToolCall)
+import std/ai (Message, ToolCall, StepResult)
 import std/json (Json, jo, kv, js, jnum, encode)
-import std/list (length)
+import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (contains)
+import std/string (contains, substring)
+import std/string as Str (length)
+import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
+import src/core/types (Msg)
 
 -- ============================================================================
 -- History: sealed. MkHistory is deliberately NOT exported.
@@ -30,13 +33,13 @@ export func history_append(h: History, m: Message) -> History {
 }
 
 export func history_len(h: History) -> int {
-  match h { MkHistory(xs) => length(xs) }
+  match h { MkHistory(xs) => List.length(xs) }
 }
 
 -- PLACEHOLDER digest: length-based and forgeable. The real digest is a Phase
 -- B/C obligation before anything consumes this value.
 export func history_digest(h: History) -> string {
-  match h { MkHistory(xs) => "h${show(length(xs))}" }
+  match h { MkHistory(xs) => "h${show(List.length(xs))}" }
 }
 
 pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
@@ -96,7 +99,7 @@ export func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
       then Err("context exhausted")
       else Ok({
         payload: MkPayload(xs),
-        events: [ProviderCallPrepared({ step: 0, msg_count: length(xs), payload_digest: "p${show(length(xs))}" })]
+        events: [ProviderCallPrepared({ step: 0, msg_count: List.length(xs), payload_digest: "p${show(List.length(xs))}" })]
       })
   }
 }
@@ -305,6 +308,104 @@ export func to_schema_v1(e: LedgerEvent) -> Json {
 }
 
 -- ============================================================================
+-- Transcript builders.
+-- ============================================================================
+
+-- Convert motoko's [Msg] to upstream [Message]. Since motoko_ext_abi 2.1.0
+-- (M-ABI-MSG-WIRE-PARITY), Msg carries tool_calls + tool_call_id fields
+-- structurally identical to Message — copy them verbatim so on_pre_step
+-- compaction round-trips losslessly. Without this, OpenRouter / OpenAI /
+-- Anthropic reject tool-role messages with empty tool_call_id (422).
+export func msgs_to_messages(msgs: [Msg]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id
+    } :: msgs_to_messages(rest))
+  }
+}
+
+-- Build a [Message] entry for one assistant turn from the StepResult. Carries
+-- the typed tool_calls verbatim so the model sees its own tool_call IDs on
+-- the next turn (provider correlation).
+export func step_result_to_message(result: StepResult) -> Message {
+  {
+    role: "assistant",
+    content: result.message.content,
+    tool_calls: result.tool_calls,
+    tool_call_id: ""
+  }
+}
+
+pure func cap_tool_message_content(content: string) -> string {
+  let cap = 65536;
+  let n = Str.length(content);
+  if n <= cap then content
+  else {
+    let marker = "\n...[truncated; original ${show(n)} bytes]";
+    let keep = cap - Str.length(marker);
+    "${substring(content, 0, keep)}${marker}"
+  }
+}
+
+pure func test_cap_tool_message_content_keeps_small_content() -> bool
+  tests [((), true)]
+  {
+    cap_tool_message_content("small result") == "small result"
+  }
+
+pure func test_cap_tool_message_content_truncates_oversized_content() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let capped = cap_tool_message_content(x1024);
+    Str.length(capped) == 65536 && contains(capped, "...[truncated; original ")
+  }
+
+export func result_env_model_content(result: ToolResultEnvelope) -> string {
+  cap_tool_message_content(encode(result_to_model_json(result)))
+}
+
+-- Build a tool-role Message containing a dispatcher result. The tool_call_id
+-- field is the load-bearing wire-format requirement: Anthropic / OpenAI /
+-- Gemini all correlate tool_use → tool_result by this id.
+export func tool_result_message(call: ToolCall, content: string) -> Message {
+  {
+    role: "tool",
+    content: cap_tool_message_content(content),
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+-- Build a tool-role Message from a ToolResultEnvelope returned by an
+-- extension's response-intercept (e.g. compose_check_premise). The model
+-- didn't emit a tool_call for these — the extension synthesized one — so
+-- we use the envelope's own tool_call_id (the extension is responsible for
+-- generating one) and JSON-encode the full envelope as the message content.
+export func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
+  {
+    role: "tool",
+    content: result_env_model_content(envelope),
+    tool_calls: [],
+    tool_call_id: envelope.tool_call_id
+  }
+}
+
+-- ============================================================================
 -- Inline pure tests.
 -- ============================================================================
 
@@ -354,4 +455,58 @@ pure func test_stream_delta_projection_names() -> bool
     let thinking = encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "s", seq: 1, kind: "thinking", text: "t" })));
     let reasoning = encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "s", seq: 2, kind: "reasoning", text: "r" })));
     contains(thinking, "\"type\":\"thinking_delta\"") && contains(reasoning, "\"type\":\"reasoning_delta\"")
+  }
+
+pure func test_msgs_to_messages_copies_wire_fields() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let msgs: [Msg] = [{ role: "assistant", content: "c", tool_calls: [call], tool_call_id: "ignored" }];
+    match msgs_to_messages(msgs) {
+      m :: [] => m.role == "assistant" && m.content == "c" && List.length(m.tool_calls) == 1 && m.tool_call_id == "ignored",
+      _ => false
+    }
+  }
+
+pure func test_step_result_to_message_copies_tool_calls() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let result: StepResult = {
+      message: { role: "assistant", content: "use tool", tool_calls: [], tool_call_id: "" },
+      tool_calls: [call],
+      finish_reason: "tool_calls",
+      input_tokens: 1,
+      output_tokens: 2,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0
+    };
+    let m = step_result_to_message(result);
+    m.role == "assistant" && m.content == "use tool" && List.length(m.tool_calls) == 1 && m.tool_call_id == ""
+  }
+
+pure func test_tool_result_message_uses_call_id_and_caps_content() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let m = tool_result_message(call, "content");
+    m.role == "tool" && m.content == "content" && List.length(m.tool_calls) == 0 && m.tool_call_id == "tc-1"
+  }
+
+pure func test_envelope_to_tool_message_uses_envelope_id() -> bool
+  tests [((), true)]
+  {
+    let env: ToolResultEnvelope = {
+      tool_call_id: "env-1",
+      tool: "FakeTool",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      metadata: jo([])
+    };
+    let m = envelope_to_tool_message(env);
+    m.role == "tool"
+      && m.tool_call_id == "env-1"
+      && List.length(m.tool_calls) == 0
+      && contains(m.content, "\"tool\":\"FakeTool\"")
   }

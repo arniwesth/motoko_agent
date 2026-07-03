@@ -34,7 +34,7 @@
 
 module src/core/agent_loop_v2
 
-import std/ai (step, Message, ToolCall, ToolSchema, StepResult, AIError, StreamChunk, ContentDelta, ThinkingDelta, Usage)
+import std/ai (step, Message, ToolCall, ToolSchema, AIError, StreamChunk, ContentDelta, ThinkingDelta, Usage)
 import std/io (println, readLine)
 import std/clock (now)
 import std/env (getEnvOr)
@@ -47,7 +47,7 @@ import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
-import src/core/tool_contract (ToolResultEnvelope, call_to_json, result_to_model_json)
+import src/core/tool_contract (ToolResultEnvelope, call_to_json)
 import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for_v2)
@@ -58,6 +58,7 @@ import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyD
 import src/core/compaction (compact_step_with_limit)
 import src/core/context_usage (catalog_context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
+import src/core/phase_vocab as PhaseVocab
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
 import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
@@ -184,7 +185,7 @@ pure func millicents_to_usd(mc: int) -> float {
 -- Cumulative token/cost totals threaded through loop_v2 recursion. Bundled
 -- into a single record (vs 6 extra params) so adding new totals later (e.g.
 -- reasoning tokens) doesn't require touching every call site again.
-type LoopTotals = {
+type RuntimeLoopTotals = {
   input_tokens: int,
   output_tokens: int,
   cache_read: int,
@@ -193,7 +194,7 @@ type LoopTotals = {
   cost_warned_pct: int
 }
 
-pure func zero_totals() -> LoopTotals {
+pure func zero_totals() -> RuntimeLoopTotals {
   { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0 }
 }
 
@@ -324,7 +325,7 @@ pure func finish_reason_str(r: int) -> string {
 func emit_run_summary(
   session_id: string,
   model: string,
-  totals: LoopTotals,
+  totals: RuntimeLoopTotals,
   steps_executed: int,
   finish_code: int,
   error_msg: string,
@@ -357,70 +358,6 @@ func emit_run_summary(
     error_kv
   ])
 }
-
--- Convert motoko's [Msg] to upstream [Message]. Since motoko_ext_abi 2.1.0
--- (M-ABI-MSG-WIRE-PARITY), Msg carries tool_calls + tool_call_id fields
--- structurally identical to Message — copy them verbatim so on_pre_step
--- compaction round-trips losslessly. Without this, OpenRouter / OpenAI /
--- Anthropic reject tool-role messages with empty tool_call_id (422).
-func msgs_to_messages(msgs: [Msg]) -> [Message] {
-  match msgs {
-    [] => [],
-    m :: rest => ({
-      role: m.role,
-      content: m.content,
-      tool_calls: m.tool_calls,
-      tool_call_id: m.tool_call_id
-    } :: msgs_to_messages(rest))
-  }
-}
-
--- Build a [Message] entry for one assistant turn from the StepResult. Carries
--- the typed tool_calls verbatim so the model sees its own tool_call IDs on
--- the next turn (provider correlation).
-func step_result_to_message(result: StepResult) -> Message {
-  {
-    role: "assistant",
-    content: result.message.content,
-    tool_calls: result.tool_calls,
-    tool_call_id: ""
-  }
-}
-
-pure func cap_tool_message_content(content: string) -> string {
-  let cap = 65536;
-  let n = Str.length(content);
-  if n <= cap then content
-  else {
-    let marker = "\n...[truncated; original ${show(n)} bytes]";
-    let keep = cap - Str.length(marker);
-    "${substring(content, 0, keep)}${marker}"
-  }
-}
-
-pure func test_cap_tool_message_content_keeps_small_content() -> bool
-  tests [((), true)]
-  {
-    cap_tool_message_content("small result") == "small result"
-  }
-
-pure func test_cap_tool_message_content_truncates_oversized_content() -> bool
-  tests [((), true)]
-  {
-    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
-    let x2 = "${x1}${x1}";
-    let x4 = "${x2}${x2}";
-    let x8 = "${x4}${x4}";
-    let x16 = "${x8}${x8}";
-    let x32 = "${x16}${x16}";
-    let x64 = "${x32}${x32}";
-    let x128 = "${x64}${x64}";
-    let x256 = "${x128}${x128}";
-    let x512 = "${x256}${x256}";
-    let x1024 = "${x512}${x512}";
-    let capped = cap_tool_message_content(x1024);
-    Str.length(capped) == 65536 && contains(capped, "...[truncated; original ")
-  }
 
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
   tests [((), true)]
@@ -469,36 +406,6 @@ pure func test_provider_api_model_ollama_keeps_routing_prefix_for_provider() -> 
   {
     provider_api_model("ollama/qwen3.5:35b-a3b-mxfp8", "") == "ollama/qwen3.5:35b-a3b-mxfp8"
   }
-
-func result_env_model_content(result: ToolResultEnvelope) -> string {
-  cap_tool_message_content(encode(result_to_model_json(result)))
-}
-
--- Build a tool-role Message containing a dispatcher result. The tool_call_id
--- field is the load-bearing wire-format requirement: Anthropic / OpenAI /
--- Gemini all correlate tool_use → tool_result by this id.
-func tool_result_message(call: ToolCall, content: string) -> Message {
-  {
-    role: "tool",
-    content: cap_tool_message_content(content),
-    tool_calls: [],
-    tool_call_id: call.id
-  }
-}
-
--- Build a tool-role Message from a ToolResultEnvelope returned by an
--- extension's response-intercept (e.g. compose_check_premise). The model
--- didn't emit a tool_call for these — the extension synthesized one — so
--- we use the envelope's own tool_call_id (the extension is responsible for
--- generating one) and JSON-encode the full envelope as the message content.
-func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
-  {
-    role: "tool",
-    content: result_env_model_content(envelope),
-    tool_calls: [],
-    tool_call_id: envelope.tool_call_id
-  }
-}
 
 -- Build the per-turn ExtCtx that motoko's extension hooks receive. Mirrors
 -- mk_ext_ctx in rpc.ail but constructs from v2's typed-loop state instead
@@ -821,7 +728,7 @@ func dispatch_calls(
                   let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
                   let handled_msg: Message = {
                     role: "tool",
-                    content: result_env_model_content(result_env),
+                    content: PhaseVocab.result_env_model_content(result_env),
                     tool_calls: [],
                     tool_call_id: call.id
                   };
@@ -853,7 +760,7 @@ func dispatch_calls(
                         kv("stream_id", js(stream_id)),
                         kv("id", js(call.id))
                       ]);
-                      let msg = tool_result_message(call, result_content);
+                      let msg = PhaseVocab.tool_result_message(call, result_content);
                       msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                     }
                   }
@@ -885,7 +792,7 @@ func dispatch_calls(
             let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
             let handled_msg: Message = {
               role: "tool",
-              content: result_env_model_content(result_env),
+              content: PhaseVocab.result_env_model_content(result_env),
               tool_calls: [],
               tool_call_id: call.id
             };
@@ -908,7 +815,7 @@ func dispatch_calls(
               -- extension-internal id.
               let handled_msg: Message = {
                 role: "tool",
-                content: result_env_model_content(result_env),
+                content: PhaseVocab.result_env_model_content(result_env),
                 tool_calls: [],
                 tool_call_id: call.id
               };
@@ -958,7 +865,7 @@ func dispatch_calls(
                     kv("stream_id", js(stream_id)),
                     kv("id", js(call.id))
                   ]);
-                  let msg = tool_result_message(call, result_content);
+                  let msg = PhaseVocab.tool_result_message(call, result_content);
                   msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 }
               }
@@ -1118,7 +1025,7 @@ func loop_v2(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  totals: LoopTotals,
+  totals: RuntimeLoopTotals,
   provider: StepProvider,
   session_id: string,
   started_at_ms: int
@@ -1157,7 +1064,7 @@ func loop_v2(
         kv("step", jnum(_int_to_float(step_idx))),
         kv("note", js(note))
       ]);
-      Ok(msgs_to_messages(compacted_msgs))
+      Ok(PhaseVocab.msgs_to_messages(compacted_msgs))
     },
     PassThrough => Ok(msgs)
   };
@@ -1246,7 +1153,7 @@ func loop_v2(
           kv("tool_calls", jnum(_int_to_float(n_calls)))
         ] ++ usage_kvs);
 
-        let assistant_msg = step_result_to_message(result);
+        let assistant_msg = PhaseVocab.step_result_to_message(result);
         let msgs_with_assistant = msgs ++ [assistant_msg];
         let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit);
 
@@ -1273,7 +1180,7 @@ func loop_v2(
               50
             } else totals.cost_warned_pct
           } else totals.cost_warned_pct;
-        let new_totals: LoopTotals = {
+        let new_totals: RuntimeLoopTotals = {
           input_tokens:    new_input,
           output_tokens:   new_output,
           cache_read:      new_cache_read,
@@ -1294,7 +1201,7 @@ func loop_v2(
               kv("tool", js(envelope.tool)),
               kv("exit_code", jnum(_int_to_float(envelope.exit_code)))
             ]);
-            let tool_msg = envelope_to_tool_message(envelope);
+            let tool_msg = PhaseVocab.envelope_to_tool_message(envelope);
             let next_msgs = msgs_with_assistant ++ [tool_msg];
             loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
           },
@@ -1507,7 +1414,7 @@ export func run_v2(
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-	  let messages = msgs_to_messages(initial_msgs);
+	  let messages = PhaseVocab.msgs_to_messages(initial_msgs);
 	  let session_id = derive_session_id();
 	  let started_at_ms = now();
 	  let session_span = "motoko.session.${session_id}";
@@ -1673,7 +1580,7 @@ export func run_v2_with_conversation(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let initial_messages = msgs_to_messages(initial_msgs);
+  let initial_messages = PhaseVocab.msgs_to_messages(initial_msgs);
   let session_id = derive_session_id();
   match run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
     Ok(final_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
