@@ -9,6 +9,18 @@ module scripts/phase_c_l1_scenarios
 import std/io (println, exit)
 import std/list (length)
 import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  CheckpointTaken,
+  apply_checkpoint,
+  checkpoint,
+  history_digest,
+  history_from_seed,
+  history_len,
+  history_valid_transcript,
+  validate_checkpoint_chain
+)
+import std/ai (Message)
+import std/json (jo)
 
 export type ScenarioFailure = {
   failed_invariant: string,
@@ -62,8 +74,90 @@ func harness_self_test_scenario() -> Scenario {
   { id: "harness_self_test", run: harness_self_test }
 }
 
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
+  if ok then Ok(())
+  else Err({ failed_invariant: invariant_name, trace: trace })
+}
+
+func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), ScenarioFailure] {
+  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let before = history_digest(h);
+      let state = {
+        step_idx: 1,
+        history: h,
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: jo([]),
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      };
+      let applied = apply_checkpoint(state, { reason: "scenario", summary: "summ" });
+      match applied.event {
+        CheckpointTaken(info) => {
+          let ok = info.before_digest == before
+            && info.after_digest == history_digest(applied.state.history)
+            && history_len(applied.state.history) == 2;
+          ok_or_failure(ok, "rewrite paired with checkpoint event", [
+            "before=${before}",
+            "event_before=${info.before_digest}",
+            "event_after=${info.after_digest}",
+            "state_after=${history_digest(applied.state.history)}"
+          ])
+        },
+        _ => Err({ failed_invariant: "checkpoint event constructor", trace: ["event=non_checkpoint"] })
+      }
+    }
+  }
+}
+
+func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFailure] {
+  match history_from_seed([msg("system", "s"), msg("user", "u"), msg("assistant", "a")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let cp = checkpoint(h, { reason: "scenario", summary: "summ" });
+      match cp.event {
+        CheckpointTaken(info) => {
+          let chain_ok = match validate_checkpoint_chain(history_digest(h), [info], history_digest(cp.history)) {
+            Ok(_) => true,
+            Err(_) => false
+          };
+          let ok = history_valid_transcript(cp.history) && chain_ok && history_len(cp.history) == 2;
+          ok_or_failure(ok, "checkpoint output is valid transcript", [
+            "history_len=${show(history_len(cp.history))}",
+            "before=${info.before_digest}",
+            "after=${info.after_digest}",
+            "valid=${show(history_valid_transcript(cp.history))}",
+            "chain_ok=${show(chain_ok)}"
+          ])
+        },
+        _ => Err({ failed_invariant: "checkpoint event constructor", trace: ["event=non_checkpoint"] })
+      }
+    }
+  }
+}
+
+func history_rewrite_requires_checkpoint_event_scenario() -> Scenario {
+  { id: "history_rewrite_requires_checkpoint_event", run: scenario_history_rewrite_requires_checkpoint_event }
+}
+
+func checkpoint_output_is_valid_transcript_scenario() -> Scenario {
+  { id: "checkpoint_output_is_valid_transcript", run: scenario_checkpoint_output_is_valid_transcript }
+}
+
 export func main() -> () ! {IO} {
-  let scenarios = [harness_self_test_scenario()];
+  let scenarios = [
+    harness_self_test_scenario(),
+    history_rewrite_requires_checkpoint_event_scenario(),
+    checkpoint_output_is_valid_transcript_scenario()
+  ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then
     println("phase_c_l1_scenarios PASS count=${show(length(scenarios))}")

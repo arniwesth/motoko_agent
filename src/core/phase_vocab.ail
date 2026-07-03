@@ -7,11 +7,12 @@
 module src/core/phase_vocab
 
 import std/ai (Message, ToolCall, StepResult)
+import std/crypto (sha256Hex)
 import std/json (Json, jo, ja, kv, js, jnum, encode)
 import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (contains, substring)
+import std/string (contains, substring, replaceMany)
 import std/string as Str (length)
 import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
 import src/core/types (Msg)
@@ -28,6 +29,23 @@ export func history_from_seed(msgs: [Message]) -> Result[History, string] {
   else Err("history seed: system messages must form a head prefix")
 }
 
+export type CheckpointChain = {
+  initial_digest: string,
+  checkpoints: [CheckpointInfo]
+}
+
+export func history_from_resume(msgs: [Message], chain: CheckpointChain) -> Result[History, string] {
+  if not system_is_head_prefix(msgs, true) then Err("history resume: system messages must form a head prefix")
+  else {
+    let h = MkHistory(msgs);
+    let final_digest = history_digest(h);
+    match validate_checkpoint_chain(chain.initial_digest, chain.checkpoints, final_digest) {
+      Err(e) => Err(e),
+      Ok(_) => Ok(h)
+    }
+  }
+}
+
 export func history_append(h: History, m: Message) -> History {
   match h { MkHistory(xs) => MkHistory(xs ++ [m]) }
 }
@@ -36,10 +54,16 @@ export func history_len(h: History) -> int {
   match h { MkHistory(xs) => List.length(xs) }
 }
 
--- PLACEHOLDER digest: length-based and forgeable. The real digest is a Phase
--- B/C obligation before anything consumes this value.
 export func history_digest(h: History) -> string {
-  match h { MkHistory(xs) => "h${show(List.length(xs))}" }
+  match h { MkHistory(xs) => digest_messages(xs) }
+}
+
+export pure func history_digest_matches(h: History, expected: string) -> bool {
+  history_digest(h) == expected
+}
+
+export pure func history_valid_transcript(h: History) -> bool {
+  match h { MkHistory(xs) => valid_message_transcript(xs) }
 }
 
 pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
@@ -56,6 +80,22 @@ pure func take_system_prefix(msgs: [Message]) -> [Message] {
   match msgs {
     [] => [],
     m :: rest => if m.role == "system" then m :: take_system_prefix(rest) else []
+  }
+}
+
+pure func valid_tool_calls(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => c.id != "" && valid_tool_calls(rest)
+  }
+}
+
+pure func valid_message_transcript(msgs: [Message]) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest =>
+      if m.role == "tool" then m.tool_call_id != "" && valid_message_transcript(rest)
+      else valid_tool_calls(m.tool_calls) && valid_message_transcript(rest)
   }
 }
 
@@ -116,23 +156,46 @@ export func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
       then Err("context exhausted")
       else Ok({
         payload: MkPayload(xs),
-        events: [ProviderCallPrepared({ step: 0, msg_count: List.length(xs), system_prefix_count: 0, payload_digest: "p${show(List.length(xs))}", model: "" })]
+        events: [ProviderCallPrepared({ step: 0, msg_count: List.length(xs), system_prefix_count: 0, payload_digest: payload_digest(xs), model: "" })]
       })
   }
 }
 
-pure func payload_digest_len(msgs: [Message], n: int, bytes: int) -> string {
-  match msgs {
-    [] => "pd-${show(n)}-${show(bytes)}",
-    m :: rest => payload_digest_len(rest, n + 1, bytes + Str.length(m.role) + Str.length(m.content) + Str.length(m.tool_call_id))
+pure func frame(label: string, value: string) -> string {
+  "${label}:${show(Str.length(value))}:${value};"
+}
+
+pure func digest_content(value: string) -> string {
+  replaceMany(value, [
+    ("make[20]", "make[0]"), ("make[19]", "make[0]"), ("make[18]", "make[0]"), ("make[17]", "make[0]"), ("make[16]", "make[0]"),
+    ("make[15]", "make[0]"), ("make[14]", "make[0]"), ("make[13]", "make[0]"), ("make[12]", "make[0]"), ("make[11]", "make[0]"),
+    ("make[10]", "make[0]"), ("make[9]", "make[0]"), ("make[8]", "make[0]"), ("make[7]", "make[0]"), ("make[6]", "make[0]"),
+    ("make[5]", "make[0]"), ("make[4]", "make[0]"), ("make[3]", "make[0]"), ("make[2]", "make[0]"), ("make[1]", "make[0]")
+  ])
+}
+
+pure func canonical_tool_calls(calls: [ToolCall]) -> string {
+  match calls {
+    [] => "tc-end;"
+    c :: rest =>
+      "tc{${frame("id", c.id)}${frame("name", c.name)}${frame("args", c.arguments)}}${canonical_tool_calls(rest)}"
   }
 }
 
--- PLACEHOLDER digest: deterministic bounded projection over provider payload
--- role/content/id lengths. This is not a content hash; checkpoint hashing
--- replaces it when the real digest lands.
+pure func canonical_messages(msgs: [Message]) -> string {
+  match msgs {
+    [] => "m-end;"
+    m :: rest =>
+      "m{${frame("role", m.role)}${frame("content", digest_content(m.content))}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}}${canonical_messages(rest)}"
+  }
+}
+
+pure func digest_messages(msgs: [Message]) -> string {
+  "sha256:${sha256Hex(canonical_messages(msgs))}"
+}
+
 export pure func payload_digest(msgs: [Message]) -> string {
-  payload_digest_len(msgs, 0, 0)
+  digest_messages(msgs)
 }
 
 pure func has_assistant_call(calls: [ToolCall], wanted_id: string) -> bool {
@@ -409,6 +472,21 @@ export type StreamStartInfo = { step: int, stream_id: string, model: string }
 export type StreamEndInfo = { step: int, stream_id: string, status: string }
 export type StreamErrorRetryInfo = { step: int, error: string }
 export type StreamDeltaInfo = { step: int, stream_id: string, seq: int, kind: string, text: string }
+
+pure func validate_checkpoint_chain_rec(prev_digest: string, checkpoints: [CheckpointInfo], final_digest: string) -> Result[(), string] {
+  match checkpoints {
+    [] =>
+      if prev_digest == final_digest then Ok(())
+      else Err("checkpoint chain final digest mismatch"),
+    cp :: rest =>
+      if cp.before_digest != prev_digest then Err("checkpoint chain broken before ${cp.reason}")
+      else validate_checkpoint_chain_rec(cp.after_digest, rest, final_digest)
+  }
+}
+
+export pure func validate_checkpoint_chain(initial_digest: string, checkpoints: [CheckpointInfo], final_digest: string) -> Result[(), string] {
+  validate_checkpoint_chain_rec(initial_digest, checkpoints, final_digest)
+}
 
 export type LedgerEvent
   = ProviderCallPrepared(ProviderCallInfo)   -- [NEW]  provider_call_prepared
@@ -695,6 +773,19 @@ pure func result_err(r: Result[(), string]) -> bool {
   match r { Ok(_) => false, Err(_) => true }
 }
 
+pure func digest_shape_ok(d: string) -> bool {
+  Str.length(d) == 71 && substring(d, 0, 7) == "sha256:"
+}
+
+pure func test_payload_digest_is_sha256_content_hash() -> bool
+  tests [((), true)]
+  {
+    let d1 = payload_digest([mk_msg("user", "hello")]);
+    let d2 = payload_digest([mk_msg("user", "hello")]);
+    let d3 = payload_digest([mk_msg("user", "hello!")]);
+    digest_shape_ok(d1) && d1 == d2 && d1 != d3
+  }
+
 pure func test_validate_compactor_output_accepts_identity() -> bool
   tests [((), true)]
   {
@@ -728,6 +819,80 @@ pure func test_checkpoint_preserves_system_prefix() -> bool
       Ok(h) => {
         let cp = checkpoint(h, { reason: "test", summary: "summ" });
         history_len(cp.history) == 2
+      }
+    }
+  }
+
+pure func test_checkpoint_digest_chain_validates() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        match cp.event {
+          CheckpointTaken(info) =>
+            digest_shape_ok(info.before_digest)
+              && digest_shape_ok(info.after_digest)
+              && result_ok(validate_checkpoint_chain(history_digest(h), [info], history_digest(cp.history)))
+              && result_err(validate_checkpoint_chain("sha256:broken", [info], history_digest(cp.history))),
+          _ => false
+        }
+      }
+    }
+  }
+
+pure func test_history_from_resume_validates_checkpoint_chain() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let before = history_digest(h);
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        match cp.event {
+          CheckpointTaken(info) =>
+            match cp.history {
+              MkHistory(resumed_msgs) => {
+                let good = history_from_resume(resumed_msgs, { initial_digest: before, checkpoints: [info] });
+                let bad = history_from_resume(resumed_msgs, { initial_digest: "sha256:broken", checkpoints: [info] });
+                match good {
+                  Ok(good_h) => history_digest_matches(good_h, history_digest(cp.history)) && match bad { Err(_) => true, Ok(_) => false },
+                  Err(_) => false
+                }
+              }
+            },
+          _ => false
+        }
+      }
+    }
+  }
+
+pure func test_apply_checkpoint_returns_rewrite_with_event() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let s: StepState = {
+          step_idx: 1,
+          history: h,
+          telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+          totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+          nudges_used: 0,
+          ext_artifacts: jo([]),
+          pending_tool_calls: [],
+          last_finish_reason: "",
+          last_response_text: ""
+        };
+        let applied = apply_checkpoint(s, { reason: "test", summary: "summ" });
+        match applied.event {
+          CheckpointTaken(info) =>
+            info.before_digest == history_digest(h)
+              && info.after_digest == history_digest(applied.state.history)
+              && history_len(applied.state.history) == 2,
+          _ => false
+        }
       }
     }
   }
