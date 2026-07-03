@@ -1,0 +1,40 @@
+module sunholo/motoko_ext_compaction_structural/register
+
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  ExtensionHooks,
+  FinalizeDecision,
+  Msg,
+  PreStepDecision,
+  ResponseInterceptDecision,
+  ToolCallEnvelope,
+  ToolHandleDecision,
+  ToolPolicyDecision
+)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
+
+func no_budget_patch(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  compact_for_pre_step(ctx, msgs)
+}
+
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+  {
+    id: "compaction_structural",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: no_budget_patch,
+    on_pre_step: pre_step,
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate },
+    on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
+    on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+  }
+}
