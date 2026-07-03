@@ -22,14 +22,14 @@ module scripts/smoke_v2_compaction_full_loop
 
 import std/io (println)
 import std/result (Result, Ok, Err)
-import std/string (repeat, contains)
+import std/string (repeat, contains, concat, substring, length)
 import std/ai (Message, AIError)
-import src/core/config (CostRates)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/config (CostRates, VerificationConfig)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/agent_loop_v2 (run_v2_with_stub)
+import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_config as register_structural_compaction)
 import src/core/test/stub_step (
   ScriptedStep,
-  empty_rt,
   prose_step
 )
 
@@ -57,6 +57,28 @@ func mk_history(content_chars: int) -> [Message] {
   [mk_user("hi"), mk_tool("t1", payload)]
 }
 
+func grow_string(s: string, target: int) -> string {
+  if length(s) >= target then s
+  else grow_string(concat([s, s]), target)
+}
+
+func make_payload(chars: int) -> string {
+  let seed = repeat("x", 100);
+  let big = grow_string(seed, chars);
+  substring(big, 0, chars)
+}
+
+func build_tools(count: int, chars_each: int, idx: int, acc: [Message]) -> [Message] {
+  if idx >= count then acc
+  else build_tools(count, chars_each, idx + 1, acc ++ [mk_tool("mt${show(idx)}", make_payload(chars_each))])
+}
+
+func multi_tool_history() -> [Message] {
+  -- 12 * 50k chars = ~150k estimated tokens against the 200k Sonnet window:
+  -- tier 1 (75%), and the first two tool messages are outside keep_last=10.
+  build_tools(12, 50000, 0, [mk_user("multi")])
+}
+
 func no_rates() -> CostRates {
   { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
 }
@@ -65,12 +87,17 @@ func mk_budget() -> BudgetPlan {
   { total: 4, solver: 4, verifier: 0 }
 }
 
+func structural_rt() -> ExtRuntime ! {Env, FS} {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { hooks: [register_structural_compaction(())] }, strict_mode: false, verification: v }
+}
+
 -- 1. Light history (10 chars total = ~2% usage). Compaction passthrough.
 func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(10);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), script
   );
@@ -87,7 +114,7 @@ func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
   let history = mk_history(300);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), script
   );
@@ -104,7 +131,7 @@ func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, Shar
   let history = mk_history(385);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), script
   );
@@ -121,8 +148,25 @@ func test_unknown_model_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
   let history = mk_history(1000);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_stub(
-    empty_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", false, mk_budget(),
     "totally-unknown-model", history, "/tmp", 4, false,
+    0, no_rates(), script
+  );
+  match result {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+-- 5. Multi-tool Sonnet history at ~75% usage. The structural extension
+-- genuinely rewrites the first two old tool results and emits a compaction
+-- stage before the provider call.
+func test_multi_tool_tier1_elides() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let history = multi_tool_history();
+  let script: [ScriptedStep] = [prose_step("ok")];
+  let result = run_v2_with_stub(
+    structural_rt(), "stub-test", "", false, mk_budget(),
+    "anthropic/claude-sonnet-4-6", history, "/tmp", 4, false,
     0, no_rates(), script
   );
   match result {
@@ -146,5 +190,7 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   report("tier 3 history (~96% usage) → Err refused",   r3);
   let r4 = test_unknown_model_fail_open();
   report("unknown model fail-open (no compaction)",     r4);
+  let r5 = test_multi_tool_tier1_elides();
+  report("multi-tool tier 1 elides via structural extension", r5);
   println("done")
 }

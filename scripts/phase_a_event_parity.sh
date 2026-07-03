@@ -92,6 +92,11 @@ run_json_smoke() {
     grep -q '"type":"native_tool_results"' "$out"
   fi
 
+  if [ "$name" = "smoke_v2_compaction_full_loop" ]; then
+    grep -q '"type":"compaction_extension".*"note":"structural:' "$out"
+    grep -q '"type":"provider_call_prepared".*"msg_count":13' "$out"
+  fi
+
   if [ "$name" = "smoke_v2_ext_fixture_parity" ]; then
     grep -q '"type":"ext_tool_handled"' "$out"
     grep -q '"type":"ext_solver_feedback"' "$out"

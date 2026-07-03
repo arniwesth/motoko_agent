@@ -10,7 +10,6 @@ import pkg/sunholo/motoko_ext_abi/types (
   PassThrough,
   Compacted
 )
-import pkg/sunholo/motoko_core/core/compaction (estimate_tokens_messages, usage_percent_with_limit)
 
 export pure func elide_tier_pct() -> int { 70 }
 
@@ -28,6 +27,16 @@ export pure func emergency_final_keep_last() -> int { 1 }
 
 pure func count_tool_msgs(msgs: [Msg]) -> int {
   foldl(\acc m. acc + (if m.role == "tool" then 1 else 0), 0, msgs)
+}
+
+export pure func estimate_tokens_messages(msgs: [Msg]) -> int {
+  let total = foldl(\acc m. acc + length(m.content), 0, msgs);
+  (total + 3) / 4
+}
+
+export pure func usage_percent_with_limit(msgs: [Msg], limit: int) -> int {
+  if limit == 0 then 0
+  else (estimate_tokens_messages(msgs) * 100) / limit
 }
 
 pure func elide_content(content: string) -> string {

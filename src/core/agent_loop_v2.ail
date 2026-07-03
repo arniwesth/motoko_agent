@@ -55,7 +55,7 @@ import src/core/types (Msg, ToolBackend)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
-import src/core/compaction (compact_step_with_limit, estimate_tokens_messages)
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
 import src/core/context_usage (catalog_context_limit_for)
 import src/core/ext/runtime (
   dispatch_response_intercept,
@@ -965,10 +965,9 @@ pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: Cos
 -- (and any solver-candidate hooks accept the result) or step_budget hits zero.
 -- Returns the final messages list.
 --
--- DP0 (pre-step compaction): before each LLM call, compact_step elides old
--- tool_result content when context usage crosses 70/85/95% thresholds. The
--- compacted view is used for step() only; the session history that recurses
--- into the next loop iteration always retains the original messages.
+-- DP0 (pre-step compaction): before each LLM call, extension compactors
+-- transform the provider payload, with the structural compactor registered
+-- last. Core refuses only if the post-chain payload remains critically full.
 --
 -- M3 wiring: between step() and tool dispatch, fires extension hooks at the
 -- two existing decision points motoko's rpc_loop uses (DP1 from the design
@@ -1141,16 +1140,14 @@ func loop_v2(
   -- DP0a: let extensions compact first (e.g., AI summarization)
   let chain = dispatch_pre_step_chain(rt, ctx, messages_to_msgs(compactable_msgs));
   let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
-  let after_ext = Ok(split.pinned ++ msgs_to_messages(chain.msgs));
-  
-  match after_ext {
-    Err(e) => Err(e),
-    Ok(msgs_after_ext) => {
-  -- DP0b: structural compaction as fallback
-  -- compact_step is a no-op below 70% usage; elides old tool_result content
-  -- at 70-85% and 85-95%; at ≥95% tries emergency compaction.
-  match compact_step_with_limit(msgs_after_ext, model, context_limit) {
-    Err(compaction_reason) => {
+  let msgs_after_ext = split.pinned ++ msgs_to_messages(chain.msgs);
+  let post_chain_pct = usage_percent_with_limit(msgs_after_ext, context_limit);
+
+  -- DP0b: after all compactors run, refuse only if the provider payload is
+  -- still critically full. Structural elision now lives in the registered
+  -- compaction_structural extension at the end of the pre-step chain.
+  if post_chain_pct >= exhaustion_pct() then {
+      let compaction_reason = "compaction_exhausted: context at ${show(post_chain_pct)}% of ${model} limit after compactor chain";
       let _ = ledger_emit(session_id, CompactionExhausted({
         step: step_idx,
         model: model,
@@ -1162,8 +1159,9 @@ func loop_v2(
         message: compaction_reason,
         retryable: false
       })
-    },
-    Ok(compacted_msgs) => {
+  }
+  else {
+    let compacted_msgs = msgs_after_ext;
     let stream_id = "step-${show(step_idx)}";
     let _ = ledger_emit(session_id, ThinkingStreamStart({
       step: step_idx,
@@ -1461,10 +1459,7 @@ func loop_v2(
         }
       }
     }
-    } -- Ok(compacted_msgs)
-  } -- match compact_step
-    } -- Ok(msgs_after_ext)
-  } -- match after_ext
+    } -- provider path
   } -- else block
 }
 

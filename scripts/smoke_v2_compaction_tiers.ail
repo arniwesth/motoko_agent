@@ -39,8 +39,8 @@ module scripts/smoke_v2_compaction_tiers
 import std/io (println, exit)
 import std/result (Result, Ok, Err)
 import std/string (repeat, length, contains, concat, substring)
-import std/ai (Message)
-import src/core/compaction (
+import src/core/types (Msg)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   usage_percent_with_limit,
   compact_step_with_limit
 )
@@ -55,11 +55,11 @@ import src/core/compaction (
 -- "keep last 10" and "keep last 5" elision rules.
 func smoke_limit() -> int { 200000 }
 
-func mk_user(content: string) -> Message {
+func mk_user(content: string) -> Msg {
   { role: "user", content: content, tool_calls: [], tool_call_id: "" }
 }
 
-func mk_tool(id: string, content: string) -> Message {
+func mk_tool(id: string, content: string) -> Msg {
   { role: "tool", content: content, tool_calls: [], tool_call_id: id }
 }
 
@@ -80,7 +80,7 @@ func make_payload(chars: int) -> string {
 }
 
 -- Build N tool messages, each with `chars_each` characters of payload.
-func build_tools(count: int, chars_each: int, idx: int, acc: [Message]) -> [Message] {
+func build_tools(count: int, chars_each: int, idx: int, acc: [Msg]) -> [Msg] {
   if idx >= count then acc
   else {
     let payload = make_payload(chars_each);
@@ -91,7 +91,7 @@ func build_tools(count: int, chars_each: int, idx: int, acc: [Message]) -> [Mess
 
 -- Construct a message list whose total content length puts usage_percent
 -- at the requested target percent against the 200k smoke_limit.
-func msgs_at_pct(target_pct: int) -> [Message] {
+func msgs_at_pct(target_pct: int) -> [Msg] {
   -- 12 tool messages so we can see the keep_last_10 vs keep_last_5 cuts.
   let total_chars = target_pct * 8000;
   let chars_each = total_chars / 12;
@@ -100,7 +100,7 @@ func msgs_at_pct(target_pct: int) -> [Message] {
 
 -- Count messages whose content has been replaced with the elide marker.
 -- elide_content prefixes the rewritten content with "[elided" per compaction.ail.
-func count_elided(msgs: [Message]) -> int {
+func count_elided(msgs: [Msg]) -> int {
   match msgs {
     [] => 0,
     m :: rest => {
@@ -111,7 +111,7 @@ func count_elided(msgs: [Message]) -> int {
 }
 
 -- Last message in a list (or a sentinel if empty).
-func last_msg(msgs: [Message]) -> Message {
+func last_msg(msgs: [Msg]) -> Msg {
   match msgs {
     [] => { role: "", content: "", tool_calls: [], tool_call_id: "" },
     m :: [] => m,

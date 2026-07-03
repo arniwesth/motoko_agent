@@ -2,8 +2,9 @@ module src/core/test/integration_tests
 
 import std/string (repeat)
 import std/result (Result, Ok, Err)
-import std/ai (Message, ToolCall)
-import src/core/compaction (compact_step_with_limit)
+import std/ai (ToolCall)
+import src/core/types (Msg)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_step_with_limit)
 import src/core/test/stub_step (prose_step, tool_step, scripted_to_step_result, terminal_step)
 
 -- Test 1: Cost-budget exhaustion math.
@@ -27,13 +28,13 @@ pure func test_cost_budget_exhausted() -> bool
 pure func test_compaction_fires_above_70pct() -> bool
   tests [((), true)]
   {
-    let big_msg: Message = {
+    let big_msg: Msg = {
       role: "tool",
       content: repeat("x", 380),
       tool_calls: [],
       tool_call_id: "t"
     };
-    let user_msg: Message = {
+    let user_msg: Msg = {
       role: "user",
       content: "test",
       tool_calls: [],

@@ -26,3 +26,17 @@ consumed and the later tool message looked pair-severed.
 The WI-6 predicate carries the full output separately from the remaining
 recursion tail. Identity with paired calls and orphan tool results now passes,
 and pair-severing outputs are rejected by direct tests and the chain smoke.
+
+## WI-7 registered package cannot import mirrored core inside the root
+
+WI-7a's throwaway package probe passed when importing
+`pkg/sunholo/motoko_core/core/compaction` from outside the root package. During
+WI-7c registration, however, checking `src/core/agent_loop_v2.ail` after adding
+`motoko_ext_compaction_structural` to the root lock failed MOD011: the mirrored
+`.packages/motoko_core/src/core/compaction.ail` declares `module
+src/core/compaction`, colliding with the root's local `src/core/compaction`.
+
+The structural package therefore keeps the tiny token/usage measurement helper
+self-contained for the in-repo path dependency. The ABI and hook behavior are
+unchanged; the root can load the registered package without importing the
+mirrored core copy into the same module namespace.
