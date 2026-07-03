@@ -66,7 +66,14 @@ import src/core/phase_vocab (
   envelope_to_tool_message,
   handled_tool_message,
   tool_result_message,
+  ScratchpadResult,
   RunSummary,
+  NativeToolDenied,
+  ToolPending,
+  ExtToolHandled,
+  DelegatedToolDeferred,
+  V2ToolDispatchStart,
+  V2ToolDispatchComplete,
   Dp7VerifierRejected,
   CostExhausted,
   StreamErrorRetry,
@@ -81,6 +88,8 @@ import src/core/phase_vocab (
   DoneEvent,
   ExtSolverFeedback,
   PersistNudge,
+  NativeToolCalls,
+  NativeToolResults,
   SessionSuspend,
   SessionStart,
   ErrorEvent
@@ -254,29 +263,17 @@ pure func zero_totals() -> RuntimeLoopTotals {
   { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0 }
 }
 
--- Emit a schema-v1 event: prepends schema_version + session_id + type to
--- the caller's `extra` kv list. Use this for ALL new emissions; existing
--- emit_json sites are migrated to emit_event in M1.
-func emit_event(session_id: string, event_type: string, extra: [{key: string, value: Json}]) -> () ! {IO, Trace} {
-  emit_json(jo([
-    kv("schema_version", js(schema_version())),
-    kv("session_id",     js(session_id)),
-    kv("type",           js(event_type))
-  ] ++ extra));
-  emit_trace_event(session_id, event_type, extra)
-}
-
 func emit_scratchpad_result_if_present(session_id: string, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> () ! {IO, Trace} {
   if is_scratchpad_tool_name(result_env.tool) then
     match get(result_env.metadata, "cells") {
       None => (),
       Some(cells) =>
-        emit_event(session_id, "scratchpad_result", [
-          kv("tool_call_id", js(tool_call_id)),
-          kv("request_id", js(request_id)),
-          kv("step", jnum(_int_to_float(step_idx))),
-          kv("cells_json", js(encode(cells)))
-        ])
+        ledger_emit(session_id, ScratchpadResult({
+          tool_call_id: tool_call_id,
+          request_id: request_id,
+          step: step_idx,
+          cells_json: encode(cells)
+        }))
     }
   else ()
 }
@@ -711,25 +708,25 @@ func dispatch_calls(
       let policy = dispatch_tool_policy(rt, ctx, envelope);
       match policy {
         Deny(reason) => {
-          let _ = emit_event(session_id, "native_tool_denied", [
-            kv("step", jnum(_int_to_float(step_idx))),
-            kv("stream_id", js(stream_id)),
-            kv("tool", js(call.name)),
-            kv("id", js(call.id)),
-            kv("reason", js(reason))
-          ]);
+          let _ = ledger_emit(session_id, NativeToolDenied({
+            step: step_idx,
+            stream_id: stream_id,
+            tool: call.name,
+            id: call.id,
+            reason: reason
+          }));
           let denial_msg = policy_denied_message(call, reason);
           denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
         },
         Pending(reason, default) => {
           -- Emit the pending event so the TUI / wrapper can prompt the operator.
-          let _ = emit_event(session_id, "tool_pending", [
-            kv("step", jnum(_int_to_float(step_idx))),
-            kv("stream_id", js(stream_id)),
-            kv("tool", js(call.name)),
-            kv("id", js(call.id)),
-            kv("reason", js(reason))
-          ]);
+          let _ = ledger_emit(session_id, ToolPending({
+            step: step_idx,
+            stream_id: stream_id,
+            tool: call.name,
+            id: call.id,
+            reason: reason
+          }));
           -- Block on stdin for {"type":"approve"} or {"type":"deny","reason":"..."}.
           -- EOF or unparseable input applies the extension-supplied PolicyDefault.
           let raw = readLine();
@@ -762,13 +759,13 @@ func dispatch_calls(
               };
           match resolved_denial {
             Some(denial_reason) => {
-              let _ = emit_event(session_id, "native_tool_denied", [
-                kv("step", jnum(_int_to_float(step_idx))),
-                kv("stream_id", js(stream_id)),
-                kv("tool", js(call.name)),
-                kv("id", js(call.id)),
-                kv("reason", js(denial_reason))
-              ]);
+              let _ = ledger_emit(session_id, NativeToolDenied({
+                step: step_idx,
+                stream_id: stream_id,
+                tool: call.name,
+                id: call.id,
+                reason: denial_reason
+              }));
               let denial_msg = policy_denied_message(call, denial_reason);
               denial_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
             },
@@ -777,13 +774,13 @@ func dispatch_calls(
               let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
               match handle_decision {
                 Handled(result_env) => {
-                  let _ = emit_event(session_id, "ext_tool_handled", [
-                    kv("step", jnum(_int_to_float(step_idx))),
-                    kv("stream_id", js(stream_id)),
-                    kv("tool", js(call.name)),
-                    kv("id", js(call.id)),
-                    kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
-                  ]);
+                  let _ = ledger_emit(session_id, ExtToolHandled({
+                    step: step_idx,
+                    stream_id: stream_id,
+                    tool: call.name,
+                    id: call.id,
+                    exit_code: result_env.exit_code
+                  }));
                   let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
                   let handled_msg = handled_tool_message(call.id, result_env);
                   handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
@@ -792,28 +789,28 @@ func dispatch_calls(
                   let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
                   match backend {
                     Delegated => {
-                      let _ = emit_event(session_id, "delegated_tool_deferred", [
-                        kv("step", jnum(_int_to_float(step_idx))),
-                        kv("stream_id", js(stream_id)),
-                        kv("tool", js(call.name)),
-                        kv("id", js(call.id))
-                      ]);
+                      let _ = ledger_emit(session_id, DelegatedToolDeferred({
+                        step: step_idx,
+                        stream_id: stream_id,
+                        tool: call.name,
+                        id: call.id
+                      }));
                       let deferred_msg = delegated_deferred_message(call);
                       deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                     },
                     Native => {
-                      let _ = emit_event(session_id, "v2_tool_dispatch_start", [
-                        kv("step", jnum(_int_to_float(step_idx))),
-                        kv("stream_id", js(stream_id)),
-                        kv("tool", js(call.name)),
-                        kv("id", js(call.id))
-                      ]);
+                      let _ = ledger_emit(session_id, V2ToolDispatchStart({
+                        step: step_idx,
+                        stream_id: stream_id,
+                        tool: call.name,
+                        id: call.id
+                      }));
                       let result_content = dispatch_one(workdir, call);
-                      let _ = emit_event(session_id, "v2_tool_dispatch_complete", [
-                        kv("step", jnum(_int_to_float(step_idx))),
-                        kv("stream_id", js(stream_id)),
-                        kv("id", js(call.id))
-                      ]);
+                      let _ = ledger_emit(session_id, V2ToolDispatchComplete({
+                        step: step_idx,
+                        stream_id: stream_id,
+                        id: call.id
+                      }));
                       let msg = tool_result_message(call, result_content);
                       msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                     }
@@ -836,13 +833,13 @@ func dispatch_calls(
               stderr: result_cell.stderr,
               metadata: result_cell.metadata
             };
-            let _ = emit_event(session_id, "ext_tool_handled", [
-              kv("step", jnum(_int_to_float(step_idx))),
-              kv("stream_id", js(stream_id)),
-              kv("tool", js(call.name)),
-              kv("id", js(call.id)),
-              kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
-            ]);
+            let _ = ledger_emit(session_id, ExtToolHandled({
+              step: step_idx,
+              stream_id: stream_id,
+              tool: call.name,
+              id: call.id,
+              exit_code: result_env.exit_code
+            }));
             let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
             let handled_msg = handled_tool_message(call.id, result_env);
             handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
@@ -850,13 +847,13 @@ func dispatch_calls(
             let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
             match handle_decision {
             Handled(result_env) => {
-              let _ = emit_event(session_id, "ext_tool_handled", [
-                kv("step", jnum(_int_to_float(step_idx))),
-                kv("stream_id", js(stream_id)),
-                kv("tool", js(call.name)),
-                kv("id", js(call.id)),
-                kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
-              ]);
+              let _ = ledger_emit(session_id, ExtToolHandled({
+                step: step_idx,
+                stream_id: stream_id,
+                tool: call.name,
+                id: call.id,
+                exit_code: result_env.exit_code
+              }));
               let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
               let handled_msg = handled_tool_message(call.id, result_env);
               handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
@@ -879,12 +876,12 @@ func dispatch_calls(
               let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
               match backend {
                 Delegated => {
-                  let _ = emit_event(session_id, "delegated_tool_deferred", [
-                    kv("step", jnum(_int_to_float(step_idx))),
-                    kv("stream_id", js(stream_id)),
-                    kv("tool", js(call.name)),
-                    kv("id", js(call.id))
-                  ]);
+                  let _ = ledger_emit(session_id, DelegatedToolDeferred({
+                    step: step_idx,
+                    stream_id: stream_id,
+                    tool: call.name,
+                    id: call.id
+                  }));
                   let deferred_msg = delegated_deferred_message(call);
                   deferred_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 },
@@ -893,18 +890,18 @@ func dispatch_calls(
                   -- native_tool_calls renderer doesn't try to consume it).
                   -- The batched native_tool_calls / native_tool_results
                   -- events are emitted by loop_v2 around dispatch_calls.
-                  let _ = emit_event(session_id, "v2_tool_dispatch_start", [
-                    kv("step", jnum(_int_to_float(step_idx))),
-                    kv("stream_id", js(stream_id)),
-                    kv("tool", js(call.name)),
-                    kv("id", js(call.id))
-                  ]);
+                  let _ = ledger_emit(session_id, V2ToolDispatchStart({
+                    step: step_idx,
+                    stream_id: stream_id,
+                    tool: call.name,
+                    id: call.id
+                  }));
                   let result_content = dispatch_one(workdir, call);
-                  let _ = emit_event(session_id, "v2_tool_dispatch_complete", [
-                    kv("step", jnum(_int_to_float(step_idx))),
-                    kv("stream_id", js(stream_id)),
-                    kv("id", js(call.id))
-                  ]);
+                  let _ = ledger_emit(session_id, V2ToolDispatchComplete({
+                    step: step_idx,
+                    stream_id: stream_id,
+                    id: call.id
+                  }));
                   let msg = tool_result_message(call, result_content);
                   msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 }
@@ -1400,19 +1397,19 @@ func loop_v2(
               -- dispatch_calls and use distinct type names so the TUI
               -- ignores them rather than mis-rendering.
               let request_id = "step-${show(step_idx)}";
-              let _ = emit_event(session_id, "native_tool_calls", [
-                kv("request_id", js(request_id)),
-                kv("step", jnum(_int_to_float(step_idx))),
-                kv("stream_id", js(stream_id)),
-                kv("tool_calls", ja(tool_calls_to_envelope_jsons(result.tool_calls)))
-              ]);
+              let _ = ledger_emit(session_id, NativeToolCalls({
+                request_id: request_id,
+                step: step_idx,
+                stream_id: stream_id,
+                payload: ja(tool_calls_to_envelope_jsons(result.tool_calls))
+              }));
               let tool_msgs = dispatch_calls(rt, ctx, result.tool_calls, workdir, step_idx, stream_id, ohmy_pi, session_id);
-              let _ = emit_event(session_id, "native_tool_results", [
-                kv("request_id", js(request_id)),
-                kv("step", jnum(_int_to_float(step_idx))),
-                kv("stream_id", js(stream_id)),
-                kv("results", ja(tool_messages_to_result_jsons(tool_msgs)))
-              ]);
+              let _ = ledger_emit(session_id, NativeToolResults({
+                request_id: request_id,
+                step: step_idx,
+                stream_id: stream_id,
+                payload: ja(tool_messages_to_result_jsons(tool_msgs))
+              }));
               let next_msgs = msgs_with_assistant ++ tool_msgs;
               loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
             }
