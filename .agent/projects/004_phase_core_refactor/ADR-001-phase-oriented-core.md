@@ -1,7 +1,10 @@
 # ADR-001: A phase-oriented core designed for Deterministic Simulation Testing
 
 Date: 2026-07-02; revised 2026-07-03 after three independent review passes (see Review
-Comments and the Author Response & Disposition log at the end)
+Comments and the Author Response & Disposition log at the end); amended same day by **D9**
+(operator decision: compaction policy is extension-resident — compactor chain over a core
+scaffold, bundled `motoko_ext_compaction_structural` default, telemetry in ABI v3; closes
+Open Question 4)
 Status: Proposed (review findings addressed; dispositions recorded)
 Pinned toolchain: AILANG **v0.26.0** (commit `3b52a24`); `ailang.lock` → `ailang_version: "v0.26.0"`
 
@@ -166,18 +169,31 @@ step machine re-derives the next decision from applied state.
   pattern-matches sealed payloads). Bare sealed-type parameters in foreign signatures remain
   impossible — sealed values cross module boundaries only inside exported wrappers. Exported
   record types are structurally forgeable, so sealed types must be variants.
-- **The compaction projection** (pure): `project(History, TokenTelemetry, CompactionPolicy) ->
-  Result[{payload, events}, string]`, pipeline per research doc §7.2: pin head system prefix →
-  `CompactableSegment` (sealed; cannot contain system messages) → normalize → extension
-  compaction (validated output; invalid ⇒ rejected + ledger event + structural fallback) →
-  structural tiers → emergency. `ProviderPayload` is sealed; `model_phase` receives it inside
-  the exported `ModelRequest` wrapper (it cannot name the sealed type — see co-location scope
-  above) and there is no other way to obtain one than `project()`. Ephemerality is by
-  construction: nothing can write a payload back into history. Note (P2-R1/P3-R4): the tier
-  table in current source is a **single** 70/85/95 elide/emergency ladder
-  (`compaction.ail:134-141`); the actual/estimate split described in DST ADR-001's 2026-06-27
-  review has since been removed from source, and `TokenTelemetry`-gated actual-token tiers are
-  a **reintroduction decision** (Open Questions), not current behavior.
+- **The compaction projection** (amended 2026-07-03, **D9** — operator decision: compaction
+  policy is **extension-resident**; core keeps only the scaffold). Core owns the scaffold: pin
+  head system prefix → `CompactableSegment` (sealed; cannot contain system messages) →
+  normalize → the **compactor chain** → the exhaustion decision. Compaction *policy* — elision
+  ladders, tier thresholds, AI summarization, any future strategy — lives in compaction
+  **extensions**. Chain semantics (normative; replaces first-`Compacted`-wins for compactors):
+  each registered compactor receives the previous stage's segment and returns `PassThrough` or
+  `Compacted`; the gate validates **every stage** (invalid ⇒ `ext_compaction_rejected` ledger
+  event, stage skipped, chain continues — subsuming the old hard-coded structural fallback);
+  registry order is pipeline order; the ledger records each stage. This preserves today's
+  semantics — extension compaction and structural elision already compose sequentially
+  (`agent_loop_v2.ail:1154→1171`); under first-wins the relocated ladder would silently stop
+  chaining. The current 70/85/95 ladder (`compaction.ail:134-141`) relocates into a **bundled
+  default extension** `motoko_ext_compaction_structural` (pure; registered last; the
+  conformance kit's trivial reference consumer alongside effectful `compaction_ai`). Core
+  exports the measurement primitives (`estimate_tokens`, `usage_percent`) so compactors never
+  duplicate them (the `compaction_ai` v0.2.0 duplication defect, fixed structurally). With
+  zero compactors installed, core behavior is honest exhaustion: `Fail(ContextExhausted)`
+  (later `TakeCheckpoint`, once emitted). `ProviderPayload` is sealed; `model_phase` receives
+  it inside the exported `ModelRequest` wrapper (it cannot name the sealed type — see
+  co-location scope above) and there is no other way to obtain one than `project()`.
+  Ephemerality is by construction: nothing can write a payload back into history. Actual-token
+  gating (the path removed from source; P2-R1/P3-R4) is now simply **compactor policy**: any
+  extension can implement it against the telemetry ABI v3 exposes — the former Open Question 4
+  is closed by D9.
 - **The checkpoint seam** (D7), mechanics tightened per review (P1-R4/P2-R6/P3-R1):
   `checkpoint(History, CheckpointPlan) -> {history, event}` is the sole op producing a rebuilt
   `History`. Normative mechanics: (a) `history_digest` is a **content hash** (the sketch's
@@ -228,8 +244,10 @@ scripted TUI approval scenario before Phase C inverts the dispatch recursion.
 ### 6. Extension ABI v3 and conformance kit (D6, D8)
 
 - **ABI v3**: `ExtCtx` gains `ports: ExtPorts` (ai_step, http, proc_exec, kv, clock_now,
-  env_get) and `artifacts: Json`; `Compacted` gains an artifacts field. **No effect-row
-  changes** (`on_tool_policy`/`on_describe_tools`/`on_build_system_prompt` are already pure in
+  env_get), `artifacts: Json`, and (added by D9) **`telemetry`** — the per-step usage numbers
+  from `StepResult` (`last_input_tokens`, output/cache tokens) so compactor extensions can
+  implement actual-token-gated policy without core deciding it for them; `Compacted` gains an
+  artifacts field. **No effect-row changes** (`on_tool_policy`/`on_describe_tools`/`on_build_system_prompt` are already pure in
   ABI 2.2.0; narrowing the four max-row hooks buys nothing once ports exist — calling an
   effectful port still requires the effect in the row). Migration cost (narrowed per review
   P1-R7/P2-R8): hook signatures are unchanged, so **non-compactor packages that do not
@@ -272,16 +290,23 @@ Deliverables: vocabulary module (seeded from `sketch/sketch_vocabulary.ail`); ex
 compaction constants **re-grounded on current source** (P2-R1/P3-R4): the single tier table
 `ELIDE_TIER_PCT=70`, `ELIDE_HARD_TIER_PCT=85`, `EMERGENCY_PCT=95` and the keep-last counts
 (10/5) from `compaction.ail:134-141` — `OUTPUT_HEADROOM` and the 60/75/85 actual tiers are
-**struck** (no referent in source; DST ADR-001 R5/R15 need a corresponding amendment);
-transcript builder extracted from `step_result_to_message` / `envelope_to_tool_message` /
-`tool_result_message`.
+**struck** (no referent in source; DST ADR-001 R5/R15 need a corresponding amendment). Under
+D9 these tier constants are a stepping stone: they relocate with the ladder into
+`motoko_ext_compaction_structural` in Phase B, while the measurement primitives
+(`estimate_tokens`, `usage_percent` — already `export pure func` in `compaction.ail`) stay in
+core permanently as the shared surface compactors build on. Transcript builder extracted from
+`step_result_to_message` / `envelope_to_tool_message` / `tool_result_message`.
 Gate: `ailang check` + existing smokes green; no event-stream diff.
 
 **Phase B — phases return `PhaseResult`; driver keeps current control flow.**
 Deliverables: all event emission through the ledger + `to_schema_v1`; provider-call recording
 seam (DST ADR-001's required first seam) as ledger events around the model phase; core-side
 system-prefix fix (pass `CompactableSegment`, not the raw list, to `dispatch_pre_step` — zero
-ABI cost, closes the live gap).
+ABI cost, closes the live gap); (D9) `dispatch_pre_step` converted from first-`Compacted`-wins
+to the **compactor chain** (no ABI change — the hook signature already supports fold-through),
+and the 70/85/95 ladder extracted from `compaction.ail` into the bundled
+`motoko_ext_compaction_structural` extension registered last — a behavior-preserving
+relocation, since chain(ext…, structural-last) equals today's sequential composition.
 Gate (per review R2-family): the projection's emitted `type` set for [prod] constructors is a
 **byte-compatible subset of the mechanically generated 29-name production inventory**
 (regenerated from source, never hand-counted; includes `reasoning_delta`); [NEW] names admitted
@@ -294,20 +319,27 @@ verified-in-wiring.
 Deliverables: pure `decide`; driver executes decisions; `run_v2_with_stub` superseded by
 scripted ports; the scripted TUI approval scenario (approval contract above); Layer 1
 compaction scenario family live
-(`provider_payload_vs_uncompacted_history_pressure`, `single_tier_ladder_selects_correctly`,
-`ext_compaction_invalid_rejected`, `summary_cache_replay_stable`,
-`history_rewrite_requires_checkpoint_event`, `checkpoint_never_emitted_in_v1`,
-`checkpoint_output_is_valid_transcript`).
-The previously listed `actual_tokens_drive_next_step` / `emergency_exhaustion_estimate_gated` /
-`telemetry_reflects_payload_not_history` scenarios are **deferred**: they presuppose the
-actual-token path that no longer exists in source (P2-R1/P3-R4) and are reinstated only if
-that path is reintroduced (Open Questions).
+(`provider_payload_vs_uncompacted_history_pressure`, `ext_compaction_invalid_rejected`,
+`summary_cache_replay_stable`, `history_rewrite_requires_checkpoint_event`,
+`checkpoint_never_emitted_in_v1`, `checkpoint_output_is_valid_transcript`, plus the D9 chain
+scenarios: `compactor_chain_order_is_registry_order`, `invalid_stage_skipped_chain_continues`,
+`zero_compactors_exhaustion_behavior`).
+`single_tier_ladder_selects_correctly` relocates with the ladder: it becomes a conformance
+scenario of `motoko_ext_compaction_structural`, not a core scenario. The previously listed
+`actual_tokens_drive_next_step` / `emergency_exhaustion_estimate_gated` /
+`telemetry_reflects_payload_not_history` scenarios are **retired from core** (P2-R1/P3-R4 +
+D9): actual-token gating is compactor policy now, so their successors live in whichever
+compactor package implements it, written against `ExtCtx.telemetry`.
 Gate: L1 scenarios pass under minimal caps with no network; every DST failure prints scenario
 id, first failed invariant, and normalized trace.
 
-**ABI v3 track (parallel to B/C):** ABI 3.0 + conformance kit 3.0 + `compaction_ai` 0.3.0;
-gate: kit rejects v0.2.0, accepts v0.3.0 (scenario ids and commands in Decision detail 6);
-registry probe runs the kit for every package in `registry_generated.ail`.
+**ABI v3 track (parallel to B/C):** ABI 3.0 (ports + artifacts + telemetry) + conformance kit
+3.0 + `compaction_ai` 0.3.0 + (D9) `motoko_ext_compaction_structural` 1.0 (the bundled
+default; note it is pure and needs no ports, so it can ship early against ABI 2.2.0 during
+Phase B and re-certify on 3.0);
+gate: kit rejects v0.2.0, accepts v0.3.0 and the structural compactor (scenario ids and
+commands in Decision detail 6); registry probe runs the kit for every package in
+`registry_generated.ail`.
 
 **Gate separation** (review P1-R8/P2-R9): the migration gates split into two operationally
 distinct classes with distinct CI targets — **core DST gates** (Phases A–C: no registry
@@ -366,6 +398,10 @@ a wide compatibility surface that must be maintained until consumers migrate; fu
   exactly that mutation (research doc §7.4).
 - **Big-bang rewrite** — the strangler phases each ship; a big bang repeats the CSP Phase-1
   failure mode.
+- **Core-resident compaction policy** (rejected 2026-07-03, D9) — keeping the elision ladder
+  in core makes core a privileged compactor exempt from the contract machinery built to police
+  compactors, and hard-codes fallback semantics the compactor chain expresses naturally.
+  Rejected in favor of extension-resident policy over a core scaffold; see Decision detail 4.
 
 ## Open questions (non-blocking)
 
@@ -375,12 +411,14 @@ a wide compatibility surface that must be maintained until consumers migrate; fu
    artifact consumer exists.
 3. Exact `ExtPorts` field list — freeze during the `compaction_ai` v0.3.0 migration, not
    before.
-4. **Reintroduce actual-token compaction gating?** (raised by review P2-R1/P3-R4): the
-   actual/estimate tier split DST ADR-001 documented (2026-06-27) has been removed from source;
-   `TokenTelemetry` in the vocabulary is forward design for its possible return. Decide —
-   with a git-history read of when/why the path was removed — whether to reintroduce it in the
-   projection (restoring the deferred `actual_tokens_*` scenarios) or to amend DST ADR-001
-   R5/R15 to the single-table reality. Blocks nothing in Phases A–B.
+4. ~~Reintroduce actual-token compaction gating?~~ **Closed by D9 (2026-07-03)**: tier policy
+   — including actual-vs-estimate gating — is compactor-extension policy, not a core decision.
+   ABI v3's `ExtCtx.telemetry` supplies what such a compactor needs; DST ADR-001 R5/R15 still
+   need their amendment to the single-table source reality (that part stands). The remaining
+   sub-question (whether the D9 default `motoko_ext_compaction_structural` also absorbs the
+   emergency path, or core keeps a minimal final elision before `Fail`) is decided during the
+   Phase B extraction — current lean: it moves too, and zero-compactor core behavior is honest
+   exhaustion.
 
 ## Review Comments
 

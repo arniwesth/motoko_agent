@@ -36,8 +36,11 @@ Decisions settled in this research (with the operator, 2026-07-02):
 Later settled same day: **ABI v3 scope** (D6 — ports-in-ExtCtx + artifacts channel, no row
 changes, conformance kit as separate package), the **`Checkpoint` seam** (D7, elaborated in
 §7.4 — blessed in v1 types with a never-emit cage), and the **conformance kit details** (D8,
-elaborated in §6.1 — two-module package, caps-as-conformance, fault-isolation split). No open
-decisions remain; this research is ready to seed the ADR.
+elaborated in §6.1 — two-module package, caps-as-conformance, fault-isolation split).
+Settled 2026-07-03 after the ADR review cycle: **extension-resident compaction** (D9,
+elaborated in §7.5 — compactor chain over a core scaffold, bundled structural default,
+`ExtCtx.telemetry` in ABI v3; amends D3). No open decisions remain; the ADR is drafted,
+three-pass reviewed, dispositioned, and D9-amended.
 
 ---
 
@@ -707,6 +710,47 @@ v1-active: `compaction.history_rewrite_requires_checkpoint_event` (digest-chain 
 `compaction.checkpoint_never_emitted_in_v1`. Reserved for v2: checkpoint output satisfies
 transcript invariants; replay across a checkpoint is deterministic given plan + artifacts;
 resume-from-checkpoint reproduces the digest chain.
+(Post-review amendment: checkpoint output's transcript-validity is a **v1** obligation —
+scenario `checkpoint_output_is_valid_transcript`; see the ADR disposition log, P3-R1.)
+
+### 7.5 Extension-resident compaction (D9, settled 2026-07-03)
+
+Operator decision, amending D3: **all compaction policy lives in extensions; core keeps only
+the scaffold.** Rationale: the D6/D8 machinery (gate, conformance kit, ports, artifacts) exists
+precisely to make untrusted compactors safe — core carrying a privileged in-tree compactor is
+an inconsistency once that machinery is trusted; and pluggable compaction is the product
+intent (`compaction_ai` was created to *fix* compaction; others should be able to follow).
+
+**Core scaffold (cannot be delegated — it is what polices compactors):** pin/segment split,
+the validation gate, exported measurement primitives (`estimate_tokens`, `usage_percent` —
+already `export pure func`; their duplication was a `compaction_ai` v0.2.0 defect), and the
+exhaustion decision (`Fail(ContextExhausted)` / later `TakeCheckpoint`) which must behave
+sanely with zero compactors installed.
+
+**Chain semantics replace first-`Compacted`-wins.** Today's behavior is already sequential
+composition — ext compaction then structural elision (`agent_loop_v2.ail:1154→1171`). Making
+structural an extension under first-wins would silently lose chaining. So `dispatch_pre_step`
+becomes a fold-through **compactor chain**: each compactor sees the previous stage's segment;
+the gate validates every stage (invalid ⇒ `ext_compaction_rejected`, stage skipped, chain
+continues — subsuming the hard-coded fallback); registry order = pipeline order; every stage
+ledger-recorded. No ABI signature change needed — `on_pre_step (ctx, msgs)` already supports
+fold-through.
+
+**Bundled default:** the current pure 70/85/95 ladder relocates to
+`motoko_ext_compaction_structural`, registered last (specialized compactors get first shot;
+elision is the universal fallback). Pure ⇒ needs no ports (can ship against ABI 2.2.0), L0
+DST in its own package, and the conformance kit's trivial reference consumer alongside
+effectful `compaction_ai`. Whether the emergency path moves with it is decided during the
+Phase B extraction (lean: yes; zero-compactor core behavior is honest exhaustion).
+
+**Q4 dissolves:** actual-vs-estimate gating, tier tables, keep-last counts are compactor
+policy. ABI v3 adds `ExtCtx.telemetry` (per-step usage from `StepResult`) so any extension can
+implement actual-token gating; core never decides it. DST ADR-001 R5/R15 still need amendment
+to the single-table source reality. Retired-from-core scenarios (`actual_tokens_*`,
+`telemetry_reflects_payload_not_history`, `single_tier_ladder_selects_correctly`) live on as
+compactor-package conformance scenarios. New core scenarios:
+`compactor_chain_order_is_registry_order`, `invalid_stage_skipped_chain_continues`,
+`zero_compactors_exhaustion_behavior`.
 
 ---
 
@@ -719,7 +763,9 @@ resume-from-checkpoint reproduces the digest chain.
    vocabulary sketch (**done** — `sketch/`, §4.1; seeds the real vocabulary module).
 2. **Phase B — split `loop_v2` into phases returning `PhaseResult`**; driver keeps the current
    recursive shape. Scattered emission centralizes; ADR-001's required first seam (provider-call
-   recording) lands naturally as ledger events around the model phase.
+   recording) lands naturally as ledger events around the model phase. (D9) `dispatch_pre_step`
+   converts to the compactor chain and the 70/85/95 ladder extracts into
+   `motoko_ext_compaction_structural` (behavior-preserving relocation; §7.5).
 3. **Phase C — extract the pure step machine and invert control**: driver executes decisions.
    Layer 1 DST scenario families (compaction first) come alive here.
 
@@ -743,9 +789,11 @@ Settled (operator + research, 2026-07-02):
 | D6 | ABI v3 scope (was O1; settled 2026-07-02) | Ports-in-ExtCtx + `artifacts` channel; **no row changes** (`on_tool_policy` is already pure in 2.2.0; narrowing the four max-row hooks buys ~nothing once ports exist). Conformance kit as a **separate package** (`motoko_ext_conformance`), lockstep-versioned with the ABI. Reference migration: `compaction_ai` v0.3.0 |
 | D7 | `Checkpoint` seam in v1 types (was O2; settled 2026-07-02) | Yes — `Checkpoint(CheckpointPlan)` decision variant; `History` opaque with a single self-auditing rebuild op returning `{history, event}`; invariant "rewritten only with a matching ledger event"; v1 never emits it, enforced by scenario. Full design §7.4 |
 | D8 | Conformance kit details (was O3; settled 2026-07-02) | Two-module package: `invariants` (pure contract law, imported by core's transcript gate — one source of law) + `harness` (test-only). Caps-as-conformance with per-extension declared-caps allowances. Per-hook obligations catalog per §6.1; invariant set frozen only after `compaction_ai` v0.3.0 passes; lockstep majors with loud version handshake; acceptance test: the kit must reject v0.2.0's two live bugs. Full design §6.1 |
+| D9 | Extension-resident compaction (settled 2026-07-03; amends D3, extends D6) | All compaction policy in extensions; core keeps the scaffold (pin/gate/measurement/exhaustion). `dispatch_pre_step` becomes a fold-through compactor chain (registry order = pipeline order; every stage validated + ledger-recorded). Bundled default `motoko_ext_compaction_structural` (pure, registered last) carries the 70/85/95 ladder. ABI v3 additionally gains `ExtCtx.telemetry`. Closes ADR Open Question 4: actual-token gating is compactor policy. Full design §7.5 |
 
-No open decisions remain — all decisions raised by this research are settled. Next step: promote
-this research into an ADR (the decision log is its skeleton).
+No open decisions remain — all decisions raised by this research are settled. The ADR
+(`ADR-001-phase-oriented-core.md`) has been drafted from this log, independently reviewed three
+times, dispositioned, and amended by D9.
 
 ## 10. ADR-001 review comments resolved by this design
 
