@@ -58,7 +58,27 @@ import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyD
 import src/core/compaction (compact_step_with_limit)
 import src/core/context_usage (catalog_context_limit_for)
 import src/core/ext/runtime (dispatch_response_intercept, dispatch_solver_candidate, dispatch_tool_policy, dispatch_tool_handle, dispatch_pre_step)
-import src/core/phase_vocab as PhaseVocab
+import src/core/phase_vocab (
+  LedgerEvent,
+  to_schema_v1_kvs,
+  msgs_to_messages,
+  step_result_to_message,
+  envelope_to_tool_message,
+  handled_tool_message,
+  tool_result_message,
+  RunSummary,
+  Dp7VerifierRejected,
+  CostExhausted,
+  StreamErrorRetry,
+  CostWarning,
+  HybridBashExtracted,
+  DoneEvent,
+  ExtSolverFeedback,
+  PersistNudge,
+  SessionSuspend,
+  SessionStart,
+  ErrorEvent
+)
 import pkg/sunholo/motoko_ext_abi/types (PreStepDecision, PassThrough, Compacted)
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
 import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
@@ -180,6 +200,36 @@ pure func motoko_commit() -> string { "dev" }
 -- tracker) to USD float. 100000 millicents = $1.00.
 pure func millicents_to_usd(mc: int) -> float {
   _int_to_float(mc) / 100000.0
+}
+
+pure func event_type_from_projected(kvs: [{key: string, value: Json}]) -> string {
+  match kvs {
+    [] => "",
+    x :: _ =>
+      if x.key == "type" then
+        match x.value {
+          JString(s) => s,
+          _ => ""
+        }
+      else ""
+  }
+}
+
+pure func event_extra_from_projected(kvs: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    _ :: rest => rest
+  }
+}
+
+func ledger_emit(session_id: string, e: LedgerEvent) -> () ! {IO, Trace} {
+  let projected = to_schema_v1_kvs(e);
+  let event_type = event_type_from_projected(projected);
+  emit_json(jo([
+    kv("schema_version", js(schema_version())),
+    kv("session_id",     js(session_id))
+  ] ++ projected));
+  emit_trace_event(session_id, event_type, event_extra_from_projected(projected))
 }
 
 -- Cumulative token/cost totals threaded through loop_v2 recursion. Bundled
@@ -346,17 +396,20 @@ func emit_run_summary(
      kv("total_tokens",  jnum(_int_to_float(total_tokens)))];
   let error_kv = if error_msg == "" then kv("error", js(""))
                  else kv("error", js(error_msg));
-  emit_event(session_id, "run_summary", [
-    kv("model",                  js(model)),
-    kv("motoko_commit",          js(motoko_commit())),
-    kv("finish_reason",          js(finish_reason_str(finish_code))),
-    kv("steps_executed",         jnum(_int_to_float(steps_executed))),
-    kv("usage",                  jo(usage_kvs)),
-    kv("total_cost_usd",         jnum(millicents_to_usd(totals.cost_millicents))),
-    kv("total_cost_millicents",  jnum(_int_to_float(totals.cost_millicents))),
-    kv("duration_ms",            jnum(_int_to_float(duration))),
-    error_kv
-  ])
+  ledger_emit(session_id, RunSummary({
+    model: model,
+    motoko_commit: motoko_commit(),
+    finish_reason: finish_reason_str(finish_code),
+    steps_executed: steps_executed,
+    input_tokens: totals.input_tokens,
+    output_tokens: totals.output_tokens,
+    cache_read_input_tokens: totals.cache_read,
+    cache_creation_input_tokens: totals.cache_creation,
+    total_cost_usd: millicents_to_usd(totals.cost_millicents),
+    total_cost_millicents: totals.cost_millicents,
+    duration_ms: duration,
+    error: error_msg
+  }))
 }
 
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
@@ -726,7 +779,7 @@ func dispatch_calls(
                     kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
                   ]);
                   let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-                  let handled_msg = PhaseVocab.handled_tool_message(call.id, result_env);
+                  let handled_msg = handled_tool_message(call.id, result_env);
                   handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 },
                 Delegate => {
@@ -755,7 +808,7 @@ func dispatch_calls(
                         kv("stream_id", js(stream_id)),
                         kv("id", js(call.id))
                       ]);
-                      let msg = PhaseVocab.tool_result_message(call, result_content);
+                      let msg = tool_result_message(call, result_content);
                       msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                     }
                   }
@@ -785,7 +838,7 @@ func dispatch_calls(
               kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
             ]);
             let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-            let handled_msg = PhaseVocab.handled_tool_message(call.id, result_env);
+            let handled_msg = handled_tool_message(call.id, result_env);
             handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
           } else {
             let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
@@ -799,7 +852,7 @@ func dispatch_calls(
                 kv("exit_code", jnum(_int_to_float(result_env.exit_code)))
               ]);
               let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-              let handled_msg = PhaseVocab.handled_tool_message(call.id, result_env);
+              let handled_msg = handled_tool_message(call.id, result_env);
               handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
             },
             Delegate => {
@@ -846,7 +899,7 @@ func dispatch_calls(
                     kv("stream_id", js(stream_id)),
                     kv("id", js(call.id))
                   ]);
-                  let msg = PhaseVocab.tool_result_message(call, result_content);
+                  let msg = tool_result_message(call, result_content);
                   msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 }
               }
@@ -925,10 +978,10 @@ func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string
   match run_dp7_verifier(rt, workdir) {
     Approve => None,
     Reject(errors) => {
-      let _ = emit_event(session_id, "dp7_verifier_rejected", [
-        kv("step", jnum(_int_to_float(step_idx))),
-        kv("errors", js(errors))
-      ]);
+      let _ = ledger_emit(session_id, Dp7VerifierRejected({
+        step: step_idx,
+        errors: errors
+      }));
       Some({
         role: "user",
         content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${errors}",
@@ -1020,12 +1073,12 @@ func loop_v2(
     })
   }
   else if max_cost_millicents > 0 && cost_rates.input_per_1m_millicents > 0 && totals.cost_millicents >= max_cost_millicents then {
-    let _ = emit_event(session_id, "cost_exhausted", [
-      kv("step", jnum(_int_to_float(step_idx))),
-      kv("total_cost_millicents", jnum(_int_to_float(totals.cost_millicents))),
-      kv("total_cost_usd",        jnum(millicents_to_usd(totals.cost_millicents))),
-      kv("cap_millicents",        jnum(_int_to_float(max_cost_millicents)))
-    ]);
+    let _ = ledger_emit(session_id, CostExhausted({
+      step: step_idx,
+      total_cost_millicents: totals.cost_millicents,
+      total_cost_usd: millicents_to_usd(totals.cost_millicents),
+      cap_millicents: max_cost_millicents
+    }));
     let _ = emit_run_summary(session_id, model, totals, step_idx, 1, "cost cap reached: ${show(totals.cost_millicents)} of ${show(max_cost_millicents)} millicents used", started_at_ms);
     Err({
       code: "BudgetExceeded",
@@ -1045,7 +1098,7 @@ func loop_v2(
         kv("step", jnum(_int_to_float(step_idx))),
         kv("note", js(note))
       ]);
-      Ok(PhaseVocab.msgs_to_messages(compacted_msgs))
+      Ok(msgs_to_messages(compacted_msgs))
     },
     PassThrough => Ok(msgs)
   };
@@ -1103,10 +1156,10 @@ func loop_v2(
         -- (length) / #19 (empty). Bounded by step_budget. Disable: MOTOKO_RETRY_STREAM_ERROR=0.
         let retry_stream = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
         if retry_stream && step_budget > 1 then {
-          let _ = emit_event(session_id, "stream_error_retry", [
-            kv("step", jnum(_int_to_float(step_idx))),
-            kv("error", js(e.message))
-          ]);
+          let _ = ledger_emit(session_id, StreamErrorRetry({
+            step: step_idx,
+            error: e.message
+          }));
           loop_v2(rt, task, env_url, hybrid_tools, budget, model, msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, totals, next_provider, session_id, started_at_ms)
         } else {
           let _ = emit_run_summary(session_id, model, totals, step_idx, 5, e.message, started_at_ms);
@@ -1134,7 +1187,7 @@ func loop_v2(
           kv("tool_calls", jnum(_int_to_float(n_calls)))
         ] ++ usage_kvs);
 
-        let assistant_msg = PhaseVocab.step_result_to_message(result);
+        let assistant_msg = step_result_to_message(result);
         let msgs_with_assistant = msgs ++ [assistant_msg];
         let ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit);
 
@@ -1151,13 +1204,13 @@ func loop_v2(
           if max_cost_millicents > 0 then {
             let pct = (new_total_cost * 100) / max_cost_millicents;
             if pct >= 90 && totals.cost_warned_pct < 90 then {
-              let _ = emit_event(session_id, "cost_warning", [kv("threshold", js("90pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("total_cost_usd", jnum(millicents_to_usd(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]);
+              let _ = ledger_emit(session_id, CostWarning({ threshold: "90pct", step: step_idx, pct: pct, total_cost_millicents: new_total_cost, total_cost_usd: millicents_to_usd(new_total_cost), cap_millicents: max_cost_millicents }));
               90
             } else if pct >= 75 && totals.cost_warned_pct < 75 then {
-              let _ = emit_event(session_id, "cost_warning", [kv("threshold", js("75pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("total_cost_usd", jnum(millicents_to_usd(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]);
+              let _ = ledger_emit(session_id, CostWarning({ threshold: "75pct", step: step_idx, pct: pct, total_cost_millicents: new_total_cost, total_cost_usd: millicents_to_usd(new_total_cost), cap_millicents: max_cost_millicents }));
               75
             } else if pct >= 50 && totals.cost_warned_pct < 50 then {
-              let _ = emit_event(session_id, "cost_warning", [kv("threshold", js("50pct")), kv("step", jnum(_int_to_float(step_idx))), kv("pct", jnum(_int_to_float(pct))), kv("total_cost_millicents", jnum(_int_to_float(new_total_cost))), kv("total_cost_usd", jnum(millicents_to_usd(new_total_cost))), kv("cap_millicents", jnum(_int_to_float(max_cost_millicents)))]);
+              let _ = ledger_emit(session_id, CostWarning({ threshold: "50pct", step: step_idx, pct: pct, total_cost_millicents: new_total_cost, total_cost_usd: millicents_to_usd(new_total_cost), cap_millicents: max_cost_millicents }));
               50
             } else totals.cost_warned_pct
           } else totals.cost_warned_pct;
@@ -1182,7 +1235,7 @@ func loop_v2(
               kv("tool", js(envelope.tool)),
               kv("exit_code", jnum(_int_to_float(envelope.exit_code)))
             ]);
-            let tool_msg = PhaseVocab.envelope_to_tool_message(envelope);
+            let tool_msg = envelope_to_tool_message(envelope);
             let next_msgs = msgs_with_assistant ++ [tool_msg];
             loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
           },
@@ -1196,10 +1249,10 @@ func loop_v2(
               let hybrid_attempt: Option[string] = if hybrid_tools then extract_bash(result.message.content) else None;
               match hybrid_attempt {
                 Some(cmd) => {
-                  let _ = emit_event(session_id, "hybrid_bash_extracted", [
-                    kv("step", jnum(_int_to_float(step_idx))),
-                    kv("cmd", js(cmd))
-                  ]);
+                  let _ = ledger_emit(session_id, HybridBashExtracted({
+                    step: step_idx,
+                    cmd: cmd
+                  }));
                   let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
                   -- M-MOTOKO-HYBRID-TOOL-CORRELATION (v0.18.3): patch the
                   -- prior assistant message to include the synthetic
@@ -1247,11 +1300,11 @@ func loop_v2(
                       -- subprocess. If we emitted done first, run_summary
                       -- would be lost mid-flush. Ordering: summary → done.
                       let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
-                      let _ = emit_event(session_id, "done", [
-                        kv("step", jnum(_int_to_float(step_idx))),
-                        kv("output", js(output)),
-                        kv("source", js("ext_solver_accept"))
-                      ]);
+                      let _ = ledger_emit(session_id, DoneEvent({
+                        step: step_idx,
+                        output: output,
+                        source: "ext_solver_accept"
+                      }));
                       Ok(msgs_with_assistant)
                     },
                     Some(retry_msg) => {
@@ -1261,10 +1314,10 @@ func loop_v2(
                   }
                 },
                 ContinueWithFeedback(feedback) => {
-                  let _ = emit_event(session_id, "ext_solver_feedback", [
-                    kv("step", jnum(_int_to_float(step_idx))),
-                    kv("feedback", js(feedback))
-                  ]);
+                  let _ = ledger_emit(session_id, ExtSolverFeedback({
+                    step: step_idx,
+                    feedback: feedback
+                  }));
                   let feedback_msg: Message = {
                     role: "user",
                     content: feedback,
@@ -1283,11 +1336,11 @@ func loop_v2(
                   let persist_budget = persist_retries_budget();
                   let nudges_used = count_persist_nudges(msgs_with_assistant);
                   if persist_budget > 0 && nudges_used < persist_budget && not any_writefile_attempt(msgs_with_assistant) then {
-                    let _ = emit_event(session_id, "persist_nudge", [
-                      kv("step", jnum(_int_to_float(step_idx))),
-                      kv("nudge_num", jnum(_int_to_float(nudges_used + 1))),
-                      kv("budget", jnum(_int_to_float(persist_budget)))
-                    ]);
+                    let _ = ledger_emit(session_id, PersistNudge({
+                      step: step_idx,
+                      nudge_num: nudges_used + 1,
+                      budget: persist_budget
+                    }));
                     let nudge_msg: Message = {
                       role: "user",
                       content: "${persist_nudge_marker()} You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs.",
@@ -1303,10 +1356,11 @@ func loop_v2(
                       -- above for rationale (TS TUI's process.exit(0) on done
                       -- would otherwise truncate run_summary mid-flush).
                       let _ = emit_run_summary(session_id, model, new_totals, step_idx + 1, 0, "", started_at_ms);
-                      let _ = emit_event(session_id, "done", [
-                        kv("step", jnum(_int_to_float(step_idx))),
-                        kv("output", js(result.message.content))
-                      ]);
+                      let _ = ledger_emit(session_id, DoneEvent({
+                        step: step_idx,
+                        output: result.message.content,
+                        source: ""
+                      }));
                       Ok(msgs_with_assistant)
                     },
                     Some(retry_msg) => {
@@ -1395,7 +1449,7 @@ export func run_v2(
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-	  let messages = PhaseVocab.msgs_to_messages(initial_msgs);
+	  let messages = msgs_to_messages(initial_msgs);
 	  let session_id = derive_session_id();
 	  let started_at_ms = now();
 	  let session_span = "motoko.session.${session_id}";
@@ -1502,10 +1556,10 @@ export func conversation_loop_v2(
       else if cmd_type == "restart" then {
         -- Emit session_suspend event and exit cleanly; TUI will respawn
         let target_profile = msg_get_str(obj, "profile");
-        let _ = emit_event(session_id, "session_suspend", [
-          kv("session_id", js(session_id)),
-          kv("target_profile", js(target_profile))
-        ]);
+        let _ = ledger_emit(session_id, SessionSuspend({
+          session_id: session_id,
+          target_profile: target_profile
+        }));
         ()
       }
       else if cmd_type == "user_message" then {
@@ -1517,19 +1571,19 @@ export func conversation_loop_v2(
           tool_call_id: ""
         };
         let next_history = history ++ [user_msg];
-        let _ = emit_event(session_id, "session_start", [
-          kv("task", js(content)),
-          kv("model", js(model)),
-          kv("mode", js("v2"))
-        ]);
+        let _ = ledger_emit(session_id, SessionStart({
+          task: content,
+          model: model,
+          mode: "v2"
+        }));
         match run_v2_from_messages(rt, content, env_url, hybrid_tools, budget, model, next_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
           Ok(updated_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
           Err(e) => {
-            let _ = emit_event(session_id, "error", [
-              kv("source", js("agent_loop_v2")),
-              kv("code", js(e.code)),
-              kv("message", js(e.message))
-            ]);
+            let _ = ledger_emit(session_id, ErrorEvent({
+              source: "agent_loop_v2",
+              code: e.code,
+              message: e.message
+            }));
             conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
           }
         }
@@ -1561,16 +1615,16 @@ export func run_v2_with_conversation(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let initial_messages = PhaseVocab.msgs_to_messages(initial_msgs);
+  let initial_messages = msgs_to_messages(initial_msgs);
   let session_id = derive_session_id();
   match run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
     Ok(final_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
     Err(e) => {
-      let _ = emit_event(session_id, "error", [
-        kv("source", js("agent_loop_v2")),
-        kv("code", js(e.code)),
-        kv("message", js(e.message))
-      ]);
+      let _ = ledger_emit(session_id, ErrorEvent({
+        source: "agent_loop_v2",
+        code: e.code,
+        message: e.message
+      }));
       conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
     }
   }
