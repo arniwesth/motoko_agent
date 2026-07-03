@@ -870,6 +870,14 @@ no diff under `src/tui/` beyond the WI-0 test file; `ailang.lock` consistent
 Per the handoff: discrepancies between the committed documents and post-Phase-A HEAD, found
 while producing this plan. None blocks Phase B; each has a plan-level resolution above.
 
+> **Addendum (2026-07-03, same day):** all seven gaps were dispositioned with operator
+> sign-off — see the ADR's **Phase-B Plan-Authoring Findings & Dispositions** log. Body
+> fixes applied same day: ADR Decision detail 3 (inventory scope, G-B6), Decision detail 4
+> (stage-recording wire scope, G-B1), Phase B section (result-level relocation wording,
+> G-B3; G7 intercept arm, G-B4), Open Question 4 (remnant closed per D-B5), plus research
+> §7.5 (G-B1). G-B5 is recorded as ABI-v3-track input; G-B7 was resolved by probe in this
+> session (positive; fallback retired). The entries below are preserved **as found**.
+
 - **G-B1 — "each stage ledger-recorded" (D9) collides with the closed [NEW] whitelist.**
   §7.5 and Decision detail 4 say every chain stage is ledger-recorded, but the normative
   [NEW] name set (ADR D5 bullet) admits only four names, none of which can carry a

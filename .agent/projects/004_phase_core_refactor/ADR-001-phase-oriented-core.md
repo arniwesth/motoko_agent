@@ -7,7 +7,10 @@ scaffold, bundled `motoko_ext_compaction_structural` default, telemetry in ABI v
 Open Question 4); further amended 2026-07-03 by the **Phase-A plan-authoring findings
 G1–G7** (the fresh-session ADR-completeness test prescribed by
 `NOTE-plan-authoring-session-choice.md`; see the Plan-Authoring Findings & Dispositions log
-at the end; closes Open Question 1)
+at the end; closes Open Question 1); further amended 2026-07-03 by the **Phase-B
+plan-authoring findings G-B1–G-B7** (same fresh-session test, second application; see the
+Phase-B Findings & Dispositions log at the end; closes Open Question 4's remaining
+sub-question)
 Status: Proposed (review findings addressed; dispositions recorded)
 Pinned toolchain: AILANG **v0.26.0** (commit `3b52a24`); `ailang.lock` → `ailang_version: "v0.26.0"`
 
@@ -133,7 +136,9 @@ The driver is the single **logical emission authority**; exactly one function
 constructor names are the DST-canonical layer; a `to_schema_v1 : (LedgerEvent) -> Json`
 projection targets the **production wire stream** — **29** event types (27 `emit_event` names
 plus `thinking_delta` and `reasoning_delta` emitted directly via `emit_json`,
-`agent_loop_v2.ail:255,:265`; inventory regenerated mechanically, never hand-counted) consumed
+`agent_loop_v2.ail:255,:265`; inventory regenerated mechanically, never hand-counted; scope
+is `agent_loop_v2`'s stream — `rpc.ail`'s raw `v2_mode` and `ai_compat`'s call-stream events
+are outside it, G-B6 2026-07-03) consumed
 by the TUI and eval harnesses. Projected names fall in two classes (normative): **[prod]**
 constructors project onto existing production names and must be byte-compatible; **[NEW]**
 constructors (`provider_call_prepared`, `loop_totals_updated`, `history_checkpoint`,
@@ -182,7 +187,10 @@ Question 1; the successor of the transcript helpers currently inline in
   each registered compactor receives the previous stage's segment and returns `PassThrough` or
   `Compacted`; the gate validates **every stage** (invalid ⇒ `ext_compaction_rejected` ledger
   event, stage skipped, chain continues — subsuming the old hard-coded structural fallback);
-  registry order is pipeline order; the ledger records each stage. This preserves today's
+  registry order is pipeline order; the ledger records each stage *(wire scope, G-B1
+  2026-07-03: Phase B records applied and rejected stages — `compaction_extension` /
+  `ext_compaction_rejected`; pass-through stages have no admitted [NEW] name and are
+  recorded once Phase C's in-memory ledger exists)*. This preserves today's
   semantics — extension compaction and structural elision already compose sequentially
   (`agent_loop_v2.ail:1154→1171`); under first-wins the relocated ladder would silently stop
   chaining. The current 70/85/95 ladder (`compaction.ail:134-141`) relocates into a **bundled
@@ -408,14 +416,19 @@ ABI cost, closes the live gap); (D9) `dispatch_pre_step` converted from first-`C
 to the **compactor chain** (no ABI change — the hook signature already supports fold-through),
 and the 70/85/95 ladder extracted from `compaction.ail` into the bundled
 `motoko_ext_compaction_structural` extension registered last — a behavior-preserving
-relocation, since chain(ext…, structural-last) equals today's sequential composition.
+relocation *at the result level* (byte-level residues — exhaustion-reason wording, stage
+events for genuinely-applied elision, the segment measurement basis with its effective-limit
+compensation — are enumerated in the Phase B plan's expected-diff tables; G-B3 2026-07-03),
+since chain(ext…, structural-last) equals today's sequential composition.
 Added 2026-07-03 (plan-authoring findings): (G3) with the ladder relocation, **retire the
 vestigial model-name-keyed pure wrappers** (`compact_step`, `usage_percent`,
 `try_emergency_compaction`, `context_limit_for`) — production limits come from the model
 catalog (`catalog_context_limit_for`, `{Env, FS}`) since commit `a7589b8` (2026-06-24) and
 the static `context_limit_for` returns 0 for every model, so the model-keyed forms are dead
 policy surface; the shared measurement surface is the limit-parameterized variants. (G7) a
-**minimal in-repo test extension** (scripted `Handled` + `ContinueWithFeedback` fixture) so
+**minimal in-repo test extension** (scripted `Handled` + `ContinueWithFeedback` +
+`InterceptHandled` fixture — the intercept arm added 2026-07-03, G-B4:
+`envelope_to_tool_message`'s only call site is the intercept path) so
 extension-path provider-message construction is e2e-coverable by the parity harness before
 emission rewires — Phase A pins those paths with golden-value pure tests only.
 Gate (per review R2-family): the projection's emitted `type` set for [prod] constructors is a
@@ -534,7 +547,10 @@ a wide compatibility surface that must be maintained until consumers migrate; fu
    sub-question (whether the D9 default `motoko_ext_compaction_structural` also absorbs the
    emergency path, or core keeps a minimal final elision before `Fail`) is decided during the
    Phase B extraction — current lean: it moves too, and zero-compactor core behavior is honest
-   exhaustion.
+   exhaustion. **Sub-question closed 2026-07-03 (Phase-B plan, decision D-B5, operator
+   sign-off): the emergency path moves into the extension; core keeps a single
+   `exhaustion_pct() = 95` exhaustion decision measured over the re-pinned full list against
+   the catalog limit, fail-open at limit 0.**
 
 ## Review Comments
 
@@ -1216,3 +1232,53 @@ Cross-repo amendment applied the same day: DST ADR-001 R5/R15 (and its "What is 
 tier-facts line) carry dated notes that the actual/estimate split they were grounded on was
 removed from source (P2-R1/P3-R4 here), with the export remedy redirected to the current
 single-table reality.
+
+---
+
+## Phase-B Plan-Authoring Findings & Dispositions (2026-07-03)
+
+_Author: Claude Fable 5 (Phase-B plan-authoring session). Second application of the
+fresh-session ADR-completeness test: a session with no prior project context wrote
+`PLAN-phase-b-phase-results.md` from the committed documents plus the Phase A commits,
+re-verifying every citation against post-Phase-A HEAD (`d0d5b7e`) and re-running the
+instruments. Discrepancies became findings G-B1–G-B7 (full evidence in the plan's "ADR gaps
+found"); dispositioned here with operator sign-off ("I will follow your recommendations",
+2026-07-03); body fixes applied same day. No finding re-opens D1–D9._
+
+- **G-B1 ("each stage ledger-recorded" collides with the closed [NEW] whitelist) —
+  ACCEPTED, doc fix.** D9's chain text promised per-stage records, but no admitted [NEW]
+  name can carry a `PassThrough` stage and Phase B has no in-memory ledger. **Fix applied**:
+  Decision detail 4 and research §7.5 now scope wire recording to applied/rejected stages
+  (`compaction_extension` / `ext_compaction_rejected`); full stage records arrive with
+  Phase C's in-memory ledger (or a future admitted name).
+- **G-B2 (as-built `to_schema_v1` [prod] arms not byte-compatible) — ACCEPTED, no doc
+  change.** Expected for a sketch-seeded scaffold; the mismatch list lives in the plan's
+  grounding and defines WI-1's work. Recorded so no reader mistakes the scaffold for the
+  contract.
+- **G-B3 ("behavior-preserving relocation" is result-level, not byte-level) — ACCEPTED,
+  doc fix.** Three residues: exhaustion-reason wording changes; genuinely-applied elision
+  gains `compaction_extension` occurrences (type-set subset holds); compactors measure the
+  segment under an effective-limit compensation (tier `t` fires at total usage `t + s(1−t)`
+  for pinned-prefix share `s`; exact at `s = 0`). **Fix applied**: Phase B wording amended;
+  the plan's expected-diff tables are the normative enumeration.
+- **G-B4 (G7's fixture wording under-covers the envelope path) — ACCEPTED, doc fix.**
+  `envelope_to_tool_message`'s only call site is the response-intercept path, so the
+  fixture needs an `InterceptHandled` arm. **Fix applied**: Phase B G7 wording amended.
+- **G-B5 (system messages remain visible via `ExtCtx.history_slice`) — ACCEPTED, deferred
+  to the ABI v3 design.** Deliverable 4 closes the compaction *input* path (and WI-5's
+  re-pin makes prefix corruption impossible regardless of compactor output); read-only
+  visibility through `history_slice` is an ABI-surface question for the v3 `ExtCtx` work.
+  No body fix; recorded here as ABI-track input.
+- **G-B6 (emission-surface accounting: sites vs. grep hits; `rpc.ail` `v2_mode` and
+  `ai_compat` outside the inventory) — ACCEPTED, doc fix.** **Fix applied**: Decision
+  detail 3 states the inventory's scope (`agent_loop_v2`'s stream). The 48-figure stands
+  as measured (grep hits incl. definitions; the plan records the call-site truth 38+6+1+3).
+- **G-B7 (`motoko_core` path-dependency shape unproven for bundled extensions) — RESOLVED
+  by probe, same session, positive.** Three substrate facts established (throwaway probe
+  package, deleted after): the path target must be the `.packages/motoko_core` sync mirror
+  (the resolver roots module lookup at the path target); `[exports] modules` gates
+  cross-package imports; transitively imported modules must also be exported. The
+  in-package-duplication fallback is retired. Residual for the ABI track: publishing
+  `motoko_ext_compaction_structural` to the registry will need a published `motoko_core`
+  (or vendored primitives) — a committed manifest cannot depend on a gitignored mirror
+  outside this repo.

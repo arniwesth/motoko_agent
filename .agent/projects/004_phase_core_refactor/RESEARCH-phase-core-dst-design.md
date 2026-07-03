@@ -738,8 +738,9 @@ structural an extension under first-wins would silently lose chaining. So `dispa
 becomes a fold-through **compactor chain**: each compactor sees the previous stage's segment;
 the gate validates every stage (invalid ⇒ `ext_compaction_rejected`, stage skipped, chain
 continues — subsuming the hard-coded fallback); registry order = pipeline order; every stage
-ledger-recorded. No ABI signature change needed — `on_pre_step (ctx, msgs)` already supports
-fold-through.
+ledger-recorded *(wire scope amended 2026-07-03, ADR G-B1: applied/rejected stages in
+Phase B; pass-through stage records await Phase C's in-memory ledger)*. No ABI signature
+change needed — `on_pre_step (ctx, msgs)` already supports fold-through.
 
 **Bundled default:** the current pure 70/85/95 ladder relocates to
 `motoko_ext_compaction_structural`, registered last (specialized compactors get first shot;
