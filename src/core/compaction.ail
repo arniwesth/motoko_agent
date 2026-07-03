@@ -7,10 +7,10 @@
 -- is preserved — the provider needs those IDs for conversation continuation.
 --
 -- Thresholds (usage = estimated_tokens / loaded context limit):
---   < 70%  → PassThrough (no compaction needed)
---   70-85% → Elide tool_result content older than last 10 turns
---   85-95% → Elide tool_result content older than last 5 turns
---   ≥ 95%  → Emergency compaction: try keep_last=3, then keep_last=1
+--   < elide_tier_pct()      → PassThrough (no compaction needed)
+--   elide_tier_pct()        → Elide tool_result content older than elide_keep_last()
+--   elide_hard_tier_pct()   → Elide tool_result content older than elide_hard_keep_last()
+--   emergency_pct()         → Emergency compaction: try emergency_keep_last(), then emergency_final_keep_last()
 --            Only fail if still ≥95% after aggressive elision
 --
 -- Compaction is per-step only: the session history (used for the next
@@ -47,6 +47,20 @@ export pure func usage_percent_with_limit(msgs: [Message], limit: int) -> int {
 export pure func usage_percent(msgs: [Message], model: string) -> int {
   usage_percent_with_limit(msgs, context_limit_for(model))
 }
+
+export pure func elide_tier_pct() -> int { 70 }
+
+export pure func elide_hard_tier_pct() -> int { 85 }
+
+export pure func emergency_pct() -> int { 95 }
+
+export pure func elide_keep_last() -> int { 10 }
+
+export pure func elide_hard_keep_last() -> int { 5 }
+
+export pure func emergency_keep_last() -> int { 3 }
+
+export pure func emergency_final_keep_last() -> int { 1 }
 
 -- Count tool-role messages in the list.
 -- contracts: SKIPPED — uses foldl (Z3 fragment requires non-higher-order)
@@ -108,14 +122,14 @@ export pure func elide_old_tool_results(msgs: [Message], keep_last: int) -> [Mes
 -- Returns Ok(compacted) if we can get below 95%, otherwise Err.
 pure func try_emergency_compaction_with_limit(msgs: [Message], model: string, limit: int) -> Result[[Message], string] {
   -- Try keeping only last 3 tool results
-  let emergency1 = elide_old_tool_results(msgs, 3);
+  let emergency1 = elide_old_tool_results(msgs, emergency_keep_last());
   let pct1 = usage_percent_with_limit(emergency1, limit);
-  if pct1 < 95 then Ok(emergency1)
+  if pct1 < emergency_pct() then Ok(emergency1)
   else {
     -- Try keeping only last 1 tool result
-    let emergency2 = elide_old_tool_results(msgs, 1);
+    let emergency2 = elide_old_tool_results(msgs, emergency_final_keep_last());
     let pct2 = usage_percent_with_limit(emergency2, limit);
-    if pct2 < 95 then Ok(emergency2)
+    if pct2 < emergency_pct() then Ok(emergency2)
     else {
       -- Even extreme compaction failed
       Err("compaction_exhausted: context at ${show(pct2)}% of ${model} limit after emergency compaction")
@@ -133,9 +147,9 @@ pure func try_emergency_compaction(msgs: [Message], model: string) -> Result[[Me
 -- At ≥95%, attempts emergency compaction before failing.
 export pure func compact_step_with_limit(msgs: [Message], model: string, limit: int) -> Result[[Message], string] {
   let pct = usage_percent_with_limit(msgs, limit);
-  if pct >= 95 then try_emergency_compaction_with_limit(msgs, model, limit)
-  else if pct >= 85 then Ok(elide_old_tool_results(msgs, 5))
-  else if pct >= 70 then Ok(elide_old_tool_results(msgs, 10))
+  if pct >= emergency_pct() then try_emergency_compaction_with_limit(msgs, model, limit)
+  else if pct >= elide_hard_tier_pct() then Ok(elide_old_tool_results(msgs, elide_hard_keep_last()))
+  else if pct >= elide_tier_pct() then Ok(elide_old_tool_results(msgs, elide_keep_last()))
   else Ok(msgs)
 }
 
