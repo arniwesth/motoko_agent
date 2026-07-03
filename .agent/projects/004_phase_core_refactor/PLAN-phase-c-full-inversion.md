@@ -4,7 +4,7 @@ Date: 2026-07-03
 Status: Implementation-ready plan (implements Phase C only of `ADR-001-phase-oriented-core.md`)
 Pinned toolchain: **AILANG v0.26.0** (commit `3b52a24`, built `2026-07-02_15:03:57`).
 Verified this session: `ailang --version` reports v0.26.0 / `3b52a24`. Phase B endpoint is
-`a9616ad`; HEAD while authoring is `0b28c86` with only the Phase C handoff on top.
+`a9616ad`; the Phase C handoff commit is `0b28c86`; review HEAD is `34f901a` (`Added Plan C`).
 
 Authored by a fresh session, per the same fresh-session rule recorded for the earlier plans:
 the Phase C deliverables and gate are read from the ADR's Phase C section, not from prior
@@ -67,7 +67,8 @@ network; checkpoint digests and validation become real. ABI v3, conformance kit 
    baseline protocol, and the checkpoint-hash probe. No production behavior change.
 2. **WI-C1 - checkpoint mechanics become real**: replace labeled length digests with canonical
    SHA-256 content digests, make `payload_digest` use the same content hash family, add
-   checkpoint-chain validation APIs, and keep v1 `TakeCheckpoint` emission impossible.
+   checkpoint-chain validation APIs, and re-bless only after a D-B7 expected-diff table for the
+   mandated `provider_call_prepared.payload_digest` value changes.
 3. **WI-C2 - pure policy modules**: add `step_machine.ail`, `cost_phase.ail`, and `recovery.ail`;
    seed `decide` from the sketch's re-derivation proof and move loop policy into pure tests.
 4. **WI-C3 - scripted ports and in-memory ledger**: introduce ports plus an in-memory ledger/trace
@@ -185,18 +186,26 @@ run under `--caps IO` even when their declared rows include `Clock`/`Env`
 must run with `--caps IO` or less; any need for `AI`, `Net`, `Stream`, `Process`, or `FS` is a
 bug in the scenario harness unless the scenario explicitly exercises that effect.
 
-**D-C7 - Parity risk is ordering, not shape.** Phase B completed typed projection and the
-projection subset gate passed (`.agent/summaries/2026-07-03-phase-b-phase-results-implementation.md:45`,
+**D-C7 - Parity risk is ordering, after the known digest-value diff.** Phase B completed typed
+projection and the projection subset gate passed
+(`.agent/summaries/2026-07-03-phase-b-phase-results-implementation.md:45`,
 `.agent/summaries/2026-07-03-phase-b-phase-results-implementation.md:52`). Phase C should avoid
-new JSONL names. If full inversion changes order, land a committed expected-diff table and
-re-bless per D-B7 (`PLAN-phase-b-phase-results.md:392`, `PLAN-phase-b-phase-results.md:405`).
+new JSONL names and new event fields. WI-C1 is the one known payload-value exception:
+`provider_call_prepared.payload_digest` must change from the labeled interim digest to the real
+content hash (`PLAN-phase-b-phase-results.md:384`, `PLAN-phase-b-phase-results.md:390`). That WI
+must land a D-B7 expected-diff table, verify no field/order/name changes beyond that digest value,
+and re-bless `/tmp/phase_c_blessed`. After that, the remaining parity risk is event ordering from
+the control-flow inversion; any such diff needs its own expected-diff table before re-bless
+(`PLAN-phase-b-phase-results.md:392`, `PLAN-phase-b-phase-results.md:405`).
 
 ## Work Breakdown
 
 Order is load-bearing: instruments before rewrites; checkpoint hash before scenarios consume
 digests; pure `decide` before driver inversion; approval before tool-phase batching; adapter before
 fleet migration. After every WI, `make smoke_parity` must be identical to the current blessed
-baseline or explained by an expected-diff table before re-blessing.
+baseline or explained by an expected-diff table before re-blessing. WI-C0 starts from
+`/tmp/phase_b_blessed`; WI-C1 creates the first Phase C baseline because the digest value diff is
+mandatory; WI-C2 and later use `/tmp/phase_c_blessed`.
 
 ### WI-C0 - Instruments, Baseline, And Probe Shells
 
@@ -246,6 +255,11 @@ this WI.
 - `src/core/phase_vocab.ail`: keep `apply_checkpoint` as the atomic state rewrite path and add
   tests that no caller can receive a rewritten `History` without the event
   (`src/core/phase_vocab.ail:287`, `src/core/phase_vocab.ail:303`).
+- Add a committed WI-C1 expected-diff table before re-blessing: either directly in this WI-C1
+  section or as a generated expected-diff artifact referenced from this section, not as a second
+  phase plan. The only allowed production-byte changes are `provider_call_prepared` lines whose
+  `payload_digest` value changes from the labeled interim form to `sha256:<64 hex>`; event type,
+  field set, field order, model, counts, and line order must remain unchanged.
 - `scripts/phase_c_l1_scenarios.ail`: add the three checkpoint scenarios that do not need the new
   driver yet: `history_rewrite_requires_checkpoint_event`, `checkpoint_output_is_valid_transcript`,
   and a direct `checkpoint_never_emitted_in_v1` check against `step_machine` once WI-C2 lands. In
@@ -256,12 +270,25 @@ this WI.
 ailang test src/core/phase_vocab.ail
 ailang run --caps IO --entry main scripts/probe_phase_c_hash.ail
 ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail
-PARITY_BASELINE=/tmp/phase_b_blessed make smoke_parity
+./scripts/phase_a_event_parity.sh /tmp/phase_c_digest_candidate
+if diff -ru /tmp/phase_b_blessed /tmp/phase_c_digest_candidate > /tmp/phase_c_wi_c1.diff; then
+  echo "expected WI-C1 digest diff, got none" >&2
+  exit 1
+else
+  rc=$?
+  test "$rc" -eq 1
+fi
+rg 'provider_call_prepared.*payload_digest|payload_digest.*provider_call_prepared' /tmp/phase_c_wi_c1.diff
+awk '/^[-+][{]/ && $0 !~ /"type":"provider_call_prepared"/ { print; bad=1 } END { exit bad }' /tmp/phase_c_wi_c1.diff
+# compare /tmp/phase_c_wi_c1.diff line-for-line with the committed WI-C1 expected-diff table
+rm -rf /tmp/phase_c_blessed && cp -a /tmp/phase_c_digest_candidate /tmp/phase_c_blessed
+PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity
+./scripts/phase_b_projection_gate.sh /tmp/phase_c_blessed
 ```
 
 **Rollback.** Revert `phase_vocab` and the scenario additions. Re-run
-`ailang test src/core/phase_vocab.ail` to prove the placeholder state is restored. No baseline
-re-bless.
+`ailang test src/core/phase_vocab.ail` to prove the placeholder state is restored. Remove the
+WI-C1 expected-diff table and restore `/tmp/phase_b_blessed` as the active parity baseline.
 
 ### WI-C2 - Pure Step Machine, Cost, And Recovery Policy
 
@@ -277,6 +304,12 @@ re-bless.
   write-attempt state for persist nudge, pending approval state, finalization/DP7 status, and
   clock/session fields. The existing re-derivation fields already exist
   (`src/core/phase_vocab.ail:253`, `src/core/phase_vocab.ail:255`).
+- Keep DP7 policy in `step_machine`: `decide` chooses whether a final answer is pending
+  verification, whether a verifier rejection becomes `InjectUserMessage`, and whether disabled or
+  fail-open verification may proceed to `Finalize`. The verifier command itself is only a port
+  execution result fed back into `StepState`. If the current `FinalizeInfo`/`StepState` shapes
+  cannot express that without a new `StepDecision` constructor, stop and record an ADR gap before
+  coding (`ADR-001-phase-oriented-core.md:100`, `RESEARCH-phase-core-dst-design.md:305`).
 - Add `src/core/cost_phase.ail`: move `step_cost_millicents`, warning-threshold calculation, and
   cap checks into pure functions (`src/core/agent_loop_v2.ail:959`,
   `src/core/agent_loop_v2.ail:963`).
@@ -284,8 +317,9 @@ re-bless.
   retire marker scanning from the future path (`src/core/agent_loop_v2.ail:1047`,
   `src/core/agent_loop_v2.ail:1065`).
 - Add inline tests for every decision branch: step budget, cost cap, stream retry, retry exhausted,
-  persist nudge, compaction exhaustion -> `Fail`, pending tools -> `RunTools`, model stop ->
-  `Finalize`, and v1 policy never returning `TakeCheckpoint`.
+  persist nudge, compaction exhaustion -> `Fail`, pending tools -> `RunTools`, DP7 approve,
+  DP7 reject -> `InjectUserMessage`, DP7 missing-infrastructure/fail-open -> `Finalize`, model
+  stop -> `Finalize`, and v1 policy never returning `TakeCheckpoint`.
 
 **Verification.**
 ```
@@ -296,7 +330,7 @@ ailang test src/core/recovery.ail
 ailang test src/core/phase_vocab.ail
 (cd .agent/projects/004_phase_core_refactor/sketch && ailang check probe_consumer_decide.ail)
 (cd .agent/projects/004_phase_core_refactor/sketch && ailang run --caps IO --entry main probe_consumer_decide.ail)
-PARITY_BASELINE=/tmp/phase_b_blessed make smoke_parity
+PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity
 ```
 
 **Rollback.** Revert the new modules and any `phase_vocab` state-field additions. If any existing
@@ -334,8 +368,8 @@ ailang check src/core/ports.ail
 ailang test src/core/test/scripted_ports.ail
 ailang test src/core/phase_vocab.ail
 ailang run --caps IO --entry main scripts/smoke_ports_record.ail
-PARITY_BASELINE=/tmp/phase_b_blessed make smoke_parity
-./scripts/phase_b_projection_gate.sh /tmp/phase_b_blessed
+PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity
+./scripts/phase_b_projection_gate.sh /tmp/phase_c_blessed
 ```
 
 **Rollback.** Revert new ports/trace files and compatibility glue. Existing smokes must still use
@@ -355,11 +389,11 @@ full tool phase is batched.
 - Add `src/core/tool_phase.ail` with the first narrow surface: policy planning for one pending
   call, `ToolPending` event construction, denial message construction, and tail preservation. Do
   not move all native execution yet.
-- Add `scripts/phase_c_approval_protocol.ail`: a scripted scenario with at least four cases:
+- Extend `scripts/phase_c_approval_protocol.ail`: a scripted scenario with at least four cases:
   approve, deny with reason, EOF/default allow, unparseable/default deny. Each case asserts:
   `tool_pending` appears before the approval-read record; the request carries the call id and
-  stream id; denial produces a tool-role denial message; approval reissues the suspended
-  `remaining` entries in original order.
+  stream id; denial produces a tool-role denial message; approval executes the approved call
+  before reissuing the suspended `remaining` entries in original order.
 - Optionally add a focused TUI parser test for `tool_pending` if the implementation chooses to
   type it in `AgentEvent`; otherwise keep the TUI side to generic `send`/stdin protocol because
   `RuntimeProcess.send` already writes arbitrary command JSON (`src/tui/src/runtime-process.ts:689`,
@@ -371,7 +405,7 @@ ailang test src/core/step_machine.ail
 ailang check src/core/tool_phase.ail
 ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
 ailang test src/core/phase_vocab.ail
-PARITY_BASELINE=/tmp/phase_b_blessed make smoke_parity
+PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity
 ```
 
 **Rollback.** Revert `tool_phase`, approval scenario, and new state fields. Existing
@@ -400,8 +434,10 @@ through parity (`scripts/smoke_v2_pending_full_loop.ail:1`,
   `native_tool_results`. The scratchpad special case currently sits in dispatch recursion
   (`src/core/agent_loop_v2.ail:864`, `src/core/agent_loop_v2.ail:883`).
 - Add `src/core/hook_phase.ail`: migrate pre-step compaction chain, response intercept, solver
-  candidate, and DP7 execution. Keep `dispatch_pre_step_chain` in `ext/runtime.ail`; it already
-  returns data (`src/core/ext/runtime.ail:149`, `src/core/ext/runtime.ail:186`).
+  candidate, and DP7 verifier port execution/result normalization. The hook phase may execute the
+  verifier effect, but it must not own the gating policy; `step_machine` decides what a normalized
+  verifier result means. Keep `dispatch_pre_step_chain` in `ext/runtime.ail`; it already returns
+  data (`src/core/ext/runtime.ail:149`, `src/core/ext/runtime.ail:186`).
 - `src/core/agent_loop_v2.ail`: turn `run_v2`, `run_v2_from_messages`,
   `run_v2_with_conversation`, and `run_v2_with_stub` into facades over `session.ail`.
 - `src/core/rpc.ail`: keep the public entry path stable; it currently calls
@@ -416,8 +452,8 @@ ailang test src/core/step_machine.ail
 ailang test src/core/phase_vocab.ail
 ailang test src/core/ext/runtime.ail
 ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
-PARITY_BASELINE=/tmp/phase_b_blessed make smoke_parity
-./scripts/phase_b_projection_gate.sh /tmp/phase_b_blessed
+PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity
+./scripts/phase_b_projection_gate.sh /tmp/phase_c_blessed
 ```
 
 **Expected-diff protocol.** This is the WI most likely to alter event ordering. If strict parity
@@ -427,7 +463,7 @@ the table is committed, per D-B7 (`PLAN-phase-b-phase-results.md:392`,
 `PLAN-phase-b-phase-results.md:405`).
 
 **Rollback.** Revert the new phase modules and facade changes as one unit. Restore the prior
-`agent_loop_v2.ail` monolith and run strict Phase B parity against `/tmp/phase_b_blessed`.
+`agent_loop_v2.ail` monolith and run strict parity against the latest `/tmp/phase_c_blessed`.
 
 ### WI-C6 - Scripted-Port Fleet Migration
 
@@ -503,10 +539,15 @@ is green.
 
 ### WI-C8 - Final Gate Checklist
 
-All commands must pass on the finished branch. `phase_c_blessed` means the current strict blessed
-baseline after any committed D-B7 expected-diff table and re-bless.
+All positive commands must pass on the finished branch. `phase_c_blessed` means the current strict
+blessed baseline after any committed D-B7 expected-diff table and re-bless. The sealing probe is
+the one intentional negative check; capture its rc next to the `ailang check` invocation and then
+inspect the saved output, matching the measurement discipline in the exit-code false-alarm note
+(`.agent/projects/004_phase_core_refactor/NOTE-ailang-run-exit-code-false-alarm.md:84`,
+`.agent/projects/004_phase_core_refactor/NOTE-ailang-run-exit-code-false-alarm.md:92`).
 
 ```
+set -euo pipefail
 ailang --version                                      # v0.26.0 / 3b52a24, else STOP
 make check_core
 make test_core
@@ -519,7 +560,15 @@ ailang test src/core/ext/runtime.ail
 ailang run --caps IO --entry main scripts/probe_phase_c_hash.ail
 ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail
 ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
-ailang check scripts/probe_phase_vocab_sealed.ail        # MUST fail IMP010
+tmp=$(mktemp)
+if ailang check scripts/probe_phase_vocab_sealed.ail >"$tmp" 2>&1; then
+  cat "$tmp"
+  rm -f "$tmp"
+  echo "expected sealed probe to fail with IMP010" >&2
+  exit 1
+fi
+rg "IMP010: symbol 'MkHistory' not exported" "$tmp"
+rm -f "$tmp"
 (cd .agent/projects/004_phase_core_refactor/sketch && ailang test sketch_vocabulary.ail)
 (cd .agent/projects/004_phase_core_refactor/sketch && ailang check probe_consumer_decide.ail)
 (cd .agent/projects/004_phase_core_refactor/sketch && ailang run --caps IO --entry main probe_consumer_decide.ail)
@@ -532,7 +581,7 @@ Supplemental checks:
   compatibility adapter definition and any explicitly retained comments.
 - `rg -n "getEnvOr|now\\(|readLine\\(" src/core/session.ail src/core/*_phase.ail src/core/step_machine.ail`
   shows env/clock/input only in driver or live port construction, not in pure `step_machine.ail`.
-- `rg -n "TakeCheckpoint|history_checkpoint" /tmp/phase_c_blessed` is empty for v1 parity
+- `! rg -n "TakeCheckpoint|history_checkpoint" /tmp/phase_c_blessed` succeeds for v1 parity
   captures. The scenario `checkpoint_never_emitted_in_v1` is the authoritative check.
 
 ## ADR Gaps Found
@@ -554,7 +603,7 @@ Non-blocking notes for implementers:
 | Check | Command | Result |
 |---|---|---|
 | Toolchain pin | `ailang --version` | v0.26.0 / `3b52a24`, matches pin |
-| HEAD / Phase B range | `git log --oneline -20`; `git log --oneline --reverse fd933b6^..a9616ad` | HEAD `0b28c86`; Phase B WI-0..WI-8 sequence present |
+| HEAD / Phase B range | `git log --oneline -20`; `git log --oneline --reverse fd933b6^..a9616ad` | review HEAD `34f901a`; Phase B WI-0..WI-8 sequence present |
 | Phase B parity | `PARITY_BASELINE=/tmp/phase_b_blessed make smoke_parity` | pass |
 | Phase B projection gate | `./scripts/phase_b_projection_gate.sh /tmp/phase_b_blessed` | pass |
 | Core vocabulary | `ailang test src/core/phase_vocab.ail` | 17 pass / 0 fail |
@@ -567,7 +616,7 @@ Non-blocking notes for implementers:
 
 ## Anchor Re-Verification Log
 
-Source anchors read against HEAD `0b28c86` on 2026-07-03:
+Source anchors read against review HEAD `34f901a` on 2026-07-03:
 
 - ADR Phase C deliverables and gate: `ADR-001-phase-oriented-core.md:443`,
   `ADR-001-phase-oriented-core.md:459`.
