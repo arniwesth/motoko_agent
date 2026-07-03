@@ -1,0 +1,239 @@
+-- src/core/step_machine.ail
+--
+-- Pure Phase C decision policy. This module is intentionally not used by the
+-- production loop until the driver inversion WIs route through session.ail.
+
+module src/core/step_machine
+
+import std/ai (Message, ToolCall)
+import std/json (jo)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  StepState,
+  StepPolicy,
+  StepDecision,
+  RunTools,
+  CallModel,
+  Finalize,
+  Fail,
+  InjectUserMessage,
+  TakeCheckpoint,
+  ToolPlanEntry,
+  ToolPlan,
+  ExecNative,
+  history_from_seed,
+  project
+)
+import src/core/recovery (persist_nudge_message)
+
+pure func plan_native(calls: [ToolCall]) -> [ToolPlanEntry] {
+  match calls {
+    [] => [],
+    c :: rest => {
+      let entry: ToolPlanEntry = { call: c, executor: ExecNative };
+      entry :: plan_native(rest)
+    }
+  }
+}
+
+pure func dp7_rejection_message(text: string) -> Message {
+  {
+    role: "user",
+    content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${text}",
+    tool_calls: [],
+    tool_call_id: ""
+  }
+}
+
+export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
+  if pol.step_budget > 0 && s.step_idx >= pol.step_budget
+  then Fail({ code: "Internal", message: "step budget exhausted", retryable: false })
+  else if pol.max_cost_millicents > 0 && s.totals.cost_millicents >= pol.max_cost_millicents
+  then Fail({ code: "BudgetExceeded", message: "cost cap reached", retryable: false })
+  else if List.length(s.pending_tool_calls) > 0
+  then RunTools({ entries: plan_native(s.pending_tool_calls) })
+  else if s.last_finish_reason == "dp7_rejected"
+  then InjectUserMessage(dp7_rejection_message(s.last_response_text))
+  else if s.last_finish_reason == "persist_nudge"
+  then InjectUserMessage(persist_nudge_message(s.nudges_used + 1, pol.persist_retries))
+  else if s.last_finish_reason == "stop" || s.last_finish_reason == "dp7_approved" || s.last_finish_reason == "dp7_fail_open"
+  then Finalize({ reason: "model_stop", output: s.last_response_text })
+  else match project(s.history, s.telemetry, pol.compaction) {
+    Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
+    Ok(projection) => CallModel({ payload: projection.payload, model: "phase-c-model" })
+  }
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func mk_policy(context_limit: int) -> StepPolicy {
+  {
+    step_budget: 8,
+    max_cost_millicents: 0,
+    persist_retries: 2,
+    retry_stream_errors: true,
+    compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+  }
+}
+
+func mk_state(reason: string, response: string, pending: [ToolCall], step_idx: int, cost: int, context_limit: int) -> Result[StepState, string] {
+  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: step_idx,
+      history: h,
+      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0 },
+      totals: { input_tokens: 0, output_tokens: 0, cost_millicents: cost, cost_warned_pct: 0 },
+      nudges_used: 0,
+      ext_artifacts: jo([]),
+      pending_tool_calls: pending,
+      last_finish_reason: reason,
+      last_response_text: response
+    })
+  }
+}
+
+func is_fail(d: StepDecision, code: string) -> bool {
+  match d {
+    Fail(f) => f.code == code,
+    _ => false
+  }
+}
+
+func is_finalize(d: StepDecision, output: string) -> bool {
+  match d {
+    Finalize(f) => f.output == output,
+    _ => false
+  }
+}
+
+func is_inject(d: StepDecision) -> bool {
+  match d {
+    InjectUserMessage(_) => true,
+    _ => false
+  }
+}
+
+func is_call_model(d: StepDecision) -> bool {
+  match d {
+    CallModel(_) => true,
+    _ => false
+  }
+}
+
+func is_run_tools(d: StepDecision, n: int) -> bool {
+  match d {
+    RunTools(p) => List.length(p.entries) == n,
+    _ => false
+  }
+}
+
+pure func test_decide_step_budget() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 8, 0, 0) {
+      Ok(s) => is_fail(decide(s, mk_policy(0)), "Internal"),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_cost_cap() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 10, 0) {
+      Ok(s) => {
+        let pol = { step_budget: 8, max_cost_millicents: 10, persist_retries: 0, retry_stream_errors: true, compaction: mk_policy(0).compaction };
+        is_fail(decide(s, pol), "BudgetExceeded")
+      },
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_pending_tools() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc", name: "ReadFile", arguments: "{}" };
+    match mk_state("tool_calls", "", [call], 0, 0, 0) {
+      Ok(s) => is_run_tools(decide(s, mk_policy(0)), 1),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_model_stop_finalize() -> bool
+  tests [((), true)]
+  {
+    match mk_state("stop", "done", [], 0, 0, 0) {
+      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_dp7_reject_injects_user_message() -> bool
+  tests [((), true)]
+  {
+    match mk_state("dp7_rejected", "bad", [], 0, 0, 0) {
+      Ok(s) => is_inject(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_dp7_approve_finalizes() -> bool
+  tests [((), true)]
+  {
+    match mk_state("dp7_approved", "done", [], 0, 0, 0) {
+      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_dp7_fail_open_finalizes() -> bool
+  tests [((), true)]
+  {
+    match mk_state("dp7_fail_open", "done", [], 0, 0, 0) {
+      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_persist_nudge() -> bool
+  tests [((), true)]
+  {
+    match mk_state("persist_nudge", "", [], 0, 0, 0) {
+      Ok(s) => is_inject(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_compaction_exhaustion_fails() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 0, 1) {
+      Ok(s) => is_fail(decide(s, mk_policy(1)), "ContextExhausted"),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_fresh_state_calls_model() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 0, 0) {
+      Ok(s) => is_call_model(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_v1_policy_never_returns_take_checkpoint() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 0, 0) {
+      Ok(s) =>
+        match decide(s, mk_policy(0)) {
+          TakeCheckpoint(_) => false,
+          _ => true
+        },
+      Err(_) => false
+    }
+  }
