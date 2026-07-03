@@ -1,0 +1,21 @@
+-- src/core/hook_phase.ail
+
+module src/core/hook_phase
+
+import src/core/ext/runtime (PreStepStage, StageApplied, StageRejected, StagePassed)
+import src/core/phase_vocab (
+  LedgerRecord,
+  CompactionStageRecord,
+  TraceStageApplied,
+  TraceStageRejected,
+  TraceStagePassed
+)
+
+export pure func stage_record(step: int, stage: PreStepStage) -> LedgerRecord {
+  let outcome = match stage.outcome {
+    StageApplied(note) => TraceStageApplied(note),
+    StageRejected(reason) => TraceStageRejected(reason),
+    StagePassed => TraceStagePassed
+  };
+  CompactionStageRecord({ step: step, ext_id: stage.ext_id, outcome: outcome })
+}

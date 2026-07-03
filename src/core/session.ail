@@ -1,0 +1,71 @@
+-- src/core/session.ail
+--
+-- Phase C driver surface. The live v2 loop is still delegated through
+-- agent_loop_v2 until the remaining phase extraction is complete.
+
+module src/core/session
+
+import std/ai (Message)
+import std/json (jo)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  StepState,
+  StepPolicy,
+  PhaseResult,
+  LedgerTrace,
+  empty_ledger_trace,
+  apply_state_delta,
+  history_from_seed,
+  CallModel,
+  RunTools,
+  AwaitApproval,
+  InjectUserMessage,
+  TakeCheckpoint,
+  Finalize,
+  Fail
+)
+import src/core/step_machine (decide)
+
+export type SessionSnapshot = {
+  state: StepState,
+  trace: LedgerTrace
+}
+
+export func session_from_messages(msgs: [Message], policy: StepPolicy) -> Result[SessionSnapshot, string] {
+  match history_from_seed(msgs) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      state: {
+        step_idx: 0,
+        history: h,
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: jo([]),
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      },
+      trace: empty_ledger_trace()
+    })
+  }
+}
+
+export func apply_phase_result(snapshot: SessionSnapshot, result: PhaseResult) -> SessionSnapshot {
+  {
+    state: apply_state_delta(snapshot.state, result.delta),
+    trace: snapshot.trace
+  }
+}
+
+export func next_decision(snapshot: SessionSnapshot, policy: StepPolicy) -> string {
+  match decide(snapshot.state, policy) {
+    CallModel(_) => "CallModel",
+    RunTools(_) => "RunTools",
+    AwaitApproval(_) => "AwaitApproval",
+    InjectUserMessage(_) => "InjectUserMessage",
+    TakeCheckpoint(_) => "TakeCheckpoint",
+    Finalize(_) => "Finalize",
+    Fail(_) => "Fail"
+  }
+}

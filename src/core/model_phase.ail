@@ -1,0 +1,43 @@
+-- src/core/model_phase.ail
+
+module src/core/model_phase
+
+import std/ai (StepResult)
+import std/option (Some, None)
+import src/core/phase_vocab (PhaseResult, ModelRequest, empty_delta, StateDelta, ProviderResult, step_result_to_message)
+
+export type ModelPhaseOutput = {
+  result: StepResult,
+  phase: PhaseResult
+}
+
+export pure func result_delta(result: StepResult) -> StateDelta {
+  {
+    telemetry: Some({ last_input_tokens: result.input_tokens, last_output_tokens: result.output_tokens }),
+    totals: None,
+    nudges_used: None,
+    ext_artifacts: None,
+    pending_tool_calls: Some(result.tool_calls),
+    last_finish_reason: Some(result.finish_reason),
+    last_response_text: Some(result.message.content)
+  }
+}
+
+export pure func phase_from_result(result: StepResult) -> PhaseResult {
+  {
+    delta: result_delta(result),
+    transcript_append: [step_result_to_message(result)],
+    events: [ProviderResult({
+      step: 0,
+      text: result.message.content,
+      finish_reason: result.finish_reason,
+      tool_calls: 0,
+      input_tokens: result.input_tokens,
+      output_tokens: result.output_tokens,
+      cost_usd: 0.0,
+      cache_read_input_tokens: result.cache_read_input_tokens,
+      cache_creation_input_tokens: result.cache_creation_input_tokens
+    })],
+    cost_delta_millicents: 0
+  }
+}
