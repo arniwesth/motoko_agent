@@ -1196,6 +1196,22 @@ re-opens D1–D9._
   extension is added to Phase B deliverables so e2e parity coverage exists before emission
   rewires.
 
+- **G8 (post-disposition, plan self-review 2026-07-03: 13 of 32 `scripts/*.ail` fail
+  `ailang check` at HEAD) — ACCEPTED, with one sub-claim retracted.** The class: stale
+  `ExtensionHooks` record literals predating the ABI 2.1/2.2 field additions
+  (`on_describe_tools`, `on_pre_step`) — G3's staleness family, fleet-wide. Invisible
+  because no CI target checks or runs `scripts/` (G6); each file fails loudly the moment
+  anything executes it. **Retraction (same day):** the review initially also reported an
+  AILANG substrate defect — "`ailang run` exits 0 on type errors" — refuted by a minimal
+  repro (check and run both exit 1); the rc=0 readings were the review's own `$?`-through-
+  a-pipeline measurement artifact. No upstream filing warranted. Post-mortem:
+  `NOTE-ailang-run-exit-code-false-alarm.md`. Disposition: the plan's parity harness
+  check-gates its own smoke list, runs under `set -euo pipefail` (the actual lesson), and
+  fails on zero-event full-loop output; its two broken members
+  (`smoke_v2_pending_full_loop`, `smoke_v2_handle`) are repaired in WI-0; the remaining 11
+  broken scripts and a `check_scripts` CI target are flagged as repo hygiene outside
+  Phase A (full list in the plan's G8 entry).
+
 Cross-repo amendment applied the same day: DST ADR-001 R5/R15 (and its "What is accurate"
 tier-facts line) carry dated notes that the actual/estimate split they were grounded on was
 removed from source (P2-R1/P3-R4 here), with the export remedy redirected to the current

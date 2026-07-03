@@ -34,7 +34,9 @@ shippable and the event stream byte-identical:
    nondeterministic field (`duration_ms`), and byte-compares JSONL streams before/after. A
    new scripted smoke (`scripts/smoke_phase_a_tool_parity.ail`) closes the discovered
    coverage hole: **no existing scripted smoke drives a native tool dispatch** (zero users of
-   `stub_step.tool_step` today).
+   `stub_step.tool_step` today). Two additions from the plan-review pass (G8): the harness
+   `ailang check`-gates its own smoke list, and WI-0 repairs the two listed smokes that are
+   type-broken at HEAD.
 2. **WI-1** — name the compaction constants in `src/core/compaction.ail` as zero-arg
    `export pure func`s (`elide_tier_pct`=70, `elide_hard_tier_pct`=85, `emergency_pct`=95,
    keep-lasts 10/5, plus the emergency keep-lasts 3/1 found by the survey), replacing the
@@ -68,7 +70,11 @@ byte-identical after `duration_ms` normalization.
 compaction path is dead code and `smoke_v2_compaction_tiers` was red at HEAD by its own pass
 criterion). *All seven were dispositioned same day (operator sign-off) — see the Addendum in
 "ADR gaps found" and the ADR's Plan-Authoring Findings & Dispositions log; the tiers smoke is
-repaired and green.*
+repaired and green.* An eighth (G8, plan self-review): **13 of 32 `scripts/*.ail` fail
+`ailang check` at HEAD**, unnoticed because nothing check-gates `scripts/` — stale
+`ExtensionHooks` literals; WI-0's harness check-gates its list and repairs its two broken
+members. (A suspected AILANG exit-code defect initially blamed for the silence was refuted
+by minimal repro — see `NOTE-ailang-run-exit-code-false-alarm.md`.)
 
 ---
 
@@ -207,43 +213,74 @@ New test-only artifacts; zero production code.
     `scripts/` today, so no existing deterministic smoke reaches `tool_result_message`
     (`:856`/`:961`). Shape: `run_v2_with_stub` (def `agent_loop_v2.ail:1692`; provider
     `Scripted`, `stub_step.ail:42`) with a script of
-    `[tool_step("ReadFile", <fixture path>, "call-1"), prose_step("done")]` against a
-    fixture file the smoke writes itself (fixed content ⇒ deterministic tool output), using
+    `[tool_step("ReadFile", <args JSON naming the fixture path>, "call-1"),
+    prose_step("done")]` (`tool_step(tool, args_json, step_id)`, `stub_step.ail:152`)
+    against a fixture file the smoke writes itself (fixed content ⇒ deterministic tool
+    output), using
     `empty_rt()` (`stub_step.ail:188`). Asserts the run returns `Ok` and — for the harness —
     emits the `v2_tool_dispatch_start/complete` + `native_tool_results` event bracket.
   - `scripts/phase_a_event_parity.sh` — the harness. Contract:
-    1. Runs each smoke in the fixed list below with `MOTOKO_SESSION_ID=phase-a-parity`
+    1. **`ailang check`s every listed smoke first; any check failure fails the harness.**
+       Fails fast with a readable error before any run — this is what surfaces the G8 class
+       (two listed smokes are type-broken at HEAD). *(An earlier draft justified this step
+       with a suspected AILANG defect — "`ailang run` exits 0 on type errors" — which a
+       minimal repro **refuted**: run exits 1 correctly; the rc=0 observations were this
+       review's own pipeline artifact. Full post-mortem:
+       `NOTE-ailang-run-exit-code-false-alarm.md`.)*
+    2. Runs each smoke in the fixed list below with `MOTOKO_SESSION_ID=phase-a-parity`
        (pins the session id — `derive_session_id`, `agent_loop_v2.ail:279-283`, prefers the
        env var) and the caps its header names.
-    2. Normalizes the **single** nondeterministic field:
+    3. Normalizes the **single** nondeterministic field:
        `sed 's/"duration_ms":[0-9]*/"duration_ms":0/g'` (empirically the only run-to-run
        diff; `duration_ms` is `now()`-derived in `emit_run_summary`,
-       `agent_loop_v2.ail:333-356`).
-    3. Writes one `<name>.jsonl` per smoke into the output dir given as `$1`.
-    4. Also captures `smoke_v2_compaction_tiers.ail` stdout (not JSONL — a ✓/✗ report) as
+       `agent_loop_v2.ail:333-356`; `motoko_commit` is a hardcoded pure `"dev"`,
+       `agent_loop_v2.ail:176` — not volatile).
+    4. Writes one `<name>.jsonl` per smoke into the output dir given as `$1`.
+    5. Also captures `smoke_v2_compaction_tiers.ail` stdout (not JSONL — a ✓/✗ report) as
        `tiers.txt`. *(Updated 2026-07-03: the smoke was repaired as part of the G3
        disposition — explicit-limit calls via `compact_step_with_limit`, seven cases
        including the corrected tier-3 pair, `exit(1)` on any failure — so it is
        absolute-green and a nonzero exit fails the harness like any other smoke.)*
-    5. Exit nonzero if any smoke exits nonzero.
+    6. Exit nonzero if any smoke exits nonzero — the script **must `set -euo pipefail`**:
+       the normalization pipeline (`ailang run … | sed …`) otherwise reports sed's exit
+       status and masks a failed run (the exact footgun behind the retracted defect claim
+       in the note above) — **or if a smoke marked full-loop in the list emits zero JSONL
+       events** (full-loop smokes always emit; zero events means the run died before the
+       loop — the belt to step 1's braces).
     Smoke list (all `Scripted`/pure — no network, no Ollama/OpenRouter, no registry
     hydration; the core-DST gate class per the ADR's gate separation):
-    - `smoke_v2_cost_budget_full_loop.ail` (validated this session: 141 events,
-      deterministic after normalization)
-    - `smoke_v2_compaction_full_loop.ail` (validated this session: 17 events, deterministic)
-    - `smoke_v2_pending_full_loop.ail` (stdin: run with `</dev/null` so the EOF→
-      `PolicyDefault` path is exercised deterministically; validate at baseline time)
-    - `smoke_v2_dp7_gate.ail` (after `bash scripts/setup_dp7_smoke_workdirs.sh`)
-    - `smoke_phase_a_tool_parity.ail` (new, above)
-    - `smoke_v2_handle.ail`, `smoke_v2_hybrid.ail` (`--caps IO,Env,Clock` unit smokes —
-      green checks, output captured)
+    - `smoke_v2_cost_budget_full_loop.ail` [full-loop] (validated this session: 141 events,
+      deterministic after normalization; `ailang check` OK at HEAD)
+    - `smoke_v2_compaction_full_loop.ail` [full-loop] (validated this session: 17 events,
+      deterministic; check OK)
+    - `smoke_v2_pending_full_loop.ail` [full-loop] (stdin: run with `</dev/null` so the
+      EOF→`PolicyDefault` path is exercised deterministically). **Type-broken at HEAD (G8)**:
+      its `mk_hook` `ExtensionHooks` literal (`smoke_v2_pending_full_loop.ail:81`) predates
+      the ABI's `on_pre_step` field (run exits 1 with the type error on stderr and zero
+      events — unnoticed only because nothing runs it in CI). **WI-0 repairs it** (add a
+      passthrough `on_pre_step` returning `PassThrough`) rather than dropping it: the
+      approval-EOF path is parity-valuable.
+    - `smoke_v2_dp7_gate.ail` [full-loop] (after `bash scripts/setup_dp7_smoke_workdirs.sh`;
+      check OK)
+    - `smoke_phase_a_tool_parity.ail` [full-loop] (new, above)
+    - `smoke_v2_handle.ail` [unit] — **type-broken at HEAD (G8)**, same class, two ABI
+      generations stale (`ExtensionHooks` literal at `smoke_v2_handle.ail:65` missing
+      `on_describe_tools` and `on_pre_step`); WI-0 repairs it (Handled-path coverage).
+    - `smoke_v2_hybrid.ail` [unit] (`--caps IO,Env,Clock`; check OK, runs green this
+      session — "M7 hybrid smoke PASS")
     - `smoke_v2_compaction_tiers.ail` (`--caps IO`; absolute-green after the 2026-07-03
       repair, see above)
   - `Makefile` — a **`smoke_parity`** target (G6 disposition; the ADR's Phase A gate now
     cites it by name): runs the harness into a fresh dir and, when `PARITY_BASELINE=<dir>`
     is set, `diff -r`s against it; without a baseline it runs the suite twice and
     self-diffs (the determinism check). Canonical CI-runnable name for the gate.
-- **Procedure:** commit the two new scripts; then
+- **Files touched (repaired, G8):** `scripts/smoke_v2_pending_full_loop.ail` (add a
+  passthrough `on_pre_step` to the `mk_hook` literal at `:81`) and
+  `scripts/smoke_v2_handle.ail` (add `on_describe_tools` + `on_pre_step` to the literal at
+  `:65`) — both type-broken at HEAD against the current `ExtensionHooks` shape. Repairs are
+  fixture-only; after them both smokes must `ailang check` clean and run green.
+- **Procedure:** commit the WI-0 artifacts (tool-parity smoke, harness, `smoke_parity`
+  target, the two G8 smoke repairs); then
   `./scripts/phase_a_event_parity.sh /tmp/phase_a_baseline` **twice** and diff the two
   output dirs against each other. Any smoke that self-diffs nonempty is either fixed (pin
   its remaining nondeterminism) or dropped from the list *at baseline time, before any
@@ -259,9 +296,12 @@ New test-only artifacts; zero production code.
   warrants. For those, equivalence is pinned by **golden-value inline pure tests** in
   `phase_vocab.ail` (WI-3) asserting exact output records for fixed inputs. This limit is
   gap G7 for the ADR's attention.
-- **Verification:** harness runs green twice at HEAD; self-diff of the two runs is empty;
-  `ailang check scripts/smoke_phase_a_tool_parity.ail` clean.
-- **Rollback:** delete the two scripts. Nothing depends on them.
+- **Verification:** `ailang check` clean on the new tool-parity smoke **and** the two
+  repaired smokes; `make smoke_parity` (self-diff mode) green — which subsumes: harness
+  runs green twice at HEAD and the self-diff of the two runs is empty.
+- **Rollback:** delete the new scripts and the `smoke_parity` target. The two G8 smoke
+  repairs need no rollback path — they fix type errors and restoring the broken state
+  serves nothing; if the harness list must shrink, drop the smoke from the list instead.
 
 ### WI-1 — Name the compaction constants (`src/core/compaction.ail` only)
 
@@ -309,7 +349,7 @@ unused; nothing is wired into production*:
   `history_len`, `history_digest` — digest kept as the sketch's **labeled placeholder**;
   the content-hash + previous-digest chain is normative ADR mechanics due before any digest
   is consumed, i.e. Phase B/C), `system_is_head_prefix`, `take_system_prefix`.
-- Sealed `CompactableSegment`, `ProviderPayload` + `payload_messages`; exported wrappers
+- Sealed `CompactableSegment`, `ProviderPayload` + `payload_messages`; the exported wrapper
   `ModelRequest`.
 - `TokenTelemetry` (forward design, per sketch note), `CompactionPolicy` — its doc comment
   now cites WI-1's named exports as the source of the 70/85/95 + 10/5 values.
@@ -366,9 +406,12 @@ Split into two commits for independent revert:
 inline tests, + their doc comments) from `agent_loop_v2.ail` into `phase_vocab.ail`, marked
 `export` (same purity qualifiers as today); add
 `import src/core/phase_vocab (msgs_to_messages, step_result_to_message,
-cap_tool_message_content, tool_result_message, envelope_to_tool_message)` to
-`agent_loop_v2.ail`'s import block (`result_env_model_content` needs importing only until
-WI-3b, when its last three direct uses become `handled_tool_message` calls). `phase_vocab`
+tool_result_message, envelope_to_tool_message, result_env_model_content)` to
+`agent_loop_v2.ail`'s import block. Two enumeration subtleties from the survey:
+`cap_tool_message_content` is **not** imported back — after the move `agent_loop_v2.ail`
+has no direct use of it (both remaining uses, `:474`/`:483`, are inside functions that
+also move); `result_env_model_content` **is** imported, but only until WI-3b, when its
+last three direct uses become `handled_tool_message` calls and the import is dropped. `phase_vocab`
 gains imports `src/core/tool_contract (ToolResultEnvelope, result_to_model_json)` and the
 std imports the bodies need (`StepResult` via std/ai; `encode` via std/json; `Str.length`,
 `substring` via std/string). No import cycle: `tool_contract` does not import
@@ -380,9 +423,10 @@ Call sites updated (none change shape — the names simply resolve via the impor
 `:911` (`result_env_model_content`, until WI-3b).
 
 Golden-value inline pure tests added in `phase_vocab.ail` pinning exact outputs for fixed
-inputs of each moved function — this is the equivalence evidence for the two paths the
-harness cannot drive end-to-end (`envelope_to_tool_message`, the `Handled` literals; WI-0
-coverage note / gap G7).
+inputs of each moved function (field-level assertions — record equality is not assumed on
+the substrate; string fields compare with `==`) — this is the equivalence evidence for the
+two paths the harness cannot drive end-to-end (`envelope_to_tool_message`, the `Handled`
+literals; WI-0 coverage note / gap G7).
 
 Expected side effect, asserted not forgotten: `ailang test src/core/agent_loop_v2.ail` drops
 19 → 17 (the two cap tests move); `ailang test src/core/phase_vocab.ail` gains them.
@@ -423,10 +467,12 @@ ailang check scripts/probe_phase_vocab_sealed.ail  # MUST FAIL with IMP010 (seal
 bash scripts/setup_dp7_smoke_workdirs.sh
 ./scripts/phase_a_event_parity.sh /tmp/phase_a_after
 diff -r /tmp/phase_a_baseline /tmp/phase_a_after   # MUST be empty — the no-event-stream-diff gate
+# (equivalently: PARITY_BASELINE=/tmp/phase_a_baseline make smoke_parity)
 ```
 
-Plus the negative checks: `grep -n "phase_vocab" src/core/*.ail` shows imports **only** in
-`agent_loop_v2.ail`; `grep -c emit_event src/core/phase_vocab.ail` = 0 (no emission wired);
+Plus the negative checks: `grep -n "phase_vocab" src/core/*.ail` hits only the module's own
+declaration line and import lines in `agent_loop_v2.ail` (no other consumer);
+`grep -c emit_event src/core/phase_vocab.ail` = 0 (no emission wired);
 no diff under `src/tui/`, `packages/`, `src/core/ext/`.
 
 ---
@@ -448,6 +494,15 @@ blocks Phase A (each has a plan-level resolution above).
 > exhausted-errs pair (7 cases, all ✓, rc=0; failure path verified rc=1). G3c (wrapper
 > retirement) and G7 (minimal in-repo test extension) are now named Phase B deliverables in
 > the ADR. The G-entries below are preserved **as found**, for the record.
+>
+> **G8** was found *after* the dispositions, during the plan's own review pass (2026-07-03):
+> it is remedied structurally inside this plan (WI-0 contract step 1 + two smoke repairs)
+> and its repo-hygiene remainder (11 more broken scripts, a `check_scripts` target) is
+> flagged to the operator rather than absorbed into Phase A. The review pass initially also
+> reported an AILANG defect ("`ailang run` exits 0 on type errors") — **retracted same
+> day**: a minimal repro showed run exits 1 correctly; the rc=0 readings were the review's
+> own `$?`-through-a-pipeline artifact. Post-mortem:
+> `NOTE-ailang-run-exit-code-false-alarm.md`.
 
 - **G1 — `transcript.ail` does not exist at HEAD.** The ADR calls the vocabulary module
   "`transcript.ail`'s successor" (Decision detail 4) and Open Question 1 offers "expanding
@@ -498,6 +553,24 @@ blocks Phase A (each has a plan-level resolution above).
   Phase A pins them with golden-value pure tests instead. If the ADR wants e2e parity
   coverage for extension-path message construction before Phase B rewires emission, a
   minimal in-repo test extension is a missing (small) deliverable.
+- **G8 — 13 of 32 scripts under `scripts/` fail `ailang check` at HEAD, all silently**
+  (found 2026-07-03 during plan self-review, after G1–G7 were dispositioned). The class:
+  stale `ExtensionHooks` record literals predating the ABI 2.1/2.2 field additions
+  (`on_describe_tools`, `on_pre_step`) — the same staleness family as G3's tiers smoke.
+  Failing: `smoke_v2_compaction_ai`, `smoke_v2_compaction_ai_registry`,
+  `smoke_v2_conversation`, `smoke_v2_factual`, `smoke_v2_handle`, `smoke_v2_intercept`,
+  `smoke_v2_pending`, `smoke_v2_pending_full_loop`, `smoke_v2_policy`,
+  `smoke_v2_policy_denial`, `smoke_v2_tool_build`, `smoke_v2_tool_read`,
+  `smoke_v2_tool_write`. Invisible because no CI target checks or runs `scripts/` (G6) —
+  each file fails loudly (check and run both exit 1) the moment anything executes it, but
+  nothing does. *(The review initially blamed an AILANG defect — "`ailang run` exits 0 on
+  type errors" — retracted after a minimal repro refuted it; the rc=0 readings were `$?`
+  measured through `| sed` / `| tail` pipelines. See
+  `NOTE-ailang-run-exit-code-false-alarm.md`.)* Phase A remedy: the WI-0 harness
+  check-gates its own list (contract step 1) and repairs its two broken members
+  (`pending_full_loop`, `handle`); the other 11 are a repo-hygiene batch outside Phase A's
+  charter — flagged for the operator, with `check_core`-style `check_scripts` coverage as
+  the structural fix.
 
 ---
 
@@ -517,7 +590,17 @@ Artifacts re-run this session, as the handoff mandates:
 | Event inventory | sketch's regeneration grep | 27 names, `diff` vs sketch list clean; + `thinking_delta`/`reasoning_delta` at `:255`/`:265` = **29** |
 | Emission counts | `grep -c` | 39 `emit_event`, 7 `emit_run_summary`, 2 `emit_stream_chunk`, 4 `emit_json` (ADR's 48 confirmed) |
 | No-diff feasibility | 2× pinned-session runs of `smoke_v2_cost_budget_full_loop` (raw) and `smoke_v2_compaction_full_loop` (normalized) | only `duration_ms` differs raw; byte-identical after normalization |
-| Tiers smoke baseline | `run --caps IO smoke_v2_compaction_tiers.ail` | 3 ✗ / 3 ✓, exit 0 (gap G3) |
+| Tiers smoke baseline | `run --caps IO smoke_v2_compaction_tiers.ail` | 3 ✗ / 3 ✓, exit 0 (gap G3; **repaired same day** — post-repair: 7/7 ✓ rc=0, failure path rc=1 demonstrated) |
+
+Review-pass verifications (2026-07-03, same toolchain — the G8 evidence):
+
+| Check | Command | Result |
+|---|---|---|
+| Script fleet type-check | `ailang check` over all 32 `scripts/*.ail` (direct `&&`/`\|\|`, no pipes) | **13 fail** (list in G8) |
+| Suspected run-exits-0 defect | minimal repro (record field mismatch): `ailang check` / `ailang run --caps IO` | **REFUTED — both rc=1.** Earlier rc=0 readings were `$?` through `\| sed` / `\| tail` pipelines; both broken smokes re-measured pipe-free: **rc=1**. See `NOTE-ailang-run-exit-code-false-alarm.md` |
+| Broken-literal shape | check errors for `pending_full_loop` (`:81`) / `handle` (`:65`) | stale `ExtensionHooks` literals missing `on_pre_step` (and `on_describe_tools` for handle) |
+| `smoke_v2_hybrid` | `run --caps IO,Env,Clock` | ✓ "M7 hybrid smoke PASS", rc=0 |
+| `motoko_commit` volatility | `agent_loop_v2.ail:176` | hardcoded pure `"dev"` — not volatile, no normalization needed |
 
 Source anchors re-read at HEAD (all cited lines above were read, not inherited): the
 transcript builders and their call sites (`agent_loop_v2.ail:361-501`, `:823-828`,
