@@ -13,6 +13,7 @@
 module src/core/test/stub_step
 
 import std/ai (step, stepWithCache, stepWithStream, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk, ContentDelta)
+import std/trace as Trace
 import std/list as List (length)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
@@ -82,7 +83,7 @@ export pure func terminal_step() -> StepResult {
   }
 }
 
-func play_chunks(chunks: [string], on_chunk: (StreamChunk) -> () ! {IO}) -> () ! {IO} {
+func play_chunks(chunks: [string], on_chunk: (StreamChunk) -> () ! {IO, Trace}) -> () ! {IO, Trace} {
   match chunks {
     [] => (),
     x :: rest => {
@@ -123,8 +124,8 @@ export func dispatch_step(
   model: string,
   msgs: [Message],
   rt: ExtRuntime,
-  on_chunk: (StreamChunk) -> () ! {IO}
-) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO} {
+  on_chunk: (StreamChunk) -> () ! {IO, Trace}
+) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO, Trace} {
   match provider {
     LiveAI => {
       { result: stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk), next_provider: LiveAI }

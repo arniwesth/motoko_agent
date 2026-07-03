@@ -90,6 +90,7 @@ import src/core/phase_vocab (
   PersistNudge,
   NativeToolCalls,
   NativeToolResults,
+  StreamDelta,
   SessionSuspend,
   SessionStart,
   ErrorEvent
@@ -278,7 +279,7 @@ func emit_scratchpad_result_if_present(session_id: string, request_id: string, s
   else ()
 }
 
--- emit_stream_chunk: dispatch one StreamChunk variant to the JSONL event
+-- append_stream_delta: dispatch one StreamChunk variant to the ledger.
 -- protocol.
 --
 -- ContentDelta(text) → thinking_delta event (TUI appends to per-stream_id
@@ -300,28 +301,24 @@ func emit_scratchpad_result_if_present(session_id: string, request_id: string, s
 --
 -- Extracted from agent_loop_v2 because match inside lambda hits a known
 -- AILANG parser bug.
-func emit_stream_chunk(session_id: string, step_idx: int, stream_id: string, chunk: StreamChunk) -> () ! {IO} {
+func append_stream_delta(session_id: string, step_idx: int, stream_id: string, chunk: StreamChunk) -> () ! {IO, Trace} {
   match chunk {
     ContentDelta(text) =>
-      emit_json(jo([
-        kv("schema_version", js(schema_version())),
-        kv("session_id", js(session_id)),
-        kv("type", js("thinking_delta")),
-        kv("step", jnum(_int_to_float(step_idx))),
-        kv("stream_id", js(stream_id)),
-        kv("seq", jnum(0.0)),
-        kv("text_delta", js(text))
-      ])),
+      ledger_emit(session_id, StreamDelta({
+        step: step_idx,
+        stream_id: stream_id,
+        seq: 0,
+        kind: "thinking",
+        text: text
+      })),
     ThinkingDelta(text) =>
-      emit_json(jo([
-        kv("schema_version", js(schema_version())),
-        kv("session_id", js(session_id)),
-        kv("type", js("reasoning_delta")),
-        kv("step", jnum(_int_to_float(step_idx))),
-        kv("stream_id", js(stream_id)),
-        kv("seq", jnum(0.0)),
-        kv("text_delta", js(text))
-      ])),
+      ledger_emit(session_id, StreamDelta({
+        step: step_idx,
+        stream_id: stream_id,
+        seq: 0,
+        kind: "reasoning",
+        text: text
+      })),
     Usage(_) => ()
   }
 }
@@ -1142,7 +1139,7 @@ func loop_v2(
     -- (not used for reordering on the consumer side as of v0.18.7).
     -- Match-in-lambda is a known AILANG parser bug, so the match lives in
     -- the top-level emit_stream_chunk helper.
-    let on_chunk: (StreamChunk) -> () ! {IO} = \chunk. emit_stream_chunk(session_id, step_idx, stream_id, chunk);
+    let on_chunk: (StreamChunk) -> () ! {IO, Trace} = \chunk. append_stream_delta(session_id, step_idx, stream_id, chunk);
     let dispatched = dispatch_step(provider, provider_api_model(model, getEnvOr("OPENAI_BASE_URL", "")), compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
