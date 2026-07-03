@@ -257,8 +257,8 @@ scripted TUI approval scenario before Phase C inverts the dispatch recursion.
   must be updated — `compaction_ai` v0.3.0 is the first and currently only such package
   (`compaction_ai.ail:146-148`).
 - **Conformance kit** (`motoko_ext_conformance`, separate package, lockstep majors with the
-  ABI): `invariants` module (pure contract law — **imported by the core transcript gate**, one
-  source of law) + `harness` module (test-only). Enforcement is behavioral
+  ABI; plain-language definition in §6.1 below): `invariants` module (pure contract law —
+  **imported by the core transcript gate**, one source of law) + `harness` module (test-only). Enforcement is behavioral
   **caps-as-conformance**: fake ports + minimal caps ⇒ raw effect calls fail at performance
   time; per-extension declared-caps allowances record residual raw-effect surface. The kit does
   not test cross-extension composition (fault-isolation rationale: research doc §6.1) — the
@@ -278,6 +278,88 @@ scripted TUI approval scenario before Phase C inverts the dispatch recursion.
     the package under test (exact arg convention frozen with the kit);
   - registry probe: a generated `scripts/conformance_registry_probe.ail` that imports
     `registry_generated.ail`'s package list and runs the harness per package in core CI.
+
+### 6.1 The conformance kit, exactly (explainer)
+
+_Added 2026-07-03 at operator request. The bullets above are the decision; this subsection is
+the plain-language definition. Elaboration with the full obligations catalog: research doc
+§6.1._
+
+**One sentence:** the conformance kit is a separate AILANG package that turns the extension
+contract from prose into an executable question — *"does this extension behave the way the
+core is entitled to assume?"* — answerable in any extension's own CI, with no network, no
+model, and almost no capabilities.
+
+**The problem it exists for.** The ABI's types constrain *shapes*, not *behavior*.
+`compaction_ai` v0.2.0 type-checks perfectly against ABI 2.2.0 and still destroys the system
+prefix, can sever tool_use/tool_result pairs, and re-summarizes on every step — three
+behavioral contract violations the type system cannot see. Those obligations ("preserve
+pairing", "preserve ids", "be deterministic given the same inputs") have to be *executable
+checks*, and they have to live somewhere that both core and extension authors run, or the two
+sides' understandings of the contract drift apart.
+
+**What is physically in the package** — two modules with different audiences:
+
+1. `invariants.ail` — **the contract law.** Pure predicates over hook inputs and outputs,
+   e.g. `pairing_preserved(segment_in, msgs_out)`, `ids_preserved(segment_in, msgs_out)`,
+   `no_system_in_output(msgs_out)`, `envelope_well_formed(call, result_env)`. Pure means: no
+   effects, runnable under `ailang test` with zero caps, Z3-eligible. The crucial move is who
+   imports it: **core's transcript gate imports these same functions and runs them in
+   production** — when a compactor returns `Compacted(...)` at runtime, the gate validates it
+   with the *identical* predicate an extension's CI ran before shipping. One implementation of
+   the law; disagreement between "what core enforces" and "what extensions were tested
+   against" is impossible by construction.
+2. `harness.ail` — **the test rig.** Test-only; core never imports it. It drives one
+   extension's `ExtensionHooks` through scenarios: synthetic `ExtCtx` values, fixture
+   histories/segments, and **fake ports** (pure, scripted — the same pattern as
+   `scripts/smoke_ports_record.ail`). It runs the invariants over the hook outputs and, on
+   failure, reports scenario id + first failed invariant + a normalized trace in the same
+   JSONL shape as the core ledger, so a conformance failure reads exactly like a core DST
+   failure.
+
+**How enforcement actually works (caps-as-conformance).** "This extension only reaches the
+world through `ctx.ports`" sounds like it needs static analysis AILANG doesn't have. It
+doesn't, because capabilities are checked when an effect is *performed* (§4 Q5): the harness
+runs scenarios with fake ports under minimal caps (e.g. `--caps IO`). If the extension
+bypasses ports and calls `std/ai.step` or `Net.httpGet` directly, that call needs the `AI` or
+`Net` capability at runtime — which the harness did not grant — so the scenario fails at the
+exact bypassing call site. The runtime is the analyzer. Extensions with legitimate remaining
+raw effects (e.g. context-mode's `SharedMem` frames before its ports migration) declare them
+in a per-extension **caps allowance** — a machine-readable list of exactly which effects that
+extension still performs outside ports; migrating it to empty is the progress metric.
+
+**Who runs it, and when.**
+- *Extension CI* (every `motoko-ext-*` repo): the harness against that package's own hooks.
+  Fast, deterministic, no network, no registry hydration — an extension author gets a contract
+  verdict locally before publishing.
+- *Core CI* (registry gate; hydration **required** — the other gate class): the generated
+  registry probe runs the harness against every package in `registry_generated.ail`, turning
+  "certified against conformance vN" into a checkable registry-inclusion condition instead of
+  a README claim.
+
+**A worked example — why v0.2.0 fails and v0.3.0 passes.** The harness hands `compact_with_ai`
+a fixture segment sitting above its threshold, with a fake `ai_step` port returning a canned
+summary. v0.2.0 splits by position and drops messages: the output severs a tool pair ⇒
+`pairing_preserved` returns false ⇒ scenario `conformance.compactor.tool_pairing_preserved`
+fails, naming the invariant. A second scenario re-runs with run-one's artifacts and an *empty*
+`ai_step` script; v0.2.0 (no cache) calls the port again and gets the poison sentinel ⇒
+`artifact_cache_effective` fails. v0.3.0 — ports-native, prefix-aware, artifact-cached —
+passes all four compactor scenarios. That fail-then-pass pair is the kit's own acceptance
+test: **the kit is correct when it rejects the shipped v0.2.0 for the right reasons.**
+
+**What it deliberately does NOT do** (each exclusion has an owner): cross-extension
+composition — chain order and arbitration are core L1 scenarios, because the composition set
+is a deployment property and the fold under test is core's; provider acceptance of final
+payloads — core's transcript gate; cross-package `id` uniqueness — the registry; resource/time
+budgets — out of scope v1. The obligations are chosen to be *composition-closed* (if every
+compactor preserves pairing/ids/prefix, any chain of them does too), which is what makes the
+exclusion safe: a composition failure always decomposes into "one extension broke its
+contract" (kit's job) or "core's chain is wrong" (core's job) — and if neither, the contract
+gains a new obligation.
+
+**Versioning.** Lockstep majors with the ABI (kit `3.x` certifies ABI `3.x`); the kit exports
+`conformance_abi_version()` and the harness refuses a mismatched ABI loudly, so version skew
+is an error, never a silent pass.
 
 ---
 
