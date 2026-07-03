@@ -586,7 +586,9 @@ The `CompactableSegment` type below **fixes a bug-in-waiting**, not a formality.
    wrong, but must be visible: hook order is a DST scenario input; the ledger records which
    extension won; conformance obligation: compactor deterministic given (segment, cache, ports).
 7. **Normalization ordering owned in one place**: cap tool output (`cap_tool_message_content`) →
-   estimate → tiers, explicit inside `transcript.ail`'s projection, using exported constants.
+   estimate → tiers, explicit inside the vocabulary module's (`phase_vocab.ail`) projection
+   (corrected 2026-07-03, ADR G1: there is no `transcript.ail` in source — the helpers live
+   inline in `agent_loop_v2.ail`), using exported constants.
    CORRECTION (2026-07-03): the constants to export are the current single tier table —
    `ELIDE_TIER_PCT=70`, `ELIDE_HARD_TIER_PCT=85`, `EMERGENCY_PCT=95`, keep-last 10/5
    (`compaction.ail:134-141`); `OUTPUT_HEADROOM=75000` and the 60/75/85 actual tiers named by
@@ -722,8 +724,11 @@ an inconsistency once that machinery is trusted; and pluggable compaction is the
 intent (`compaction_ai` was created to *fix* compaction; others should be able to follow).
 
 **Core scaffold (cannot be delegated — it is what polices compactors):** pin/segment split,
-the validation gate, exported measurement primitives (`estimate_tokens`, `usage_percent` —
-already `export pure func`; their duplication was a `compaction_ai` v0.2.0 defect), and the
+the validation gate, exported measurement primitives (`estimate_tokens_messages`,
+`usage_percent_with_limit` — already `export pure func`; names corrected 2026-07-03 per ADR
+G2/G3: `estimate_tokens` is the `[Msg]`-typed function in `context_usage.ail`, and the
+model-name-keyed `usage_percent` is dead surface since limits moved to the model catalog;
+their duplication was a `compaction_ai` v0.2.0 defect), and the
 exhaustion decision (`Fail(ContextExhausted)` / later `TakeCheckpoint`) which must behave
 sanely with zero compactors installed.
 
@@ -858,3 +863,15 @@ times, dispositioned, and amended by D9.
     binds definers only; bare sealed-type parameters in foreign signatures remain impossible.
 18. (2026-07-03) Emission call sites measured: 39 `emit_event` + 7 `emit_run_summary` +
     2 `emit_stream_chunk` + 4 `emit_json` = 48 in `agent_loop_v2.ail`.
+19. (2026-07-03, plan-authoring finding G3) The model-name-keyed pure compaction path is
+    dead at HEAD: `context_limit_for` returns 0 for **every** model — intentional since
+    commit `a7589b8` ("Moved context usage into model catalog", 2026-06-24) moved limits
+    into the catalog (`catalog_context_limit_for`, `{Env, FS}`; `context_usage.ail:68`).
+    Production passes the limit explicitly (`agent_loop_v2.ail:1149` →
+    `compact_step_with_limit` at `:1171`), so `compact_step` / `usage_percent` /
+    `try_emergency_compaction` can never trigger compaction and are vestigial (Phase B
+    retires them with the ladder relocation). Side effect: `smoke_v2_compaction_tiers.ail`
+    was red-but-exit-0 from `a7589b8` until fixed 2026-07-03 (explicit-limit calls +
+    `exit(1)` on failure) — and the fix exposed a second latent defect: the smoke's tier-3
+    expectation (Err at ≥95% tool-heavy load) was wrong, since emergency elision recovers
+    tool-heavy overload; exhaustion requires non-tool content, which elision never touches.

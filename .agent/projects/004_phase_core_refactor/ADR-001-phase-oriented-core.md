@@ -4,7 +4,10 @@ Date: 2026-07-02; revised 2026-07-03 after three independent review passes (see 
 Comments and the Author Response & Disposition log at the end); amended same day by **D9**
 (operator decision: compaction policy is extension-resident — compactor chain over a core
 scaffold, bundled `motoko_ext_compaction_structural` default, telemetry in ABI v3; closes
-Open Question 4)
+Open Question 4); further amended 2026-07-03 by the **Phase-A plan-authoring findings
+G1–G7** (the fresh-session ADR-completeness test prescribed by
+`NOTE-plan-authoring-session-choice.md`; see the Plan-Authoring Findings & Dispositions log
+at the end; closes Open Question 1)
 Status: Proposed (review findings addressed; dispositions recorded)
 Pinned toolchain: AILANG **v0.26.0** (commit `3b52a24`); `ailang.lock` → `ailang_version: "v0.26.0"`
 
@@ -154,8 +157,9 @@ step machine re-derives the next decision from applied state.
 
 ### 4. Single transcript gate + sealed history types (D3, D7)
 
-`transcript.ail`'s successor (the **vocabulary module**, working name
-`src/core/phase_vocab.ail`) owns:
+The **vocabulary module**, `src/core/phase_vocab.ail` (name settled 2026-07-03 — G1 / Open
+Question 1; the successor of the transcript helpers currently inline in
+`agent_loop_v2.ail:361-501` — there is no `transcript.ail` in source), owns:
 
 - **`History`** — sealed: a single-constructor variant whose constructor is *not exported*.
   Substrate proof (`sketch/README.md` Q1): unexported variant constructors are unimportable
@@ -184,8 +188,12 @@ step machine re-derives the next decision from applied state.
   chaining. The current 70/85/95 ladder (`compaction.ail:134-141`) relocates into a **bundled
   default extension** `motoko_ext_compaction_structural` (pure; registered last; the
   conformance kit's trivial reference consumer alongside effectful `compaction_ai`). Core
-  exports the measurement primitives (`estimate_tokens`, `usage_percent`) so compactors never
-  duplicate them (the `compaction_ai` v0.2.0 duplication defect, fixed structurally). With
+  exports the measurement primitives — `estimate_tokens_messages` and
+  `usage_percent_with_limit` (names corrected 2026-07-03, G2/G3: `estimate_tokens` is a
+  different, `[Msg]`-typed function in `context_usage.ail:12`; the model-name-keyed
+  `usage_percent` is dead surface since limits moved to the model catalog in `a7589b8`) — so
+  compactors never duplicate them (the `compaction_ai` v0.2.0 duplication defect, fixed
+  structurally). With
   zero compactors installed, core behavior is honest exhaustion: `Fail(ContextExhausted)`
   (later `TakeCheckpoint`, once emitted). `ProviderPayload` is sealed; `model_phase` receives
   it inside the exported `ModelRequest` wrapper (it cannot name the sealed type — see
@@ -218,7 +226,7 @@ step machine re-derives the next decision from applied state.
 
 | Module | Nature | DST layer |
 |---|---|---|
-| `phase_vocab.ail` (name TBD) | sealed types, StepState, LedgerEvent, projection, invariants | L0, Z3 candidates |
+| `phase_vocab.ail` (name settled — G1) | sealed types, StepState, LedgerEvent, projection, invariants, transcript builders | L0, Z3 candidates |
 | `step_machine.ail` | pure `decide` + all loop policy | L0/L1, no effects |
 | `model_phase.ail`, `tool_phase.ail`, `hook_phase.ail` | effectful via ports → `PhaseResult` | L1, scripted ports |
 | `tool_stream_phase.ail` | contained `selectEvents` island | L1 + supplemental smokes |
@@ -371,14 +379,26 @@ Strangler-style; each phase leaves the system shippable.
 Deliverables: vocabulary module (seeded from `sketch/sketch_vocabulary.ail`); exported
 compaction constants **re-grounded on current source** (P2-R1/P3-R4): the single tier table
 `ELIDE_TIER_PCT=70`, `ELIDE_HARD_TIER_PCT=85`, `EMERGENCY_PCT=95` and the keep-last counts
-(10/5) from `compaction.ail:134-141` — `OUTPUT_HEADROOM` and the 60/75/85 actual tiers are
-**struck** (no referent in source; DST ADR-001 R5/R15 need a corresponding amendment). Under
+(10/5) from `compaction.ail:134-141`, plus (G5, 2026-07-03) the emergency keep-lasts (3/1)
+and the emergency re-check literals at `compaction.ail:111-118` — the full inline-literal
+set of the ladder, seven named exports as house-style zero-arg `export pure func`s —
+`OUTPUT_HEADROOM` and the 60/75/85 actual tiers are
+**struck** (no referent in source; DST ADR-001 R5/R15 amended 2026-07-03). Under
 D9 these tier constants are a stepping stone: they relocate with the ladder into
 `motoko_ext_compaction_structural` in Phase B, while the measurement primitives
-(`estimate_tokens`, `usage_percent` — already `export pure func` in `compaction.ail`) stay in
+(`estimate_tokens_messages`, `usage_percent_with_limit` — already `export pure func` in
+`compaction.ail`; names corrected per G2/G3) stay in
 core permanently as the shared surface compactors build on. Transcript builder extracted from
-`step_result_to_message` / `envelope_to_tool_message` / `tool_result_message`.
-Gate: `ailang check` + existing smokes green; no event-stream diff.
+`step_result_to_message` / `envelope_to_tool_message` / `tool_result_message` — plus the
+plan survey's finds: `cap_tool_message_content`, `result_env_model_content`,
+`msgs_to_messages`, and a new `handled_tool_message` consolidating three duplicated inline
+tool-message literals (full call-site enumeration in `PLAN-phase-a-pure-foundations.md`).
+Gate: `ailang check` + existing smokes green; no event-stream diff — byte-identical **modulo
+declared volatile fields** (G4: session id pinned via `MOTOKO_SESSION_ID`; `duration_ms`
+normalized — empirically the complete volatile set at HEAD), checked mechanically by the
+plan's parity harness (`scripts/phase_a_event_parity.sh` + `make smoke_parity`, both
+to-be-created in plan WI-0; named here so the gate is executable when it arrives — G6, the
+same no-phantom-gates discipline as Decision detail 6).
 
 **Phase B — phases return `PhaseResult`; driver keeps current control flow.**
 Deliverables: all event emission through the ledger + `to_schema_v1`; provider-call recording
@@ -389,9 +409,19 @@ to the **compactor chain** (no ABI change — the hook signature already support
 and the 70/85/95 ladder extracted from `compaction.ail` into the bundled
 `motoko_ext_compaction_structural` extension registered last — a behavior-preserving
 relocation, since chain(ext…, structural-last) equals today's sequential composition.
+Added 2026-07-03 (plan-authoring findings): (G3) with the ladder relocation, **retire the
+vestigial model-name-keyed pure wrappers** (`compact_step`, `usage_percent`,
+`try_emergency_compaction`, `context_limit_for`) — production limits come from the model
+catalog (`catalog_context_limit_for`, `{Env, FS}`) since commit `a7589b8` (2026-06-24) and
+the static `context_limit_for` returns 0 for every model, so the model-keyed forms are dead
+policy surface; the shared measurement surface is the limit-parameterized variants. (G7) a
+**minimal in-repo test extension** (scripted `Handled` + `ContinueWithFeedback` fixture) so
+extension-path provider-message construction is e2e-coverable by the parity harness before
+emission rewires — Phase A pins those paths with golden-value pure tests only.
 Gate (per review R2-family): the projection's emitted `type` set for [prod] constructors is a
 **byte-compatible subset of the mechanically generated 29-name production inventory**
-(regenerated from source, never hand-counted; includes `reasoning_delta`); [NEW] names admitted
+(regenerated from source, never hand-counted; includes `reasoning_delta`; byte-compatibility
+as defined by the Phase A gate — modulo declared volatile fields, G4); [NEW] names admitted
 only after the TUI unknown-type tolerance check; the streaming byte-parity test
 (`thinking_stream_start → N×delta → thinking_stream_end` in arrival order) passes; DST scenario
 `system_messages_hidden_from_compactors` goes from unrepresentable-in-new-code to
@@ -487,8 +517,12 @@ a wide compatibility surface that must be maintained until consumers migrate; fu
 
 ## Open questions (non-blocking)
 
-1. Final name and home of the vocabulary module (`phase_vocab.ail` vs. expanding
-   `transcript.ail`); pure naming decision, Phase A.
+1. ~~Final name and home of the vocabulary module (`phase_vocab.ail` vs. expanding
+   `transcript.ail`); pure naming decision, Phase A.~~ **Closed 2026-07-03 (G1)**:
+   `src/core/phase_vocab.ail`, transcript builders included. The "expanding
+   `transcript.ail`" option was void — no such file exists in source; the transcript
+   helpers live inline in `agent_loop_v2.ail:361-501`. Full justification in
+   `PLAN-phase-a-pure-foundations.md` ("Decision: module name and builder home").
 2. `artifacts` as raw `Json` vs. a typed artifact record — start `Json`, revisit when a second
    artifact consumer exists.
 3. Exact `ExtPorts` field list — freeze during the `compaction_ai` v0.3.0 migration, not
@@ -1100,3 +1134,69 @@ proven form: continuation is state, not a result field.
 `vocab_probe.ail`/`probe_consumer_decide.ail`: run ✓. All prior probes unchanged and behaving
 as documented. `scripts/smoke_ports_record.ail`: unchanged, previously verified by all three
 reviewers.
+
+---
+
+## Plan-Authoring Findings & Dispositions (2026-07-03)
+
+_Author: Claude Fable 5 (Phase-A plan-authoring session). These findings are the output of
+the fresh-session ADR-completeness test prescribed by `NOTE-plan-authoring-session-choice.md`:
+a session with no ADR-authoring context wrote `PLAN-phase-a-pure-foundations.md` from the
+committed documents alone, re-verifying every citation against HEAD (`8227053`) and re-running
+every artifact. Discrepancies became findings G1–G7 (full evidence in the plan's "ADR gaps
+found"); dispositioned here with operator sign-off; body fixes applied same day. No finding
+re-opens D1–D9._
+
+- **G1 (`transcript.ail` does not exist at HEAD) — ACCEPTED, doc fix.** The ADR called the
+  vocabulary module "`transcript.ail`'s successor" and Open Question 1 offered "expanding
+  `transcript.ail`"; no such file exists — the helpers live in `agent_loop_v2.ail:361-501`.
+  **Fix applied**: Decision detail 4 reworded; Open Question 1 closed with the plan's
+  decision (`src/core/phase_vocab.ail`, transcript builders included); module table updated;
+  research doc §7.1 case 7 corrected.
+- **G2 (measurement-primitive naming imprecision) — ACCEPTED, doc fix.** "`estimate_tokens`,
+  `usage_percent` … in `compaction.ail`" named the wrong symbols: `compaction.ail` exports
+  `estimate_tokens_messages` / `usage_percent` / `usage_percent_with_limit`;
+  `estimate_tokens` is a different, `[Msg]`-typed function in `context_usage.ail:12`.
+  **Fix applied**: names corrected in Decision detail 4, Phase A, and research §7.5; the D9
+  shared measurement surface is stated as the limit-parameterized variants (see G3).
+- **G3 (model-name-keyed pure compaction path is dead at HEAD) — ACCEPTED; the load-bearing
+  finding.** `context_limit_for` returns 0 for every model — intentional: commit `a7589b8`
+  ("Moved context usage into model catalog", 2026-06-24) moved limits into the catalog
+  (`catalog_context_limit_for`, `{Env, FS}`); production compaction takes the limit
+  explicitly (`agent_loop_v2.ail:1149→1171`). Consequences dispositioned: (a) fact recorded
+  (research §11 fact 19); (b) `scripts/smoke_v2_compaction_tiers.ail` — red at HEAD by its
+  own pass criterion while exiting 0 — **fixed same day**: explicit-limit calls
+  (`compact_step_with_limit`, hermetic, `--caps IO`), `exit(1)` on failure; the fix also
+  exposed that the old tier-3 expectation (Err at 97% tool-heavy load) was itself wrong —
+  emergency elision recovers; the smoke now tests both emergency-recovers and
+  exhausted-errs; (c) wrapper retirement (`compact_step`, `usage_percent`,
+  `try_emergency_compaction`, `context_limit_for`) added to Phase B deliverables, riding the
+  D9 ladder relocation.
+- **G4 (no-diff gate nondeterminism unspecified) — ACCEPTED, doc fix.** The event stream
+  contains volatile fields (`duration_ms`; a `now()`-derived session-id fallback), so
+  "no event-stream diff" was not executable as stated. **Fix applied**: Phase A gate restated
+  as byte-identical modulo declared volatile fields (session id pinned via
+  `MOTOKO_SESSION_ID`, `duration_ms` normalized — empirically the complete volatile set at
+  HEAD, proven by pinned-session double-runs in the plan); Phase B's byte-compatible-subset
+  gate inherits the definition.
+- **G5 (constants enumeration incomplete) — ACCEPTED, doc fix.** The ladder's inline
+  literals include the emergency keep-lasts 3/1 (`compaction.ail:111,:116`) and emergency
+  re-checks (`:113,:118`) beyond the cited `:134-141` table. **Fix applied**: Phase A
+  enumerates the full seven-export set.
+- **G6 ("existing smokes" has no canonical runner) — ACCEPTED.** No Make/CI target runs
+  `scripts/smoke_v2_*.ail`; some smokes need a live model; one was silently red (G3b) — as a
+  gate, "existing smokes green" was unexecutable. **Fix applied**: the Phase A gate now names
+  its executable artifacts (`scripts/phase_a_event_parity.sh` + `make smoke_parity`,
+  to-be-created in plan WI-0 — future deliverables named now, mirroring Decision detail 6's
+  no-phantom-gates remedy).
+- **G7 (two extracted paths not e2e-coverable) — ACCEPTED, deferred deliverable.**
+  `envelope_to_tool_message` and the `Handled`-path literals need an extension fixture
+  (`ContinueWithFeedback` / `Handled`) no deterministic smoke can supply today. Disposition:
+  Phase A pins them with golden-value pure tests (plan WI-3); a minimal in-repo test
+  extension is added to Phase B deliverables so e2e parity coverage exists before emission
+  rewires.
+
+Cross-repo amendment applied the same day: DST ADR-001 R5/R15 (and its "What is accurate"
+tier-facts line) carry dated notes that the actual/estimate split they were grounded on was
+removed from source (P2-R1/P3-R4 here), with the export remedy redirected to the current
+single-table reality.

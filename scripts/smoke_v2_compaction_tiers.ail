@@ -1,40 +1,59 @@
 -- scripts/smoke_v2_compaction_tiers.ail
 --
 -- Exercises compaction.ail's three threshold transitions (70/85/95%) by
--- constructing message lists at calibrated sizes against the Sonnet 4.6
--- 200k context window.
+-- constructing message lists at calibrated sizes against an EXPLICIT 200k
+-- context limit passed to compact_step_with_limit.
+--
+-- Hermetic by design (fixed 2026-07-03, phase-core ADR finding G3): the
+-- original smoke called compact_step(msgs, "anthropic/claude-sonnet-4-6"),
+-- which resolves its limit via context_limit_for — but the static limit
+-- table was moved into the model catalog in a7589b8 ("Moved context usage
+-- into model catalog", 2026-06-24) and context_limit_for now returns 0 for
+-- every model, so compact_step was permanently PassThrough and tiers 1-3
+-- printed ✗ while the script still exited 0. This version passes the limit
+-- explicitly (no catalog, no Env/FS) and exits 1 on any failure.
 --
 -- Tier behavior under test:
---   < 70%   → PassThrough (compact_step returns Ok with input unchanged)
---   70-85%  → Elide all but last 10 tool results (keep_last=10)
---   85-95%  → Elide all but last 5 tool results (keep_last=5)
---   ≥ 95%   → Err("compaction_exhausted")
+--   < 70%   → PassThrough (compact_step_with_limit returns Ok, input unchanged)
+--   70-85%  → Elide tool_result content, all but last 10 (keep_last=10)
+--   85-95%  → Elide tool_result content, all but last 5 (keep_last=5)
+--   ≥ 95%   → EMERGENCY compaction: try keep_last=3, then keep_last=1;
+--             Ok if that lands below 95%, Err("compaction_exhausted") only
+--             if even aggressive elision cannot help (e.g. the load is
+--             non-tool content, which elision never touches).
+--
+-- NOTE (2026-07-03): the original smoke expected Err at 97% tool-heavy
+-- load. That expectation was wrong — emergency elision recovers easily
+-- when the load is tool content — but the miscalibration was invisible
+-- for as long as the limit resolved to 0 (see G3 note above). Tier 3 is
+-- now two cases: emergency-recovers (tool-heavy) and exhausted-errs
+-- (user-content-heavy).
 --
 -- Run:
 --   ailang run --caps IO --entry main scripts/smoke_v2_compaction_tiers.ail
 --
--- Pass = prints all 6 ✓ lines and exits 0.
+-- Pass = prints all 7 ✓ lines and exits 0. Any ✗ line exits 1.
 
 module scripts/smoke_v2_compaction_tiers
 
-import std/io (println)
+import std/io (println, exit)
 import std/result (Result, Ok, Err)
 import std/string (repeat, length, contains, concat, substring)
 import std/ai (Message)
 import src/core/compaction (
-  estimate_tokens_messages,
-  usage_percent,
-  elide_old_tool_results,
-  compact_step
+  usage_percent_with_limit,
+  compact_step_with_limit
 )
 
--- Sonnet 4.6 has a 200k window per context_limit_for. Our token estimate
--- is `length(content) / 4`, so each char ≈ 0.25 tokens. To hit usage % p:
+-- The explicit context limit every case runs against. 200k tokens; our
+-- token estimate is `length(content) / 4`, so each char ≈ 0.25 tokens.
+-- To hit usage % p:
 --   target_chars = p * 200_000 * 4 / 100  =  p * 8000
 -- e.g. p=75 → 600_000 chars, p=90 → 720_000 chars, p=97 → 776_000 chars.
 --
 -- We split that across 12 tool messages so we have enough to exercise the
 -- "keep last 10" and "keep last 5" elision rules.
+func smoke_limit() -> int { 200000 }
 
 func mk_user(content: string) -> Message {
   { role: "user", content: content, tool_calls: [], tool_call_id: "" }
@@ -71,7 +90,7 @@ func build_tools(count: int, chars_each: int, idx: int, acc: [Message]) -> [Mess
 }
 
 -- Construct a message list whose total content length puts usage_percent
--- at the requested target percent against Sonnet 4.6 (200k tokens).
+-- at the requested target percent against the 200k smoke_limit.
 func msgs_at_pct(target_pct: int) -> [Message] {
   -- 12 tool messages so we can see the keep_last_10 vs keep_last_5 cuts.
   let total_chars = target_pct * 8000;
@@ -103,8 +122,8 @@ func last_msg(msgs: [Message]) -> Message {
 -- 1. Below 70% → passthrough. Use 10% load to be unambiguous.
 func test_below_threshold_passthrough() -> bool {
   let msgs = msgs_at_pct(10);
-  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
-  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+  let pct = usage_percent_with_limit(msgs, smoke_limit());
+  match compact_step_with_limit(msgs, "smoke-model", smoke_limit()) {
     Err(_) => false,
     Ok(out) => {
       -- pct should be roughly 10 (allow some slop), and the message list
@@ -118,8 +137,8 @@ func test_below_threshold_passthrough() -> bool {
 --    should have content elided, the last 10 should be untouched.
 func test_tier1_keeps_last_10() -> bool {
   let msgs = msgs_at_pct(75);
-  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
-  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+  let pct = usage_percent_with_limit(msgs, smoke_limit());
+  match compact_step_with_limit(msgs, "smoke-model", smoke_limit()) {
     Err(_) => false,
     Ok(out) => {
       pct >= 70 && pct < 85 && count_elided(out) == 2
@@ -131,8 +150,8 @@ func test_tier1_keeps_last_10() -> bool {
 --    should be elided, the last 5 untouched.
 func test_tier2_keeps_last_5() -> bool {
   let msgs = msgs_at_pct(90);
-  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
-  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+  let pct = usage_percent_with_limit(msgs, smoke_limit());
+  match compact_step_with_limit(msgs, "smoke-model", smoke_limit()) {
     Err(_) => false,
     Ok(out) => {
       pct >= 85 && pct < 95 && count_elided(out) == 7
@@ -140,11 +159,29 @@ func test_tier2_keeps_last_5() -> bool {
   }
 }
 
--- 4. ≥ 95% → Err("compaction_exhausted"). Use 97% load.
-func test_tier3_returns_err() -> bool {
+-- 4a. ≥ 95% with TOOL-heavy load → emergency compaction recovers: the
+--     keep_last=3 pass elides 9 of 12 tool messages, which drops usage far
+--     below 95%, so the result is Ok — not Err.
+func test_tier3_emergency_recovers() -> bool {
   let msgs = msgs_at_pct(97);
-  let pct = usage_percent(msgs, "anthropic/claude-sonnet-4-6");
-  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+  let pct = usage_percent_with_limit(msgs, smoke_limit());
+  match compact_step_with_limit(msgs, "smoke-model", smoke_limit()) {
+    Err(_) => false,
+    Ok(out) => {
+      pct >= 95
+        && count_elided(out) == 9
+        && usage_percent_with_limit(out, smoke_limit()) < 95
+    }
+  }
+}
+
+-- 4b. ≥ 95% with NON-tool load → Err("compaction_exhausted"). Elision only
+--     rewrites tool-role content, so a huge user message defeats even the
+--     keep_last=1 emergency pass.
+func test_tier3_exhausted_errs() -> bool {
+  let msgs = [mk_user(make_payload(97 * 8000))];
+  let pct = usage_percent_with_limit(msgs, smoke_limit());
+  match compact_step_with_limit(msgs, "smoke-model", smoke_limit()) {
     Ok(_) => false,
     Err(reason) => pct >= 95 && contains(reason, "compaction_exhausted")
   }
@@ -155,7 +192,7 @@ func test_tier3_returns_err() -> bool {
 --    here we re-confirm at the realistic tier-1 setting.
 func test_elision_preserves_length() -> bool {
   let msgs = msgs_at_pct(75);
-  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+  match compact_step_with_limit(msgs, "smoke-model", smoke_limit()) {
     Err(_) => false,
     Ok(out) => _list_length(out) == _list_length(msgs)
   }
@@ -165,7 +202,7 @@ func test_elision_preserves_length() -> bool {
 --    Tail tool message in tier-1 must NOT be elided.
 func test_recent_content_preserved() -> bool {
   let msgs = msgs_at_pct(75);
-  match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
+  match compact_step_with_limit(msgs, "smoke-model", smoke_limit()) {
     Err(_) => false,
     Ok(out) => {
       let last = last_msg(out);
@@ -174,18 +211,23 @@ func test_recent_content_preserved() -> bool {
   }
 }
 
-func report(name: string, ok: bool) -> () ! {IO} {
-  if ok then println("  ✓ ${name}")
-  else println("  ✗ ${name}")
+func report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${name}") else println("  ✗ ${name}");
+  ok
 }
 
 export func main() -> () ! {IO} = {
   println("=== smoke_v2_compaction_tiers ===");
-  report("below_threshold_passthrough     (<70% → no elision)",   test_below_threshold_passthrough());
-  report("tier1_keeps_last_10             (75% → 2 of 12 elided)", test_tier1_keeps_last_10());
-  report("tier2_keeps_last_5              (90% → 7 of 12 elided)", test_tier2_keeps_last_5());
-  report("tier3_returns_err               (97% → Err exhausted)",  test_tier3_returns_err());
-  report("elision_preserves_length        (length unchanged)",     test_elision_preserves_length());
-  report("recent_content_preserved        (tail not elided)",      test_recent_content_preserved());
-  println("done")
+  let r1 = report("below_threshold_passthrough     (<70% → no elision)",   test_below_threshold_passthrough());
+  let r2 = report("tier1_keeps_last_10             (75% → 2 of 12 elided)", test_tier1_keeps_last_10());
+  let r3 = report("tier2_keeps_last_5              (90% → 7 of 12 elided)", test_tier2_keeps_last_5());
+  let r4 = report("tier3_emergency_recovers        (97% tools → Ok, 9 elided)", test_tier3_emergency_recovers());
+  let r5 = report("tier3_exhausted_errs            (97% user → Err exhausted)", test_tier3_exhausted_errs());
+  let r6 = report("elision_preserves_length        (length unchanged)",     test_elision_preserves_length());
+  let r7 = report("recent_content_preserved        (tail not elided)",      test_recent_content_preserved());
+  if r1 && r2 && r3 && r4 && r5 && r6 && r7 then println("done")
+  else {
+    println("FAILED — see ✗ lines above");
+    exit(1)
+  }
 }
