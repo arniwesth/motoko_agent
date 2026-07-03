@@ -1,0 +1,74 @@
+-- scripts/phase_c_l1_scenarios.ail
+--
+-- Phase C Layer-1 scenario harness. WI-C0 establishes the reporting contract:
+-- failures name the scenario id, the first failed invariant, and a normalized
+-- trace. Later Phase C work items add the real compaction/checkpoint cases.
+
+module scripts/phase_c_l1_scenarios
+
+import std/io (println, exit)
+import std/list (length)
+import std/result (Result, Ok, Err)
+
+export type ScenarioFailure = {
+  failed_invariant: string,
+  trace: [string]
+}
+
+export type Scenario = {
+  id: string,
+  run: () -> Result[(), ScenarioFailure]
+}
+
+func print_trace(lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    line :: rest => {
+      let _ = println("trace ${line}");
+      print_trace(rest)
+    }
+  }
+}
+
+func run_one(s: Scenario) -> bool ! {IO} {
+  match s.run() {
+    Ok(_) => {
+      println("scenario=${s.id} ok");
+      true
+    },
+    Err(f) => {
+      let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
+      let _ = print_trace(f.trace);
+      false
+    }
+  }
+}
+
+func run_all(scenarios: [Scenario], failed: int) -> int ! {IO} {
+  match scenarios {
+    [] => failed,
+    s :: rest => {
+      let ok = run_one(s);
+      run_all(rest, if ok then failed else failed + 1)
+    }
+  }
+}
+
+func harness_self_test() -> Result[(), ScenarioFailure] {
+  Ok(())
+}
+
+func harness_self_test_scenario() -> Scenario {
+  { id: "harness_self_test", run: harness_self_test }
+}
+
+export func main() -> () ! {IO} {
+  let scenarios = [harness_self_test_scenario()];
+  let failed = run_all(scenarios, 0);
+  if failed == 0 then
+    println("phase_c_l1_scenarios PASS count=${show(length(scenarios))}")
+  else {
+    let _ = println("phase_c_l1_scenarios FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}

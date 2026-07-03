@@ -50,6 +50,10 @@ smoke_parity:
 		diff -r /tmp/phase_a_parity_a /tmp/phase_a_parity_b; \
 	fi'
 
+phase_c_l1:
+	ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail
+	ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
+
 # Type-check every AILANG core runtime module in src/core/, then
 # runtime-boot-probe every extension in the active profile's registry
 # so DP7 can catch the class of bugs that pass type-check but crash
