@@ -71,6 +71,12 @@ import src/core/phase_vocab (
   CostExhausted,
   StreamErrorRetry,
   CostWarning,
+  CompactionApplied,
+  CompactionExhausted,
+  ThinkingStreamStart,
+  ThinkingStreamEnd,
+  ProviderResult,
+  ExtInterceptHandled,
   HybridBashExtracted,
   DoneEvent,
   ExtSolverFeedback,
@@ -1094,10 +1100,10 @@ func loop_v2(
   -- DP0a: let extensions compact first (e.g., AI summarization)
   let after_ext = match dispatch_pre_step(rt, ctx, messages_to_msgs(msgs)) {
     Compacted(compacted_msgs, note) => {
-      let _ = emit_event(session_id, "compaction_extension", [
-        kv("step", jnum(_int_to_float(step_idx))),
-        kv("note", js(note))
-      ]);
+      let _ = ledger_emit(session_id, CompactionApplied({
+        step: step_idx,
+        note: note
+      }));
       Ok(msgs_to_messages(compacted_msgs))
     },
     PassThrough => Ok(msgs)
@@ -1111,11 +1117,11 @@ func loop_v2(
   -- at 70-85% and 85-95%; at ≥95% tries emergency compaction.
   match compact_step_with_limit(msgs_after_ext, model, context_limit) {
     Err(compaction_reason) => {
-      let _ = emit_event(session_id, "compaction_exhausted", [
-        kv("step", jnum(_int_to_float(step_idx))),
-        kv("model", js(model)),
-        kv("reason", js(compaction_reason))
-      ]);
+      let _ = ledger_emit(session_id, CompactionExhausted({
+        step: step_idx,
+        model: model,
+        reason: compaction_reason
+      }));
       let _ = emit_run_summary(session_id, model, totals, step_idx, 3, compaction_reason, started_at_ms);
       Err({
         code: "ContextExhausted",
@@ -1125,11 +1131,11 @@ func loop_v2(
     },
     Ok(compacted_msgs) => {
     let stream_id = "step-${show(step_idx)}";
-    let _ = emit_event(session_id, "thinking_stream_start", [
-      kv("step", jnum(_int_to_float(step_idx))),
-      kv("stream_id", js(stream_id)),
-      kv("model", js(model))
-    ]);
+    let _ = ledger_emit(session_id, ThinkingStreamStart({
+      step: step_idx,
+      stream_id: stream_id,
+      model: model
+    }));
     -- Per-chunk callback (M-AI-STEP-STREAMING, AILANG v0.18.7).
     -- Anthropic / OpenAI / OpenRouter / Gemini emit one ContentDelta per
     -- SSE event during the call; Ollama and config-driven providers fire
@@ -1144,11 +1150,11 @@ func loop_v2(
     let next_provider = dispatched.next_provider;
     match dispatched.result {
       Err(e) => {
-        let _ = emit_event(session_id, "thinking_stream_end", [
-          kv("step", jnum(_int_to_float(step_idx))),
-          kv("stream_id", js(stream_id)),
-          kv("status", js("errored"))
-        ]);
+        let _ = ledger_emit(session_id, ThinkingStreamEnd({
+          step: step_idx,
+          stream_id: stream_id,
+          status: "errored"
+        }));
         -- M-MOTOKO-STREAM-RETRY: a stream/parse error mid-step (e.g. AILANG std/xml
         -- choking on malformed DOCX XML in the model's work -> "XML syntax error ...
         -- unexpected EOF") is RECOVERABLE. Re-issue the step (fresh generation)
@@ -1175,17 +1181,22 @@ func loop_v2(
         -- The single batched thinking_delta below was the pre-v0.18.7 path —
         -- removed because it would now duplicate every text_delta the TUI
         -- already received per chunk.
-        let _ = emit_event(session_id, "thinking_stream_end", [
-          kv("step", jnum(_int_to_float(step_idx))),
-          kv("stream_id", js(stream_id)),
-          kv("status", js("completed"))
-        ]);
-        let _ = emit_event(session_id, "thinking", [
-          kv("step", jnum(_int_to_float(step_idx))),
-          kv("text", js(result.message.content)),
-          kv("finish_reason", js(result.finish_reason)),
-          kv("tool_calls", jnum(_int_to_float(n_calls)))
-        ] ++ usage_kvs);
+        let _ = ledger_emit(session_id, ThinkingStreamEnd({
+          step: step_idx,
+          stream_id: stream_id,
+          status: "completed"
+        }));
+        let _ = ledger_emit(session_id, ProviderResult({
+          step: step_idx,
+          text: result.message.content,
+          finish_reason: result.finish_reason,
+          tool_calls: n_calls,
+          input_tokens: result.input_tokens,
+          output_tokens: result.output_tokens,
+          cost_usd: millicents_to_usd(step_cost),
+          cache_read_input_tokens: result.cache_read_input_tokens,
+          cache_creation_input_tokens: result.cache_creation_input_tokens
+        }));
 
         let assistant_msg = step_result_to_message(result);
         let msgs_with_assistant = msgs ++ [assistant_msg];
@@ -1230,11 +1241,13 @@ func loop_v2(
         -- append it as a tool-role Message and recurse for the next step.
         match dispatch_response_intercept(rt, ctx, result.message.content) {
           InterceptHandled(envelope) => {
-            let _ = emit_event(session_id, "ext_intercept_handled", [
-              kv("step", jnum(_int_to_float(step_idx))),
-              kv("tool", js(envelope.tool)),
-              kv("exit_code", jnum(_int_to_float(envelope.exit_code)))
-            ]);
+            let _ = ledger_emit(session_id, ExtInterceptHandled({
+              step: step_idx,
+              stream_id: "",
+              tool: envelope.tool,
+              id: "",
+              exit_code: envelope.exit_code
+            }));
             let tool_msg = envelope_to_tool_message(envelope);
             let next_msgs = msgs_with_assistant ++ [tool_msg];
             loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
