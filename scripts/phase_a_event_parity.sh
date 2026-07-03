@@ -96,7 +96,7 @@ run_json_smoke() {
     grep -q '"type":"ext_tool_handled"' "$out"
     grep -q '"type":"ext_solver_feedback"' "$out"
     grep -q '"type":"ext_intercept_handled"' "$out"
-    grep -q '"type":"compaction_extension".*"note":"fixture_prestep sys=1"' "$out"
+    grep -q '"type":"compaction_extension".*"note":"fixture_prestep sys=0"' "$out"
     [ "$(combined_capture "$name" | grep -c '"type":"provider_call_prepared"')" -eq 4 ]
     combined_capture "$name" | awk '
       /"type":"provider_call_prepared"/ {

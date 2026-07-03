@@ -66,8 +66,25 @@ pure func take_system_prefix(msgs: [Message]) -> [Message] {
 type CompactableSegment = MkSegment([Message])
 type ProviderPayload = MkPayload([Message])
 
+export type PinnedSplit = { pinned: [Message], segment: CompactableSegment }
+
 export func payload_messages(p: ProviderPayload) -> [Message] {
   match p { MkPayload(xs) => xs }
+}
+
+pure func take_non_system_tail(msgs: [Message]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "system" then take_non_system_tail(rest) else msgs
+  }
+}
+
+export pure func split_for_compaction(msgs: [Message]) -> PinnedSplit {
+  { pinned: take_system_prefix(msgs), segment: MkSegment(take_non_system_tail(msgs)) }
+}
+
+export pure func segment_messages(segment: CompactableSegment) -> [Message] {
+  match segment { MkSegment(xs) => xs }
 }
 
 export type ModelRequest = { payload: ProviderPayload, model: string }
@@ -116,6 +133,66 @@ pure func payload_digest_len(msgs: [Message], n: int, bytes: int) -> string {
 -- replaces it when the real digest lands.
 export pure func payload_digest(msgs: [Message]) -> string {
   payload_digest_len(msgs, 0, 0)
+}
+
+pure func has_assistant_call(calls: [ToolCall], wanted_id: string) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.id == wanted_id then true else has_assistant_call(rest, wanted_id)
+  }
+}
+
+pure func has_assistant_call_id(msgs: [Msg], wanted_id: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "assistant" && has_assistant_call(m.tool_calls, wanted_id) then true
+      else has_assistant_call_id(rest, wanted_id)
+  }
+}
+
+pure func has_tool_result_id(msgs: [Msg], wanted_id: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "tool" && m.tool_call_id == wanted_id then true
+      else has_tool_result_id(rest, wanted_id)
+  }
+}
+
+pure func validate_output_calls(input: [Msg], output: [Msg], calls: [ToolCall]) -> Result[(), string] {
+  match calls {
+    [] => Ok(()),
+    c :: rest =>
+      if c.id == "" then Err("compactor output contains empty assistant tool_call id")
+      else if not (has_assistant_call_id(input, c.id) || has_tool_result_id(input, c.id)) then Err("compactor output invented assistant tool_call id ${c.id}")
+      else validate_output_calls(input, output, rest)
+  }
+}
+
+pure func validate_compactor_output_rec(input: [Msg], output: [Msg]) -> Result[(), string] {
+  match output {
+    [] => Ok(()),
+    m :: rest =>
+      if m.role == "system" then Err("compactor output contains system message")
+      else if m.role == "tool" && m.tool_call_id == "" then Err("compactor output contains tool message with empty tool_call_id")
+      else {
+        let call_check = validate_output_calls(input, output, m.tool_calls);
+        match call_check {
+          Err(e) => Err(e),
+          Ok(_) =>
+            if m.role == "tool" && not has_tool_result_id(input, m.tool_call_id) then
+              Err("compactor output invented tool_result id ${m.tool_call_id}")
+            else if m.role == "assistant" then
+              validate_compactor_output_rec(input, rest)
+            else validate_compactor_output_rec(input, rest)
+        }
+      }
+  }
+}
+
+export pure func validate_compactor_output(input: [Msg], output: [Msg]) -> Result[(), string] {
+  validate_compactor_output_rec(input, output)
 }
 
 -- ============================================================================
@@ -583,6 +660,59 @@ pure func test_history_from_seed_rejects_late_system() -> bool
       Ok(_) => false,
       Err(_) => true
     }
+  }
+
+pure func test_split_for_compaction_pins_system_prefix() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([mk_msg("system", "s1"), mk_msg("system", "s2"), mk_msg("user", "u")]);
+    List.length(split.pinned) == 2 && match segment_messages(split.segment) {
+      m :: [] => m.role == "user" && m.content == "u",
+      _ => false
+    }
+  }
+
+pure func mk_msg_with_call(id: string) -> Msg {
+  { role: "assistant", content: "call", tool_calls: [{ id: id, name: "T", arguments: "{}" }], tool_call_id: "" }
+}
+
+pure func mk_tool_msg(id: string) -> Msg {
+  { role: "tool", content: "result", tool_calls: [], tool_call_id: id }
+}
+
+pure func mk_plain_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+pure func result_ok(r: Result[(), string]) -> bool {
+  match r { Ok(_) => true, Err(_) => false }
+}
+
+pure func result_err(r: Result[(), string]) -> bool {
+  match r { Ok(_) => false, Err(_) => true }
+}
+
+pure func test_validate_compactor_output_accepts_identity() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    result_ok(validate_compactor_output(input, input))
+  }
+
+pure func test_validate_compactor_output_accepts_orphan_identity() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_tool_msg("orphan")];
+    result_ok(validate_compactor_output(input, input))
+  }
+
+pure func test_validate_compactor_output_rejects_bad_shapes() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    result_err(validate_compactor_output(input, [mk_plain_msg("system", "bad")]))
+      && result_err(validate_compactor_output(input, [{ role: "tool", content: "bad", tool_calls: [], tool_call_id: "" }]))
+      && result_err(validate_compactor_output(input, [mk_tool_msg("new-id")]))
   }
 
 pure func test_checkpoint_preserves_system_prefix() -> bool
