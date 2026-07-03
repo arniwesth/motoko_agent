@@ -1,0 +1,142 @@
+-- src/core/test/scripted_ports.ail
+--
+-- State-threaded scripted fakes for Phase C ports. These helpers are pure
+-- where possible and intentionally do not route production through ports yet.
+
+module src/core/test/scripted_ports
+
+import std/ai (Message, StepResult, ToolCall, AIError)
+import std/json (jo)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import std/trace as Trace
+import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ports_shape_probe)
+import src/core/phase_vocab (ApprovalRequest, ExecNative)
+import src/core/test/stub_step (ScriptedStep, StepProvider, Scripted, LiveAI, scripted_to_step_result)
+import src/core/config (VerificationConfig)
+import pkg/sunholo/motoko_ext_abi/types (ExtRuntime)
+
+export type ScriptedPortsState = {
+  model_steps: [ScriptedStep],
+  approvals: [ApprovalResolution],
+  clock_values: [int]
+}
+
+export pure func scripted_state(model_steps: [ScriptedStep], approvals: [ApprovalResolution], clock_values: [int]) -> ScriptedPortsState {
+  { model_steps: model_steps, approvals: approvals, clock_values: clock_values }
+}
+
+export pure func state_from_step_provider(provider: StepProvider) -> ScriptedPortsState {
+  match provider {
+    Scripted(steps) => scripted_state(steps, [], []),
+    LiveAI => scripted_state([], [], [])
+  }
+}
+
+export pure func scripted_model_next(state: ScriptedPortsState) -> { result: Result[StepResult, AIError], next: ScriptedPortsState } {
+  match state.model_steps {
+    [] => {
+      let err: AIError = { code: "ScriptExhausted", message: "scripted model exhausted", retryable: false };
+      { result: Err(err), next: state }
+    },
+    s :: rest => {
+      { result: Ok(scripted_to_step_result(s)), next: { model_steps: rest, approvals: state.approvals, clock_values: state.clock_values } }
+    }
+  }
+}
+
+export pure func scripted_approval_next(state: ScriptedPortsState, default_allow: bool) -> { resolution: ApprovalResolution, next: ScriptedPortsState } {
+  match state.approvals {
+    [] => {
+      let res = if default_allow then ApprovalAllowed else ApprovalDenied("default deny");
+      { resolution: res, next: state }
+    },
+    x :: rest => {
+      { resolution: x, next: { model_steps: state.model_steps, approvals: rest, clock_values: state.clock_values } }
+    }
+  }
+}
+
+export pure func scripted_clock_next(state: ScriptedPortsState) -> { value: int, next: ScriptedPortsState } {
+  match state.clock_values {
+    [] => { value: 0, next: state },
+    x :: rest => { value: x, next: { model_steps: state.model_steps, approvals: state.approvals, clock_values: rest } }
+  }
+}
+
+func fake_model(_model: string, _msgs: [Message]) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+  let err: AIError = { code: "ScriptedPorts", message: "use scripted_model_next for state-threaded tests", retryable: false };
+  Err(err)
+}
+
+func fake_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [] }, strict_mode: false, verification: v }
+}
+
+export func fake_ports() -> Ports {
+  ports_shape_probe(fake_model, fake_hooks)
+}
+
+pure func tool_call() -> ToolCall {
+  { id: "tc", name: "ReadFile", arguments: "{}" }
+}
+
+pure func scripted_step() -> ScriptedStep {
+  { prose: "", tool_calls: [tool_call()], input_tokens: 3, output_tokens: 4, finish_reason: "tool_calls", chunks: [] }
+}
+
+pure func test_scripted_model_threads_state() -> bool
+  tests [((), true)]
+  {
+    let s0 = scripted_state([scripted_step()], [], []);
+    let s1 = scripted_model_next(s0);
+    match s1.result {
+      Ok(r) => List.length(r.tool_calls) == 1 && List.length(s1.next.model_steps) == 0,
+      Err(_) => false
+    }
+  }
+
+pure func test_state_from_step_provider_preserves_script() -> bool
+  tests [((), true)]
+  {
+    let state = state_from_step_provider(Scripted([scripted_step()]));
+    List.length(state.model_steps) == 1
+  }
+
+pure func test_scripted_approval_defaults_on_exhaustion() -> bool
+  tests [((), true)]
+  {
+    let s0 = scripted_state([], [], []);
+    match scripted_approval_next(s0, true).resolution {
+      ApprovalAllowed => true,
+      _ => false
+    }
+  }
+
+pure func test_scripted_approval_consumes_script() -> bool
+  tests [((), true)]
+  {
+    let s0 = scripted_state([], [ApprovalDenied("no")], []);
+    let s1 = scripted_approval_next(s0, true);
+    match s1.resolution {
+      ApprovalDenied(r) => r == "no" && List.length(s1.next.approvals) == 0,
+      _ => false
+    }
+  }
+
+pure func test_scripted_clock_threads_state() -> bool
+  tests [((), true)]
+  {
+    let s0 = scripted_state([], [], [10, 11]);
+    let s1 = scripted_clock_next(s0);
+    let s2 = scripted_clock_next(s1.next);
+    s1.value == 10 && s2.value == 11 && List.length(s2.next.clock_values) == 0
+  }
+
+pure func test_fake_ports_constructs_record() -> bool
+  tests [((), true)]
+  {
+    let _ = jo([]);
+    true
+  }

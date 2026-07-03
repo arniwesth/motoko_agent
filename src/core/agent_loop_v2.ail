@@ -1709,6 +1709,27 @@ export func run_v2_with_stub(
 	  result
 	}
 
+-- Phase C strangler adapter. WI-C3 introduces scripted ports as the future
+-- seam, but the parity fleet still depends on run_v2_with_stub. Keep this
+-- compatibility entry delegated to the old loop until WI-C6 migrates callers.
+export func run_v2_with_stub_port_adapter(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  script: [ScriptedStep]
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  run_v2_with_stub(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, script)
+}
+
 -- M-MOTOKO-EVAL-INSTRUMENTATION inline tests (pure-only). Validates the
 -- schema-v1 contract surface that downstream eval harnesses depend on.
 

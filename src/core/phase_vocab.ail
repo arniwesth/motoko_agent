@@ -473,6 +473,38 @@ export type StreamEndInfo = { step: int, stream_id: string, status: string }
 export type StreamErrorRetryInfo = { step: int, error: string }
 export type StreamDeltaInfo = { step: int, stream_id: string, seq: int, kind: string, text: string }
 
+export type InMemoryStageOutcome = TraceStageApplied(string) | TraceStageRejected(string) | TraceStagePassed
+export type LedgerRecord
+  = WireRecord(LedgerEvent)
+  | CompactionStageRecord({ step: int, ext_id: string, outcome: InMemoryStageOutcome })
+export type LedgerTrace = { records: [LedgerRecord] }
+
+export pure func empty_ledger_trace() -> LedgerTrace {
+  { records: [] }
+}
+
+export pure func ledger_append(trace: LedgerTrace, record: LedgerRecord) -> LedgerTrace {
+  { records: trace.records ++ [record] }
+}
+
+export pure func ledger_record_name(record: LedgerRecord) -> string {
+  match record {
+    WireRecord(event) => {
+      match event {
+        ProviderCallPrepared(_) => "provider_call_prepared",
+        ExtCompactionRejected(_) => "ext_compaction_rejected",
+        _ => "wire"
+      }
+    },
+    CompactionStageRecord(r) =>
+      match r.outcome {
+        TraceStageApplied(_) => "stage_applied",
+        TraceStageRejected(_) => "stage_rejected",
+        TraceStagePassed => "stage_passed"
+      }
+  }
+}
+
 pure func validate_checkpoint_chain_rec(prev_digest: string, checkpoints: [CheckpointInfo], final_digest: string) -> Result[(), string] {
   match checkpoints {
     [] =>
@@ -784,6 +816,19 @@ pure func test_payload_digest_is_sha256_content_hash() -> bool
     let d2 = payload_digest([mk_msg("user", "hello")]);
     let d3 = payload_digest([mk_msg("user", "hello!")]);
     digest_shape_ok(d1) && d1 == d2 && d1 != d3
+  }
+
+pure func test_ledger_trace_records_wire_and_stage_passed() -> bool
+  tests [((), true)]
+  {
+    let t0 = empty_ledger_trace();
+    let t1 = ledger_append(t0, WireRecord(ProviderCallPrepared({ step: 1, msg_count: 2, system_prefix_count: 1, payload_digest: "sha256:abc", model: "m" })));
+    let t2 = ledger_append(t1, CompactionStageRecord({ step: 1, ext_id: "ext", outcome: TraceStagePassed }));
+    List.length(t2.records) == 2
+      && match t2.records {
+        a :: b :: [] => ledger_record_name(a) == "provider_call_prepared" && ledger_record_name(b) == "stage_passed",
+        _ => false
+      }
   }
 
 pure func test_validate_compactor_output_accepts_identity() -> bool
