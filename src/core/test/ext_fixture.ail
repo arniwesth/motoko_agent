@@ -1,0 +1,106 @@
+-- Phase-B deterministic extension fixture.
+--
+-- This is an in-repo test extension, not a package. It exercises the
+-- extension-produced transcript paths before ledger emission is rewired.
+
+module src/core/test/ext_fixture
+
+import std/json (jo, kv, js)
+import std/option (None)
+import std/string (contains)
+import src/core/config (VerificationConfig)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  ExtRuntime,
+  ExtensionHooks,
+  FinalizeDecision,
+  InterceptHandled,
+  ContinueWithFeedback,
+  NoDecision,
+  PassThrough,
+  PreStepDecision,
+  Compacted,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolCallEnvelope,
+  ToolHandleDecision,
+  ToolPolicyDecision,
+  ToolResultEnvelope,
+  Handled
+)
+import src/core/types (Msg)
+
+pure func count_system(msgs: [Msg]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => (if m.role == "system" then 1 else 0) + count_system(rest)
+  }
+}
+
+pure func fixture_result(tool_call_id: string, tool: string, stdout: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: tool_call_id,
+    tool: tool,
+    exit_code: 0,
+    stdout: stdout,
+    stderr: "",
+    metadata: jo([kv("fixture", js("phase_b"))])
+  }
+}
+
+pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+pure func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Allow
+}
+
+pure func handle_tool(_ctx: ExtCtx, call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  if call.tool == "FixtureEcho" then
+    Handled(fixture_result("fixture-internal-tool-id", "FixtureEcho", "fixture handled ${call.id}"))
+  else Delegate
+}
+
+pure func intercept_response(_ctx: ExtCtx, response: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  if contains(response, "[FIXTURE_INTERCEPT]") then
+    InterceptHandled(fixture_result("fixture-intercept-id", "FixtureIntercept", "fixture intercept"))
+  else NoIntercept
+}
+
+pure func solve_candidate(_ctx: ExtCtx, candidate: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  if contains(candidate, "[FIXTURE_CONTINUE]") then
+    ContinueWithFeedback("fixture feedback")
+  else NoDecision
+}
+
+pure func pre_step(_ctx: ExtCtx, msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}")
+}
+
+export pure func fixture_rt() -> ExtRuntime {
+  let hooks: ExtensionHooks = {
+    id: "phase_b_fixture",
+    provided_tools: ["FixtureEcho"],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: empty_prompt_patch,
+    on_budget_plan: empty_budget_patch,
+    on_pre_step: pre_step,
+    on_tool_policy: allow_policy,
+    on_tool_handle: handle_tool,
+    on_response_intercept: intercept_response,
+    on_solver_candidate: solve_candidate
+  };
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}

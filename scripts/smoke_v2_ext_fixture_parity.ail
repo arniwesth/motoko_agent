@@ -1,0 +1,60 @@
+module scripts/smoke_v2_ext_fixture_parity
+
+import std/io (println, exit)
+import std/json (encode, jo, kv, js)
+import std/result (Result, Ok, Err)
+import std/ai (Message)
+import src/core/config (CostRates)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/ext_fixture (fixture_rt)
+import src/core/test/stub_step (ScriptedStep, prose_step, tool_step)
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 8, solver: 8, verifier: 0 }
+}
+
+func seed_history() -> [Message] {
+  [
+    { role: "system", content: "fixture system prefix", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "exercise fixture hooks", tool_calls: [], tool_call_id: "" }
+  ]
+}
+
+func script() -> [ScriptedStep] {
+  [
+    tool_step("FixtureEcho", encode(jo([kv("msg", js("hello"))])), "call-fix-1"),
+    prose_step("[FIXTURE_CONTINUE] draft"),
+    prose_step("[FIXTURE_INTERCEPT] trip"),
+    prose_step("done")
+  ]
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let result = run_v2_with_stub(
+    fixture_rt(),
+    "phase-b-fixture-parity",
+    "",
+    false,
+    mk_budget(),
+    "anthropic/claude-sonnet-4-6",
+    seed_history(),
+    "/tmp",
+    8,
+    false,
+    0,
+    no_rates(),
+    script()
+  );
+  match result {
+    Ok(_) => println("phase_b_ext_fixture_parity PASS"),
+    Err(e) => {
+      let _ = println("phase_b_ext_fixture_parity FAIL: ${e.code}: ${e.message}");
+      exit(1)
+    }
+  }
+}
