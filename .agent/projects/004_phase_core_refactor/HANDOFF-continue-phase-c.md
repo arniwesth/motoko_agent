@@ -1,5 +1,11 @@
 # Handoff: continue Phase C implementation
 
+> **STALE (2026-07-04).** This handoff describes the state at `b7f2ff8` but was committed
+> after `898ada6` (WI-C5 route-through), `c816620` (WI-C6), and `a73c6a8` (WI-C7) landed.
+> Do not start from it. Current status — including the WI-C8 gate run (passes) and the
+> finding that the inversion is not on the live path — is in
+> `NOTE-phase-c-implementation-findings.md`.
+
 Audience: a fresh implementer session continuing `PLAN-phase-c-full-inversion.md`.
 This handoff is intentionally narrow. The plan remains the spec.
 
