@@ -84,17 +84,21 @@ note, this survey found the **byte-level divergences between the pure surface an
 live emitters** — each one a parity bug waiting to fire the moment the pure surface goes
 live, and therefore WI-C9's work list:
 
-1. **`recovery.persist_nudge_message` appends ` nudge=${n}/${budget}`**
-   (`src/core/recovery.ail:52`); the live nudge content has no such suffix
-   (`src/core/session.ail:1413`). Transcript-only, but it changes
-   `provider_call_prepared.payload_digest` (a real SHA-256 over content since WI-C1) on
-   any nudge-exercising run.
+1. **`recovery.persist_nudge_message` diverges from the live nudge content twice**:
+   it appends ` nudge=${n}/${budget}` and uses `"prose --"` where live uses the em-dash
+   `"prose —"` (`src/core/recovery.ail:52`, `src/core/session.ail:1413`).
+   Transcript-only, but it changes `provider_call_prepared.payload_digest` (a real
+   SHA-256 over content since WI-C1) on any nudge-exercising run.
 2. **`decide`'s Fail messages don't match live wire bytes.** `"step budget exhausted"`
    vs. live `"v2 loop: step budget exhausted"` (`src/core/step_machine.ail:65`,
-   `src/core/session.ail:1108`); `"cost cap reached"` vs. live
+   `src/core/session.ail:1123-1126`); `"cost cap reached"` vs. live
    `"cost cap reached: ${X} of ${Y} millicents used"` (`src/core/step_machine.ail:67`,
-   `src/core/session.ail:1122`). These land in `run_summary.error` / `error` events —
-   byte-visible in the cost-budget smoke.
+   `src/core/session.ail:1137`). These land in `run_summary.error` / `error` events —
+   byte-visible in the cost-budget smoke. **The cost-cap guard itself also diverges**:
+   live trips the cap only when `cost_rates.input_per_1m_millicents > 0` (unmetered
+   providers never exhaust, `src/core/session.ail:1130`); `decide`
+   (`src/core/step_machine.ail:66`) and `cost_phase.cost_cap_exceeded`
+   (`src/core/cost_phase.ail:15`) lack the metered-rates condition.
 3. **`await_approval_from_calls` hardcodes `stream_id: "step-${show(0)}"`**
    (`src/core/step_machine.ail:57`) — must derive from `s.step_idx`.
 4. **`decide`'s `CallModel` hardcodes `model: "phase-c-model"`**
@@ -128,12 +132,17 @@ live, and therefore WI-C9's work list:
    (`src/core/session.ail:1833-1863`) are the intended substrate, currently uncalled.
 
 Live-loop event-order facts the inversion must reproduce (read this session):
-`thinking_stream_start` → `provider_call_prepared` → deltas (mid-call) →
-`thinking_stream_end` → `thinking` (`src/core/session.ail:1181-1253`); `run_summary`
-**before** `done` on every success path (`src/core/session.ail:1367-1375,:1424-1431`);
-`tool_pending` emitted before the approval read (`src/core/session.ail:776-785`); batch
-`native_tool_calls` before dispatch, `native_tool_results` after
-(`src/core/session.ail:1456-1469`).
+`thinking_stream_start` (`src/core/session.ail:1181`) → `provider_call_prepared`
+(`:1196`) → deltas (mid-call, handle installed `:1195`) → `thinking_stream_end` →
+`thinking`; `run_summary` **before** `done` on every success path
+(`src/core/session.ail:1369,:1425`); `tool_pending` emitted before the approval read
+(`src/core/session.ail:776,:785`); batch `native_tool_calls` before dispatch and **one**
+`native_tool_results` after the entire call set resolves — including across the approval
+pause, which today blocks *inside* the batch (`src/core/session.ail:1457,:1464`). The
+inverted RunTools → AwaitApproval → RunTools(remaining) split must therefore accumulate
+tool messages across the approval boundary and emit the single results batch only when
+the original call set is fully resolved; two per-segment batches would be a wire
+regression the differ will catch but the design must prevent.
 
 ## Plan-level decisions
 
@@ -142,10 +151,12 @@ Live-loop event-order facts the inversion must reproduce (read this session):
 D9 compactor chain is effectful — the ADR's §7.2 pipeline cannot run inside a pure
 function on this substrate. Resolution: `phase_vocab` (the definer module — sealing
 unaffected, fact 17) gains one op,
-`seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message], limit: int)
--> Result[ProviderPayload, string]`, which re-pins the prefix, applies the exhaustion
-check (`exhaustion_pct()`, fail-open at limit 0 — exact live semantics,
-`src/core/session.ail:1159-1164`), and seals. `decide`'s embedded `project()` remains the
+`seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message], model: string,
+limit: int) -> Result[ProviderPayload, string]`, which re-pins the prefix, applies the
+exhaustion check (`exhaustion_pct()`, fail-open at limit 0 — exact live semantics,
+`src/core/session.ail:1160-1165`), and on exhaustion returns the **live reason bytes**
+(`"compaction_exhausted: context at ${pct}% of ${model} limit after compactor chain"`,
+`src/core/session.ail:1165`), golden-tested in `phase_vocab`. `decide`'s embedded `project()` remains the
 pure precheck; `CallModel` means "a model call is due", and the driver's hook phase
 produces the actual sealed payload. Ephemerality holds: nothing can write a payload back
 into `History`. Recorded as ADR input in "ADR gaps found" — this is the one place the
@@ -160,7 +171,14 @@ as-built `decide` already keys on driver-written sentinels in `last_finish_reaso
 `InjectUserMessage(feedback)`), `intercept_handled` and `hybrid_bash` (drive the next
 cycle's arms). Contract: **every sentinel the driver writes has a `decide` arm and a pure
 test**; a sentinel without an arm is a bug the wiring scenario must catch (it surfaces as
-a wrong decision in the `DecisionRecord` sequence).
+a wrong decision in the `DecisionRecord` sequence). One rule is load-bearing: **the raw
+provider `finish_reason` is interpretation input and is never written into
+`last_finish_reason` verbatim.** Live control flow runs intercept → hybrid → solver →
+persist-nudge → DP7 *after* a `"stop"` result (`src/core/session.ail:1296-1440`), but
+`decide` finalizes on `"stop"` (`src/core/step_machine.ail:77`) — so the driver writes
+`"stop"` only when interpretation is complete and finalization is approved; intermediate
+outcomes get their own sentinels. A DP7-enabled wiring scenario asserts no premature
+`Finalize` appears in the `DecisionRecord` sequence.
 
 **D-C2-3 — Strangler via a transient routing flag, deleted before the final gate.**
 WI-C11/WI-C12 run the inverted cycle behind `MOTOKO_PHASE_C2_DRIVER=1`, read **once** at
@@ -211,11 +229,14 @@ Commit subjects continue the Phase C sequence (WI-C9 …).
   (match `src/core/session.ail:1413` bytes exactly); golden test.
 - `src/core/step_machine.ail`: Fail messages take the live forms (budget message
   verbatim; cost message composed from `s.totals.cost_millicents` and
-  `pol.max_cost_millicents`); `await_approval_from_calls` derives `stream_id` from a new
+  `pol.max_cost_millicents`); the cost-cap arm gains the live metered-rates guard
+  (grounding item 2 — a `cost_metered: bool` policy fact, or rates in `StepPolicy`;
+  `cost_phase.cost_cap_exceeded` gains the same condition with tests);
+  `await_approval_from_calls` derives `stream_id` from a new
   `step_idx` parameter (or reads `s.step_idx` — implementer's choice, tested);
   `CallModel` model comes from `StepPolicy` (see WI-C10 — in this WI, thread a
   parameter and keep the placeholder default so nothing changes for existing tests);
-  golden tests transcribed from `session.ail:1108,:1122,:1042`.
+  golden tests transcribed from `session.ail:1123-1126,:1137,:1042`.
 - `src/core/tool_phase.ail`: extend to the **live** approval protocol:
   `parse_approval_command` JSON-decodes (`type`, `reason`) with the exact live default
   reasons; `denial_message` builds via `encode(jo(...))` (escaping-safe) and a golden
@@ -223,9 +244,11 @@ Commit subjects continue the Phase C sequence (WI-C9 …).
   (`src/core/session.ail:710-723`); keep the simplified string forms as additional
   accepted inputs only if the live TUI sends them (survey says it does not — drop them).
 - `src/core/phase_vocab.ail`: add `DecisionRecord({ step, decision })` to `LedgerRecord`
-  (+ `ledger_record_name` arm + tests); add `seal_compacted_payload` (D-C2-1) with pure
-  tests: seals, re-pins, exhausts at ≥95 with the live reason string
-  (`src/core/session.ail:1150`), fail-open at limit 0.
+  (+ `ledger_record_name` arm + tests; blast radius checked this session — the only
+  out-of-module `LedgerRecord` matches, `scripts/phase_c_l1_scenarios.ail:275-282`,
+  carry `_ =>` wildcards, so the variant addition is non-breaking); add
+  `seal_compacted_payload` (D-C2-1) with pure tests: seals, re-pins, exhausts at ≥95
+  with the live reason bytes (`src/core/session.ail:1165`), fail-open at limit 0.
 - `scripts/phase_c2_ab_parity.sh` (new, small): runs `phase_a_event_parity.sh` into
   `/tmp/c2_ab_off`, then with `MOTOKO_PHASE_C2_DRIVER=1` into `/tmp/c2_ab_on`, then
   `diff -r`. In this WI the flag does not exist yet, so the script must pass trivially
@@ -258,8 +281,10 @@ PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity   # byte-identical
 
 **Files.**
 - `src/core/phase_vocab.ail`: `StepPolicy` gains `model: string` and
-  `provider_base_url: string` (definer module; update `mk_policy`-style fixtures in
-  `step_machine.ail` tests and the L1 scenario script constructors).
+  `provider_base_url: string` — plus the WI-C9 metered-cost fact if it was deferred to
+  ride this field addition (definer module; blast radius verified this session: literal
+  constructors exist only in `step_machine.ail:91,:172` and
+  `scripts/phase_c_l1_scenarios.ail:100`).
 - `src/core/session.ail`: a `session_policy_init(...)` built once per entry
   (`run_v2`, `run_v2_from_messages`, `run_v2_with_conversation`, `run_v2_with_stub`)
   resolving `MOTOKO_PERSIST_RETRIES` (`:1064-1071`), `MOTOKO_RETRY_STREAM_ERROR`
@@ -292,13 +317,32 @@ PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity   # byte-identical
   - Model error: sentinel `stream_error`; `recovery.should_retry_stream_error` gates the
     retry arm in `decide`; `stream_error_retry` emitted by the driver on that
     transition; non-retry → live error path bytes.
-  - Post-model interpretation writes sentinels: intercept (`intercept_handled` + tool
-    msg append), solver feedback (`solver_feedback`), hybrid (`hybrid_bash` + synthetic
-    call in `pending_tool_calls` + augmented assistant message per the Bedrock
-    correlation rule, `src/core/session.ail:1327-1348`), dp7 outcomes, persist nudge
+  - Post-model interpretation writes sentinels (D-C2-2: raw `finish_reason` never
+    written verbatim): intercept (`intercept_handled` + tool msg append; **intercept
+    preempts tool dispatch** — live checks it before the `finish_reason` branch,
+    `src/core/session.ail:1296` — so the delta clears `pending_tool_calls`), solver
+    feedback (`solver_feedback`), hybrid (`hybrid_bash` + synthetic call in
+    `pending_tool_calls` + augmented assistant message per the Bedrock correlation rule,
+    `src/core/session.ail:1319-1351`), dp7 outcomes, persist nudge
     (`recovery.should_inject_persist_nudge` on `nudges_used` state — marker scanning
     retired on the flagged path).
-  - `Finalize`: `run_summary` before `done`, source field per accept path.
+  - **Transcript-append deferral**: the assistant message from `model_phase` is applied
+    to history only *after* interpretation, because the hybrid path must swap in the
+    augmented assistant message (tool_calls patched in) in its place — appending early
+    would orphan the synthetic tool_result (the Bedrock 400 class,
+    `src/core/session.ail:1330-1350`).
+  - **Step accounting is driver-owned**: `StateDelta` deliberately has no `step_idx`
+    field (`src/core/phase_vocab.ail:258-266`); the driver increments `step_idx` when
+    it executes `CallModel` — the live loop's one-recursion-one-model-call equivalence
+    (stream-retry consumed a step there too, and does here via its re-`CallModel`).
+  - **ExtCtx fidelity**: the live loop builds two differently-shaped `ExtCtx` per step —
+    pre-step with the segment-compensated effective limit over the raw history
+    (`src/core/session.ail:1153`) and post-model with the raw catalog limit over
+    `msgs_with_assistant` (`:1257`) — the cycle reproduces both (extensions observe
+    `history_slice` and `context_limit`).
+  - `Finalize`: `run_summary` before `done`, source field per accept path;
+    `steps_executed` is `step_idx + 1` on success paths and `step_idx` on failure paths
+    (live bytes, `src/core/session.ail:1369,:1123`).
   - `Fail`: exact live event/summary bytes (WI-C9 goldens).
   - `InjectUserMessage`, `TakeCheckpoint` (executes `apply_checkpoint` faithfully; v1
     policy never returns it — the scenario stays the cage), `RunTools` (this WI:
@@ -318,23 +362,29 @@ PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity   # byte-identical
   Finalize]`; chain fixture run's trace carries `StagePassed`/`StageApplied`/
   `StageRejected` records in registry order (G-B1 consumer); nudge-configured run shows
   `InjectUserMessage`; `checkpoint_never_emitted_in_v1` re-asserted over
-  `DecisionRecord`s from the live cycle. Runs under the minimal caps the cycle's
+  `DecisionRecord`s from the live cycle; the D-C2-2 no-premature-`Finalize` scenario
+  (DP7 rejection) — note it executes the verifier command in a fixture workdir like
+  `smoke_v2_dp7_gate`, so it needs `Process`. Runs under the minimal caps the cycle's
   performed effects need (scripted provider, deny/fixture rt — expect
-  `IO,Env,Clock,Trace`; record the exact set in the script header).
+  `IO,Env,Clock,Trace` + `Process` for the DP7 scenario; record the exact set in the
+  script header).
 
 **Verification.**
 ```
 make check_core && make test_core && make test_integration
-ailang test src/core/session.ail 2>/dev/null || true   # if inline tests added
 ailang test src/core/step_machine.ail && ailang test src/core/model_phase.ail
-ailang run --caps IO,Env,Clock,Trace --entry main scripts/phase_c2_wiring_scenarios.ail
+ailang run --caps IO,Env,Clock,Trace,Process --entry main scripts/phase_c2_wiring_scenarios.ail
 bash scripts/phase_c2_ab_parity.sh        # THE gate: flag-on fleet ≡ flag-off fleet, bytes
 PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity   # flag off: byte-identical
 ```
 **Expected-diff protocol.** The A/B differ diffing non-empty is the designed failure
 mode: classify every line (order / missing / payload) per D-B7; fix the cycle — do not
 bless. The blessed baseline never changes in this WI.
-**Rollback.** Revert the commit; the flag and cycle disappear, facades unconditional.
+**Sub-commits.** This is the largest WI; internal sub-commits (e.g. by decision-arm
+family) are allowed because the shipped path is flag-off: each sub-commit needs strict
+parity (flag off) and green module tests only; the A/B differ and the wiring scenarios
+are the **WI-boundary** completion criteria, not per-sub-commit gates.
+**Rollback.** Revert the commit(s); the flag and cycle disappear, facades unconditional.
 
 ### WI-C12 — Approval inversion on the flagged path
 
@@ -349,10 +399,14 @@ bless. The blessed baseline never changes in this WI.
   `readLine()` + `tool_phase.resolve_approval` with the live default reasons), then
   denial message or approved-call execution, then `RunTools` re-issued with
   `req.remaining` in original order (`tool_phase.approval_resume_plan`,
-  `execution_order_after_approval` invariant). Batch `native_tool_results` bytes and
-  ordering must match the old path exactly — the old path resolves approval inside one
-  dispatch pass; the differ proves equivalence, the pending smoke's devnull stdin pins
-  the EOF-default path.
+  `execution_order_after_approval` invariant). **Batch accumulation spans the approval
+  boundary**: the live path emits one `native_tool_calls` before dispatch and exactly
+  one `native_tool_results` after the entire call set resolves, blocking mid-batch on
+  the read (`src/core/session.ail:1457,:1464`) — so the driver carries the accumulated
+  tool messages through the AwaitApproval decision and emits the single results batch
+  only when the original call set is fully resolved (grounding, event-order facts). The
+  differ proves equivalence; the pending smoke's devnull stdin pins the EOF-default
+  path.
 - `src/core/ports.ail` + `src/core/test/scripted_ports.ail`: `approval_read` becomes the
   seam the driver calls; scripted approvals thread through `ScriptedPortsState`
   (`scripted_approval_next`, `src/core/test/scripted_ports.ail:49-60`) in the wiring
@@ -366,14 +420,18 @@ bless. The blessed baseline never changes in this WI.
 
 **Verification.** WI-C11 command set (differ + strict parity, flag off), plus
 `smoke_v2_pending_full_loop` scrutinized line-by-line in the A/B diff output (it is the
-only smoke exercising `tool_pending`).
+only **parity-fleet** smoke exercising `tool_pending`; `smoke_v2_pending.ail` and
+`smoke_v2_policy_denial.ail` also name it but are outside the fleet and type-broken at
+HEAD — the G8 hygiene list).
 **Rollback.** Revert; the flagged path falls back to whole-plan delegation (WI-C11
 state), old path untouched.
 
 ### WI-C13 — Flip, delete, and relocate (sub-commits a–c)
 
 **a — Flip.** Facades route through the inverted cycle unconditionally; the
-`MOTOKO_PHASE_C2_DRIVER` flag is deleted; `run_v2_with_stub` and
+`MOTOKO_PHASE_C2_DRIVER` flag is deleted and `scripts/phase_c2_ab_parity.sh` is retired
+with it (its job is done — post-flip it would only duplicate `make smoke_parity`'s
+self-diff mode, and keeping it would trip the flag-absence grep); `run_v2_with_stub` and
 `run_v2_with_stub_port_adapter` stay as facades over the cycle. Strict parity vs
 `/tmp/phase_c_blessed` now proves the new path on the whole fleet.
 **b — Delete.** The old `loop_v2` recursion (`src/core/session.ail:1103-1500`-region)
@@ -385,15 +443,25 @@ remaining body becomes the executor implementations.
 delegated/native split) is built once at session init; `session.ail` shrinks to driver +
 init + emission; `run_v2_with_scripted_ports` passes real scripted `Ports`
 (model/approval/clock) instead of unwrapping to `Scripted(steps)`; live `Ports` built
-once at entry. Hybrid-bash synthesis and the assistant-message augmentation stay with
-the response interpretation + transcript builders (D-C2-6).
+once at entry. **The as-built `Ports.model_step` signature cannot carry the streaming
+protocol** — it has no chunk callback (`src/core/ports.ail:18`), while the ADR's
+streaming exception requires the driver-issued append handle to reach the call
+mid-flight. The model port signature widens to
+`(string, [Message], (StreamChunk) -> () ! {IO, Trace}) -> Result[StepResult, AIError]`;
+the live adapter wraps `stepWithStream` + `tools_with_extensions(rt)` + the cache
+breakpoints (today's `dispatch_step` LiveAI arm, `src/core/test/stub_step.ail:130-132`);
+the scripted adapter plays `chunks` (the Scripted arm, `:133-143`). Ripple is test-only:
+`ports_shape_probe`/`fake_model` (`src/core/ports.ail:36-48`,
+`src/core/test/scripted_ports.ail:68-80`). Hybrid-bash synthesis and the
+assistant-message augmentation stay with the response interpretation + transcript
+builders (D-C2-6).
 
 **Verification (after each sub-commit).**
 ```
 make check_core && make test_core && make test_integration
 PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity     # byte-identical, new path
 ./scripts/phase_b_projection_gate.sh /tmp/phase_c_blessed
-ailang run --caps IO,Env,Clock,Trace --entry main scripts/phase_c2_wiring_scenarios.ail
+ailang run --caps IO,Env,Clock,Trace,Process --entry main scripts/phase_c2_wiring_scenarios.ail
 ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail
 ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
 grep -rn "MOTOKO_PHASE_C2_DRIVER" src scripts && exit 1 || true   # flag gone (13a+)
@@ -410,9 +478,8 @@ Run the parent plan's WI-C8 block verbatim (`PLAN-phase-c-full-inversion.md:549-
 additions:
 
 ```
-bash scripts/phase_c2_ab_parity.sh                        # trivially identical (flag gone)
-ailang run --caps IO,Env,Clock,Trace --entry main scripts/phase_c2_wiring_scenarios.ail
-grep -rn "MOTOKO_PHASE_C2_DRIVER" src scripts; test $? -eq 1
+ailang run --caps IO,Env,Clock,Trace,Process --entry main scripts/phase_c2_wiring_scenarios.ail
+grep -rn "MOTOKO_PHASE_C2_DRIVER" src scripts; test $? -eq 1   # flag and differ script gone
 grep -n "getEnvOr\|readLine(" src/core/session.ail        # init/entry/adapter sites only
 grep -rln "src/core/tool_phase\|src/core/model_phase\|src/core/hook_phase\|src/core/ports" \
   src/core/session.ail                                    # session consumes the phase modules
@@ -457,9 +524,13 @@ Read at HEAD `8604365` this session — the load-bearing set:
 stream delta `:353-373`, `derive_session_id` `:379-382`, `emit_run_summary` `:424`,
 `dispatch_calls` `:747-1016` (approval region `:761-859`, scratchpad `:864-883`),
 dp7 `:1016-1048`, persist-nudge helpers `:1060-1101`, `loop_v2` `:1103-1500` (env reads
-`:1065,:1203,:1217`; order-critical emission `:1181-1253`; cost warnings `:1268-1281`;
-hybrid `:1327-1348`; summary-before-done `:1367-1375,:1424-1431`; batch tool events
-`:1456-1469`), entries `:1500-1736`, snapshot helpers `:1833-1875`.
+`:1065,:1203,:1217`; cost-cap guard incl. metered-rates condition `:1130`; Fail/summary
+bytes `:1123-1126,:1137`; exhaustion reason `:1165`; order-critical emission
+`:1181-1253` — stream start `:1181`, `provider_call_prepared` `:1196`, dispatch `:1203`;
+cost warnings `:1272-1278`; intercept-before-branch `:1296`; hybrid `:1319-1351`; nudge
+content `:1413`; summary-before-done `:1369,:1425`; batch tool events `:1457,:1464`;
+the two per-step `ExtCtx` builds `:1153,:1257`; dp7 retry message `:1042`),
+entries `:1500-1736`, snapshot helpers `:1833-1875`.
 `src/core/agent_loop_v2.ail` (123 lines): facades `:89,:107`.
 `src/core/step_machine.ail`: `decide` `:63-83`, divergences `:57,:65,:67,:81`, 12 tests.
 `src/core/tool_phase.ail`: pending plan `:33-51`, parse/resolve `:53-67`, denial `:69-76`,
