@@ -99,6 +99,7 @@ func policy(context_limit: int) -> StepPolicy {
   {
     step_budget: 8,
     max_cost_millicents: 0,
+    cost_metered: true,
     persist_retries: 0,
     retry_stream_errors: true,
     compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }

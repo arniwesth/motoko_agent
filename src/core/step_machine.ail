@@ -47,27 +47,35 @@ pure func dp7_rejection_message(text: string) -> Message {
   }
 }
 
-pure func await_approval_from_calls(calls: [ToolCall]) -> StepDecision {
+pure func await_approval_from_calls(step_idx: int, calls: [ToolCall]) -> StepDecision {
   match calls {
     [] => Fail({ code: "Internal", message: "approval requested without pending call", retryable: false }),
     c :: rest => AwaitApproval({
       call: c,
       default_allow: false,
       reason: "tool approval required",
-      stream_id: "step-${show(0)}",
+      stream_id: "step-${show(step_idx)}",
       remaining: plan_native(rest)
     })
   }
 }
 
+pure func cost_cap_message(total_cost_millicents: int, max_cost_millicents: int) -> string {
+  "cost cap reached: ${show(total_cost_millicents)} of ${show(max_cost_millicents)} millicents used"
+}
+
+pure func policy_model(_pol: StepPolicy) -> string {
+  "phase-c-model"
+}
+
 export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   if pol.step_budget > 0 && s.step_idx >= pol.step_budget
-  then Fail({ code: "Internal", message: "step budget exhausted", retryable: false })
-  else if pol.max_cost_millicents > 0 && s.totals.cost_millicents >= pol.max_cost_millicents
-  then Fail({ code: "BudgetExceeded", message: "cost cap reached", retryable: false })
+  then Fail({ code: "Internal", message: "v2 loop: step budget exhausted", retryable: false })
+  else if pol.max_cost_millicents > 0 && pol.cost_metered && s.totals.cost_millicents >= pol.max_cost_millicents
+  then Fail({ code: "BudgetExceeded", message: cost_cap_message(s.totals.cost_millicents, pol.max_cost_millicents), retryable: false })
   else if List.length(s.pending_tool_calls) > 0
   then {
-    if s.last_finish_reason == "await_approval" then await_approval_from_calls(s.pending_tool_calls)
+    if s.last_finish_reason == "await_approval" then await_approval_from_calls(s.step_idx, s.pending_tool_calls)
     else RunTools({ entries: plan_native(s.pending_tool_calls) })
   }
   else if s.last_finish_reason == "dp7_rejected"
@@ -78,7 +86,7 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   then Finalize({ reason: "model_stop", output: s.last_response_text })
   else match project(s.history, s.telemetry, pol.compaction) {
     Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
-    Ok(projection) => CallModel({ payload: projection.payload, model: "phase-c-model" })
+    Ok(projection) => CallModel({ payload: projection.payload, model: policy_model(pol) })
   }
 }
 
@@ -90,6 +98,7 @@ func mk_policy(context_limit: int) -> StepPolicy {
   {
     step_budget: 8,
     max_cost_millicents: 0,
+    cost_metered: true,
     persist_retries: 2,
     retry_stream_errors: true,
     compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
@@ -120,6 +129,13 @@ func is_fail(d: StepDecision, code: string) -> bool {
   }
 }
 
+func fail_message(d: StepDecision) -> string {
+  match d {
+    Fail(f) => f.message,
+    _ => ""
+  }
+}
+
 func is_finalize(d: StepDecision, output: string) -> bool {
   match d {
     Finalize(f) => f.output == output,
@@ -141,6 +157,13 @@ func is_await_approval(d: StepDecision, remaining: int) -> bool {
   }
 }
 
+func await_stream_id(d: StepDecision) -> string {
+  match d {
+    AwaitApproval(req) => req.stream_id,
+    _ => ""
+  }
+}
+
 func is_call_model(d: StepDecision) -> bool {
   match d {
     CallModel(_) => true,
@@ -159,7 +182,7 @@ pure func test_decide_step_budget() -> bool
   tests [((), true)]
   {
     match mk_state("", "", [], 8, 0, 0) {
-      Ok(s) => is_fail(decide(s, mk_policy(0)), "Internal"),
+      Ok(s) => fail_message(decide(s, mk_policy(0))) == "v2 loop: step budget exhausted",
       Err(_) => false
     }
   }
@@ -169,8 +192,20 @@ pure func test_decide_cost_cap() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, persist_retries: 0, retry_stream_errors: true, compaction: mk_policy(0).compaction };
-        is_fail(decide(s, pol), "BudgetExceeded")
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, compaction: mk_policy(0).compaction };
+        fail_message(decide(s, pol)) == "cost cap reached: 10 of 10 millicents used"
+      },
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_cost_cap_unmetered_does_not_exhaust() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 10, 0) {
+      Ok(s) => {
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, compaction: mk_policy(0).compaction };
+        not is_fail(decide(s, pol), "BudgetExceeded")
       },
       Err(_) => false
     }
@@ -191,8 +226,11 @@ pure func test_decide_pending_approval() -> bool
   {
     let c1: ToolCall = { id: "tc1", name: "ReadFile", arguments: "{}" };
     let c2: ToolCall = { id: "tc2", name: "ReadFile", arguments: "{}" };
-    match mk_state("await_approval", "", [c1, c2], 0, 0, 0) {
-      Ok(s) => is_await_approval(decide(s, mk_policy(0)), 1),
+    match mk_state("await_approval", "", [c1, c2], 3, 0, 0) {
+      Ok(s) => {
+        let d = decide(s, mk_policy(0));
+        is_await_approval(d, 1) && await_stream_id(d) == "step-3"
+      },
       Err(_) => false
     }
   }

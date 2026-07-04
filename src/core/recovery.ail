@@ -48,7 +48,7 @@ export pure func should_inject_persist_nudge(persist_budget: int, nudges_used: i
 export pure func persist_nudge_message(nudge_num: int, budget: int) -> Message {
   {
     role: "user",
-    content: "${persist_nudge_marker()} You stopped without writing a solution file. Do NOT answer in prose -- use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs. nudge=${show(nudge_num)}/${show(budget)}",
+    content: "${persist_nudge_marker()} You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs.",
     tool_calls: [],
     tool_call_id: ""
   }
@@ -93,4 +93,10 @@ pure func test_persist_nudge_message_shape() -> bool
   {
     let m = persist_nudge_message(1, 2);
     m.role == "user" && List.length(m.tool_calls) == 0 && contains(m.content, persist_nudge_marker())
+  }
+
+pure func test_persist_nudge_message_live_bytes() -> bool
+  tests [((), true)]
+  {
+    persist_nudge_message(1, 2).content == "[motoko-persist-nudge] You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs."
   }

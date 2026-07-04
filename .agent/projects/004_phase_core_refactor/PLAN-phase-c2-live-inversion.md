@@ -492,7 +492,8 @@ write the session summary; commit `ailang.lock` if still dirty (inspect first).
 
 ## ADR gaps found
 
-- **G-C2-1 (design addition, dispositioned by D-C2-1 pending operator sign-off):** the
+- **G-C2-1 (design addition, dispositioned by D-C2-1; operator sign-off received
+  2026-07-04):** the
   ADR's "no other way to obtain a `ProviderPayload` than `project()`" (Decision detail 4)
   is unimplementable as stated once D9 made the compaction chain effectful — a pure
   `project()` cannot run extension hooks. `seal_compacted_payload` in the definer module

@@ -1,0 +1,99 @@
+-- scripts/phase_c2_wiring_scenarios.ail
+--
+-- Phase C2 positive wiring scenario harness. WI-C9 establishes the in-memory
+-- DecisionRecord instrument; WI-C11 adds live-cycle assertions that consume it.
+
+module scripts/phase_c2_wiring_scenarios
+
+import std/io (println, exit)
+import std/list (length)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  DecisionRecord,
+  empty_ledger_trace,
+  ledger_append,
+  ledger_record_name
+)
+
+type ScenarioFailure = {
+  failed_invariant: string,
+  trace: [string]
+}
+
+type Scenario = {
+  id: string,
+  run: () -> Result[(), ScenarioFailure]
+}
+
+func print_trace(lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    line :: rest => {
+      let _ = println("trace ${line}");
+      print_trace(rest)
+    }
+  }
+}
+
+func run_one(s: Scenario) -> bool ! {IO} {
+  match s.run() {
+    Ok(_) => {
+      println("scenario=${s.id} ok");
+      true
+    },
+    Err(f) => {
+      let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
+      let _ = print_trace(f.trace);
+      false
+    }
+  }
+}
+
+func run_all(scenarios: [Scenario], failed: int) -> int ! {IO} {
+  match scenarios {
+    [] => failed,
+    s :: rest => {
+      let ok = run_one(s);
+      run_all(rest, if ok then failed else failed + 1)
+    }
+  }
+}
+
+func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
+  if ok then Ok(())
+  else Err({ failed_invariant: invariant_name, trace: trace })
+}
+
+func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFailure] {
+  let trace = ledger_append(empty_ledger_trace(), DecisionRecord({ step: 2, decision: "CallModel" }));
+  match trace.records {
+    record :: [] => {
+      let ok = ledger_record_name(record) == "decision"
+        && match record {
+          DecisionRecord(r) => r.step == 2 && r.decision == "CallModel",
+          _ => false
+        };
+      ok_or_failure(ok, "decision record append/name round-trip", [
+        "record_name=${ledger_record_name(record)}"
+      ])
+    },
+    _ => Err({ failed_invariant: "single decision record appended", trace: ["record_count=${show(length(trace.records))}"] })
+  }
+}
+
+func decision_record_append_name_round_trip_scenario() -> Scenario {
+  { id: "decision_record_append_name_round_trip", run: scenario_decision_record_append_name_round_trip }
+}
+
+export func main() -> () ! {IO} {
+  let scenarios = [
+    decision_record_append_name_round_trip_scenario()
+  ];
+  let failed = run_all(scenarios, 0);
+  if failed == 0 then
+    println("phase_c2_wiring_scenarios PASS count=${show(length(scenarios))}")
+  else {
+    let _ = println("phase_c2_wiring_scenarios FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}

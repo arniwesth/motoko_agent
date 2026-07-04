@@ -12,8 +12,8 @@ export pure func step_cost_millicents(input_tokens: int, output_tokens: int, rat
    output_tokens * rates.output_per_1m_millicents) / 1000000
 }
 
-export pure func cost_cap_exceeded(total_cost_millicents: int, max_cost_millicents: int) -> bool {
-  max_cost_millicents > 0 && total_cost_millicents >= max_cost_millicents
+export pure func cost_cap_exceeded(total_cost_millicents: int, max_cost_millicents: int, rates: CostRates) -> bool {
+  max_cost_millicents > 0 && rates.input_per_1m_millicents > 0 && total_cost_millicents >= max_cost_millicents
 }
 
 export pure func next_warning_threshold(total_cost_millicents: int, max_cost_millicents: int, already_warned_pct: int) -> int {
@@ -50,7 +50,10 @@ pure func test_step_cost_millicents_counts_input_and_output() -> bool
 pure func test_cost_cap_exceeded() -> bool
   tests [((), true)]
   {
-    cost_cap_exceeded(100, 100) && not cost_cap_exceeded(99, 100) && not cost_cap_exceeded(100, 0)
+    cost_cap_exceeded(100, 100, priced_rates())
+      && not cost_cap_exceeded(99, 100, priced_rates())
+      && not cost_cap_exceeded(100, 0, priced_rates())
+      && not cost_cap_exceeded(100, 100, no_rates())
   }
 
 pure func test_next_warning_thresholds() -> bool

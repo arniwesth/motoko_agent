@@ -205,7 +205,9 @@ Question 1; the successor of the transcript helpers currently inline in
   zero compactors installed, core behavior is honest exhaustion: `Fail(ContextExhausted)`
   (later `TakeCheckpoint`, once emitted). `ProviderPayload` is sealed; `model_phase` receives
   it inside the exported `ModelRequest` wrapper (it cannot name the sealed type — see
-  co-location scope above) and there is no other way to obtain one than `project()`.
+  co-location scope above) and there is no other way to obtain one outside
+  `phase_vocab`'s exported projection/sealing ops (`project()` for pure precheck,
+  `seal_compacted_payload()` for effectful post-chain sealing; C2 sign-off 2026-07-04).
   Ephemerality is by construction: nothing can write a payload back into history. Actual-token
   gating (the path removed from source; P2-R1/P3-R4) is now simply **compactor policy**: any
   extension can implement it against the telemetry ABI v3 exposes — the former Open Question 4

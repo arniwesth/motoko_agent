@@ -51,7 +51,7 @@ func pass_case() -> CaseResult {
   { ok: true, failed_invariant: "", trace: [] }
 }
 
-func scenario(id: string, raw: string, eof: bool, default_allow: bool, expect_allow: bool) -> CaseResult {
+func scenario(id: string, raw: string, eof: bool, default_allow: bool, expect_allow: bool, expect_reason: string) -> CaseResult {
   match plan_pending_approval_from_calls(7, "stream-7", [call("a"), call("b"), call("c")], default_allow, "needs approval") {
     None => fail_case(id, "pending request constructed", ["plan=none"]),
     Some(p) => {
@@ -66,8 +66,8 @@ func scenario(id: string, raw: string, eof: bool, default_allow: bool, expect_al
       };
       let resolution = resolve_approval(raw, default_allow, eof);
       let resolution_ok = match resolution {
-        ApprovalAllowed => expect_allow,
-        ApprovalDenied(_) => not expect_allow
+        ApprovalAllowed => expect_allow && expect_reason == "",
+        ApprovalDenied(reason) => (not expect_allow) && reason == expect_reason
       };
       let behavior_ok = match resolution {
         ApprovalAllowed =>
@@ -77,7 +77,7 @@ func scenario(id: string, raw: string, eof: bool, default_allow: bool, expect_al
           },
         ApprovalDenied(reason) => {
           let msg = denial_message(p.request.call, reason);
-          msg.role == "tool" && msg.tool_call_id == "a" && List.length(p.request.remaining) == 2
+          msg.role == "tool" && msg.tool_call_id == "a" && List.length(p.request.remaining) == 2 && reason == expect_reason
         }
       };
       if event_ok && order_ok && resolution_ok && behavior_ok then pass_case()
@@ -107,10 +107,13 @@ func run_cases(results: [CaseResult], failed: int) -> int ! {IO} {
 
 export func main() -> () ! {IO} {
   let results = [
-    scenario("approve", "approve", false, false, true),
-    scenario("deny_with_reason", "deny", false, true, false),
-    scenario("eof_default_allow", "", true, true, true),
-    scenario("unparseable_default_deny", "wat", false, false, false)
+    scenario("approve", "{\"type\":\"approve\"}", false, false, true, ""),
+    scenario("deny_with_reason", "{\"type\":\"deny\",\"reason\":\"blocked\"}", false, true, false, "blocked"),
+    scenario("deny_default_reason", "{\"type\":\"deny\"}", false, true, false, "denied by operator"),
+    scenario("eof_default_allow", "", true, true, true, ""),
+    scenario("eof_default_deny", "", true, false, false, "timeout — no approval received"),
+    scenario("unparseable_default_deny", "wat", false, false, false, "unparseable response — default deny applied"),
+    scenario("unknown_default_deny", "{\"type\":\"later\"}", false, false, false, "unknown approval command — default deny applied")
   ];
   let failed = run_cases(results, 0);
   if failed == 0 then println("phase_c_approval_protocol PASS count=${show(List.length(results))}")

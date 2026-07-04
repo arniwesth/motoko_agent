@@ -6,6 +6,7 @@
 module src/core/tool_phase
 
 import std/ai (Message, ToolCall)
+import std/json (Json, jo, kv, js, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/option (Option, Some, None)
 import src/core/phase_vocab (
@@ -24,7 +25,7 @@ export type PendingApprovalPlan = {
   request: ApprovalRequest
 }
 
-export type ApprovalCommand = ParsedApprove | ParsedDeny(string) | ParsedInvalid
+export type ApprovalCommand = ParsedApprove | ParsedDeny(string) | ParsedUnknown | ParsedUnparseable
 
 export pure func tool_pending_event(step: int, stream_id: string, call: ToolCall, reason: string) -> LedgerEvent {
   ToolPending({ step: step, stream_id: stream_id, tool: call.name, id: call.id, reason: reason })
@@ -51,27 +52,50 @@ export pure func plan_pending_approval_from_calls(step: int, stream_id: string, 
 }
 
 export pure func parse_approval_command(raw: string) -> ApprovalCommand {
-  if raw == "approve" || raw == "{\"type\":\"approve\"}" then ParsedApprove
-  else if raw == "deny" || raw == "{\"type\":\"deny\"}" then ParsedDeny("denied")
-  else ParsedInvalid
+  match decode(raw) {
+    Err(_) => ParsedUnparseable,
+    Ok(obj) => {
+      let cmd_type = msg_get_str(obj, "type");
+      if cmd_type == "approve" then ParsedApprove
+      else if cmd_type == "deny" then {
+        let r = msg_get_str(obj, "reason");
+        ParsedDeny(if r == "" then "denied by operator" else r)
+      }
+      else ParsedUnknown
+    }
+  }
 }
 
 export pure func resolve_approval(raw: string, default_allow: bool, eof: bool) -> ApprovalResolution {
   if eof then {
-    if default_allow then ApprovalAllowed else ApprovalDenied("default deny")
+    if default_allow then ApprovalAllowed else ApprovalDenied("timeout — no approval received")
   } else match parse_approval_command(raw) {
     ParsedApprove => ApprovalAllowed,
     ParsedDeny(reason) => ApprovalDenied(reason),
-    ParsedInvalid => if default_allow then ApprovalAllowed else ApprovalDenied("default deny")
+    ParsedUnparseable => if default_allow then ApprovalAllowed else ApprovalDenied("unparseable response — default deny applied"),
+    ParsedUnknown => if default_allow then ApprovalAllowed else ApprovalDenied("unknown approval command — default deny applied")
   }
 }
 
 export pure func denial_message(call: ToolCall, reason: string) -> Message {
+  let payload = encode(jo([
+    kv("error", jb(true)),
+    kv("denied_by_policy", jb(true)),
+    kv("tool", js(call.name)),
+    kv("reason", js(reason))
+  ]));
   {
     role: "tool",
-    content: "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"${call.name}\",\"reason\":\"${reason}\"}",
+    content: payload,
     tool_calls: [],
     tool_call_id: call.id
+  }
+}
+
+pure func msg_get_str(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    None => "",
+    Some(j) => match asString(j) { None => "", Some(s) => s }
   }
 }
 
@@ -143,7 +167,7 @@ pure func test_resolve_approval_defaults() -> bool
     match resolve_approval("", true, true) {
       ApprovalAllowed =>
         match resolve_approval("not-json", false, false) {
-          ApprovalDenied(_) => true,
+          ApprovalDenied(r) => r == "unparseable response — default deny applied",
           _ => false
         },
       _ => false
@@ -154,7 +178,39 @@ pure func test_denial_message_uses_tool_role_and_call_id() -> bool
   tests [((), true)]
   {
     let m = denial_message(call("tc", "BashExec"), "no");
-    m.role == "tool" && m.tool_call_id == "tc" && List.length(m.tool_calls) == 0
+    m.role == "tool"
+      && m.tool_call_id == "tc"
+      && List.length(m.tool_calls) == 0
+      && m.content == "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"reason\":\"no\"}"
+  }
+
+pure func test_resolve_approval_live_protocol() -> bool
+  tests [((), true)]
+  {
+    match resolve_approval("{\"type\":\"approve\"}", false, false) {
+      ApprovalAllowed =>
+        match resolve_approval("{\"type\":\"deny\",\"reason\":\"blocked\"}", true, false) {
+          ApprovalDenied(r1) =>
+            match resolve_approval("{\"type\":\"deny\"}", true, false) {
+              ApprovalDenied(r2) =>
+                match resolve_approval("{\"type\":\"later\"}", false, false) {
+                  ApprovalDenied(r3) =>
+                    match resolve_approval("", false, true) {
+                      ApprovalDenied(r4) =>
+                        r1 == "blocked"
+                          && r2 == "denied by operator"
+                          && r3 == "unknown approval command — default deny applied"
+                          && r4 == "timeout — no approval received",
+                      _ => false
+                    },
+                  _ => false
+                },
+              _ => false
+            },
+          _ => false
+        },
+      _ => false
+    }
   }
 
 pure func test_execution_order_after_approval() -> bool

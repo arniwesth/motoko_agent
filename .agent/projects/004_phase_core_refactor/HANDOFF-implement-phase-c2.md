@@ -33,13 +33,12 @@ absence let a relocation pass as an inversion.
 - The WI-C8 gate block, strict parity, projection gate, L1 scenarios (10/10), approval
   protocol (4/4), and all module tests were re-run green on 2026-07-04 at `8604365`.
 
-## Blocking item before WI-C9
+## Blocking item before WI-C9 — resolved
 
-**G-C2-1 / D-C2-1 needs operator sign-off**: `seal_compacted_payload` in `phase_vocab`
+**G-C2-1 / D-C2-1 received operator sign-off on 2026-07-04**:
+`seal_compacted_payload` in `phase_vocab`
 and the ADR wording widening ("no way to obtain a `ProviderPayload` outside
-`phase_vocab`'s exported projection ops"). It is dispositioned in the plan pending that
-sign-off. Do not land WI-C9's `phase_vocab` changes without it; everything else in
-WI-C9 is unaffected if you need to start while waiting.
+`phase_vocab`'s exported projection ops"). WI-C9 may land the `phase_vocab` changes.
 
 ## Reading order
 
