@@ -128,6 +128,11 @@ import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, S
 import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 import src/core/step_machine (decide)
 
+type SessionPolicy = {
+  step: StepPolicy,
+  headless: bool
+}
+
 -- Convert Motoko's UI/profile model identifier to the provider API model id
 -- expected by upstream stepWithStream(). The --ai flag already selected the
 -- handler/provider; the model argument passed to step is forwarded to the
@@ -1061,10 +1066,57 @@ func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
 
 -- How many persistence nudges are allowed this run (MOTOKO_PERSIST_RETRIES,
 -- default 0 = feature off).
-func persist_retries_budget() -> int ! {Env} {
-  match _stringToInt(trim(getEnvOr("MOTOKO_PERSIST_RETRIES", "0"))) {
+pure func parse_persist_retries_budget(raw: string) -> int {
+  match _stringToInt(trim(raw)) {
     Some(n) => if n > 0 then n else 0,
     None => 0
+  }
+}
+
+func session_policy_init(model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicy ! {Env} {
+  let budget_steps = if step_budget <= 0 then 8 else step_budget;
+  let persist_retries = parse_persist_retries_budget(getEnvOr("MOTOKO_PERSIST_RETRIES", "0"));
+  let retry_stream_errors = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
+  let provider_base_url = getEnvOr("OPENAI_BASE_URL", "");
+  let headless = getEnvOr("MOTOKO_HEADLESS", "") == "1";
+  {
+    step: {
+      step_budget: budget_steps,
+      max_cost_millicents: max_cost_millicents,
+      cost_metered: cost_rates.input_per_1m_millicents > 0,
+      persist_retries: persist_retries,
+      retry_stream_errors: retry_stream_errors,
+      model: model,
+      provider_base_url: provider_base_url,
+      compaction: {
+        context_limit: catalog_context_limit_for(model),
+        elide_tier_pct: 70,
+        elide_hard_tier_pct: 85,
+        emergency_pct: exhaustion_pct()
+      }
+    },
+    headless: headless
+  }
+}
+
+pure func session_policy_with_model(policy: SessionPolicy, model: string) -> SessionPolicy {
+  {
+    step: {
+      step_budget: policy.step.step_budget,
+      max_cost_millicents: policy.step.max_cost_millicents,
+      cost_metered: policy.step.cost_metered,
+      persist_retries: policy.step.persist_retries,
+      retry_stream_errors: policy.step.retry_stream_errors,
+      model: model,
+      provider_base_url: policy.step.provider_base_url,
+      compaction: {
+        context_limit: catalog_context_limit_for(model),
+        elide_tier_pct: policy.step.compaction.elide_tier_pct,
+        elide_hard_tier_pct: policy.step.compaction.elide_hard_tier_pct,
+        emergency_pct: policy.step.compaction.emergency_pct
+      }
+    },
+    headless: policy.headless
   }
 }
 
@@ -1106,6 +1158,7 @@ func loop_v2(
   env_url: string,
   hybrid_tools: bool,
   budget: BudgetPlan,
+  policy: SessionPolicy,
   model: string,
   msgs: [Message],
   workdir: string,
@@ -1200,7 +1253,7 @@ func loop_v2(
       payload_digest: payload_digest(compacted_msgs),
       model: model
     }));
-    let dispatched = dispatch_step(provider, provider_api_model(model, getEnvOr("OPENAI_BASE_URL", "")), compacted_msgs, rt, on_chunk);
+    let dispatched = dispatch_step(provider, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, rt, on_chunk);
     let next_provider = dispatched.next_provider;
     match dispatched.result {
       Err(e) => {
@@ -1214,13 +1267,12 @@ func loop_v2(
         -- unexpected EOF") is RECOVERABLE. Re-issue the step (fresh generation)
         -- instead of KILLING the whole run with finish=error. Same pattern as #13
         -- (length) / #19 (empty). Bounded by step_budget. Disable: MOTOKO_RETRY_STREAM_ERROR=0.
-        let retry_stream = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
-        if retry_stream && step_budget > 1 then {
+        if policy.step.retry_stream_errors && step_budget > 1 then {
           let _ = ledger_emit(session_id, StreamErrorRetry({
             step: step_idx,
             error: e.message
           }));
-          loop_v2(rt, task, env_url, hybrid_tools, budget, model, msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, totals, next_provider, session_id, started_at_ms)
+            loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, totals, next_provider, session_id, started_at_ms)
         } else {
           let _ = emit_run_summary(session_id, model, totals, step_idx, 5, e.message, started_at_ms);
           Err(e)
@@ -1304,7 +1356,7 @@ func loop_v2(
             }));
             let tool_msg = envelope_to_tool_message(envelope);
             let next_msgs = msgs_with_assistant ++ [tool_msg];
-            loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+              loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
           },
           NoIntercept => {
             if result.finish_reason != "tool_calls" then {
@@ -1348,7 +1400,7 @@ func loop_v2(
                   let msgs_with_augmented = msgs ++ [augmented_assistant_msg];
                   let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
                   let next_msgs = msgs_with_augmented ++ tool_msgs;
-                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                    loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
                 None => {
               -- M3 DP1b: when the model emits prose without tool_calls, give
@@ -1376,7 +1428,7 @@ func loop_v2(
                     },
                     Some(retry_msg) => {
                       let next_msgs = msgs_with_assistant ++ [retry_msg];
-                      loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                        loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                     }
                   }
                 },
@@ -1392,7 +1444,7 @@ func loop_v2(
                     tool_call_id: ""
                   };
                   let next_msgs = msgs_with_assistant ++ [feedback_msg];
-                  loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                    loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
                 NoDecision => {
                   -- M-MOTOKO-PERSIST-NUDGE: the model stopped (finish_reason !=
@@ -1400,7 +1452,7 @@ func loop_v2(
                   -- wrote a solution and we have nudge budget left, keep the loop
                   -- ALIVE with a bounded nudge instead of finalizing — this is the
                   -- backlog-#1 disengagement fix (off unless MOTOKO_PERSIST_RETRIES>0).
-                  let persist_budget = persist_retries_budget();
+                  let persist_budget = policy.step.persist_retries;
                   let nudges_used = count_persist_nudges(msgs_with_assistant);
                   if persist_budget > 0 && nudges_used < persist_budget && not any_writefile_attempt(msgs_with_assistant) then {
                     let _ = ledger_emit(session_id, PersistNudge({
@@ -1415,7 +1467,7 @@ func loop_v2(
                       tool_call_id: ""
                     };
                     let next_msgs = msgs_with_assistant ++ [nudge_msg];
-                    loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                      loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                   } else {
                   match dp7_gate(rt, workdir, step_idx, session_id) {
                     None => {
@@ -1432,7 +1484,7 @@ func loop_v2(
                     },
                     Some(retry_msg) => {
                       let next_msgs = msgs_with_assistant ++ [retry_msg];
-                      loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                        loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                     }
                   }
                   }
@@ -1468,7 +1520,7 @@ func loop_v2(
                 payload: ja(tool_messages_to_result_jsons(tool_msgs))
               }));
               let next_msgs = msgs_with_assistant ++ tool_msgs;
-              loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
+                loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
             }
           }
         }
@@ -1497,6 +1549,30 @@ func loop_v2(
 --
 -- step_budget defaults to 8 if caller passes <= 0 (mirrors upstream
 -- runTools' typical default).
+func run_v2_from_messages_with_policy(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let session_id = derive_session_id();
+  let started_at_ms = now();
+  let session_span = "motoko.session.${session_id}";
+  Trace.spanStart(session_span);
+  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, 0, policy.step.step_budget, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
+  Trace.spanEnd(session_span);
+  result
+}
+
 export func run_v2(
   rt: ExtRuntime,
   task: string,
@@ -1512,16 +1588,10 @@ export func run_v2(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let budget_steps = if step_budget <= 0 then 8 else step_budget;
-	  let messages = msgs_to_messages(initial_msgs);
-	  let session_id = derive_session_id();
-	  let started_at_ms = now();
-	  let session_span = "motoko.session.${session_id}";
-	  Trace.spanStart(session_span);
-	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, model, messages, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
-	  Trace.spanEnd(session_span);
-	  result
-	}
+  let messages = msgs_to_messages(initial_msgs);
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider)
+}
 
 -- Run loop_v2 starting from an existing [Message] history (instead of the
 -- legacy [Msg] shape). Used by conversation_loop_v2 to resume after each
@@ -1542,15 +1612,9 @@ export func run_v2_from_messages(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let budget_steps = if step_budget <= 0 then 8 else step_budget;
-	  let session_id = derive_session_id();
-	  let started_at_ms = now();
-	  let session_span = "motoko.session.${session_id}";
-	  Trace.spanStart(session_span);
-	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, model, history, workdir, 0, budget_steps, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
-	  Trace.spanEnd(session_span);
-	  result
-	}
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider)
+}
 
 -- Read a JSON-shaped string field from a decoded Json object, returning
 -- "" when the key is absent or has the wrong type. Mirrors rpc.ail's
@@ -1579,11 +1643,12 @@ func msg_get_str(obj: Json, key: string) -> string {
 --
 -- EOF (readLine returns "") cleanly terminates the loop — the env-server
 -- closes stdin when the user exits the TUI.
-export func conversation_loop_v2(
+func conversation_loop_v2_with_policy(
   rt: ExtRuntime,
   env_url: string,
   hybrid_tools: bool,
   budget: BudgetPlan,
+  policy: SessionPolicy,
   model: string,
   history: [Message],
   workdir: string,
@@ -1604,18 +1669,19 @@ export func conversation_loop_v2(
   -- M-BENCH-MOTOKO Day-1 design that originally got skipped — restored
   -- after the AILANG eval-harness adapter smoke test surfaced the hang
   -- on 2026-05-08 (msg_20260508_102147_4f9aa71d).
-  if getEnvOr("MOTOKO_HEADLESS", "") == "1" then ()
+  if policy.headless then ()
   else {
   let raw = readLine();
   if raw == "" then ()
   else match decode(raw) {
-    Err(_) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+    Err(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
     Ok(obj) => {
       let cmd_type = msg_get_str(obj, "type");
       if cmd_type == "abort" || cmd_type == "exit" then ()
       else if cmd_type == "model_change" then {
         let new_model = msg_get_str(obj, "model");
-        conversation_loop_v2(rt, env_url, hybrid_tools, budget, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+        let next_policy = session_policy_with_model(policy, new_model);
+        conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, next_policy, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
       }
       else if cmd_type == "restart" then {
         -- Emit session_suspend event and exit cleanly; TUI will respawn
@@ -1640,22 +1706,41 @@ export func conversation_loop_v2(
           model: model,
           mode: "v2"
         }));
-        match run_v2_from_messages(rt, content, env_url, hybrid_tools, budget, model, next_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
-          Ok(updated_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+        match run_v2_from_messages_with_policy(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider) {
+          Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
           Err(e) => {
             let _ = ledger_emit(session_id, ErrorEvent({
               source: "agent_loop_v2",
               code: e.code,
               message: e.message
             }));
-            conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+            conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
           }
         }
       }
-      else conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+      else conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
     }
   }
   }
+}
+
+export func conversation_loop_v2(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  session_id: string
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
 }
 
 -- M8 combined entry point: runs the initial task via run_v2, then enters
@@ -1681,15 +1766,16 @@ export func run_v2_with_conversation(
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let initial_messages = msgs_to_messages(initial_msgs);
   let session_id = derive_session_id();
-  match run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider) {
-    Ok(final_history) => conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  match run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider) {
+    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
     Err(e) => {
       let _ = ledger_emit(session_id, ErrorEvent({
         source: "agent_loop_v2",
         code: e.code,
         message: e.message
       }));
-      conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
     }
   }
 }

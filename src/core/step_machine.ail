@@ -64,10 +64,6 @@ pure func cost_cap_message(total_cost_millicents: int, max_cost_millicents: int)
   "cost cap reached: ${show(total_cost_millicents)} of ${show(max_cost_millicents)} millicents used"
 }
 
-pure func policy_model(_pol: StepPolicy) -> string {
-  "phase-c-model"
-}
-
 export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   if pol.step_budget > 0 && s.step_idx >= pol.step_budget
   then Fail({ code: "Internal", message: "v2 loop: step budget exhausted", retryable: false })
@@ -86,7 +82,7 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   then Finalize({ reason: "model_stop", output: s.last_response_text })
   else match project(s.history, s.telemetry, pol.compaction) {
     Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
-    Ok(projection) => CallModel({ payload: projection.payload, model: policy_model(pol) })
+    Ok(projection) => CallModel({ payload: projection.payload, model: pol.model })
   }
 }
 
@@ -101,6 +97,8 @@ func mk_policy(context_limit: int) -> StepPolicy {
     cost_metered: true,
     persist_retries: 2,
     retry_stream_errors: true,
+    model: "phase-c-model",
+    provider_base_url: "",
     compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
   }
 }
@@ -192,7 +190,7 @@ pure func test_decide_cost_cap() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, compaction: mk_policy(0).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
         fail_message(decide(s, pol)) == "cost cap reached: 10 of 10 millicents used"
       },
       Err(_) => false
@@ -204,7 +202,7 @@ pure func test_decide_cost_cap_unmetered_does_not_exhaust() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, compaction: mk_policy(0).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
         not is_fail(decide(s, pol), "BudgetExceeded")
       },
       Err(_) => false
