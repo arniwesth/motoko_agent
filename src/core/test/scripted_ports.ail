@@ -13,8 +13,9 @@ import std/trace as Trace
 import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ports_shape_probe)
 import src/core/phase_vocab (ApprovalRequest, ExecNative)
 import src/core/test/stub_step (ScriptedStep, StepProvider, Scripted, LiveAI, scripted_to_step_result)
-import src/core/config (VerificationConfig)
-import pkg/sunholo/motoko_ext_abi/types (ExtRuntime)
+import src/core/config (CostRates, VerificationConfig)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
+import src/core/session as Session
 
 export type ScriptedPortsState = {
   model_steps: [ScriptedStep],
@@ -76,6 +77,25 @@ func fake_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clo
 
 export func fake_ports() -> Ports {
   ports_shape_probe(fake_model, fake_hooks)
+}
+
+export func run_v2_with_scripted_ports(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  script: [ScriptedStep]
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let state = scripted_state(script, [], []);
+  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(state.model_steps))
 }
 
 pure func tool_call() -> ToolCall {

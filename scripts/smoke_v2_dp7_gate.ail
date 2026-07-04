@@ -28,7 +28,7 @@ import std/result (Result, Ok, Err)
 import std/ai (Message, AIError)
 import src/core/config (CostRates, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime, ExtensionHooks)
-import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/test/stub_step (
   ScriptedStep,
   prose_step
@@ -62,7 +62,7 @@ func mk_budget() -> BudgetPlan {
 --    return Err (Scripted([]) → terminal_step → DP7 rejects → ... → budget).
 func test_dp7_rejects_broken_workdir() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let script: [ScriptedStep] = [prose_step("done")];
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     enabled_rt("/tmp/dp7-smoke", "make check_core"),
     "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
@@ -83,7 +83,7 @@ func test_dp7_rejects_broken_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
 --    DP7 should approve, loop terminates Ok at step 0.
 func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let script: [ScriptedStep] = [prose_step("done")];
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     enabled_rt("/tmp/dp7-smoke-pass", "make check_core"),
     "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
@@ -107,7 +107,7 @@ func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
 --    so projects without DP7 setup are not blocked.
 func test_dp7_fail_open_on_missing_make() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let script: [ScriptedStep] = [prose_step("done")];
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     enabled_rt("/tmp/dp7-smoke-empty", "make check_core"),
     "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",

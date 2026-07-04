@@ -6,7 +6,7 @@ import std/ai (Message)
 import std/option (None)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/types (Msg)
-import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/ext/runtime (
   dispatch_pre_step_chain,
   StageApplied,
@@ -164,7 +164,7 @@ func direct_section() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock
 
 func full_loop_section() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let script: [ScriptedStep] = [prose_step("done")];
-  match run_v2_with_stub(
+  match run_v2_with_scripted_ports(
     chain_rt(),
     "phase-b-compaction-chain",
     "",

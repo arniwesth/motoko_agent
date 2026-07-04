@@ -4,7 +4,7 @@
 -- fixture. Complements the existing layer-1 smokes (smoke_v2_compaction*,
 -- 10/10) and integration_tests#test_compaction_fires_above_70pct (which
 -- exercises compact_step in isolation) by running compaction as part of
--- the live loop_v2 path via run_v2_with_stub.
+-- the live loop_v2 path via run_v2_with_scripted_ports.
 --
 -- Verifies:
 --   1. Light history (~10% usage) → no elision, loop completes Ok.
@@ -26,7 +26,7 @@ import std/string (repeat, contains, concat, substring, length)
 import std/ai (Message, AIError)
 import src/core/config (CostRates, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
-import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_config as register_structural_compaction)
 import src/core/test/stub_step (
   ScriptedStep,
@@ -96,7 +96,7 @@ func structural_rt() -> ExtRuntime ! {Env, FS} {
 func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(10);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), script
@@ -113,7 +113,7 @@ func test_light_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(300);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), script
@@ -125,12 +125,12 @@ func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 }
 
 -- 3. Extreme history (385 chars total = ~96.5% usage, tier 3). DP0 refuses
--- the step; run_v2_with_stub returns Err with the compaction_exhausted
+-- the step; run_v2_with_scripted_ports returns Err with the compaction_exhausted
 -- reason propagated through the loop.
 func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(385);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), script
@@ -147,7 +147,7 @@ func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, Shar
 func test_unknown_model_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(1000);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "totally-unknown-model", history, "/tmp", 4, false,
     0, no_rates(), script
@@ -164,7 +164,7 @@ func test_unknown_model_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 func test_multi_tool_tier1_elides() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = multi_tool_history();
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "anthropic/claude-sonnet-4-6", history, "/tmp", 4, false,
     0, no_rates(), script

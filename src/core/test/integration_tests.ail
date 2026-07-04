@@ -12,7 +12,7 @@ import src/core/test/stub_step (prose_step, tool_step, scripted_to_step_result, 
 --   step_cost = (100000*60000 + 50000*208000) / 1_000_000 = 16_400 mc
 -- After 3 steps: 3 * 16_400 = 49_200 < 50_000 cap → loop continues.
 -- After 4 steps: 4 * 16_400 = 65_600 >= 50_000 cap → BudgetExceeded fires.
--- The full-loop test (run_v2_with_stub + deny_all_rt + cap=50000) exercises
+-- The full-loop test (run_v2_with_scripted_ports + deny_all_rt + cap=50000) exercises
 -- this path end-to-end; this pure test verifies the arithmetic is correct.
 pure func test_cost_budget_exhausted() -> bool
   tests [((), true)]
@@ -50,7 +50,7 @@ pure func test_compaction_fires_above_70pct() -> bool
 -- A prose_step produces finish_reason="stop" — the loop-exit signal.
 -- A tool_step produces finish_reason="tool_calls" — the loop-recurse signal.
 -- terminal_step (empty script) also returns finish_reason="stop".
--- These invariants are what make run_v2_with_stub safe for integration tests:
+-- These invariants are what make run_v2_with_scripted_ports safe for integration tests:
 -- a scripted prose step terminates the loop without any LLM or tool calls.
 pure func test_pending_deny_path() -> bool
   tests [((), true)]

@@ -5,7 +5,7 @@ import std/result (Result, Ok, Err)
 import std/ai (Message)
 import src/core/config (CostRates)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
-import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/test/stub_step (ScriptedStep, empty_rt, chunked_prose_step)
 
 func no_rates() -> CostRates {
@@ -28,7 +28,7 @@ func script() -> [ScriptedStep] {
 }
 
 export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     empty_rt(),
     "phase-b-stream-parity",
     "",

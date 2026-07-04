@@ -13,7 +13,7 @@ import std/result (Result, Ok, Err)
 import std/ai (Message, AIError)
 import src/core/config (CostRates)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
-import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/test/stub_step (ScriptedStep, empty_rt, tool_step, prose_step)
 
 func no_rates() -> CostRates {
@@ -54,7 +54,7 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   let rel_path = "fixture.txt";
   if not seed_fixture(workdir, rel_path) then exit(1)
   else {
-    let result = run_v2_with_stub(
+    let result = run_v2_with_scripted_ports(
       empty_rt(),
       "phase-a-tool-parity",
       "",

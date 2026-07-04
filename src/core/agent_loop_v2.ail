@@ -10,7 +10,7 @@ import std/ai (Message, AIError)
 import std/result (Result)
 import src/core/config (CostRates)
 import src/core/types (Msg)
-import src/core/test/stub_step (StepProvider, ScriptedStep)
+import src/core/test/stub_step (StepProvider, Scripted, ScriptedStep)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/session as Session
 
@@ -101,7 +101,7 @@ export func run_v2_with_stub(
   cost_rates: CostRates,
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  Session.run_v2_with_stub(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, script)
+  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
 }
 
 export func run_v2_with_stub_port_adapter(
@@ -119,5 +119,5 @@ export func run_v2_with_stub_port_adapter(
   cost_rates: CostRates,
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  Session.run_v2_with_stub_port_adapter(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, script)
+  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
 }

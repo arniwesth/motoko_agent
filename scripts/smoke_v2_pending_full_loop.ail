@@ -43,7 +43,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   BudgetPatch
 )
 import src/core/tool_contract (ToolCallEnvelope)
-import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/test/stub_step (ScriptedStep, prose_step)
 
 -- New since a9b53e7: extensions declare their tool schemas via on_describe_tools.
@@ -132,7 +132,7 @@ func no_rates() -> CostRates {
 --    (the denial message is appended to history; prose_step terminates).
 func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let rt = mk_runtime(mk_hook("pending-deny", pending_deny_default));
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     rt, "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5", [], "/tmp", 4, false,
     0, no_rates(), script_with_one_call("tc1")
@@ -149,7 +149,7 @@ func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net
 --    a noop. The loop should still complete.
 func test_pending_allow_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let rt = mk_runtime(mk_hook("pending-allow", pending_allow_default));
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     rt, "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5", [], "/tmp", 4, false,
     0, no_rates(), script_with_one_call("tc2")

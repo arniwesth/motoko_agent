@@ -1711,22 +1711,12 @@ export func run_v2_with_stub(
   cost_rates: CostRates,
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-	  let budget_steps = if step_budget <= 0 then 8 else step_budget;
-	  let session_id = derive_session_id();
-	  let started_at_ms = now();
-	  let session_span = "motoko.session.${session_id}";
-	  Trace.spanStart(session_span);
-	  let result = loop_v2(rt, task, env_url, hybrid_tools, budget, model, history,
-	          workdir, 0, budget_steps, ohmy_pi,
-	          max_cost_millicents, cost_rates, zero_totals(), Scripted(script),
-	          session_id, started_at_ms);
-	  Trace.spanEnd(session_span);
-	  result
-	}
+  run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
+}
 
--- Phase C strangler adapter. WI-C3 introduces scripted ports as the future
--- seam, but the parity fleet still depends on run_v2_with_stub. Keep this
--- compatibility entry delegated to the old loop until WI-C6 migrates callers.
+-- Phase C compatibility adapter. WI-C6 moves the parity fleet to
+-- scripted-port imports; keep this entry for external callers until they are
+-- audited.
 export func run_v2_with_stub_port_adapter(
   rt: ExtRuntime,
   task: string,
