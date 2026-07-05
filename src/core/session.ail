@@ -47,21 +47,18 @@ import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
-import src/core/tool_contract (ToolResultEnvelope, call_to_json)
+import src/core/tool_contract (call_to_json)
 import src/core/parse (extract_bash)
-import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
-import src/core/tool_runtime (backend_for_v2)
-import src/core/types (Msg, ToolBackend)
+import src/core/tool_dispatch_adapter (tool_call_to_envelope)
+import src/core/types (Msg)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, PolicyDefault, ResponseInterceptDecision, FinalizeDecision, ToolPolicyDecision, ToolHandleDecision, ExtensionHooks)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision)
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
 import src/core/context_usage (catalog_context_limit_for)
 import src/core/ext/runtime (
   dispatch_response_intercept,
   dispatch_solver_candidate,
-  dispatch_tool_policy,
-  dispatch_tool_handle,
   dispatch_pre_step_chain,
   PreStepStage,
   StageApplied,
@@ -77,17 +74,9 @@ import src/core/phase_vocab (
   segment_messages,
   step_result_to_message,
   envelope_to_tool_message,
-  handled_tool_message,
-  tool_result_message,
   ProviderCallPrepared,
-  ScratchpadResult,
   RunSummary,
   NativeToolDenied,
-  ToolPending,
-  ExtToolHandled,
-  DelegatedToolDeferred,
-  V2ToolDispatchStart,
-  V2ToolDispatchComplete,
   Dp7VerifierRejected,
   CostExhausted,
   StreamErrorRetry,
@@ -136,12 +125,11 @@ import src/core/phase_vocab (
   Fail
 )
 import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
-import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
-import src/core/tool_phase (resolve_approval)
+import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries, ToolDispatchDone, ToolDispatchPending)
 import src/core/ports (ApprovalAllowed, ApprovalDenied)
 
 type SessionPolicy = {
@@ -492,21 +480,6 @@ pure func c2_done_step(step_idx: int) -> int {
   if step_idx <= 0 then 0 else step_idx - 1
 }
 
-func emit_scratchpad_result_if_present(session_id: string, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> () ! {IO, Trace} {
-  if is_scratchpad_tool_name(result_env.tool) then
-    match get(result_env.metadata, "cells") {
-      None => (),
-      Some(cells) =>
-        ledger_emit(session_id, ScratchpadResult({
-          tool_call_id: tool_call_id,
-          request_id: request_id,
-          step: step_idx,
-          cells_json: encode(cells)
-        }))
-    }
-  else ()
-}
-
 -- append_stream_delta: dispatch one StreamChunk variant to the ledger.
 -- protocol.
 --
@@ -767,28 +740,6 @@ func json_field_str(obj: Json, key: string, fallback: string) -> string {
   }
 }
 
-func is_scratchpad_tool_name(name: string) -> bool {
-  name == "scratchpad" || name == "Scratchpad"
-}
-
-func scratchpad_extension_active(rt: ExtRuntime) -> bool {
-  scratchpad_extension_active_rec(rt.registry.hooks)
-}
-
-func scratchpad_extension_active_rec(hooks: [ExtensionHooks]) -> bool {
-  match hooks {
-    [] => false,
-    h :: rest => startsWith(h.id, "scratchpad#") || h.id == "scratchpad" || scratchpad_extension_active_rec(rest)
-  }
-}
-
-func scratchpad_cells_arg(args: Json) -> Json {
-  match get(args, "cells") {
-    Some(j) => j,
-    None => jo([])
-  }
-}
-
 -- Helper: detect whether a JSON object has a boolean field set to true.
 -- Used to detect policy_denied_message / delegated_deferred_message
 -- payloads (both flag themselves with `error: true`).
@@ -867,21 +818,6 @@ func synthesize_hybrid_bash_call(cmd: string, step_idx: int) -> ToolCall {
 -- delegated calls return this clear, recoverable error so the model can
 -- adapt (e.g. retry with a non-delegated argument shape, or surface that
 -- ohmy_pi was selected but unavailable).
-func delegated_deferred_message(call: ToolCall) -> Message {
-  let payload = encode(jo([
-    kv("error", jb(true)),
-    kv("delegated_backend_not_wired", jb(true)),
-    kv("tool", js(call.name)),
-    kv("note", js("v2 split_by_backend selected Delegated; the inbox-based ohmy_pi wait is deferred to a follow-up milestone. Re-run with settings.ohmy_pi=false or use a tool that resolves to the Native backend."))
-  ]));
-  {
-    role: "tool",
-    content: payload,
-    tool_calls: [],
-    tool_call_id: call.id
-  }
-}
-
 -- Build a denial tool-role Message for a ToolCall the policy gate rejected.
 -- The model sees a structured `{denied_by_policy, reason, tool}` JSON in the
 -- tool result, correlated by tool_call_id, so it can correct course on the
@@ -1127,151 +1063,6 @@ pure func c2_pending_context(st: C2LoopState) -> [Message] {
 
 pure func c2_pending_prefix(st: C2LoopState) -> [Message] {
   if List.length(st.pending_tool_prefix) > 0 then st.pending_tool_prefix else st.msgs
-}
-
-type C2ToolDispatchOutcome
-  = C2ToolsDone([Message])
-  | C2ToolsPending({ request: ApprovalRequest, accumulated: [Message] })
-
-pure func policy_default_allow(default: PolicyDefault) -> bool {
-  match default {
-    AllowAfterTimeout => true,
-    DenyAfterTimeout => false
-  }
-}
-
-func c2_execute_allowed_tool_call(
-  rt: ExtRuntime,
-  ctx: ExtCtx,
-  call: ToolCall,
-  workdir: string,
-  step_idx: int,
-  stream_id: string,
-  ohmy_pi: bool,
-  session_id: string
-) -> Message ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
-  let envelope = tool_call_to_envelope(call);
-  if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
-    let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
-    let result_env: ToolResultEnvelope = {
-      tool_call_id: envelope.id,
-      tool: "scratchpad",
-      exit_code: result_cell.exit_code,
-      stdout: result_cell.stdout,
-      stderr: result_cell.stderr,
-      metadata: result_cell.metadata
-    };
-    let _ = ledger_emit(session_id, ExtToolHandled({
-      step: step_idx,
-      stream_id: stream_id,
-      tool: call.name,
-      id: call.id,
-      exit_code: result_env.exit_code
-    }));
-    let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-    handled_tool_message(call.id, result_env)
-  } else {
-    let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
-    match handle_decision {
-      Handled(result_env) => {
-        let _ = ledger_emit(session_id, ExtToolHandled({
-          step: step_idx,
-          stream_id: stream_id,
-          tool: call.name,
-          id: call.id,
-          exit_code: result_env.exit_code
-        }));
-        let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
-        handled_tool_message(call.id, result_env)
-      },
-      Delegate => {
-        let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
-        match backend {
-          Delegated => {
-            let _ = ledger_emit(session_id, DelegatedToolDeferred({
-              step: step_idx,
-              stream_id: stream_id,
-              tool: call.name,
-              id: call.id
-            }));
-            delegated_deferred_message(call)
-          },
-          Native => {
-            let _ = ledger_emit(session_id, V2ToolDispatchStart({
-              step: step_idx,
-              stream_id: stream_id,
-              tool: call.name,
-              id: call.id
-            }));
-            let result_content = dispatch_one(workdir, call);
-            let _ = ledger_emit(session_id, V2ToolDispatchComplete({
-              step: step_idx,
-              stream_id: stream_id,
-              id: call.id
-            }));
-            tool_result_message(call, result_content)
-          }
-        }
-      }
-    }
-  }
-}
-
-func c2_dispatch_entries(
-  rt: ExtRuntime,
-  ctx: ExtCtx,
-  entries: [ToolPlanEntry],
-  workdir: string,
-  step_idx: int,
-  stream_id: string,
-  ohmy_pi: bool,
-  session_id: string,
-  accumulated: [Message]
-) -> C2ToolDispatchOutcome ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
-  match entries {
-    [] => C2ToolsDone(accumulated),
-    entry :: rest => {
-      let call = entry.call;
-      let envelope = tool_call_to_envelope(call);
-      let policy = dispatch_tool_policy(rt, ctx, envelope);
-      match policy {
-        Deny(reason) => {
-          let _ = ledger_emit(session_id, NativeToolDenied({
-            step: step_idx,
-            stream_id: stream_id,
-            tool: call.name,
-            id: call.id,
-            reason: reason
-          }));
-          let denial_msg = policy_denied_message(call, reason);
-          c2_dispatch_entries(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id, accumulated ++ [denial_msg])
-        },
-        Pending(reason, default) => {
-          let _ = ledger_emit(session_id, ToolPending({
-            step: step_idx,
-            stream_id: stream_id,
-            tool: call.name,
-            id: call.id,
-            reason: reason
-          }));
-          C2ToolsPending({
-            request: {
-              call: call,
-              default_allow: policy_default_allow(default),
-              reason: reason,
-              stream_id: stream_id,
-              remaining: rest
-            },
-            accumulated: accumulated
-          })
-        },
-        _ => {
-          let msg = c2_execute_allowed_tool_call(rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, session_id);
-          c2_dispatch_entries(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id, accumulated ++ [msg])
-        }
-      }
-    }
-  }
 }
 
 func c2_finish_tool_batch(
@@ -1541,7 +1332,7 @@ func c2_loop(
                   c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
-                  let msg = c2_execute_allowed_tool_call(rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, session_id);
+                  let msg = execute_allowed_tool_call(rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
                   c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [msg])
                 }
               }
@@ -1564,10 +1355,10 @@ func c2_loop(
               payload: ja(tool_calls_to_envelope_jsons(calls))
             }))
           else ();
-          match c2_dispatch_entries(rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, session_id, st.accumulated_tool_msgs) {
-            C2ToolsDone(tool_msgs) =>
+          match dispatch_tool_entries(rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event)) {
+            ToolDispatchDone(tool_msgs) =>
               c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, tool_step_idx, stream_id, tool_msgs),
-            C2ToolsPending(pending) => {
+            ToolDispatchPending(pending) => {
               let next_state: C2LoopState = {
                 msgs: st.msgs,
                 step_idx: st.step_idx,
