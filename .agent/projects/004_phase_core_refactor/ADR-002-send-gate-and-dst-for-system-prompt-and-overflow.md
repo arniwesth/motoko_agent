@@ -13,6 +13,9 @@ Relates to:
 - PR **#76** (`fix(harness): serve the system prompt reliably`) and PR **#75**
   (`fix(compaction): reliable triggering`) — the two production incidents that motivated the
   core rewrite. This ADR is the DST expression of their bug classes.
+- `NOTE-env-manifest-single-source-and-drift-guard.md` (this project) — the host-side residue §5
+  declares out of scope: unify the env allowlist onto one manifest so the scrub bug class
+  collapses to a one-line conformance check.
 
 ---
 
@@ -68,8 +71,11 @@ draft aimed it:
    `split_for_compaction → dispatch_pre_step_chain → seal_compacted_payload`
    (`session.ail:1394-1402`) for **every** model call, not only under pressure. `seal` gates on
    the **actual constructed payload** — `usage_percent_with_limit(split.pinned ++ chain_msgs,
-   limit) >= exhaustion_pct()` (`phase_vocab.ail:133-135`). Consequently **the #75.2 overflow
-   is already structurally prevented on the live path.**
+   limit) >= exhaustion_pct()` (`phase_vocab.ail:133-135`). Verified structurally: the live
+   loop has **exactly one** provider dispatch (`dispatch_step`, `session.ail:1424`) and
+   **exactly one** seal call (`:1402`), and the dispatch sits inside that seal's `Ok` branch, so
+   no model call can bypass the gate. Consequently **the #75.2 overflow is already structurally
+   prevented on the live path.**
 
 2. **`project` is vestigial for the payload and for observability.** `decide` calls `project`
    (`step_machine.ail:72`) only to reach a `CallModel` vs `Fail` *decision*; the handler matches
@@ -133,6 +139,14 @@ gains a `system_prefix_chars: int` field, populated at the live emit site
 (`take_system_prefix`), `system_prefix_chars(split.pinned) == 0` catches **both** #76 shapes —
 a *missing* prefix and a *present-but-empty* one — with one predicate.
 
+**Two observability channels, by branch.** `provider_call_prepared` is emitted *only* on seal's
+`Ok` branch (`session.ail:1410,:1416`), so it is present exactly for calls that **proceed** —
+there it carries `system_prefix_chars`, giving always-on served-size logging (the signal #76
+lacked for healthy steps). On the **rejected** empty-prompt path there is no
+`provider_call_prepared`; the observability is the `ErrorEvent` of Decision detail 1, whose
+message reports the 0-char prefix. The two channels are complementary, not redundant, and the
+distinction is deliberate: `provider_call_prepared` continues to mean "a call happened."
+
 `provider_call_prepared` is a `[NEW]` event (ADR-001 §3), so the additive field is admitted
 under the TUI unknown-type/unknown-field tolerance; a one-line check against the TUI parser is
 the gate.
@@ -152,7 +166,10 @@ reject. This preserves reuse of `seal` for headless invocations and matches ADR-
 - **`oversized_payload_rejected`** — `seal` over an over-limit `pinned ++ chain`,
   `require_system_prompt = false` ⇒ `Err(SealExhausted)`. Regression guard for #75.2; expected
   green on landing, which is the point: it certifies that the rewrite already prevents the
-  overflow, and fails loudly if a future change regresses the send-gate.
+  overflow, and fails loudly if a future change regresses the send-gate. The exhaustion
+  *mechanism* is already unit-tested (`phase_vocab.ail:874`); the scenario adds the
+  PR-traceable guard at the L1 harness layer with its reporting contract (scenario id + invariant
+  + trace), so a regression reads as a named DST failure, not an opaque unit-test break.
 
 ### 5. Out of scope (owned elsewhere)
 
@@ -162,24 +179,43 @@ reject. This preserves reuse of `seal` for headless invocations and matches ADR-
 - **`project` cleanup** (reducing it to a bare decision now that its payload and events are
   discarded) is a separate work item; this ADR deliberately does not touch it so the change
   stays scoped to the two bug classes.
+- **#76's host-side root cause — the env-allowlist scrub** in `runtime-process.ts` — runs
+  *before* any `.ail`, so **core DST cannot observe it**: a process's birth environment is set by
+  its parent at spawn (`runtime-process.ts:512-531`), and the AILANG child cannot govern the env
+  it was born with. That boundary is irreducible. But it is already narrowed to near-zero for
+  #76 specifically: (i) on this branch the system prompt is delivered **by value** as a
+  `--system-prompt` argv (`runtime-process.ts:508`) read as `cfg.agent.system_prompt`
+  (`rpc.ail:197`), not via `SYSTEM_MD` env — an argv cannot be scrubbed; and (ii) the `seal` gate
+  above refuses an **empty prefix regardless of cause** (scrubbed env, missing file, an extension
+  returning `""` at `rpc.ail:228`), so the *symptom* is caught in-core even when the cause is not.
+  `empty_system_prompt_rejected` is that AILANG-side reaction. The residual *general* scrub class
+  (`MOTOKO_REPO`, pricing vars, …), still governed by the hand-maintained `childEnv` allowlist
+  (`runtime-process.ts:342-411`) rather than the existing `CORE_MAP` manifest (`config.ts:22`), is
+  out of scope here and taken up in `NOTE-env-manifest-single-source-and-drift-guard.md`: deriving
+  the allowlist from the manifest turns that untestable host half into a one-line conformance
+  check plus an AILANG-side manifest-completeness scenario.
 
 ## Blast radius (all compiler-enforced by AILANG's closed record literals and typed matches)
 
 | Change | Sites |
 |---|---|
-| `StepPolicy += require_system_prompt: bool` | session `:968,:989,:1685`; step_machine `:110,:209,:221`; scenarios `:99` |
+| `StepPolicy += require_system_prompt: bool` | session `:968` (origin, default `true`), `:989,:1685` (inherit from base, not re-defaulted); step_machine `:110,:209,:221`; scenarios `:99` |
 | `ProviderCallInfo += system_prefix_chars: int` | type `:438`; wire projection `:611`; `project` stub `:168`; tests `:839,:1023`; session event `:1416` |
 | `seal` new param + `SealError` return | live caller `session:1402`; unit tests `phase_vocab:857,:874,:884` (pass `false` to keep them exhaustion-only); import `session:118` |
 
 ## Acceptance criteria
 
 1. `empty_system_prompt_rejected` fails against a build without the `seal` refusal arm and
-   passes with it; it names the scenario id and `SystemPromptEmpty` on failure (ADR-001 §5
-   reporting contract).
+   passes with it; it names the scenario id and `SystemPromptEmpty` on failure (the Phase C
+   reporting contract: scenario id + first failed invariant + normalized trace, per the
+   `phase_c_l1_scenarios.ail` harness / WI-C0).
 2. `oversized_payload_rejected` passes on landing under `--caps IO`, no network.
-3. An empty system prompt in the live loop produces an `error` event with
-   `code: "SystemPromptEmpty"` and a provider-call event carrying `system_prefix_chars: 0` —
-   the two observations #76 lacked.
+3. An empty system prompt in the live loop produces an `error` event coded
+   `SystemPromptEmpty` whose message reports the 0-char prefix. (`provider_call_prepared` is
+   emitted only on seal's `Ok` branch — `session.ail:1410,:1416` — so it is correctly absent on
+   this rejected path.) Conversely, every call that **proceeds** emits `provider_call_prepared`
+   carrying `system_prefix_chars`, giving the always-on served-size logging #76 lacked. DST
+   assertions match the structured `code`, never the message text.
 4. `ailang check` green; existing `phase_vocab`/`step_machine` unit tests green with the
    updated literals and match arms.
 5. No scenario depends on effect-handler mocking, real providers, or registry hydration.
@@ -223,3 +259,10 @@ every normal session, so headless callers must opt out explicitly.
 - **D4** (2026-07-05): #75.2 overflow is **already guarded**; its scenario is a regression
   guard, not a fix. #75.1/#75.3 are compactor-extension policy per ADR-001 D9, out of core
   scope. `project` cleanup deferred to a separate WI.
+- **D5** (2026-07-05): on the empty-prompt rejection, the observable is the `ErrorEvent`, not a
+  `provider_call_prepared` with `chars: 0` — because that event is emitted only when a call
+  proceeds (`session.ail:1410,:1416`). Emitting a served-size event *before* the gate (to log
+  every attempt, matching PR #76's always-on `system_prompt_built`) was **considered and
+  deferred**: it would make `provider_call_prepared` fire when no call happens, changing its
+  meaning for existing consumers. Revisit only if a rejected-attempt served-size log proves
+  necessary.
