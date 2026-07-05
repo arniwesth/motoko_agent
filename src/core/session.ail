@@ -113,6 +113,7 @@ import src/core/phase_vocab (
   StepPolicy,
   StepDecision,
   PhaseResult,
+  ApprovalRequest,
   ToolPlanEntry,
   LedgerTrace,
   LedgerRecord,
@@ -140,6 +141,8 @@ import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
+import src/core/tool_phase (resolve_approval)
+import src/core/ports (ApprovalAllowed, ApprovalDenied)
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -342,6 +345,8 @@ type C2LoopState = {
   pending_tool_context: [Message],
   pending_tool_prefix: [Message],
   pending_tool_batched: bool,
+  accumulated_tool_msgs: [Message],
+  pending_approval: Option[ApprovalRequest],
   last_finish_reason: string,
   last_response_text: string,
   nudges_used: int,
@@ -441,6 +446,8 @@ func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState
     pending_tool_context: [],
     pending_tool_prefix: [],
     pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
     last_finish_reason: "",
     last_response_text: "",
     nudges_used: count_persist_nudges(history),
@@ -1372,6 +1379,244 @@ pure func c2_pending_prefix(st: C2LoopState) -> [Message] {
   if List.length(st.pending_tool_prefix) > 0 then st.pending_tool_prefix else st.msgs
 }
 
+type C2ToolDispatchOutcome
+  = C2ToolsDone([Message])
+  | C2ToolsPending({ request: ApprovalRequest, accumulated: [Message] })
+
+pure func policy_default_allow(default: PolicyDefault) -> bool {
+  match default {
+    AllowAfterTimeout => true,
+    DenyAfterTimeout => false
+  }
+}
+
+func c2_execute_allowed_tool_call(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  call: ToolCall,
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  session_id: string
+) -> Message ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+  let envelope = tool_call_to_envelope(call);
+  if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
+    let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
+    let result_env: ToolResultEnvelope = {
+      tool_call_id: envelope.id,
+      tool: "scratchpad",
+      exit_code: result_cell.exit_code,
+      stdout: result_cell.stdout,
+      stderr: result_cell.stderr,
+      metadata: result_cell.metadata
+    };
+    let _ = ledger_emit(session_id, ExtToolHandled({
+      step: step_idx,
+      stream_id: stream_id,
+      tool: call.name,
+      id: call.id,
+      exit_code: result_env.exit_code
+    }));
+    let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+    handled_tool_message(call.id, result_env)
+  } else {
+    let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+    match handle_decision {
+      Handled(result_env) => {
+        let _ = ledger_emit(session_id, ExtToolHandled({
+          step: step_idx,
+          stream_id: stream_id,
+          tool: call.name,
+          id: call.id,
+          exit_code: result_env.exit_code
+        }));
+        let _ = emit_scratchpad_result_if_present(session_id, "step-${show(step_idx)}", step_idx, call.id, result_env);
+        handled_tool_message(call.id, result_env)
+      },
+      Delegate => {
+        let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
+        match backend {
+          Delegated => {
+            let _ = ledger_emit(session_id, DelegatedToolDeferred({
+              step: step_idx,
+              stream_id: stream_id,
+              tool: call.name,
+              id: call.id
+            }));
+            delegated_deferred_message(call)
+          },
+          Native => {
+            let _ = ledger_emit(session_id, V2ToolDispatchStart({
+              step: step_idx,
+              stream_id: stream_id,
+              tool: call.name,
+              id: call.id
+            }));
+            let result_content = dispatch_one(workdir, call);
+            let _ = ledger_emit(session_id, V2ToolDispatchComplete({
+              step: step_idx,
+              stream_id: stream_id,
+              id: call.id
+            }));
+            tool_result_message(call, result_content)
+          }
+        }
+      }
+    }
+  }
+}
+
+func c2_dispatch_entries(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  entries: [ToolPlanEntry],
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  session_id: string,
+  accumulated: [Message]
+) -> C2ToolDispatchOutcome ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+  match entries {
+    [] => C2ToolsDone(accumulated),
+    entry :: rest => {
+      let call = entry.call;
+      let envelope = tool_call_to_envelope(call);
+      let policy = dispatch_tool_policy(rt, ctx, envelope);
+      match policy {
+        Deny(reason) => {
+          let _ = ledger_emit(session_id, NativeToolDenied({
+            step: step_idx,
+            stream_id: stream_id,
+            tool: call.name,
+            id: call.id,
+            reason: reason
+          }));
+          let denial_msg = policy_denied_message(call, reason);
+          c2_dispatch_entries(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id, accumulated ++ [denial_msg])
+        },
+        Pending(reason, default) => {
+          let _ = ledger_emit(session_id, ToolPending({
+            step: step_idx,
+            stream_id: stream_id,
+            tool: call.name,
+            id: call.id,
+            reason: reason
+          }));
+          C2ToolsPending({
+            request: {
+              call: call,
+              default_allow: policy_default_allow(default),
+              reason: reason,
+              stream_id: stream_id,
+              remaining: rest
+            },
+            accumulated: accumulated
+          })
+        },
+        _ => {
+          let msg = c2_execute_allowed_tool_call(rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, session_id);
+          c2_dispatch_entries(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id, accumulated ++ [msg])
+        }
+      }
+    }
+  }
+}
+
+func c2_finish_tool_batch(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  started_at_ms: int,
+  st: C2LoopState,
+  trace: LedgerTrace,
+  tool_step_idx: int,
+  stream_id: string,
+  tool_msgs: [Message]
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let request_id = "step-${show(tool_step_idx)}";
+  let _ = if st.pending_tool_batched then
+    ledger_emit(session_id, NativeToolResults({
+      request_id: request_id,
+      step: tool_step_idx,
+      stream_id: stream_id,
+      payload: ja(tool_messages_to_result_jsons(tool_msgs))
+    }))
+  else ();
+  let next_state: C2LoopState = {
+    msgs: c2_pending_prefix(st) ++ tool_msgs,
+    step_idx: st.step_idx,
+    totals: st.totals,
+    provider: st.provider,
+    pending_tool_calls: [],
+    pending_tool_context: [],
+    pending_tool_prefix: [],
+    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+    last_finish_reason: "tools_complete",
+    last_response_text: "",
+    nudges_used: st.nudges_used,
+    finalize_source: "",
+    trace: trace
+  };
+  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+}
+
+func c2_continue_tool_batch(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  started_at_ms: int,
+  st: C2LoopState,
+  trace: LedgerTrace,
+  req: ApprovalRequest,
+  accumulated: [Message]
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match req.remaining {
+    [] => c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace, c2_done_step(st.step_idx), req.stream_id, accumulated),
+    _ => {
+      let next_state: C2LoopState = {
+        msgs: st.msgs,
+        step_idx: st.step_idx,
+        totals: st.totals,
+        provider: st.provider,
+        pending_tool_calls: c2_tool_plan_calls(req.remaining),
+        pending_tool_context: st.pending_tool_context,
+        pending_tool_prefix: st.pending_tool_prefix,
+        pending_tool_batched: st.pending_tool_batched,
+        accumulated_tool_msgs: accumulated,
+        pending_approval: None,
+        last_finish_reason: "approval_resolved",
+        last_response_text: "",
+        nudges_used: st.nudges_used,
+        finalize_source: "",
+        trace: trace
+      };
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+    }
+  }
+}
+
 func c2_after_dp7(
   rt: ExtRuntime,
   task: string,
@@ -1406,6 +1651,8 @@ func c2_after_dp7(
         pending_tool_context: [],
         pending_tool_prefix: [],
         pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
         last_finish_reason: "dp7_rejected",
         last_response_text: errors,
         nudges_used: count_persist_nudges(msgs_with_assistant),
@@ -1424,6 +1671,8 @@ func c2_after_dp7(
         pending_tool_context: [],
         pending_tool_prefix: [],
         pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
         last_finish_reason: "dp7_approved",
         last_response_text: output,
         nudges_used: count_persist_nudges(msgs_with_assistant),
@@ -1486,6 +1735,8 @@ func c2_loop(
             pending_tool_context: [],
             pending_tool_prefix: [],
             pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
             last_finish_reason: "user_injected",
             last_response_text: "",
             nudges_used: next_nudges,
@@ -1506,6 +1757,8 @@ func c2_loop(
             pending_tool_context: st.pending_tool_context,
             pending_tool_prefix: st.pending_tool_prefix,
             pending_tool_batched: st.pending_tool_batched,
+            accumulated_tool_msgs: st.accumulated_tool_msgs,
+            pending_approval: st.pending_approval,
             last_finish_reason: st.last_finish_reason,
             last_response_text: st.last_response_text,
             nudges_used: st.nudges_used,
@@ -1515,8 +1768,35 @@ func c2_loop(
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
         },
         AwaitApproval(_) => {
-          let result: Result[[Message], AIError] = Err({ code: "Internal", message: "phase C2 approval inversion is not enabled in WI-C11", retryable: false });
-          { result: result, trace: trace_with_decision }
+          match st.pending_approval {
+            None => {
+              let result: Result[[Message], AIError] = Err({ code: "Internal", message: "approval requested without pending approval state", retryable: false });
+              { result: result, trace: trace_with_decision }
+            },
+            Some(req) => {
+              let raw = readLine();
+              let resolution = resolve_approval(raw, req.default_allow, raw == "");
+              let tool_step_idx = c2_done_step(st.step_idx);
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), catalog_context_limit_for(model));
+              match resolution {
+                ApprovalDenied(reason) => {
+                  let _ = ledger_emit(session_id, NativeToolDenied({
+                    step: tool_step_idx,
+                    stream_id: req.stream_id,
+                    tool: req.call.name,
+                    id: req.call.id,
+                    reason: reason
+                  }));
+                  let denial_msg = policy_denied_message(req.call, reason);
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [denial_msg])
+                },
+                ApprovalAllowed => {
+                  let msg = c2_execute_allowed_tool_call(rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, session_id);
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [msg])
+                }
+              }
+            }
+          }
         },
         RunTools(plan) => {
           let tool_step_idx = c2_done_step(st.step_idx);
@@ -1524,9 +1804,9 @@ func c2_loop(
           let calls = c2_tool_plan_calls(plan.entries);
           let request_id = "step-${show(tool_step_idx)}";
           let ctx_msgs = c2_pending_context(st);
-          let prefix_msgs = c2_pending_prefix(st);
           let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, catalog_context_limit_for(model));
-          let _ = if st.pending_tool_batched then
+          let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
+          let _ = if emit_calls then
             ledger_emit(session_id, NativeToolCalls({
               request_id: request_id,
               step: tool_step_idx,
@@ -1534,31 +1814,30 @@ func c2_loop(
               payload: ja(tool_calls_to_envelope_jsons(calls))
             }))
           else ();
-          let tool_msgs = dispatch_calls(rt, ctx, calls, workdir, tool_step_idx, stream_id, ohmy_pi, session_id);
-          let _ = if st.pending_tool_batched then
-            ledger_emit(session_id, NativeToolResults({
-              request_id: request_id,
-              step: tool_step_idx,
-              stream_id: stream_id,
-              payload: ja(tool_messages_to_result_jsons(tool_msgs))
-            }))
-          else ();
-          let next_state: C2LoopState = {
-            msgs: prefix_msgs ++ tool_msgs,
-            step_idx: st.step_idx,
-            totals: st.totals,
-            provider: st.provider,
-            pending_tool_calls: [],
-            pending_tool_context: [],
-            pending_tool_prefix: [],
-            pending_tool_batched: true,
-            last_finish_reason: "tools_complete",
-            last_response_text: "",
-            nudges_used: st.nudges_used,
-            finalize_source: "",
-            trace: trace_with_decision
-          };
-          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+          match c2_dispatch_entries(rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, session_id, st.accumulated_tool_msgs) {
+            C2ToolsDone(tool_msgs) =>
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, tool_step_idx, stream_id, tool_msgs),
+            C2ToolsPending(pending) => {
+              let next_state: C2LoopState = {
+                msgs: st.msgs,
+                step_idx: st.step_idx,
+                totals: st.totals,
+                provider: st.provider,
+                pending_tool_calls: [pending.request.call],
+                pending_tool_context: st.pending_tool_context,
+                pending_tool_prefix: st.pending_tool_prefix,
+                pending_tool_batched: st.pending_tool_batched,
+                accumulated_tool_msgs: pending.accumulated,
+                pending_approval: Some(pending.request),
+                last_finish_reason: "await_approval",
+                last_response_text: pending.request.reason,
+                nudges_used: st.nudges_used,
+                finalize_source: "",
+                trace: trace_with_decision
+              };
+              c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+            }
+          }
         },
         CallModel(_) => {
           let step_idx = st.step_idx;
@@ -1611,6 +1890,8 @@ func c2_loop(
                       pending_tool_context: [],
                       pending_tool_prefix: [],
                       pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
                       last_finish_reason: "stream_error",
                       last_response_text: e.message,
                       nudges_used: st.nudges_used,
@@ -1657,6 +1938,8 @@ func c2_loop(
                         pending_tool_context: [],
                         pending_tool_prefix: [],
                         pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
                         last_finish_reason: "intercept_handled",
                         last_response_text: result.message.content,
                         nudges_used: applied.nudges_used,
@@ -1676,6 +1959,8 @@ func c2_loop(
                           pending_tool_context: msgs_with_assistant,
                           pending_tool_prefix: msgs_with_assistant,
                           pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
                           last_finish_reason: "tool_calls",
                           last_response_text: applied.last_response_text,
                           nudges_used: applied.nudges_used,
@@ -1705,6 +1990,8 @@ func c2_loop(
                               pending_tool_context: msgs_with_assistant,
                               pending_tool_prefix: st.msgs ++ [augmented_assistant_msg],
                               pending_tool_batched: false,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
                               last_finish_reason: "hybrid_bash",
                               last_response_text: result.message.content,
                               nudges_used: applied.nudges_used,
@@ -1729,6 +2016,8 @@ func c2_loop(
                                   pending_tool_context: [],
                                   pending_tool_prefix: [],
                                   pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
                                   last_finish_reason: "solver_feedback",
                                   last_response_text: feedback,
                                   nudges_used: applied.nudges_used,
@@ -1754,6 +2043,8 @@ func c2_loop(
                                     pending_tool_context: [],
                                     pending_tool_prefix: [],
                                     pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
                                     last_finish_reason: "persist_nudge",
                                     last_response_text: result.message.content,
                                     nudges_used: st.nudges_used,

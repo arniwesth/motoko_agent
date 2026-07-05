@@ -10,6 +10,7 @@ import std/list (length)
 import std/ai (Message, ToolCall, ToolSchema)
 import std/option (None)
 import std/result (Result, Ok, Err)
+import std/string (contains)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/phase_vocab (
   CompactionStageRecord,
@@ -45,6 +46,8 @@ import pkg/sunholo/motoko_ext_abi/types (
   Delegate,
   ToolPolicyDecision,
   NoOpinion,
+  Pending,
+  DenyAfterTimeout,
   Compacted
 )
 
@@ -224,6 +227,10 @@ func no_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   NoOpinion
 }
 
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("approval required", DenyAfterTimeout)
+}
+
 func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
   Delegate
 }
@@ -267,6 +274,55 @@ func stage_rt() -> ExtRuntime {
     strict_mode: false,
     verification: v
   }
+}
+
+func pending_rt() -> ExtRuntime {
+  let h = stage_hook("approval-pending", "pass");
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  {
+    registry: { hooks: [{
+      id: h.id,
+      provided_tools: h.provided_tools,
+      on_describe_tools: h.on_describe_tools,
+      on_build_system_prompt: h.on_build_system_prompt,
+      on_budget_plan: h.on_budget_plan,
+      on_pre_step: h.on_pre_step,
+      on_tool_policy: pending_policy,
+      on_tool_handle: h.on_tool_handle,
+      on_response_intercept: h.on_response_intercept,
+      on_solver_candidate: h.on_solver_candidate
+    }] },
+    strict_mode: false,
+    verification: v
+  }
+}
+
+func has_tool_content(msgs: [Message], needle: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "tool" && contains(m.content, needle) then true
+      else has_tool_content(rest, needle)
+  }
+}
+
+func scenario_traced_approval_default_deny() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted(pending_rt(), [tool_step("BashExec", "{\"cmd\":\"true\"}", "tc"), prose_step("done")]);
+  match traced.result {
+    Ok(history_after) => {
+      let decisions_ok = names_equal(trace_decision_names(traced.trace), ["CallModel", "RunTools", "AwaitApproval", "CallModel", "Finalize"]);
+      let denial_ok = has_tool_content(history_after, "timeout — no approval received");
+      ok_or_failure(decisions_ok && denial_ok, "approval await/default deny", [
+        "actual=${join_names(trace_decision_names(traced.trace))}",
+        "denial_ok=${show(denial_ok)}"
+      ])
+    },
+    Err(e) => Err({ failed_invariant: "approval default deny succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func traced_approval_default_deny_scenario() -> Scenario {
+  { id: "traced_approval_default_deny", run: scenario_traced_approval_default_deny }
 }
 
 func has_stage_passed(records: [LedgerRecord]) -> bool {
@@ -356,6 +412,7 @@ export func main() -> () ! {IO} {
     traced_prose_decisions_scenario(),
     traced_tool_decisions_scenario(),
     traced_persist_nudge_decisions_scenario(),
+    traced_approval_default_deny_scenario(),
     traced_stage_records_scenario()
   ];
   let failed = run_all(scenarios, 0);
