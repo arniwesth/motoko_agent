@@ -179,13 +179,14 @@ additive; no gate behavior changes. Leaves the tree green.
   export pure func system_prefix_chars(msgs: [Message]) -> int {
     match msgs {
       [] => 0,
-      m :: rest => if m.role == "system" then String.length(m.content) + system_prefix_chars(rest) else 0
+      m :: rest => if m.role == "system" then Str.length(m.content) + system_prefix_chars(rest) else 0
     }
   }
   ```
-  (mirror `count_system_prefix`'s recursion; confirm the in-repo length primitive — `String.length`
-  vs a local `strlen` — against how `phase_vocab.ail` already measures `content`, e.g. the
-  `estimate_tokens_messages`/`payload_digest` neighbourhood; match the existing idiom).
+  Use **`Str.length`** — `phase_vocab.ail` already imports `std/string as Str (length)` (`:16`) and
+  measures content with `Str.length` at `:174`, `:685`, `:823` (**not** `String.length`, which is
+  not the in-repo name). The recursion mirrors `count_system_prefix` structurally, swapping the
+  message-count `1 +` for the content-length `Str.length(m.content) +`.
 - `src/core/phase_vocab.ail:438`: `ProviderCallInfo` gains `system_prefix_chars: int` (append after
   `system_prefix_count`).
 - `src/core/phase_vocab.ail:611`: wire projection — insert
@@ -201,6 +202,12 @@ additive; no gate behavior changes. Leaves the tree green.
 - `src/core/session.ail:1407`: the live `ProviderCallPrepared({...})` emit — add
   `system_prefix_chars: system_prefix_chars(compacted_msgs)` (per D-P4). Add `system_prefix_chars`
   to session's `phase_vocab` import block (near `:109`).
+
+**Completeness (verified repo-wide this session).** `grep -rn 'ProviderCallPrepared({'
+--include=*.ail .` returns exactly these four production construction sites (`phase_vocab.ail:168`,
+`:839`, `:1023`, `session.ail:1407`); the only other hit is `sketch_vocabulary.ail:141` (the
+standalone sketch's own event, different shape, out of scope). Adding a field to the closed
+`ProviderCallInfo` record breaks any missed literal at compile time — the safety net.
 
 **Verification.**
 ```
@@ -238,6 +245,15 @@ plus type def):**
 - `src/core/step_machine.ail:209` and `:221` (inline `StepPolicy` literals in tests): add
   `require_system_prompt: true`.
 - `scripts/phase_c_l1_scenarios.ail:98` (`policy()` helper): add `require_system_prompt: true`.
+
+**Completeness (verified repo-wide this session).** These 7 are *all* production `StepPolicy`
+literals — `grep -rn 'step_budget:' --include=*.ail .` returns exactly these plus one hit in
+`.agent/projects/004_phase_core_refactor/sketch/sketch_vocabulary.ail:436`, which is a **standalone
+sketch module** (`module sketch_vocabulary`) defining its *own* `StepPolicy` (`:185`, a different,
+older shape lacking `model`/`provider_base_url`); it does not import `src/core/phase_vocab`, is in
+no build/check target, and is **out of the blast radius** — do not touch it. If `ailang check` on
+any core file still fails after these 7 edits, the compiler names the missed literal; that is the
+closed-record safety net working.
 
 **Verification.**
 ```
