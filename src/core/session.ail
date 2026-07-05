@@ -146,8 +146,7 @@ import src/core/ports (ApprovalAllowed, ApprovalDenied)
 
 type SessionPolicy = {
   step: StepPolicy,
-  headless: bool,
-  phase_c2_driver: bool
+  headless: bool
 }
 
 export type TracedSessionResult = {
@@ -1267,7 +1266,6 @@ func session_policy_init(model: string, step_budget: int, max_cost_millicents: i
   let retry_stream_errors = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
   let provider_base_url = getEnvOr("OPENAI_BASE_URL", "");
   let headless = getEnvOr("MOTOKO_HEADLESS", "") == "1";
-  let phase_c2_driver = getEnvOr("MOTOKO_PHASE_C2_DRIVER", "") == "1";
   {
     step: {
       step_budget: budget_steps,
@@ -1284,8 +1282,7 @@ func session_policy_init(model: string, step_budget: int, max_cost_millicents: i
         emergency_pct: exhaustion_pct()
       }
     },
-    headless: headless,
-    phase_c2_driver: phase_c2_driver
+    headless: headless
   }
 }
 
@@ -1306,8 +1303,7 @@ pure func session_policy_with_model(policy: SessionPolicy, model: string) -> Ses
         emergency_pct: policy.step.compaction.emergency_pct
       }
     },
-    headless: policy.headless,
-    phase_c2_driver: policy.phase_c2_driver
+    headless: policy.headless
   }
 }
 
@@ -2142,8 +2138,7 @@ export func run_v2_session_traced_with_persist_retries(
       provider_base_url: base.step.provider_base_url,
       compaction: base.step.compaction
     },
-    headless: base.headless,
-    phase_c2_driver: true
+    headless: base.headless
   };
   run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider)
 }
@@ -2564,11 +2559,7 @@ func run_v2_from_messages_with_policy(
   let started_at_ms = now();
   let session_span = "motoko.session.${session_id}";
   Trace.spanStart(session_span);
-  let result =
-    if policy.phase_c2_driver then
-      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, provider)).result
-    else
-      loop_v2(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, 0, policy.step.step_budget, ohmy_pi, max_cost_millicents, cost_rates, zero_totals(), provider, session_id, started_at_ms);
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, provider)).result;
   Trace.spanEnd(session_span);
   result
 }
