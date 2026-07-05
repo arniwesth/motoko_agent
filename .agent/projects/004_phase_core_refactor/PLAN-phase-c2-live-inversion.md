@@ -1,7 +1,8 @@
 # Phase-C2 implementation plan: route the live driver through the pure core
 
 Date: 2026-07-04
-Status: Draft (completes Phase C of the **Proposed** `ADR-001-phase-oriented-core.md`)
+Status: Completed 2026-07-05 (WI-C14 gate passed; completes Phase C of the
+**Proposed** `ADR-001-phase-oriented-core.md`)
 Pinned toolchain: **AILANG v0.26.0** (commit `3b52a24`). Verified this session:
 `ailang --version` = v0.26.0 / `3b52a24` — the pin has not moved. **Every `file:line`
 anchor below was read against HEAD `8604365` this session** (see "Anchor re-verification

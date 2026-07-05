@@ -1,5 +1,9 @@
 # Handoff: implement Phase C2 (live inversion)
 
+> **CLOSED (2026-07-05).** WI-C9 through WI-C14 have landed and the final gate passed.
+> This file is retained as historical implementation context; use
+> `NOTE-phase-c-implementation-findings.md` for the final disposition.
+
 Date: 2026-07-04 (written by the session that verified Phase C as-built, wrote
 `NOTE-phase-c-implementation-findings.md`, and authored + reviewed the plan)
 Audience: a fresh implementer session. **The plan is the spec**:

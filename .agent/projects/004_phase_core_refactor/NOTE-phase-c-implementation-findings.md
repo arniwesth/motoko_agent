@@ -102,3 +102,34 @@ supersession) — an operator decision on sequencing, not a re-litigation of D1�
 `ailang.lock` dirt at verification time is a benign regeneration (only `generated_at` +
 `.packages` mirror content hashes; no dependency changes) — commit it deliberately.
 `oh-my-pi/` remains untracked, unrelated, untouched.
+
+## Phase C2 resolution addendum
+
+Date: 2026-07-05
+Toolchain: AILANG v0.26.0 (commit `3b52a24`)
+Completion range: WI-C9 through WI-C14 on branch
+`arniwesth/mot-27-phased-core-architecture`.
+
+Phase C2 closed the live-path inversion gap recorded above. The shipped driver now runs
+the live loop through `decide` and the phase modules; the old recursive loop and blocking
+mid-dispatch approval path were deleted; policy/env reads are hoisted to session init;
+the approval pause is represented as `AwaitApproval`; tool execution is in `tool_phase`;
+and scripted parity entrypoints pass a port-backed model provider. The transient
+`MOTOKO_PHASE_C2_DRIVER` flag and A/B differ were removed before final closeout.
+
+Disposition after WI-C14:
+
+| Deliverable | Final disposition | Closing WI |
+|---|---|---|
+| Pure `decide` with loop policy is live | Met | WI-C11, WI-C13a |
+| Driver executes decisions through phase modules | Met | WI-C11, WI-C13b, WI-C13c |
+| Scripted ports supersede `run_v2_with_stub` | Met | WI-C13c follow-up `f30f475` |
+| Approval protocol inversion is live | Met | WI-C12 |
+| L1 scenario family | Met | Phase C WI-C7, reverified WI-C14 |
+| Checkpoint mechanics real | Met | Phase C WI-C1, reverified WI-C14 |
+
+WI-C14 final gate passed as a block on 2026-07-05: core checks/tests, integration tests,
+module tests, L1 scenarios, approval protocol, sealing negative probe (`IMP010`),
+sketch probes, projection gate, Phase C2 wiring scenarios, strict smoke parity against
+`/tmp/phase_c_blessed`, and the final greps for flag removal, phase-module imports,
+live `decide` calls, and absent checkpoint events in the blessed captures.
