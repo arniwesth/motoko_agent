@@ -7,12 +7,45 @@ module scripts/phase_c2_wiring_scenarios
 
 import std/io (println, exit)
 import std/list (length)
+import std/ai (Message, ToolCall, ToolSchema)
+import std/option (None)
 import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
 import src/core/phase_vocab (
+  CompactionStageRecord,
   DecisionRecord,
+  LedgerRecord,
+  LedgerTrace,
+  TraceStageApplied,
+  TraceStagePassed,
+  TraceStageRejected,
   empty_ledger_trace,
   ledger_append,
   ledger_record_name
+)
+import src/core/session (TracedSessionResult)
+import src/core/session as Session
+import src/core/test/stub_step (Scripted, ScriptedStep, prose_step, tool_step, empty_rt, deny_all_rt)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/types (Msg)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  ExtRuntime,
+  ExtensionHooks,
+  FinalizeDecision,
+  NoDecision,
+  PassThrough,
+  PreStepDecision,
+  PromptPatch,
+  ResponseInterceptDecision,
+  NoIntercept,
+  ToolHandleDecision,
+  Delegate,
+  ToolPolicyDecision,
+  NoOpinion,
+  Compacted
 )
 
 type ScenarioFailure = {
@@ -22,7 +55,7 @@ type ScenarioFailure = {
 
 type Scenario = {
   id: string,
-  run: () -> Result[(), ScenarioFailure]
+  run: () -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace}
 }
 
 func print_trace(lines: [string]) -> () ! {IO} {
@@ -35,7 +68,7 @@ func print_trace(lines: [string]) -> () ! {IO} {
   }
 }
 
-func run_one(s: Scenario) -> bool ! {IO} {
+func run_one(s: Scenario) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   match s.run() {
     Ok(_) => {
       println("scenario=${s.id} ok");
@@ -49,7 +82,7 @@ func run_one(s: Scenario) -> bool ! {IO} {
   }
 }
 
-func run_all(scenarios: [Scenario], failed: int) -> int ! {IO} {
+func run_all(scenarios: [Scenario], failed: int) -> int ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   match scenarios {
     [] => failed,
     s :: rest => {
@@ -64,7 +97,239 @@ func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[
   else Err({ failed_invariant: invariant_name, trace: trace })
 }
 
-func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFailure] {
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func history() -> [Message] {
+  [msg("system", "s"), msg("user", "u")]
+}
+
+func budget() -> BudgetPlan {
+  { total: 10, solver: 6, verifier: 4 }
+}
+
+func zero_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func names_equal(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs =>
+      match b {
+        y :: ys => x == y && names_equal(xs, ys),
+        [] => false
+      }
+  }
+}
+
+func join_names(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${join_names(rest)}"
+  }
+}
+
+func decision_names(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        DecisionRecord(d) => d.decision :: decision_names(rest),
+        _ => decision_names(rest)
+      }
+  }
+}
+
+func trace_decision_names(trace: LedgerTrace) -> [string] {
+  decision_names(trace.records)
+}
+
+func assert_decisions(trace: LedgerTrace, expected: [string]) -> Result[(), ScenarioFailure] {
+  let actual = trace_decision_names(trace);
+  ok_or_failure(names_equal(actual, expected), "decision sequence", [
+    "actual=${join_names(actual)}",
+    "expected=${join_names(expected)}"
+  ])
+}
+
+func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(rt, "task", "", false, budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
+}
+
+func scenario_traced_prose_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted(empty_rt(), [prose_step("done")]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "scripted prose succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func traced_prose_decisions_scenario() -> Scenario {
+  { id: "traced_prose_decisions", run: scenario_traced_prose_decisions }
+}
+
+func scenario_traced_tool_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted(deny_all_rt(), [tool_step("BashExec", "{\"cmd\":\"true\"}", "tc"), prose_step("done")]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "RunTools", "CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "scripted tool succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func traced_tool_decisions_scenario() -> Scenario {
+  { id: "traced_tool_decisions", run: scenario_traced_tool_decisions }
+}
+
+func scenario_traced_persist_nudge_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = Session.run_v2_session_traced_with_persist_retries(
+    empty_rt(),
+    "task",
+    "",
+    false,
+    budget(),
+    "phase-c-model",
+    history(),
+    ".",
+    8,
+    false,
+    0,
+    zero_rates(),
+    1,
+    Scripted([prose_step("not done"), prose_step("done")])
+  );
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "InjectUserMessage", "CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "scripted nudge succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func traced_persist_nudge_decisions_scenario() -> Scenario {
+  { id: "traced_persist_nudge_decisions", run: scenario_traced_persist_nudge_decisions }
+}
+
+func no_describe() -> [ToolSchema] { [] }
+
+func no_prompt(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func no_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Delegate
+}
+
+func no_intercept(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoIntercept
+}
+
+func no_solver(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoDecision
+}
+
+func bad_system_msg() -> Msg {
+  { role: "system", content: "bad", tool_calls: [], tool_call_id: "" }
+}
+
+func stage_hook(id: string, mode: string) -> ExtensionHooks {
+  let on_pre = func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    if mode == "pass" then PassThrough
+    else if mode == "apply" then Compacted(msgs, "applied")
+    else Compacted([bad_system_msg()], "rejected")
+  };
+  {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: on_pre,
+    on_tool_policy: no_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  }
+}
+
+func stage_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  {
+    registry: { hooks: [stage_hook("stage-pass", "pass"), stage_hook("stage-apply", "apply"), stage_hook("stage-reject", "reject")] },
+    strict_mode: false,
+    verification: v
+  }
+}
+
+func has_stage_passed(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => false,
+    r :: rest =>
+      match r {
+        CompactionStageRecord(s) =>
+          match s.outcome {
+            TraceStagePassed => true,
+            _ => has_stage_passed(rest)
+          },
+        _ => has_stage_passed(rest)
+      }
+  }
+}
+
+func has_stage_applied(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => false,
+    r :: rest =>
+      match r {
+        CompactionStageRecord(s) =>
+          match s.outcome {
+            TraceStageApplied(_) => true,
+            _ => has_stage_applied(rest)
+          },
+        _ => has_stage_applied(rest)
+      }
+  }
+}
+
+func has_stage_rejected(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => false,
+    r :: rest =>
+      match r {
+        CompactionStageRecord(s) =>
+          match s.outcome {
+            TraceStageRejected(_) => true,
+            _ => has_stage_rejected(rest)
+          },
+        _ => has_stage_rejected(rest)
+      }
+  }
+}
+
+func scenario_traced_stage_records() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted(stage_rt(), [prose_step("done")]);
+  match traced.result {
+    Ok(_) => {
+      let ok = has_stage_passed(traced.trace.records) && has_stage_applied(traced.trace.records) && has_stage_rejected(traced.trace.records);
+      ok_or_failure(ok, "stage records include pass/apply/reject", ["records=${show(length(traced.trace.records))}"])
+    },
+    Err(e) => Err({ failed_invariant: "stage run succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func traced_stage_records_scenario() -> Scenario {
+  { id: "traced_stage_records", run: scenario_traced_stage_records }
+}
+
+func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let trace = ledger_append(empty_ledger_trace(), DecisionRecord({ step: 2, decision: "CallModel" }));
   match trace.records {
     record :: [] => {
@@ -87,7 +352,11 @@ func decision_record_append_name_round_trip_scenario() -> Scenario {
 
 export func main() -> () ! {IO} {
   let scenarios = [
-    decision_record_append_name_round_trip_scenario()
+    decision_record_append_name_round_trip_scenario(),
+    traced_prose_decisions_scenario(),
+    traced_tool_decisions_scenario(),
+    traced_persist_nudge_decisions_scenario(),
+    traced_stage_records_scenario()
   ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then

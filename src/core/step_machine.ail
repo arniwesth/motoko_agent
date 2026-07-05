@@ -64,11 +64,20 @@ pure func cost_cap_message(total_cost_millicents: int, max_cost_millicents: int)
   "cost cap reached: ${show(total_cost_millicents)} of ${show(max_cost_millicents)} millicents used"
 }
 
-export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
+func call_model_or_fail(s: StepState, pol: StepPolicy) -> StepDecision {
   if pol.step_budget > 0 && s.step_idx >= pol.step_budget
   then Fail({ code: "Internal", message: "v2 loop: step budget exhausted", retryable: false })
   else if pol.max_cost_millicents > 0 && pol.cost_metered && s.totals.cost_millicents >= pol.max_cost_millicents
   then Fail({ code: "BudgetExceeded", message: cost_cap_message(s.totals.cost_millicents, pol.max_cost_millicents), retryable: false })
+  else match project(s.history, s.telemetry, pol.compaction) {
+    Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
+    Ok(projection) => CallModel({ payload: projection.payload, model: pol.model })
+  }
+}
+
+export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
+  if s.last_finish_reason == "hybrid_bash" && List.length(s.pending_tool_calls) > 0
+  then RunTools({ entries: plan_native(s.pending_tool_calls) })
   else if List.length(s.pending_tool_calls) > 0
   then {
     if s.last_finish_reason == "await_approval" then await_approval_from_calls(s.step_idx, s.pending_tool_calls)
@@ -76,14 +85,21 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   }
   else if s.last_finish_reason == "dp7_rejected"
   then InjectUserMessage(dp7_rejection_message(s.last_response_text))
+  else if s.last_finish_reason == "solver_feedback"
+  then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "" })
   else if s.last_finish_reason == "persist_nudge"
   then InjectUserMessage(persist_nudge_message(s.nudges_used + 1, pol.persist_retries))
   else if s.last_finish_reason == "stop" || s.last_finish_reason == "dp7_approved" || s.last_finish_reason == "dp7_fail_open"
   then Finalize({ reason: "model_stop", output: s.last_response_text })
-  else match project(s.history, s.telemetry, pol.compaction) {
-    Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
-    Ok(projection) => CallModel({ payload: projection.payload, model: pol.model })
-  }
+  else if s.last_finish_reason == "stream_error"
+  then call_model_or_fail(s, pol)
+  else if s.last_finish_reason == "intercept_handled"
+  then call_model_or_fail(s, pol)
+  else if s.last_finish_reason == "tools_complete"
+  then call_model_or_fail(s, pol)
+  else if s.last_finish_reason == "user_injected"
+  then call_model_or_fail(s, pol)
+  else call_model_or_fail(s, pol)
 }
 
 func msg(role: string, content: string) -> Message {
@@ -247,6 +263,37 @@ pure func test_decide_dp7_reject_injects_user_message() -> bool
   {
     match mk_state("dp7_rejected", "bad", [], 0, 0, 0) {
       Ok(s) => is_inject(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_solver_feedback_injects_user_message() -> bool
+  tests [((), true)]
+  {
+    match mk_state("solver_feedback", "revise", [], 0, 0, 0) {
+      Ok(s) =>
+        match decide(s, mk_policy(0)) {
+          InjectUserMessage(m) => m.role == "user" && m.content == "revise",
+          _ => false
+        },
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_stream_error_calls_model() -> bool
+  tests [((), true)]
+  {
+    match mk_state("stream_error", "bad stream", [], 0, 0, 0) {
+      Ok(s) => is_call_model(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_intercept_handled_calls_model() -> bool
+  tests [((), true)]
+  {
+    match mk_state("intercept_handled", "handled", [], 0, 0, 0) {
+      Ok(s) => is_call_model(decide(s, mk_policy(0))),
       Err(_) => false
     }
   }
