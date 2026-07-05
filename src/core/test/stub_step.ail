@@ -20,6 +20,7 @@ import std/result (Result, Ok, Err)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
+import src/core/ports (Ports, ports_shape_probe)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
@@ -39,9 +40,10 @@ export type ScriptedStep = {
   chunks: [string]
 }
 
--- Step provider: either the live AI or a scripted sequence.
+-- Step provider: either the live AI, a scripted sequence, or a port-backed
+-- provider used by the Phase C2 driver while preserving old entrypoints.
 -- Scripted([]) emits a terminal "stop" result so the loop exits cleanly.
-export type StepProvider = LiveAI | Scripted([ScriptedStep])
+export type StepProvider = LiveAI | Scripted([ScriptedStep]) | Ported(Ports)
 
 -- Convert a ScriptedStep to the StepResult shape loop_v2 expects.
 export pure func scripted_to_step_result(s: ScriptedStep) -> StepResult {
@@ -93,6 +95,36 @@ func play_chunks(chunks: [string], on_chunk: (StreamChunk) -> () ! {IO, Trace}) 
   }
 }
 
+pure func assistant_count(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "assistant" then 1 else 0;
+      here + assistant_count(rest)
+    }
+  }
+}
+
+func scripted_step_at(script: [ScriptedStep], idx: int) -> StepResult {
+  match script {
+    [] => terminal_step(),
+    s :: rest => {
+      if idx <= 0 then scripted_to_step_result(s)
+      else scripted_step_at(rest, idx - 1)
+    }
+  }
+}
+
+func scripted_chunks_at(script: [ScriptedStep], idx: int) -> [string] {
+  match script {
+    [] => [],
+    s :: rest => {
+      if idx <= 0 then s.chunks
+      else scripted_chunks_at(rest, idx - 1)
+    }
+  }
+}
+
 -- M-AI-PROMPT-CACHING opt-in (AILANG v0.18.4): cache the stable system prompt
 -- across turns. Routes per provider:
 --   - anthropic/* (incl. via openrouter/anthropic/*): stamps
@@ -107,6 +139,32 @@ func play_chunks(chunks: [string], on_chunk: (StreamChunk) -> () ! {IO, Trace}) 
 -- stable across all turns of a session.
 pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
   [{ position: "system", ttl: "ephemeral" }]
+}
+
+func default_hooks_runtime() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  empty_rt()
+}
+
+export func live_ports(rt: ExtRuntime) -> Ports {
+  let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} =
+    func(model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+      stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk)
+    };
+  ports_shape_probe(model_step, default_hooks_runtime)
+}
+
+export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]) -> Ports {
+  let base_assistant_count = assistant_count(history);
+  let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} =
+    func(_model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+      let idx = assistant_count(msgs) - base_assistant_count;
+      let chunks = scripted_chunks_at(script, idx);
+      let _ = play_chunks(chunks, on_chunk);
+      Ok(scripted_step_at(script, idx))
+    };
+  ports_shape_probe(model_step, default_hooks_runtime)
 }
 
 -- Dispatch one step call through the provider.
@@ -127,6 +185,9 @@ export func dispatch_step(
   on_chunk: (StreamChunk) -> () ! {IO, Trace}
 ) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO, Trace} {
   match provider {
+    Ported(ports) => {
+      { result: ports.model_step(model, msgs, on_chunk), next_provider: Ported(ports) }
+    },
     LiveAI => {
       { result: stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk), next_provider: LiveAI }
     },

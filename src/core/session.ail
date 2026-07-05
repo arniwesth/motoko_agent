@@ -124,7 +124,7 @@ import src/core/phase_vocab (
   Finalize,
   Fail
 )
-import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedStep)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, Ported, ScriptedStep, live_ports, scripted_ports_from_steps)
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
@@ -440,6 +440,14 @@ func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState
     nudges_used: count_persist_nudges(history),
     finalize_source: "",
     trace: empty_ledger_trace()
+  }
+}
+
+func ported_provider(rt: ExtRuntime, history: [Message], provider: StepProvider) -> StepProvider {
+  match provider {
+    Ported(_) => provider,
+    LiveAI => Ported(live_ports(rt)),
+    Scripted(script) => Ported(scripted_ports_from_steps(history, script))
   }
 }
 
@@ -1630,8 +1638,9 @@ func run_v2_from_messages_traced_with_policy(
   let session_id = derive_session_id();
   let started_at_ms = now();
   let session_span = "motoko.session.${session_id}";
+  let live_provider = ported_provider(rt, history, provider);
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, provider));
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, live_provider));
   Trace.spanEnd(session_span);
   result
 }
@@ -1706,8 +1715,9 @@ func run_v2_from_messages_with_policy(
   let session_id = derive_session_id();
   let started_at_ms = now();
   let session_span = "motoko.session.${session_id}";
+  let live_provider = ported_provider(rt, history, provider);
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, provider)).result;
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, live_provider)).result;
   Trace.spanEnd(session_span);
   result
 }
@@ -1879,7 +1889,8 @@ export func conversation_loop_v2(
   session_id: string
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+  let live_provider = ported_provider(rt, history, provider);
+  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id)
 }
 
 -- M8 combined entry point: runs the initial task via run_v2, then enters
@@ -1906,15 +1917,16 @@ export func run_v2_with_conversation(
   let initial_messages = msgs_to_messages(initial_msgs);
   let session_id = derive_session_id();
   let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  match run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider) {
-    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+  let live_provider = ported_provider(rt, initial_messages, provider);
+  match run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, live_provider) {
+    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id),
     Err(e) => {
       let _ = ledger_emit(session_id, ErrorEvent({
         source: "agent_loop_v2",
         code: e.code,
         message: e.message
       }));
-      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id)
     }
   }
 }

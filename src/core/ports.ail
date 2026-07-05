@@ -1,12 +1,12 @@
 -- src/core/ports.ail
 --
--- Phase C ports: function-valued seams for nondeterminism. Live wiring lands
--- later; WI-C3 defines the contract and scripted fakes can satisfy it under
--- minimal caps.
+-- Phase C ports: function-valued seams for nondeterminism. The live driver
+-- consumes the model port through the StepProvider compatibility surface while
+-- keeping the historical public entrypoints stable.
 
 module src/core/ports
 
-import std/ai (Message, StepResult, AIError)
+import std/ai (Message, StepResult, AIError, StreamChunk)
 import std/result (Result)
 import std/trace as Trace
 import pkg/sunholo/motoko_ext_abi/types (ExtRuntime)
@@ -15,7 +15,7 @@ import src/core/phase_vocab (ApprovalRequest)
 export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
 
 export type Ports = {
-  model_step: (string, [Message]) -> Result[StepResult, AIError] ! {AI, IO, Trace},
+  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
   approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env},
@@ -34,7 +34,7 @@ func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 export func ports_shape_probe(
-  model_step: (string, [Message]) -> Result[StepResult, AIError] ! {AI, IO, Trace},
+  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
   hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
 ) -> Ports {
   {
