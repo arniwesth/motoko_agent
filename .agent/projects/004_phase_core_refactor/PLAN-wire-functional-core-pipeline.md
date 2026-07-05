@@ -1,4 +1,4 @@
-# PLAN: Wire the functional-core pipeline into the live Phase C driver
+# PLAN: Close the functional-core pipeline gaps in the live Phase C driver
 
 Date: 2026-07-05
 Status: Draft (for operator review)
@@ -7,233 +7,325 @@ Pinned toolchain: AILANG v0.26.0 (commit `3b52a24`)
 
 Fixes: `ISSUE-functional-core-pipeline-not-wired.md` (findings 1–6, as corrected by
 the 2026-07-05 independent-verification pass).
-Relates to: `ADR-001-phase-oriented-core.md` (D1, D3, D5, D9);
-`DIAGRAM-phase-core-architecture.md` §1, §3; `PLAN-phase-c2-live-inversion.md`
-(the driver this plan finishes); `NOTE-phase-c-implementation-findings.md`.
+Relates to: `ADR-001-phase-oriented-core.md` (D1, D3, D5, D9 + Open Question 4
+closure); `DIAGRAM-phase-core-architecture.md` §1, §3;
+`PLAN-phase-c2-live-inversion.md` (the driver this plan finishes);
+`HANDOFF-continue-phase-c.md` (the "do not start ABI v3" boundary this plan honors).
 
 ---
 
-## Framing
+## TL;DR
 
-The Phase C driver (`session.ail:c2_loop`) is live and shippable, but it threads
-only the cheap half of the functional-core pipeline. The compaction sub-pipeline,
-telemetry, totals, transcript-append, and cost are duplicated inside the driver's
-own `C2LoopState` flow. This plan makes the live path match the ADR.
+After grounding every finding against source **and against the ADR's own D9 / Open
+Question 4 closure**, the live pipeline is in far better shape than the ISSUE's
+severities suggest. Most findings resolve to "not a defect", "deferred to ABI v3 by
+design", or "cosmetic". The required, in-scope, **byte-neutral** work is small:
 
-**The overriding constraint is strict JSONL parity.** This is the same discipline
-as Phases A–C: any change that alters production bytes is classified under D-B7
-(expected-diff evidence + baseline re-bless) *before* it lands; everything else
-must be byte-neutral against `/tmp/phase_c_blessed`. Most work items here are
-byte-neutral refactors. Exactly one (WI-F4, telemetry threading) can change
-compaction *behavior* and is fenced accordingly.
+1. **WI-F1** — delete the dead `SessionSnapshot` cluster (finding 5).
+2. **WI-F2** — replace `project()`'s misleading stub with honest pure prep, and drop
+   the vestigial `ModelRequest.payload` the driver discards (findings 1, 2-residue).
 
-## The architectural clarification that reframes findings 1 & 2
+Optional follow-on (byte-neutral but carries an import-cycle cost — D-F3):
 
-The ISSUE reads finding 2 ("driver discards `CallModel`'s payload and runs its own
-compaction") as a pure defect. It is half a defect and half a **necessary
-consequence of the pure/effectful split**, and the plan must not pretend
-otherwise:
+3. **WI-F3** — extract the effectful compaction+model call into an effectful
+   `model_phase`, consuming `PhaseResult.transcript_append`/`cost_delta_millicents`
+   (finding 6 + the organizational half of finding 2 + the ADR's "effectful
+   `model_phase`" gap).
 
-- The compactor chain is **effectful**: `dispatch_pre_step_chain`
-  (`ext/runtime.ail:185`) carries the 9-effect row
-  `{IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}`.
-- `decide` is **pure** (`step_machine.ail:78`) and can therefore *never* run the
-  compactor chain. So `CallModel`'s payload, produced inside pure `decide` via
-  `project()`, can only ever be a *pre-chain* value. The driver is right to not
-  ship it to the provider as-is.
+Explicitly **deferred to the ABI v3 track** (out of scope here, and forbidden to
+start now by `HANDOFF-continue-phase-c.md`):
 
-This matches the ADR's own two-op design (D3/D9, ADR line 208-210): `project()` is
-the **pure precheck**; `seal_compacted_payload()` is the **post-chain seal**. The
-effectful chain belongs *between* them, in an effectful phase — not in `decide`.
+- **Telemetry threading + actual-token gating** (findings 3-telemetry, 4). Per D9 /
+  Open Question 4, core's exhaustion decision is the *effectful* 95%-estimate seal
+  (already live and correct); actual-token gating is *compactor-extension policy* fed
+  by `ExtCtx.telemetry`, which is ABI v3. Threading telemetry into the loop now has
+  no in-scope consumer. See "Deferred" below.
 
-So "wire `project()` into production" is **not** the fix. The fix is:
+**No item in the required or optional scope changes production bytes**, so no D-B7
+fence is needed — a notable simplification from earlier drafts, which wrongly modeled
+an actual-token pre-gate as core behavior.
 
-1. Give `project()` a real pure-precheck job (or retire it if precheck buys
-   nothing — see D-F1).
-2. Move the effectful compaction+model-call block out of `c2_loop`'s inline body
-   into an effectful **`model_phase`** function that the driver calls — the ADR's
-   "single logical authority", and the seam that makes the compaction path
-   L1-testable instead of reachable only through the whole driver.
-3. Thread telemetry and consume the full `StateDelta` / `PhaseResult` so the
-   driver stops maintaining a shadow copy of state.
+One either/or needs operator sign-off (D-F2, delete vs keep the dead cluster) and one
+scoping call (D-F3, whether to take the optional WI-F3 now).
+
+## Framing — why the required scope is this small
+
+The driver carries **`C2LoopState`** (`session.ail:317`): `[Message]`-based, plus
+driver-only fields. Each step it converts `C2LoopState → StepState` (`c2_step_state`,
+`:400`), calls `decide`, then `apply_state_delta` (`:1456`), then rebuilds
+`C2LoopState`. The pipeline is *already* threaded through this loop for the fields
+that matter: `pending_tool_calls`, `last_response_text`, `nudges_used` flow from
+`applied`; `totals` is driver-summed (the delta carries `None`); `last_finish_reason`
+is driver-set for control flow. `apply_state_delta` is the DIAGRAM §1 single applier
+and is live.
+
+Adjudicating each finding against source + the ADR's D9 closure:
+
+| # | ISSUE severity | Adjudication | Home |
+|---|---|---|---|
+| 1 `project()` stub | CRITICAL | Real, but its job is pure *prep*, not exhaustion (D9). Fix = honest prep. | **WI-F2** |
+| 2 driver runs own compaction | CRITICAL | **Not a defect** — the compactor chain is effectful; the driver is right to run it. Residue = a vestigial `CallModel` payload. | **WI-F2** (drop payload) |
+| 3 delta partially wired | CRITICAL | Only *telemetry* is genuinely dropped; `totals`/`last_finish_reason` are correct-by-design (not defects). Telemetry's consumer is ABI v3. | **Deferred** (telemetry); rest = no-op |
+| 4 telemetry always 0 | HIGH | Superseded by D9 — core does not actual-token-gate; the consumer is `ExtCtx.telemetry` (ABI v3). | **Deferred** |
+| 5 dead `apply_phase_result` cluster | MEDIUM | Real dead code (0 callers). | **WI-F1** (delete) |
+| 6 `transcript_append`/`cost_delta` unused | MEDIUM | Cosmetic; real consumption only exists once the effectful `model_phase` owns the call. | **WI-F3** (optional) |
+
+So the required plan closes findings 1, 2-residue, 5; the optional WI-F3 closes 6 and
+the organizational half of 2; and findings 3-telemetry / 4 are dispositioned to ABI v3.
+
+**The overriding constraint is strict JSONL parity.** Every item below is byte-neutral
+against the blessed baseline; the plan adds no behavior change, so nothing here needs
+D-B7 expected-diff evidence or a re-bless.
+
+## Why finding 2 is not a correctness defect, and why `project()` is prep (not a gate)
+
+- `dispatch_pre_step_chain` (`ext/runtime.ail:185`) carries the 9-effect row; `decide`
+  (`step_machine.ail:78`) is pure and can never call it. The fully-compacted payload
+  is necessarily produced effectfully, so the driver running compaction inline is
+  correct. Its only residue is the discarded `CallModel(ModelRequest{payload})`
+  (`CallModel(_)`, `:1382`) — removed in WI-F2.
+- Per ADR §4 and Open Question 4's closure: core's **exhaustion decision** is the
+  *effectful* `seal_compacted_payload` (95%-estimate over the re-pinned full list vs
+  the catalog limit, fail-open at 0) — this is already live and correct at
+  `session.ail:1393`. `project()` is the **pure precheck**, i.e. structural prep, not
+  an exhaustion gate. The current stub's `t.last_input_tokens >= pol.context_limit`
+  Fail is therefore *doubly* misaligned: it is (a) an exhaustion decision that belongs
+  in the seal, and (b) an *actual-token* test that D9 assigns to extension policy. WI-F2
+  removes it.
+
+A real Fail-capable pre-gate in `decide` is also inherently **not byte-neutral**: it
+would fail *before* the effectful compaction attempt, skipping the `ProviderCallPrepared`
+/ stage events the current post-compaction failure emits. That is another reason the
+pre-gate is out of scope here — if ever wanted, it is a fenced behavior change on the
+ABI v3 track, not a "wiring fix."
 
 ## Decisions (for operator sign-off)
 
-- **D-F1 — `project()`'s fate.** Recommend: keep it, narrowed to a genuine pure
-  precheck (pin system prefix + split segment + estimate-based exhaustion
-  precheck), and have the effectful phase consume its `PinnedSplit` rather than
-  re-running `split_for_compaction`. Rejected alternative: delete `project()` and
-  let `CallModel` carry only `{model}`. Rejected because D9's actual-token-gated
-  precheck wants a pure, Z3-eligible exhaustion gate, and the ADR names
-  `project()` normatively.
-- **D-F2 — `apply_phase_result` (finding 5).** Recommend: make it the driver's
-  single state-application path (delta + transcript + events + cost), replacing
-  the ad-hoc `apply_state_delta` call and the inline `assistant_msg`/`step_cost`
-  duplication, then it is no longer dead. Rejected alternative: delete
-  `apply_phase_result` + `SessionSnapshot` as scaffolding. Rejected because
-  findings 3/5/6 share one root cause and one fix — routing state through the
-  single applier the ADR's D5 prescribes — so deleting it would re-entrench the
-  duplication findings 3 and 6 describe.
-- **D-F3 — telemetry carrier (finding 4).** Recommend: thread real per-step tokens
-  through `PhaseResult.delta.telemetry` (already populated by `result_delta`,
-  `model_phase.ail:15`) into the next `StepState`, by giving `C2LoopState` a
-  `telemetry` field so `c2_step_state` stops hardcoding zero. This is the only
-  change that can move compaction decisions; see WI-F4's parity fence.
+- **D-F2 — the dead `SessionSnapshot` cluster (finding 5).** Recommend: **delete**
+  `apply_phase_result`, `session_from_messages`, `next_decision`, `SessionSnapshot`
+  (`session.ail:2061-2103`). They are a bypassed exploratory API (0 callers);
+  `apply_state_delta` is already the live single applier. Rejected: keep and build a
+  `SessionSnapshot`-based L1 harness — deferred; the live driver has no path to it and
+  this plan's L1 coverage drives `decide` directly. *(They were likely intended as a
+  snapshot-style loop API the pragmatic C2 driver never adopted.)*
+- **D-F3 — the effectful `model_phase` extraction (WI-F3).** Recommend: **defer**. Not
+  required for correctness (finding 2 is not a defect), and it hits a real import
+  cycle — `run_model_phase` needs `ledger_emit`, `mk_v2_ext_ctx`, `messages_to_msgs`,
+  all in `session.ail`, which imports `model_phase.ail`. Doing it right means
+  relocating those helpers to a lower shared module or injecting them as
+  driver-constructed ports/closures (the ADR ports pattern) — a deliberate refactor,
+  not a rider on a cleanup. Rejected: do it now.
 
 ## Work items
 
-Ordered; each leaves the tree green and shippable. `WI-F0` is setup; `WI-F1..F5`
-are the fixes; `WI-F6` is the closing gate.
+`WI-F0` is setup; `WI-F1..F2` are the required fixes; `WI-F3` is optional; `WI-F4` is
+the closing gate.
 
 ### WI-F0 — Baseline and instruments
-- Re-bless the current parity baseline at `fed914c` (or confirm `/tmp/phase_c_blessed`
-  still matches) and record the exact command block. No code change.
-- Add an L1 scenario stub file `scripts/phase_f_pipeline_wiring.ail` (named now so
-  later gates are executable — same no-phantom-gates discipline as ADR Decision
-  detail 6). It will hold the assertions WI-F1..F5 fill in.
-- **Gate:** `PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity` green;
+- **Generate** the parity baseline from `fed914c` into a session-local path (the prior
+  `/tmp/phase_c_blessed` is ephemeral and will not exist in a fresh session — regenerate
+  it or bless a new path and use it consistently). Record the bless command. No code
+  change.
+- Add L1 scenario file `scripts/phase_f_pipeline_wiring.ail` (named now — the ADR
+  Decision-detail-6 no-phantom-gates discipline).
+- **Gate:** `PARITY_BASELINE=<baseline> make smoke_parity` green;
   `ailang check scripts/phase_f_pipeline_wiring.ail`.
 
-### WI-F1 — Extract the effectful compaction+model call into `model_phase`
-Addresses findings 1 & 2 (structurally, per the reframe above).
-- Move the inline block `session.ail:1385-1415` (split → `dispatch_pre_step_chain`
-  → `seal_compacted_payload` → `ProviderCallPrepared` → `dispatch_step`) into an
-  effectful function in `model_phase.ail`, e.g.
-  `run_model_phase(rt, ctx_inputs, split, model, limit, on_chunk) -> ModelPhaseOutput`.
-- The driver's `CallModel(_)` arm calls it. `decide` still produces the `CallModel`
-  decision; the effectful phase does the chain + seal (the ADR's post-chain seal
-  seam). `project()`'s pure precheck output (`PinnedSplit`) is passed in rather
-  than recomputed (ties to D-F1 / WI-F5).
-- **Parity:** byte-neutral. The moved code is identical; only its home changes.
-- **Gate:** strict parity green; `ailang test src/core/model_phase.ail` (new phase
-  covered by an L1 test driving it with scripted ports under `--caps IO`).
+### WI-F1 — Delete the dead `SessionSnapshot` cluster (finding 5)
+- Remove `apply_phase_result` (`:2086`), `session_from_messages` (`:2066`),
+  `next_decision` (`:2093`), `SessionSnapshot` (`:2061`). Confirm 0 callers first
+  (`grep -rn` across `src/`, `scripts/`; `cgq.py q callers` each).
+- **Parity:** byte-neutral (dead code).
+- **Gate:** strict parity green; `make check_core` clean; `cgq.py q callers
+  apply_phase_result` empty.
 
-### WI-F2 — Route state application through `apply_phase_result` (single applier)
-Addresses finding 5 and the totals/finish-reason half of finding 3.
-- Replace the inline `apply_state_delta` call (`session.ail:1456`) and the
-  per-branch `next_state` field-picking with one `apply_phase_result(snapshot,
-  phase)` call whose result builds the next `C2LoopState`. `apply_phase_result`
-  gains 6 real callers, retiring the dead-code finding.
-- Route `totals` and `last_finish_reason` through the applier instead of the
-  driver's `new_totals` / branch-literals, *or* consciously record them as
-  driver-owned in `apply_phase_result`'s contract (whichever preserves bytes —
-  totals are already summed identically; the change is which code owns the sum).
-- **Parity:** byte-neutral (same values, single owner). Verify with a diff of
-  `loop_totals_updated` / `run_summary` events specifically.
-- **Gate:** strict parity green; `cgq.py q callers apply_phase_result` now
-  non-empty; `ailang test src/core/session.ail`.
+### WI-F2 — Honest `project()` prep + drop vestigial `ModelRequest.payload` (findings 1, 2-residue)
+- Replace the `MkPayload(xs)`-wraps-everything stub (`phase_vocab.ail:160-171`) with an
+  honest pure-prep body: pin the system prefix and build the `CompactableSegment`
+  (reuse `split_for_compaction`), returning the structural prep. **It does not make an
+  exhaustion/Fail decision** — per D9 that lives in the effectful `seal_compacted_payload`
+  (unchanged). Keeping `project()` non-failing is what keeps this byte-neutral (no
+  early-fail skips events).
+- Shrink `ModelRequest` to `{model}` (`phase_vocab.ail:139`); update the sole
+  construction site `step_machine.ail:74` to `CallModel({model})`. The driver's
+  `CallModel(_)` already ignores the payload; `model_phase` imports `ModelRequest` but
+  never reads `.payload`. So this removes the "discarded payload" residue by
+  construction.
+- Rewrite the stale stub comment ("not called from production" — it *is* called by
+  `decide` via `call_model_or_fail`, `step_machine.ail:72`; state that its prep output
+  is consumed only once the optional WI-F3 lands, and that exhaustion is the seal's job).
+- **Parity:** byte-neutral (`project()`'s output is still discarded by the driver until
+  WI-F3, and it never Fails, so no event-stream change; the `ModelRequest` shrink is an
+  internal-type change with one construction site).
+- **Gate:** strict parity green; `ailang test src/core/phase_vocab.ail`;
+  `ailang test src/core/step_machine.ail`.
 
-### WI-F3 — Consume `transcript_append` and `cost_delta_millicents`
-Addresses finding 6.
-- Build the assistant message from `phase.transcript_append` instead of the inline
-  `step_result_to_message(result)` (`session.ail:1457`); source `step_cost` from
-  `phase.cost_delta_millicents` instead of the independent `step_cost_millicents`
-  call (`session.ail:1449`).
-- `phase_from_result` already computes both identically, so this removes a
-  duplicate computation, not a behavior.
-- **Parity:** byte-neutral (assert `phase.transcript_append == [step_result_to_message(result)]`
-  and `phase.cost_delta_millicents == step_cost` hold before deleting the inline
-  forms — a golden-value pure test in `phase_f_pipeline_wiring.ail`).
-- **Gate:** strict parity green; golden-value equality test passes.
+### WI-F3 — (OPTIONAL, deferred by D-F3) Extract the effectful `model_phase`
+Addresses finding 6 + the organizational half of finding 2 + the ADR gap
+(`model_phase.ail` is pure-only today; the ADR wants it "effectful via ports →
+`PhaseResult`"). **Not required for correctness. Do not land inside the F1–F2 series.**
+- Move the inline block (`session.ail:~1385-1415`: `split_for_compaction` →
+  `dispatch_pre_step_chain` → `seal_compacted_payload` → `dispatch_step`) into an
+  effectful `run_model_phase` in `model_phase.ail`, returning
+  `{ next_provider, dispatched_result, stages, phase, compacted_msgs, stream_id }`.
+  Retry, `ThinkingStream{Start,End}`, totals, and `next_state` stay in `c2_loop`, which
+  resumes on `dispatched_result`. It consumes `project()`'s prep (from WI-F2) instead
+  of recomputing the split — finally giving `project()` a real consumer.
+- **Resolve the import cycle first** (D-F3): relocate `ledger_emit`, `mk_v2_ext_ctx`,
+  `messages_to_msgs` to a lower shared module, **or** pass them plus the `on_chunk`
+  handle and a discrete-event emit handle as **driver-constructed ports/closures** so
+  `model_phase` never imports `session` (single emission authority stays in the driver;
+  ADR D5).
+- Have `run_model_phase` compute cost (`step_cost_millicents`, `cost_phase.ail:10`) so
+  `phase.cost_delta_millicents` is genuinely phase-sourced; then the driver consumes
+  `phase.transcript_append` (already phase-computed) and `phase.cost_delta_millicents`
+  instead of the inline `step_result_to_message` (`:1457`) / `step_cost_millicents`
+  (`:1449`).
+- **Parity:** byte-neutral (relocation + identical-value dedup). Guard with golden-value
+  checks (`phase.transcript_append == [step_result_to_message(result)]`,
+  `phase.cost_delta_millicents == step_cost`; field-wise if `[Message]` `==` is
+  unavailable) **and** the streaming byte-parity test
+  (`thinking_stream_start → N×delta → thinking_stream_end`) — a phase-boundary mis-cut
+  silently reorders ledger events.
+- **Fixture:** L1 test needs a no-extension `ExtRuntime` (pass-through chain) + a
+  `Scripted` provider under `--caps IO` (fake ports ⇒ the 9-effect row isn't performed —
+  the `smoke_ports_record` result).
+- **Gate:** strict parity green; golden-value + streaming-parity checks;
+  `ailang test src/core/model_phase.ail`.
 
-### WI-F4 — Thread telemetry (finding 4) — behavior-fenced
-Addresses finding 4 and the telemetry half of finding 3. **The one item that can
-change output.**
-- Add `telemetry: TokenTelemetry` to `C2LoopState` (`session.ail:317`), seed it in
-  `c2_initial_state`, and set `c2_step_state:406` to read it instead of hardcoding
-  zero. Populate the next state's telemetry from `applied.telemetry` (already the
-  real tokens via `result_delta`).
-- **Consequence:** `project()`'s exhaustion precheck (`t.last_input_tokens >=
-  limit`) and any actual-token-gated compactor policy now see real numbers. This
-  *can* change when compaction fires ⇒ a real parity diff.
-- **Parity:** classify under D-B7 *before* landing. Capture the expected-diff (which
-  sessions now compact earlier/later, which `compaction_*` events appear) as
-  `EVIDENCE-phase-f-telemetry-expected-diff.md`, then re-bless. If the diff is
-  empty on the parity fleet (likely — the fleet is short sessions below any tier),
-  record that and land as byte-neutral.
-- **Gate:** D-B7 evidence recorded; new baseline blessed if nonempty; L1 scenario
-  `actual_tokens_reach_project` asserts `c2_step_state` telemetry is nonzero after
-  a scripted multi-step run.
+### WI-F4 — Closing gate
+- Run the verification block as a unit (below).
+- Update `ISSUE-functional-core-pipeline-not-wired.md` to Resolved with per-finding
+  dispositions matching the table above (2 = not-a-defect/residue-only; 3-totals/finish
+  = not defects; 3-telemetry + 4 = deferred to ABI v3; 6 = optional WI-F3).
+- **Gate:** the WI-C8-equivalent block passes as a block.
 
-### WI-F5 — Narrow `project()` to a real pure precheck
-Addresses finding 1 (the stub body) and closes D-F1.
-- Replace the `MkPayload(xs)`-wraps-everything stub (`phase_vocab.ail:160-171`)
-  with: pin system prefix, split segment (reuse `split_for_compaction`), and an
-  estimate-based exhaustion precheck against `pol.context_limit`. It returns the
-  `PinnedSplit` (or a sealed precheck payload) the effectful phase consumes in
-  WI-F1. It does **not** run the compactor chain (it cannot — pure).
-- Update or delete the stale stub comment ("not called from production").
-- **Parity:** byte-neutral if the precheck's exhaustion threshold matches the
-  driver's `seal_compacted_payload` gate (`exhaustion_pct()`); assert equivalence
-  in a pure test so the pure precheck and effectful seal cannot disagree.
-- **Gate:** strict parity green; `ailang test src/core/phase_vocab.ail` (precheck
-  vs. seal agreement test); `ailang test src/core/step_machine.ail`.
+## Deferred to the ABI v3 track (out of scope; do not start now)
 
-### WI-F6 — Closing gate
-- Run the full Phase C verification block as a unit (parity, projection gate,
-  minimal-caps L1 family, approval protocol, pure-module tests, sketch probes,
-  sealing negative probe).
-- Update `ISSUE-functional-core-pipeline-not-wired.md` status to Resolved with a
-  per-finding disposition and the commit that closed each.
-- **Gate:** the WI-C8-equivalent block passes as a block (commands below).
+`HANDOFF-continue-phase-c.md` explicitly bars starting ABI v3 / conformance /
+`compaction_ai` 0.3.0. Findings 3-telemetry and 4 land there because that is where
+their *consumer* is:
+
+- Per D9 / Open Question 4, actual-token gating is **compactor-extension policy** fed by
+  `ExtCtx.telemetry`. That field arrives with ABI v3. Until then, threading real
+  telemetry into `C2LoopState`/`StepState` (replacing the `c2_step_state:406` zero) has
+  no in-scope consumer, so it is deliberately *not* done here (no unconsumed state,
+  no 14-site edit for zero current benefit).
+- When ABI v3 lands: add `telemetry: TokenTelemetry` to `C2LoopState`, seed it, populate
+  from `applied.telemetry` (already the real tokens via `result_delta`,
+  `model_phase.ail:15`), and surface it through `ExtCtx.telemetry`. That work carries
+  its own D-B7 fence *iff* a compactor then gates on it and changes output.
 
 ## Sequencing & dependencies
 
 ```
-WI-F0 ─┬─> WI-F1 ─> WI-F2 ─> WI-F3 ─> WI-F5 ─> WI-F6
-       └─> WI-F4 (independent; land last of F1–F5 so its D-B7 diff is isolated)
+WI-F0 → WI-F1 → WI-F2 → WI-F4
+                    ⇧
+       WI-F3 (optional; any time after F2, gated separately)
 ```
-WI-F1 is the enabling structural move; F2/F3/F5 are byte-neutral consolidations on
-top of it; F4 is fenced and lands isolated so its parity diff is never entangled
-with a refactor's.
+Linear for the required series (all byte-neutral). WI-F3, if taken, depends on WI-F2
+(it consumes `project()`'s prep) and is gated on its own parity + streaming-parity run.
 
 ## Parity classification summary
 
-| WI | Changes bytes? | Fence |
+| WI | Required? | Changes bytes? | Fence |
+|---|---|---|---|
+| F1 | yes | No (dead-code deletion) | strict parity + 0-callers proof |
+| F2 | yes | No (`project()` never Fails; internal-type shrink) | strict parity |
+| F3 | optional | No (relocation + identical-value dedup) | strict parity + golden-value + streaming-parity |
+
+## Blast radius
+
+Grounded against `fed914c`. Required work touches 3 modules; optional F3 adds a 4th.
+Extension side, compaction primitives, telemetry/ABI v3, and all `run_v2*` entrypoints
+untouched.
+
+**Modules modified:**
+
+| Module | What changes | WIs |
 |---|---|---|
-| F1 | No (code relocation) | strict parity |
-| F2 | No (single owner, same values) | strict parity + totals/summary diff check |
-| F3 | No (dedup of identical computation) | golden-value equality test first |
-| F4 | **Possibly** (telemetry gates compaction) | **D-B7 evidence + re-bless** |
-| F5 | No (precheck ≡ seal threshold) | strict parity + agreement test |
+| `src/core/session.ail` | delete `SessionSnapshot` cluster (F1); *[opt]* compaction block → `run_model_phase`, consume `transcript_append`/`cost_delta` (F3) | F1,(F3) |
+| `src/core/phase_vocab.ail` | `project()` stub → honest pure prep; `ModelRequest` → `{model}` (F2) | F2 |
+| `src/core/step_machine.ail` | `CallModel({model})` at `:74` (F2) | F2 |
+| `src/core/model_phase.ail` | *[opt]* new **effectful** `run_model_phase` (F3) | (F3) |
+
+**Type / signature ripples:**
+- `ModelRequest` → `{model}` (F2): sole consumer `step_machine.ail:74`; driver's
+  `CallModel(_)` ignores it; `model_phase` never reads `.payload`. Safe.
+- `project()` return (F2): flows to `step_machine.ail:72-74`.
+- `SessionSnapshot` deletion (F1): removes 4 exported symbols; 0 callers.
+- *[opt]* `run_model_phase` (F3): consumed only in `c2_loop`'s `CallModel` arm; its
+  9-effect row and the import-cycle resolution are the F3 cost (D-F3).
+
+**No `C2LoopState` field changes** in the required scope — the telemetry field (and its
+14 constructor sites: the 13 `next_state` literals + `c2_initial_state:417`) belongs to
+the deferred ABI v3 work, not here.
+
+**Effect-row / purity:** required work adds no effect rows. *[opt]* F3 introduces the
+9-effect row into `model_phase.ail` (pure today); its existing pure funcs
+(`result_delta`, `phase_from_result`) stay pure.
+
+**Deliberately NOT touched (containment boundary):**
+- Extension ABI / ABI v3, `ExtCtx.telemetry`, `dispatch_pre_step_chain`
+  (`ext/runtime.ail:185`), compaction extensions.
+- `compaction.ail` / `seal_compacted_payload` — the live, correct exhaustion decision.
+- `totals` accumulation (`c2_add_step_totals`) and `last_finish_reason` control-flow
+  overrides — **intentional** (the delta carries neither; changing them regresses
+  `decide`).
+- The driver's inline effectful compaction — **correct as-is** unless the optional F3
+  relocates it.
+- The pre-existing `step_cost_millicents` duplication (`cost_phase.ail:10` vs
+  `session.ail:842`) — noted, out of scope.
+- All `run_v2*` entrypoints and the `agent_loop_v2.ail` facade / `rpc.ail` entry —
+  `c2_loop`'s signature is unchanged. **Re-verify, don't edit.**
+
+**Gates / baselines:** parity fleet + baseline (no re-bless — nothing changes bytes),
+`phase_b_projection_gate.sh`, and `scripts/phase_f_pipeline_wiring.ail`.
 
 ## Rejected alternatives
 
-- **Run the compactor chain inside pure `decide`/`project()`** — impossible;
-  `dispatch_pre_step_chain` is effectful. This is why finding 2 is partly
-  structural, not a pure defect.
-- **Delete `apply_phase_result`, `transcript_append`, `cost_delta_millicents`,
-  `project()` as unused scaffolding** — re-entrenches the duplication findings
-  3/5/6 name, and contradicts D5/D3 which are normative. Consolidation, not
-  deletion.
-- **Fix telemetry (F4) folded into the F1–F3 refactor commits** — mixes a
-  behavior change into byte-neutral refactors, producing an unreviewable parity
-  diff (the exact failure mode `HANDOFF-continue-phase-c.md` warns about). Kept
-  isolated.
+- **Give `project()` a real Fail-capable exhaustion pre-gate** — misaligned with D9
+  (exhaustion is the effectful seal; actual-token gating is extension/ABI-v3 policy) and
+  inherently not byte-neutral (early-fail skips events). If ever wanted, it is a fenced
+  behavior change on the ABI v3 track.
+- **Thread telemetry now** — no in-scope consumer (ABI v3 owns it); adds unconsumed
+  state and a 14-site edit for zero current benefit; barred by the handoff.
+- **Route live state through `apply_phase_result` as "the single applier"** —
+  `apply_state_delta` already *is* that path (DIAGRAM §1) and is live;
+  `apply_phase_result` is a dead wrapper (`= apply_state_delta` + trace passthrough) and
+  `StateDelta` carries no `history`, so it could not own transcript anyway. Deleted (D-F2).
+- **"Fix" `totals`/`last_finish_reason` to flow from the delta** — a regression: the
+  delta carries no `totals` (accumulation is driver-owned) and `last_finish_reason` is a
+  driver control signal `decide` branches on.
+- **Extract the effectful `model_phase` as part of the correctness fix** — not required
+  (finding 2 is not a defect) and hits a `session ↔ model_phase` import cycle; kept
+  optional and separate (D-F3).
 
 ## Risks
 
-- **Hidden parity diff in F2/F3.** The claim "same values" must be *proven* by
-  golden-value equality tests before the inline forms are deleted, not assumed.
-- **F4 telemetry changes more than compaction.** Real tokens flowing into
-  `StepState` could feed any actual-token consumer added since; grep
-  `last_input_tokens` consumers before landing.
-- **`project()`/seal threshold drift (F5).** If the pure precheck and effectful
-  seal use different limits/percentages they will disagree on exhaustion; the
-  agreement test is mandatory, not optional.
+- **F2 must keep `project()` non-failing** to stay byte-neutral; a reviewer might
+  "helpfully" re-add an exhaustion Fail. The stub-comment rewrite must state that
+  exhaustion is the seal's job and the pre-gate is deferred, so the constraint is
+  explicit in-code.
+- **[opt] F3 phase-boundary mis-cut.** The model block is not a clean span — retry,
+  stream Start/End, totals interleave. A wrong cut silently reorders ledger events;
+  guard with the streaming byte-parity test. (One more reason it is deferred.)
+- **[opt] F3 import-cycle resolution** is the real work; underestimating it (treating
+  it as a mechanical move) is the trap — hence D-F3 defers it to a deliberate refactor.
 
-## Verification block (WI-F6, run as a unit)
+## Verification block (WI-F4, run as a unit)
 
 ```bash
 ailang --version                                   # must be v0.26.0 / 3b52a24
 git status --short
-PARITY_BASELINE=/tmp/phase_c_blessed make smoke_parity
-./scripts/phase_b_projection_gate.sh /tmp/phase_c_blessed
+PARITY_BASELINE=<baseline> make smoke_parity
+./scripts/phase_b_projection_gate.sh <baseline>
 make check_core && make test_core && make test_integration
 ailang test src/core/step_machine.ail
 ailang test src/core/phase_vocab.ail
-ailang test src/core/model_phase.ail
 ailang test src/core/session.ail
+# F3 only, if taken:
+# ailang test src/core/model_phase.ail
 ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
 ailang run --caps IO --entry main scripts/phase_f_pipeline_wiring.ail
 (cd .agent/projects/004_phase_core_refactor/sketch && ailang check probe_consumer_decide.ail)
@@ -241,10 +333,11 @@ ailang run --caps IO --entry main scripts/phase_f_pipeline_wiring.ail
 
 ## Open questions
 
-1. Does the parity fleet contain any session long enough for WI-F4 to produce a
-   nonempty compaction diff? If not, F4 is byte-neutral in practice and the D-B7
-   evidence records "no fleet session reaches a tier" — but the L1 scenario must
-   still prove telemetry is nonzero synthetically.
-2. Should `model_phase` also absorb the stream-delta append handle (currently
-   `on_chunk` built inline at `session.ail:1406`), or does that stay driver-owned?
-   Leaning driver-owned (single logical authority for the ledger), passed in.
+1. **Take the optional WI-F3 now, or defer with the ABI v3 track?** — Recommendation:
+   defer (D-F3). It is the only item with real refactor risk (import cycle,
+   phase-boundary parity), and finding 2 — its motivation — is not a correctness defect.
+   Operator call.
+2. **Stream-delta append handle ownership** — **Resolved: driver-owned** (operator: "go
+   with your recommendation", 2026-07-05); relevant only if WI-F3 is taken. `on_chunk`
+   (and any discrete-event emit handle) stays driver-constructed and is passed into
+   `run_model_phase`, preserving single logical emission authority (ADR D5).
