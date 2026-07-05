@@ -1,34 +1,25 @@
 -- src/core/session.ail
--- Phase C live v2 driver using upstream std/ai.step() with TYPED tool_calls.
--- Replaces motoko's text-based parse_tool_calls + indicates_continuation_intent
--- string-matching layer with provider-native tool-use protocols (Anthropic
--- tool_use blocks, OpenAI tool_calls field, Gemini functionCall - handled
--- transparently by upstream step()).
+-- Phase C live v2 driver: the imperative shell over a pure step machine.
 --
--- Why this remains separate from rpc_loop:
---   - rpc_loop is 1494 LOC of intricate state-machine code with extension
---     intercept dispatch, ohmy_pi backend split, hybrid mode, continuation
---     intent feedback, and tool gating policies. Replacing in place is
---     high-risk for users who depend on those features.
---   - This v2 loop is the MINIMUM VIABLE agent: step -> dispatch -> loop.
---     It demonstrates that upstream step() works end-to-end against motoko's
---     existing tool dispatcher, without committing to dropping any of
---     rpc_loop's features.
---   - Selection between rpc_loop (legacy) and run_v2 (this) is a runtime
---     decision via env var MOTOKO_AGENT_V2=1, so users can stress-test the
---     v2 path against real workloads while keeping the legacy path as the
---     default until the migration is fully validated.
+-- This module owns the real effect row and is the sole emitter of ledger
+-- events. Per step it lifts C2LoopState into a StepState, calls the pure
+-- `decide` (src/core/step_machine.ail), and executes the returned
+-- StepDecision through phases (model_phase / tool_phase / hook_phase) and
+-- ports, applying state deltas only through apply_phase_result.
 --
--- What this loop deliberately DOES NOT include (vs rpc_loop):
---   - Extension intercept dispatch (ContinueWithFeedback / Accept / NoIntercept)
---   - Tool gating policy (apply_tool_policy)
---   - Tool-handle routing (route_tool_handles for compose extensions)
---   - Native vs ohmy_pi backend split
---   - Hybrid mode (extract_bash for shell-prefix shorthand)
---   - Trajectory caching, context-usage telemetry
+-- Continuation is state, not a field: `decide` re-derives each
+-- CallModel / RunTools / AwaitApproval / Finalize / Fail decision from
+-- typed StepState fields, and c2_loop tail-recurses with the next state.
 --
--- These features can be added back incrementally if needed. The point of
--- this v2 module is to prove the upstream typed API works.
+-- This is the only agent loop. The legacy rpc_loop was deleted in the
+-- M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover; rpc.ail is now a thin entry
+-- point that builds config and calls run_v2_with_conversation here.
+-- src/core/agent_loop_v2.ail is a compatibility facade re-exporting
+-- these entry points under the historical import surface.
+--
+-- Companion to: src/core/step_machine.ail (pure decide),
+-- src/core/phase_vocab.ail (sealed types + transcript gate),
+-- src/core/ports.ail (port adapters), src/core/tool_phase.ail.
 --
 -- Companion to: src/core/tool_dispatch_adapter (M1), src/core/tool_catalog (M2)
 
