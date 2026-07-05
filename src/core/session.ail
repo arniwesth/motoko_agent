@@ -5,7 +5,7 @@
 -- events. Per step it lifts C2LoopState into a StepState, calls the pure
 -- `decide` (src/core/step_machine.ail), and executes the returned
 -- StepDecision through phases (model_phase / tool_phase / hook_phase) and
--- ports, applying state deltas only through apply_phase_result.
+-- ports. State deltas flow through apply_state_delta.
 --
 -- Continuation is state, not a field: `decide` re-derives each
 -- CallModel / RunTools / AwaitApproval / Finalize / Fail decision from
