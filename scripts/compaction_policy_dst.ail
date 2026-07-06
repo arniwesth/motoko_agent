@@ -1,0 +1,298 @@
+module scripts/compaction_policy_dst
+
+import std/io (println, exit)
+import std/list (length)
+import std/result (Result, Ok, Err)
+import std/string (length as string_length)
+import std/ai (ToolCall)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
+  compact_for_pre_step,
+  elide_old_tool_results,
+  estimate_tokens_messages,
+  usage_percent_with_limit,
+  elide_tier_pct,
+  elide_hard_tier_pct,
+  emergency_pct,
+  elide_keep_last,
+  elide_hard_keep_last,
+  emergency_keep_last,
+  emergency_final_keep_last
+)
+
+type ScenarioFailure = {
+  failed_invariant: string,
+  trace: [string]
+}
+
+type Scenario = {
+  id: string,
+  run: () -> Result[(), ScenarioFailure]
+}
+
+func print_trace(lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    line :: rest => {
+      let _ = println("trace ${line}");
+      print_trace(rest)
+    }
+  }
+}
+
+func run_one(s: Scenario) -> bool ! {IO} {
+  match s.run() {
+    Ok(_) => {
+      println("scenario=${s.id} ok");
+      true
+    },
+    Err(f) => {
+      let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
+      let _ = print_trace(f.trace);
+      false
+    }
+  }
+}
+
+func run_all(scenarios: [Scenario], failed: int) -> int ! {IO} {
+  match scenarios {
+    [] => failed,
+    s :: rest => {
+      let ok = run_one(s);
+      run_all(rest, if ok then failed else failed + 1)
+    }
+  }
+}
+
+func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
+  if ok then Ok(())
+  else Err({ failed_invariant: invariant_name, trace: trace })
+}
+
+func tool(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func user(content: string) -> Msg {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func assistant(content: string, calls: [ToolCall]) -> Msg {
+  { role: "assistant", content: content, tool_calls: calls, tool_call_id: "" }
+}
+
+func call(id: string, name: string) -> ToolCall {
+  { id: id, name: name, arguments: "{\"ok\":true}" }
+}
+
+func long_content() -> string {
+  "long tool output that genuinely exceeds eighty characters and keeps going well past the elide threshold so shortening actually happens and the decision becomes Compacted not PassThrough"
+}
+
+func ctx(limit: int) -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "ollama/qwen3.6:35b-a3b-mxfp8",
+    context_limit: limit,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1, solver: 1, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: [],
+    state_key: "k"
+  }
+}
+
+func tool_heavy_msgs() -> [Msg] {
+  let c = long_content();
+  [
+    user("seed"),
+    tool("t0", c),
+    tool("t1", c),
+    tool("t2", c),
+    tool("t3", c),
+    tool("t4", c),
+    tool("t5", c),
+    tool("t6", c),
+    tool("t7", c),
+    tool("t8", c),
+    tool("t9", c),
+    tool("t10", c),
+    tool("t11", c)
+  ]
+}
+
+func limit_for_pct(msgs: [Msg], pct: int) -> int {
+  (estimate_tokens_messages(msgs) * 100) / pct
+}
+
+func count_kept_tools(msgs: [Msg], full: string) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => {
+      let inc = if m.role == "tool" && m.content == full then 1 else 0;
+      inc + count_kept_tools(rest, full)
+    }
+  }
+}
+
+func same_tool_ids(a: [Msg], b: [Msg]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b {
+      [] => false,
+      y :: ys => x.tool_call_id == y.tool_call_id && same_tool_ids(xs, ys)
+    }
+  }
+}
+
+func expect_passthrough(decision: PreStepDecision) -> bool {
+  match decision {
+    PassThrough => true,
+    Compacted(_, _) => false
+  }
+}
+
+func expect_compacted_keep(decision: PreStepDecision, keep_last: int, invariant_name: string) -> Result[(), ScenarioFailure] {
+  match decision {
+    PassThrough => Err({ failed_invariant: invariant_name, trace: ["decision=PassThrough"] }),
+    Compacted(out, _) => {
+      let kept = count_kept_tools(out, long_content());
+      ok_or_failure(kept == keep_last, invariant_name, [
+        "kept=${show(kept)}",
+        "expected=${show(keep_last)}",
+        "usage=${show(usage_percent_with_limit(out, ctx(1).context_limit))}"
+      ])
+    }
+  }
+}
+
+func scenario_estimate_tier_ladder() -> Result[(), ScenarioFailure] {
+  let msgs = tool_heavy_msgs();
+  let below_limit = limit_for_pct(msgs, elide_tier_pct() - 10);
+  let tier_limit = limit_for_pct(msgs, elide_tier_pct() + 5);
+  let hard_limit = limit_for_pct(msgs, elide_hard_tier_pct() + 5);
+  let emergency_limit = limit_for_pct(msgs, emergency_pct() + 2);
+  let below_ok = expect_passthrough(compact_for_pre_step(ctx(below_limit), msgs));
+  if not below_ok then Err({
+    failed_invariant: "below elide tier passes through",
+    trace: ["pct=${show(usage_percent_with_limit(msgs, below_limit))}", "threshold=${show(elide_tier_pct())}"]
+  })
+  else match expect_compacted_keep(compact_for_pre_step(ctx(tier_limit), msgs), elide_keep_last(), "elide tier keeps imported keep-last") {
+    Err(f) => Err(f),
+    Ok(_) => match expect_compacted_keep(compact_for_pre_step(ctx(hard_limit), msgs), elide_hard_keep_last(), "hard tier keeps imported keep-last") {
+      Err(f) => Err(f),
+      Ok(_) => expect_compacted_keep(compact_for_pre_step(ctx(emergency_limit), msgs), emergency_keep_last(), "emergency tier keeps imported keep-last")
+    }
+  }
+}
+
+func msg_at(msgs: [Msg], idx: int) -> Msg {
+  match msgs {
+    [] => { role: "", content: "", tool_calls: [], tool_call_id: "" },
+    m :: rest => if idx == 0 then m else msg_at(rest, idx - 1)
+  }
+}
+
+func tool_shape_ok(input: [Msg], out: [Msg], keep_last: int) -> bool {
+  let same_length = length(input) == length(out);
+  let same_ids = same_tool_ids(input, out);
+  let u0 = msg_at(out, 0);
+  let a1 = msg_at(out, 1);
+  let old_tool = msg_at(out, 2);
+  let recent_tool = msg_at(out, 5);
+  same_length
+    && same_ids
+    && u0.role == "user"
+    && u0.content == "question"
+    && a1.role == "assistant"
+    && a1.content == "call tools"
+    && length(a1.tool_calls) == 2
+    && string_length(old_tool.content) < string_length(long_content())
+    && recent_tool.content == long_content()
+    && keep_last == 2
+}
+
+func scenario_tool_shape_preserved_by_elision() -> Result[(), ScenarioFailure] {
+  let c = long_content();
+  let input = [
+    user("question"),
+    assistant("call tools", [call("tc0", "lookup"), call("tc1", "fetch")]),
+    tool("tc0", c),
+    user("followup"),
+    tool("tc1", c),
+    tool("tc2", c)
+  ];
+  let out = elide_old_tool_results(input, 2);
+  ok_or_failure(tool_shape_ok(input, out, 2), "elision preserves message shape", [
+    "input_len=${show(length(input))}",
+    "out_len=${show(length(out))}",
+    "tool_ids_preserved=${show(same_tool_ids(input, out))}"
+  ])
+}
+
+func non_tool_pressure_msgs() -> [Msg] {
+  let c = long_content();
+  [
+    user("${c}${c}${c}${c}${c}${c}${c}${c}${c}${c}${c}${c}"),
+    assistant("${c}${c}${c}${c}${c}${c}", []),
+    tool("tiny", "short")
+  ]
+}
+
+func scenario_emergency_recovery_or_defer() -> Result[(), ScenarioFailure] {
+  let tools = tool_heavy_msgs();
+  let tool_limit = limit_for_pct(tools, emergency_pct() + 2);
+  let recovery = compact_for_pre_step(ctx(tool_limit), tools);
+  match recovery {
+    PassThrough => Err({ failed_invariant: "emergency tool-heavy pressure recovers", trace: ["decision=PassThrough"] }),
+    Compacted(out, _) => {
+      let recovered = length(out) == length(tools) && count_kept_tools(out, long_content()) == emergency_keep_last();
+      if not recovered then Err({
+        failed_invariant: "emergency tool-heavy pressure recovers",
+        trace: ["kept=${show(count_kept_tools(out, long_content()))}", "expected=${show(emergency_keep_last())}"]
+      })
+      else {
+        let blocked = non_tool_pressure_msgs();
+        let blocked_limit = limit_for_pct(blocked, emergency_pct() + 2);
+        match compact_for_pre_step(ctx(blocked_limit), blocked) {
+          PassThrough => Ok(()),
+          Compacted(_, _) => Err({
+            failed_invariant: "emergency non-tool pressure defers to seal",
+            trace: ["decision=Compacted", "final_keep_last=${show(emergency_final_keep_last())}"]
+          })
+        }
+      }
+    }
+  }
+}
+
+func estimate_tier_ladder_scenario() -> Scenario {
+  { id: "compaction.estimate_tier_ladder", run: scenario_estimate_tier_ladder }
+}
+
+func tool_shape_preserved_by_elision_scenario() -> Scenario {
+  { id: "compaction.tool_shape_preserved_by_elision", run: scenario_tool_shape_preserved_by_elision }
+}
+
+func emergency_recovery_or_defer_scenario() -> Scenario {
+  { id: "compaction.emergency_recovery_or_defer", run: scenario_emergency_recovery_or_defer }
+}
+
+export func main() -> () ! {IO} {
+  let scenarios = [
+    estimate_tier_ladder_scenario(),
+    tool_shape_preserved_by_elision_scenario(),
+    emergency_recovery_or_defer_scenario()
+  ];
+  let failed = run_all(scenarios, 0);
+  if failed == 0 then println("compaction_policy_dst PASS count=${show(length(scenarios))}")
+  else {
+    let _ = println("compaction_policy_dst FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}

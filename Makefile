@@ -50,9 +50,13 @@ smoke_parity:
 		diff -r /tmp/phase_a_parity_a /tmp/phase_a_parity_b; \
 	fi'
 
-phase_c_l1:
+phase_c_l1: compaction_dst
 	ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail
 	ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
+
+compaction_dst:
+	ailang run --caps IO --entry main scripts/compaction_policy_dst.ail
+	ailang run --caps IO,Env,FS --entry main scripts/compaction_catalog_dst.ail
 
 # Type-check every AILANG core runtime module in src/core/, then
 # runtime-boot-probe every extension in the active profile's registry
