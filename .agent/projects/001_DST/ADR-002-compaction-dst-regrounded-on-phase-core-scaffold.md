@@ -12,9 +12,10 @@ Relates to:
   architecture. ADR-001's layer model, harness-boundary (PR #76) scenarios, and CI discipline are
   retained by reference; only the compaction design is re-pointed.
 - `004_phase_core_refactor/ADR-001-phase-oriented-core.md` **D9** — the operator decision that made
-  compaction *policy* extension-resident (core keeps only the measurement scaffold; the elision
-  ladder, tiers, and AI summarization live in `motoko_ext_compaction_structural`; actual-token
-  gating is deferred to ABI v3 `ExtCtx.telemetry`). This ADR targets the architecture D9 produced.
+  compaction *policy* (elision ladders, tiers, AI summarization) extension-resident; core keeps only
+  the measurement scaffold. The shipped structural default is `motoko_ext_compaction_structural`
+  (elision only — it carries no AI summarizer); actual-token gating is deferred to ABI v3
+  `ExtCtx.telemetry`. This ADR targets the architecture D9 produced.
 - `004_phase_core_refactor/ADR-002-send-gate-and-dst-for-system-prompt-and-overflow.md` — landed the
   typed send-gate (`seal_compacted_payload`) and the ledger observable (`provider_call_prepared`
   carrying `system_prefix_chars`). This ADR **reuses that ledger as the DST recorder** instead of
@@ -44,14 +45,19 @@ re-points the surviving invariants at what shipped.
    reusing the `phase_c_l1_scenarios.ail` harness. **Specify** the actual-token / qwen-threshold DST
    precisely but **gate it** on the un-landed ABI v3 `ExtCtx.telemetry` seam plus a fake `ai_step`
    port. DST progress is not blocked on the ABI build.
-3. **Qwen enters as an injected `limit` (D2).** There is no pure limit function — the only source is
-   the effectful `catalog_context_limit_for` (`{Env, FS}`) — so qwen in a pure scenario = the
-   model-string label plus its `262144` limit (`.motoko/model-catalog.json:43`) passed as the `limit`
-   int to `compact_step_with_limit(msgs, model, limit)`. One small effectful conformance scenario
-   guards the `qwen → 262144` catalog binding itself.
+3. **Qwen's window is guarded once; the estimate tiers are qwen-agnostic (D2).** The estimate tiers
+   are **limit-relative** (`usage_percent = tokens*100/limit`), so tier logic is identical at any
+   window — the tier scenario injects a **small tractable `ctx.context_limit`** with tiny fixtures
+   (as the live-loop smoke does at `test/tiny`'s limit 100), *not* qwen's `262144` with a generated
+   700 KB fixture. Qwen's specific window only matters for the (gated) actual-token path; in the
+   estimate path "qwen" is the model label plus one `{Env, FS}` scenario asserting
+   `catalog_context_limit_for(...) == 262144` (`.motoko/model-catalog.json:43`). There is no pure
+   limit function — the only source is the effectful `catalog_context_limit_for` — so the catalog
+   guard is the sole place the `262144` literal appears.
 
-The estimate-path scenarios are shippable under `--caps IO` with no ABI change; the actual-token
-half is documented as a follow-on that unblocks when D9's ABI v3 lands.
+The now-scenarios ship with no ABI change — four pure under `--caps IO` (policy ones also need the
+compaction package resolvable, finding 6), one catalog guard under `--caps IO,Env,FS`; the
+actual-token half is documented as a follow-on that unblocks when D9's ABI v3 lands.
 
 ---
 
@@ -73,15 +79,27 @@ concepts. This ADR re-establishes what is real at HEAD and splits the work accor
 
 ## Investigation findings (grounded at HEAD, toolchain v0.26.0 / `3b52a24`)
 
-1. **The shipped compactor is estimate-only.**
+1. **The shipped compactor is estimate-only, and its live entry is `compact_for_pre_step`.**
    `packages/motoko-ext-compaction-structural/compaction_structural.ail` (module
    `sunholo/motoko_ext_compaction_structural/compaction_structural`) is a single estimate ladder:
    `elide_tier_pct()=70` (`:14`), `elide_hard_tier_pct()=85` (`:16`), `emergency_pct()=95` (`:18`),
-   keep-lasts `10/5/3/1` (`:20-26`), `elide_old_tool_results` (`:72`),
-   `compact_step_with_limit(msgs, model, limit)` (`:90`), and the hook entry
-   `compact_for_pre_step(ctx, msgs)` (`:117`) which gates on `usage_percent_with_limit(msgs,
-   ctx.context_limit)` — **never on actual tokens**. All tier constants are already
+   keep-lasts `10/5/3/1` (`:20-26`), `elide_old_tool_results` (`:72`). The **live** compactor is the
+   `pure` hook `compact_for_pre_step(ctx, msgs) -> PreStepDecision` (`:117`), registered as
+   `on_pre_step` in `register.ail:34`; it gates on `usage_percent_with_limit(msgs, ctx.context_limit)`
+   — **never on actual tokens** — and returns `PassThrough | Compacted` only: **it has no exhaustion
+   `Err`**. When even the emergency tier (keep-last 3 → 1) can't reduce further, it returns
+   `PassThrough` and **defers exhaustion to core `seal`**. All tier constants are already
    `export pure func`, so DST imports them; no fixture may duplicate a threshold literal.
+
+   `compact_step_with_limit(msgs, model, limit) -> Result[…, string]` (`:90`) — the only entry that
+   returns the `"compaction_exhausted"` `Err` — is **not on the live path**: nothing in `src/core`
+   calls it (it was removed from `src/core/compaction.ail`), and its only callers are
+   `src/core/test/integration_tests.ail:43` and the smoke scripts. DST-ing *its* exhaustion would
+   test off-path code; live exhaustion is core `seal`, already guarded by `oversized_payload_rejected`
+   (004 ADR-002). The extension also carries its own inline unit tests (e.g. `compact_for_pre_step`
+   at `:213`), so the DST value-add is the **L1 reporting-contract layer** over them (scenario id +
+   invariant + trace), mirroring 004 ADR-002's rationale for `oversized_payload_rejected`, not first
+   coverage.
 
 2. **The ABI v3 telemetry seam is not landed.** The extension consumes `ExtCtx` from
    `pkg/sunholo/motoko_ext_abi/types` at **ABI v2.2.0** (`ailang.toml:7`, `ailang.lock:43`). That
@@ -99,12 +117,13 @@ concepts. This ADR re-establishes what is real at HEAD and splits the work accor
    exists and is production.
 
 4. **Much of the old invariant list is already core-DST law.** `scripts/phase_c_l1_scenarios.ail`
-   already runs 12/12 under `--caps IO`, including system-prefix pinning (sealed `CompactableSegment`
-   cannot hold system messages), `compactor_chain_order_is_registry_order`,
+   already runs 12/12 under `--caps IO`, including system-prefix pinning (the head system run is
+   pinned out of the `CompactableSegment` by construction — `split_for_compaction` +
+   unexported `MkSegment`), `compactor_chain_order_is_registry_order`,
    `invalid_stage_skipped_chain_continues`, `oversized_payload_rejected` /
    `actual_token_pressure_defers_to_seal` (the seal exhaustion gate), and `empty_system_prompt_rejected`.
-   The genuinely-uncovered residue is the **extension's own policy** — the estimate tier ladder and
-   the emergency recovery/exhaustion nuance — plus everything actual-token.
+   The genuinely-uncovered residue is the **live hook's own policy** — the estimate tier ladder and
+   the emergency-recovery-or-defer behavior — plus everything actual-token.
 
 5. **The only limit source is the effectful catalog — there is no pure limit function.** The pure
    `context_limit_for` the 2026-07-03 amendment referred to has since been **deleted entirely**; it
@@ -114,17 +133,33 @@ concepts. This ADR re-establishes what is real at HEAD and splits the work accor
    the live limit for every send (`rpc.ail:106,:212`; `session.ail:972,:994,:1389`). A pure scenario
    cannot call it, so injecting qwen's limit is **mandatory**, not merely preferred (D2).
 
+6. **Testing the compactor policy requires importing the extension package.** The tier ladder, the
+   elision helper, and the constants live only in `pkg/sunholo/motoko_ext_compaction_structural`.
+   `scripts/phase_c_l1_scenarios.ail` imports only `src/core/*` — so the policy scenarios have a
+   **heavier dependency profile than phase_c_l1**: the package must be resolvable. In this checkout it
+   is (an `ailang check` on `src/core/test/integration_tests.ail`, which imports the pkg, passes
+   without an explicit `ailang lock`), but that resolution is a **precondition** CI must guarantee
+   (001_DST/ADR-001 Phase 0 hydration), not a free property. Separately, `scripts/smoke_catalog_compaction.ail`
+   is **stale/red** — it imports `compact_step_with_limit` from `src/core/compaction`, where the
+   function no longer exists — and must be fixed or retired before piling DST on top (001_DST/ADR-001
+   Phase 0 discipline).
+
 ## Decision drivers
 
 - Don't assert over removed concepts. Every DST invariant must have a referent at HEAD.
-- Reuse the phase-core ledger and the `phase_c_l1` harness; do not build a parallel recorder or a
-  second scenario framework (001_DST/ADR-001 "use existing seams first").
+- Reuse the phase-core ledger and the `phase_c_l1` harness pattern; do not build a parallel recorder
+  or a second scenario framework (001_DST/ADR-001 "use existing seams first").
+- Target the **live** compactor (`compact_for_pre_step`), not the off-path `compact_step_with_limit`,
+  so scenarios assert over what actually runs.
 - Import the extension's exported tier constants; never duplicate a threshold literal in a fixture
   (the surviving, amended form of 001_DST/ADR-001 R5).
 - Keep DST decoupled from the ABI v3 build: an estimate-path guard has standing value now and must
   not wait on a registry publish.
-- Layer-1 scenarios run under `--caps IO`, pure, no network, no registry hydration — matching the
-  proven `phase_c_l1` gate class.
+- No scenario needs network or effect-handler mocking. The four pure scenarios run under `--caps IO`;
+  the one catalog-binding scenario needs `--caps IO,Env,FS`. The **core-only** scenarios match the
+  `phase_c_l1` dependency profile; the **policy** scenarios additionally require the compaction
+  package to be resolvable (a hydration precondition, per finding 6), because the ladder lives only
+  there.
 
 ---
 
@@ -142,46 +177,71 @@ justify.
 
 ### 2. Scope split — estimate-path now, actual-token specified-but-gated (D1)
 
-**Land now (Layer-1, `phase_c_l1_scenarios.ail` style, `--caps IO`, pure):** scenarios over the
-extension's exported pure funcs and the core seal gate, with the qwen limit injected. These become
-standing law for the compactor that actually ships.
+**Land now (Layer-1, `phase_c_l1_scenarios.ail` style, `--caps IO`, pure):** scenarios over the live
+hook and the extension's exported pure funcs, plus the core scaffold (`split_for_compaction` /
+`segment_messages`) and the catalog. These become standing law for the compactor that actually ships.
 
 **Specify but gate:** the actual-token scenarios and the #75.3 summarizer scenario require (a) ABI v3
 `ExtCtx.telemetry` and (b) a fake `ai_step` port. This ADR fixes their canonical ids and invariants
 so they are implementable the day the seam lands, and names the seam as the single blocker. No DST
 gate depends on the ABI build until then.
 
-### 3. Qwen as an injected limit; one catalog-binding guard (D2)
+### 3. Qwen-agnostic tiers; one catalog-binding guard (D2)
 
-Pure scenarios pass `262144` as the `limit` argument and `"ollama/qwen3.6:35b-a3b-mxfp8"` as the
-model label. Separately, one small `{Env, FS}` scenario asserts
-`catalog_context_limit_for("ollama/qwen3.6:35b-a3b-mxfp8") == 262144`, so the `qwen → 262144` binding
-is guarded in exactly one place and the pure scenarios' injected constant is not a free-floating
-magic number.
+The live hook reads its budget from `ctx.context_limit` (the `ExtCtx` literal follows the pkg's
+test-helper shape, `compaction_structural.ail:197-211`). Because the tiers are limit-relative, the
+tier scenario injects a **small tractable `context_limit`** (tiny fixtures cross the thresholds — the
+`test/tiny` limit-100 pattern the live-loop smoke already uses), and uses `model:
+"ollama/qwen3.6:35b-a3b-mxfp8"` only as a label. The real qwen window is asserted **once**, in a
+separate `{Env, FS}` scenario: `catalog_context_limit_for("ollama/qwen3.6:35b-a3b-mxfp8") == 262144`.
+So `262144` appears in exactly one place and never as a free-floating magic number, and the fast tier
+scenario stays a fast pure scenario.
 
 ### 4. Proposed scenarios
 
-**Estimate-path (implement now):**
+The live-loop *outcome* (no-elision / tier-1-silent / tier-3-`compaction_exhausted`) is already
+covered by the Layer-2 smoke `smoke_v2_compaction_full_loop.ail` (`run_v2_with_scripted_ports`, real
+compactor registered), but that smoke needs the broad loop cap set + network allowances and asserts
+only Ok/Err, not the per-tier keep-last count. These scenarios are the **fast, pure, `--caps IO`
+tier-decision-granularity** layer under it.
 
-- **`compaction.estimate_tier_ladder_qwen`** — `compact_step_with_limit(msgs, "ollama/qwen…", 262144)`
-  across the tiers, asserting against the *imported* constants: `< elide_tier_pct()` ⇒ no elision;
-  `>= elide_tier_pct()` ⇒ keep-last `elide_keep_last()`; `>= elide_hard_tier_pct()` ⇒ keep-last
-  `elide_hard_keep_last()`; `>= emergency_pct()` ⇒ emergency path.
-- **`compaction.tool_shape_preserved_by_elision`** — `elide_old_tool_results` preserves list length
-  and order, every `tool_call_id`, assistant `tool_calls` `id`/`name`/`arguments`, leaves non-tool
-  messages untouched, and preserves the recent tier verbatim.
-- **`compaction.emergency_recovers_then_exhausts`** — the emergency ladder tries keep-last-3 then
-  keep-last-1 and **recovers** tool-heavy overload; it returns `Err("compaction_exhausted: …")` only
-  when non-tool content keeps the estimate `>= emergency_pct()` after elision (the amended
-  001_DST/ADR-001 R15 nuance: elision never touches non-tool content).
-- **`compaction.compactor_input_excludes_system`** — belt-and-suspenders over the sealed segment:
-  `compact_for_pre_step` / the chain never receives a `role == "system"` message.
-- **`compaction.catalog_limit_qwen`** (`{Env, FS}`) — the single catalog-binding guard from D2.
+**Policy-path over the live hook (implement now; import the compaction pkg, per finding 6):**
+
+- **`compaction.estimate_tier_ladder`** — `compact_for_pre_step(ctx, msgs)` at a small injected
+  `ctx.context_limit` (tiny fixtures, `test/tiny`-style), asserting against the *imported* constants:
+  below `elide_tier_pct()` ⇒ `PassThrough`; `>= elide_tier_pct()` ⇒ `Compacted` keep-last
+  `elide_keep_last()`; `>= elide_hard_tier_pct()` ⇒ keep-last `elide_hard_keep_last()`;
+  `>= emergency_pct()` ⇒ the emergency tier. (`model: "ollama/qwen…"` label only; tiers are
+  qwen-agnostic, per D2 — the granularity full_loop omits is the exact keep-last per tier.)
+- **`compaction.tool_shape_preserved_by_elision`** — `elide_old_tool_results(msgs, keep_last)`
+  preserves list length and order, every `tool_call_id`, assistant `tool_calls` `id`/`name`/`arguments`,
+  leaves non-tool messages untouched, and preserves the recent-`keep_last` tier verbatim.
+- **`compaction.emergency_recovery_or_defer`** — at `>= emergency_pct()`, `compact_for_pre_step`
+  **recovers** tool-heavy overload via keep-last-3 then keep-last-1 (returns `Compacted`); when even
+  keep-last-1 cannot reduce (non-tool content dominates — elision never touches non-tool content,
+  the amended 001_DST/ADR-001 R15 nuance), it returns **`PassThrough`, deferring exhaustion to
+  `seal`**. This scenario asserts the recover-or-defer behavior; the exhaustion itself is core
+  `seal`, covered by `oversized_payload_rejected` — **not re-asserted here**.
+
+**Core-scaffold scenario (implement now; core-only, exactly phase_c_l1's profile):**
+
+- **`compaction.segment_excludes_system_prefix`** — over `split_for_compaction` /
+  `segment_messages`: given messages led by a system run, the built `CompactableSegment` (hence what
+  any compactor can ever receive) contains no `role == "system"` message. This tests the construction
+  invariant at the seam that actually enforces it, not `compact_for_pre_step` in isolation (which
+  would only echo hand-built input).
+
+**Catalog-binding scenario (implement now; core, `{Env, FS}`):**
+
+- **`compaction.catalog_limit_qwen`** — the single `qwen → 262144` guard from D2.
 
 **Gated on ABI v3 `ExtCtx.telemetry` + fake `ai_step` port (specify only):**
 
 - **`compaction.actual_tokens_drive_next_step`** — when telemetry `last_input_tokens > 0`, tier
-  selection uses the actual value, not the char estimate.
+  selection uses the actual value, not the char estimate. This one is a **loop** property (step N's
+  telemetry drives step N+1), so its home is the existing live-loop harness
+  `run_v2_with_scripted_ports` (`src/core/test/scripted_ports.ail`), not a pure hook call — once the
+  telemetry seam lets a scripted `input_tokens` reach `compact_for_pre_step`.
 - **`compaction.actual_tokens_small_context_fail_open`** — `effective <= 0` (limit at/below headroom)
   fails open in the actual path (the estimate half — `limit <= 0` ⇒ `Ok` — is already unit-tested at
   `phase_vocab` `test_seal_compacted_payload_fail_open_limit_zero`).
@@ -192,11 +252,20 @@ magic number.
 
 | Old canonical id (001_DST/ADR-001 / research draft) | Status at HEAD |
 |---|---|
-| `compaction.system_messages_hidden_from_compactors` | Structurally guaranteed (sealed `CompactableSegment`); a thin explicit guard is `compactor_input_excludes_system` above, nothing more |
+| `compaction.system_messages_hidden_from_compactors` | Enforced by construction (`split_for_compaction` strips the system prefix; `MkSegment` unexported); new guard is `segment_excludes_system_prefix` over the construction seam |
 | `compaction.provider_payload_vs_uncompacted_history_pressure` | **Covered** by `project_prep_vs_uncompacted_history_pressure` + `actual_token_pressure_defers_to_seal` |
-| `compaction.emergency_exhaustion_estimate_gated` | Seal half covered by `oversized_payload_rejected`; the **extension** emergency ladder is new (`emergency_recovers_then_exhausts`) |
+| `compaction.emergency_exhaustion_estimate_gated` | Exhaustion is core `seal`, covered by `oversized_payload_rejected`; the **live hook's** emergency *recovery* is new (`emergency_recovery_or_defer`) — the hook never exhausts |
 | `compaction.actual_tokens_drive_next_step` | **Gated** (no telemetry seam) |
 | `compaction.actual_tokens_small_context_fail_open` | Estimate half unit-tested; actual half **gated** |
+
+## Preconditions (before implementing)
+
+- The compaction package `pkg/sunholo/motoko_ext_compaction_structural` must be resolvable for the
+  policy scenarios (finding 6); CI must guarantee it (001_DST/ADR-001 Phase 0 hydration + an
+  import-resolution check on a pkg-importer such as `integration_tests.ail`).
+- **Fix or retire `scripts/smoke_catalog_compaction.ail`** — it is red at HEAD (imports
+  `compact_step_with_limit` from `src/core/compaction`, which no longer defines it). Do not add DST on
+  top of a red smoke.
 
 ## Out of scope
 
@@ -210,14 +279,20 @@ magic number.
 
 ## Acceptance criteria
 
-1. The five estimate-path scenarios run green under `ailang run --caps IO --entry main
-   scripts/phase_c_l1_scenarios.ail` (or a sibling harness), no network, no registry hydration.
-2. Each scenario asserts against **imported** extension constants, not literals; a grep proves no tier
-   threshold is hardcoded in the scenario file.
-3. `emergency_recovers_then_exhausts` distinguishes recovery (tool-heavy) from exhaustion (non-tool
-   content), and names its id + first failed invariant on failure (the phase-C reporting contract).
-4. `catalog_limit_qwen` proves `qwen → 262144` in one place; the pure scenarios reference that limit,
-   not a second copy.
+1. The four **pure** now-scenarios (the three policy + `segment_excludes_system_prefix`) run green
+   under `ailang run --caps IO`, no network, no effect-handler mocking; the three policy scenarios
+   import `pkg/sunholo/motoko_ext_compaction_structural` (resolvable per Preconditions),
+   `segment_excludes_system_prefix` imports only `src/core/*`. `catalog_limit_qwen` is `{Env, FS}`
+   (reads the catalog file) — it runs under `--caps IO,Env,FS`, either as a separate tiny gate or an
+   Env/FS-capable sibling harness, not the pure `--caps IO` list.
+2. The policy scenarios assert against **imported** extension constants, not literals; a grep proves
+   no tier threshold is hardcoded in the scenario file.
+3. Scenarios target the **live** hook `compact_for_pre_step` (not `compact_step_with_limit`);
+   `emergency_recovery_or_defer` asserts recover (tool-heavy) vs `PassThrough`-defer (non-tool
+   content) and does **not** assert an exhaustion `Err` (that is `seal`, covered elsewhere). Every
+   failure names scenario id + first failed invariant (the phase-C reporting contract).
+4. `catalog_limit_qwen` proves `qwen → 262144` in one place; the policy scenarios' injected
+   `context_limit` references that value, not a second copy.
 5. The three gated scenarios are specified with ids + invariants and marked blocked-on-ABI-v3; none
    is registered in a live harness list until the seam lands.
 6. No scenario depends on effect-handler mocking, real providers, or a bespoke provider-call recorder.
@@ -263,8 +338,10 @@ once by `catalog_limit_qwen`), a deliberate seam between pure policy and the eff
 ## Grounding and anchor log (HEAD, v0.26.0 / `3b52a24`)
 
 - Extension: `packages/motoko-ext-compaction-structural/compaction_structural.ail` — tiers `:14/:16/:18`,
-  keep-lasts `:20-26`, `estimate_tokens_messages:32`, `usage_percent_with_limit:37`,
-  `elide_old_tool_results:72`, `compact_step_with_limit:90`, `compact_for_pre_step:117`; ABI dep
+  keep-lasts `:20-26`, `elide_old_tool_results:72`, **live hook** `compact_for_pre_step:117` (pure,
+  `PreStepDecision`, no exhaustion `Err`), ctx test-helper shape `:197-211`, inline unit test `:213`;
+  **off-path** `compact_step_with_limit:90` (the only `"compaction_exhausted"` `Err`, callers:
+  `integration_tests.ail:43` + smokes). Hook registration `register.ail:34` (`on_pre_step`). ABI dep
   `ailang.toml:7` = `2.2.0`, `ailang.lock:43`.
 - ABI `ExtCtx` (no `telemetry`): consumed from `pkg/sunholo/motoko_ext_abi/types` (registry cache,
   ABI 2.2.0); in-tree mirror `src/core/ext/types.ail:11`.
@@ -274,8 +351,16 @@ once by `catalog_limit_qwen`), a deliberate seam between pure policy and the eff
   live at `rpc.ail:106,:212` and `session.ail:972,:994,:1389`. No pure `context_limit_for` exists
   (deleted; the 2026-07-03 amendment's "returns 0" claim is itself stale).
 - Model catalog: `.motoko/model-catalog.json:43` → `"ollama/qwen3.6:35b-a3b-mxfp8": 262144`.
-- Existing L1 harness: `scripts/phase_c_l1_scenarios.ail` (12 scenarios, `--caps IO`); scenario-builder
-  + `main` list pattern to extend.
+- Existing L1 harness: `scripts/phase_c_l1_scenarios.ail` (12 scenarios, `--caps IO`, imports only
+  `src/core/*`); scenario-builder + `main` list pattern to extend.
+- Existing live-loop seam: `run_v2_with_scripted_ports` (`src/core/test/scripted_ports.ail`) drives
+  the real `loop_v2` with scripted ports; `scripts/smoke_v2_compaction_full_loop.ail` uses it (real
+  compactor registered) to assert live-loop compaction outcomes incl. `compaction_exhausted` — but at
+  the **broad loop cap set + `--net-allow-*`**, asserting Ok/Err only. This is the home for the gated
+  actual-token *loop* scenario.
+- Stale/red at HEAD: `scripts/smoke_catalog_compaction.ail` (imports `compact_step_with_limit` from
+  `src/core/compaction`, absent). `smoke_v2_compaction_tiers.ail` checks green but tests the off-path
+  `compact_step_with_limit`.
 - Superseded: `001_DST/ADR-001` compaction sections; `.agent/research/DST/…-agent-loop-compaction.md`.
 - **Re-verify before implementing:** `tools/code-graph/extract.sh` (graph was stale at authoring from
   the 004 ADR-002 edits); confirm the extension anchors and the ABI version have not drifted.
