@@ -24,7 +24,6 @@ import src/core/phase_vocab (
   history_from_seed,
   history_len,
   history_valid_transcript,
-  payload_messages,
   project,
   segment_messages,
   split_for_compaction,
@@ -174,7 +173,7 @@ func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFail
   }
 }
 
-func scenario_provider_payload_vs_uncompacted_history_pressure() -> Result[(), ScenarioFailure] {
+func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), ScenarioFailure] {
   let msgs = [
     msg("system", "pinned"),
     msg("user", "compactable-a"),
@@ -188,14 +187,15 @@ func scenario_provider_payload_vs_uncompacted_history_pressure() -> Result[(), S
       match projected {
         Err(e) => Err({ failed_invariant: "projection under limit", trace: ["project_err=${e}"] }),
         Ok(p) => {
-          let payload = payload_messages(p.payload);
           let ok = length(split.pinned) == 1
             && length(segment_messages(split.segment)) == 2
-            && length(payload) == 3;
-          ok_or_failure(ok, "payload separates pinned/compactable pressure", [
+            && length(p.split.pinned) == 1
+            && length(segment_messages(p.split.segment)) == 2;
+          ok_or_failure(ok, "project prep separates pinned/compactable pressure", [
             "pinned=${show(length(split.pinned))}",
             "segment=${show(length(segment_messages(split.segment)))}",
-            "payload=${show(length(payload))}"
+            "projected_pinned=${show(length(p.split.pinned))}",
+            "projected_segment=${show(length(segment_messages(p.split.segment)))}"
           ])
         }
       }
@@ -304,7 +304,7 @@ func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFail
   }
 }
 
-func scenario_zero_compactors_exhaustion_behavior() -> Result[(), ScenarioFailure] {
+func scenario_actual_token_pressure_defers_to_seal() -> Result[(), ScenarioFailure] {
   match history_from_seed([msg("system", "s"), msg("user", "over pressure")]) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(h) => {
@@ -321,12 +321,9 @@ func scenario_zero_compactors_exhaustion_behavior() -> Result[(), ScenarioFailur
       };
       let d = decide(state, policy(1));
       match d {
-        Fail(f) => ok_or_failure(f.code == "ContextExhausted", "zero compactors exhaust honestly", [
-          "code=${f.code}",
-          "message=${f.message}"
-        ]),
-        CallModel(_) => Err({ failed_invariant: "zero compactors exhaust honestly", trace: ["decision=CallModel"] }),
-        _ => Err({ failed_invariant: "zero compactors exhaust honestly", trace: ["decision=other"] })
+        CallModel(_) => Ok(()),
+        Fail(f) => Err({ failed_invariant: "actual token pressure defers to seal", trace: ["code=${f.code}", "message=${f.message}"] }),
+        _ => Err({ failed_invariant: "actual token pressure defers to seal", trace: ["decision=other"] })
       }
     }
   }
@@ -340,8 +337,8 @@ func checkpoint_output_is_valid_transcript_scenario() -> Scenario {
   { id: "checkpoint_output_is_valid_transcript", run: scenario_checkpoint_output_is_valid_transcript }
 }
 
-func provider_payload_vs_uncompacted_history_pressure_scenario() -> Scenario {
-  { id: "provider_payload_vs_uncompacted_history_pressure", run: scenario_provider_payload_vs_uncompacted_history_pressure }
+func project_prep_vs_uncompacted_history_pressure_scenario() -> Scenario {
+  { id: "project_prep_vs_uncompacted_history_pressure", run: scenario_project_prep_vs_uncompacted_history_pressure }
 }
 
 func ext_compaction_invalid_rejected_scenario() -> Scenario {
@@ -364,14 +361,14 @@ func invalid_stage_skipped_chain_continues_scenario() -> Scenario {
   { id: "invalid_stage_skipped_chain_continues", run: scenario_invalid_stage_skipped_chain_continues }
 }
 
-func zero_compactors_exhaustion_behavior_scenario() -> Scenario {
-  { id: "zero_compactors_exhaustion_behavior", run: scenario_zero_compactors_exhaustion_behavior }
+func actual_token_pressure_defers_to_seal_scenario() -> Scenario {
+  { id: "actual_token_pressure_defers_to_seal", run: scenario_actual_token_pressure_defers_to_seal }
 }
 
 export func main() -> () ! {IO} {
   let scenarios = [
     harness_self_test_scenario(),
-    provider_payload_vs_uncompacted_history_pressure_scenario(),
+    project_prep_vs_uncompacted_history_pressure_scenario(),
     ext_compaction_invalid_rejected_scenario(),
     summary_cache_replay_stable_scenario(),
     history_rewrite_requires_checkpoint_event_scenario(),
@@ -379,7 +376,7 @@ export func main() -> () ! {IO} {
     checkpoint_output_is_valid_transcript_scenario(),
     compactor_chain_order_is_registry_order_scenario(),
     invalid_stage_skipped_chain_continues_scenario(),
-    zero_compactors_exhaustion_behavior_scenario()
+    actual_token_pressure_defers_to_seal_scenario()
   ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then

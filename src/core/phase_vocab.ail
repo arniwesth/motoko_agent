@@ -136,7 +136,7 @@ export pure func seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message
   else Ok(MkPayload(payload_msgs))
 }
 
-export type ModelRequest = { payload: ProviderPayload, model: string }
+export type ModelRequest = { model: string }
 
 export type TokenTelemetry = {
   last_input_tokens: int,
@@ -154,19 +154,28 @@ export type CompactionPolicy = {
   emergency_pct: int
 }
 
--- Scaffold only: Phase B replaces this body with the real
--- pin -> normalize -> compactor-chain -> tiers projection. It is not called
--- from production in Phase A.
-export func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
-  -> Result[{ payload: ProviderPayload, events: [LedgerEvent] }, string] {
+-- Pure structural prep for the effectful model-call seal. This pins the system
+-- prefix and identifies the compactable segment; it deliberately does not make
+-- a Fail/exhaustion decision. Context exhaustion is owned by
+-- seal_compacted_payload after the compactor chain has run, and any actual-token
+-- pre-gate is deferred to ABI v3 extension policy. The live driver consumes the
+-- prep directly only after the optional WI-F3 model_phase extraction lands.
+export pure func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
+  -> Result[{ split: PinnedSplit, events: [LedgerEvent] }, string] {
   match h {
-    MkHistory(xs) =>
-      if pol.context_limit > 0 && t.last_input_tokens >= pol.context_limit
-      then Err("context exhausted")
-      else Ok({
-        payload: MkPayload(xs),
-        events: [ProviderCallPrepared({ step: 0, msg_count: List.length(xs), system_prefix_count: 0, payload_digest: payload_digest(xs), model: "" })]
+    MkHistory(xs) => {
+      let split = split_for_compaction(xs);
+      Ok({
+        split: split,
+        events: [ProviderCallPrepared({
+          step: 0,
+          msg_count: List.length(xs),
+          system_prefix_count: List.length(split.pinned),
+          payload_digest: payload_digest(xs),
+          model: ""
+        })]
       })
+    }
   }
 }
 

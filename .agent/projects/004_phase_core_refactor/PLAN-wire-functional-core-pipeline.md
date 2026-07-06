@@ -108,13 +108,14 @@ ABI v3 track, not a "wiring fix."
   `SessionSnapshot`-based L1 harness — deferred; the live driver has no path to it and
   this plan's L1 coverage drives `decide` directly. *(They were likely intended as a
   snapshot-style loop API the pragmatic C2 driver never adopted.)*
-- **D-F3 — the effectful `model_phase` extraction (WI-F3).** Recommend: **defer**. Not
-  required for correctness (finding 2 is not a defect), and it hits a real import
-  cycle — `run_model_phase` needs `ledger_emit`, `mk_v2_ext_ctx`, `messages_to_msgs`,
-  all in `session.ail`, which imports `model_phase.ail`. Doing it right means
-  relocating those helpers to a lower shared module or injecting them as
+- **D-F3 — the effectful `model_phase` extraction (WI-F3).** **Resolved: defer**
+  (operator, 2026-07-05). Not required for correctness (finding 2 is not a defect), and
+  it hits a real import cycle — `run_model_phase` needs `ledger_emit`, `mk_v2_ext_ctx`,
+  `messages_to_msgs`, all in `session.ail`, which imports `model_phase.ail`. Doing it
+  right means relocating those helpers to a lower shared module or injecting them as
   driver-constructed ports/closures (the ADR ports pattern) — a deliberate refactor,
-  not a rider on a cleanup. Rejected: do it now.
+  not a rider on a cleanup. Deferred to the ABI v3 track with the telemetry work.
+  **D-F2 (delete the dead cluster) is the only decision still open.**
 
 ## Work items
 
@@ -333,10 +334,11 @@ ailang run --caps IO --entry main scripts/phase_f_pipeline_wiring.ail
 
 ## Open questions
 
-1. **Take the optional WI-F3 now, or defer with the ABI v3 track?** — Recommendation:
-   defer (D-F3). It is the only item with real refactor risk (import cycle,
-   phase-boundary parity), and finding 2 — its motivation — is not a correctness defect.
-   Operator call.
+1. **Take the optional WI-F3 now, or defer with the ABI v3 track?** — **Resolved:
+   defer** (operator, 2026-07-05). WI-F3 is out of this plan's execution scope; it rides
+   the ABI v3 track alongside the deferred telemetry work. Required scope is now exactly
+   **WI-F0 → WI-F1 → WI-F2 → WI-F4**, all byte-neutral. Finding 6 and the organizational
+   half of finding 2 are deferred with it.
 2. **Stream-delta append handle ownership** — **Resolved: driver-owned** (operator: "go
    with your recommendation", 2026-07-05); relevant only if WI-F3 is taken. `on_chunk`
    (and any discrete-event emit handle) stays driver-constructed and is passed into

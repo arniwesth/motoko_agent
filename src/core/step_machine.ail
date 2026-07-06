@@ -71,7 +71,7 @@ func call_model_or_fail(s: StepState, pol: StepPolicy) -> StepDecision {
   then Fail({ code: "BudgetExceeded", message: cost_cap_message(s.totals.cost_millicents, pol.max_cost_millicents), retryable: false })
   else match project(s.history, s.telemetry, pol.compaction) {
     Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
-    Ok(projection) => CallModel({ payload: projection.payload, model: pol.model })
+    Ok(_) => CallModel({ model: pol.model })
   }
 }
 
@@ -325,11 +325,11 @@ pure func test_decide_persist_nudge() -> bool
     }
   }
 
-pure func test_decide_compaction_exhaustion_fails() -> bool
+pure func test_decide_actual_token_pressure_still_calls_model() -> bool
   tests [((), true)]
   {
     match mk_state("", "", [], 0, 0, 1) {
-      Ok(s) => is_fail(decide(s, mk_policy(1)), "ContextExhausted"),
+      Ok(s) => is_call_model(decide(s, mk_policy(1))),
       Err(_) => false
     }
   }

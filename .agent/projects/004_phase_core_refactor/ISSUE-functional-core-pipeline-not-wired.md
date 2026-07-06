@@ -1,7 +1,7 @@
 # ISSUE: Phase C driver runs the functional-core pipeline only partially
 
 Date: 2026-07-05 (originally filed); independently verified & corrected 2026-07-05
-Status: Open
+Status: Resolved (2026-07-05, WI-F0/F1/F2/F4)
 Verified against: branch `arniwesth/mot-27-phased-core-architecture`, commit `fed914c`
   (original filing verified `64262d1`; the `64262d1→fed914c` diff on `session.ail`
   is header-comment-only — no behavioral change in the reviewed region, so line
@@ -28,6 +28,29 @@ see the correction under §3.
 
 Six findings, listed by severity. All claims re-verified against source and
 code-graph at `fed914c`.
+
+## Resolution
+
+Implemented by `PLAN-wire-functional-core-pipeline.md` required scope:
+WI-F0 -> WI-F1 -> WI-F2 -> WI-F4. WI-F3 remains deferred to the ABI v3 track.
+
+Parity baseline scratch note: regenerated for this work with:
+
+```
+./scripts/phase_a_event_parity.sh /tmp/phase_f_pipeline_blessed
+```
+
+Per-finding disposition:
+
+| # | Disposition |
+|---|---|
+| 1 `project()` scaffold | Fixed. `project()` now performs honest pure structural prep by splitting pinned system prefix from compactable segment. It deliberately does not Fail; exhaustion remains in the effectful `seal_compacted_payload` seal. |
+| 2 driver compaction / `CallModel` payload | Not a correctness defect: the driver must run the effectful compactor chain. Residue fixed by shrinking `ModelRequest` to `{model}` and removing the discarded payload construction. |
+| 3 totals / finish reason | Not defects. Totals accumulation and `last_finish_reason` are driver-owned control flow, not delta-owned state in the current ABI. |
+| 3 telemetry | Deferred to ABI v3, where `ExtCtx.telemetry` becomes the consumer. No telemetry threading was added in this byte-neutral scope. |
+| 4 telemetry always 0 / actual-token gate | Deferred to ABI v3. Actual-token policy is extension policy; core's live exhaustion decision remains the effectful post-compaction seal. |
+| 5 dead `SessionSnapshot` cluster | Fixed by deleting `SessionSnapshot`, `session_from_messages`, `apply_phase_result`, and `next_decision` after confirming 0 callers. |
+| 6 `transcript_append` / `cost_delta_millicents` unused | Deferred with optional WI-F3 / ABI v3 `model_phase` extraction. |
 
 ---
 
