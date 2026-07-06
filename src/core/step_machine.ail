@@ -113,6 +113,7 @@ func mk_policy(context_limit: int) -> StepPolicy {
     cost_metered: true,
     persist_retries: 2,
     retry_stream_errors: true,
+    require_system_prompt: true,
     model: "phase-c-model",
     provider_base_url: "",
     compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
@@ -206,7 +207,7 @@ pure func test_decide_cost_cap() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
         fail_message(decide(s, pol)) == "cost cap reached: 10 of 10 millicents used"
       },
       Err(_) => false
@@ -218,7 +219,7 @@ pure func test_decide_cost_cap_unmetered_does_not_exhaust() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
         not is_fail(decide(s, pol), "BudgetExceeded")
       },
       Err(_) => false

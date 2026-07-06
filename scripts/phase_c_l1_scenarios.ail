@@ -25,7 +25,10 @@ import src/core/phase_vocab (
   history_len,
   history_valid_transcript,
   project,
+  seal_compacted_payload,
   segment_messages,
+  SealExhausted,
+  SealSystemPromptEmpty,
   split_for_compaction,
   validate_checkpoint_chain,
   validate_compactor_output
@@ -101,6 +104,7 @@ func policy(context_limit: int) -> StepPolicy {
     cost_metered: true,
     persist_retries: 0,
     retry_stream_errors: true,
+    require_system_prompt: true,
     model: "phase-c-model",
     provider_base_url: "",
     compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
@@ -200,6 +204,36 @@ func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), Scena
         }
       }
     }
+  }
+}
+
+func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure] {
+  let split = split_for_compaction([msg("user", "hi")]);
+  match seal_compacted_payload(split, [msg("user", "hi")], "phase-c-model", 1000, true) {
+    Err(SealSystemPromptEmpty(_)) => Ok(()),
+    Err(SealExhausted(_)) => Err({
+      failed_invariant: "empty system prompt rejected with SystemPromptEmpty",
+      trace: ["expected=SystemPromptEmpty", "actual=SealExhausted"]
+    }),
+    Ok(_) => Err({
+      failed_invariant: "empty system prompt rejected with SystemPromptEmpty",
+      trace: ["expected=SystemPromptEmpty", "actual=Ok"]
+    })
+  }
+}
+
+func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure] {
+  let split = split_for_compaction([]);
+  match seal_compacted_payload(split, [msg("user", "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 10, false) {
+    Err(SealExhausted(_)) => Ok(()),
+    Err(SealSystemPromptEmpty(_)) => Err({
+      failed_invariant: "oversized payload rejected with SealExhausted",
+      trace: ["expected=SealExhausted", "actual=SealSystemPromptEmpty"]
+    }),
+    Ok(_) => Err({
+      failed_invariant: "oversized payload rejected with SealExhausted",
+      trace: ["expected=SealExhausted", "actual=Ok"]
+    })
   }
 }
 
@@ -345,6 +379,14 @@ func ext_compaction_invalid_rejected_scenario() -> Scenario {
   { id: "ext_compaction_invalid_rejected", run: scenario_ext_compaction_invalid_rejected }
 }
 
+func empty_system_prompt_rejected_scenario() -> Scenario {
+  { id: "empty_system_prompt_rejected", run: scenario_empty_system_prompt_rejected }
+}
+
+func oversized_payload_rejected_scenario() -> Scenario {
+  { id: "oversized_payload_rejected", run: scenario_oversized_payload_rejected }
+}
+
 func summary_cache_replay_stable_scenario() -> Scenario {
   { id: "summary_cache_replay_stable", run: scenario_summary_cache_replay_stable }
 }
@@ -369,6 +411,8 @@ export func main() -> () ! {IO} {
   let scenarios = [
     harness_self_test_scenario(),
     project_prep_vs_uncompacted_history_pressure_scenario(),
+    empty_system_prompt_rejected_scenario(),
+    oversized_payload_rejected_scenario(),
     ext_compaction_invalid_rejected_scenario(),
     summary_cache_replay_stable_scenario(),
     history_rewrite_requires_checkpoint_event_scenario(),

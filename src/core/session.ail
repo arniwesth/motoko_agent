@@ -63,6 +63,7 @@ import src/core/phase_vocab (
   msgs_to_messages,
   split_for_compaction,
   segment_messages,
+  system_prefix_chars,
   step_result_to_message,
   envelope_to_tool_message,
   ProviderCallPrepared,
@@ -107,6 +108,8 @@ import src/core/phase_vocab (
   history_append,
   payload_messages,
   seal_compacted_payload,
+  SealExhausted,
+  SealSystemPromptEmpty,
   CallModel,
   RunTools,
   AwaitApproval,
@@ -962,6 +965,7 @@ func session_policy_init(model: string, step_budget: int, max_cost_millicents: i
       cost_metered: cost_rates.input_per_1m_millicents > 0,
       persist_retries: persist_retries,
       retry_stream_errors: retry_stream_errors,
+      require_system_prompt: not headless,
       model: model,
       provider_base_url: provider_base_url,
       compaction: {
@@ -983,6 +987,7 @@ pure func session_policy_with_model(policy: SessionPolicy, model: string) -> Ses
       cost_metered: policy.step.cost_metered,
       persist_retries: policy.step.persist_retries,
       retry_stream_errors: policy.step.retry_stream_errors,
+      require_system_prompt: policy.step.require_system_prompt,
       model: model,
       provider_base_url: policy.step.provider_base_url,
       compaction: {
@@ -1390,8 +1395,15 @@ func c2_loop(
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
-          match seal_compacted_payload(split, msgs_to_messages(chain.msgs), model, context_limit) {
-            Err(compaction_reason) => {
+          match seal_compacted_payload(split, msgs_to_messages(chain.msgs), model, context_limit, policy.step.require_system_prompt) {
+            Err(SealSystemPromptEmpty(reason)) => {
+              let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
+              let _ = ledger_emit(session_id, event);
+              let _ = emit_run_summary(session_id, model, st.totals, step_idx, 5, reason, started_at_ms);
+              let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
+              { result: result, trace: ledger_append(trace_after_stages, WireRecord(event)) }
+            },
+            Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
               let _ = emit_run_summary(session_id, model, st.totals, step_idx, 3, compaction_reason, started_at_ms);
@@ -1408,6 +1420,7 @@ func c2_loop(
                 step: step_idx,
                 msg_count: List.length(compacted_msgs),
                 system_prefix_count: count_system_prefix(compacted_msgs),
+                system_prefix_chars: system_prefix_chars(compacted_msgs),
                 payload_digest: payload_digest(compacted_msgs),
                 model: model
               });
@@ -1679,6 +1692,7 @@ export func run_v2_session_traced_with_persist_retries(
       cost_metered: base.step.cost_metered,
       persist_retries: persist_retries,
       retry_stream_errors: base.step.retry_stream_errors,
+      require_system_prompt: base.step.require_system_prompt,
       model: base.step.model,
       provider_base_url: base.step.provider_base_url,
       compaction: base.step.compaction

@@ -84,6 +84,13 @@ pure func take_system_prefix(msgs: [Message]) -> [Message] {
   }
 }
 
+export pure func system_prefix_chars(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => if m.role == "system" then Str.length(m.content) + system_prefix_chars(rest) else 0
+  }
+}
+
 pure func valid_tool_calls(calls: [ToolCall]) -> bool {
   match calls {
     [] => true,
@@ -128,12 +135,18 @@ export pure func segment_messages(segment: CompactableSegment) -> [Message] {
   match segment { MkSegment(xs) => xs }
 }
 
-export pure func seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message], model: string, limit: int) -> Result[ProviderPayload, string] {
+export type SealError = SealExhausted(string) | SealSystemPromptEmpty(string)
+
+export pure func seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message], model: string, limit: int, require_system_prompt: bool) -> Result[ProviderPayload, SealError] {
   let payload_msgs = split.pinned ++ chain_msgs;
-  let pct = usage_percent_with_limit(payload_msgs, limit);
-  if pct >= exhaustion_pct() then
-    Err("compaction_exhausted: context at ${show(pct)}% of ${model} limit after compactor chain")
-  else Ok(MkPayload(payload_msgs))
+  if require_system_prompt && system_prefix_chars(split.pinned) == 0 then
+    Err(SealSystemPromptEmpty("system prompt required but system prefix is 0 chars"))
+  else {
+    let pct = usage_percent_with_limit(payload_msgs, limit);
+    if pct >= exhaustion_pct() then
+      Err(SealExhausted("compaction_exhausted: context at ${show(pct)}% of ${model} limit after compactor chain"))
+    else Ok(MkPayload(payload_msgs))
+  }
 }
 
 export type ModelRequest = { model: string }
@@ -171,6 +184,7 @@ export pure func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
           step: 0,
           msg_count: List.length(xs),
           system_prefix_count: List.length(split.pinned),
+          system_prefix_chars: 0,
           payload_digest: payload_digest(xs),
           model: ""
         })]
@@ -322,6 +336,7 @@ export type StepPolicy = {
   cost_metered: bool,
   persist_retries: int,
   retry_stream_errors: bool,
+  require_system_prompt: bool,
   model: string,
   provider_base_url: string,
   compaction: CompactionPolicy
@@ -444,7 +459,7 @@ export type PhaseResult = {
 -- constructors introduce additive names gated in Phase B.
 -- ============================================================================
 
-export type ProviderCallInfo = { step: int, msg_count: int, system_prefix_count: int, payload_digest: string, model: string }
+export type ProviderCallInfo = { step: int, msg_count: int, system_prefix_count: int, system_prefix_chars: int, payload_digest: string, model: string }
 export type ThinkingInfo = {
   step: int,
   text: string,
@@ -617,7 +632,7 @@ func done_kvs(i: DoneInfo) -> [{key: string, value: Json}] {
 
 export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
   match e {
-    ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("system_prefix_count", jnum(_int_to_float(i.system_prefix_count))), kv("payload_digest", js(i.payload_digest)), kv("model", js(i.model))],
+    ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("system_prefix_count", jnum(_int_to_float(i.system_prefix_count))), kv("system_prefix_chars", jnum(_int_to_float(i.system_prefix_chars))), kv("payload_digest", js(i.payload_digest)), kv("model", js(i.model))],
     ScratchpadResult(i) => [kv("type", js("scratchpad_result")), kv("tool_call_id", js(i.tool_call_id)), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("cells_json", js(i.cells_json))],
     RunSummary(i) => [kv("type", js("run_summary")), kv("model", js(i.model)), kv("motoko_commit", js(i.motoko_commit)), kv("finish_reason", js(i.finish_reason)), kv("steps_executed", jnum(_int_to_float(i.steps_executed))), kv("usage", jo(usage_kvs(i.input_tokens, i.output_tokens, i.cache_read_input_tokens, i.cache_creation_input_tokens))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("duration_ms", jnum(_int_to_float(i.duration_ms))), kv("error", js(i.error))],
     NativeToolDenied(i) => [kv("type", js("native_tool_denied")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("reason", js(i.reason))],
@@ -845,7 +860,7 @@ pure func test_ledger_trace_records_wire_and_stage_passed() -> bool
   tests [((), true)]
   {
     let t0 = empty_ledger_trace();
-    let t1 = ledger_append(t0, WireRecord(ProviderCallPrepared({ step: 1, msg_count: 2, system_prefix_count: 1, payload_digest: "sha256:abc", model: "m" })));
+    let t1 = ledger_append(t0, WireRecord(ProviderCallPrepared({ step: 1, msg_count: 2, system_prefix_count: 1, system_prefix_chars: 3, payload_digest: "sha256:abc", model: "m" })));
     let t2 = ledger_append(t1, CompactionStageRecord({ step: 1, ext_id: "ext", outcome: TraceStagePassed }));
     let t3 = ledger_append(t2, DecisionRecord({ step: 1, decision: "CallModel" }));
     List.length(t3.records) == 3
@@ -867,7 +882,7 @@ pure func test_seal_compacted_payload_repins_and_seals() -> bool
   tests [((), true)]
   {
     let split = split_for_compaction([mk_msg("system", "sys"), mk_msg("user", "old")]);
-    match seal_compacted_payload(split, [mk_msg("user", "new")], "m", 1000) {
+    match seal_compacted_payload(split, [mk_msg("user", "new")], "m", 1000, false) {
       Ok(payload) =>
         match payload {
           MkPayload(msgs) =>
@@ -884,8 +899,9 @@ pure func test_seal_compacted_payload_exhausts_with_live_reason() -> bool
   tests [((), true)]
   {
     let split = split_for_compaction([]);
-    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 10) {
-      Err(reason) => reason == "compaction_exhausted: context at 100% of test-model limit after compactor chain",
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 10, false) {
+      Err(SealExhausted(reason)) => reason == "compaction_exhausted: context at 100% of test-model limit after compactor chain",
+      Err(_) => false,
       Ok(_) => false
     }
   }
@@ -894,10 +910,34 @@ pure func test_seal_compacted_payload_fail_open_limit_zero() -> bool
   tests [((), true)]
   {
     let split = split_for_compaction([]);
-    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 0) {
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 0, false) {
       Ok(_) => true,
       Err(_) => false
     }
+  }
+
+pure func test_seal_compacted_payload_rejects_empty_system_prompt() -> bool
+  tests [((), true)]
+  {
+    let missing = split_for_compaction([mk_msg("user", "hi")]);
+    let present_empty = split_for_compaction([mk_msg("system", ""), mk_msg("user", "hi")]);
+    let missing_rejected =
+      match seal_compacted_payload(missing, [mk_msg("user", "hi")], "test-model", 1000, true) {
+        Err(SealSystemPromptEmpty(_)) => true,
+        _ => false
+      };
+    let present_empty_rejected =
+      match seal_compacted_payload(present_empty, [mk_msg("user", "hi")], "test-model", 1000, true) {
+        Err(SealSystemPromptEmpty(_)) => true,
+        _ => false
+      };
+    let headless_allowed =
+      match seal_compacted_payload(missing, [mk_msg("user", "hi")], "test-model", 1000, false) {
+        Ok(_) => true,
+        Err(SealSystemPromptEmpty(_)) => false,
+        Err(_) => false
+      };
+    missing_rejected && present_empty_rejected && headless_allowed
   }
 
 pure func test_validate_compactor_output_accepts_identity() -> bool
@@ -1029,7 +1069,7 @@ pure func golden(e: LedgerEvent, want: string) -> bool {
 pure func test_ledger_projection_golden_bytes() -> bool
   tests [((), true)]
   {
-    golden(ProviderCallPrepared({ step: 1, msg_count: 2, system_prefix_count: 1, payload_digest: "p2", model: "m" }), "{\"type\":\"provider_call_prepared\",\"step\":1,\"msg_count\":2,\"system_prefix_count\":1,\"payload_digest\":\"p2\",\"model\":\"m\"}")
+    golden(ProviderCallPrepared({ step: 1, msg_count: 2, system_prefix_count: 1, system_prefix_chars: 3, payload_digest: "p2", model: "m" }), "{\"type\":\"provider_call_prepared\",\"step\":1,\"msg_count\":2,\"system_prefix_count\":1,\"system_prefix_chars\":3,\"payload_digest\":\"p2\",\"model\":\"m\"}")
     && golden(ScratchpadResult({ tool_call_id: "tc", request_id: "step-1", step: 1, cells_json: "[]" }), "{\"type\":\"scratchpad_result\",\"tool_call_id\":\"tc\",\"request_id\":\"step-1\",\"step\":1,\"cells_json\":\"[]\"}")
     && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "" }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"\"}")
     && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 5, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "err" }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"cache_read_input_tokens\":5,\"cache_creation_input_tokens\":0,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"err\"}")
