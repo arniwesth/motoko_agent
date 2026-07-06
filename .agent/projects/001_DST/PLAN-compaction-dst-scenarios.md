@@ -60,19 +60,28 @@ dependency to one file, and honors that the catalog scenario has a wider effect 
   The two new files re-declare those ~40 lines (`print_trace`, `run_one`, `run_all`, `ok_or_failure`,
   and local `msg`/`tool` builders). A shared `scripts/dst_harness.ail` module is a nice future
   consolidation but out of scope — it would perturb the green `phase_c_l1` imports.
-- **D-P3 — the policy scenarios use ABI types.** `compact_for_pre_step` takes `(ctx: ExtCtx, msgs:
-  [Msg])` and returns `PreStepDecision`. Import `ExtCtx, Msg, PreStepDecision, PassThrough, Compacted`
-  from `pkg/sunholo/motoko_ext_abi/types` (the same origins the extension uses). `Msg` is
-  `{ role, content, tool_calls, tool_call_id }` — build it locally; the pkg's own `tool`/`user`/`ctx`
-  helpers are unexported.
-- **D-P4 — assert structurally against imported constants; small tractable limit.** The tier scenario
-  injects a **small** `ctx.context_limit` (fixtures cross the bands cheaply, per
-  `smoke_v2_compaction_tiers.ail`'s target-percent fixture helpers) with `model:
+- **D-P3 — the policy scenarios use ABI types (compile-verified this session via a throwaway probe).**
+  `compact_for_pre_step` takes `(ctx: ExtCtx, msgs: [Msg])` and returns `PreStepDecision`. Import
+  `ExtCtx, Msg, PreStepDecision, PassThrough, Compacted` from `pkg/sunholo/motoko_ext_abi/types` (the
+  same origins the extension uses); import `ToolCall` from `std/ai` (needed to build an assistant
+  `tool_calls` fixture in scenario 2). `Msg` is `{ role, content, tool_calls: [ToolCall], tool_call_id }`
+  — build it locally; the pkg's own `tool`/`user`/`ctx` helpers are unexported. **Use the clean
+  13-field `ExtCtx` literal in WI-2 below** (verified to check + run) — do **not** copy the pkg's
+  test-helper literal at `compaction_structural.ail:197-211` verbatim: it lists `context_limit`
+  *twice* (a source quirk AILANG tolerates); the type has one `context_limit`.
+- **D-P4 — assert structurally against imported constants; small tractable limit; mind the elide
+  threshold.** The tier scenario injects a **small** `ctx.context_limit` (fixtures cross the bands
+  cheaply, per `smoke_v2_compaction_tiers.ail`'s target-percent helpers) with `model:
   "ollama/qwen3.6:35b-a3b-mxfp8"` as a label only — the tiers are qwen-agnostic (ADR-002 D2).
   Assertions count preserved recent tool messages against `elide_keep_last()` /
   `elide_hard_keep_last()` etc.; **do not** sniff the `structural_note` string, and **do not** hardcode
-  70/85/95. To observe a `Compacted` at a tier you need **more tool messages than the tier's
-  keep-last** (else `compact_for_pre_step` returns `PassThrough` via its `same_msgs` guard).
+  70/85/95. **Two traps** to observe a `Compacted` (else `compact_for_pre_step` returns `PassThrough`
+  via its `same_msgs` guard): (a) you need **more tool messages than the tier's keep-last**; and (b)
+  **`elide_content` is a no-op for content ≤ 80 chars** (`compaction_structural.ail:42-49`) — the
+  older, elidable tool messages must carry **long content** (use a ~200-char `long_tool_content()`
+  string, as the pkg's own tests do) or elision changes nothing and the decision is `PassThrough`.
+  Size the limit so total usage lands in the target band *given* that long content (a ~250–300 limit
+  with ≥11 long tool messages puts you in tier-1; scale up for hard/emergency).
 - **D-P5 — the catalog scenario depends on the catalog file.** `catalog_context_limit_for` reads
   `.motoko/model-catalog.json` (or `$MOTOKO_MODELS_FILE` / `$MOTOKO_REPO/.motoko/model-catalog.json`).
   The scenario asserts `== 262144` for `"ollama/qwen3.6:35b-a3b-mxfp8"`; it is the only place the
@@ -125,7 +134,7 @@ are already imported at `:32`/`:29`).**
     let seg = segment_messages(split.segment);
     let pinned_ok = length(split.pinned) == 2;   -- the two-message system prefix is pinned out
     ok_or_failure(no_system_in(seg) && pinned_ok, "compactable segment excludes the system prefix",
-      ["pinned_len=${encode(...)}"])   -- or a simple string; keep the trace minimal
+      ["segment_had_system_or_bad_pin"])   -- plain marker; harness already prints scenario id + invariant
   }
   ```
   (Keep the trace line simple — a plain `"segment_had_system"` marker on failure is enough; the
@@ -159,6 +168,7 @@ module scripts/compaction_policy_dst
 import std/io (println)
 import std/list (length)
 import std/result (Result, Ok, Err)
+import std/ai (ToolCall)
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   compact_for_pre_step, elide_old_tool_results,
@@ -171,16 +181,18 @@ import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
 
 func tool(id: string, content: string) -> Msg { { role: "tool", content: content, tool_calls: [], tool_call_id: id } }
 func user(content: string) -> Msg { { role: "user", content: content, tool_calls: [], tool_call_id: "" } }
+-- long content so elide_content actually shortens (≤80 chars is a no-op — D-P4):
+func long_content() -> string { "long tool output that genuinely exceeds eighty characters and keeps going well past the elide threshold so shortening actually happens and the decision becomes Compacted not PassThrough" }
 
--- ctx with an injected small limit; copy the full field list from
--- packages/motoko-ext-compaction-structural/compaction_structural.ail:197-211,
--- setting context_limit to the injected value and model to "ollama/qwen3.6:35b-a3b-mxfp8".
+-- ctx with an injected small limit. This clean 13-field literal is compile+run verified
+-- (do NOT replicate the pkg helper's duplicate context_limit at :197-211).
 func ctx(limit: int) -> ExtCtx { { task: "t", step: 0, model: "ollama/qwen3.6:35b-a3b-mxfp8", context_limit: limit, cwd: ".", hybrid_tools: false, budget: { total: 1, solver: 1, verifier: 0 }, mode: "default", workdir: ".", env_server_url: "", budget_remaining: 1, history_slice: [], state_key: "k" } }
 ```
 
 **Scenario 1 — `estimate_tier_ladder`.** Build fixtures crossing each band against a small
-`ctx(limit)` (mirror `smoke_v2_compaction_tiers.ail`'s "N tool messages sized to hit target%"
-approach; needs `> elide_keep_last()` tool messages so tier-1 actually elides). Assert:
+`ctx(limit)`. Per D-P4 you need **> keep-last** tool messages **with long (>80-char) content** in the
+elidable positions, or elision is a no-op and you get `PassThrough`. Mirror
+`smoke_v2_compaction_tiers.ail`'s target-percent sizing. Assert:
 ```
 -- count tool messages whose content is unshortened == the tier's keep-last
 func kept(msgs: [Msg], full: int) -> int { ... count tool msgs with length(content) == full ... }
@@ -216,7 +228,10 @@ export func main() -> () ! {IO} {
 ```
 ailang check scripts/compaction_policy_dst.ail
 ailang run --caps IO --entry main scripts/compaction_policy_dst.ail    # 3 PASS
-grep -nE '\b(70|85|95|10|5|3|1)\b' scripts/compaction_policy_dst.ail    # only in fixture sizes, never as a tier threshold
+# constants are imported and referenced in assertions (positive check):
+grep -nE 'elide_tier_pct|elide_hard_tier_pct|emergency_pct|elide_keep_last|elide_hard_keep_last|emergency_keep_last|emergency_final_keep_last' scripts/compaction_policy_dst.ail
+# and no bare tier PERCENT literal is used in a comparison (70/85/95 may only appear in a limit/size, not `>= 70`):
+grep -nE '(>=|>|==|<)\s*(70|85|95)\b' scripts/compaction_policy_dst.ail || echo "good: no hardcoded threshold comparison"
 ```
 **Teeth check (per scenario).** Flip one assertion's expected constant (e.g. `elide_keep_last()` →
 `elide_hard_keep_last()`) → the scenario must FAIL naming its id + invariant; revert.
@@ -249,7 +264,29 @@ Confirm `.motoko/model-catalog.json:43` is the source; if the run can't find the
 `MOTOKO_MODELS_FILE` or run from repo root.
 **Rollback.** Delete the file.
 
-### WI-4 — acceptance gate (maps to ADR-002 §Acceptance criteria)
+### WI-4 — wire the new scenarios into the build gate
+
+**Purpose.** Without this the two new scripts never run in CI and guard nothing. WI-1's scenario
+already rides the existing `phase_c_l1:` target (`Makefile:53-54`, runs
+`scripts/phase_c_l1_scenarios.ail` under `--caps IO`); the two **new** files are wired into nothing.
+
+**Change (`Makefile`).** Add a `compaction_dst` target and make it reachable from the same gate that
+runs `phase_c_l1` (and, if CI runs `test`, chain it there — note `test: test_core` does **not**
+currently include `phase_c_l1`, so confirm what CI actually invokes):
+```
+compaction_dst:
+	ailang run --caps IO --entry main scripts/compaction_policy_dst.ail
+	ailang run --caps IO,Env,FS --entry main scripts/compaction_catalog_dst.ail
+```
+Prefer extending the existing `phase_c_l1` target to also invoke `compaction_dst` (or list it as a
+prerequisite) so the L1 compaction DST travels with the rest of the L1 gate. (001_DST/ADR-001's
+`make test_dst` naming is aspirational — reuse the live `phase_c_l1` gate rather than inventing an
+unreferenced target.)
+
+**Verification.** `make compaction_dst` (or `make phase_c_l1` if chained) runs green.
+**Rollback.** Remove the target / prerequisite.
+
+### WI-5 — acceptance gate (maps to ADR-002 §Acceptance criteria)
 
 ```
 # crit 1: four pure scenarios green under --caps IO
@@ -257,8 +294,9 @@ ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail        # 13 P
 ailang run --caps IO --entry main scripts/compaction_policy_dst.ail       # 3 PASS
 # crit 1: catalog under wider caps
 ailang run --caps IO,Env,FS --entry main scripts/compaction_catalog_dst.ail   # ok
-# crit 2: no hardcoded tier thresholds in the policy file
-grep -nE 'elide_tier_pct|elide_hard_tier_pct|emergency_pct|elide_keep_last|elide_hard_keep_last|emergency_keep_last' scripts/compaction_policy_dst.ail  # constants imported & used
+# crit 2: constants imported & used (positive), and no bare threshold comparison
+grep -nE 'elide_tier_pct|elide_hard_tier_pct|emergency_pct|elide_keep_last|elide_hard_keep_last|emergency_keep_last' scripts/compaction_policy_dst.ail
+grep -nE '(>=|>|==|<)\s*(70|85|95)\b' scripts/compaction_policy_dst.ail || echo "good: no hardcoded threshold comparison"
 # crit 3: scenarios target compact_for_pre_step, not compact_step_with_limit
 grep -n 'compact_step_with_limit' scripts/compaction_policy_dst.ail || echo "good: none"
 # crit 4: 262144 appears only in the catalog file
