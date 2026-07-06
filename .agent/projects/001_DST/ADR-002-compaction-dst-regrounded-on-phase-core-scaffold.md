@@ -44,11 +44,11 @@ re-points the surviving invariants at what shipped.
    reusing the `phase_c_l1_scenarios.ail` harness. **Specify** the actual-token / qwen-threshold DST
    precisely but **gate it** on the un-landed ABI v3 `ExtCtx.telemetry` seam plus a fake `ai_step`
    port. DST progress is not blocked on the ABI build.
-3. **Qwen enters as an injected `limit` (D2).** Because `context_limit_for` now returns 0 and real
-   limits are catalog-effectful, qwen in a pure scenario = the model-string label plus its `262144`
-   limit (`.motoko/model-catalog.json:43`) passed as the `limit` int to
-   `compact_step_with_limit(msgs, model, limit)`. One small effectful conformance scenario guards the
-   `qwen → 262144` catalog binding itself.
+3. **Qwen enters as an injected `limit` (D2).** There is no pure limit function — the only source is
+   the effectful `catalog_context_limit_for` (`{Env, FS}`) — so qwen in a pure scenario = the
+   model-string label plus its `262144` limit (`.motoko/model-catalog.json:43`) passed as the `limit`
+   int to `compact_step_with_limit(msgs, model, limit)`. One small effectful conformance scenario
+   guards the `qwen → 262144` catalog binding itself.
 
 The estimate-path scenarios are shippable under `--caps IO` with no ABI change; the actual-token
 half is documented as a follow-on that unblocks when D9's ABI v3 lands.
@@ -106,11 +106,13 @@ concepts. This ADR re-establishes what is real at HEAD and splits the work accor
    The genuinely-uncovered residue is the **extension's own policy** — the estimate tier ladder and
    the emergency recovery/exhaustion nuance — plus everything actual-token.
 
-5. **`context_limit_for` is inert; the catalog is effectful.** `context_limit_for` returns 0 for
-   every model. Real limits come from `catalog_context_limit_for(model)` (`src/core/context_usage.ail`),
-   effect row `{Env, FS}`, reading `.motoko/model-catalog.json`, where
-   `"ollama/qwen3.6:35b-a3b-mxfp8": 262144` (`:43`). A pure scenario cannot call it; qwen's limit must
-   be injected (D2).
+5. **The only limit source is the effectful catalog — there is no pure limit function.** The pure
+   `context_limit_for` the 2026-07-03 amendment referred to has since been **deleted entirely**; it
+   has no definition at HEAD (verified: no `func context_limit_for` in `src/`). The sole limit source
+   is `catalog_context_limit_for(model)` (`src/core/context_usage.ail:50`), effect row `{Env, FS}`,
+   reading `.motoko/model-catalog.json` where `"ollama/qwen3.6:35b-a3b-mxfp8": 262144` (`:43`); it is
+   the live limit for every send (`rpc.ail:106,:212`; `session.ail:972,:994,:1389`). A pure scenario
+   cannot call it, so injecting qwen's limit is **mandatory**, not merely preferred (D2).
 
 ## Decision drivers
 
@@ -268,8 +270,9 @@ once by `catalog_limit_qwen`), a deliberate seam between pure policy and the eff
   ABI 2.2.0); in-tree mirror `src/core/ext/types.ail:11`.
 - Core scaffold: `src/core/compaction.ail` `estimate_tokens_messages:17`, `usage_percent_with_limit:25`,
   `exhaustion_pct:30`; send-gate `src/core/phase_vocab.ail` `seal_compacted_payload` + `SealError`
-  (post 004 ADR-002); `catalog_context_limit_for` in `src/core/context_usage.ail` (`{Env, FS}`),
-  `context_limit_for` inert.
+  (post 004 ADR-002); `catalog_context_limit_for:50` in `src/core/context_usage.ail` (`{Env, FS}`),
+  live at `rpc.ail:106,:212` and `session.ail:972,:994,:1389`. No pure `context_limit_for` exists
+  (deleted; the 2026-07-03 amendment's "returns 0" claim is itself stale).
 - Model catalog: `.motoko/model-catalog.json:43` → `"ollama/qwen3.6:35b-a3b-mxfp8": 262144`.
 - Existing L1 harness: `scripts/phase_c_l1_scenarios.ail` (12 scenarios, `--caps IO`); scenario-builder
   + `main` list pattern to extend.
