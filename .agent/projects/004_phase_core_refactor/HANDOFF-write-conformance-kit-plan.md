@@ -74,35 +74,80 @@ Plan 1 was the one plan that had to wait for Plan 2. That dependency is discharg
 
 ## The decisions this plan must close (with operator sign-off, D9 / D-B5 pattern)
 
-The sequence note calls Plan 1 "execution only — no open decisions." **Re-grounding at HEAD says
-that is not quite true** — the ABI froze cleanly, but the *law's current home in core* forces at
-least two structural decisions §6.1 does not settle. Surface each, recommend, and amend ADR-001 §6.1
-on sign-off. (If, on your own re-grounding, one turns out already-settled, say so and drop it — don't
-manufacture decisions.)
+The sequence note calls Plan 1 "execution only — no open decisions." **Re-grounding at HEAD found
+otherwise** — the ABI froze cleanly, but the *law's current home in core* plus the ABI-major gap in
+the reject fixture forced four. **Three are now closed with the operator (A, C, D); B is scoped and
+coupled to A.** They are recorded below so the planning session inherits them settled — do not
+re-litigate; just carry the amendment text into ADR-001 §6.1. (If your own re-grounding contradicts
+one, that's a finding to report, not a re-open.)
 
-- **Decision A — where the contract law lives, and which way the dependency points.** §6.1 says
-  `invariants.ail` is "**imported by the core transcript gate** … one source of law." But at HEAD the
-  law lives in `src/core/phase_vocab.validate_compactor_output`, which `runtime.ail` already imports.
-  Two shapes: **(A1)** extract the predicates into `packages/motoko_ext_conformance/invariants.ail`
-  and have **core import them back** (matches §6.1 literally; inverts the dependency —
-  `src/core` → a `packages/` module; blast radius: `runtime.ail:27,170`, `phase_c_l1_scenarios.ail`,
-  the `phase_vocab` tests). **(A2)** keep the law in core and have the kit *re-export/wrap* it (kit
-  depends on core, not vice versa; less blast radius but reads §6.1's "imported by core" backwards).
-  This is the plan's central decision — close it explicitly.
+- **Decision A — where the contract law lives / dependency direction. → CLOSED 2026-07-07 (operator
+  sign-off): A1.** The contract-law predicates move **out of** `src/core/phase_vocab` **into**
+  `packages/motoko_ext_conformance/invariants.ail`, and **core imports them back** (`runtime.ail`
+  imports the `invariants` module, never `harness`). This matches §6.1 verbatim ("invariants.ail …
+  imported by the core transcript gate").
+  - **Enabling detail (do this or you create a cycle):** type the law on the **ABI `Msg`**
+    (`pkg/sunholo/motoko_ext_abi/types.Msg`), not `src/core/types.Msg`. `src/core/types.Msg` is a
+    separate-but-structurally-identical definition (`types.ail:10,16`); typing invariants on core
+    `Msg` would make `conformance-pkg → src/core → conformance-pkg`. On ABI `Msg` the graph is
+    `core → conformance/invariants → ABI` (acyclic; core already `→ ABI`). Core can still call the
+    law with core `Msg` — that structural compat is **already exercised in shipping code** at
+    `runtime.ail:170` (an ABI `Msg` from the ABI `Compacted` is passed where core `Msg` is expected
+    and compiles), so the retype is cheap, likely conversion-free.
+  - **Blast radius to enumerate in the plan:** move `validate_compactor_output` + its helpers
+    (`validate_output_calls`, `has_assistant_call_id`, `has_tool_result_id`,
+    `validate_compactor_output_rec`, `phase_vocab.ail:240-293`) + their tests out of `phase_vocab`;
+    update importers `src/core/ext/runtime.ail:27,170` and `scripts/phase_c_l1_scenarios.ail`; keep
+    core's `import` granularity so `harness.ail` never enters core's build.
+  - **Accepted cost:** core's build now depends on the conformance package existing — this *is*
+    §6.1's shared-single-law coupling, not an accident (rejected A2 because it drags all of
+    `motoko_core` into every extension's conformance CI; rejected A3 as either blurring §6.1's
+    shapes/behavior split or adding a second package + lockstep version).
+  - **Amend ADR-001 §6.1** on landing: note the law's canonical home is `invariants.ail` typed on
+    ABI `Msg`, extracted from `phase_vocab` (the D9 / D-B5 amendment pattern).
+  - Pairs with **Decision B** (decomposing the moved monolithic validator into the named
+    predicates) — do them together, since both edit the same functions.
 - **Decision B — decompose the monolithic validator into named invariants.** §6.1 requires failures
   to name the *first failed invariant* (`pairing_preserved` etc.). Today there is one `Result[(),
   string]`. The plan must split it into the four named predicates and define how core's coarse
   wrapper composes them (so the transcript gate keeps its single Err message while the harness gets
   per-invariant booleans). Scope the refactor + its blast radius; this pairs with Decision A.
-- **Decision C — two-version fixture loading for the fail-then-pass gate.** The reject fixture is
-  registry-cache `0.2.0`; the accept fixture is workspace-path `0.3.0` — the *same package name at
-  two versions*. Decide how the harness loads both (e.g., point-at-package arg convention — §6 says
-  "exact arg convention frozen with the kit"), since a single `ailang.lock` pins one version.
-- **Decision D — the harness's real cap set (measure, don't assume).** §6 says
-  `ailang run --caps IO`. But `ExtPorts.ai_step` carries a broad effect row, and Plan 2 learned the
-  hard way (§5.4 / G-A5) that a driven run needs `IO,Env,Clock,FS,Trace`, not bare `IO`. A harness
-  running *hooks* (not the full loop) may need less — but **measure it empirically** and freeze the
-  real set, don't inherit `--caps IO` on faith.
+- **Decision C — the reject fixture. → PARTIALLY SETTLED (premise corrected 2026-07-07; sub-choice
+  C-i/C-ii open for the plan).** The original framing ("load two versions of the same package, one
+  lockfile") is a **false premise**: published `compaction_ai 0.2.0` targets **ABI 2.2.0**
+  (`its ailang.toml: motoko_ext_abi = "2.2.0"`, 2-arg `Compacted` at `:148`) — it **cannot compile
+  or link under the ABI-3.0 harness**, and its `std/ai.step` port-bypass would fault on a missing
+  `AI` cap (failing for the *wrong* reason, before any invariant observes bad output). §6.1's own
+  worked example already presumes a **ports-consuming** buggy compactor ("a fake `ai_step` port
+  returning a canned summary"), not the shipped `0.2.0`.
+  - **Therefore:** the reject fixture is a **frozen ABI-3.0 regression fixture** — ports-native (so
+    scenarios observe its bad *output*), reproducing `0.2.0`'s positional `split_msgs` (severs system
+    prefix + tool pairs) and no-cache behavior. Published `0.2.0` stays as provenance
+    documentation, not a loadable artifact. No lockfile version-swap: both fixtures are ABI-3.0,
+    loaded side by side. The fail-then-pass is the **kit's own self-acceptance test**, distinct from
+    the registry probe (which tests whatever the lockfile resolves — now `0.3.0`).
+  - **Sub-choice → CLOSED 2026-07-07 (operator): C-i.** The reject fixture is an **in-kit
+    `fixtures/` module**, hand-written ABI-3.0 `ExtensionHooks` modeled on the 3.0-clean
+    `src/core/test/ext_fixture.ail` (`Compacted(msgs, note, empty_ext_artifacts())`, `:89`).
+    Self-contained, single run, no package/version overhead — and it must **not** be registry-
+    resolvable (C-ii, a standalone fixture package modeled on `packages/motoko-ext-test-dummy/`, was
+    rejected precisely to keep a known-bad compactor out of the registry-probe path). The cap-floor
+    measurement (Decision D) built exactly this pattern and confirmed it drives `compact_with_ai`
+    through fake ports cleanly.
+  - **Plan must also carry** (not a decision): the fixture likely needs **per-bug variants**
+    (prefix-dropping, pair-severing, no-cache) so each scenario fails on *its own* invariant rather
+    than all failing on the first flaw hit.
+- **Decision D — the harness's real cap set. → CLOSED 2026-07-07 (measured): `--caps IO`.** §6's
+  `--caps IO` is **correct for the hooks harness** — confirmed empirically, not inherited on faith. A
+  throwaway harness (fake ports + one `compact_with_ai` call + output check, the exact C-i pattern)
+  ran `compaction_ai 0.3.0` **green under `--caps IO`**; with no caps it faults only on `IO` (the
+  harness's own `println`). The compaction hook under fake ports performs **no gated effect**, so the
+  floor is bare `IO` — sharply unlike Plan 2's *driven-loop* scenario (`IO,Env,Clock,FS,Trace`,
+  because the full loop performs `now()`/`Trace`/FS/Env). This is caps-as-conformance working as
+  designed: a compactor that **bypassed** ports (`std/ai.step` directly) would need `AI`, which
+  `--caps IO` withholds, and would fault at the bypass — so the harness *at `--caps IO`* **is** the
+  enforcement. The plan should still re-measure once the real harness adds its own scaffolding (e.g.
+  reading fixtures), but the floor for hook-driving is settled.
 
 ## Deliverables the plan must specify (ADR §6 / §6.1)
 
