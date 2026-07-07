@@ -8,6 +8,38 @@ Author session: fresh, grounded at HEAD `8923993`
 Spec: ADR-001-phase-oriented-core §6 / §6.1; framed by
 NOTE-remaining-dst-work-scope-and-sequence.md as **Plan 2, the dependency root**.
 
+## TL;DR
+
+Take the extension ABI **2.2.0 → 3.0** and produce the frozen surface the other two DST plans sit
+on. Three type edits (`ExtCtx += {ports, artifacts, telemetry}`, `Compacted += artifacts`, new
+`ExtPorts`/`TokenTelemetry`), migrate `compaction_ai` → **0.3.0** (ports-native, artifact-cached,
+core-primitive-based — the accept fixture Plan 1 will certify), re-cert bundled
+`compaction_structural` → **1.1.0**, and fold in the one core-side DST completion (assert an L1
+scenario over a `LedgerTrace` captured from a driven run).
+
+**Closes two ADR-001 open questions (operator sign-off required, §2):**
+- **Q2 · artifacts** → stay raw `Json` (one self-owned producer/consumer; no speculative typing).
+- **Q3 · `ExtPorts`** → freeze **{ `ai_step`, `proc_exec`, `clock_now`, `env_get` }** (one exercised
+  port + three zero-invention projections of live core `Ports` seams); **defer `http` + `kv`** (no
+  consumer — addable later as a host-only constructor break, *not* a major bump).
+
+**Five ADR gaps / re-ground corrections the plan carries (§1), the load-bearing ones:**
+- **Blast radius is wider than ADR §6 says** — `Compacted` breaks **17 sites across 7 files**
+  (construct *and* pattern-match), incl. **live core** `runtime.ail:159,168`; `ExtCtx` breaks ~9
+  construction sites incl. two ADR-unnamed `rpc.ail` builders (§4).
+- **The threading is real state plumbing, not "expose existing fields"** — `C2LoopState` carries
+  *neither* `ext_artifacts` nor `telemetry` across steps; without adding them the artifact cache is
+  dead (§5.1).
+- **The driven-trace mechanism already exists** (`phase_c2_wiring_scenarios.ail`, ungated) — reuse +
+  gate it, don't rebuild (§5.4).
+- `ai_step` returns `Result[string, string]`, not `Result[StepResult, AIError]`, to keep the ABI
+  free of `std/ai` imports (§2).
+
+**Gates (two classes, do not conflate, §8):** ABI/compaction packages → **hydration-required**
+(`ailang lock` first); the ledger scenario → **core-DST** but empirically needs
+`--caps IO,Env,Clock,FS,Trace` (no provider/network). **Out of scope:** the conformance kit itself
+(Plan 1) and the checkpoint trigger (Plan 3).
+
 ## 0. Grounding note (read first)
 
 Every `file:line` below was re-observed at HEAD `8923993` on 2026-07-07 per
@@ -28,7 +60,7 @@ Confirmed at HEAD:
 
 ## 1. ADR gaps found (ADR-001 §6 is a decision, not a plan)
 
-ADR-001 §6 is thinner than ADR-002 was, exactly as the handoff warned. Four facts a sequencing
+ADR-001 §6 is thinner than ADR-002 was, exactly as the handoff warned. Five facts a sequencing
 plan needs are not derivable from §6 + prose and were only visible in source. None re-opens a
 decision; each is a scoping fact the plan must carry.
 
@@ -76,8 +108,22 @@ decision; each is a scoping fact the plan must carry.
   `[Msg] → [Message]` at the call, or core must expose a `Msg`-typed helper. §6.2 picks
   Msg→Message conversion in the extension (no core change).
 
-**No new decision is implied by any of these.** They sharpen the blast radius (G-A1, G-A2),
-resolve a shape the ADR left implicit (G-A3), and name an import path (G-A4).
+- **G-A5 — a *driven*-trace L1 scenario cannot run under AC4's literal "`--caps IO` or less."**
+  ADR-001 Acceptance criterion 4 (lines 490-492) says "the compaction L1 family … runs with
+  `--caps IO` or less, no Ollama/OpenRouter/network." That is exact for the **pure-invariant**
+  scenarios, but the handoff's folded item explicitly wants a scenario that captures a
+  `LedgerTrace` *from a real run* — and a real `run_v2_session_traced` run **empirically requires
+  `--caps IO,Env,Clock,FS,Trace`** (measured at HEAD; §5.4), because the loop performs `now()`
+  (Clock), `Trace` spans (`session.ail:1646-1648`), and FS/Env host effects even with scripted
+  ports. It does **not** need `AI`/`Net`/`SharedMem`/`Stream` (never *performed*). Reconciliation:
+  AC4's binding criterion is "**no provider / no network / no hydration**," which the driven-trace
+  scenario satisfies; "`--caps IO` or less" describes the pure family only. Recommend a one-line
+  ADR-001 AC4 clarification ("pure-invariant scenarios `--caps IO`; driven-trace scenarios
+  `--caps IO,Env,Clock,FS,Trace`, still no provider/network/hydration"). Not blocking; no decision.
+
+**No new decision is implied by any of these.** They sharpen the blast radius (G-A1, G-A2, and the
+17-site `Compacted` sweep in §4b), resolve a shape the ADR left implicit (G-A3), name an import
+path (G-A4), and reconcile a caps clause against an empirically measured run (G-A5).
 
 ---
 
@@ -132,14 +178,22 @@ signatures against a consumer (violating the same discipline that produced this 
 because it invents `http`/`kv` signatures with no consumer to pin them and no cheaper-later
 argument against it. Recorded so the operator can choose it.
 
-**Frozen signatures (Option B), grounded in `src/core/ports.ail`:**
+**Frozen signatures (Option B), grounded in `src/core/ports.ail` and the ABI's purity pattern:**
 
 ```ail
 export type ExtPorts = {
-  -- Exercised by compaction_ai 0.3.0. Mirrors its current std/ai.step(model, msgs, []) call.
-  -- StepResult / AIError are pure *type* imports from std/ai (no effectful funcs), consistent
-  -- with the ABI already inlining Msg/ToolCall/ToolSchema to stay effect-func-free.
-  ai_step:   (string, [Msg]) -> Result[StepResult, AIError] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream},
+  -- Exercised by compaction_ai 0.3.0, replacing its std/ai.step(model, msgs, []) call.
+  -- Returns Result[string, string] (Ok = response content, Err = error message), NOT
+  -- Result[StepResult, AIError]: (1) the ABI imports ONLY std/option + std/json and inlines
+  -- every std/ai shape (Msg/ToolCall/ToolSchema) to stay effect-func-free — verified at HEAD,
+  -- types.ail:11-12 — so importing std/ai StepResult/AIError would break that deliberate
+  -- pattern; (2) the sole consumer reads only result.message.content and e.code/e.message
+  -- (verified compaction_ai.ail:92-93), which a string result covers exactly. The host wraps
+  -- core Ports.model_step and returns .message.content on Ok / the error string on Err.
+  -- Row = on_pre_step's hook row (types.ail:134) so the extension can call it inside on_pre_step;
+  -- note Trace is deliberately absent (on_pre_step's row has no Trace), so the host wrapper must
+  -- NOT surface Trace from model_step (ports.ail:18 declares Trace) — discharge it host-side.
+  ai_step:   (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream},
   -- Projected verbatim from core Ports.tool_exec (ports.ail:22).
   proc_exec: (string, string) -> string ! {IO, Process, FS},
   -- Projected verbatim from core Ports.clock_now (ports.ail:20).
@@ -194,6 +248,12 @@ export type PreStepDecision
   deriving (Eq)
 ```
 
+**[re-ground, verified]** The `deriving (Eq)` at `types.ail:127` **survives** the `Json` field: a
+minimal probe (`type D = A | C(note: string, artifacts: Json) deriving (Eq)` with `jo([]) == jo([])`)
+type-checks and evaluates `true` under `AILANG v0.26.0`. `Json` is `Eq`-comparable (the ABI already
+derives `Eq` on `ToolPolicyDecision`/`FinalizeDecision`, and `ToolCallEnvelope.arguments` is `Json`).
+No `deriving`-clause change needed.
+
 **3c. New ABI types `ExtPorts` and `TokenTelemetry`** added to `types.ail` (TokenTelemetry mirrors
 `phase_vocab.ail:154-157` — see G-A3 / §5.3 for why input/output only). `ExtPorts` per §2.
 
@@ -239,44 +299,76 @@ either delete the mirror or update it in lockstep. Do not silently leave a diver
 | `packages/.../compaction_structural.ail:215` | **match** `Compacted(_, _)` | bundled pkg test | add arity `_` |
 | `src/core/test/ext_fixture.ail:88` | **construct** | in-repo test fixture | `jo([])` |
 | `src/core/ext/runtime.ail:434,440,446` | **construct** ×3 (chain-test hooks) | in-repo test | `jo([])` |
+| `scripts/phase_c2_wiring_scenarios.ail:253,254` | **construct** ×2 (stage_hook) | in-repo DST harness [re-ground] | `jo([])` |
+| `scripts/smoke_v2_compaction_chain.ail:117,123,129` | **construct** ×3 | in-repo smoke [re-ground] | `jo([])` |
 | `src/core/ext/runtime.ail:159` `Compacted(_, note)` | **match** | **live core chain fold** [G-A2] | add arity `_` |
 | `src/core/ext/runtime.ail:168` `Compacted(compacted_msgs, note)` | **match** | **live core chain fold** [G-A2] | add arity binder; wire artifacts into stage (§5.2) |
+| `scripts/compaction_policy_dst.ail:156,163,253,264` | **match** ×4 | in-repo DST [re-ground] | add arity `_` |
 
 The only **external** package that breaks is `compaction_ai` — ADR §6's claim holds at that
-granularity. But the in-repo edit set is the whole 4b table, and two of them are **live core code**
-(`runtime.ail:159,168`), not tests.
+granularity. But the in-repo edit set is the whole 4b table — **17 sites across 7 files** (initial
+grep missed the five `scripts/` files; re-swept `grep -rn 'Compacted(' scripts/ packages/` at HEAD),
+and two of them are **live core code** (`runtime.ail:159,168`), not tests. A mechanical
+`Compacted(m, n) → Compacted(m, n, jo([]))` codemod covers every site except `compaction_ai`
+(real artifacts, §6) and `runtime.ail:168` (wire artifacts into the stage result, §5.2).
 
 ---
 
 ## 5. Core-side wiring (the one DST completion + the ABI threading)
 
-### 5.1 Where `artifacts` and `telemetry` already live
+### 5.1 Where `artifacts` and `telemetry` live — and the cross-step gap (re-ground correction)
 
-Core `StepState` **already carries both** (`phase_vocab.ail:345-351`): `telemetry: TokenTelemetry`
-and `ext_artifacts: Json`, threaded via `StateDelta`/`apply_delta` (`:358-396`) and seeded at
-`session.ail:409,412`. `model_phase.result_delta` builds telemetry from `StepResult`
-(`model_phase.ail:17`). So the ABI-v3 threading is **not** new state plumbing — it is *exposing*
-existing `StepState` fields into the `ExtCtx` the hooks receive.
+The `StepState` **type** carries both (`phase_vocab.ail:345-351`): `telemetry: TokenTelemetry` and
+`ext_artifacts: Json`, with a `StateDelta`/`apply_delta` path (`:358-396`) and `model_phase.result_delta`
+building telemetry from `StepResult` (`model_phase.ail:17`). **But these are transient *within* a
+step, not persisted *across* steps** — and that gap is load-bearing:
+
+- `c2_step_state` **rebuilds `StepState` fresh every iteration**, hard-resetting
+  `telemetry: {0, 0}` and `ext_artifacts: jo([])` (`session.ail:409,412`).
+- The cross-step carrier is **`C2LoopState`** (`session.ail:320-336`), which has
+  `msgs, step_idx, totals, provider, pending_*, trace, …` but **neither `ext_artifacts` nor
+  `telemetry`**. So a value computed in step N's `StepState` is dropped at the tail-recursion and
+  step N+1 starts from zero/empty.
+
+Consequence: exposing `StepState`'s fields into `ExtCtx` is **not** enough. `ExtCtx.artifacts` would
+always be empty and `ExtCtx.telemetry` always `{0,0}` unless `C2LoopState` is extended to persist
+them. The artifact cache (§6.1) — the whole point of which is reusing step N's summary at N+1 —
+**cannot function** without this. So the threading *is* new state plumbing, contrary to a first read.
 
 ### 5.2 The threading (WI-2)
 
 1. **Project `ExtPorts` from core `Ports`.** Add a pure `ext_ports_of(p: Ports) -> ExtPorts` that
    maps `tool_exec → proc_exec`, `clock_now`, `env_get` verbatim, and adapts `model_step` into
-   `ai_step` (drop the streaming `on_chunk` param; a summary call needs no stream). Core's `Ports`
-   is available in `c2_loop` via the `Ported` provider (`session.ail:442-444`, `ports.ail:17`).
-2. **Extend `mk_v2_ext_ctx`** (`session.ail:670-697`) to take `ports: ExtPorts`, `artifacts: Json`,
+   `ai_step` (drop the streaming `on_chunk` param — a summary needs no stream — and map the result
+   to `Result[string, string]`: `Ok(sr) → Ok(sr.message.content)`, `Err(e) → Err("${e.code}: ${e.message}")`,
+   so the ABI stays free of `std/ai` types, §2). Core's `Ports` is available in `c2_loop` via the
+   `Ported` provider (`session.ail:442-444`, `ports.ail:17`).
+2. **Persist artifacts + telemetry across steps (the §5.1 gap).** Add `ext_artifacts: Json` and
+   `telemetry: TokenTelemetry` to **`C2LoopState`** (`session.ail:320`); seed them
+   (`jo([])` / `{0,0}`) in `c2_initial_state` (`:420`); stop `c2_step_state` from hard-resetting
+   them (`:409,412`) — carry the `C2LoopState` values in instead; and when building each next
+   `C2LoopState`, write back (a) the step's telemetry after the model phase and (b) the fold's
+   artifacts after the pre-step chain.
+3. **Extend `mk_v2_ext_ctx`** (`session.ail:670-697`) to take `ports: ExtPorts`, `artifacts: Json`,
    `telemetry: TokenTelemetry` and set the three new fields. Update its four call sites
-   (`session.ail:1325,1352,1394,1472`) to pass `ext_ports_of(...)`, the current
-   `StepState.ext_artifacts`, and `StepState.telemetry`.
-3. **Consume `Compacted`'s new artifacts** in the chain fold (`runtime.ail:168`): thread the
-   returned artifacts back so they land in `StepState.ext_artifacts` (next step's
-   `ctx.artifacts`). This closes the artifact-cache loop end-to-end and is what makes the kit's
-   future `artifact_cache_effective` scenario meaningful.
+   (`session.ail:1325,1352,1394,1472`) to pass `ext_ports_of(...)` and the **`C2LoopState`**
+   artifacts + telemetry (per step 2), so the pre-step `ctx` (`:1394`) sees the prior step's cache.
+4. **Return `Compacted`'s artifacts from the fold.** `fold_pre_step_chain` currently returns
+   `{ msgs, stages }` (`runtime.ail:150-151`); add an `artifacts` field so the chain's final
+   artifacts reach `c2_loop`, which writes them into the next `C2LoopState` (step 2b). This closes
+   the artifact-cache loop end-to-end and is what makes the kit's future `artifact_cache_effective`
+   scenario meaningful. **Chain-artifact merge semantics** (multiple compactors returning artifacts)
+   are undefined by ADR §6 — with one artifact-producing compactor (`compaction_ai`) at HEAD,
+   last-writer-wins is sufficient; flag a richer merge as follow-on if a second producer appears.
 
 ### 5.3 `TokenTelemetry` shape (resolves G-A3)
 
-Reuse the existing `TokenTelemetry = { last_input_tokens, last_output_tokens }`
-(`phase_vocab.ail:154-157`) as the ABI 3.0 `telemetry` type. **Do not** add cache-token fields yet:
+**Mirror** `TokenTelemetry = { last_input_tokens, last_output_tokens }` (`phase_vocab.ail:154-157`)
+as a *new type defined in the ABI package* — the ABI cannot import `src/core/phase_vocab`, so it
+declares its own structurally-identical `TokenTelemetry`, exactly as it inlines `Msg` today.
+`mk_v2_ext_ctx` converts the core `TokenTelemetry` value into the ABI one at the seam (a trivial
+field copy — like `messages_to_msgs`; distinct nominal types even when structurally identical).
+**Do not** add cache-token fields yet:
 no consumer exists (0.3.0 uses estimate-based usage), and the cache figures live only in the JSONL
 projection `per_step_usage_kvs` (`session.ail:553-559`), never in the typed carrier. Adding cache
 fields is deferred to the first actual-token-gated compactor (Open Q4 / D9 future) — the identical
@@ -285,32 +377,61 @@ tokens" phrasing is satisfied by input/output now, cache-on-first-consumer later
 
 ### 5.4 Typed-ledger consumption wiring — closing the dst-status "partial" (WI-5)
 
-**Current state (re-ground):** the live loop **already threads a `LedgerTrace`** end-to-end —
-`c2_loop` builds it via `c2_append_decision` / `c2_trace_stage_records` / `c2_trace_wire_events`
-(`session.ail:354-368`) and every arm returns `{ result, trace }` (`TracedSessionResult`,
-`session.ail:134-137`). The exported traced entry `run_v2_session_traced(..., provider:
-StepProvider)` returns that trace (`session.ail:1652-1669`). **But** `scripts/phase_c_l1_scenarios.ail`
-asserts only over **pure functions** (`validate_compactor_output`, `history_valid_transcript`,
-`project`, `seal_compacted_payload`, `validate_checkpoint_chain` — e.g. scenarios at
-`:126,137,172,258,272`); **no scenario drives a run and asserts over a captured `LedgerTrace`.**
-That gap *is* the "partial."
+**[re-ground — this section was rewritten after review; my first draft's premise was false.]** The
+capture *mechanism already exists and is exercised.* Two distinct harness files must be
+distinguished:
 
-**The mechanism (small — the plumbing exists):**
-- A scripted run already resolves to fake ports: `Scripted(script) → Ported(scripted_ports_from_steps(history, script))` (`session.ail:444`). So `run_v2_session_traced(..., Scripted(script))` drives a full loop with **no network/model** and returns the real `LedgerTrace`.
-- The scripted path performs no real `AI`/`Net` effects (caps-as-conformance: effects are checked when *performed*, §6.1), so it runs in the **core-DST gate class — `--caps IO`, no hydration** (NOT the ABI/conformance class — see §8).
+- `scripts/phase_c_l1_scenarios.ail` (**gated**, `--caps IO`, `Makefile:54`) — the compaction/
+  checkpoint invariant family. Confirmed at HEAD to assert **only over pure functions / hand-built
+  inputs** (`validate_compactor_output`, `history_valid_transcript`, `project`,
+  `seal_compacted_payload`, `validate_checkpoint_chain`; scenarios at `:126,137,172,258,272`). It
+  imports no `run_v2`/`Session.` (grep-verified). This is the "partial."
+- `scripts/phase_c2_wiring_scenarios.ail` (**ungated** — no `Makefile`/CI reference, grep-verified)
+  — **already drives real scripted runs and asserts over the captured `LedgerTrace`**:
+  `run_scripted(rt, script)` calls `Session.run_v2_session_traced(..., Scripted(script))`
+  (`:161-163`) and asserts over `traced.trace` — decision sequences via `assert_decisions`/
+  `DecisionRecord` (`:153`) and stage outcomes via `has_stage_passed/applied/rejected` over
+  `CompactionStageRecord` (`:328-378`).
 
-**Deliverable (scope: mechanism + ≥1 converted scenario):**
-1. Add a `LedgerTrace`-driven scenario helper to `phase_c_l1_scenarios.ail` that calls
-   `run_v2_session_traced` with a `Scripted([ScriptedStep])` fixture and returns `result.trace.records`.
-2. Convert **one** existing scenario to assert over the captured trace. Recommended:
-   `compactor_chain_order_is_registry_order` (`:322`) — today it asserts over stage records built
-   by hand; drive a two-compactor scripted run and assert the **captured** trace's
-   `CompactionStageRecord` order equals registry order. This exercises the exact
-   `ledger_append`/`stage_record` path (`phase_vocab.ail:523`, `hook_phase.stage_record`) the pure
-   test only simulates.
-3. Enumerate the remaining convertible scenarios as **follow-on** (not in this plan):
-   `history_rewrite_requires_checkpoint_event`, `checkpoint_output_is_valid_transcript`,
-   `summary_cache_replay_stable` — each has a captured-trace analogue once the helper exists.
+So the loop threading is done (`c2_loop` builds the trace via `c2_append_decision`/
+`c2_trace_stage_records`/`c2_trace_wire_events`, `session.ail:354-368`; every arm returns
+`{result, trace}`, `TracedSessionResult`, `:134-137`) **and** a driven-trace harness exists. The
+residual gap is therefore narrower and more specific than "build the mechanism":
+
+1. **The gated L1 suite has no driven-trace scenario at all** — its compaction-content invariants
+   (system-prefix / tool-pairing preserved *in a driven compacted payload*, summary-cache reuse,
+   checkpoint-output validity) are proven only over synthetic inputs, never over a trace from a run.
+2. **The one harness that drives runs (`phase_c2_wiring`) is ungated** and covers only decision/
+   stage *wiring*, not compaction *content* invariants.
+
+**Caps — corrected and empirically measured.** A driven scripted run is **not** `--caps IO`. Running
+`phase_c2_wiring_scenarios.ail` at HEAD faults progressively (`Env` → `FS` → `Clock` → `Trace`) and
+**passes only under `--caps IO,Env,Clock,FS,Trace`**. Crucially it does **not** need `AI`, `Net`,
+`SharedMem`, or `Stream` (declared in the effect row, never *performed* under scripted ports —
+caps-as-conformance, §6.1). So a driven-trace scenario is still squarely **core-DST gate class** by
+AC4's substantive clause ("no Ollama/OpenRouter/network") — no provider, no network, no hydration —
+but requires the deterministic-effect set, not bare `IO`. See G-A5 (§1) for the AC4 wording
+reconciliation.
+
+**Deliverable (scope: reuse existing mechanism + ≥1 compaction-content invariant over a driven
+trace + gate it):**
+1. **Reuse** `run_scripted` from `phase_c2_wiring_scenarios.ail` (do not rebuild a driver). Either
+   add the compaction-content scenario there, or lift `run_scripted` into a shared helper the L1
+   suite imports.
+2. **Add one compaction-content invariant over a driven trace.** Recommended:
+   `compactor_chain_order_is_registry_order` — drive a two-compactor scripted run (a `stage_rt()`
+   analogue) and assert the **captured** `CompactionStageRecord` *order* equals registry order.
+   `phase_c2_wiring` asserts stage *presence* (pass/apply/reject) but **not order**, and the gated
+   L1 suite asserts neither over a real trace — so this is genuinely new coverage, exercising the
+   live `fold_pre_step_chain` → `stage_record` → `ledger_append` path (`runtime.ail:150+`,
+   `phase_vocab.ail:523`) end-to-end.
+3. **Gate the driven-trace harness** in the `Makefile` under `--caps IO,Env,Clock,FS,Trace`
+   (either `phase_c2_wiring_scenarios.ail` as-is, or a merged suite). An ungated harness is not a
+   DST gate. *(Synergy: the ABI-v3 `Compacted += artifacts` change forces edits to
+   `phase_c2_wiring:253,254` anyway (§4b), so touching this file already rides WI-2/WI-4.)*
+4. **Follow-on (enumerated, not in this plan):** convert `history_rewrite_requires_checkpoint_event`,
+   `checkpoint_output_is_valid_transcript`, `summary_cache_replay_stable` to driven-trace form once
+   the shared helper is gated.
 
 ---
 
@@ -328,7 +449,9 @@ the kit's four compactor scenarios resolvable (`system_prefix_preserved`, `tool_
    `ctx.ports.ai_step(cfg.model, prompt_msgs)`. The extension no longer holds the `AI` effect
    itself for summarization; it reaches the model only through the port (the property the kit's
    caps-as-conformance model polices). Keep the `Result` match — `ai_step` returns
-   `Result[StepResult, AIError]`, same fallback-string-on-`Err` behavior (`:91-94`).
+   `Result[string, string]` (§2): `Ok(content)` replaces `result.message.content` (`:92`),
+   `Err(msg)` replaces the `"[summarizer unavailable: ...]"` fallback (`:93`), same
+   continue-on-failure behavior.
 2. **Core measurement primitives (G-A4).** Delete the local `estimate_tokens`/`estimate_msgs_tokens`/
    `usage_percent` (`compaction_ai.ail:28-46`); depend on `motoko_core` (path dep, as
    `compaction-structural/ailang.toml` already does) and import
@@ -352,7 +475,9 @@ the kit's four compactor scenarios resolvable (`system_prefix_preserved`, `tool_
    shape (Open Q2 `Json`, self-owned): e.g. `{ "compaction_ai": { "segment_digest": <str>,
    "summary": <str> } }`. This is what makes a re-run with an **empty `ai_step` script** pass
    instead of hitting the poison sentinel (ADR §6.1 worked example) — and it is closed end-to-end
-   only because §5.2 step 3 threads `Compacted.artifacts` back into `StepState.ext_artifacts`.
+   only because §5.2 steps 2+4 persist `Compacted.artifacts` into `C2LoopState.ext_artifacts` across
+   steps (without that cross-step plumbing, `ctx.artifacts` is empty every step and the cache is
+   dead — the §5.1 gap).
 
 ### 6.2 The single source-level break in 0.3.0
 
@@ -404,18 +529,31 @@ ailang check packages/motoko-ext-compaction-structural/compaction_structural.ail
   on). *The fail-then-pass conformance proof (0.2.0 rejected / 0.3.0 accepted) is **Plan 1's**
   gate, not this plan's — this plan's obligation is only that 0.3.0 is built to pass it.*
 
-### 8b. Core-DST gate class — **no hydration, `--caps IO` or less, no network** (the ledger item only)
+### 8b. Core-DST gate class — **no provider, no network, no hydration** (the ledger item only)
+
+Two cap tiers within this class (empirically measured at HEAD, §5.4 / G-A5): the **pure-invariant**
+suite stays at `--caps IO`; the **driven-trace** scenario needs `--caps IO,Env,Clock,FS,Trace` (but
+still no `AI`/`Net`/`SharedMem`/`Stream` — no provider, no network).
 
 ```
-ailang check scripts/phase_c_l1_scenarios.ail
+# pure-invariant family (unchanged, Makefile:54):
 ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail
+# driven-trace scenario (new gate — add to Makefile; verified passing set):
+ailang run --caps IO,Env,Clock,FS,Trace --entry main scripts/phase_c2_wiring_scenarios.ail
 ```
 
-- **G4** The converted `LedgerTrace`-driven scenario (§5.4) passes under `--caps IO` with a
-  `Scripted` provider — no Ollama/OpenRouter/network — and on failure prints scenario id + first
-  failed invariant + normalized trace (the existing `phase_c_l1_scenarios` reporting contract).
-- **G5** All existing smokes + DST scripts touched by the ExtCtx constructor edits (§4a) stay
-  green (`ailang check` + their `make` targets).
+- **G4** The new compaction-content driven-trace scenario (§5.4) passes under
+  `--caps IO,Env,Clock,FS,Trace` with a `Scripted` provider — no provider/network/hydration — and
+  on failure prints scenario id + first failed invariant + normalized trace (the harness reporting
+  contract at `phase_c2_wiring_scenarios.ail:64-86`).
+- **G4b** The driven-trace harness is **wired into the `Makefile`** (it is ungated at HEAD, §5.4) —
+  an ungated harness is not a gate.
+- **G5** All existing smokes + DST scripts touched by the ExtCtx constructor edits (§4a) and the
+  `Compacted` codemod (§4b) stay green (`ailang check` + their `make` targets).
+
+> **Verified at HEAD:** the `--caps IO,Env,Clock,FS,Trace` set is the measured minimal passing set
+> for a driven `run_v2_session_traced` run (progressive faults `Env→FS→Clock→Trace` below it;
+> `PASS count=6` at it). Re-measure after the ABI-v3 edits, since new host effects could shift it.
 
 > **Gate discipline (memory `verify-before-claiming-substrate-defects`):** never read `$?` after a
 > pipeline to judge an `ailang run`; assert on the run's own printed verdict.
@@ -429,16 +567,21 @@ Frozen-surface-first, so Plan 1 and Plan 3 build on a stable ABI.
 - **WI-1 — Freeze the surface.** Apply §3 type edits to a new `motoko_ext_abi` 3.0; resolve the
   vestigial-mirror question (§4a: verify no importer of `src/core/ext/types`; delete or lockstep).
   Get Open Q2/Q3 sign-off; apply the ADR-001 amendment (§2).
-- **WI-2 — Core threading.** `ext_ports_of`, extend `mk_v2_ext_ctx`, update its 4 call sites, and
-  the two `rpc.ail` + test/smoke ctx sites (§4a); consume `Compacted.artifacts` in the fold
-  (§5.2). Fix the two live core `Compacted` matches (`runtime.ail:159,168`) and in-repo construct
-  sites (§4b).
+- **WI-2 — Core threading.** `ext_ports_of`; **persist `ext_artifacts` + `telemetry` on
+  `C2LoopState` across steps** (the §5.1 cross-step gap — seed, stop the `c2_step_state` reset,
+  write-back after model + fold); extend `mk_v2_ext_ctx` and update its 4 call sites to pass ports +
+  persisted artifacts/telemetry; extend `fold_pre_step_chain` to return artifacts; update the two
+  `rpc.ail` + test/smoke ctx sites (§4a). Fix the two live core `Compacted` matches
+  (`runtime.ail:159,168`) and all in-repo construct/match sites (§4b codemod).
 - **WI-3 — `compaction_ai` 0.3.0.** Ports-native, core primitives (+Msg→Message), prefix/pairing
   split, artifact cache, the one Compacted site (§6). Publish.
 - **WI-4 — Structural 1.1.0 re-cert.** Version+dep bump + mechanical Compacted/ctx edits (§7).
   Publish.
-- **WI-5 — Ledger consumption.** Trace-driven scenario helper + one converted scenario in
-  `phase_c_l1_scenarios.ail` (§5.4). Enumerate follow-on conversions.
+- **WI-5 — Ledger consumption.** **Reuse** the existing `run_scripted` driver in
+  `phase_c2_wiring_scenarios.ail` (do not rebuild); add ≥1 **compaction-content** invariant over a
+  driven `LedgerTrace` (recommended: chain-order over the captured trace); and **gate** the
+  driven-trace harness in the `Makefile` under `--caps IO,Env,Clock,FS,Trace` (it is ungated at
+  HEAD). Enumerate follow-on conversions (§5.4). Re-measure the minimal cap set post-ABI-v3.
 - **WI-6 — Lock + gates.** `ailang lock` to the three new majors; run §8a and §8b; update
   `ailang.lock`.
 
