@@ -50,6 +50,7 @@ from, so it inherits more decayed claims per page.
    quietly reconcile — record what the doc claimed, what HEAD shows, and re-point downstream work. The
    correction is often more valuable than the artifact you set out to write.
 5. **Fresh, source-heavy work belongs in a fresh session grounded against HEAD** (see
+   `author-each-artifact-in-the-session-whose-assets-it-consumes.md`, generalized from
    `NOTE-plan-authoring-session-choice.md`): distance from the authoring session is what makes the
    re-grounding honest. The completeness test is deliberate — if you *can't* rebuild the artifact from
    the upstream docs alone, those docs have a gap worth finding now, cheaply.
