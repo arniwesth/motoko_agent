@@ -1,8 +1,12 @@
 # Plan 2 · Extension ABI v3 rollout (2.2.0 → 3.0)
 
 Date: 2026-07-07
-Status: Plan — implementation not started. Two operator sign-offs required (Open Q2, Open Q3;
-§2 below). Amendments to ADR-001 Open Questions log drafted here, to be applied on sign-off.
+Status: **Implemented 2026-07-07** (commit `e650b56`). Both operator sign-offs obtained (Open Q2 →
+raw `Json`; Open Q3 → Option B `{ ai_step, proc_exec, clock_now, env_get }`); the ADR-001 Open-Q2/Q3
+amendments are applied. ABI `3.0` / `compaction_ai 0.3.0` / `compaction_structural 1.1.0` shipped as
+workspace path-deps (see `NOTE-abi-v3-runtime-package-resolution.md`). Verified: all §8 gates green,
+core tests 26/17/16, driven-trace suite 7/7 (adds `compactor_chain_order_is_registry_order`,
+gated `Makefile:56`).
 Author session: fresh, grounded at HEAD `8923993`
 (`arniwesth/mot-29-implement-remaining-refactor-adrs`), toolchain `AILANG v0.26.0`.
 Spec: ADR-001-phase-oriented-core §6 / §6.1; framed by
