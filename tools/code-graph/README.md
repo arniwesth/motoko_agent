@@ -27,9 +27,10 @@ tools/code-graph/smoke.sh
 ```
 
 Default extraction uses the `core` profile: `src/core/**`, excluding smoke scripts,
-examples, `*_test.ail`, and `src/core/test/**`. `--profile=all` restores the broad
-repo graph; `--profile=smoke` focuses on scripts/examples; `--include-tests` adds core
-test modules to the core profile.
+examples, `*_test.ail`, and `src/core/test/**`. `--profile=all` builds the broad
+repo graph over `src/**`, `scripts/**`, `examples/**`, and `packages/**`;
+`--profile=smoke` focuses on scripts/examples; `--include-tests` adds core test
+modules to the core profile.
 
 Source tables:
 

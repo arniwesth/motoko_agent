@@ -121,9 +121,22 @@ decision; each is a scoping fact the plan must carry.
   ADR-001 AC4 clarification ("pure-invariant scenarios `--caps IO`; driven-trace scenarios
   `--caps IO,Env,Clock,FS,Trace`, still no provider/network/hydration"). Not blocking; no decision.
 
+- **G-A6 — implementation correction: ABI/package sources must be workspace-durable, not created
+  only in `~/.ailang/cache`.** The original plan described producing new package versions under the
+  local registry cache, but that cache is disposable across dev-container rebuilds. The durable
+  rollout therefore vendors/re-certs the active extension packages under `packages/` and points
+  `ailang.toml`/`ailang.lock` at path dependencies. AILANG has no manifest-level override that
+  reconciles exact transitive `motoko_ext_abi = 2.2.0` requirements with a root ABI 3.0 path
+  dependency, so active registry extensions must be workspace re-certified or published together.
+  Related source fact: importing `.packages/motoko_core` from the workspace `compaction_ai` package
+  collides with the root `src/core/compaction.ail` module declaration (`module_prefix = "src"` in
+  `.packages/motoko_core`); the monorepo fixture imports the live `src/core/compaction` primitive
+  instead, preserving a single source inside this checkout.
+
 **No new decision is implied by any of these.** They sharpen the blast radius (G-A1, G-A2, and the
 17-site `Compacted` sweep in §4b), resolve a shape the ADR left implicit (G-A3), name an import
-path (G-A4), and reconcile a caps clause against an empirically measured run (G-A5).
+path (G-A4), reconcile a caps clause against an empirically measured run (G-A5), and correct the
+package-source mechanics for durable implementation (G-A6).
 
 ---
 

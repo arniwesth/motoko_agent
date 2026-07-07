@@ -538,10 +538,16 @@ a wide compatibility surface that must be maintained until consumers migrate; fu
    `transcript.ail`" option was void — no such file exists in source; the transcript
    helpers live inline in `agent_loop_v2.ail:361-501`. Full justification in
    `PLAN-phase-a-pure-foundations.md` ("Decision: module name and builder home").
-2. `artifacts` as raw `Json` vs. a typed artifact record — start `Json`, revisit when a second
-   artifact consumer exists.
-3. Exact `ExtPorts` field list — freeze during the `compaction_ai` v0.3.0 migration, not
-   before.
+2. ~~`artifacts` as raw `Json` vs. a typed artifact record~~ **Closed 2026-07-07
+   (Plan 2, ABI v3 rollout; operator sign-off).** Raw `Json`. Sole producer/consumer in the
+   migration is `compaction_ai` 0.3.0 reading its own cached-summary shape; core plumbing is
+   already `Json` (`StepState.ext_artifacts`). Revisit at a second consumer.
+3. ~~Exact `ExtPorts` field list~~ **Closed 2026-07-07 (Plan 2; operator sign-off).**
+   `ExtPorts = { ai_step, proc_exec, clock_now, env_get }`. `ai_step` is justified by
+   `compaction_ai` 0.3.0; the other three are zero-invention projections of live core
+   `Ports` seams. `http` and `kv` are **deferred** (no consumer; no live seam) — addable later
+   as a constructor-only break at the single core construction site, *not* a major bump, since
+   only the host constructs `ExtPorts`.
 4. ~~Reintroduce actual-token compaction gating?~~ **Closed by D9 (2026-07-03)**: tier policy
    — including actual-vs-estimate gating — is compactor-extension policy, not a core decision.
    ABI v3's `ExtCtx.telemetry` supplies what such a compactor needs; DST ADR-001 R5/R15 still

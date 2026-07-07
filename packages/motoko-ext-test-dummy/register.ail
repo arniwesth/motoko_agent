@@ -1,0 +1,99 @@
+-- Minimal no-op motoko_agent extension for testing generate-extension-registry.
+--
+-- All hooks return their pass-through defaults. Behaviour can be overridden
+-- via environment variables (see EXT_DUMMY_* env vars below).
+--
+-- Config parameter is polymorphic (type variable 'a') because this extension
+-- loads its own config from env vars and does not need any RuntimeConfig fields.
+
+module sunholo/motoko_ext_test_dummy/register
+
+import std/option (Option, Some, None)
+import std/env (getEnvOr)
+import std/string (stringToInt)
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtensionHooks, ExtCtx, ToolSchema,
+  BudgetPlan, BudgetPatch, PromptPatch,
+  ToolCallEnvelope, ToolResultEnvelope,
+  ToolPolicyDecision, ToolHandleDecision,
+  ResponseInterceptDecision, FinalizeDecision, PreStepDecision,
+  Allow, Deny, NoOpinion, Delegate, NoIntercept, NoDecision,
+  Accept, ContinueWithFeedback, PassThrough,
+  Msg
+)
+
+type DummyConfig = {
+  prompt_marker: string,
+  tool_decision: string,
+  finalize: string,
+  budget_total: Option[int]
+}
+
+func parse_optional_int(raw: string) -> Option[int] {
+  if raw == "" then None
+  else match stringToInt(raw) {
+    Some(n) => Some(n),
+    None => None
+  }
+}
+
+func load_dummy_config() -> DummyConfig ! {Env} {
+  {
+    prompt_marker: getEnvOr("EXT_DUMMY_PROMPT", ""),
+    tool_decision: getEnvOr("EXT_DUMMY_TOOL_DECISION", "noop"),
+    finalize: getEnvOr("EXT_DUMMY_FINALIZE", "noop"),
+    budget_total: parse_optional_int(getEnvOr("EXT_DUMMY_BUDGET_TOTAL", ""))
+  }
+}
+
+-- register_with_config uses a type variable for cfg so this extension is
+-- host-config-agnostic. The caller (generated registry) passes RuntimeConfig
+-- which unifies with the type variable at call site.
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env} {
+  let dc = load_dummy_config();
+  let tool_decision = dc.tool_decision;
+  let finalize = dc.finalize;
+  let budget_total = dc.budget_total;
+  let prompt_marker = dc.prompt_marker;
+  {
+    id: "test_dummy",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt:
+      \_ctx.
+        if prompt_marker == "" then { prepend: [], append: [] }
+        else { prepend: [], append: [prompt_marker] },
+    on_budget_plan:
+      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+        {
+          requested_total: budget_total,
+          requested_solver: None,
+          requested_verifier: None
+        }
+      },
+    on_tool_policy:
+      \_ctx call.
+        if tool_decision == "allow" then Allow
+        else if tool_decision == "deny" then Deny("dummy deny")
+        else NoOpinion,
+    on_pre_step:
+      func(_ctx: ExtCtx, _msgs: list[Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        PassThrough
+      },
+    on_tool_handle:
+      func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        Delegate
+      },
+    on_response_intercept:
+      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        NoIntercept
+      },
+    on_solver_candidate:
+      func(_ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        if finalize == "accept" then Accept(candidate)
+        else if finalize == "continue" then ContinueWithFeedback("dummy feedback")
+        else NoDecision
+      }
+  }
+}

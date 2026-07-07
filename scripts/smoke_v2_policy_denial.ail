@@ -19,10 +19,13 @@ module scripts/smoke_v2_policy_denial
 
 import std/io (println)
 import std/option (None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PromptPatch, BudgetPatch)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PromptPatch, BudgetPatch, Msg, PreStepDecision, PassThrough)
 import src/core/ext/runtime (dispatch_tool_policy)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/tool_contract (ToolCallEnvelope)
 import std/json (jo, kv, js, encode)
+import src/core/config (VerificationConfig)
+import std/ai (ToolSchema)
 
 -- Stub that denies any tool call. We construct a single hook with a
 -- denying on_tool_policy and use that as the test registry.
@@ -50,13 +53,21 @@ pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision
   Delegate
 }
 
+pure func empty_describe_tools() -> [ToolSchema] { [] }
+
+pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  PassThrough
+}
+
 func mk_deny_all_hook() -> ExtensionHooks {
   {
-    id: "deny-all-test-hook",
-    provided_tools: [],
-    on_build_system_prompt: empty_prompt_patch,
-    on_budget_plan: empty_budget_patch,
-    on_tool_policy: deny_all_tool_policy,
+	    id: "deny-all-test-hook",
+	    provided_tools: [],
+	    on_describe_tools: empty_describe_tools,
+	    on_build_system_prompt: empty_prompt_patch,
+	    on_budget_plan: empty_budget_patch,
+	    on_pre_step: pass_pre_step,
+	    on_tool_policy: deny_all_tool_policy,
     on_tool_handle: no_handle,
     on_response_intercept: noop_response_intercept,
     on_solver_candidate: nodecision_solver_candidate
@@ -64,9 +75,11 @@ func mk_deny_all_hook() -> ExtensionHooks {
 }
 
 export func main() -> () ! {IO, Clock, Env} {
+  let v: VerificationConfig = { enabled: false, command: "" };
   let rt: ExtRuntime = {
     registry: { hooks: [mk_deny_all_hook()] },
-    strict_mode: false
+    strict_mode: false,
+    verification: v
   };
 
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
@@ -82,8 +95,12 @@ export func main() -> () ! {IO, Clock, Env} {
     env_server_url: "",
     budget_remaining: 4,
     history_slice: [],
-    state_key: "test"
-  };
+	    state_key: "test",
+	    context_limit: 0,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry()
+	  };
 
   -- Construct a synthetic ToolCallEnvelope (mirrors what tool_call_to_envelope
   -- produces from a typed ToolCall)

@@ -1,0 +1,34 @@
+[package]
+name = "sunholo/motoko_ext_compose"
+version = "0.2.4"
+edition = "1"
+ailang = ">=0.21.0"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+"sunholo/motoko_ext_ai_compat" = { path = "../motoko-ext-ai-compat" }
+
+[effects]
+max = ["IO", "AI", "Net", "Stream", "Process", "FS", "Env", "Clock", "SharedMem"]
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_compose/register",
+  "sunholo/motoko_ext_compose/compose",
+  "sunholo/motoko_ext_compose/types",
+  "sunholo/motoko_ext_compose/config",
+  "sunholo/motoko_ext_compose/guard",
+  "sunholo/motoko_ext_compose/ledger",
+  "sunholo/motoko_ext_compose/prompts",
+  "sunholo/motoko_ext_compose/store",
+  "sunholo/motoko_ext_compose/telemetry",
+  "sunholo/motoko_ext_compose/retry",
+  "sunholo/motoko_ext_compose/compose_body",
+  "sunholo/motoko_ext_compose/validator",
+  "sunholo/motoko_ext_compose/claimcheck",
+  "sunholo/motoko_ext_compose/author_tools",
+  "sunholo/motoko_ext_compose/author_loop",
+  "sunholo/motoko_ext_compose/authoring/state",
+  "sunholo/motoko_ext_compose/authoring/render",
+  "sunholo/motoko_ext_compose/authoring/dispatcher"
+]

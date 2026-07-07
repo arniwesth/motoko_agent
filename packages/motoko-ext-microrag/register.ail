@@ -1,0 +1,200 @@
+-- motoko-ext-microrag@0.2.0: tier-1 motoko extension that AUTO-INJECTS
+-- AILANG knowledge retrieval into WriteFile tool results for .ail files.
+--
+-- The model doesn't have to remember to call a microrag_lookup tool. When
+-- it writes a .ail file, this ext intercepts the call, performs the actual
+-- write, runs `ailang micro-rag context` on the content, and returns the
+-- combined result — so the model's NEXT turn sees the retrieval as part
+-- of its own most recent tool result history.
+--
+-- Architecture:
+--   on_tool_handle(WriteFile{path: foo.ail, content: code}) →
+--     1. writeFile(path, content)             -- actual file write
+--     2. exec("ailang micro-rag context ...") -- retrieval based on content
+--     3. Handled(toolResult{stdout: "wrote N bytes\n[μRAG]: <retrieval>"})
+--
+-- Non-.ail file writes are Delegated to motoko's default WriteFile handler.
+-- Path validation happens via std/fs writeFile (respects AILANG_FS_SANDBOX
+-- which motoko sets to WORKDIR — sandbox enforcement is automatic).
+--
+-- Loaded via profile config:
+--   "extensions": { "order": [..., "microrag"] }
+--
+-- Bootstrapping the brain (run once after install):
+--   ailang micro-rag bootstrap
+-- Indexes 56 syntax chunks + 295 builtin frames into ~/.ailang/microrag/.
+
+module sunholo/motoko_ext_microrag/register
+
+import std/option (None, Some)
+import std/string (length, endsWith)
+import std/process (exec)
+import std/fs (writeFile)
+import std/bytes (toString)
+import std/json (get, asString, encode, jo)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx,
+  ExtensionHooks,
+  ToolSchema,
+  PromptPatch,
+  BudgetPlan,
+  BudgetPatch,
+  ToolPolicyDecision,
+  ToolHandleDecision,
+  ToolCallEnvelope,
+  ToolResultEnvelope,
+  ResponseInterceptDecision,
+  FinalizeDecision,
+  PreStepDecision,
+  Msg,
+  Allow, NoOpinion, Delegate, Handled, NoIntercept, NoDecision, PassThrough
+)
+
+-- Cap the retrieval text added to each tool result. ~2K chars = ~500 tokens
+-- per WriteFile. If the model writes the same .ail many times in a session,
+-- each write costs this much extra prompt budget — bounded.
+pure func cap_chars(s: string, n: int) -> string {
+  if length(s) <= n then s
+  else "${_str_slice(s, 0, n)}\n[truncated to ${show(n)} chars]"
+}
+
+pure func cap_chars_truncates() -> bool
+  tests [((), true)]
+  {
+    cap_chars("abcdef", 3) == "abc\n[truncated to 3 chars]"
+      && cap_chars("abc", 10) == "abc"
+      && cap_chars("", 5) == ""
+  }
+
+-- Pull a string field from the JSON arguments. Fall back to "" so empty
+-- string is the indicator of "missing" rather than an exception.
+pure func get_str(call: ToolCallEnvelope, key: string) -> string {
+  match get(call.arguments, key) {
+    None => "",
+    Some(j) => match asString(j) { None => "", Some(s) => s }
+  }
+}
+
+pure func is_ail_file(path: string) -> bool {
+  endsWith(path, ".ail")
+}
+
+pure func is_ail_file_detects_extension() -> bool
+  tests [((), true)]
+  {
+    is_ail_file("solution.ail")
+      && is_ail_file("src/core/foo.ail")
+      && not is_ail_file("solution.py")
+      && not is_ail_file("solution")
+      && not is_ail_file("")
+  }
+
+func make_result(call: ToolCallEnvelope, stdout: string, exit_code: int) -> ToolResultEnvelope {
+  {
+    tool_call_id: call.id,
+    tool: call.tool,
+    exit_code: exit_code,
+    stdout: stdout,
+    stderr: "",
+    metadata: jo([])
+  }
+}
+
+func make_error_result(call: ToolCallEnvelope, msg: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: call.id,
+    tool: call.tool,
+    exit_code: 1,
+    stdout: "",
+    stderr: msg,
+    metadata: jo([])
+  }
+}
+
+-- Run `ailang micro-rag lint-builtin --file <path> --code <content>` for
+-- .ail files. lint-builtin is the right path for AILANG code (per ADR-002,
+-- user-prompt-style embedding retrieval is config'd to skip .ail files
+-- because the source of truth is `ailang prompt` + builtin signatures).
+-- Returns relevant builtin signature nudges based on what the model just
+-- wrote — adaptive context, automatically.
+--
+-- Surfaces exec errors as visible markers (instead of empty string) so
+-- debugging is possible from the JSONL — empty was hiding NotAllowed /
+-- NotFound failures.
+func microrag_context_for(path: string, content: string) -> string ! {Process} {
+  match exec("ailang", ["micro-rag", "lint-builtin", "--file", path, "--code", content]) {
+    Err(_) => "",
+    Ok(out) =>
+      if out.exitCode == 0 then cap_chars(toString(out.stdout), 2000)
+      else ""
+  }
+}
+
+-- Auto-injection wrap: write the file, run microRAG, return combined result.
+-- The retrieval gets surfaced via the tool's stdout so it's in the model's
+-- next-turn history — adaptive context based on what was just written.
+func auto_write_with_microrag(call: ToolCallEnvelope) -> ToolHandleDecision ! {FS, Process} {
+  let path = get_str(call, "path");
+  let content = get_str(call, "content");
+  if path == "" then Handled(make_error_result(call, "WriteFile: missing 'path'"))
+  else if content == "" then Handled(make_error_result(call, "WriteFile: missing 'content'"))
+  else {
+    let _ = writeFile(path, content);
+    let retrieval = microrag_context_for(path, content);
+    let combined = if length(retrieval) == 0
+      then "Wrote ${show(length(content))} bytes to ${path}"
+      else "Wrote ${show(length(content))} bytes to ${path}\n\n[μRAG auto-injected for next turn]:\n${retrieval}";
+    Handled(make_result(call, combined, 0))
+  }
+}
+
+pure func microrag_describe_tools() -> [ToolSchema] { [] }
+
+pure func microrag_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+-- Auto-fire on WriteFile to .ail. For everything else, Delegate to motoko's
+-- default handlers (the actual WriteFile / EditFile / ReadFile path-validation
+-- + sha256 hash + emit_event chain in src/core/tool_runtime.ail).
+func microrag_tool_handle(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  if call.tool == "WriteFile" then {
+    let path = get_str(call, "path");
+    if is_ail_file(path) then auto_write_with_microrag(call)
+    else Delegate
+  }
+  else Delegate
+}
+
+export func register_with_config(_cfg: a) -> ExtensionHooks {
+  {
+    id: "microrag",
+    -- Declare WriteFile so motoko's first_handle routes it through our
+    -- on_tool_handle. Without this, dispatch_tool_handle skips us and
+    -- WriteFile goes straight to native dispatch — see ext/runtime.ail:
+    -- first_handle gates on `contains_tool(h.provided_tools, name)`.
+    -- We Delegate for non-.ail paths so motoko's native handler still
+    -- runs in those cases.
+    provided_tools: ["WriteFile"],
+    on_describe_tools: microrag_describe_tools,
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan:
+      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+        { requested_total: None, requested_solver: None, requested_verifier: None }
+      },
+    on_pre_step:
+      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        PassThrough
+      },
+    on_tool_policy: microrag_tool_policy,
+    on_tool_handle: microrag_tool_handle,
+    on_response_intercept:
+      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        NoIntercept
+      },
+    on_solver_candidate:
+      func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        NoDecision
+      }
+  }
+}

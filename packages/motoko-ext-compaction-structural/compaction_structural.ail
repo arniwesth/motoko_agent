@@ -3,6 +3,7 @@ module sunholo/motoko_ext_compaction_structural/compaction_structural
 import std/string (length, substring)
 import std/list (foldl)
 import std/result (Result, Ok, Err)
+import std/json (jo)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx,
   Msg,
@@ -10,6 +11,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   PassThrough,
   Compacted
 )
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
 export pure func elide_tier_pct() -> int { 70 }
 
@@ -118,20 +120,20 @@ export pure func compact_for_pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecisi
   let pct = usage_percent_with_limit(msgs, ctx.context_limit);
   if pct >= emergency_pct() then {
     let emergency1 = elide_old_tool_results(msgs, emergency_keep_last());
-    if not same_msgs(msgs, emergency1) then Compacted(emergency1, structural_note("emergency", emergency_keep_last()))
+    if not same_msgs(msgs, emergency1) then Compacted(emergency1, structural_note("emergency", emergency_keep_last()), jo([]))
     else {
       let emergency2 = elide_old_tool_results(msgs, emergency_final_keep_last());
-      if not same_msgs(msgs, emergency2) then Compacted(emergency2, structural_note("emergency", emergency_final_keep_last()))
+      if not same_msgs(msgs, emergency2) then Compacted(emergency2, structural_note("emergency", emergency_final_keep_last()), jo([]))
       else PassThrough
     }
   }
   else if pct >= elide_hard_tier_pct() then {
     let elided = elide_old_tool_results(msgs, elide_hard_keep_last());
-    if same_msgs(msgs, elided) then PassThrough else Compacted(elided, structural_note("hard", elide_hard_keep_last()))
+    if same_msgs(msgs, elided) then PassThrough else Compacted(elided, structural_note("hard", elide_hard_keep_last()), jo([]))
   }
   else if pct >= elide_tier_pct() then {
     let elided = elide_old_tool_results(msgs, elide_keep_last());
-    if same_msgs(msgs, elided) then PassThrough else Compacted(elided, structural_note("tier1", elide_keep_last()))
+    if same_msgs(msgs, elided) then PassThrough else Compacted(elided, structural_note("tier1", elide_keep_last()), jo([]))
   }
   else PassThrough
 }
@@ -208,10 +210,13 @@ func test_pre_step_passthrough_when_unchanged() -> bool
       budget_remaining: 1,
       history_slice: [],
       state_key: "k",
-      context_limit: 1
+      context_limit: 1,
+      ports: noop_ext_ports(),
+      artifacts: empty_ext_artifacts(),
+      telemetry: zero_token_telemetry()
     };
     match compact_for_pre_step(ctx, [tool("t1", "short")]) {
       PassThrough => true,
-      Compacted(_, _) => false
+      Compacted(_, _, _) => false
     }
   }

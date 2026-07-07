@@ -1,0 +1,82 @@
+-- Register the AI compaction extension.
+-- This extension uses AI to summarize old conversation turns when context fills up.
+
+module sunholo/motoko_ext_compaction_ai/register
+
+import std/env (getEnvOr)
+import std/json (decode, getString, getInt)
+import std/option (Option, Some, None)
+import std/fs (readFileResult)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtensionHooks, ExtCtx, PreStepDecision,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  Allow, Delegate, NoIntercept, NoDecision
+)
+import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
+import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig, default_config)
+import std/option (Option, None)
+
+-- Read compaction_ai config from profile directory.
+--
+-- Uses readFileResult (NOT readFile) so a missing config file falls back
+-- to default_config() instead of crashing the AILANG runtime. The plain
+-- readFile in std/fs has signature `string -> string ! {FS}` and PANICS
+-- on FS errors — the previous Err(_)/Ok(content) match arms were dead
+-- code because readFile never returns Err. Caught when motoko_agent's
+-- TUI crashed with "execution failed: readFile: ... no such file or
+-- directory" on the first turn of a session whose profile directory
+-- didn't ship a compaction_ai.json (which is most profiles, since the
+-- file is optional and default_config provides usable defaults).
+func read_compaction_ai_config(profile_dir: string) -> CompactionAiConfig ! {Env, FS} {
+  let config_path = "${profile_dir}/compaction_ai.json";
+  match readFileResult(config_path) {
+    Err(_) => default_config(),
+    Ok(content) => {
+      match decode(content) {
+        Err(_) => default_config(),
+        Ok(json) => {
+          -- std/json.getString and getInt return Option[T] (Some/None),
+          -- NOT Result[T, _] (Ok/Err). The previous code matched against
+          -- Result constructors which never matched at runtime, throwing
+          -- "no pattern matched in match expression" when a field WAS
+          -- present. Bug was masked when readFile (now readFileResult)
+          -- panicked on missing file and never reached this branch.
+          let model = match getString(json, "model") {
+            None => default_config().model,
+            Some(m) => m
+          };
+          let threshold_pct = match getInt(json, "threshold_pct") {
+            None => default_config().threshold_pct,
+            Some(t) => t
+          };
+          let keep_recent = match getInt(json, "keep_recent") {
+            None => default_config().keep_recent,
+            Some(k) => k
+          };
+          { model: model, threshold_pct: threshold_pct, keep_recent: keep_recent }
+        }
+      }
+    }
+  }
+}
+
+-- Register the AI compaction extension
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let compaction_cfg = read_compaction_ai_config(profile_dir);
+  
+  {
+    id: "compaction_ai",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ . { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      compact_with_ai(ctx, msgs, compaction_cfg)
+    },
+    on_tool_policy: \_ _ . Allow,
+    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  }
+}

@@ -1,0 +1,63 @@
+module sunholo/motoko_ext_omnigraph/register
+
+import std/env (getEnvOr)
+import std/extension (requireWorkdirFile)
+import std/option (Option, None)
+import std/result (Result, Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtensionHooks, ExtCtx, BudgetPlan, BudgetPatch,
+  ToolCallEnvelope, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  NoIntercept, NoDecision
+)
+import pkg/sunholo/motoko_ext_omnigraph/omnigraph (
+  provided_tools, on_tool_policy, on_tool_handle, on_build_system_prompt
+)
+import pkg/sunholo/motoko_ext_omnigraph/prompts (load_agent_prompt)
+
+func no_budget_patch() -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+-- Self-disable check (M-EXT-PORTABILITY-GATE, v0.19.0): when the workdir
+-- lacks omnigraph/omnigraph.yaml, the extension advertises an empty tools
+-- list. Hosts won't dispatch unadvertised tools, so on_tool_handle is never
+-- invoked and the extension cleanly skips itself instead of crashing.
+func enabled_in(workdir: string) -> bool ! {FS} {
+  match requireWorkdirFile(workdir, "omnigraph/omnigraph.yaml") {
+    Ok(_) => true,
+    Err(_) => false
+  }
+}
+
+-- register_with_config uses a type variable for cfg so this extension is
+-- host-config-agnostic. workdir is read from MOTOKO_WORKDIR env var
+-- (set by the host at startup), falling back to "." if unset.
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+  let workdir = getEnvOr("MOTOKO_WORKDIR", ".");
+  let active = enabled_in(workdir);
+  let cached_prompt = load_agent_prompt(workdir);
+  let tools = if active then provided_tools() else [];
+  {
+    id: "omnigraph",
+    provided_tools: tools,
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      no_budget_patch()
+    },
+    on_pre_step:
+      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        PassThrough
+      },
+    on_tool_policy: on_tool_policy,
+    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      on_tool_handle(ctx, call)
+    },
+    on_response_intercept: func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      NoIntercept
+    },
+    on_solver_candidate: func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      NoDecision
+    }
+  }
+}

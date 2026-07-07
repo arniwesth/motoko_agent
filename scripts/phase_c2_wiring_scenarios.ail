@@ -11,6 +11,7 @@ import std/ai (Message, ToolCall, ToolSchema)
 import std/option (None)
 import std/result (Result, Ok, Err)
 import std/string (contains)
+import std/json (jo)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/phase_vocab (
   CompactionStageRecord,
@@ -250,8 +251,8 @@ func bad_system_msg() -> Msg {
 func stage_hook(id: string, mode: string) -> ExtensionHooks {
   let on_pre = func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
     if mode == "pass" then PassThrough
-    else if mode == "apply" then Compacted(msgs, "applied")
-    else Compacted([bad_system_msg()], "rejected")
+    else if mode == "apply" then Compacted(msgs, "applied", jo([]))
+    else Compacted([bad_system_msg()], "rejected", jo([]))
   };
   {
     id: id,
@@ -370,6 +371,33 @@ func has_stage_rejected(records: [LedgerRecord]) -> bool {
   }
 }
 
+func stage_tag(r: LedgerRecord) -> string {
+  match r {
+    CompactionStageRecord(s) =>
+      match s.outcome {
+        TraceStagePassed => "${s.ext_id}:pass",
+        TraceStageApplied(_) => "${s.ext_id}:apply",
+        TraceStageRejected(_) => "${s.ext_id}:reject"
+      },
+    _ => ""
+  }
+}
+
+func stage_order_matches(records: [LedgerRecord], expected: [string]) -> bool {
+  match records {
+    [] => match expected { [] => true, _ => false },
+    r :: rest =>
+      match r {
+        CompactionStageRecord(_) =>
+          match expected {
+            [] => false,
+            e :: es => stage_tag(r) == e && stage_order_matches(rest, es)
+          },
+        _ => stage_order_matches(rest, expected)
+      }
+  }
+}
+
 func scenario_traced_stage_records() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let traced = run_scripted(stage_rt(), [prose_step("done")]);
   match traced.result {
@@ -383,6 +411,24 @@ func scenario_traced_stage_records() -> Result[(), ScenarioFailure] ! {AI, FS, P
 
 func traced_stage_records_scenario() -> Scenario {
   { id: "traced_stage_records", run: scenario_traced_stage_records }
+}
+
+func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted(stage_rt(), [prose_step("done")]);
+  match traced.result {
+    Ok(_) => {
+      let expected = ["stage-pass:pass", "stage-apply:apply", "stage-reject:reject"];
+      ok_or_failure(stage_order_matches(traced.trace.records, expected), "compactor chain order is registry order", [
+        "expected=${join_names(expected)}",
+        "records=${show(length(traced.trace.records))}"
+      ])
+    },
+    Err(e) => Err({ failed_invariant: "stage order run succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func compactor_chain_order_is_registry_order_scenario() -> Scenario {
+  { id: "compactor_chain_order_is_registry_order", run: scenario_compactor_chain_order_is_registry_order }
 }
 
 func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -411,10 +457,11 @@ export func main() -> () ! {IO} {
     decision_record_append_name_round_trip_scenario(),
     traced_prose_decisions_scenario(),
     traced_tool_decisions_scenario(),
-    traced_persist_nudge_decisions_scenario(),
-    traced_approval_default_deny_scenario(),
-    traced_stage_records_scenario()
-  ];
+	    traced_persist_nudge_decisions_scenario(),
+	    traced_approval_default_deny_scenario(),
+	    traced_stage_records_scenario(),
+	    compactor_chain_order_is_registry_order_scenario()
+	  ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then
     println("phase_c2_wiring_scenarios PASS count=${show(length(scenarios))}")

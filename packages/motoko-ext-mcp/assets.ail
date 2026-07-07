@@ -1,0 +1,21 @@
+module sunholo/motoko_ext_mcp/assets
+
+-- M-EXT-PORTABILITY-GATE (v0.19.0): the package bundles mcp-call.mjs under
+-- assets/ so consumers no longer need to vendor scripts/mcp-call.mjs in
+-- their workdir. Use bridge_path() to get the resolved absolute path.
+--
+-- Migration:
+--   v0.2.0: caller built path as "${workdir}/scripts/mcp-call.mjs"
+--   v0.2.1: caller calls bridge_path() and passes the Ok value to bridge_args.
+--           Falls back to workdir-relative path on Err for back-compat with
+--           consumers running an older AILANG that lacks std/package.
+
+import std/package (assetPath)
+import std/result (Result)
+
+-- Returns the absolute filesystem path of the bundled mcp-call.mjs bridge
+-- script (the Node helper that talks to MCP servers over JSON-RPC).
+-- Err when the package isn't installed via the registry — typically only
+-- happens during local development where you'd use a path dep.
+export func bridge_path() -> Result[string, string] ! {FS} =
+  assetPath("sunholo/motoko_ext_mcp", "mcp-call.mjs")

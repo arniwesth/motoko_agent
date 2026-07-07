@@ -2,7 +2,7 @@ module src/core/ext/runtime
 
 import std/clock (now)
 import std/io (println)
-import std/json (encode, jo, kv, js, jnum)
+import std/json (Json, encode, jo, kv, js, jnum)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import std/string (startsWith)
@@ -25,10 +25,11 @@ import pkg/sunholo/motoko_ext_abi/types (
 import src/core/types (Msg)
 import src/core/ext/registry_generated (parse_core_ext_order)
 import src/core/phase_vocab (validate_compactor_output)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
 export type StageOutcome = StageApplied(string) | StageRejected(string) | StagePassed
 export type PreStepStage = { ext_id: string, outcome: StageOutcome }
-export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage] }
+export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage], artifacts: Json }
 
 export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, FS, Net} {
   {
@@ -148,32 +149,32 @@ export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) 
 
 -- Fold compaction hooks in registry order. Each stage receives the previous
 -- valid stage's messages; invalid output is recorded and skipped.
-func fold_pre_step_chain(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg]) -> PreStepChainResult ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], artifacts: Json) -> PreStepChainResult ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
   match hooks {
-    [] => { msgs: msgs, stages: [] },
+    [] => { msgs: msgs, stages: [], artifacts: artifacts },
     h :: rest => {
       let decision = (h.on_pre_step)(ctx, msgs);
       let _ = if is_test_dummy(h.id) then {
         let tag = match decision {
           PassThrough => "passthrough",
-          Compacted(_, note) => "compacted:${note}"
+          Compacted(_, note, _) => "compacted:${note}"
         };
         emit_dummy_hook("on_pre_step", "decision", tag)
       } else ();
       match decision {
         PassThrough => {
-          let next = fold_pre_step_chain(rest, ctx, msgs);
-          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StagePassed } :: next.stages }
+          let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts);
+          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StagePassed } :: next.stages, artifacts: next.artifacts }
         },
-        Compacted(compacted_msgs, note) => {
+        Compacted(compacted_msgs, note, next_artifacts) => {
           match validate_compactor_output(msgs, compacted_msgs) {
             Ok(_) => {
-              let next = fold_pre_step_chain(rest, ctx, compacted_msgs);
-              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageApplied(note) } :: next.stages }
+              let next = fold_pre_step_chain_rec(rest, ctx, compacted_msgs, next_artifacts);
+              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageApplied(note) } :: next.stages, artifacts: next.artifacts }
             },
             Err(reason) => {
-              let next = fold_pre_step_chain(rest, ctx, msgs);
-              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageRejected(reason) } :: next.stages }
+              let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts);
+              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageRejected(reason) } :: next.stages, artifacts: next.artifacts }
             }
           }
         }
@@ -183,7 +184,7 @@ func fold_pre_step_chain(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg]) -> P
 }
 
 export func dispatch_pre_step_chain(rt: ExtRuntime, ctx: ExtCtx, msgs: [Msg]) -> PreStepChainResult ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  fold_pre_step_chain(rt.registry.hooks, ctx, msgs)
+  fold_pre_step_chain_rec(rt.registry.hooks, ctx, msgs, ctx.artifacts)
 }
 
 func decide_one_policy(h: ExtensionHooks, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
@@ -339,10 +340,13 @@ func smoke_ctx() -> ExtCtx {
     env_server_url: "",
     budget_remaining: 10,
     history_slice: [],
-    state_key: "k",
-    context_limit: 0
-  }
-}
+	    state_key: "k",
+	    context_limit: 0,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry()
+	  }
+	}
 
 func smoke_hook_a() -> ExtensionHooks {
   let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
@@ -431,19 +435,19 @@ func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, 
 
 func chain_hook_a() -> ExtensionHooks {
   chain_base_hook("chain_A", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-    Compacted(msgs ++ [chain_msg("user", "chain-A")], "A")
+    Compacted(msgs ++ [chain_msg("user", "chain-A")], "A", jo([]))
   })
 }
 
 func chain_hook_b_bad() -> ExtensionHooks {
   chain_base_hook("chain_B", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-    Compacted([chain_call_msg("tc-chain")], "B")
+    Compacted([chain_call_msg("tc-chain")], "B", jo([]))
   })
 }
 
 func chain_hook_c() -> ExtensionHooks {
   chain_base_hook("chain_C", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-    Compacted([chain_call_msg("tc-chain"), chain_tool_msg("tc-chain", "rewritten")] ++ msgs, "C")
+    Compacted([chain_call_msg("tc-chain"), chain_tool_msg("tc-chain", "rewritten")] ++ msgs, "C", jo([]))
   })
 }
 

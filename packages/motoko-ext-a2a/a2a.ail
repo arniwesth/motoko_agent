@@ -1,0 +1,253 @@
+module sunholo/motoko_ext_a2a/a2a
+
+import std/json (Json, jo, kv, js, ja, decode, getString, get, asArray, asString, encode)
+import std/net (httpGet, httpPost)
+import std/option (Option, Some, None)
+import std/rand (uuid4)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtensionHooks, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision, ToolResultEnvelope, ResponseInterceptDecision, FinalizeDecision,
+  ToolCallEnvelope, Msg, PreStepDecision
+)
+import pkg/sunholo/motoko_ext_a2a/types (A2AAgent, A2AConfig)
+
+func tool_name(agent_name: string) -> string {
+  "delegate_to_${agent_name}"
+}
+
+func make_tool_schema(agent: A2AAgent) -> ToolSchema {
+  let param_schema = "{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\",\"description\":\"The task to delegate to the agent\"}},\"required\":[\"task\"]}";
+  {
+    name: tool_name(agent.name),
+    description: "Delegate a task to the ${agent.name} agent. ${agent.description}",
+    parameters: param_schema
+  }
+}
+
+func collect_schemas(agents: [A2AAgent]) -> [ToolSchema] {
+  match agents {
+    [] => [],
+    a :: rest => make_tool_schema(a) :: collect_schemas(rest)
+  }
+}
+
+func collect_tool_names(agents: [A2AAgent]) -> [string] {
+  match agents {
+    [] => [],
+    a :: rest => tool_name(a.name) :: collect_tool_names(rest)
+  }
+}
+
+func get_task_text(call: ToolCallEnvelope) -> string {
+  match getString(call.arguments, "task") {
+    Some(t) => t,
+    None    => encode(call.arguments)
+  }
+}
+
+-- Build a JSON-RPC 2.0 tasks/send envelope for the AILANG serve-api A2A
+-- endpoint. The remote function is selected via params.metadata.skill_id
+-- ("module.path.function"); arguments are passed as a JSON {"args": [...]}
+-- text part, which the AILANG handler unwraps into positional args.
+func build_task_request(task_id: string, skill_id: string, task_text: string) -> string {
+  let args_payload = encode(jo([kv("args", ja([js(task_text)]))]));
+  encode(jo([
+    kv("jsonrpc", js("2.0")),
+    kv("id",      js(task_id)),
+    kv("method",  js("tasks/send")),
+    kv("params",  jo([
+      kv("id",       js(task_id)),
+      kv("metadata", jo([kv("skill_id", js(skill_id))])),
+      kv("message",  jo([
+        kv("role",  js("user")),
+        kv("parts", ja([jo([
+          kv("type", js("text")),
+          kv("text", js(args_payload))
+        ])]))
+      ]))
+    ]))
+  ]))
+}
+
+func extract_text_from_parts(parts: [Json]) -> string {
+  match parts {
+    [] => "",
+    p :: rest => {
+      let t = match getString(p, "text") { Some(s) => s, None => "" };
+      if t == "" then extract_text_from_parts(rest)
+      else t
+    }
+  }
+}
+
+func extract_artifact_text(artifact: Json) -> string {
+  match get(artifact, "parts") {
+    None => "",
+    Some(arr) => match asArray(arr) {
+      None     => "",
+      Some(xs) => extract_text_from_parts(xs)
+    }
+  }
+}
+
+-- Unwrap a JSON-RPC 2.0 response (or a bare task object) and pull the
+-- first artifact's text. Falls back to the raw response on any decode
+-- failure so the caller can still surface diagnostics.
+--
+-- Handles three response shapes:
+--   1. {"jsonrpc":"2.0","result":{"artifacts":[...]}}  — JSON-RPC envelope
+--   2. {"artifacts":[...]}                              — bare task object
+--   3. {"result":"<plain string>"}                      — legacy/non-AILANG
+func extract_response_text(response: string) -> string {
+  match decode(response) {
+    Err(_) => response,
+    Ok(j)  =>
+      match getString(j, "result") {
+        Some(s) => s,
+        None => {
+          let inner = match get(j, "result") {
+            Some(r) => r,
+            None    => j
+          };
+          match get(inner, "artifacts") {
+            None => response,
+            Some(arr) => match asArray(arr) {
+              None     => response,
+              Some(xs) => match xs {
+                []      => response,
+                a :: _  => {
+                  let text = extract_artifact_text(a);
+                  if text == "" then response else text
+                }
+              }
+            }
+          }
+        }
+      }
+  }
+}
+
+func delegate(base_url: string, skill_id: string, task_text: string) -> string ! {Net, Rand} {
+  let task_id = uuid4();
+  let body = build_task_request(task_id, skill_id, task_text);
+  let response = httpPost("${base_url}/a2a/", body);
+  extract_response_text(response)
+}
+
+func find_agent_for_tool(agents: [A2AAgent], tool: string) -> Option[A2AAgent] {
+  match agents {
+    [] => None,
+    a :: rest =>
+      if tool_name(a.name) == tool then Some(a)
+      else find_agent_for_tool(rest, tool)
+  }
+}
+
+func make_result(call: ToolCallEnvelope, stdout: string, exit_code: int) -> ToolResultEnvelope {
+  { tool_call_id: call.id, tool: call.tool, exit_code: exit_code, stdout: stdout, stderr: "", metadata: jo([]) }
+}
+
+func no_budget_patch() -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+export func make_hooks(cfg: A2AConfig) -> ExtensionHooks {
+  let agents = cfg.agents;
+  let schemas = collect_schemas(agents);
+  let names = collect_tool_names(agents);
+  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    match find_agent_for_tool(agents, call.tool) {
+      None  => Delegate,
+      Some(a) => {
+        let task_text = get_task_text(call);
+        let result = delegate(a.url, a.skill_id, task_text);
+        Handled(make_result(call, result, 0))
+      }
+    }
+  };
+  let intercept = func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoIntercept
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoDecision
+  };
+  {
+    id: "a2a",
+    provided_tools: names,
+    on_describe_tools: \_ . schemas,
+    on_build_system_prompt: \_ . { prepend: [], append: [] },
+    on_budget_plan:        func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} { no_budget_patch() },
+    on_tool_policy:        func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion },
+    on_tool_handle:        handle,
+    on_response_intercept: intercept,
+    on_solver_candidate:   finalize,
+    on_pre_step:           func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+  }
+}
+
+pure func tool_name_derives_correctly() -> bool
+  tests [((), true)]
+  {
+    tool_name("hello") == "delegate_to_hello"
+      && tool_name("my_agent") == "delegate_to_my_agent"
+  }
+
+pure func extract_artifact_text_from_valid_response() -> bool
+  tests [((), true)]
+  {
+    let response = "{\"artifacts\":[{\"parts\":[{\"text\":\"Hello from agent\"}]}]}";
+    extract_response_text(response) == "Hello from agent"
+  }
+
+pure func extract_unwraps_jsonrpc_result() -> bool
+  tests [((), true)]
+  {
+    let response = "{\"jsonrpc\":\"2.0\",\"id\":\"task-1\",\"result\":{\"artifacts\":[{\"parts\":[{\"text\":\"Hello via JSON-RPC\"}]}]}}";
+    extract_response_text(response) == "Hello via JSON-RPC"
+  }
+
+pure func extract_fallback_to_raw_on_bad_json() -> bool
+  tests [((), true)]
+  {
+    extract_response_text("not json") == "not json"
+  }
+
+pure func extract_uses_result_field_as_fallback() -> bool
+  tests [((), true)]
+  {
+    let response = "{\"result\":\"direct result\"}";
+    extract_response_text(response) == "direct result"
+  }
+
+pure func build_request_includes_jsonrpc_envelope() -> bool
+  tests [((), true)]
+  {
+    let body = build_task_request("task-1", "main.handle_typefix", "fix this code");
+    match decode(body) {
+      Err(_) => false,
+      Ok(j)  => {
+        let jsonrpc_ok = match getString(j, "jsonrpc") { Some(s) => s == "2.0", None => false };
+        let method_ok  = match getString(j, "method")  { Some(s) => s == "tasks/send", None => false };
+        jsonrpc_ok && method_ok
+      }
+    }
+  }
+
+pure func build_request_carries_skill_id() -> bool
+  tests [((), true)]
+  {
+    let body = build_task_request("t1", "main.handle_typefix", "code");
+    match decode(body) {
+      Err(_) => false,
+      Ok(j)  => match get(j, "params") {
+        None => false,
+        Some(p) => match get(p, "metadata") {
+          None => false,
+          Some(m) => match getString(m, "skill_id") {
+            Some(s) => s == "main.handle_typefix",
+            None    => false
+          }
+        }
+      }
+    }
+  }

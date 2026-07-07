@@ -1,0 +1,35 @@
+[package]
+name = "sunholo/motoko_ext_ailang_docs"
+version = "0.1.4"
+edition = "1"
+ailang = ">=0.18.11"
+description = "Tier-1 motoko extension: exposes the AILANG docs MCP server (mcp.ailang.sunholo.com) as 23 typed tools the agent can call on demand. Supersedes motoko_ext_ailang_hints by replacing static hint text with live lookups (stdlib_search, docs_search, example_for_concept, etc.). Workdir-gated: only registers tools when ailang.toml is present in the workdir root."
+license = "Apache-2.0"
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_ailang_docs/register",
+  "sunholo/motoko_ext_ailang_docs/ailang_docs",
+  "sunholo/motoko_ext_ailang_docs/types",
+  "sunholo/motoko_ext_ailang_docs/prompts"
+]
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+"sunholo/motoko_ext_mcp" = { path = "../motoko-ext-mcp" }
+
+[effects]
+max = ["Process", "FS", "Env"]
+
+[metadata]
+tags = ["motoko", "extension", "ailang", "docs", "mcp", "stdlib", "lookup"]
+ai_summary = "Wraps the public AILANG docs MCP server (mcp.ailang.sunholo.com/mcp/) as 23 motoko tools: stdlib_search/module/modules, docs_search/nav, examples_*, design_doc(s)_*, benchmarks_*, install/onboarding guides, effects/limitations catalogs, prompt_get, ailang_versions, changelog, roadmap, submit_feedback. Workdir-gated on ailang.toml. Conditional prompt patch encourages lookup-on-demand for the common hallucinated-stdlib-name failure modes. Direct successor to motoko_ext_ailang_hints@0.1.2."
+repository = "https://github.com/sunholo-data/ailang-packages/tree/main/packages/motoko-ext-ailang-docs"
+license_url = "https://github.com/sunholo-data/ailang-packages/blob/main/LICENSE"
+supersedes = ["sunholo/motoko_ext_ailang_hints"]
+
+[cascade]
+max_cost_usd = 0.25
+
+[stability]
+level = "experimental"
