@@ -1,0 +1,64 @@
+flowchart TB
+  %% Remaining DST work as 3 fresh-session plans (no new ADR). Verified 2026-07-07.
+  %% Colour = nature: green execution-only · amber carries-a-decision · gray-dashed conditional.
+
+  subgraph SRC["Already decided in existing ADRs — the specs these plans execute"]
+    adr61["ADR-001 §6.1<br/>conformance-kit spec"]:::spec
+    adr6["ADR-001 §6<br/>ABI v3: ports · artifacts · telemetry"]:::spec
+    adrck["ADR-001 D7 + ADR-002<br/>checkpoint mechanics (built) · send-gate"]:::spec
+  end
+
+  subgraph HERE["This session · 004 context-holder"]
+    handoff["write 3 handoffs<br/>cash out residual context<br/>+ re-verify-anchors-at-HEAD mandate"]:::sess
+  end
+
+  subgraph P1["PLAN 1 · Conformance kit — execution only"]
+    p1a["packages/motoko_ext_conformance<br/>invariants.ail · harness.ail"]:::exec
+    p1b["scenarios: system_prefix_preserved ·<br/>tool_pairing_preserved ·<br/>deterministic_replay · artifact_cache_effective"]:::exec
+    p1c["registry probe in core CI<br/>accept v0.3.0 · reject v0.2.0"]:::exec
+  end
+
+  subgraph P2["PLAN 2 · ABI v3 rollout — execution + 2 freeze calls"]
+    p2a["ABI 2.2.0 &rarr; 3.0<br/>ExtCtx += ports/artifacts/telemetry<br/>Compacted += artifacts"]:::exec
+    p2b["compaction_ai 0.3.0 (ports-native)<br/>structural compactor re-cert on 3.0"]:::exec
+    p2c["fold: L1 scenarios consume typed LedgerTrace<br/>(closes the dst-status 'partial')"]:::exec
+    p2d["close Open Q2 (artifacts Json vs typed)<br/>Open Q3 (ExtPorts field list)"]:::decision
+  end
+
+  subgraph P3["PLAN 3 · Checkpoint trigger — CONDITIONAL · carries the open decision"]
+    p3a["wire emission: decide / seal &rarr; TakeCheckpoint<br/>machinery already built · handler at session:1293"]:::cond
+    p3b["OPEN DECISION<br/>trigger cond · emission site (project vs seal) ·<br/>summary source · policy flag · termination guard"]:::decision
+    p3c["amend ADR-001 D7<br/>decision-log entry · operator sign-off<br/>(the D9 / D-B5 pattern)"]:::decision
+  end
+
+  adr61 --> handoff
+  adr6 --> handoff
+  adrck --> handoff
+  handoff -->|"fresh session"| p1a
+  handoff -->|"fresh session"| p2a
+  handoff -->|"fresh session · only if pursued now"| p3a
+
+  p1a --> p1b
+  p1b --> p1c
+  p2a --> p2b
+  p2b --> p2c
+  p2a --> p2d
+  p3a --> p3b
+  p3b --> p3c
+
+  p2a -.->|"kit 3.x certifies ABI 3.x — lockstep majors"| p1a
+  p2b -.->|"is the kit's accept/reject fixture"| p1c
+  p2a -.->|"telemetry feeds summary policy"| p3b
+
+  subgraph LEGEND["Legend"]
+    lg1["execution — decided, build to spec"]:::exec
+    lg2["carries an open decision — closed in-plan w/ sign-off"]:::decision
+    lg3["conditional — only if checkpoint pursued now"]:::cond
+    lg4["spec / handoff"]:::spec
+  end
+
+  classDef exec fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef decision fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef cond fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;
+  classDef spec fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef sess fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
