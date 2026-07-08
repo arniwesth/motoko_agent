@@ -258,6 +258,51 @@ Verbatim from the handoff; re-grounding **did not contradict** any of them.
 
 ## 4. Package layout
 
+### 4.0 Why an ABI-only package — not `src/core`, not a registered extension
+
+First, a terminology correction that resolves most of the "why is this an extension?" discomfort:
+**it is not an extension.** `motoko_ext_conformance` is a *library package* under `packages/`, but
+it is deliberately **never** a registered extension — not in root `[extensions]`, not in
+`registry_generated`, registers no hooks. It is the same *category* as `motoko_ext_abi`, which also
+lives in `packages/` and also is not an extension. `packages/` is the workspace's home for **all**
+shareable path-deps, not only registered extensions. So the real question is "why a separate
+ABI-only package instead of putting the law in `src/core`?"
+
+**The load-bearing reason: two importers that must not import each other.** The invariants must be
+*the identical predicate* run in two places — core's transcript gate in production (`runtime.ail:170`)
+**and** every extension author's own CI, against their own hooks, before they ship (§6.1: "one law,
+no drift"). That constrains where the law can live:
+
+- If it lived in `src/core`, every `motoko-ext-*` repo would have to pull in **all of `motoko_core`**
+  — its whole dependency graph and Net/FS/Clock surface — just to test one compactor (rejected
+  option A2, §2 Decision A).
+- If it lived only in an extension, **core could not enforce it**.
+
+An **ABI-only leaf** is the one node in the graph both sides can depend on cheaply:
+`core → conformance/invariants → ABI` and `extension → conformance/harness → ABI`, acyclic, with
+neither side dragging in the other. Nothing else in the module graph has that property. This is the
+whole reason for the package boundary.
+
+**Supporting reasons:**
+- **Lockstep versioning.** The contract is an ABI-level artifact (kit `3.x` certifies ABI `3.x`,
+  exports `conformance_abi_version()`, §6.1 / G4). A package carries its own version that moves with
+  `motoko_ext_abi`; folding the law into core would chain the contract's version to core's release
+  cadence, which is the wrong axis.
+- **Caps-as-conformance stays honest.** The harness runs at `--caps IO` with fake ports and the
+  enforcement *is* that a port-bypassing compactor faults on a withheld cap (Decision D, §6.1). That
+  signal is only clean if the harness is **core-free** — core performs Env/FS/Clock, which would
+  muddy the floor. An ABI-only package keeps the cap surface minimal.
+
+**The honest tension (name it, don't hide it).** This is *not* a one-way "plugin into core" story.
+Decision A makes core **build-depend on** this package: the law moved out of `phase_vocab` and core
+imports it back, so the dependency arrow points `core → package` — which feels backwards for
+something under `packages/`. That is the accepted cost, and it is justified only by an **asymmetry**:
+the ABI-only leaf is cheap for *everyone* (core *and* every extension) to depend on, whereas core is
+expensive for every extension to depend on. The arrow points the direction that minimizes total
+blast radius. If the *placement* (a conformance harness co-located with the extensions) is what
+grates, that is a naming/foldering call we can revisit **without** disturbing the dependency argument
+above — the argument is about the module graph, not the directory.
+
 ```
 packages/motoko_ext_conformance/          # ABI-ONLY package (no src/core dep) — safe for extension CI
   ailang.toml                 # version 3.x; dep motoko_ext_abi only; exports invariants+harness+fixtures
