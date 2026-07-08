@@ -55,6 +55,10 @@ export func history_len(h: History) -> int {
   match h { MkHistory(xs) => List.length(xs) }
 }
 
+export func history_messages(h: History) -> [Message] {
+  match h { MkHistory(xs) => xs }
+}
+
 export func history_digest(h: History) -> string {
   match h { MkHistory(xs) => digest_messages(xs) }
 }
@@ -276,6 +280,8 @@ export type StepPolicy = {
   require_system_prompt: bool,
   model: string,
   provider_base_url: string,
+  checkpoint_enabled: bool,
+  checkpoint_pct: int,
   compaction: CompactionPolicy
 }
 
@@ -337,6 +343,15 @@ export func apply_checkpoint(s: StepState, plan: CheckpointPlan)
     },
     event: cp.event
   }
+}
+
+export pure func history_usage_percent(h: History, limit: int) -> int {
+  match h { MkHistory(xs) => usage_percent_with_limit(xs, limit) }
+}
+
+export pure func checkpoint_would_relieve(h: History, plan: CheckpointPlan, limit: int, threshold: int) -> bool {
+  let projected = checkpoint(h, plan).history;
+  history_usage_percent(projected, limit) < threshold
 }
 
 -- ============================================================================

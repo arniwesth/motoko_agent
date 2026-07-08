@@ -13,6 +13,7 @@ import src/core/phase_vocab (
   StepState,
   StepPolicy,
   StepDecision,
+  CheckpointPlan,
   RunTools,
   CallModel,
   Finalize,
@@ -24,6 +25,9 @@ import src/core/phase_vocab (
   ToolPlan,
   ExecNative,
   history_from_seed,
+  history_len,
+  history_usage_percent,
+  checkpoint_would_relieve,
   project
 )
 import src/core/recovery (persist_nudge_message)
@@ -64,11 +68,32 @@ pure func cost_cap_message(total_cost_millicents: int, max_cost_millicents: int)
   "cost cap reached: ${show(total_cost_millicents)} of ${show(max_cost_millicents)} millicents used"
 }
 
+func checkpoint_summary(s: StepState) -> string {
+  "session checkpoint at step ${show(s.step_idx)}: folded ${show(history_len(s.history))} messages"
+}
+
+func mk_checkpoint_plan(s: StepState) -> CheckpointPlan {
+  {
+    reason: "context_pressure_at_step_${show(s.step_idx)}",
+    summary: checkpoint_summary(s)
+  }
+}
+
+func should_checkpoint(s: StepState, pol: StepPolicy) -> bool {
+  let plan = mk_checkpoint_plan(s);
+  let limit = pol.compaction.context_limit;
+  pol.checkpoint_enabled
+    && history_usage_percent(s.history, limit) >= pol.checkpoint_pct
+    && checkpoint_would_relieve(s.history, plan, limit, pol.checkpoint_pct)
+}
+
 func call_model_or_fail(s: StepState, pol: StepPolicy) -> StepDecision {
   if pol.step_budget > 0 && s.step_idx >= pol.step_budget
   then Fail({ code: "Internal", message: "v2 loop: step budget exhausted", retryable: false })
   else if pol.max_cost_millicents > 0 && pol.cost_metered && s.totals.cost_millicents >= pol.max_cost_millicents
   then Fail({ code: "BudgetExceeded", message: cost_cap_message(s.totals.cost_millicents, pol.max_cost_millicents), retryable: false })
+  else if should_checkpoint(s, pol)
+  then TakeCheckpoint(mk_checkpoint_plan(s))
   else match project(s.history, s.telemetry, pol.compaction) {
     Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
     Ok(_) => CallModel({ model: pol.model })
@@ -116,12 +141,14 @@ func mk_policy(context_limit: int) -> StepPolicy {
     require_system_prompt: true,
     model: "phase-c-model",
     provider_base_url: "",
+    checkpoint_enabled: false,
+    checkpoint_pct: 90,
     compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
   }
 }
 
-func mk_state(reason: string, response: string, pending: [ToolCall], step_idx: int, cost: int, context_limit: int) -> Result[StepState, string] {
-  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+func mk_state_with_messages(reason: string, response: string, pending: [ToolCall], step_idx: int, cost: int, context_limit: int, msgs: [Message]) -> Result[StepState, string] {
+  match history_from_seed(msgs) {
     Err(e) => Err(e),
     Ok(h) => Ok({
       step_idx: step_idx,
@@ -135,6 +162,18 @@ func mk_state(reason: string, response: string, pending: [ToolCall], step_idx: i
       last_response_text: response
     })
   }
+}
+
+func mk_state(reason: string, response: string, pending: [ToolCall], step_idx: int, cost: int, context_limit: int) -> Result[StepState, string] {
+  mk_state_with_messages(reason, response, pending, step_idx, cost, context_limit, [msg("system", "s"), msg("user", "u")])
+}
+
+func pressured_msgs() -> [Message] {
+  [
+    msg("system", "s"),
+    msg("user", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    msg("assistant", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+  ]
 }
 
 func is_fail(d: StepDecision, code: string) -> bool {
@@ -207,7 +246,7 @@ pure func test_decide_cost_cap() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(0).compaction };
         fail_message(decide(s, pol)) == "cost cap reached: 10 of 10 millicents used"
       },
       Err(_) => false
@@ -219,7 +258,7 @@ pure func test_decide_cost_cap_unmetered_does_not_exhaust() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(0).compaction };
         not is_fail(decide(s, pol), "BudgetExceeded")
       },
       Err(_) => false
@@ -344,15 +383,43 @@ pure func test_decide_fresh_state_calls_model() -> bool
     }
   }
 
-pure func test_v1_policy_never_returns_take_checkpoint() -> bool
+pure func test_default_policy_never_returns_take_checkpoint() -> bool
   tests [((), true)]
   {
-    match mk_state("", "", [], 0, 0, 0) {
+    match mk_state_with_messages("", "", [], 0, 0, 20, pressured_msgs()) {
       Ok(s) =>
-        match decide(s, mk_policy(0)) {
+        match decide(s, mk_policy(20)) {
           TakeCheckpoint(_) => false,
           _ => true
         },
+      Err(_) => false
+    }
+  }
+
+pure func test_enabled_policy_checkpoints_under_pressure() -> bool
+  tests [((), true)]
+  {
+    match mk_state_with_messages("", "", [], 0, 0, 20, pressured_msgs()) {
+      Ok(s) => {
+        let base = mk_policy(20);
+        let pol = {
+          step_budget: base.step_budget,
+          max_cost_millicents: base.max_cost_millicents,
+          cost_metered: base.cost_metered,
+          persist_retries: base.persist_retries,
+          retry_stream_errors: base.retry_stream_errors,
+          require_system_prompt: base.require_system_prompt,
+          model: base.model,
+          provider_base_url: base.provider_base_url,
+          checkpoint_enabled: true,
+          checkpoint_pct: base.checkpoint_pct,
+          compaction: base.compaction
+        };
+        match decide(s, pol) {
+          TakeCheckpoint(_) => true,
+          _ => false
+        }
+      },
       Err(_) => false
     }
   }

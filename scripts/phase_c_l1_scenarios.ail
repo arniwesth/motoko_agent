@@ -17,6 +17,7 @@ import src/core/phase_vocab (
   CompactionStageRecord,
   Fail,
   StepPolicy,
+  StepState,
   TakeCheckpoint,
   apply_checkpoint,
   checkpoint,
@@ -107,7 +108,26 @@ func policy(context_limit: int) -> StepPolicy {
     require_system_prompt: true,
     model: "phase-c-model",
     provider_base_url: "",
+    checkpoint_enabled: false,
+    checkpoint_pct: 90,
     compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+  }
+}
+
+func policy_with_checkpoint(context_limit: int) -> StepPolicy {
+  let base = policy(context_limit);
+  {
+    step_budget: base.step_budget,
+    max_cost_millicents: base.max_cost_millicents,
+    cost_metered: base.cost_metered,
+    persist_retries: base.persist_retries,
+    retry_stream_errors: base.retry_stream_errors,
+    require_system_prompt: base.require_system_prompt,
+    model: base.model,
+    provider_base_url: base.provider_base_url,
+    checkpoint_enabled: true,
+    checkpoint_pct: base.checkpoint_pct,
+    compaction: base.compaction
   }
 }
 
@@ -170,7 +190,8 @@ func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), Scenario
 }
 
 func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFailure] {
-  match history_from_seed([msg("system", "s"), msg("user", "u"), msg("assistant", "a")]) {
+  let input_msgs = [msg("system", "s"), msg("user", "u"), msg("assistant", "a")];
+  match history_from_seed(input_msgs) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(h) => {
       let cp = checkpoint(h, { reason: "scenario", summary: "summ" });
@@ -180,13 +201,20 @@ func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFail
             Ok(_) => true,
             Err(_) => false
           };
-          let ok = history_valid_transcript(cp.history) && chain_ok && history_len(cp.history) == 2;
+          let in_seg = segment_messages(split_for_compaction(input_msgs).segment);
+          let out_seg = segment_messages(split_for_compaction([msg("system", "s"), msg("assistant", "[CHECKPOINT] summ")]).segment);
+          let segment_law_ok = match validate_compactor_output(in_seg, out_seg) {
+            Ok(_) => true,
+            Err(_) => false
+          };
+          let ok = history_valid_transcript(cp.history) && chain_ok && segment_law_ok && history_len(cp.history) == 2;
           ok_or_failure(ok, "checkpoint output is valid transcript", [
             "history_len=${show(history_len(cp.history))}",
             "before=${info.before_digest}",
             "after=${info.after_digest}",
             "valid=${show(history_valid_transcript(cp.history))}",
-            "chain_ok=${show(chain_ok)}"
+            "chain_ok=${show(chain_ok)}",
+            "segment_law_ok=${show(segment_law_ok)}"
           ])
         },
         _ => Err({ failed_invariant: "checkpoint event constructor", trace: ["event=non_checkpoint"] })
@@ -295,25 +323,87 @@ func scenario_summary_cache_replay_stable() -> Result[(), ScenarioFailure] {
   }
 }
 
-func scenario_checkpoint_never_emitted_in_v1() -> Result[(), ScenarioFailure] {
-  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+func pressured_msgs() -> [Message] {
+  [
+    msg("system", "s"),
+    msg("user", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    msg("assistant", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+  ]
+}
+
+func state_from_msgs(msgs: [Message], context_limit: int) -> Result[StepState, string] {
+  match history_from_seed(msgs) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: 0,
+      history: h,
+      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0 },
+      totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+      nudges_used: 0,
+      ext_artifacts: jo([]),
+      pending_tool_calls: [],
+      last_finish_reason: "",
+      last_response_text: ""
+    })
+  }
+}
+
+func scenario_checkpoint_never_emitted_when_policy_off() -> Result[(), ScenarioFailure] {
+  match state_from_msgs(pressured_msgs(), 20) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
-    Ok(h) => {
-      let state = {
-        step_idx: 0,
-        history: h,
-        telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
-        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
-        nudges_used: 0,
-        ext_artifacts: jo([]),
-        pending_tool_calls: [],
-        last_finish_reason: "",
-        last_response_text: ""
-      };
-      let decision = decide(state, policy(0));
+    Ok(state) => {
+      let decision = decide(state, policy(20));
       match decision {
-        TakeCheckpoint(_) => Err({ failed_invariant: "v1 never emits checkpoint", trace: ["decision=TakeCheckpoint"] }),
+        TakeCheckpoint(_) => Err({ failed_invariant: "checkpoint never emitted when policy off", trace: ["decision=TakeCheckpoint"] }),
         _ => Ok(())
+      }
+    }
+  }
+}
+
+func scenario_checkpoint_emitted_under_pressure() -> Result[(), ScenarioFailure] {
+  match state_from_msgs(pressured_msgs(), 20) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(state) => {
+      match decide(state, policy_with_checkpoint(20)) {
+        TakeCheckpoint(_) => Ok(()),
+        _ => Err({ failed_invariant: "checkpoint emitted under pressure", trace: ["decision=not_TakeCheckpoint"] })
+      }
+    }
+  }
+}
+
+func scenario_checkpoint_terminates_not_spins() -> Result[(), ScenarioFailure] {
+  match state_from_msgs(pressured_msgs(), 20) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(state) => {
+      let first = decide(state, policy_with_checkpoint(20));
+      let progress_ok = match first {
+        TakeCheckpoint(plan) => {
+          let applied = apply_checkpoint(state, plan);
+          match decide(applied.state, policy_with_checkpoint(20)) {
+            CallModel(_) => true,
+            _ => false
+          }
+        },
+        _ => false
+      };
+      match state_from_msgs([
+        msg("system", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        msg("user", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+      ], 20) {
+        Err(e) => Err({ failed_invariant: "degenerate seed accepted", trace: ["seed_err=${e}"] }),
+        Ok(heavy_state) => {
+          let degenerate_ok = match decide(heavy_state, policy_with_checkpoint(20)) {
+            CallModel(_) => true,
+            TakeCheckpoint(_) => false,
+            _ => false
+          };
+          ok_or_failure(progress_ok && degenerate_ok, "checkpoint terminates not spins", [
+            "progress_ok=${show(progress_ok)}",
+            "degenerate_ok=${show(degenerate_ok)}"
+          ])
+        }
       }
     }
   }
@@ -409,8 +499,16 @@ func summary_cache_replay_stable_scenario() -> Scenario {
   { id: "summary_cache_replay_stable", run: scenario_summary_cache_replay_stable }
 }
 
-func checkpoint_never_emitted_in_v1_scenario() -> Scenario {
-  { id: "checkpoint_never_emitted_in_v1", run: scenario_checkpoint_never_emitted_in_v1 }
+func checkpoint_never_emitted_when_policy_off_scenario() -> Scenario {
+  { id: "checkpoint_never_emitted_when_policy_off", run: scenario_checkpoint_never_emitted_when_policy_off }
+}
+
+func checkpoint_emitted_under_pressure_scenario() -> Scenario {
+  { id: "checkpoint_emitted_under_pressure", run: scenario_checkpoint_emitted_under_pressure }
+}
+
+func checkpoint_terminates_not_spins_scenario() -> Scenario {
+  { id: "checkpoint_terminates_not_spins", run: scenario_checkpoint_terminates_not_spins }
 }
 
 func compactor_chain_order_is_registry_order_scenario() -> Scenario {
@@ -439,7 +537,9 @@ export func main() -> () ! {IO} {
     ext_compaction_invalid_rejected_scenario(),
     summary_cache_replay_stable_scenario(),
     history_rewrite_requires_checkpoint_event_scenario(),
-    checkpoint_never_emitted_in_v1_scenario(),
+    checkpoint_never_emitted_when_policy_off_scenario(),
+    checkpoint_emitted_under_pressure_scenario(),
+    checkpoint_terminates_not_spins_scenario(),
     checkpoint_output_is_valid_transcript_scenario(),
     compactor_chain_order_is_registry_order_scenario(),
     invalid_stage_skipped_chain_continues_scenario(),

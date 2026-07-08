@@ -106,6 +106,7 @@ import src/core/phase_vocab (
   apply_checkpoint,
   history_from_seed,
   history_append,
+  history_messages,
   payload_messages,
   seal_compacted_payload,
   SealExhausted,
@@ -1010,6 +1011,8 @@ func session_policy_init(model: string, step_budget: int, max_cost_millicents: i
       require_system_prompt: not headless,
       model: model,
       provider_base_url: provider_base_url,
+      checkpoint_enabled: false,
+      checkpoint_pct: 90,
       compaction: {
         context_limit: catalog_context_limit_for(model),
         elide_tier_pct: 70,
@@ -1032,6 +1035,8 @@ pure func session_policy_with_model(policy: SessionPolicy, model: string) -> Ses
       require_system_prompt: policy.step.require_system_prompt,
       model: model,
       provider_base_url: policy.step.provider_base_url,
+      checkpoint_enabled: policy.step.checkpoint_enabled,
+      checkpoint_pct: policy.step.checkpoint_pct,
       compaction: {
         context_limit: catalog_context_limit_for(model),
         elide_tier_pct: policy.step.compaction.elide_tier_pct,
@@ -1348,7 +1353,7 @@ func c2_loop(
           let cp = apply_checkpoint(step_state, plan);
           let _ = ledger_emit(session_id, cp.event);
           let next_state: C2LoopState = {
-            msgs: st.msgs,
+            msgs: history_messages(cp.state.history),
 	            step_idx: st.step_idx,
 	            totals: st.totals,
 	            ext_artifacts: cp.state.ext_artifacts,
@@ -1765,6 +1770,8 @@ export func run_v2_session_traced_with_persist_retries(
       require_system_prompt: base.step.require_system_prompt,
       model: base.step.model,
       provider_base_url: base.step.provider_base_url,
+      checkpoint_enabled: base.step.checkpoint_enabled,
+      checkpoint_pct: base.step.checkpoint_pct,
       compaction: base.step.compaction
     },
     headless: base.headless

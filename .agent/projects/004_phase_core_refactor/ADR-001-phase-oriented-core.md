@@ -220,12 +220,24 @@ Question 1; the successor of the transcript helpers currently inline in
   is the atomic `apply_checkpoint(StepState, CheckpointPlan) -> {state, event}` — no code path
   takes the rebuilt history without its event (shape proven in the sketch); (d)
   `history_from_seed` validates the digest chain before accepting a resumed `History`; (e)
-  **checkpoint output carries the same transcript-validity obligations as ext compaction**
-  (system prefix preserved, pairing preserved, ids preserved), enforced by the same gate and by
-  scenario `checkpoint_output_is_valid_transcript` — a v1 obligation, not deferred to v2.
+  **checkpoint output carries the same transcript-validity obligations as ext compaction**.
+  v1 policy emits `TakeCheckpoint` only when the checkpoint policy is enabled
+  (`checkpoint_enabled`, default off), structural context usage over `History` reaches
+  `checkpoint_pct` (default 90, between the hard-elide tier and exhaustion), and the rebuilt
+  history would bring usage below that ceiling (`checkpoint_would_relieve`); if the pinned
+  system prefix alone exceeds the ceiling, no checkpoint is emitted and the loop reaches
+  seal-exhaustion, the honest terminal state. The trigger and summary are pure functions of
+  `StepState` (structural summary; AI-delegated summary is a v2 option). Checkpoint output
+  satisfies the obligations over its two shapes: the shared
+  `motoko_ext_conformance/invariants.validate_compactor_output` law on its non-system segment,
+  and `history_valid_transcript` on the full history (the system prefix is preserved, not passed
+  to the segment law, which rejects system messages) — both under scenario
+  `checkpoint_output_is_valid_transcript`.
   Invariant: *History is rewritten only by `checkpoint`, and every rewrite has a matching
-  ledger event.* v1 policy **never emits** `TakeCheckpoint` — enforced by scenario, not
-  convention.
+  ledger event.* v1 policy **never emits by default** — enforced by
+  `checkpoint_never_emitted_when_policy_off` (scenario) and
+  `test_default_policy_never_returns_take_checkpoint` (in-module test), plus the positive
+  `checkpoint_emitted_under_pressure` scenario.
 - **Transcript invariants**: no empty tool ids; exactly one result per call; ids preserved;
   tool_use/tool_result correlation (the Bedrock rule — currently a 20-line comment at
   `agent_loop_v2.ail:1316-1333`, here an enforced property); no live chunks in the transcript;

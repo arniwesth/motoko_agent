@@ -135,6 +135,14 @@ Corrected / newly discovered (see §1 gaps):
   structural trigger uses `pol.compaction.context_limit` over the full history. This is an intentional
   simplification for v1 (the trigger is a *coarse* ceiling, not the exact seal predicate). Note as a
   fidelity caveat, not a defect.
+- **G5 — implementation HEAD no longer threads checkpointed history in the live handler.** This plan's
+  §4.4 claimed the `TakeCheckpoint` handler already threads `cp.state` into `next_state`; at
+  implementation HEAD `b74fc4f`, `session.ail:1352` still sets `msgs: st.msgs` after
+  `apply_checkpoint(step_state, plan)`. That preserves the old history in the live loop even though the
+  checkpoint event is emitted. This is a contract drift from the plan, not a line-number drift.
+  **Resolution on landing:** add read-only `history_messages(History) -> [Message]` and thread
+  `msgs: history_messages(cp.state.history)` in the existing handler so the audited rewrite is the next
+  loop state.
 
 ## 2. Decisions closed (operator sign-off 2026-07-08 — carry the amendments, do not re-litigate)
 
