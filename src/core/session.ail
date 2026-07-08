@@ -339,6 +339,7 @@ type C2LoopState = {
   last_response_text: string,
   nudges_used: int,
   finalize_source: string,
+  prior_counts: RuntimeStatusCounts,
   trace: LedgerTrace
 }
 
@@ -414,12 +415,22 @@ pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
   runtime_status_counts_rec(trace.records, zero_runtime_status_counts())
 }
 
+pure func runtime_status_counts_add(a: RuntimeStatusCounts, b: RuntimeStatusCounts) -> RuntimeStatusCounts {
+  {
+    provider_calls_started: a.provider_calls_started + b.provider_calls_started,
+    provider_calls_completed: a.provider_calls_completed + b.provider_calls_completed,
+    stage_applied_total: a.stage_applied_total + b.stage_applied_total,
+    stage_rejected_total: a.stage_rejected_total + b.stage_rejected_total,
+    compaction_ai_applied: a.compaction_ai_applied + b.compaction_ai_applied
+  }
+}
+
 pure func runtime_status_json(
   st: C2LoopState,
   policy: SessionPolicy,
   tool_step_idx: int
 ) -> Json {
-  let counts = runtime_status_counts(st.trace);
+  let counts = runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace));
   let context_msgs = c2_pending_context(st);
   let split = split_for_compaction(context_msgs);
   let pinned = split.pinned;
@@ -538,7 +549,7 @@ func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
   }
 }
 
-func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState {
+func c2_initial_state_with_counts(history: [Message], provider: StepProvider, prior_counts: RuntimeStatusCounts) -> C2LoopState {
   {
     msgs: history,
     step_idx: 0,
@@ -556,8 +567,13 @@ func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState
     last_response_text: "",
     nudges_used: count_persist_nudges(history),
     finalize_source: "",
+    prior_counts: prior_counts,
     trace: empty_ledger_trace()
   }
+}
+
+func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState {
+  c2_initial_state_with_counts(history, provider, zero_runtime_status_counts())
 }
 
 func ext_ai_step(p: Ports, model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
@@ -1280,6 +1296,7 @@ func c2_finish_tool_batch(
     last_response_text: "",
     nudges_used: st.nudges_used,
     finalize_source: "",
+    prior_counts: st.prior_counts,
     trace: trace
   };
   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1324,6 +1341,7 @@ func c2_continue_tool_batch(
         last_response_text: "",
         nudges_used: st.nudges_used,
         finalize_source: "",
+        prior_counts: st.prior_counts,
         trace: trace
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1348,6 +1366,7 @@ func c2_after_dp7(
 	  ext_artifacts: Json,
 	  telemetry: { last_input_tokens: int, last_output_tokens: int },
 	  next_provider: StepProvider,
+  prior_counts: RuntimeStatusCounts,
   session_id: string,
   started_at_ms: int,
   trace: LedgerTrace,
@@ -1375,6 +1394,7 @@ func c2_after_dp7(
         last_response_text: errors,
         nudges_used: count_persist_nudges(msgs_with_assistant),
         finalize_source: "",
+        prior_counts: prior_counts,
         trace: trace
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1397,6 +1417,7 @@ func c2_after_dp7(
         last_response_text: output,
         nudges_used: count_persist_nudges(msgs_with_assistant),
         finalize_source: source,
+        prior_counts: prior_counts,
         trace: trace
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1463,6 +1484,7 @@ func c2_loop(
             last_response_text: "",
             nudges_used: next_nudges,
             finalize_source: "",
+            prior_counts: st.prior_counts,
             trace: trace_with_decision
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1487,6 +1509,7 @@ func c2_loop(
             last_response_text: st.last_response_text,
             nudges_used: st.nudges_used,
             finalize_source: st.finalize_source,
+            prior_counts: st.prior_counts,
             trace: ledger_append(trace_with_decision, WireRecord(cp.event))
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1561,6 +1584,7 @@ func c2_loop(
                 last_response_text: pending.request.reason,
                 nudges_used: st.nudges_used,
                 finalize_source: "",
+                prior_counts: st.prior_counts,
                 trace: trace_with_decision
               };
               c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1635,6 +1659,7 @@ func c2_loop(
                       last_response_text: e.message,
                       nudges_used: st.nudges_used,
                       finalize_source: "",
+                      prior_counts: st.prior_counts,
                       trace: ledger_append(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), WireRecord(retry_event))
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1685,6 +1710,7 @@ func c2_loop(
                         last_response_text: result.message.content,
                         nudges_used: applied.nudges_used,
                         finalize_source: "",
+                        prior_counts: st.prior_counts,
                         trace: ledger_append(trace_after_model, WireRecord(event))
                       };
                       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1708,6 +1734,7 @@ func c2_loop(
                           last_response_text: applied.last_response_text,
                           nudges_used: applied.nudges_used,
                           finalize_source: "",
+                          prior_counts: st.prior_counts,
                           trace: trace_after_model
                         };
                         c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1741,6 +1768,7 @@ func c2_loop(
                               last_response_text: result.message.content,
                               nudges_used: applied.nudges_used,
                               finalize_source: "",
+                              prior_counts: st.prior_counts,
                               trace: ledger_append(trace_after_model, WireRecord(event))
                             };
                             c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1748,7 +1776,7 @@ func c2_loop(
                           None => {
                             match dispatch_solver_candidate(rt, post_ctx, result.message.content) {
                               Accept(output) =>
-	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, next_provider, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
+	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, next_provider, st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
                               ContinueWithFeedback(feedback) => {
                                 let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
                                 let _ = ledger_emit(session_id, event);
@@ -1769,6 +1797,7 @@ func c2_loop(
                                   last_response_text: feedback,
                                   nudges_used: applied.nudges_used,
                                   finalize_source: "",
+                                  prior_counts: st.prior_counts,
                                   trace: ledger_append(trace_after_model, WireRecord(event))
                                 };
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1798,11 +1827,12 @@ func c2_loop(
                                     last_response_text: result.message.content,
                                     nudges_used: st.nudges_used,
                                     finalize_source: "",
+                                    prior_counts: st.prior_counts,
                                     trace: ledger_append(trace_after_model, WireRecord(event))
                                   };
                                   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                                 } else
-	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, next_provider, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, result.message.content, "")
+	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, next_provider, st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, result.message.content, "")
                               }
                             }
                           }
@@ -1835,12 +1865,31 @@ func run_v2_from_messages_traced_with_policy(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  run_v2_from_messages_traced_with_policy_and_counts(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, zero_runtime_status_counts())
+}
+
+func run_v2_from_messages_traced_with_policy_and_counts(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  prior_counts: RuntimeStatusCounts
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let session_id = derive_session_id();
   let started_at_ms = now();
   let session_span = "motoko.session.${session_id}";
   let live_provider = ported_provider(rt, history, provider);
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, live_provider));
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, live_provider, prior_counts));
   Trace.spanEnd(session_span);
   result
 }
@@ -1915,12 +1964,31 @@ func run_v2_from_messages_with_policy(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  run_v2_from_messages_with_policy_and_counts(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, zero_runtime_status_counts())
+}
+
+func run_v2_from_messages_with_policy_and_counts(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  prior_counts: RuntimeStatusCounts
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let session_id = derive_session_id();
   let started_at_ms = now();
   let session_span = "motoko.session.${session_id}";
   let live_provider = ported_provider(rt, history, provider);
   Trace.spanStart(session_span);
-  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, live_provider)).result;
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state_with_counts(history, live_provider, prior_counts)).result;
   Trace.spanEnd(session_span);
   result
 }
@@ -2009,7 +2077,8 @@ func conversation_loop_v2_with_policy(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider,
-  session_id: string
+  session_id: string,
+  prior_counts: RuntimeStatusCounts
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   -- Headless mode (M-MOTOKO-HEADLESS, 2026-05-08): skip the stdin-polling
   -- conversation loop entirely when MOTOKO_HEADLESS=1. The TS TUI layer
@@ -2026,14 +2095,14 @@ func conversation_loop_v2_with_policy(
   let raw = readLine();
   if raw == "" then ()
   else match decode(raw) {
-    Err(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+    Err(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts),
     Ok(obj) => {
       let cmd_type = msg_get_str(obj, "type");
       if cmd_type == "abort" || cmd_type == "exit" then ()
       else if cmd_type == "model_change" then {
         let new_model = msg_get_str(obj, "model");
         let next_policy = session_policy_with_model(policy, new_model);
-        conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, next_policy, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+        conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, next_policy, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts)
       }
       else if cmd_type == "restart" then {
         -- Emit session_suspend event and exit cleanly; TUI will respawn
@@ -2058,19 +2127,21 @@ func conversation_loop_v2_with_policy(
           model: model,
           mode: "v2"
         }));
-        match run_v2_from_messages_with_policy(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider) {
-          Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+        let traced = run_v2_from_messages_traced_with_policy_and_counts(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, prior_counts);
+        let next_counts = runtime_status_counts_add(prior_counts, runtime_status_counts(traced.trace));
+        match traced.result {
+          Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts),
           Err(e) => {
             let _ = ledger_emit(session_id, ErrorEvent({
               source: "agent_loop_v2",
               code: e.code,
               message: e.message
             }));
-            conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+            conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, next_counts)
           }
         }
       }
-      else conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+      else conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id, prior_counts)
     }
   }
   }
@@ -2093,7 +2164,7 @@ export func conversation_loop_v2(
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
   let live_provider = ported_provider(rt, history, provider);
-  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id)
+  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, zero_runtime_status_counts())
 }
 
 -- M8 combined entry point: runs the initial task via run_v2, then enters
@@ -2121,15 +2192,17 @@ export func run_v2_with_conversation(
   let session_id = derive_session_id();
   let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
   let live_provider = ported_provider(rt, initial_messages, provider);
-  match run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, live_provider) {
-    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id),
+  let initial_traced = run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, live_provider);
+  let initial_counts = runtime_status_counts(initial_traced.trace);
+  match initial_traced.result {
+    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts),
     Err(e) => {
       let _ = ledger_emit(session_id, ErrorEvent({
         source: "agent_loop_v2",
         code: e.code,
         message: e.message
       }));
-      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id)
+      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, initial_counts)
     }
   }
 }
@@ -2268,4 +2341,85 @@ pure func test_per_step_usage_kvs_full_cache() -> bool
     -- Anthropic case: both cache_read + cache_creation → 5 kv entries
     let r = mk_test_step_result(100, 50, 25, 12);
     kv_len(per_step_usage_kvs(r, 1500)) == 5
+  }
+
+pure func test_runtime_status_includes_prior_conversation_counts() -> bool
+  tests [((), true)]
+  {
+    let prior: RuntimeStatusCounts = {
+      provider_calls_started: 26,
+      provider_calls_completed: 26,
+      stage_applied_total: 0,
+      stage_rejected_total: 0,
+      compaction_ai_applied: 0
+    };
+    let trace: LedgerTrace = {
+      records: [
+        WireRecord(ProviderCallPrepared({
+          step: 0,
+          msg_count: 2,
+          system_prefix_count: 1,
+          system_prefix_chars: 3,
+          system_prefix_digest: "sha256:sys",
+          payload_digest: "sha256:payload",
+          model: "m"
+        })),
+        WireRecord(ProviderResult({
+          step: 0,
+          text: "",
+          finish_reason: "tool_calls",
+          tool_calls: 1,
+          input_tokens: 10,
+          output_tokens: 5,
+          cost_usd: 0.0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
+        }))
+      ]
+    };
+    let st: C2LoopState = {
+      msgs: [{ role: "system", content: "sys", tool_calls: [], tool_call_id: "" }],
+      step_idx: 1,
+      totals: zero_totals(),
+      ext_artifacts: jo([]),
+      telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+      provider: LiveAI,
+      pending_tool_calls: [],
+      pending_tool_context: [],
+      pending_tool_prefix: [],
+      pending_tool_batched: true,
+      accumulated_tool_msgs: [],
+      pending_approval: None,
+      last_finish_reason: "tool_calls",
+      last_response_text: "",
+      nudges_used: 0,
+      finalize_source: "",
+      prior_counts: prior,
+      trace: trace
+    };
+    let policy: SessionPolicy = {
+      step: {
+        step_budget: 100,
+        max_cost_millicents: 0,
+        cost_metered: false,
+        persist_retries: 0,
+        retry_stream_errors: false,
+        require_system_prompt: true,
+        model: "m",
+        provider_base_url: "",
+        checkpoint_enabled: false,
+        checkpoint_pct: 90,
+        compaction: {
+          context_limit: 1000,
+          elide_tier_pct: 70,
+          elide_hard_tier_pct: 85,
+          emergency_pct: 95
+        }
+      },
+      headless: false
+    };
+    let encoded = encode(runtime_status_json(st, policy, 0));
+    contains(encoded, "\"provider_calls_started\":27")
+      && contains(encoded, "\"provider_calls_completed\":27")
+      && contains(encoded, "\"steps_executed_so_far\":27")
   }
