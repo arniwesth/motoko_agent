@@ -312,3 +312,118 @@ The follow-up plan should:
 5. Implement the four standing scenario ids above.
 6. Wire the deterministic scenario into the compaction DST Make target.
 7. Add a short handoff for the optional live calibration run.
+
+---
+
+## Review Comments
+
+Reviewer model: Claude Opus 4.8. Date: 2026-07-08. Independent session, no context from the
+authoring session. Method: citation audit, feasibility attack, oracle-consistency pass, scope and
+diagram attack, all grounded against HEAD `3cbe898`.
+
+### R1. The diagram and Decision-detail §1 attribute a "state-threaded script" to a `Ported(Ports)` provider, which the seam cannot thread
+
+**Defect.** The diagram `routed` node reads "custom routed Ported(Ports) / normal agent calls:
+state-threaded script", and Decision detail §1 says agent calls "must advance from a state-threaded
+script or from visible step markers". But `Ported(Ports)` carries no state across steps:
+`dispatch_step` returns `next_provider: Ported(ports)` unchanged, whereas only `Scripted` threads by
+returning its tail — and `Scripted` is built from `scripted_ports_from_steps`, whose index is exactly
+the assistant-count clock this ADR rejects, and which also routes the summarizer through the same
+script. So "state-threaded script" is not a drop-in option for the `Ported(Ports)` design the diagram
+names; it silently requires a different provider.
+
+**Grounding.**
+- `src/core/test/stub_step.ail:186-206` — `Ported(ports) => { ... next_provider: Ported(ports) }`
+  (no threading) vs `Scripted(script) => ... next_provider: Scripted(rest)` (threads via tail).
+- `src/core/test/stub_step.ail:157-168` — `scripted_ports_from_steps` indexes by
+  `assistant_count(msgs) - base_assistant_count`; this is the clock the ADR says is unstable after
+  compaction changes payload shape.
+- `src/core/session.ail:453-469` — for `Ported(p)`, both the agent call (`dispatch_step`) and the
+  extension summarizer (`ext_ports_of` → `ext_ai_step` → `p.model_step`) run through the same
+  `Ports.model_step`, so a stateless routed provider must disambiguate by prompt shape, which it can.
+- Note: Investigation finding 5 already gets this right ("either a *new* traced/state-threaded
+  scripted provider *or* a custom `Ported(Ports)` provider … routes normal agent calls from visible
+  step markers"). The diagram and §1/Fixture/Plan-handoff #4 lost that pairing and present the two
+  mechanisms as interchangeable for one provider.
+
+**Action.** Make §1, §4 Fixture, Plan-handoff note #4, and the diagram `routed` node consistent with
+finding 5. For the existing `Ported(Ports)` seam, specify **stateless marker-based routing only**
+(next step derived from a marker in the last retained tool-result/tool-call id, which always survives
+recent-context retention). If "state-threaded" is kept as an option, label it explicitly as a **new
+`StepProvider` variant** — not `Ported(Ports)` — that also routes the summarizer separately, or drop
+it. Threading state through `SharedMem` inside a `Ported` closure is possible but reintroduces mutable
+call-counter nondeterminism and should be ruled out in the plan, not left implicit.
+
+### R2. Minor citation imprecision: `ProviderCallPrepared` fields cited at the record-type line
+
+**Defect.** Investigation finding 1 says "`ProviderCallPrepared` carries `step`, `msg_count`, … 
+(`src/core/phase_vocab.ail:414`)", but line 414 defines the payload record `ProviderCallInfo`. The
+`ProviderCallPrepared(ProviderCallInfo)` constructor is at `:514`; the schema-v1 projection is at
+`:587`. The field list is correct; only the name/line pairing is loose.
+
+**Grounding.** `src/core/phase_vocab.ail:414` (`export type ProviderCallInfo = { … }`), `:514`
+(`ProviderCallPrepared(ProviderCallInfo)`), `:587` (projection).
+
+**Action.** Cite `:414` for the `ProviderCallInfo` fields and `:514` for the constructor, or reword.
+Non-blocking.
+
+### Residual risks / test gaps (not plan-blocking, but assert or note them)
+
+- **≥3 compaction_ai applications needs deliberate re-inflation.** After each application the payload
+  collapses to `prefix ++ [summary] ++ recent` (`compaction_ai.ail:175`); to cross `threshold_pct`
+  again the fixture must re-grow. `compact_with_ai` returns `PassThrough` when `old_turns == 0`
+  (`:168`), and `split_body` locks unresolved tool-call/result pairs into `recent` (`:106`). The plan
+  should assert the count of three and be ready to add turns / enlarge tool outputs, especially since
+  `keep_recent` halves at `pct >= 90` (`:163`), shifting the split boundary.
+- **The artifact cache is single-slot.** `cache_artifact` writes one `compaction_ai` key holding one
+  `segment_digest` + `summary` (`compaction_ai.ail:150-156`); within a growing session each
+  compaction's `old_turns` differ, so no cross-turn cache hit occurs. The cache oracle is only
+  meaningful as a **direct, same-segment replay** — which §3 correctly scopes. Do not add a cross-turn
+  cache assertion to the long-session scenario.
+- **Fake ports must pin time.** The custom `Ported(Ports)` must supply a fixed `clock_now`/`env_get`,
+  or replay determinism depends entirely on the trace normalizer stripping every time field. §3's
+  "normalize volatile session/time fields" covers this only if the normalizer is exhaustive.
+- **Negative-event invariant.** "No `ext_compaction_rejected`" assumes a rejected stage surfaces as
+  that wire event; confirm the emission path for `StageRejected` before relying on its absence as an
+  oracle signal (the in-memory `TraceStageRejected` is the more direct observable).
+
+### What is accurate
+
+The core observability design holds. `ProviderCallPrepared` is threaded into the in-memory
+`LedgerTrace` as a `WireRecord` (`session.ail:1517,1522,1538`), so `system_prefix_count`,
+`system_prefix_chars`, and `payload_digest` are readable from the in-memory trace, not just the wire
+— the oracle is observable. `CompactionStageRecord` carries `ext_id` + `TraceStageApplied`
+(`phase_vocab.ail:464-467`) while the wire `compaction_extension` event lacks `ext_id`
+(`phase_vocab.ail:598`), so the decision to count in-memory records (Review disposition, §3) is
+correct. The `MOTOKO_MODELS_FILE` override genuinely reaches the session path:
+`CallModel` calls `catalog_context_limit_for(model)` (`session.ail:1452`), which reads
+`catalog_path()` honoring the env var (`context_usage.ail:24-32,50`), and the `openrouter/` stripping
+(`:39-45`) makes either label form resolve. Catalog claims check out: `.motoko/model-catalog.json`
+maps `ollama/qwen3.6:35b-a3b-mxfp8 → 262144` with no OpenRouter Qwen3.6 entry. The `compaction_ai`
+anchors are correct (`summarize_with_ai:62-67`, `cached_summary:136-147`, `cache_artifact:150-156`,
+`compact_with_ai:159-177`), and the cache path is gated so `summarize_with_ai` runs only on a miss
+(`:171-173`) — the counter-free sentinel-summary oracle is sound. The production tool path is real:
+`on_tool_handle` → `dispatch_tool_handle` → `dispatch_tool_entries` (`tool_phase.ail:242,244,288`;
+`runtime.ail:245-261`) returns `Handled(ToolResultEnvelope)` with arbitrary deterministic content, so
+large deterministic tool results on the production path are feasible. Registry order
+`compaction_ai → structural` is confirmed in shipped config (`.motoko/config/default/config.json`
+`order` array), so `compaction_ai` sees full pressure first; the DeepSeek default summarizer is
+confirmed (`compaction_ai.json` `model = openrouter/deepseek/deepseek-v4-flash`). `validate_compactor_output`
+is exported and pure (`invariants.ail:133`), usable directly. Live Qwen stays evidence-only: the
+diagram's dashed "calibrates fixture realism only" edge and gate wiring keep it out of the fast gate.
+
+### Recommended pre-implementation actions (dependency-ordered)
+
+1. Resolve R1: commit the standing DST to stateless marker routing on `Ported(Ports)`, and rewrite
+   §1, §4, Plan-handoff #4, and the diagram `routed` node to match finding 5. (Blocks provider work.)
+2. Choose the traced entry point: call `run_v2_session_traced` directly (`session.ail:1727`) or add a
+   thin traced helper beside `run_v2_with_scripted_ports`.
+3. Add the OpenRouter Qwen catalog entry + `qwen36-compaction-live` profile, plus the test
+   `MOTOKO_MODELS_FILE` fixture binding the same label to a small limit.
+4. Build the routed provider (prompt-shape summarizer branch = single user message) and the test
+   `on_tool_handle` extension emitting large deterministic results; register `compaction_ai` before
+   `compaction_structural`.
+5. Tune the fixture to guarantee ≥3 `compaction_ai` `TraceStageApplied` records; assert the count and
+   pin/normalize volatile clock/session/time fields for replay determinism.
+6. Implement the four standing scenario ids and wire them into the fast gate; fold R2 into a citation
+   cleanup while editing.
