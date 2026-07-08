@@ -17,31 +17,37 @@ emission under a policy gate, keeping v1 **pure, structural, independent of ABI/
 off-by-default**:
 
 - **Trigger (D3-1):** pure usage-percent ceiling `checkpoint_pct = 90`, sitting between the compaction
-  hard tier (85) and seal exhaustion (95). `decide` fires when `history` usage `>= checkpoint_pct`.
-- **Emission site + summary (D3-2/D3-3):** pure `decide`, structural summary (no effect). AI/telemetry
-  delegation recorded as the v2 path.
-- **Flag default (D3-4):** `checkpoint_enabled = false`. `checkpoint_never_emitted_in_v1` is retargeted
-  to `checkpoint_never_emitted_when_policy_off`; a new positive scenario asserts emission under the
-  flag. v1-never-emits becomes v1-never-emits-**by-default** (the D9/D-B5 amendment pattern).
+  hard tier (85) and seal exhaustion (95). The gate fires when `history` usage `>= checkpoint_pct`.
+- **Emission site + summary (D3-2/D3-3):** the effect-free decision path — specifically **inside
+  `call_model_or_fail`** (the fan-in of the five model-call branches of `decide`), *not* a `decide`
+  `else` arm (which would skip the `tools_complete` growth path). Structural summary, no effect.
+  AI/telemetry delegation recorded as the v2 path.
+- **Flag default (D3-4):** `checkpoint_enabled = false`. The never-emit tripwire is retargeted in **both**
+  places that assert it — the scenario `checkpoint_never_emitted_in_v1` → `…_when_policy_off` and the
+  in-module test `test_v1_policy_never_returns_take_checkpoint` → `test_default_policy_…`; positive twins
+  added for each. v1-never-emits becomes v1-never-emits-**by-default** (the D9/D-B5 amendment pattern).
 - **Termination guard (D3-5):** pressure-cleared (checkpoint rebuilds history to `pinned ++ [summary]`,
-  dropping usage far below threshold) **plus a pure "would-relieve" precondition** — `decide` emits
+  dropping usage far below threshold) **plus a pure "would-relieve" precondition** — the gate emits
   only if the projected post-checkpoint usage falls below `checkpoint_pct`. This handles the degenerate
   case (system prefix alone `>=` threshold) found by verification (§0), where a naive guard spins
   forever.
 
-Blast radius: two new `StepPolicy` fields, one `decide` arm, one pure summary builder + two pure
-helpers in `phase_vocab`, three scenario edits (one retargeted, two new), and routing
-`checkpoint_output_is_valid_transcript` through the shared `invariants.validate_compactor_output` law.
-No ABI change, no kit change, no checkpoint-mechanics change.
+Blast radius: two new `StepPolicy` fields, one gate in `call_model_or_fail`, one pure summary builder +
+two pure helpers in `phase_vocab`; scenario edits (retarget 1, add 2) and in-module test edits (rename 1,
+add 1); and validating checkpoint output via the shared `validate_compactor_output` law **on its
+non-system segment** while keeping `history_valid_transcript` on the full history. No ABI change, no kit
+change, no checkpoint-mechanics change.
 
 ## 0. Grounding note (what re-grounding at HEAD `4371de0` confirmed / corrected)
 
 Confirmed:
 
-- `decide(s: StepState, pol: StepPolicy) -> StepDecision` (`step_machine.ail:78`) is pure and has **no
-  `TakeCheckpoint` arm** (arms: RunTools/await/inject/Finalize via `call_model_or_fail`). It receives
-  `s.history`, `s.telemetry`, and `pol.compaction.context_limit` — everything a pure structural trigger
-  needs.
+- `decide(s: StepState, pol: StepPolicy) -> StepDecision` (`step_machine.ail:78`) is effect-free (a plain
+  `func` with no effect row, not `pure`-annotated) and has **no `TakeCheckpoint` arm** (arms:
+  RunTools/await/inject/Finalize via `call_model_or_fail`). It receives `s.history`, `s.telemetry`, and
+  `pol.compaction.context_limit` — everything a structural trigger needs, no effect. `pure func`s in
+  `phase_vocab` (e.g. `test_checkpoint_*` at `:880`) already call `checkpoint`, so the new `pure`
+  helpers (§4.3) may call it too.
 - `mk_policy(context_limit)` (`step_machine.ail:109`) builds the `StepPolicy`; `pol.compaction` is a
   `CompactionPolicy` with `context_limit`, `elide_tier_pct: 70`, `elide_hard_tier_pct: 85`,
   `emergency_pct: 95` (`phase_vocab.ail:163`).
@@ -67,11 +73,17 @@ Confirmed:
 Corrected / newly discovered (see §1 gaps):
 
 - **The handoff's `:1293` handler anchor is now `:1347`** (drift, as warned).
-- **`checkpoint_output_is_valid_transcript` does NOT currently use the shared law.** It asserts
-  `history_valid_transcript(cp.history)` (`:183`), a *separate* predicate from
-  `invariants.validate_compactor_output`. ADR-001 D7(e) says checkpoint output is checked "by the same
-  gate" as ext compaction — today that is aspirational, not literal. Routing it through the shared law
-  is a concrete edit in this plan (§5), closing the one-law drift the handoff warns about.
+- **`checkpoint_output_is_valid_transcript` uses `history_valid_transcript`, not the shared law — and
+  the two check *complementary* things, not the same thing twice.** `history_valid_transcript(cp.history)`
+  (`:183`) validates the **full** history (system head-prefix present, pairing well-formed).
+  `invariants.validate_compactor_output(input, output)` validates a **non-system segment
+  transformation** — and it **rejects any system message in `output`** (`invariants.ail:70`,
+  `no_system_in_output` `:89`). The live call site confirms this: `runtime.ail:170` feeds it the
+  *compacted segment* `(msgs, compacted_msgs)`, never the pinned system prefix. **Therefore the shared
+  law cannot be applied to the whole checkpoint history** (which keeps the system prefix) — it must be
+  applied to the checkpoint's **segment** rewrite (input = original non-system tail, output = the
+  `[summary]` message). `history_valid_transcript` stays for the system-prefix-preservation half. See G1
+  (corrected) and §5.4.
 - **The pressure-cleared guard is insufficient alone.** Verified with a minimal repro
   (`scratchpad/verify_guard.ail`, `ailang run --caps IO`):
 
@@ -84,14 +96,30 @@ Corrected / newly discovered (see §1 gaps):
   In the third case the checkpoint keeps the full system prefix, so post-checkpoint usage stays ≥
   threshold and a naive `decide` would re-emit `TakeCheckpoint` every step forever. D3-5's guard must
   therefore include the "would-relieve" precondition (§2, §4.3). This is evidence, not assertion.
+- **The model-call decision fans in through `call_model_or_fail`, not a single `else`.** `decide`
+  (`step_machine.ail:78`) routes **five** finish-reason branches to `call_model_or_fail`
+  (`stream_error`, `intercept_handled`, `tools_complete`, `user_injected`, and the final `else`).
+  `tools_complete` — the branch after a tool batch finishes — is the *dominant* history-growth path.
+  So the trigger must be gated **inside `call_model_or_fail`** (`:67`), after its budget/cost `Fail`
+  checks and before `project`/`CallModel`; an arm in `decide`'s final `else` alone would never fire
+  after a tool batch. (Earlier drafts of §4.2 placed it in the `else` — corrected.)
+- **The never-emit invariant is asserted in TWO places, not one.** Besides the scenario, there is an
+  in-module test `test_v1_policy_never_returns_take_checkpoint` (`step_machine.ail:347`). Both must be
+  retargeted to "…by default"; §4.1/§5 enumerate both.
 
 ## 1. ADR gaps found (record, don't invent silently)
 
-- **G1 — "the same gate" for checkpoint output is not literally wired.** ADR-001 D7(e) (`:223-225`) says
-  checkpoint output is validated "by the same gate" as ext compaction. In fact the scenario uses
-  `history_valid_transcript`, not `invariants.validate_compactor_output`. **Resolution (this plan):**
-  route `checkpoint_output_is_valid_transcript` through `validate_compactor_output` (§5). Amend D7(e) to
-  name the shared predicate.
+- **G1 — "the same gate" for checkpoint output is under-specified, because checkpoint output and
+  compactor output are different shapes.** ADR-001 D7(e) (`:223-225`) says checkpoint output is validated
+  "by the same gate" as ext compaction. But `validate_compactor_output` operates on a *non-system
+  segment* and **rejects system messages** (`invariants.ail:70`), whereas a checkpoint history *keeps*
+  the pinned system prefix. So "the same gate" cannot mean "feed the whole checkpoint history to the same
+  predicate" — that would fail. **Resolution (this plan):** apply the shared law to the checkpoint's
+  **segment** rewrite (the obligations it actually owns: no invented/severed tool ids, no system message
+  in the summarized tail), and keep `history_valid_transcript(cp.history)` for the full-history
+  system-prefix-preservation obligation. Amend D7(e) to say checkpoint output satisfies
+  `validate_compactor_output` **on its non-system segment** and `history_valid_transcript` **on the full
+  history** — the union is "the same obligations as ext compaction," expressed over the two shapes.
 - **G2 — D7 under-specifies the helper surface `decide` needs.** `decide` lives in `step_machine.ail`
   and cannot destructure the opaque `History` type (not exported from `phase_vocab`). To compute the
   trigger and the would-relieve precondition purely, `phase_vocab` must export two small pure helpers
@@ -118,14 +146,19 @@ Recommendations presented with tradeoffs; operator approved the bundle below.
   checkpoint is the escape *after* compaction can no longer recover headroom but *before* seal kills the
   run. Rejected: "reactive to seal exhaustion" (requires the effectful site, contradicts D3-2);
   "step-budget proximity" (decoupled from the token-ceiling rationale).
-- **D3-2 · Emission site — pure `decide`.** The trigger and summary are pure functions of `StepState`;
-  no effect is needed, so emission stays in `decide`, keeping it Z3-eligible and Plan 3 independent of
-  ABI/Plan 2. Rejected for v1: the effectful seal site (needed only if the summary requires AI/telemetry
-  — the v2 path).
+- **D3-2 · Emission site — the effect-free decision path** (specifically inside `call_model_or_fail`, §0/§4.2). The
+  trigger and summary are pure functions of `StepState`; no effect is needed, so emission stays on the
+  effect-free decision path (`decide`/`call_model_or_fail` carry no effect row), keeping Plan 3
+  independent of ABI/Plan 2. Rejected for v1: the effectful seal site (needed only if the summary
+  requires AI/telemetry — the v2 path).
 - **D3-3 · Summary source — structural.** The `CheckpointPlan.summary` is built purely from `StepState`:
   step index, message/tool-call counts elided, and the pre-checkpoint digest. No AI, no ABI telemetry.
   AI-summary delegation via a compactor extension is recorded as the documented **v2** option. Checkpoint
-  output must satisfy `invariants.validate_compactor_output` regardless (D7(e)).
+  output must satisfy the D7(e) obligations regardless — `validate_compactor_output` on its non-system
+  segment **and** `history_valid_transcript` on the full history (G1). Note: for the trivial structural
+  summary the segment check passes near-vacuously (the summary is a single assistant message with no tool
+  structure); it becomes load-bearing under the v2 summary that may retain tool-bearing tail messages,
+  and it satisfies the "one law, no second copy" directive today.
 - **D3-4 · Policy flag default — OFF.** `checkpoint_enabled = false` in the shipped default (`mk_policy`).
   `checkpoint_never_emitted_in_v1` is **retargeted** to `checkpoint_never_emitted_when_policy_off` (still
   true for the default), and a **new** `checkpoint_emitted_under_pressure` scenario asserts emission with
@@ -146,25 +179,32 @@ Recommendations presented with tradeoffs; operator approved the bundle below.
 > ceiling (`checkpoint_would_relieve`); if the pinned system prefix alone exceeds the ceiling, no
 > checkpoint is emitted and the loop reaches seal-exhaustion, the honest terminal state. The trigger and
 > summary are pure functions of `StepState` (structural summary; AI-delegated summary is a v2 option).
-> Checkpoint output is validated by the shared `motoko_ext_conformance/invariants.validate_compactor_output`
-> law — the same predicate as ext-compaction output — via `checkpoint_output_is_valid_transcript`. The
-> former "v1 never emits" invariant becomes **"v1 never emits by default"**, enforced by
-> `checkpoint_never_emitted_when_policy_off` plus the positive `checkpoint_emitted_under_pressure` scenario.
+> Checkpoint output satisfies the same transcript obligations as ext-compaction output, expressed over
+> its two shapes: the shared `motoko_ext_conformance/invariants.validate_compactor_output` law on its
+> **non-system segment**, and `history_valid_transcript` on the **full history** (the system prefix is
+> preserved, not passed to the segment law, which rejects system messages) — both under
+> `checkpoint_output_is_valid_transcript`. The former "v1 never emits" invariant becomes **"v1 never emits
+> by default"**, enforced by `checkpoint_never_emitted_when_policy_off` (scenario) and the renamed
+> `test_default_policy_never_returns_take_checkpoint` (in-module test), plus the positive
+> `checkpoint_emitted_under_pressure` scenario.
 
 ## 3. The surface being wired (reference, at HEAD)
 
 ```
-step_machine.ail   decide(s, pol)                     :78    ← add TakeCheckpoint arm (before call_model_or_fail fall-through)
+step_machine.ail   call_model_or_fail(s, pol)         :67    ← add checkpoint gate after budget/cost Fail, before project/CallModel
+                   decide(s, pol)                     :78    ← (no arm needed here; the gate lives in call_model_or_fail, the model-call fan-in)
                    mk_policy(context_limit)           :109   ← default the two new fields
+                   test_v1_policy_never_returns_take_checkpoint :347 ← rename → _default_policy_… ; add positive twin
 phase_vocab.ail    StepPolicy                         :270   ← + checkpoint_enabled: bool, checkpoint_pct: int
                    checkpoint / apply_checkpoint       :239/:323  (FROZEN — do not touch mechanics)
                    CheckpointPlan {reason, summary}    :237
+                   split_for_compaction / segment_messages  :130/:134  ← used to extract non-system segment for the output law
                    (new) history_usage_percent                ← pure, owns History destructure
                    (new) checkpoint_would_relieve             ← pure, projects post-checkpoint usage
                    (new) checkpoint_summary (or in step_machine)  ← pure structural summary builder
 session.ail        TakeCheckpoint handler              :1347  (already wired — no change needed)
-invariants.ail     validate_compactor_output           :133   (shared law — reuse, do not copy)
-scripts/phase_c_l1_scenarios.ail                              ← retarget + 2 new scenarios; route output law
+invariants.ail     validate_compactor_output / no_system_in_output  :133/:89  (shared law — reuse over the SEGMENT, do not copy)
+scripts/phase_c_l1_scenarios.ail                              ← retarget + 2 new scenarios; route segment through output law
 ```
 
 ## 4. Implementation
@@ -189,22 +229,31 @@ export type StepPolicy = {
 `phase_c_l1_scenarios`, `phase_f_pipeline_wiring`). Prefer routing through `mk_policy` where a site
 already does; add the two literals where it constructs inline.
 
-### 4.2 `decide` — the `TakeCheckpoint` arm (`step_machine.ail:78`)
+### 4.2 The `TakeCheckpoint` gate — inside `call_model_or_fail` (`step_machine.ail:67`)
 
-Insert the checkpoint decision **after the pending-tools/inject/finalize arms and before the final
-`call_model_or_fail` fall-through** (i.e. checkpoint only when the loop would otherwise call the model —
-never when tools are pending or a finalize/inject is due). Sketch:
+**Not** an arm in `decide`'s `else` chain. `decide` (`:78`) sends five finish-reason branches
+(`stream_error`, `intercept_handled`, `tools_complete`, `user_injected`, final `else`) to
+`call_model_or_fail`; `tools_complete` is the dominant growth path. Putting the gate in `decide`'s final
+`else` would skip it after every tool batch (§0). The gate belongs in `call_model_or_fail`, **after** the
+budget/cost `Fail` checks (so an over-budget run fails rather than checkpoints — correct priority) and
+**before** `project`/`CallModel`:
 
 ```
-  ...
-  else if s.last_finish_reason == "user_injected"
-  then call_model_or_fail(s, pol)
-  else if should_checkpoint(s, pol)
-  then TakeCheckpoint(mk_checkpoint_plan(s))
-  else call_model_or_fail(s, pol)
+func call_model_or_fail(s: StepState, pol: StepPolicy) -> StepDecision {
+  if pol.step_budget > 0 && s.step_idx >= pol.step_budget
+  then Fail({ ... "step budget exhausted" ... })
+  else if pol.max_cost_millicents > 0 && pol.cost_metered && s.totals.cost_millicents >= pol.max_cost_millicents
+  then Fail({ ... cost cap ... })
+  else if should_checkpoint(s, pol)                       -- [NEW]
+  then TakeCheckpoint(mk_checkpoint_plan(s))              -- [NEW]
+  else match project(s.history, s.telemetry, pol.compaction) {
+    Err(reason) => Fail({ code: "ContextExhausted", ... }),
+    Ok(_) => CallModel({ model: pol.model })
+  }
+}
 ```
 
-where (pure):
+where (effect-free helpers):
 
 ```
 func should_checkpoint(s: StepState, pol: StepPolicy) -> bool {
@@ -220,13 +269,15 @@ func mk_checkpoint_plan(s: StepState) -> CheckpointPlan {
 }
 ```
 
-(Note: `should_checkpoint` calls `mk_checkpoint_plan(s)` to feed `checkpoint_would_relieve`, and the
-`decide` arm calls it again to build the emitted decision — it is pure, so the duplicate call is free;
-an implementer may hoist it into a `let` if preferred.)
+(`should_checkpoint` and the gate each call `mk_checkpoint_plan(s)`; it is pure, so the duplicate is
+free — hoist to a `let` if preferred.)
 
-Placement matters for the guard: because checkpoint sits on the `call_model_or_fail` branch, the very
-next iteration after a checkpoint re-enters `decide` with the rebuilt (small) history, `should_checkpoint`
-is false (pressure cleared), and the loop proceeds to `CallModel` — progress, not another checkpoint.
+Why this also gives the termination guard: after a checkpoint the loop re-enters with the rebuilt (small)
+history; `history_usage_percent` is now well below `checkpoint_pct`, so `should_checkpoint` is false and
+`call_model_or_fail` proceeds to `CallModel` — progress, not another checkpoint. The `checkpoint_would_relieve`
+conjunct additionally blocks the degenerate spin (§0 boundary): if the pinned prefix alone is over the
+ceiling, `should_checkpoint` is false and the run falls to `project`/`CallModel`→ seal-exhaustion instead
+of looping.
 
 ### 4.3 New pure helpers in `phase_vocab` (owns `History` internals)
 
@@ -250,8 +301,9 @@ export pure func checkpoint_would_relieve(h: History, plan: CheckpointPlan, limi
 `History` destructure — prefer `step_machine` using `history_len`) — a pure structural summary, e.g.
 `"session checkpoint at step ${show(s.step_idx)}: folded ${show(history_len(s.history))} messages"`.
 No AI, no telemetry effect. The exact string is not load-bearing; only that it is deterministic and that
-the resulting `[CHECKPOINT] ...` message keeps the output a valid transcript (it is a plain assistant
-message — trivially satisfies `validate_compactor_output`).
+the resulting `[CHECKPOINT] ...` assistant message keeps the output valid: it satisfies
+`history_valid_transcript` on the full history (system prefix intact) and, as the sole non-system
+segment message, satisfies `validate_compactor_output` (no system, no tool ids — §5.4).
 
 ### 4.4 Handler — no change
 
@@ -263,23 +315,45 @@ unchanged.
 ## 5. Scenario changes (all core-DST class: `--caps IO`, no hydration)
 
 1. **Retarget `checkpoint_never_emitted_in_v1` → `checkpoint_never_emitted_when_policy_off`**
-   (`phase_c_l1_scenarios.ail:298`). Keep the body; assert that with `checkpoint_enabled = false` (the
-   default `policy(...)` helper), `decide` on a **pressured** state does **not** return `TakeCheckpoint`.
-   Rename the scenario id and its registrar (`:412`, `:442`).
+   (`phase_c_l1_scenarios.ail:298`). Rename the scenario id and its registrar (`:412`, `:442`).
+   **Critical:** the current fixture uses `policy(0)` + a two-message seed → `context_limit = 0` →
+   `history_usage_percent = 0`, which never triggers *regardless of the flag*. Retargeting to "policy
+   off" requires making the fixture **pressured** (a limit and history that put usage `≥ checkpoint_pct`,
+   as in §5.2) with `checkpoint_enabled = false`; otherwise the test passes vacuously and no longer guards
+   the flag. Assert `decide` does **not** return `TakeCheckpoint`.
 2. **New `checkpoint_emitted_under_pressure`.** Build a state whose history usage `>= checkpoint_pct`
    with `checkpoint_enabled = true` and a system prefix well below threshold; assert `decide` returns
    `TakeCheckpoint(_)`. (Mirror the pressured fixture from `scratchpad/verify_guard.ail`: small system
    prefix + large tail, limit chosen so usage ≥ 90%.)
-3. **New `checkpoint_terminates_not_spins`** (D3-5). Two parts: (a) after `apply_checkpoint` on a
-   pressured state, `decide` on the *rebuilt* state returns a non-checkpoint decision (progress); (b)
-   the degenerate case — a state whose **system prefix alone** ≥ `checkpoint_pct` with the flag on — has
-   `should_checkpoint` false, so `decide` does **not** emit (it would spin otherwise). Assert both.
-4. **Route `checkpoint_output_is_valid_transcript` through the shared law** (`:172`, G1). Replace the
-   `history_valid_transcript(cp.history)` assertion with `result_ok(validate_compactor_output(input,
-   output))`, where `input`/`output` are the pre- and post-checkpoint message lists (`[Msg]`). Keep the
-   digest-chain and `history_len == 2` checks. This makes "the same gate" literal.
+3. **New `checkpoint_terminates_not_spins`** (D3-5). Two parts, both observed through `decide`'s return
+   (the gate is internal to `call_model_or_fail`): (a) after `apply_checkpoint` on a pressured state,
+   `decide` on the *rebuilt* state returns `CallModel` (progress), not `TakeCheckpoint`; (b) the
+   degenerate case — a state whose **system prefix alone** ≥ `checkpoint_pct` with the flag **on** — makes
+   `decide` return `CallModel` (would-relieve is false, so no emission), not `TakeCheckpoint`, so the loop
+   reaches seal-exhaustion rather than spinning. Mirror the boundary fixture from §0. Assert both.
+4. **Add the shared law over the checkpoint *segment*** in `checkpoint_output_is_valid_transcript`
+   (`:172`, G1). Do **not** feed the whole `cp.history` to `validate_compactor_output` — it rejects the
+   pinned system messages. Instead:
+   - **Keep** `history_valid_transcript(cp.history)` (system-prefix-preservation on the full history) and
+     the digest-chain + `history_len == 2` checks.
+   - **Add** `result_ok(validate_compactor_output(in_seg, out_seg))`, where `in_seg` / `out_seg` are the
+     **non-system segments** of the pre- and post-checkpoint histories, obtained via
+     `segment_messages(split_for_compaction(msgs))` (or `project(...).split.segment`). `out_seg` is the
+     `[summary]` message. `Msg` and `Message` are the same record shape (`{role, content, tool_calls,
+     tool_call_id}`, `types.ail:16`); the sibling `ext_compaction_invalid_rejected` scenario already
+     passes such records to the law, so no conversion is needed (use `messages_to_msgs` only if the
+     checker distinguishes them nominally).
+5. **Rename the in-module test** `test_v1_policy_never_returns_take_checkpoint`
+   (`step_machine.ail:347`) → `test_default_policy_never_returns_take_checkpoint`, and add a positive twin
+   `test_enabled_policy_checkpoints_under_pressure` asserting `decide` returns `TakeCheckpoint` for an
+   enabled policy + pressured state. (These run inside `make check_core` via the module's `tests`
+   attributes, not the scenario suite.) Same vacuity caveat as §5.1: the current test uses `mk_policy(0)`
+   + `mk_state(…, 0)` (`limit 0`, usage 0); both the renamed negative and the new positive must use a
+   pressured `mk_state`/`mk_policy(limit>0)` so usage `≥ checkpoint_pct`, or the negative passes for the
+   wrong reason and the positive can't fire.
 
-Registry (`:435-447`): retarget id #1, append the two new scenarios → **`PASS count=15`**.
+Registry (`:435-447`): retarget scenario #1, append the two new scenarios → **`PASS count=15`**. In-module
+tests (#5) are counted by `make check_core`, not the suite's `count=`.
 
 ## 6. Gate / acceptance criteria (checkable commands)
 
@@ -309,10 +383,13 @@ Done = all four green + the D7 amendment committed.
    constructor (grep, §4.1); `mk_policy` defaults `false`/`90`. Gate: `make check_core` compiles.
 2. **WI-2 · Pure helpers.** Add `history_usage_percent`, `checkpoint_would_relieve` to `phase_vocab`;
    add `checkpoint_summary` (structural). Gate: `ailang check`.
-3. **WI-3 · Trigger arm.** Add `should_checkpoint`/`mk_checkpoint_plan` + the `decide` arm (§4.2). Gate:
-   `ailang check`; existing `decide` tests still green.
-4. **WI-4 · Scenarios.** Retarget #1; add the two positives; route the output law (§5). Gate:
-   `phase_c_l1_scenarios PASS count=15`.
+3. **WI-3 · Trigger gate.** Add `should_checkpoint`/`mk_checkpoint_plan` and wire the gate **inside
+   `call_model_or_fail`** after the budget/cost `Fail` checks (§4.2 — not a `decide` `else` arm). Gate:
+   `ailang check`; existing `decide` tests still green (default off).
+4. **WI-4 · Scenarios + in-module tests.** Retarget scenario #1; add the two positive scenarios; route the
+   checkpoint *segment* through the output law while keeping `history_valid_transcript` (§5.4); rename the
+   in-module test and add its positive twin (§5.5). Gate: `phase_c_l1_scenarios PASS count=15` **and**
+   `make check_core`.
 5. **WI-5 · ADR-001 D7 amendment** (§2 text) + note the new helper surface (G2) and the no-escape
    terminal (G3). Gate: grep in §6 step 4.
 6. **WI-6 · Full gate.** `make check_core` green. (Optional: a live smoke — a session with
@@ -338,6 +415,11 @@ Done = all four green + the D7 amendment committed.
 - **Guard correctness rests on the would-relieve precondition, verified (§0).** Do not drop it for
   "simplicity" — the naive pressure-cleared guard spins in the system-prefix-heavy case. The
   `checkpoint_terminates_not_spins` scenario is the regression lock.
+- **`step_budget` is NOT a backstop against a checkpoint spin.** The handler keeps `step_idx: st.step_idx`
+  (`session.ail:1352`) — a checkpoint does not advance the step counter, so a mis-guarded checkpoint loop
+  would never hit `step_budget` and would hang, not fail. `checkpoint_would_relieve` is therefore the
+  *sole* termination guarantee, not merely an optimization. (This is also why the gate sits *after* the
+  budget/cost `Fail` checks but is itself budget-independent.)
 - **One law, still.** Checkpoint output validation goes through
   `motoko_ext_conformance/invariants.validate_compactor_output` (WI-4, G1). If a second validator appears,
   stop — that is the drift Plan 1 existed to prevent.
