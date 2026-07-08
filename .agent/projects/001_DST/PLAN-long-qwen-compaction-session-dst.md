@@ -9,6 +9,22 @@ Live calibration source: OpenRouter model page `https://openrouter.ai/qwen/qwen3
 
 ---
 
+## TL;DR
+
+Implement ADR-004 by adding a Qwen3.6 live calibration profile and catalog entry, then building an
+offline deterministic long-session DST that uses the same Qwen runtime label with a small
+`MOTOKO_MODELS_FILE` fixture. The standing test drives `Session.run_v2_session_traced` directly with a
+custom marker-routed `Ported(Ports)` provider, prompt-shape-routed fake `compaction_ai` summarizer,
+and deterministic large tool results through the production `on_tool_handle` path.
+
+The fast gate oracle is structural, not model prose: count at least three in-memory
+`compaction_ai` `TraceStageApplied` records, assert zero `TraceStageRejected`, require
+`ProviderCallPrepared` as seal acceptance followed by `ProviderResult` as scripted dispatch success,
+and prove replay determinism over a bounded normalized trace projection. Payload-shape and cache-reuse
+claims live in direct `compaction_ai` scenarios using `validate_compactor_output` and same-segment
+artifact replay. Live OpenRouter/Qwen is opt-in calibration evidence only and must stay out of
+`make compaction_dst`.
+
 ## Goal
 
 Land ADR-004 as a deterministic, offline, Qwen-labeled long-session DST plus direct `compaction_ai`
