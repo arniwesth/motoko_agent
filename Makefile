@@ -60,6 +60,7 @@ phase_c_l1: compaction_dst
 compaction_dst:
 	ailang run --caps IO --entry main scripts/compaction_policy_dst.ail
 	ailang run --caps IO,Env,FS --entry main scripts/compaction_catalog_dst.ail
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --entry main scripts/runtime_status_tool_dst.ail
 	MOTOKO_MODELS_FILE=scripts/fixtures/qwen36-small-model-catalog.json \
 	  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --entry main \
 	  scripts/long_qwen_compaction_dst.ail

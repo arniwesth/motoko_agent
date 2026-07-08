@@ -99,8 +99,11 @@ import src/core/phase_vocab (
   ToolPlanEntry,
   LedgerTrace,
   LedgerRecord,
+  CompactionStageRecord,
   DecisionRecord,
   WireRecord,
+  TraceStageApplied,
+  TraceStageRejected,
   empty_ledger_trace,
   ledger_append,
   apply_state_delta,
@@ -125,7 +128,7 @@ import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
-import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries, ToolDispatchDone, ToolDispatchPending)
+import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
 import src/core/ports (ApprovalAllowed, ApprovalDenied, Ports)
 
 type SessionPolicy = {
@@ -339,8 +342,122 @@ type C2LoopState = {
   trace: LedgerTrace
 }
 
+type RuntimeStatusCounts = {
+  provider_calls_started: int,
+  provider_calls_completed: int,
+  stage_applied_total: int,
+  stage_rejected_total: int,
+  compaction_ai_applied: int
+}
+
 pure func zero_totals() -> RuntimeLoopTotals {
   { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0 }
+}
+
+pure func zero_runtime_status_counts() -> RuntimeStatusCounts {
+  {
+    provider_calls_started: 0,
+    provider_calls_completed: 0,
+    stage_applied_total: 0,
+    stage_rejected_total: 0,
+    compaction_ai_applied: 0
+  }
+}
+
+pure func runtime_status_counts_rec(records: [LedgerRecord], counts: RuntimeStatusCounts) -> RuntimeStatusCounts {
+  match records {
+    [] => counts,
+    r :: rest => {
+      let next = match r {
+        WireRecord(event) => match event {
+          ProviderCallPrepared(_) => {
+            provider_calls_started: counts.provider_calls_started + 1,
+            provider_calls_completed: counts.provider_calls_completed,
+            stage_applied_total: counts.stage_applied_total,
+            stage_rejected_total: counts.stage_rejected_total,
+            compaction_ai_applied: counts.compaction_ai_applied
+          },
+          ProviderResult(_) => {
+            provider_calls_started: counts.provider_calls_started,
+            provider_calls_completed: counts.provider_calls_completed + 1,
+            stage_applied_total: counts.stage_applied_total,
+            stage_rejected_total: counts.stage_rejected_total,
+            compaction_ai_applied: counts.compaction_ai_applied
+          },
+          _ => counts
+        },
+        CompactionStageRecord(stage) => match stage.outcome {
+          TraceStageApplied(_) => {
+            provider_calls_started: counts.provider_calls_started,
+            provider_calls_completed: counts.provider_calls_completed,
+            stage_applied_total: counts.stage_applied_total + 1,
+            stage_rejected_total: counts.stage_rejected_total,
+            compaction_ai_applied: counts.compaction_ai_applied + (if stage.ext_id == "compaction_ai" then 1 else 0)
+          },
+          TraceStageRejected(_) => {
+            provider_calls_started: counts.provider_calls_started,
+            provider_calls_completed: counts.provider_calls_completed,
+            stage_applied_total: counts.stage_applied_total,
+            stage_rejected_total: counts.stage_rejected_total + 1,
+            compaction_ai_applied: counts.compaction_ai_applied
+          },
+          _ => counts
+        },
+        _ => counts
+      };
+      runtime_status_counts_rec(rest, next)
+    }
+  }
+}
+
+pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
+  runtime_status_counts_rec(trace.records, zero_runtime_status_counts())
+}
+
+pure func runtime_status_json(
+  st: C2LoopState,
+  policy: SessionPolicy,
+  tool_step_idx: int
+) -> Json {
+  let counts = runtime_status_counts(st.trace);
+  let context_msgs = c2_pending_context(st);
+  let split = split_for_compaction(context_msgs);
+  let pinned = split.pinned;
+  jo([
+    kv("tool", js("MotokoRuntimeStatus")),
+    kv("current_step", jnum(_int_to_float(tool_step_idx))),
+    kv("provider_calls_started", jnum(_int_to_float(counts.provider_calls_started))),
+    kv("provider_calls_completed", jnum(_int_to_float(counts.provider_calls_completed))),
+    kv("steps_executed_so_far", jnum(_int_to_float(counts.provider_calls_completed))),
+    kv("step_budget", jnum(_int_to_float(policy.step.step_budget))),
+    kv("finish_reason_so_far", js(st.last_finish_reason)),
+    kv("compaction", jo([
+      kv("stage_applied_total", jnum(_int_to_float(counts.stage_applied_total))),
+      kv("stage_rejected_total", jnum(_int_to_float(counts.stage_rejected_total))),
+      kv("compaction_ai_applied", jnum(_int_to_float(counts.compaction_ai_applied)))
+    ])),
+    kv("system_prefix", jo([
+      kv("count", jnum(_int_to_float(count_system_prefix(pinned)))),
+      kv("chars", jnum(_int_to_float(system_prefix_chars(pinned)))),
+      kv("digest", js(system_prefix_digest_for(pinned)))
+    ])),
+    kv("usage", jo([
+      kv("input_tokens", jnum(_int_to_float(st.totals.input_tokens))),
+      kv("output_tokens", jnum(_int_to_float(st.totals.output_tokens))),
+      kv("cache_read_input_tokens", jnum(_int_to_float(st.totals.cache_read))),
+      kv("cache_creation_input_tokens", jnum(_int_to_float(st.totals.cache_creation))),
+      kv("total_cost_millicents", jnum(_int_to_float(st.totals.cost_millicents)))
+    ]))
+  ])
+}
+
+pure func runtime_status_tool_message(call: ToolCall, content: string) -> Option[Message] {
+  if call.name == "MotokoRuntimeStatus" then Some({
+    role: "tool",
+    content: content,
+    tool_calls: [],
+    tool_call_id: call.id
+  }) else None
 }
 
 pure func c2_decision_name(d: StepDecision) -> string {
@@ -1421,7 +1538,9 @@ func c2_loop(
               payload: ja(tool_calls_to_envelope_jsons(calls))
             }))
           else ();
-          match dispatch_tool_entries(rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event)) {
+          let runtime_status_content = encode(runtime_status_json(st, policy, tool_step_idx));
+          let runtime_builtin = \call. runtime_status_tool_message(call, runtime_status_content);
+          match dispatch_tool_entries_with_builtin(rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event), runtime_builtin) {
             ToolDispatchDone(tool_msgs) =>
               c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, tool_step_idx, stream_id, tool_msgs),
             ToolDispatchPending(pending) => {

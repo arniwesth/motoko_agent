@@ -296,46 +296,67 @@ export func dispatch_tool_entries(
   accumulated: [Message],
   emit: (LedgerEvent) -> () ! {IO, Trace}
 ) -> ToolDispatchOutcome ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+  dispatch_tool_entries_with_builtin(rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, emit, \_ . None)
+}
+
+export func dispatch_tool_entries_with_builtin(
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  entries: [ToolPlanEntry],
+  workdir: string,
+  step_idx: int,
+  stream_id: string,
+  ohmy_pi: bool,
+  accumulated: [Message],
+  emit: (LedgerEvent) -> () ! {IO, Trace},
+  builtin: (ToolCall) -> Option[Message]
+) -> ToolDispatchOutcome ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
   match entries {
     [] => ToolDispatchDone(accumulated),
     entry :: rest => {
       let call = entry.call;
-      let envelope = tool_call_to_envelope(call);
-      let policy = dispatch_tool_policy(rt, ctx, envelope);
-      match policy {
-        Deny(reason) => {
-          let _ = emit(NativeToolDenied({
-            step: step_idx,
-            stream_id: stream_id,
-            tool: call.name,
-            id: call.id,
-            reason: reason
-          }));
-          let denial_msg = denial_message(call, reason);
-          dispatch_tool_entries(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emit)
-        },
-        Pending(reason, default) => {
-          let _ = emit(ToolPending({
-            step: step_idx,
-            stream_id: stream_id,
-            tool: call.name,
-            id: call.id,
-            reason: reason
-          }));
-          ToolDispatchPending({
-            request: {
-              call: call,
-              default_allow: policy_default_allow(default),
-              reason: reason,
-              stream_id: stream_id,
-              remaining: rest
+      match builtin(call) {
+        Some(msg) =>
+          dispatch_tool_entries_with_builtin(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emit, builtin),
+        None => {
+          let envelope = tool_call_to_envelope(call);
+          let policy = dispatch_tool_policy(rt, ctx, envelope);
+          match policy {
+            Deny(reason) => {
+              let _ = emit(NativeToolDenied({
+                step: step_idx,
+                stream_id: stream_id,
+                tool: call.name,
+                id: call.id,
+                reason: reason
+              }));
+              let denial_msg = denial_message(call, reason);
+              dispatch_tool_entries_with_builtin(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emit, builtin)
             },
-            accumulated: accumulated
-          })
-        },
-        _ => {
-          let msg = execute_allowed_tool_call(rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, emit);
-          dispatch_tool_entries(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emit)
+            Pending(reason, default) => {
+              let _ = emit(ToolPending({
+                step: step_idx,
+                stream_id: stream_id,
+                tool: call.name,
+                id: call.id,
+                reason: reason
+              }));
+              ToolDispatchPending({
+                request: {
+                  call: call,
+                  default_allow: policy_default_allow(default),
+                  reason: reason,
+                  stream_id: stream_id,
+                  remaining: rest
+                },
+                accumulated: accumulated
+              })
+            },
+            _ => {
+              let msg = execute_allowed_tool_call(rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, emit);
+              dispatch_tool_entries_with_builtin(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emit, builtin)
+            }
+          }
         }
       }
     }
