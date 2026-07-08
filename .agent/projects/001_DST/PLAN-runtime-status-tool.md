@@ -68,7 +68,8 @@ Preferred shape:
 
 - Add a `RuntimeStatusSnapshot` record type in `src/core/session.ail` or a small new helper module.
 - Build the snapshot in the `RunTools(plan)` arm before dispatching tool entries.
-- Teach the tool-dispatch path to intercept `MotokoRuntimeStatus` and return a tool message directly.
+- Teach the tool-dispatch path to intercept `MotokoRuntimeStatus` and return a tool message directly,
+  while preserving left-to-right tool-result order.
 
 Avoid threading hidden mutable state through `Ported(Ports)`.
 
@@ -78,9 +79,9 @@ Do not inject per-step status into the system prompt or pinned prefix.
 
 The status JSON may include:
 
-- `system_prefix_digest`
-- `system_prefix_count`
-- `system_prefix_chars`
+- `system_prefix.digest`
+- `system_prefix.count`
+- `system_prefix.chars`
 
 These values should be computed with the same functions already used by `ProviderCallPrepared`.
 
@@ -97,18 +98,22 @@ The runtime status should distinguish at least:
 The exact field names can be simpler if the first implementation only needs total applied/rejected,
 but tests should cover the `compaction_ai` case because it is the live calibration target.
 
+Use `C2LoopState.trace` as the source of truth. In the `RunTools(plan)` arm, `st.trace` already
+contains the provider call that emitted the tool calls, including its `CompactionStageRecord`s and
+`ProviderResult`. Do not reconstruct counts from JSONL, shell logs, or a separate mutable counter.
+
 ### D5. Tool answer is exact at the moment it is called
 
 If the model calls `MotokoRuntimeStatus` during tool execution for provider step `N`, the tool should
 return an unambiguous convention:
 
-- `current_step`: `N`
-- `provider_calls_started`: number of provider calls prepared so far
-- `steps_executed_so_far`: provider calls completed before the current tool batch, or the same as
-  `provider_calls_started` if that is easier to explain and test
+- `current_step`: the provider step whose tool calls are currently being handled
+- `provider_calls_started`: count of `ProviderCallPrepared` records in `st.trace`
+- `provider_calls_completed`: count of `ProviderResult` records in `st.trace`
+- `steps_executed_so_far`: alias of `provider_calls_completed`
 
-Pick one convention and document it in the tool description and tests. Prefer including both
-`current_step` and `provider_calls_started` to avoid off-by-one ambiguity.
+Document this convention in the tool description and tests. It avoids deriving counts from arithmetic
+alone and makes retry/error behavior easier to audit.
 
 ## Proposed Tool Result Shape
 
@@ -119,6 +124,8 @@ Return a JSON object in the tool-role message content:
   "tool": "MotokoRuntimeStatus",
   "current_step": 77,
   "provider_calls_started": 78,
+  "provider_calls_completed": 78,
+  "steps_executed_so_far": 78,
   "step_budget": 100,
   "finish_reason_so_far": "tool_calls",
   "compaction": {
@@ -177,6 +184,9 @@ Expected current facts:
 - `C2LoopState.step_idx` is authoritative loop state.
 - `RunSummary.steps_executed` receives `step_idx`.
 - `ProviderCallPrepared.step` is emitted before provider dispatch.
+- `ProviderResult` is emitted from `phase_from_result` after a provider call succeeds.
+- `RunTools(plan)` receives `st.trace` that already includes the previous provider call's stage and
+  result records.
 - Native tools are advertised by `src/core/tool_catalog.ail`.
 - Extension tool handling does not currently have enough state for exact runtime status.
 
@@ -216,10 +226,13 @@ Minimum helper responsibilities:
 - Build JSON for `MotokoRuntimeStatus`.
 - Count applied/rejected compaction records from `C2LoopState.trace`.
 - Count `compaction_ai` applied records separately.
+- Count `ProviderCallPrepared` and `ProviderResult` records from `C2LoopState.trace`.
 - Include cumulative totals from `RuntimeLoopTotals`.
 - Include:
   - `current_step`
   - `provider_calls_started`
+  - `provider_calls_completed`
+  - `steps_executed_so_far`
   - `step_budget`
   - `last_finish_reason`
   - `system_prefix` status
@@ -230,8 +243,12 @@ Important implementation detail:
   step that produced tool calls.
 - Use a documented convention:
   - `current_step = tool_step_idx`
-  - `provider_calls_started = tool_step_idx + 1`
-  - `steps_executed_so_far = tool_step_idx + 1`
+  - `provider_calls_started = count ProviderCallPrepared records in st.trace`
+  - `provider_calls_completed = count ProviderResult records in st.trace`
+  - `steps_executed_so_far = provider_calls_completed`
+- Compute `system_prefix` from the same pinned-prefix logic as provider preparation. In `RunTools`,
+  use the current pending provider context (`c2_pending_context(st)`) and `split_for_compaction(...).pinned`;
+  the digest must match the most recent `ProviderCallPrepared.system_prefix_digest`.
 
 If this convention is wrong after source re-grounding, update both the implementation and tool
 description together.
@@ -240,10 +257,11 @@ description together.
 
 Preferred implementation:
 
-- In the `RunTools(plan)` arm, split `plan.entries` into runtime-status calls and all other calls.
-- For each runtime-status call, append a direct tool-role message with the JSON status payload and
-  matching `tool_call_id`.
-- Continue dispatching any remaining calls through `dispatch_tool_entries`.
+- In or below the `RunTools(plan)` arm, add a status-aware dispatcher that walks `plan.entries`
+  left-to-right.
+- When an entry's tool name is `MotokoRuntimeStatus`, append a direct tool-role message with the JSON
+  status payload and matching `tool_call_id`.
+- For non-status entries, delegate through the existing policy/handle/native execution path.
 
 This keeps the special tool close to the `C2LoopState` snapshot and avoids expanding every extension
 or native dispatch function with runtime-state parameters.
@@ -252,13 +270,17 @@ Acceptance details:
 
 - Preserve ordering of tool results relative to tool calls.
 - Preserve `tool_call_id`.
-- Emit a normal handled-tool style ledger event if an existing event fits, or add a small event only
-  if needed for tests/debugging.
+- Preserve `accumulated_tool_msgs` if a later non-status tool enters `Pending` approval. A status
+  result produced before the pending tool must still be present when the batch resumes.
+- Preserve existing `NativeToolCalls` / `NativeToolResults` batch emission shape.
+- Do not add a new ledger event unless tests or UI need it. Avoid reusing misleading events such as
+  `ExtToolHandled` for a native runtime introspection result.
 - Do not require approval for this tool.
 - Do not call `BashExec`, filesystem, network, or logs.
 
-If preserving mixed-call ordering becomes awkward in `RunTools(plan)`, add a small helper that walks
-entries left-to-right and delegates non-status runs in batches. Do not reorder model tool results.
+Do not split status calls and non-status calls into separate lists unless the split helper explicitly
+reconstructs original order and pending-approval accumulation. A naive split will reorder tool-role
+messages in mixed batches.
 
 ### WI-4: Teach the model to use the tool without per-step prompt mutation
 
@@ -287,8 +309,11 @@ Add focused offline tests. Suggested coverage:
    - runtime returns a tool result with:
      - `current_step`
      - `provider_calls_started`
+     - `provider_calls_completed`
+     - `steps_executed_so_far`
      - `step_budget`
      - valid `system_prefix.digest`
+     - `tool_call_id` matching the model-emitted call
    - scripted provider then answers using the tool result
 
 3. A compaction-aware deterministic scenario, preferably extending
@@ -297,6 +322,12 @@ Add focused offline tests. Suggested coverage:
    - assert the returned JSON has `compaction.compaction_ai_applied >= 1`
    - assert `compaction.stage_rejected_total == 0`
    - assert `system_prefix.digest` matches the provider-call prepared digest projection
+
+4. A mixed-batch ordering/pending scenario:
+   - scripted provider emits `[MotokoRuntimeStatus, BashExec]` or another non-status tool
+   - assert the status tool result appears before the second tool result
+   - if the second tool can go pending, assert the status result survives in `accumulated_tool_msgs`
+     after approval resumes
 
 Do not use OpenRouter or live Qwen in deterministic tests.
 
@@ -345,6 +376,8 @@ Expected behavior:
 - `MotokoRuntimeStatus` is advertised as a native tool.
 - The tool returns exact runtime state from `C2LoopState`, not from model memory.
 - The tool result preserves `tool_call_id`.
+- Mixed tool batches preserve tool result order.
+- Pending approval after a status call preserves the already-produced status result.
 - Tool handling does not mutate the system prompt or pinned prefix.
 - The returned `system_prefix.digest` matches `ProviderCallPrepared.system_prefix_digest`.
 - Deterministic tests prove the model can call the tool and receive exact step count.
@@ -361,4 +394,3 @@ Expected behavior:
 - Overexposure: return counters and digests, not full prompt/payload contents.
 - Extension temptation: current extension hooks do not have enough state; do not force this into
   `ExtCtx` unless a broader runtime-state ABI change is intentionally planned.
-
