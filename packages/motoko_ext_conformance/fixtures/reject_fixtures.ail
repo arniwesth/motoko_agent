@@ -1,0 +1,122 @@
+module sunholo/motoko_ext_conformance/fixtures/reject_fixtures
+
+import std/json (jo)
+import std/option (None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  ExtCtx,
+  ExtensionHooks,
+  FinalizeDecision,
+  Msg,
+  NoDecision,
+  PassThrough,
+  PreStepDecision,
+  Compacted,
+  PromptPatch,
+  ResponseInterceptDecision,
+  NoIntercept,
+  ToolCallEnvelope,
+  ToolHandleDecision,
+  Delegate,
+  ToolPolicyDecision,
+  Allow
+)
+
+func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Allow
+}
+
+func delegate_tool(_ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Delegate
+}
+
+func no_intercept(_ctx: ExtCtx, _response: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoIntercept
+}
+
+func no_solver_decision(_ctx: ExtCtx, _candidate: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  NoDecision
+}
+
+func system_msg() -> Msg {
+  { role: "system", content: "bad injected system", tool_calls: [], tool_call_id: "" }
+}
+
+func assistant_summary(content: string) -> Msg {
+  { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func first_msg(msgs: [Msg]) -> Msg {
+  match msgs {
+    [] => assistant_summary("empty"),
+    m :: _ => m
+  }
+}
+
+func drop_first_tool_result(msgs: [Msg]) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" then rest
+      else m :: drop_first_tool_result(rest)
+  }
+}
+
+func prefix_pre_step(_ctx: ExtCtx, msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Compacted([system_msg()] ++ msgs, "reject fixture: system injection", jo([]))
+}
+
+func pair_pre_step(_ctx: ExtCtx, msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  Compacted(drop_first_tool_result(msgs), "reject fixture: severed tool pair", jo([]))
+}
+
+func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let summary = match ctx.ports.ai_step(ctx.model, msgs) {
+    Ok(content) => content,
+    Err(e) => "ERR ${e}"
+  };
+  Compacted([assistant_summary(summary), first_msg(msgs)], "reject fixture: no cache", jo([]))
+}
+
+func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+  {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: empty_prompt_patch,
+    on_budget_plan: empty_budget_patch,
+    on_pre_step: pre_step,
+    on_tool_policy: allow_policy,
+    on_tool_handle: delegate_tool,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver_decision
+  }
+}
+
+export func reject_prefix_hooks() -> ExtensionHooks {
+  hooks("reject_prefix", prefix_pre_step)
+}
+
+export func reject_pair_hooks() -> ExtensionHooks {
+  hooks("reject_pair", pair_pre_step)
+}
+
+export func reject_nocache_hooks() -> ExtensionHooks {
+  hooks("reject_nocache", nocache_pre_step)
+}

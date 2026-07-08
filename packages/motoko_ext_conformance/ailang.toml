@@ -1,0 +1,18 @@
+[package]
+name = "sunholo/motoko_ext_conformance"
+version = "3.0.0"
+edition = "1"
+ailang = ">=0.26.0"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_conformance/invariants",
+  "sunholo/motoko_ext_conformance/harness",
+  "sunholo/motoko_ext_conformance/fixtures/reject_fixtures",
+]
+
+[effects]
+max = ["AI", "IO", "Process", "FS", "Env", "Net", "SharedMem", "Clock", "Stream"]

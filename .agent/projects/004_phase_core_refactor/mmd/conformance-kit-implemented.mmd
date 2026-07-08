@@ -1,0 +1,105 @@
+flowchart TD
+  %% Plan 1 · conformance kit — IMPLEMENTED end-state.
+  %% Grounding: tools/code-graph/extract.sh --profile=all refreshed 2026-07-08T07:05:10Z.
+  %% code-graph status: profile=all, modules=166, funcs=1675, imports=199, source_lines=48165,
+  %% stale=false, source_stale=false, coverage ok=145 partial=3 failed=18.
+  %% Module existence/function chunks are from modules/source_chunks. Package import edges that
+  %% use pkg/sunholo/motoko_ext_conformance/... are source-index-confirmed because imports.csv
+  %% does not currently resolve those package namespace strings back to filesystem slugs.
+
+  subgraph GATE["make conformance — implemented registry/conformance gate"]
+    mk["Makefile target conformance<br/>checks package libs with AILANG_RELAX_MODULES=1<br/>checks root scripts strict<br/>tests invariants<br/>runs selftest + registry probe with caps IO,Env,FS"]
+  end
+
+  subgraph CORE["Core consumers edited by Decision A"]
+    runtime["src/core/ext/runtime.ail<br/>imports validate_compactor_output at line 27<br/>fold_pre_step_chain_rec calls gate at line 170"]
+    phasec["scripts/phase_c_l1_scenarios.ail<br/>imports validate_compactor_output at line 35<br/>invalid compaction scenario uses it at line 266"]
+    phasevocab["src/core/phase_vocab.ail<br/>validator cluster removed<br/>remaining vocab tests: 23 passing"]
+    rootdep["ailang.toml<br/>path dep sunholo/motoko_ext_conformance<br/>not present in root [extensions]"]
+  end
+
+  subgraph PKG["packages/motoko_ext_conformance — ABI-only package, not a registered extension"]
+    inv["invariants.ail<br/>module sunholo/motoko_ext_conformance/invariants<br/>pure ABI-Msg law<br/>no_system_in_output · pairing_preserved · ids_preserved<br/>validate_compactor_output lines 133-135<br/>6 tests incl. drop-complete-pair + equivalence"]
+    harn["harness.ail<br/>module sunholo/motoko_ext_conformance/harness<br/>main-less library<br/>run_scenario · run_conformance lines 321-324<br/>4 scenarios · fake ports · local ctx defaults"]
+    fixes["fixtures/reject_fixtures.ail<br/>module sunholo/motoko_ext_conformance/fixtures/reject_fixtures<br/>reject_prefix_hooks line 112<br/>reject_pair_hooks line 116<br/>reject_nocache_hooks line 120"]
+  end
+
+  subgraph ROOTS["Root scripts added by implementation"]
+    self["scripts/conformance_selftest.ail<br/>imports harness + reject fixtures<br/>imports compaction_ai/register + structural/register<br/>asserts fail-then-pass by invariant name<br/>prints conformance self-test PASS"]
+    probe["scripts/conformance_registry_probe.ail<br/>imports harness.run_conformance line 5<br/>imports parse_core_ext_order line 7<br/>folds run_conformance in run_hooks lines 13-21"]
+  end
+
+  subgraph REG["Existing registry and frozen accept packages"]
+    registry["src/core/ext/registry_generated.ail<br/>export parse_core_ext_order<br/>imports all registered extension registers"]
+    cfg["src/core/config.ail<br/>load_runtime_config"]
+    aireg["motoko_ext_compaction_ai/register<br/>accept fixture 0.3.0"]
+    streg["motoko_ext_compaction_structural/register<br/>accept fixture 1.1.0"]
+    noncomp["other registry packages<br/>test_dummy · omnigraph · context_mode · mcp · exa_search<br/>ailang_docs · compose · a2a · decision_framework · microrag · scratchpad<br/>pass conformance vacuously"]
+  end
+
+  abi[["motoko-ext-abi @ 3.0<br/>Msg · ToolCall · ExtCtx{ports,artifacts,telemetry}<br/>ExtensionHooks · PreStepDecision · Compacted(msgs,note,artifacts)"]]
+
+  note["code-graph grounding<br/>modules table records 5 conformance modules/scripts<br/>source_lines confirms pkg imports in runtime, phase_c_l1, selftest, probe, harness<br/>source_chunks confirms validate_compactor_output and run_conformance"]
+
+  %% implemented gates
+  mk --> inv
+  mk --> harn
+  mk --> self
+  mk --> probe
+
+  %% source-index-confirmed package import edges
+  runtime -->|"pkg import validate_compactor_output"| inv
+  phasec -->|"pkg import validate_compactor_output"| inv
+  harn -->|"pkg import invariants"| inv
+  self -->|"pkg import harness"| harn
+  self -->|"pkg import reject fixtures"| fixes
+  probe -->|"pkg import run_conformance"| harn
+
+  %% graph-confirmed root/core import edges
+  probe -->|"imports parse_core_ext_order"| registry
+  probe -->|"imports load_runtime_config"| cfg
+  runtime -->|"imports parse_core_ext_order"| registry
+
+  %% root script accept fixtures
+  self --> aireg
+  self --> streg
+
+  %% registry hydration path
+  registry --> aireg
+  registry --> streg
+  registry --> noncomp
+  probe -->|"registry.hooks"| noncomp
+  probe -->|"registry.hooks"| aireg
+  probe -->|"registry.hooks"| streg
+
+  %% ABI-only bottom
+  inv --> abi
+  harn --> abi
+  fixes --> abi
+  aireg --> abi
+  streg --> abi
+  noncomp --> abi
+
+  %% extraction marker
+  phasevocab -.->|"law extracted out"| inv
+  rootdep -.->|"root path dep only"| PKG
+  note -.-> inv
+  note -.-> harn
+  note -.-> self
+  note -.-> probe
+
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef edited fill:#2f2145,stroke:#bb9af7,color:#e5d5fb,stroke-width:2px;
+  classDef existing fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef leaf fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2.5px;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef note fill:#332b16,stroke:#e0af68,color:#f8e3b0,stroke-dasharray: 4 3;
+
+  class inv,harn,fixes,self,probe new;
+  class runtime,phasec,phasevocab,rootdep edited;
+  class registry,cfg existing;
+  class aireg,streg,noncomp frozen;
+  class abi leaf;
+  class mk gate;
+  class note note;

@@ -230,69 +230,6 @@ export pure func payload_digest(msgs: [Message]) -> string {
   digest_messages(msgs)
 }
 
-pure func has_assistant_call(calls: [ToolCall], wanted_id: string) -> bool {
-  match calls {
-    [] => false,
-    c :: rest => if c.id == wanted_id then true else has_assistant_call(rest, wanted_id)
-  }
-}
-
-pure func has_assistant_call_id(msgs: [Msg], wanted_id: string) -> bool {
-  match msgs {
-    [] => false,
-    m :: rest =>
-      if m.role == "assistant" && has_assistant_call(m.tool_calls, wanted_id) then true
-      else has_assistant_call_id(rest, wanted_id)
-  }
-}
-
-pure func has_tool_result_id(msgs: [Msg], wanted_id: string) -> bool {
-  match msgs {
-    [] => false,
-    m :: rest =>
-      if m.role == "tool" && m.tool_call_id == wanted_id then true
-      else has_tool_result_id(rest, wanted_id)
-  }
-}
-
-pure func validate_output_calls(input: [Msg], output: [Msg], calls: [ToolCall]) -> Result[(), string] {
-  match calls {
-    [] => Ok(()),
-    c :: rest =>
-      if c.id == "" then Err("compactor output contains empty assistant tool_call id")
-      else if not (has_assistant_call_id(input, c.id) || has_tool_result_id(input, c.id)) then Err("compactor output invented assistant tool_call id ${c.id}")
-      else if has_tool_result_id(input, c.id) != has_tool_result_id(output, c.id) then Err("compactor output severed tool_result pair ${c.id}")
-      else validate_output_calls(input, output, rest)
-  }
-}
-
-pure func validate_compactor_output_rec(input: [Msg], all_output: [Msg], remaining: [Msg]) -> Result[(), string] {
-  match remaining {
-    [] => Ok(()),
-    m :: rest =>
-      if m.role == "system" then Err("compactor output contains system message")
-      else if m.role == "tool" && m.tool_call_id == "" then Err("compactor output contains tool message with empty tool_call_id")
-      else {
-        let call_check = validate_output_calls(input, all_output, m.tool_calls);
-        match call_check {
-          Err(e) => Err(e),
-          Ok(_) =>
-            if m.role == "tool" && not has_tool_result_id(input, m.tool_call_id) then
-              Err("compactor output invented tool_result id ${m.tool_call_id}")
-            else if m.role == "tool" && has_assistant_call_id(input, m.tool_call_id) != has_assistant_call_id(all_output, m.tool_call_id) then
-              Err("compactor output severed assistant tool_call pair ${m.tool_call_id}")
-            else if m.role == "assistant" then
-              validate_compactor_output_rec(input, all_output, rest)
-            else validate_compactor_output_rec(input, all_output, rest)
-        }
-      }
-  }
-}
-
-export pure func validate_compactor_output(input: [Msg], output: [Msg]) -> Result[(), string] {
-  validate_compactor_output_rec(input, output, output)
-}
-
 -- ============================================================================
 -- Checkpoint seam.
 -- ============================================================================
@@ -938,31 +875,6 @@ pure func test_seal_compacted_payload_rejects_empty_system_prompt() -> bool
         Err(_) => false
       };
     missing_rejected && present_empty_rejected && headless_allowed
-  }
-
-pure func test_validate_compactor_output_accepts_identity() -> bool
-  tests [((), true)]
-  {
-    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
-    result_ok(validate_compactor_output(input, input))
-  }
-
-pure func test_validate_compactor_output_accepts_orphan_identity() -> bool
-  tests [((), true)]
-  {
-    let input = [mk_tool_msg("orphan")];
-    result_ok(validate_compactor_output(input, input))
-  }
-
-pure func test_validate_compactor_output_rejects_bad_shapes() -> bool
-  tests [((), true)]
-  {
-    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
-    result_err(validate_compactor_output(input, [mk_plain_msg("system", "bad")]))
-      && result_err(validate_compactor_output(input, [{ role: "tool", content: "bad", tool_calls: [], tool_call_id: "" }]))
-      && result_err(validate_compactor_output(input, [mk_tool_msg("new-id")]))
-      && result_err(validate_compactor_output(input, [mk_msg_with_call("tc1")]))
-      && result_err(validate_compactor_output(input, [mk_tool_msg("tc1")]))
   }
 
 pure func test_checkpoint_preserves_system_prefix() -> bool
