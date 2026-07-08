@@ -152,8 +152,7 @@ number; the probe must fail. Revert the bad value.
 **Exact files.**
 
 - New: `scripts/fixtures/qwen36-small-model-catalog.json`
-- New or extended probe: prefer adding a scenario to the ADR-004 script from WI-3 if it already has
-  a harness; otherwise add `scripts/long_qwen_catalog_fixture_probe.ail`.
+- New: `scripts/long_qwen_catalog_fixture_probe.ail`
 
 **Implementation notes.**
 
@@ -170,11 +169,11 @@ number; the probe must fail. Revert the bad value.
   can cross pressure repeatedly without huge fixtures.
 - If tuning shows `pct >= 90` halves `keep_recent` too aggressively, prefer increasing the limit to
   `1600` or reducing per-turn tool output before changing the scenario's core invariants.
-- Add a probe that asserts both labels resolve as expected:
-  `catalog_context_limit_for("openrouter/qwen/qwen3.6-35b-a3b") == 1200` and, because
-  `context_usage.ail` strips `openrouter/`, optionally
-  `catalog_context_limit_for("qwen/qwen3.6-35b-a3b") == 1200` if the fixture also includes the stripped
-  key. If only one key is present, assert only the runtime label to avoid obscuring the contract.
+- Add a tiny probe script that asserts the runtime label resolves as expected:
+  `catalog_context_limit_for("openrouter/qwen/qwen3.6-35b-a3b") == 1200`.
+- Do not require a stripped-key assertion unless the fixture explicitly adds `"qwen/qwen3.6-35b-a3b"`.
+  `context_usage.ail` first checks the exact key and only strips `openrouter/` as a fallback, so the
+  runtime-label key is the one this fixture must prove.
 
 **Verification.**
 
@@ -186,7 +185,7 @@ MOTOKO_MODELS_FILE=scripts/fixtures/qwen36-small-model-catalog.json \
 **Teeth check.** Point `MOTOKO_MODELS_FILE` at a missing file or change the fixture value; the probe
 must fail with the actual resolved limit.
 
-**Rollback.** Delete the fixture and probe, or remove the probe scenario from the ADR-004 script.
+**Rollback.** Delete the fixture and probe.
 
 ## WI-3 — Traced Deterministic Harness
 
@@ -206,6 +205,10 @@ contract deterministic and offline.
 - Build `ExtRuntime` locally with hooks:
   `compaction_ai` registered under exact id `"compaction_ai"` first, then `compaction_structural`, plus
   a test tool extension that handles one tool name such as `LongResult`.
+- Keep `compaction_structural` in the deterministic chain unless tuning proves it is unnecessary.
+  `compaction_ai.split_body` deliberately keeps completed assistant/tool pairs in recent context, so
+  `compaction_ai` may apply while leaving large paired tool results in the provider payload; the
+  structural compactor is the backstop that can elide old tool-result content before the send gate.
 - For deterministic `compaction_ai` config in the script, prefer direct hook construction around
   `compact_with_ai` with config `{ model: "openrouter/qwen/qwen3.6-35b-a3b", threshold_pct: 60,
   keep_recent: 8 }` instead of relying on `MOTOKO_PROFILE_DIR`. This keeps the standing DST local to
@@ -218,8 +221,9 @@ contract deterministic and offline.
   - Return a tool-call step until the final marker, then return a terminal prose step.
   - Emit deterministic chunks or no chunks; keep the normalized projection stable either way.
   - `clock_now`: fixed integer.
-  - `env_get`: fixed values, except allow `MOTOKO_MODELS_FILE` to be read by the actual environment
-    through `catalog_context_limit_for`.
+  - `env_get`: fixed values. Note that `catalog_context_limit_for` reads `MOTOKO_MODELS_FILE` through
+    `std/env`, not through `Ports.env_get`, so the test catalog override is controlled by the shell
+    environment on the `ailang run` command.
   - `proc_exec`: deterministic inert value; the production tool path should be through `on_tool_handle`,
     not process execution.
 - The test `on_tool_handle` extension must return `Handled(ToolResultEnvelope)` with the incoming
@@ -266,6 +270,13 @@ sealed payloads after each application, and replays deterministically.
   - Tool handler returns 1-2 KB deterministic content containing `long-qwen-step-(N+1)`.
   - Use enough tool turns to re-grow after each compaction. Start with 10-12 tool turns and tune down
     only after `>= 3` applications is stable.
+  - Keep the marker needed for the next agent step in the retained tail. `compaction_ai.split_body`
+    keeps completed assistant/tool pairs in recent context to preserve tool-call/result pairing, so the
+    marker should live in the latest tool result or latest tool-call id, not only in an old user/plain
+    message that may be summarized.
+  - If the chain hits `CompactionExhausted`, first reduce per-turn tool-result size or increase the
+    small fixture limit, then consider lowering `keep_recent`. Do not remove the paired-tool shape just
+    to make the count pass; the scenario is meant to exercise realistic tool-call/result traffic.
   - End with a final prose step so `result` is `Ok`.
 - Invariants:
   - `result` is `Ok`.
