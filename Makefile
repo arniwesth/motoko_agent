@@ -1,4 +1,6 @@
 PROFILE ?= $(if $(MOTOKO_CONFIG),$(MOTOKO_CONFIG),default)
+QWEN36_COMPACTION_LIVE_TASK ?= Run a long tool-heavy compaction calibration task that repeatedly grows conversation history and continues after compaction.
+QWEN36_COMPACTION_HEAVY_TASK ?= Run a compaction stress calibration. Do not stop early. Perform at least 45 sequential tool-heavy phases. In each phase, read several large source files or documentation files in full, run broad searches over the repository, and keep a running phase log in your response. Prefer files under src/, packages/, .agent/projects/, scripts/, and design_docs/. After every 5 phases, restate the important accumulated findings so far. Continue until you have made at least 45 model turns or until the runtime compacts. If context pressure or compaction occurs, continue the task and explicitly report that you continued after it.
 
 codex:
 	clear
@@ -58,6 +60,9 @@ phase_c_l1: compaction_dst
 compaction_dst:
 	ailang run --caps IO --entry main scripts/compaction_policy_dst.ail
 	ailang run --caps IO,Env,FS --entry main scripts/compaction_catalog_dst.ail
+	MOTOKO_MODELS_FILE=scripts/fixtures/qwen36-small-model-catalog.json \
+	  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --entry main \
+	  scripts/long_qwen_compaction_dst.ail
 
 conformance:
 	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/invariants.ail
@@ -146,6 +151,20 @@ build: sync_packages check_core build_tui
 run: build
 	clear
 	MOTOKO_CONFIG=$(PROFILE) ./scripts/run-agent.sh
+
+# Optional live calibration only; not part of compaction_dst or CI.
+# Requires OPENROUTER_API_KEY and uses Qwen for both agent and compaction_ai.
+live_qwen36_compaction_calibration: build
+	clear
+	MOTOKO_CONFIG=qwen36-compaction-live \
+	  TASK="$(QWEN36_COMPACTION_LIVE_TASK)" \
+	  ./scripts/run-agent.sh
+
+live_qwen36_compaction_heavy: build
+	clear
+	MOTOKO_CONFIG=qwen36-compaction-live \
+	  TASK="$(QWEN36_COMPACTION_HEAVY_TASK)" \
+	  ./scripts/run-agent.sh
 
 # Install all prerequisites (Go, Bun, Node, context-mode, AILANG, TUI deps)
 install:

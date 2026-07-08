@@ -1,0 +1,14 @@
+module scripts/long_qwen_catalog_fixture_probe
+
+import std/io (println, exit)
+import src/core/context_usage (catalog_context_limit_for)
+
+export func main() -> () ! {IO, Env, FS} {
+  let model = "openrouter/qwen/qwen3.6-35b-a3b";
+  let n = catalog_context_limit_for(model);
+  if n == 1200 then println("scenario=compaction.long_qwen_catalog_fixture ok")
+  else {
+    let _ = println("scenario=compaction.long_qwen_catalog_fixture invariant=qwen fixture maps to 1200 actual=${show(n)}");
+    exit(1)
+  }
+}
