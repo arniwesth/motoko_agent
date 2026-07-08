@@ -6,7 +6,7 @@ import std/json (Json, jo, kv, js)
 import std/list (length)
 import std/option (None)
 import std/result (Result, Ok, Err)
-import std/string (contains, length as string_length)
+import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
 import src/core/ports (Ports, ports_shape_probe)
@@ -347,7 +347,7 @@ func record_projection(r: LedgerRecord) -> string {
 
 func event_projection(ev: LedgerEvent) -> string {
   match ev {
-    ProviderCallPrepared(i) => "prepared step=${show(i.step)} model=${i.model} msg=${show(i.msg_count)} sys=${show(i.system_prefix_count)} chars=${show(i.system_prefix_chars)} digest=${i.payload_digest}",
+    ProviderCallPrepared(i) => "prepared step=${show(i.step)} model=${i.model} msg=${show(i.msg_count)} sys=${show(i.system_prefix_count)} chars=${show(i.system_prefix_chars)} sys_digest=${i.system_prefix_digest} digest=${i.payload_digest}",
     ProviderResult(i) => "provider_result step=${show(i.step)} finish=${i.finish_reason} tools=${show(i.tool_calls)}",
     CompactionExhausted(info) => "compaction_exhausted step=${show(info.step)}",
     ErrorEvent(info) => "error code=${info.code}",
@@ -429,10 +429,37 @@ func prepared_fields_ok(records: [LedgerRecord]) -> bool {
     r :: rest => {
       let here = match r {
         WireRecord(ProviderCallPrepared(info)) =>
-          info.model == qwen_model && info.system_prefix_count >= 1 && info.system_prefix_chars > 0 && info.payload_digest != "",
+          info.model == qwen_model && info.system_prefix_count >= 1 && info.system_prefix_chars > 0 && digest_shape_ok(info.system_prefix_digest) && info.payload_digest != "",
         _ => true
       };
       here && prepared_fields_ok(rest)
+    }
+  }
+}
+
+func digest_shape_ok(d: string) -> bool {
+  string_length(d) == 71 && substring(d, 0, 7) == "sha256:"
+}
+
+func first_system_prefix_digest(records: [LedgerRecord]) -> string {
+  match records {
+    [] => "",
+    r :: rest => match r {
+      WireRecord(ProviderCallPrepared(info)) => info.system_prefix_digest,
+      _ => first_system_prefix_digest(rest)
+    }
+  }
+}
+
+func system_prefix_digest_stable(records: [LedgerRecord], expected: string) -> bool {
+  match records {
+    [] => expected != "",
+    r :: rest => {
+      let here = match r {
+        WireRecord(ProviderCallPrepared(info)) => info.system_prefix_digest == expected,
+        _ => true
+      };
+      here && system_prefix_digest_stable(rest, expected)
     }
   }
 }
@@ -501,6 +528,7 @@ func scenario_multiple_compactions() -> Result[(), ScenarioFailure] ! {AI, FS, P
       else if s.rejected != 0 then Err({ failed_invariant: "no TraceStageRejected records", trace: s.projection })
       else if has_exhausted_or_system_empty(records) then Err({ failed_invariant: "no compaction exhausted or SystemPromptEmpty", trace: s.projection })
       else if not prepared_fields_ok(records) then Err({ failed_invariant: "prepared call has Qwen model, system prefix, and digest", trace: s.projection })
+      else if not system_prefix_digest_stable(records, first_system_prefix_digest(records)) then Err({ failed_invariant: "system prefix digest is stable across provider calls", trace: s.projection })
       else if not applied_stages_have_dispatch_success(records, records) then Err({ failed_invariant: "each applied compaction_ai stage has same-step ProviderCallPrepared then ProviderResult", trace: s.projection })
       else if s.prepared < s.applied then Err({ failed_invariant: "each compaction reaches provider_call_prepared", trace: s.projection })
       else if s.provider_results < s.prepared then Err({ failed_invariant: "each prepared provider call has ProviderResult", trace: s.projection })

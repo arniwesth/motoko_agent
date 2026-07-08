@@ -60,6 +60,7 @@ import src/core/phase_vocab (
   LedgerEvent,
   to_schema_v1_kvs,
   payload_digest,
+  system_prefix_digest_for,
   msgs_to_messages,
   split_for_compaction,
   segment_messages,
@@ -1484,6 +1485,7 @@ func c2_loop(
                 msg_count: List.length(compacted_msgs),
                 system_prefix_count: count_system_prefix(compacted_msgs),
                 system_prefix_chars: system_prefix_chars(compacted_msgs),
+                system_prefix_digest: system_prefix_digest_for(split.pinned),
                 payload_digest: payload_digest(compacted_msgs),
                 model: model
               });
