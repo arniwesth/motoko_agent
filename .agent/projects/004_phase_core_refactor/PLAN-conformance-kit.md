@@ -18,7 +18,7 @@ fixtures dir plus one core-CI probe:
   `validate_compactor_output` wrapper. **This file is the single source of the compactor-output
   law**: it is *extracted from* `src/core/phase_vocab.ail` and **core imports it back** (Decision
   A/B). Typed on **ABI `Msg`**, not core `Msg`, to keep the module graph acyclic.
-- **`harness.ail`** — test-only library. Scripted `ExtCtx` + fake ports; drives one package's
+- **`harness.ail`** — test-only library. Synthetic `ExtCtx` + pure fake ports; drives one package's
   `ExtensionHooks` through the four scenarios; on failure prints `scenario=<id>
   invariant=<name>` + a normalized JSONL trace, the same shape as the cousin harness
   `scripts/phase_c2_wiring_scenarios.ail`. **Package-agnostic** (never imports
@@ -114,17 +114,24 @@ registry hydration**."*
 **Resolution (freeze this):** `harness.ail` is a **package-agnostic library**. The
 package-under-test is supplied **by import**, not by name-string:
 
-- `harness.ail` exports `run_conformance(hooks: ExtensionHooks) -> int ! {IO,...}` (returns the
-  failure count; prints per-scenario verdicts) plus the scenario constructors.
+- `harness.ail` is a library with **no `main`**: it exports `run_conformance(hooks: ExtensionHooks)
+  -> int ! {IO,...}` (failure count; prints per-scenario verdicts) + `run_scenario` + scenario
+  constructors, and imports **only** ABI + `invariants`. It must not import fixtures or any compactor
+  package, or those would ride into every consumer's build.
 - **Extension CI** writes a 3-line entry in its *own* repo importing the kit + its own `register`:
   `main() = exit_nonzero_if(run_conformance(register_with_config(cfg)))`. No `registry_generated`,
   no other package — hydration-free, matching §6.1.
 - **The registry probe** (`scripts/conformance_registry_probe.ail`, core CI) is the *only* place
-  `getArgs()`/`registry_generated` appear; it resolves names → hooks via `resolve` and folds
-  `run_conformance` over the package list. Hydration is expected here (its gate class).
-- **The kit's own self-acceptance `main`** imports the in-kit reject fixtures + `compaction_ai`'s
-  and `compaction_structural`'s `register` directly (fixed import set, no arg) and asserts
-  fail-then-pass.
+  `registry_generated` appears; it resolves names → hooks via the **exported**
+  `parse_core_ext_order(csv, cfg) -> ExtRegistry` (registry_generated.ail:63 — note `resolve` at :26
+  is *not* exported, so it cannot be imported directly) and folds `run_conformance` over
+  `registry.hooks`. Hydration is expected here (its gate class).
+- **The kit's own self-acceptance `main`** lives in a **root script `scripts/conformance_selftest.ail`**
+  (§4.4), *not* in `harness.ail` — it imports the in-kit reject fixtures + `compaction_ai`'s and
+  `compaction_structural`'s `register` directly (fixed import set, no arg) and asserts fail-then-pass.
+  **This amends ADR §6's command**, which names `--entry main …/harness.ail` "pointed at the package
+  under test": the self-test entry is `scripts/conformance_selftest.ail`; `harness.ail` is a
+  `main`-less library only `ailang check`ed.
 
 So the frozen "arg convention" is: **hooks in by import; name-string selection exists only in the
 hydration-class probe.** This is the minimal reading consistent with both gate classes.
@@ -165,7 +172,7 @@ strike `http`/`kv` from §6's `ExtPorts` line (already reflected in PLAN-abi-v3 
 |---|---|---|
 | `conformance.compactor.system_prefix_preserved` | `no_system_in_output(out)` | fixture emits a `system`-role message in output (phase_vocab law :273) |
 | `conformance.compactor.tool_pairing_preserved` | `pairing_preserved(seg, out)` ∧ `ids_preserved(seg, out)` | fixture severs a tool_use/tool_result pair (positional split) |
-| `conformance.compactor.deterministic_replay` | two runs with identical ctx+segment+`ai_step` script produce equal output | (accept-only check; a non-deterministic compactor would differ) |
+| `conformance.compactor.deterministic_replay` | two runs with identical ctx+segment+`ai_step` fake produce equal output | (accept-only check; a non-deterministic compactor would differ) |
 | `conformance.compactor.artifact_cache_effective` | re-run with run-one artifacts + poison/empty `ai_step` equals run-one output | no-cache fixture re-calls the port → poison sentinel in output ≠ run-one |
 
 **Naming note (record, don't rename):** scenario `system_prefix_preserved` is certified via the
@@ -228,7 +235,9 @@ Verbatim from the handoff; re-grounding **did not contradict** any of them.
 > is the four-field Option-B set. The ABI-version guard is compile-time structural dependence on
 > 3.0 shapes plus a declared `conformance_abi_version()` constant (the ABI exposes no runtime
 > version symbol). Extension CI supplies hooks by import; name-string selection exists only in the
-> hydration-class registry probe.
+> hydration-class registry probe. `harness.ail` is a `main`-less library (imports only ABI +
+> invariants); the fail-then-pass self-test entry is a root script `scripts/conformance_selftest.ail`
+> (so the ADR §6 command `--entry main …/harness.ail` becomes `scripts/conformance_selftest.ail`).
 
 ---
 
@@ -250,20 +259,54 @@ Verbatim from the handoff; re-grounding **did not contradict** any of them.
 ## 4. Package layout
 
 ```
-packages/motoko_ext_conformance/
-  ailang.toml                 # version 3.x; dep motoko_ext_abi = { path = "../motoko-ext-abi" }
-  invariants.ail              # module sunholo/motoko_ext_conformance/invariants  (pure, zero-cap)
-  harness.ail                 # module sunholo/motoko_ext_conformance/harness     (test-only lib)
+packages/motoko_ext_conformance/          # ABI-ONLY package (no src/core dep) — safe for extension CI
+  ailang.toml                 # version 3.x; dep motoko_ext_abi only; exports invariants+harness+fixtures
+  invariants.ail              # module .../invariants  (pure, zero-cap; core imports this)
+  harness.ail                 # module .../harness     (test-only LIBRARY; no main; imports only ABI+invariants)
   fixtures/
-    reject_fixtures.ail       # module .../fixtures/reject_fixtures  (in-kit ABI-3.0 bad hooks)
-scripts/
-  conformance_registry_probe.ail   # core-CI probe (imports registry_generated)
+    reject_fixtures.ail       # module .../fixtures/reject_fixtures  (in-kit ABI-3.0 bad hooks; EXPORTED, not in [extensions])
+scripts/                                   # ROOT-project scripts (resolve against root ailang.toml)
+  conformance_selftest.ail         # has main; fail-then-pass; imports harness + fixtures + accept registers
+  conformance_registry_probe.ail   # core-CI probe; imports registry_generated + harness
 ```
 
 Naming: the ADR uses `motoko_ext_conformance` (underscores) for the package dir, unlike the
 hyphenated `motoko-ext-*` sibling dirs. **Keep the ADR's exact spelling** (`packages/
 motoko_ext_conformance/`) — it is the path named in the executable gate command (§6 line 289, §6
 line 294). Module namespace follows the `sunholo/…` convention of the other packages.
+
+**`ailang.toml`** (modeled on `motoko-ext-compaction-ai/ailang.toml`):
+
+```toml
+[package]
+name = "sunholo/motoko_ext_conformance"
+version = "3.0.0"                        # lockstep major with ABI 3.0 (G4 / §6.1 versioning)
+edition = "1"
+ailang = ">=0.26.0"
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+[exports]
+modules = ["sunholo/motoko_ext_conformance/invariants",
+           "sunholo/motoko_ext_conformance/harness",
+           "sunholo/motoko_ext_conformance/fixtures/reject_fixtures"]  # fixtures EXPORTED (importable) but NOT in root [extensions]
+[effects]
+max = ["AI","IO","Process","FS","Env","Net","SharedMem","Clock","Stream"]   # the on_pre_step row the harness drives
+```
+
+Note the dep path is `../motoko-ext-abi` (ABI's dir is hyphenated); `invariants.ail` imports
+`pkg/sunholo/motoko_ext_abi/types`. The package depends on **ABI only** — it does **not** depend on
+`src/core` or on any compactor package, which keeps it acyclic and extension-CI hydration-free.
+
+**Why `selftest` and the probe are ROOT scripts, not package modules.** The self-test must import the
+*accept* packages' registers, but `compaction_ai` imports `src/core/compaction` (compaction_ai.ail:14)
+and `compaction_structural` imports `src/core/ext/ctx_defaults` (:14). If the self-test lived *inside*
+the conformance package, that package's `ailang.toml` would need to depend on the compactors (hence
+on `src/core`), making it no longer ABI-only and coupling it to core. Putting the self-test and probe
+under `scripts/` resolves their imports against the **root** `ailang.toml` — which already declares
+`compaction_ai`, `compaction_structural`, `motoko_ext_conformance`, and `src/core` — so the package
+stays clean and there is no back-edge into it. `fixtures/reject_fixtures` is exported so the root
+`scripts/conformance_selftest.ail` can import it by path, while its absence from root `[extensions]`
+keeps it off the registry-probe path (Decision C-i).
 
 ### 4.1 `invariants.ail` — the extracted law (Decisions A + B)
 
@@ -274,23 +317,52 @@ Move from `phase_vocab.ail` and **re-type on ABI `Msg`**:
 - `validate_output_calls`, `validate_compactor_output_rec` (:258-290) → internal recursion.
 - **Decompose** into three exported pure predicates (Decision B), each returning `bool`:
   - `no_system_in_output(out: [Msg]) -> bool` — no `role == "system"` message in output
-    (phase_vocab law :273); also folds the empty-`tool_call_id` shape check (:274).
-  - `pairing_preserved(input: [Msg], out: [Msg]) -> bool` — for every id, `has_tool_result_id`
-    agrees input↔output and `has_assistant_call_id` agrees input↔output (the severed-pair checks at
-    :264, :282, :283).
-  - `ids_preserved(input: [Msg], out: [Msg]) -> bool` — no empty tool_call id (:262), no invented
-    assistant-call id (:263), no invented tool_result id (:280-281).
+    (phase_vocab law :273). **This is the only Err assigned here** (mapping re-verified at HEAD).
+  - `pairing_preserved(input: [Msg], out: [Msg]) -> bool` — **quantified over `out`, not over
+    `input`** (this is critical — see below): for each assistant tool_call `c` appearing **in an
+    output message**, `has_tool_result_id(input, c.id) == has_tool_result_id(out, c.id)` (:264,
+    "severed tool_result pair"); and for each tool message **in output**,
+    `has_assistant_call_id(input, id) == has_assistant_call_id(out, id)` (:282-283, "severed
+    assistant tool_call pair"). The two severed-pair Errs.
+  - `ids_preserved(input: [Msg], out: [Msg]) -> bool` — **also quantified over `out`**: no empty
+    assistant tool_call id (:262), no invented assistant-call id — `c.id` must trace to input as
+    call-or-result (:263), **no empty tool-message `tool_call_id` (:274)**, no invented tool_result
+    id — a tool message's id must trace to input (:280-281). The four id-shape/provenance Errs.
+    (:274 is an *id-shape* check on tool messages, not a system check — do not fold it into
+    `no_system_in_output`.)
+
+  **⚠ Quantification is over the OUTPUT, never over the input.** The wrapper's recursion iterates
+  *output* messages (`validate_compactor_output_rec(input, output, output)`, phase_vocab.ail:293) and
+  each output message's `tool_calls` (`validate_output_calls`, :258). Consequence: a compactor that
+  **drops a complete tool pair** (both the assistant call *and* its result) is **accepted** — nothing
+  in output references that id, so no check fires. This is not incidental — it is exactly what
+  `compaction_ai` 0.3.0 does when it summarizes old turns into one message (`compact_with_ai`:175
+  replaces `old_turns` wholesale). A boolean written as "for every id *in input*, presence must agree
+  in output" would be **stricter than the law** and would reject 0.3.0's own legitimate
+  summarization — making 0.3.0 fail its own cert. The severed-pair Errs fire only when output
+  *keeps one side and drops the other*.
 - **Composed wrapper** (core keeps this exact call site & message):
   ```
   export pure func validate_compactor_output(input: [Msg], output: [Msg]) -> Result[(), string]
   ```
   It must reproduce the **exact Err strings and first-failure order** of the current
-  `validate_compactor_output_rec` so `runtime.ail:170` is byte-for-byte behavior-preserving. Cleanest
-  implementation: keep the existing recursive body as the wrapper's engine and have the three `bool`
-  predicates *also* call the shared helpers — i.e. the predicates are boolean *views* of the same
-  law, not a re-implementation. (Avoids two divergent encodings of the contract.)
+  `validate_compactor_output_rec` so `runtime.ail:170` is byte-for-byte behavior-preserving. The Err
+  messages embed specific ids (e.g. `"severed tool_result pair ${c.id}"`), which a `bool` predicate
+  discards — so the wrapper **must keep the id-aware recursion** (it cannot be reconstructed from the
+  booleans). Two encodings therefore coexist: the recursive wrapper (source of truth for core's
+  message) and the three total-scan booleans (for per-invariant harness naming). Keep them from
+  drifting by (a) sharing the same helpers (`has_assistant_call_id`, `has_tool_result_id`) and
+  (b) the equivalence test below.
 - Port the three tests (phase_vocab.ail:943-966) into `invariants.ail` as `tests [((), true)]`
-  blocks, retyped on ABI `Msg`; add three per-predicate boolean tests.
+  blocks, retyped on ABI `Msg`; add three per-predicate boolean tests; **add an equivalence test**
+  over a battery of inputs asserting `is_ok(validate_compactor_output(i, o)) == (no_system_in_output(o)
+  && pairing_preserved(i, o) && ids_preserved(i, o))`. This pins the two encodings together and is
+  well-formed because every Err in the recursion is assigned to exactly one predicate (the mapping
+  above), so the conjunction partitions the wrapper's failure set. **The battery must include a
+  dropped-complete-pair case** (input has an assistant call + its tool result; output drops *both*)
+  asserting **`Ok` / all three booleans true** — this is the case that catches a predicate wrongly
+  quantified over input, and it is 0.3.0's own summarization shape. Reuse the existing
+  `accepts_orphan_identity` (phase_vocab.ail:950) and extend with drop-both and keep-one-side cases.
 - `export pure func conformance_abi_version() -> string { "3.0" }` (G4).
 
 **Blast radius (Decision A), enumerate & execute in WI-1:**
@@ -299,14 +371,28 @@ Move from `phase_vocab.ail` and **re-type on ABI `Msg`**:
   the rest of `phase_vocab` intact (checkpoint/ledger vocab untouched).
 - `src/core/ext/runtime.ail:27` — change `import src/core/phase_vocab (validate_compactor_output)`
   → `import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)`. Call site
-  :170 unchanged (structural `Msg` compat already holds).
+  :170 `validate_compactor_output(msgs, compacted_msgs)` unchanged **in text**, but note the type
+  direction shifts: after the move the param is **ABI `Msg`**, so `compacted_msgs` (already ABI `Msg`
+  from the `Compacted` destructure) fits directly, while `msgs` is core `Msg` (`types.ail:16`, whose
+  `tool_calls` is `[std/ai.ToolCall]` vs ABI's `[motoko_ext_abi.ToolCall]` — both structurally
+  `{id,name,arguments}`). The current code already compiles the *forward* mix at this site, so AILANG
+  unifies these records structurally; the reverse should hold symmetrically. **WI-1 must confirm with
+  `ailang check src/core/ext/runtime.ail`** — if it does not, the fallback is a one-line wrap of
+  `msgs` through the existing `messages_to_msgs`/`msgs_to_messages` round-trip (session.ail:746 /
+  phase_vocab.ail:683), which is conversion but not new machinery. This is the one place Decision A's
+  "conversion-free" claim is empirically load-bearing.
 - `scripts/phase_c_l1_scenarios.ail` — repoint the same import (verify at WI-1; grep for
   `validate_compactor_output`).
-- Add `motoko_ext_conformance = { path = "../motoko_ext_conformance" }` (or relative) to the core
-  build's dep set / lockfile so `runtime.ail` resolves it. **Accepted cost:** core's build now
+- Add to the **root `ailang.toml` `[dependencies]`** (alongside the other path deps):
+  `"sunholo/motoko_ext_conformance" = { path = "packages/motoko_ext_conformance" }`, then
+  `ailang lock`. The package resolves under `pkg/sunholo/motoko_ext_conformance/…` exactly as ABI
+  does (root `ailang.toml` maps `"sunholo/motoko_ext_abi" = { path = "packages/motoko-ext-abi" }`).
+  **Do NOT** add it to `[extensions] packages` — it is a library dep like ABI, not a registered
+  extension, so it must not appear in `registry_generated.ail`. **Accepted cost:** core's build now
   depends on the conformance package (this *is* §6.1's shared-single-law coupling). Keep import
-  granularity so `harness.ail` (test-only) never enters core's build — core imports `invariants`
-  only.
+  granularity so `harness.ail`/`fixtures/` (test-only) never enter core's build — core imports
+  `invariants` only, and `invariants.ail` imports **only ABI** (no core import), keeping the package
+  graph acyclic and hydration-free for extension CI.
 - Zero-cap check: `ailang test packages/motoko_ext_conformance/invariants.ail` passes with no caps.
 
 ### 4.2 `harness.ail` — the test rig (library, package-agnostic)
@@ -314,38 +400,48 @@ Move from `phase_vocab.ail` and **re-type on ABI `Msg`**:
 - Imports ABI types + `invariants` (for the two predicate-wrapping scenarios) + a pure `same_msgs`
   comparator (copy the shape from compaction_structural.ail:100 or ext_fixture; keep it local).
 - **Does NOT import `registry_generated`** (G1) — stays hydration-free for extension CI.
-- **ExtCtx fixture builder** `mk_conformance_ctx(segment: [Msg], artifacts: Json, ai_step_script)`
+- **ExtCtx fixture builder** `mk_conformance_ctx(segment: [Msg], artifacts: Json, ai_step_fake)`
   producing the 14-field ABI `ExtCtx` (types.ail:74-96), modeled on `mk_v2_ext_ctx`
-  (session.ail:706) and the literal in compaction_structural.ail:199-217. `context_limit` set low
-  enough to force compaction (e.g. small limit vs a segment sized above threshold — see §4.3).
-- **Fake ports** (pattern: `scripts/smoke_ports_record.ail`, ext_fixture): `ai_step` is a
-  **scripted pure** port — threads a script of canned summaries `Script([...])` returning the next
-  on each call and a **poison sentinel** when exhausted (for the cache scenario). `proc_exec`,
-  `clock_now`, `env_get` are noops. Because the fakes never *perform* `AI`/`Clock`/`Env`, the
-  harness runs at `--caps IO` (Decision D).
-- **Report shape** — reuse the cousin's types (`scripts/phase_c2_wiring_scenarios.ail:55-101`):
-  `ScenarioFailure = {failed_invariant: string, trace: [string]}`, `Scenario = {id, run}`,
-  `ok_or_failure`, `run_all` printing `scenario=<id> invariant=<name>`. Add a `trace` emitter that
-  serializes the offending `(segment, output)` as JSONL **in the same shape as the core ledger** so
-  a conformance failure reads like a core DST failure (§6.1). Keep the JSONL builder small
-  (`std/json` `jo/kv/js`); one line per scenario failure.
+  (session.ail:706) and the literal in compaction_structural.ail:199-217. `context_limit` set very
+  low so `usage_percent` clears every tier — the compaction-forcing technique in §5.
+- **Fake ports** (pattern: `scripts/smoke_ports_record.ail`, ext_fixture). **Key constraint:**
+  `ExtPorts.ai_step` is `(string, [Msg]) -> Result[string, string]` — **stateless**; it cannot
+  count calls or thread a script (a pure function of its args only). And `compact_with_ai` calls it
+  **at most once** per compaction (`summarize_with_ai`, compaction_ai.ail:64, invoked once on
+  cache-miss at :173). So a fake is a **constant per-run** port, not a cross-call script:
+  - **canned fake** — `ai_step = \_model _msgs. Ok("CANNED SUMMARY")` (deterministic; may key its
+    answer off `_msgs` content if a scenario needs input-sensitivity, still a pure function).
+  - **poison fake** — `ai_step = \_model _msgs. Ok("POISON")` (or `Err("no summarizer")`, which
+    `summarize_with_ai` maps to `"[summarizer unavailable: …]"`). Used for the cache scenario's
+    second run: any compactor that re-calls the port instead of hitting the cache emits the poison
+    string into its output, which the assertion detects.
+  `proc_exec`, `clock_now`, `env_get` are noops (as in `ctx_defaults.noop_ext_ports`). Because the
+  fakes never *perform* `AI`/`Clock`/`Env`/`Process`/`FS` (their bodies are pure despite declaring
+  the rows), the harness drives at `--caps IO` (Decision D; `sha256Hex` used by 0.3.0's digest is
+  pure — verified, no cap).
+- **Report shape** — **adapt** the cousin's types (`scripts/phase_c2_wiring_scenarios.ail:55-101`):
+  `ScenarioFailure = {failed_invariant: string, trace: [string]}` (verbatim); `Scenario = {id:
+  string, run: (ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net,
+  SharedMem, Clock, Stream}}` — **`run` takes the hooks under test** (the cousin's `run` is nullary
+  because it closes over a fixed scenario; the kit parameterizes on hooks). Note the row is
+  on_pre_step's (ABI types.ail:149) — **no `Trace`** (the cousin adds `Trace` because it drives full
+  sessions; the kit does not). Reuse `ok_or_failure`; a `run_all`-style fold prints `scenario=<id>
+  invariant=<name>`. Add a `trace` emitter that serializes the offending `(segment, output)` as one
+  JSONL object per failure via `std/json` `jo/kv/js`. **Minimum:** a stable self-describing line
+  (`scenario`, `invariant`, `segment`, `output`). §6.1's "same JSONL shape as the core ledger" is
+  the aspiration; full `to_schema_v1` (phase_vocab.ail) parity is a WI-4 nicety, not a blocker.
 - **Public entry points:**
+  - `export func run_scenario(hooks: ExtensionHooks, s: Scenario) -> Result[(), ScenarioFailure] ! {IO, ...}`
+    — drives one scenario; the `Err` names the exact `failed_invariant` (e.g. `"pairing_preserved"`).
   - `export func run_conformance(hooks: ExtensionHooks) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}`
-    — runs all four scenarios against `hooks.on_pre_step`, returns failure count, prints verdicts.
-    (Declares the full `on_pre_step` row; performs only `IO` under fake ports.)
-  - scenario constructors, for probes that want to name a subset.
-- **The kit's own `main`** (self-acceptance): imports the reject fixtures + `compaction_ai`'s and
-  `compaction_structural`'s `register_with_config`, and asserts:
-  `run_conformance(reject_prefix) == 1 on system_prefix` (etc., >0), `run_conformance(reject_pair)`
-  fails pairing, `run_conformance(reject_nocache)` fails cache, and
-  `run_conformance(register_compaction_ai(cfg)) == 0` and
-  `run_conformance(register_compaction_structural(cfg)) == 0`. Prints `conformance self-test PASS`
-  or `exit(1)`. This is the fail-then-pass proof (ADR Acceptance criterion 3).
-
-  Note: `register_with_config` for both accept packages performs `{Env, FS}` (reads profile config);
-  the self-test `main` therefore needs `--caps IO,Env,FS`. The *pure hook-driving* is still `IO`;
-  the extra caps are for constructing the real hooks, not for the scenarios. Record both floors in
-  the gate (§7).
+    — folds `run_scenario` over all four, prints `scenario=<id> invariant=<name>` per failure, returns
+    the failure count (the probe's summable API). Declares the full `on_pre_step` row; performs only
+    `IO` under fake ports.
+- **`harness.ail` has NO `main` and imports only ABI + `invariants`** (+ a local `same_msgs`). It
+  must **not** import the fixtures or any compactor package — otherwise every extension that imports
+  `harness` for `run_conformance` would transitively compile `compaction_ai`, `compaction_structural`,
+  and the reject fixtures, breaking the hydration-free / package-agnostic promise (G1). The
+  fail-then-pass `main` lives in a **root script**, `scripts/conformance_selftest.ail` (§4.4).
 
 ### 4.3 `fixtures/reject_fixtures.ail` — the C-i reject fixtures
 
@@ -362,7 +458,7 @@ than all tripping the first flaw:
   Fails `pairing_preserved` → `tool_pairing_preserved`.
 - `reject_nocache_hooks` — a summarizing compactor that **always calls `ctx.ports.ai_step`** and
   **never reads `ctx.artifacts`** (no `cached_summary`), so on the cache scenario's second run
-  (poison/empty `ai_step` script) it emits the poison sentinel. Fails `artifact_cache_effective`.
+  (poison `ai_step` fake) it emits the poison string in its output. Fails `artifact_cache_effective`.
 
 Each fixture is a full 9-field `ExtensionHooks` (the 8 non-`on_pre_step` hooks are the trivial
 pass-throughs from ext_fixture.ail:54-104). The fixtures must construct valid *segments* (system
@@ -370,59 +466,110 @@ already stripped by the harness) so that the ONLY violation is the intended one 
 `reject_pair_hooks` must otherwise return well-formed output.
 
 **Fixture must not be registry-resolvable** (Decision C-i / rejected C-ii): it lives under
-`packages/motoko_ext_conformance/fixtures/`, is imported only by the kit's `harness.ail` self-test,
-and is **never** added to `registry_generated` or any `ailang.toml [extensions]` list.
+`packages/motoko_ext_conformance/fixtures/` and is `[exports]`-listed so `scripts/conformance_selftest.ail`
+can import it by path, but it is **never** added to root `[extensions]` / `registry_generated`, so the
+registry probe never resolves it.
+
+### 4.4 `scripts/conformance_selftest.ail` — the kit's own fail-then-pass gate
+
+A **root-project script** (has `main`), not a package module — see "Why … ROOT scripts" in §4.1
+(keeps the conformance package ABI-only). Imports `harness` + `fixtures/reject_fixtures` (both
+exported by the package) + `compaction_ai`'s and `compaction_structural`'s `register_with_config`
+(root deps). Asserts **per scenario, by name** (not by count — R3), via `run_scenario`:
+
+- `reject_prefix` → `system_prefix_preserved` returns `Err` with `failed_invariant ==
+  "no_system_in_output"`, and the other three scenarios return `Ok`.
+- `reject_pair` → `tool_pairing_preserved` returns `Err` with `failed_invariant ==
+  "pairing_preserved"`, others `Ok`.
+- `reject_nocache` → `artifact_cache_effective` returns `Err`, others `Ok`.
+- `compaction_ai` 0.3.0 and `compaction_structural` 1.1.0 → **all four `Ok`** *and* the liveness
+  assertion (returns `Compacted`, not `PassThrough`, on the engineered segment — §5 vacuity guard).
+
+Prints `conformance self-test PASS` or `exit(1)`. This is the fail-then-pass proof (ADR Acceptance
+criterion 3).
+
+Caps: `register_with_config` for both accept packages performs `{Env, FS}` (reads profile config,
+compaction-ai/register.ail:30-66, compaction-structural/register.ail:19-40 declared row), so the
+self-test needs `--caps IO,Env,FS`. The *pure hook-driving* is still `IO`; the extra caps construct
+the real hooks, not the scenarios (§7).
 
 ---
 
 ## 5. The four scenarios (exact ids, mechanics)
 
-All scenarios hand the compactor a **system-stripped segment** sized above the compaction threshold
-(match the live loop: `context_limit` small, segment content large; for `compaction_ai` the default
-`threshold_pct=75`, `keep_recent=6` from compaction_ai/types.ail). Each scenario runs
+All scenarios hand the compactor a **system-stripped segment** and a ctx engineered to **force
+compaction** for any threshold-based compactor. The harness controls `ctx.context_limit`, and
+`usage_percent = estimate_tokens * 100 / context_limit` (compaction_ai.ail:27-29,
+compaction_structural.ail:39-42), so **setting `context_limit` very low drives pct ≫ every tier**
+(0.3.0's `threshold_pct=75`; structural's 70/85/95). The segment must also (a) contain **long tool
+content** so structural's `elide_old_tool_results` actually shortens (else `same_msgs` ⇒
+`PassThrough`, compaction_structural.ail:132-138), and (b) have **enough non-system turns** that
+0.3.0's `split_body` yields non-empty `old` (compaction_ai.ail:99-119). Each scenario runs
 `hooks.on_pre_step(ctx, segment)`, destructures `PreStepDecision`, and asserts.
+
+**Vacuity guard (self-test only).** A `PassThrough` trivially satisfies all four invariant checks
+(identity preserves everything) — which is *correct* for a non-compactor and is why the **registry
+probe** stays green on the ~11 non-compactor packages (they make no compaction claim). But it would
+let the accept packages pass **vacuously**. So the kit's self-test `main` additionally asserts that
+`compaction_ai` 0.3.0 and `compaction_structural` 1.1.0 each return **`Compacted(...)` (not
+`PassThrough`)** on the engineered segment — a liveness assertion (report invariant
+`compaction_occurred` on failure). This keeps the four scenarios reusable/probe-safe while making the
+accept cert non-vacuous.
 
 1. **`conformance.compactor.system_prefix_preserved`** — build a segment with tool pairs and prose;
    run once; assert `no_system_in_output(out)`. (A `PassThrough` also passes — nothing emitted.)
 2. **`conformance.compactor.tool_pairing_preserved`** — segment contains ≥1 assistant tool_use +
    matching tool_result far enough apart to be split; assert `pairing_preserved(seg, out) &&
    ids_preserved(seg, out)`.
-3. **`conformance.compactor.deterministic_replay`** — run `on_pre_step` **twice** with an
-   *identical* ctx (same artifacts=`empty`, same `ai_step` script producing the same summary);
-   assert `same_msgs(out1, out2)`. Fails a compactor whose output depends on unscripted
-   nondeterminism.
-4. **`conformance.compactor.artifact_cache_effective`** — run once with `ai_step` scripted to a
-   canned summary and `artifacts = empty`; capture `out1` and the returned `Compacted` artifacts.
-   Run again with `ctx.artifacts = <run-one artifacts>` and an **empty/poison `ai_step` script**;
-   assert `same_msgs(out2, out1)` (cache hit, port not re-called). A no-cache compactor re-calls the
-   (now poison) port → sentinel content in `out2` ≠ `out1` → fail. (Mirrors §6.1's worked example.)
+3. **`conformance.compactor.deterministic_replay`** — run `on_pre_step` **twice** with two
+   *identically-constructed* ctx values (same `artifacts = empty`, the same **canned** `ai_step`
+   fake, same segment); assert `same_msgs(out1, out2)`. Fails a compactor whose output depends on
+   anything outside its declared inputs. (Both runs get a fresh identical ctx — nothing is threaded
+   between them.)
+4. **`conformance.compactor.artifact_cache_effective`** — run one with the **canned** `ai_step` fake
+   and `artifacts = empty`; capture `out1` and the `artifacts1` carried by the run-one
+   `Compacted(_, _, artifacts1)`. Run two with `ctx.artifacts = artifacts1` and the **poison**
+   `ai_step` fake; assert `same_msgs(out2, out1)`. A cache-effective compactor (0.3.0:
+   `cached_summary` hits on the identical segment digest) never calls the port, so poison never
+   appears and `out2 == out1`. A no-cache compactor re-calls the poison port → poison string in
+   `out2` ≠ `out1` → fail. (Mirrors §6.1's worked example; note `same_msgs` compares
+   role/content/tool_call_id — the poison surfaces in `content`, so it is detected.)
 
-`compaction_ai` 0.3.0 passes all four: prefix-safe (no system emitted), pairing-aware
-(`has_tool_result_for`/`split_body`), deterministic given a fixed script, artifact-cached
-(`cached_summary`/`cache_artifact`). `compaction_structural` 1.1.0 passes all four (pure, no ports:
-on run-two it still `PassThrough`/elides identically — cache scenario is trivially satisfied since
-it never calls `ai_step`).
+`compaction_ai` 0.3.0 passes all four: prefix-safe (emits no system message), pairing-aware
+(drops complete pairs / keeps pairs together via `split_body`+`has_tool_result_for`; never severs),
+deterministic given a fixed canned fake, artifact-cached (`cached_summary`/`cache_artifact`).
+`compaction_structural` 1.1.0 passes all four: at the forced-high pct it returns `Compacted` (emergency
+elision) on **both** runs and, being pure and port-free, elides identically each time — so
+`deterministic_replay` holds and `artifact_cache_effective` holds trivially (it never calls
+`ai_step`, so the poison fake is never reached; its emitted `artifacts` are `jo([])`,
+compaction_structural.ail:123). See R4.
 
 ---
 
 ## 6. Registry probe — `scripts/conformance_registry_probe.ail`
 
-Core-CI, **hydration-required** class. Imports `src/core/ext/registry_generated (resolve)` (or the
-generated package-name list) + `harness (run_conformance)`; for each package name, `resolve(name,
-cfg)` → `Some(hooks)` → `run_conformance(hooks)`, summing failures; `exit(1)` if any package
-fails. This is the "certified against conformance vN as a registry-inclusion condition" gate (§6.1
-"Who runs it").
+Core-CI, **hydration-required** class. Imports `src/core/ext/registry_generated
+(parse_core_ext_order)` + `harness (run_conformance)`. Build a CSV of the **short** ext names (the
+tokens `resolve` switches on, registry_generated.ail:27-39), call `parse_core_ext_order(csv, cfg) ->
+ExtRegistry`, then fold `run_conformance` over `registry.hooks`, summing failures; `exit(1)` if any
+package fails. This reuses the exported entry (no dependence on the unexported `resolve`) and
+inherits its `name#idx` id tagging. This is the "certified against conformance vN as a
+registry-inclusion condition" gate (§6.1 "Who runs it").
 
-- Package list source: iterate the same names `resolve` switches on (registry_generated.ail:27-39),
-  or a generated list beside it. Since `registry_generated` is `GENERATED by
-  ailang generate-extension-registry`, prefer regenerating a companion `[string]` of names rather
-  than hand-maintaining one (note for the extension-registry generator; out of scope to *build* the
-  generator here — the probe can start from a literal list matching registry_generated at HEAD and
-  a WI-note to fold it into the generator).
+- Package list source: a CSV of the short names — `"test_dummy,omnigraph,context_mode,mcp,exa_search,
+  ailang_docs,compose,a2a,decision_framework,microrag,compaction_ai,scratchpad,compaction_structural"`
+  at HEAD. Since `registry_generated.ail` is `GENERATED by ailang generate-extension-registry`,
+  prefer regenerating a companion `[string]` of names rather than hand-maintaining this literal
+  (note for the extension-registry generator; out of scope to *build* the generator here — the probe
+  starts from the literal above with a WI-note to fold it into the generator).
 - **Only compactor packages implement `on_pre_step` meaningfully;** non-compactor hooks return
   `PassThrough`, which passes all four scenarios vacuously (correct — they make no compaction claim).
   The probe thus certifies the whole registry cheaply and specifically catches a regressed
-  compactor.
+  compactor. An extension whose `on_pre_step` performs a **gated effect outside `ctx.ports`** (e.g.
+  a direct `std/ai.step`) faults under `--caps IO,Env,FS` — that is caps-as-conformance working
+  (§6.1); such an extension needs a per-extension **caps allowance** declaring its residual raw
+  effects, or the probe run for it is scoped accordingly. (WI-6 assumption: at HEAD only the two
+  compactors implement `on_pre_step` non-trivially — WI-6 verifies by running the probe.)
 - Caps: `--caps IO,Env,FS` (registry parse performs `{Env, FS}` — parse_core_ext_order,
   registry_generated.ail:63; `register_with_config` performs `{Env, FS}`).
 
@@ -436,12 +583,13 @@ fails. This is the "certified against conformance vN as a registry-inclusion con
 # 1. static check
 ailang check packages/motoko_ext_conformance/invariants.ail
 ailang check packages/motoko_ext_conformance/harness.ail
+ailang check scripts/conformance_selftest.ail
 
 # 2. pure law, zero caps
 ailang test packages/motoko_ext_conformance/invariants.ail
 
 # 3. self-acceptance (fail-then-pass) — the kit's own gate
-ailang run --caps IO,Env,FS --entry main packages/motoko_ext_conformance/harness.ail
+ailang run --caps IO,Env,FS --entry main scripts/conformance_selftest.ail
 #   expect: reject_prefix fails system_prefix_preserved,
 #           reject_pair  fails tool_pairing_preserved,
 #           reject_nocache fails artifact_cache_effective,
@@ -484,17 +632,19 @@ not fold them into the no-hydration core-DST Makefile targets. Add them under a 
   tests. Repoint importers (`runtime.ail:27`, `scripts/phase_c_l1_scenarios.ail`); add the core dep.
   Gate: `ailang test invariants.ail` (zero caps) + `ailang check runtime.ail` + core gate green
   (behavior-preserving; verify Err strings/order identical).
-- **WI-2 — Harness library (§4.2).** `harness.ail`: ctx builder, scripted/poison fake ports, report
-  shape (reuse cousin), `run_conformance`, JSONL trace emitter. Decide fixture-defaults source:
-  reuse `src/core/ext/ctx_defaults` (pulls a core module into the kit — acceptable, it's ABI-typed
-  and pure) **or** copy the three tiny constructors locally to keep the kit core-free for extension
-  CI. **Recommend local copies** (keeps extension-CI hydration-free; the three fns are 15 lines).
-  Gate: `ailang check harness.ail`.
+- **WI-2 — Harness library (§4.2).** `harness.ail` (**no `main`**, imports only ABI + `invariants`):
+  ctx builder, canned/poison fake ports, report shape (adapt cousin — `run` takes hooks, no `Trace`),
+  `run_scenario`/`run_conformance`, the four scenario constructors, JSONL trace emitter, local
+  `same_msgs`. Fixture-defaults source: **copy** the three `ctx_defaults` constructors locally rather
+  than importing `src/core/ext/ctx_defaults` (keeps the kit core-free / extension-CI hydration-free;
+  ~15 lines). Gate: `ailang check harness.ail`.
 - **WI-3 — Reject fixtures (§4.3).** `fixtures/reject_fixtures.ail` with the three per-bug variants;
-  ensure each fails exactly one invariant. Confirm none is registry-resolvable.
-- **WI-4 — Wire the four scenarios + self-test `main` (§5, §4.2).** Implement scenario logic; the
-  `main` self-acceptance asserting fail-then-pass over the reject fixtures + the two accept packages.
-  Gate: command 3.
+  ensure each fails **exactly one** invariant (assert the specific `failed_invariant` name — R3).
+  Confirm none is registry-resolvable.
+- **WI-4 — Scenarios + `scripts/conformance_selftest.ail` (§5, §4.4).** Implement the four scenario
+  bodies in `harness`; write the root script `scripts/conformance_selftest.ail` (`main`) asserting
+  fail-then-pass **by invariant name** over the reject fixtures + the two accept packages, plus the
+  liveness (`Compacted`) guard. Gate: command 3 (entry `scripts/conformance_selftest.ail`).
 - **WI-5 — Measure caps & finalize floors (Decision D).** Run command 3 at `--caps IO,Env,FS`, then
   probe the pure driving at `--caps IO` against a fixture; confirm a ports-bypassing fixture faults
   on the withheld cap. Record the confirmed floors in the plan/ADR amendment.
@@ -519,11 +669,13 @@ not fold them into the no-hydration core-DST Makefile targets. Add them under a 
 
 ## 10. Risks / notes
 
-- **R1 — Err-string parity after the law move (WI-1).** The composed `validate_compactor_output`
+- **R1 — Err-string parity + two-encoding drift (WI-1).** The composed `validate_compactor_output`
   must reproduce the exact first-failure and message of the current recursive body, or `runtime.ail`
-  stage-rejection strings drift and any test asserting on them breaks. Mitigation: keep the existing
-  recursion as the wrapper engine; the 3 predicates are boolean views over the same helpers, not a
-  reimplementation. Verify with the ported `rejects_bad_shapes` test (phase_vocab.ail:957).
+  stage-rejection strings drift. Because the id-bearing messages can't be rebuilt from booleans, the
+  wrapper keeps the recursion while the 3 booleans are separate total scans (§4.1) — two encodings
+  that could diverge. Mitigation: both share the same helpers, and the **equivalence test** (§4.1)
+  pins `is_ok(wrapper) == (no_system ∧ pairing ∧ ids)` over a battery incl. the dropped-complete-pair
+  case. Verify with the ported `rejects_bad_shapes` test (phase_vocab.ail:957).
 - **R2 — Core now build-depends on the conformance package (Decision A cost).** If the package path
   dep is misconfigured, core stops building. Land WI-1 as a single atomic change (move + repoint +
   dep) and gate on `make check_core`.
@@ -531,6 +683,17 @@ not fold them into the no-hydration core-DST Makefile targets. Add them under a 
   the scenario→invariant map (G3) a lie. Each fixture must be otherwise-valid; assert the *specific*
   `failed_invariant` name in the self-test, not merely `failures > 0`.
 - **R4 — Cache scenario false green for pure compactors.** `compaction_structural` never calls
-  `ai_step`, so the poison script can't poison it; `same_msgs(out2, out1)` holds trivially. That is
+  `ai_step`, so the poison fake can't poison it; `same_msgs(out2, out1)` holds trivially. That is
   *correct* (a compactor that makes no port call is trivially cache-effective) — document it so it
   isn't mistaken for the scenario not exercising anything.
+- **R5 — `deterministic_replay` has limited teeth in AILANG.** With ctx + fake ports fixed and the
+  effect system controlling all nondeterminism, a well-typed compactor is deterministic almost by
+  construction; the scenario mainly catches gross misuse and is retained for ADR scenario-id
+  completeness. It is *not* a substitute for the cache/pairing checks, which carry the real signal.
+- **R6 — AILANG workspace resolution assumptions (WI-1/WI-2/WI-4).** The plan assumes: (a) core can
+  `import pkg/sunholo/motoko_ext_conformance/invariants` given a root path dep (mirrors the ABI dep);
+  (b) a package can export a module (`fixtures/reject_fixtures`) that a root script imports by path
+  while that module stays out of `[extensions]`; (c) root scripts resolve compactor + `src/core`
+  imports against the root `ailang.toml`. All three match existing patterns (ABI dep; packages
+  importing `src/core`; `scripts/*` importing both), but each is an inference — WI-1/WI-2 confirm with
+  `ailang check` before building further.
