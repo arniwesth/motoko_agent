@@ -63,11 +63,12 @@ a new evaluation program.
 
 ## Investigation findings
 
-1. **The phase-core ledger already records the needed send boundary.** `ProviderCallPrepared`
-   carries `step`, `msg_count`, `system_prefix_count`, `system_prefix_chars`, `payload_digest`, and
-   `model` (`src/core/phase_vocab.ail:414`), and projects to schema-v1
-   `provider_call_prepared` (`src/core/phase_vocab.ail:587`). This is the oracle for "a provider
-   call would have been made with this compacted payload."
+1. **The phase-core ledger already records the needed send boundary.** `ProviderCallInfo` carries
+   `step`, `msg_count`, `system_prefix_count`, `system_prefix_chars`, `payload_digest`, and `model`
+   (`src/core/phase_vocab.ail:414`); `ProviderCallPrepared(ProviderCallInfo)` is the event
+   constructor (`:514`) and projects to schema-v1 `provider_call_prepared`
+   (`src/core/phase_vocab.ail:587`). This is the oracle for "the send gate accepted this compacted
+   payload and prepared a provider call."
 
 2. **The loop emits compaction stages before every model call.** The live `CallModel` arm runs
    `split_for_compaction`, builds a pre-step `ExtCtx`, dispatches the pre-step chain, emits stage
@@ -97,10 +98,10 @@ a new evaluation program.
    the test reuses `scripted_ports_from_steps` directly, `compaction_ai` summarizer calls can consume
    the main agent script. Second, the existing scripted-port index is derived from the message payload
    shape; compaction deliberately changes that payload, so assistant-count indexing is not a stable
-   clock for a long compaction replay. The scenario needs either a new traced/state-threaded scripted
-   provider or a custom `Ported(Ports)` provider whose `model_step` routes summarization prompts
-   (single user message from `compaction_ai`) to a stable fake summary and routes normal agent calls
-   from visible step markers that survive recent-context retention.
+   clock for a long compaction replay. This ADR chooses a custom `Ported(Ports)` provider with
+   stateless marker routing: summarization prompts (one user message from `compaction_ai`, no system
+   prefix) return a stable fake summary, while normal agent calls derive the next scripted step from
+   visible markers in retained recent messages.
 
 6. **The wire ledger does not contain full provider payloads.** `provider_call_prepared` carries
    counts and a `payload_digest`, not the payload body. Full-loop invariants can prove that the
@@ -161,12 +162,13 @@ a new evaluation program.
 - Context limit: a test-only `MOTOKO_MODELS_FILE` fixture that maps that model label to a small
   limit. The production `.motoko/model-catalog.json` remains the 262144 binding.
 - Runtime: production `session` loop via `run_v2_session_traced` or a small traced helper.
-- Provider: custom routed model provider. Normal agent calls must advance from a state-threaded
-  script or from visible step markers in retained recent messages; they must not rely on raw
-  assistant-count indexing after compaction. Summarizer-shaped calls return stable fake summaries
-  without advancing the agent script.
-- Summarizer: fake summary branch selected by prompt shape, not necessarily by model string, because
-  the live calibration profile may use Qwen for both the agent and summarizer.
+- Provider: custom routed `Ported(Ports)` provider. Normal agent calls must derive the next step
+  from visible markers in retained recent messages; they must not rely on raw assistant-count
+  indexing after compaction. Summarizer-shaped calls return stable fake summaries without advancing
+  the agent script.
+- Summarizer: fake summary branch selected by prompt shape: exactly one user message and no system
+  prefix. Do not branch by model string, because the live calibration profile may use Qwen for both
+  the agent and summarizer.
 - Tools: deterministic handled tool results from a test extension `on_tool_handle`, large enough to
   create pressure while preserving assistant/tool pairing.
 - Oracle: in-memory `LedgerTrace`, returned history, and direct extension/chain assertions for
@@ -194,10 +196,13 @@ The long-session DST must assert:
 - At least three `compaction_ai` compactions occur.
 - Each counted compaction is an in-memory `CompactionStageRecord` with `ext_id == "compaction_ai"`
   and `TraceStageApplied`.
-- Every applied `compaction_ai` stage is followed by a successful `provider_call_prepared` before
-  the next provider result or terminal event.
+- Every applied `compaction_ai` stage is followed by `provider_call_prepared`, proving
+  `seal_compacted_payload` accepted the compacted payload.
+- Every prepared call in the happy-path fixture is followed by `ProviderResult`, not
+  `StreamErrorRetry` or a terminal provider error, before the next compaction stage.
 - Every proceeded provider call has `system_prefix_count >= 1` and `system_prefix_chars > 0`.
-- No `ext_compaction_rejected`, `compaction_exhausted`, or `SystemPromptEmpty` error occurs.
+- No in-memory `CompactionStageRecord` has `TraceStageRejected`; no `compaction_exhausted` or
+  `SystemPromptEmpty` error occurs.
 - The returned persisted history still contains the un-compacted session growth expected from the
   scripted tool loop; compaction remains provider-payload-local except for explicit artifact
   threading.
@@ -221,14 +226,19 @@ session:
 - A non-empty system prefix.
 - Alternating assistant tool calls and tool results.
 - Large deterministic tool outputs to push usage over the `compaction_ai.threshold_pct`.
+- Test `compaction_ai` config values pinned in the fixture, including `threshold_pct` and
+  `keep_recent`, so the small catalog limit reliably yields at least three applications.
 - Scripted model steps that continue the loop with tool calls for enough turns to trigger repeated
   pre-step compaction.
-- Step markers in tool-call ids or tool-result content, if the implementation chooses stateless
-  routing, so the fake agent can continue after compaction removes older transcript turns.
+- Step markers in retained tool-call ids or tool-result content so the marker-routed fake agent can
+  continue after compaction removes older transcript turns.
 - A final scripted prose step to terminate.
 - `compaction_ai` registered before the structural compactor, matching shipped profiles.
 - A test-only model catalog file selected by `MOTOKO_MODELS_FILE` so the Qwen model label has a
   small limit during the deterministic run.
+- Explicit run caps for the deterministic script. The exact command belongs in the implementation
+  plan, but it must cover the session loop's effect row plus `Env`/`FS` for
+  `catalog_context_limit_for` and `MOTOKO_MODELS_FILE`.
 
 Use a small test context limit for the deterministic scenario. The Qwen 262144 binding is guarded in
 the production catalog/profile path; the long-session fixture should not generate hundreds of
@@ -264,7 +274,7 @@ contents.
 3. The deterministic long-session scenario runs with a test `MOTOKO_MODELS_FILE` override, without
    network and without real provider calls.
 4. The deterministic long-session scenario observes at least three in-memory `compaction_ai`
-   `TraceStageApplied` records.
+   `TraceStageApplied` records and zero `TraceStageRejected` records.
 5. The deterministic long-session scenario proves replay determinism over a normalized trace
    projection.
 6. Direct `compaction_ai` scenarios prove output-shape validity and artifact-cache reuse for
@@ -296,6 +306,11 @@ The iterative review resolved four plan-blocking issues:
   catalog still guards the real 262144 limit.
 - The fake provider must route summarizer prompts separately and must not use assistant-count
   indexing as its only script clock after compaction changes the payload.
+- The two independent ADR reviews are folded into the normative sections: the provider is now
+  marker-routed `Ported(Ports)` only; negative compaction rejection checks use
+  `TraceStageRejected`; `provider_call_prepared` is treated as seal acceptance, with
+  `ProviderResult` proving dispatch success; and the fixture must pin caps plus
+  `compaction_ai` threshold/keep settings.
 
 ## Plan handoff notes
 
@@ -305,10 +320,10 @@ The follow-up plan should:
 2. Decide whether to add a traced helper beside `run_v2_with_scripted_ports` or call
    `Session.run_v2_session_traced` directly from the scenario.
 3. Add the OpenRouter Qwen catalog entry and dedicated profile.
-4. Build the routed model port and fake summarizer branch. Do not use assistant-count indexing as
-   the only script clock after compaction; use state threading or retained step markers. The cache
-   oracle should be feasible: first run produces a cached summary; second run would visibly differ
-   or fail if the cache were not used.
+4. Build the marker-routed model port and fake summarizer branch. Do not use assistant-count
+   indexing or mutable call counters as the script clock after compaction; use retained step
+   markers. The cache oracle should be feasible: first run produces a cached summary; second run
+   would visibly differ or fail if the cache were not used.
 5. Implement the four standing scenario ids above.
 6. Wire the deterministic scenario into the compaction DST Make target.
 7. Add a short handoff for the optional live calibration run.
