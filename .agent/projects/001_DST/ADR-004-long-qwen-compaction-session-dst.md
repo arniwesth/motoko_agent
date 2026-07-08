@@ -427,3 +427,151 @@ diagram's dashed "calibrates fixture realism only" edge and gate wiring keep it 
    pin/normalize volatile clock/session/time fields for replay determinism.
 6. Implement the four standing scenario ids and wire them into the fast gate; fold R2 into a citation
    cleanup while editing.
+
+## Review Comments — Second independent audit
+
+Reviewer model: openrouter/z-ai/glm-5.2. Date: 2026-07-08. Independent session; no context from the
+authoring session or from the first `## Review Comments` section below. Method: citation audit,
+feasibility attack, oracle-consistency pass, and scope/diagram attack, all grounded against HEAD
+`3cbe898` (branch `arniwesth/mot-31-checkpoint-trigger`). The first review (R1–R2 + residuals) was
+audited as part of this pass and is confirmed against source unless stated.
+
+### Prior-review verification
+
+- Prior R1 (state-threaded script vs `Ported(Ports)`) holds. `dispatch_step` returns
+  `next_provider: Ported(ports)` unchanged (`src/core/test/stub_step.ail:188-190`); only `Scripted`
+  threads via its tail (`:194-204`), and `Scripted` is built from `scripted_ports_from_steps`, whose
+  index is `assistant_count(msgs) - base_assistant_count` (`:157-168`) — the clock the ADR rejects —
+  and which routes the summarizer through the same `Ports.model_step` (`session.ail:453-471`). The
+  inconsistent sites are the diagram `routed` node, Decision-detail §1, §4 Fixture, and Plan-handoff #4.
+- Prior R2 (citation at `phase_vocab.ail:414`) holds: `:414` is `ProviderCallInfo`; the
+  `ProviderCallPrepared(ProviderCallInfo)` constructor is `:514`; the schema-v1 projection is `:587`.
+  The field list is correct.
+
+### R1. "No `ext_compaction_rejected`" is not observable from the in-memory `LedgerTrace` oracle and would silently pass
+
+**Defect.** §3 lists "No `ext_compaction_rejected`, `compaction_exhausted`, or `SystemPromptEmpty`
+error occurs" as a core invariant over the in-memory `LedgerTrace` oracle, but `ext_compaction_rejected`
+is a *wire* event that is never appended to the in-memory trace, so an assertion over its absence is
+trivially true and gives no signal.
+
+**Grounding.**
+- `emit_pre_step_stages` emits `ExtCompactionRejected({step, note})` only via `ledger_emit` (the wire
+  journal): `src/core/session.ail:298-301`. It is never wrapped in `WireRecord(...)`.
+- The in-memory stage path instead appends `CompactionStageRecord({step, ext_id, outcome})` with
+  `TraceStageRejected(reason)` via `stage_record`/`c2_trace_stage_records`:
+  `src/core/hook_phase.ail:14-20`, `src/core/session.ail:361-365`.
+- `c2_trace_wire_events` appends only `phase.events` (provider-result phase), not pre-step stage wire
+  events: `src/core/session.ail:368-373,1538`. So no `WireRecord(ExtCompactionRejected)` ever enters
+  `TracedSessionResult.trace` (`session.ail:135-138`).
+- By contrast `compaction_exhausted` and `SystemPromptEmpty` *are* in-memory `WireRecord`s on their
+  paths: `session.ail:1467,1474`. Only the `ext_compaction_rejected` member of the triple is
+  mis-anchored.
+- The diagram `clean` node ("ext_compaction_rejected … absent") inherits the same defect and is
+  internally inconsistent with the `stage` node, which correctly uses the in-memory
+  `CompactionStageRecord`/`TraceStageApplied`.
+
+**Action.** Reword the invariant to the in-memory observable: "no `CompactionStageRecord` with
+`outcome == TraceStageRejected` (any `ext_id`)" — or scoped to the compactor under test, "no
+`CompactionStageRecord` with `ext_id == "compaction_ai"` and `TraceStageRejected`." Update the diagram
+`clean` node to match (e.g. "`TraceStageRejected` absent"). Leave `compaction_exhausted` and
+`SystemPromptEmpty` as-is (they are real in-memory `WireRecord`s).
+
+### R2. §3's "successful `provider_call_prepared`" conflates payload-acceptance with dispatch success
+
+**Defect.** §3 requires every applied `compaction_ai` stage to be "followed by a successful
+`provider_call_prepared` before the next provider result," but `provider_call_prepared` is emitted
+*before* `dispatch_step` and encodes only that `seal_compacted_payload` accepted the payload — not
+that the provider call succeeded.
+
+**Grounding.** `session.ail:1482-1491` emits `ProviderCallPrepared`, then runs `dispatch_step`; on a
+stream error the trace gets `WireRecord(prepared_event)` followed by `StreamErrorRetry`
+(`:1498-1517`) or a terminal error (`:1521-1522`), with no `ProviderResult`. Success is observable
+only via the subsequent `ProviderResult(ThinkingInfo)` (`:1538`; `phase_vocab.ail:531`).
+
+**Action.** Split the invariant: (a) "every applied `compaction_ai` stage is followed by a
+`provider_call_prepared` (seal accepted the compacted payload)"; (b) "that call is followed by a
+`ProviderResult`, not a `StreamErrorRetry`/terminal error, before the next compaction stage." Since
+the fixture scripts the provider to succeed, (b) is implicit, but stating it prevents a future
+scripted-error case from passing the oracle. Non-blocking.
+
+### Residual risks / test gaps
+
+- **Replay normalization is lighter than the ADR implies.** The in-memory `LedgerTrace` records carry
+  no `session_id` or wall-clock in the per-step events (`ProviderCallPrepared`, `CompactionStageRecord`,
+  `ThinkingStream*`, `ProviderResult` — `phase_vocab.ail:414,467,531`), so the multi-compaction happy
+  path is deterministic *without* trace normalization once the fake provider/summarizer are fixed. The
+  only volatile in-memory field to confirm is `RunSummaryInfo.duration_ms` (`phase_vocab.ail:437`) on
+  the terminal/error path. Pin fakes and normalize only that field if it appears, rather than assuming
+  a broad volatile-field scrub. This refines the first review's "Fake ports must pin time" residual:
+  the risk is real but narrower than stated.
+- **Scenario caps and `compaction_ai` config are unspecified.** `catalog_context_limit_for` has effect
+  row `{Env, FS}` (`context_usage.ail:50`) and `run_v2_session_traced` carries
+  `{AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace}` (`session.ail:1741`), so the
+  scenario needs `--caps` covering Env/FS (ADR-002 was explicit; ADR-004 is not). The deterministic run
+  must also pick a `compaction_ai` config (`threshold_pct`, `keep_recent`) consistent with the small
+  test limit and the ≥3-compaction goal; the shipped default (`threshold_pct: 75`, `keep_recent: 10`,
+  `compaction_ai.json`) plus `keep_recent` halving at `pct >= 90` (`compaction_ai.ail:163`) sets the
+  minimum old-turns needed per application.
+- **Summarizer routing discriminator is underspecified in the ADR body.** §1 says "selected by prompt
+  shape" without naming the shape. Source fixes it: the summarizer call is exactly one `role: "user"`
+  message with no tool results (`compaction_ai.ail:63`), while every agent call carries the pinned
+  system prefix (≥1 message) — so "single user message, no system role" is the stable discriminator.
+  The first review's Plan-handoff action already states this; the ADR body should too.
+- **`ext_id` source is the registered hook id string, not a type.** `dispatch_pre_step_chain` builds
+  `{ ext_id: h.id, … }` (`runtime.ail:166-177`), so the oracle's `ext_id == "compaction_ai"` filter
+  depends on the registered hook id. The test must register the compaction_ai hook under that exact id
+  (the shipped config order does: `config.json:37`). Worth pinning in the fixture.
+
+### What is accurate
+
+The observability spine holds. `TracedSessionResult = { result, trace: LedgerTrace }`
+(`session.ail:135-138`) exposes both the in-memory trace and the returned history, so every positive
+invariant is observable: ≥3 `CompactionStageRecord` with `ext_id == "compaction_ai"` and
+`TraceStageApplied` (`phase_vocab.ail:464-467`; `hook_phase.ail:16-20`); `provider_call_prepared`
+fields `system_prefix_count`/`system_prefix_chars`/`payload_digest` as in-memory `WireRecord`s
+(`session.ail:1482-1490,1517,1538`); and uncompacted persisted history (`st.msgs ++ [assistant_msg]`,
+`session.ail:1536`, never replaced by the compacted payload). The wire `compaction_extension` event
+indeed lacks `ext_id` (`phase_vocab.ail:598`), so counting in-memory records is the correct choice
+(Review disposition; diagram `stage` node). `MOTOKO_MODELS_FILE` genuinely reaches the session path:
+`CallModel` calls `catalog_context_limit_for(model)` (`session.ail:1452`) → `catalog_path()` honors the
+env var (`context_usage.ail:24-32`), and the `openrouter/` stripping (`:39-45`) makes either label form
+resolve, so a test fixture mapping `openrouter/qwen/qwen3.6-35b-a3b` to a small limit works. Catalog
+claims check out: `.motoko/model-catalog.json` has `ollama/qwen3.6:35b-a3b-mxfp8 → 262144` (`:43`) and
+no OpenRouter Qwen3.6 entry. The `compaction_ai` anchors are correct (`summarize_with_ai:62-67`,
+`cached_summary:136-147`, `cache_artifact:150-156`, `compact_with_ai:159-177`) and the cache is gated so
+`summarize_with_ai` runs only on a miss (`:171-173`) — the counter-free sentinel-summary oracle is sound
+as a direct, same-segment replay. The production tool path is real: `on_tool_handle` →
+`dispatch_tool_handle` → `first_handle` returns `Handled(ToolResultEnvelope)` with arbitrary
+deterministic `stdout` (`runtime.ail:245-261`; `tool_phase.ail:242-253,288`; `types.ail:48-55`), so
+large deterministic tool results on the production path are feasible. Registry order
+`compaction_ai → … → compaction_structural` is confirmed (`config.json:37`) and the DeepSeek default
+summarizer is confirmed (`compaction_ai.json:2`). `validate_compactor_output` is exported and pure
+(`invariants.ail:133`), usable directly. The ABI-no-gate conclusion (finding 4) is correct: `ExtCtx`
+carries `context_limit`/`ports`/`artifacts` (`types.ail:74-95`) and `compaction_ai` gates on
+`usage_percent(msgs, ctx.context_limit)` (`compaction_ai.ail:160`) — note `telemetry` is present in the
+type but unused by `compaction_ai`, so it is not the enabler. Prompt-shape routing is feasible:
+summarizer calls are a single user message (`compaction_ai.ail:63`); agent calls carry the system
+prefix. Live Qwen stays evidence-only: the diagram's dashed "calibrates fixture realism only" edge and
+the gate wiring keep it out of the fast gate, and AC8 requires date/profile/model/log path. The diagram
+does not imply the ledger holds full payloads (`prepared` shows `payload_digest`, not body) and does not
+imply wire events carry `ext_id` (`stage` attributes it to `CompactionStageRecord`).
+
+### Recommended pre-implementation actions (dependency-ordered)
+
+1. Fix R1: reword the negative invariant to `CompactionStageRecord`/`TraceStageRejected` (in-memory) in
+   §3 and the diagram `clean` node; drop the `ext_compaction_rejected` wire-event name.
+2. Adopt prior R1: commit the standing DST to stateless marker routing on `Ported(Ports)`; align §1,
+   §4 Fixture, Plan-handoff #4, and the diagram `routed` node. Fold R2's "successful" split into §3.
+3. State the scenario `--caps` (Env/FS for the catalog, plus the loop effect row) and the test
+   `compaction_ai` config (threshold/keep_recent) in §4.
+4. Pin fakes (provider, summarizer, clock, env) and normalize only `RunSummaryInfo.duration_ms` if it
+   reaches the in-memory trace; do not assume a broad volatile-field scrub.
+5. Build the routed provider (single-user-message summarizer branch) and the test `on_tool_handle`
+   large-result extension; register `compaction_ai` under id `"compaction_ai"` before
+   `compaction_structural`.
+6. Tune the fixture to guarantee ≥3 `compaction_ai` `TraceStageApplied` records (mind the
+   `old_turns == 0` short-circuit at `compaction_ai.ail:168` and `keep_recent` halving at `:163`);
+   assert the count.
+7. Implement the four standing scenario ids and wire them into the fast gate; fold prior R2 into a
+   citation cleanup (`ProviderCallInfo` at `:414`, constructor at `:514`, projection at `:587`).
