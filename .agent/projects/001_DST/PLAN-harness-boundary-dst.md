@@ -188,9 +188,9 @@ Verified this session that this repo-root form runs a `src/tui/src/*.test.ts` fa
 resolves `node_modules`/`@jest/globals` upward from the test file, so cwd does not matter). The
 `cd src/tui && bun test src/harness-dst.test.ts` form is equivalent.
 
-**Gating note (ADR gap G3):** WI-1a + scenarios **1–3** (WI-2/3/4) require a production change the
-handoff did **not** authorize — hold them until the ADR owner rules on G3. WI-1b + scenario **4**
-(WI-5) are handoff-authorized and can land independently.
+**Gating note (ADR gap G3) — RESOLVED 2026-07-09.** The ADR owner **approved** the WI-1a module
+extraction (see G3 in §"ADR gaps found"). WI-1a + scenarios **1–3** (WI-2/3/4) are now **unblocked**
+and proceed as written. WI-1b + scenario **4** (WI-5) were already handoff-authorized.
 
 ### WI-0 — precondition: prove the *slice* is green (do not adopt the red repo)
 
@@ -209,12 +209,13 @@ block on the two unrelated scratchpad WebSocket/loopback failures surfaced by `b
 
 **Rollback.** n/a (read-only).
 
-### WI-1a — extract host prompt functions into `src/tui/src/system-prompt.ts` (production, behavior-preserving) — **BLOCKED ON G3 DECISION**
+### WI-1a — extract host prompt functions into `src/tui/src/system-prompt.ts` (production, behavior-preserving) — **G3 APPROVED 2026-07-09**
 
 **Purpose.** Make `systemPromptForWorkspace` / `materializeSystemPromptArg` importable in isolation so
-scenarios 1–3 observe the **real** #76 host logic (survey finding 1; D-P2). **This exceeds the ADR's /
-handoff's sanctioned production-change scope (only the scenario-4 helpers were authorized) — do NOT
-land it until the ADR owner rules on ADR gap G3.** Scenario 4 (WI-1b + WI-5) does not depend on this.
+scenarios 1–3 observe the **real** #76 host logic (survey finding 1; D-P2). This exceeded the ADR's /
+handoff's originally-sanctioned production-change scope (only the scenario-4 helpers were authorized);
+the ADR owner **approved** the extension on 2026-07-09 (ADR gap G3), on the ground that it is the same
+behavior-preserving-extraction category already sanctioned for scenario 4. Proceed as written.
 
 **File-level changes.**
 - **New** `src/tui/src/system-prompt.ts`: move the bodies of `systemPromptForWorkspace` (`index.ts:409-421`)
@@ -377,9 +378,9 @@ git status --porcelain | grep -E '\.ail$' && echo "FIX: .ail changed" || echo "g
 
 ## Acceptance gate — the six ADR-003 §"Acceptance criteria" (final checklist)
 
-> Crits 1, 2, 4 cover scenarios 1–3, which are **contingent on the G3 decision** (WI-1a). Scenario 4
-> (crit 3) and crits 5–6 are reachable independently. A partial landing of only scenario 4 satisfies
-> crits 3, 5, 6 and the scenario-4 half of crit 1.
+> **G3 approved 2026-07-09**, so all six criteria are in scope for this plan. (Historical note: crits
+> 1/2/4 cover scenarios 1–3, which were contingent on the G3 decision via WI-1a; crit 3 + crits 5–6
+> were always reachable via the handoff-authorized scenario 4.)
 
 1. **Four Layer-2 scenarios green** under `bun test src/tui/src/harness-dst.test.ts`, each using a
    `mkdtemp` workdir and restoring `process.env`/`process.argv`; no AILANG, no spawn, no network; each
@@ -419,15 +420,17 @@ The ADR-003 anchors and semantics were fresh and held on re-verification. These 
   scratchpad WebSocket/loopback flakes) / 226 passed. *Resolved in-plan* (D-P5, WI-0): the **runtime-
   process family the new file joins is green under bun-native (14/14)**; gate on that slice, not the
   pre-existing repo-wide red. The ADR should narrow its precondition accordingly.
-- **G3 (material) — scenarios 1–3 are not directly bun-testable.** The ADR (Decision drivers,
-  Decision detail 2) treats `systemPromptForWorkspace` / `materializeSystemPromptArg` as "bun-test-able
-  directly." At HEAD both are **unexported** and `index.ts` **self-executes `main()`** (`:1007`), so
-  they are unreachable without a production change. The handoff sanctioned only the scenario-4
-  `buildChildEnv`/`buildSupervisorArgs` extraction. **This plan proposes a second, same-category
-  behavior-preserving extraction (WI-1a → `system-prompt.ts`)** and flags it here for the ADR owner:
-  it is the minimum that lets scenarios 1–3 observe the real functions (inlining is rejected, D-P2,
-  because crit 2 requires catching the real function regressing). If the owner declines, scenarios 1–3
-  cannot be built as specified.
+- **G3 (material) — scenarios 1–3 are not directly bun-testable. → APPROVED 2026-07-09.** The ADR
+  (Decision drivers, Decision detail 2) treats `systemPromptForWorkspace` / `materializeSystemPromptArg`
+  as "bun-test-able directly." At HEAD both are **unexported** and `index.ts` **self-executes `main()`**
+  (`:1007`), so they are unreachable without a production change. The handoff sanctioned only the
+  scenario-4 `buildChildEnv`/`buildSupervisorArgs` extraction. This plan proposed a second,
+  same-category behavior-preserving extraction (WI-1a → `system-prompt.ts`); inlining was rejected
+  (D-P2, because crit 2 requires catching the real function regressing).
+  **Decision:** the ADR owner **approved** the WI-1a module extraction on 2026-07-09 (rationale: same
+  behavior-preserving-extraction category already sanctioned for scenario 4; the alternative
+  `import.meta.main` guard was declined in favor of the extraction because it leaves `main()`'s entry
+  behavior untouched). WI-1a and scenarios 1–3 are unblocked; all six acceptance criteria are in scope.
 - **G4 (trivial) — line drift.** The handoff cites the `"."`-root-return at `index.ts:417`; actual is
   **`:418`**. (The ADR grounding log does not cite that line.) Also the ADR grounding log lists the
   materialization write at `:441`; `:441` constructs the `dest` path literal, the `writeFileSync` is at
