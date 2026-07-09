@@ -393,7 +393,7 @@ pure func runtime_status_counts_rec(records: [LedgerRecord], counts: RuntimeStat
             provider_calls_completed: counts.provider_calls_completed,
             stage_applied_total: counts.stage_applied_total + 1,
             stage_rejected_total: counts.stage_rejected_total,
-            compaction_ai_applied: counts.compaction_ai_applied + (if stage.ext_id == "compaction_ai" then 1 else 0)
+            compaction_ai_applied: counts.compaction_ai_applied + (if is_compaction_ai_ext_id(stage.ext_id) then 1 else 0)
           },
           TraceStageRejected(_) => {
             provider_calls_started: counts.provider_calls_started,
@@ -409,6 +409,10 @@ pure func runtime_status_counts_rec(records: [LedgerRecord], counts: RuntimeStat
       runtime_status_counts_rec(rest, next)
     }
   }
+}
+
+pure func is_compaction_ai_ext_id(ext_id: string) -> bool {
+  ext_id == "compaction_ai" || startsWith(ext_id, "compaction_ai#")
 }
 
 pure func runtime_status_counts(trace: LedgerTrace) -> RuntimeStatusCounts {
@@ -1626,6 +1630,7 @@ func c2_loop(
               let prepared_event = ProviderCallPrepared({
                 step: step_idx,
                 msg_count: List.length(compacted_msgs),
+                estimated_input_tokens: estimate_tokens_messages(compacted_msgs),
                 system_prefix_count: count_system_prefix(compacted_msgs),
                 system_prefix_chars: system_prefix_chars(compacted_msgs),
                 system_prefix_digest: system_prefix_digest_for(split.pinned),
@@ -2358,6 +2363,7 @@ pure func test_runtime_status_includes_prior_conversation_counts() -> bool
         WireRecord(ProviderCallPrepared({
           step: 0,
           msg_count: 2,
+          estimated_input_tokens: 3,
           system_prefix_count: 1,
           system_prefix_chars: 3,
           system_prefix_digest: "sha256:sys",
@@ -2422,4 +2428,27 @@ pure func test_runtime_status_includes_prior_conversation_counts() -> bool
     contains(encoded, "\"provider_calls_started\":27")
       && contains(encoded, "\"provider_calls_completed\":27")
       && contains(encoded, "\"steps_executed_so_far\":27")
+  }
+
+pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool
+  tests [((), true)]
+  {
+    let trace: LedgerTrace = {
+      records: [
+        CompactionStageRecord({
+          step: 3,
+          ext_id: "compaction_ai#0",
+          outcome: TraceStageApplied("AI-summarized 1 turns")
+        }),
+        CompactionStageRecord({
+          step: 3,
+          ext_id: "compaction_structural#3",
+          outcome: TraceStageApplied("structural: tier=emergency keep_last=3")
+        })
+      ]
+    };
+    let counts = runtime_status_counts(trace);
+    counts.stage_applied_total == 2
+      && counts.stage_rejected_total == 0
+      && counts.compaction_ai_applied == 1
   }

@@ -354,7 +354,7 @@ func record_projection(r: LedgerRecord) -> string {
 
 func event_projection(ev: LedgerEvent) -> string {
   match ev {
-    ProviderCallPrepared(i) => "prepared step=${show(i.step)} model=${i.model} msg=${show(i.msg_count)} sys=${show(i.system_prefix_count)} chars=${show(i.system_prefix_chars)} sys_digest=${i.system_prefix_digest} digest=${i.payload_digest}",
+    ProviderCallPrepared(i) => "prepared step=${show(i.step)} model=${i.model} msg=${show(i.msg_count)} est=${show(i.estimated_input_tokens)} sys=${show(i.system_prefix_count)} chars=${show(i.system_prefix_chars)} sys_digest=${i.system_prefix_digest} digest=${i.payload_digest}",
     ProviderResult(i) => "provider_result step=${show(i.step)} finish=${i.finish_reason} tools=${show(i.tool_calls)}",
     CompactionExhausted(info) => "compaction_exhausted step=${show(info.step)}",
     ErrorEvent(info) => "error code=${info.code}",
@@ -436,7 +436,7 @@ func prepared_fields_ok(records: [LedgerRecord]) -> bool {
     r :: rest => {
       let here = match r {
         WireRecord(ProviderCallPrepared(info)) =>
-          info.model == qwen_model && info.system_prefix_count >= 1 && info.system_prefix_chars > 0 && digest_shape_ok(info.system_prefix_digest) && info.payload_digest != "",
+          info.model == qwen_model && info.estimated_input_tokens > 0 && info.system_prefix_count >= 1 && info.system_prefix_chars > 0 && digest_shape_ok(info.system_prefix_digest) && info.payload_digest != "",
         _ => true
       };
       here && prepared_fields_ok(rest)

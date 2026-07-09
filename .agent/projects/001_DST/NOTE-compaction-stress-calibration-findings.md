@@ -7,6 +7,94 @@
 
 ---
 
+## Follow-up Investigation — 2026-07-09
+
+The first three gaps were investigated against the runtime code and newer live logs.
+
+### What Was Fixed
+
+1. **AI compaction status counter was undercounting generated extension IDs**
+   - Root cause: runtime status counted AI compaction only when `stage.ext_id == "compaction_ai"`.
+   - Generated extension registry IDs are suffixed, for example `compaction_ai#0`.
+   - Fix: `src/core/session.ail` now treats both `compaction_ai` and `compaction_ai#...` as AI compaction stages.
+   - Regression: added `test_runtime_status_counts_generated_compaction_ai_id`.
+
+2. **Per-call token-estimate observability was added**
+   - `ProviderCallInfo` now carries `estimated_input_tokens`.
+   - `provider_call_prepared` JSONL now emits `estimated_input_tokens` for the exact compacted payload that is about to be sent.
+   - This can be joined with the following `thinking.input_tokens` for the same step to measure estimate-vs-provider actual tokens.
+   - `scripts/long_qwen_compaction_dst.ail` now asserts prepared calls include positive estimate telemetry.
+
+### What Was Tested
+
+Commands run after the fixes:
+
+```sh
+ailang check src/core/session.ail
+ailang test src/core/session.ail
+ailang check src/core/phase_vocab.ail
+ailang test src/core/phase_vocab.ail
+ailang check scripts/long_qwen_compaction_dst.ail
+MOTOKO_MODELS_FILE=scripts/fixtures/qwen36-small-model-catalog.json \
+  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+  --entry main scripts/long_qwen_compaction_dst.ail
+```
+
+All passed.
+
+### Latest Live Qwen Heavy Run
+
+Latest log reviewed: `.motoko/logfile/session_2026-07-09T07-49-32-948Z.jsonl`
+
+| Metric | Value |
+|--------|-------|
+| Steps executed | 55 |
+| Final step | 54 |
+| Input tokens | 5,046,227 |
+| Output tokens | 18,428 |
+| Cache read tokens | 0 |
+| Cache creation tokens | 0 |
+| Raw compaction events | 26 |
+| AI compaction events | 13 |
+| Structural compaction events | 13 |
+| Stage rejections | 0 |
+| System prefix count | 1 |
+| System prefix chars | 9,817 |
+| System prefix digest | `sha256:4d5d9ec8ab4afddfa5406f5523e76e9d03a1618f5ea4744553a6f7d444440a6c` |
+
+Notes:
+- Motoko's final prose/status snapshot reported **12 compactions / 6 AI applied**, but the raw JSONL contains **26 compaction events / 13 AI applied**.
+- The discrepancy is because several later prepared calls had retry errors and additional compaction events occurred after the last runtime-status snapshot.
+- Provider retry errors occurred at steps 43-46 and 51. Errors were OpenRouter upstream/provider issues: rate limits and `No user query found in messages`.
+
+### Token Estimate Issue Found
+
+The new `estimated_input_tokens` field confirmed that the current `content_chars / 4` estimator **systematically undercounts** Qwen/OpenRouter actual input tokens.
+
+Across 50 completed provider calls:
+
+| Slice | Calls | Avg estimate / actual | Avg absolute error |
+|-------|-------|-----------------------|--------------------|
+| Before compaction | 42 | 0.776 | 22.4% |
+| Compaction/retry window | 3 | 0.431 | 56.9% |
+| After compaction | 5 | 0.533 | 46.7% |
+| Overall | 50 | 0.731 | 26.9% |
+
+Concrete examples:
+
+| Step | Estimated | Actual | Ratio |
+|------|-----------|--------|-------|
+| 41 | 184,083 | 228,616 | 0.805 |
+| 42 | 37,085 | 82,541 | 0.449 |
+| 54 | 18,604 | 32,390 | 0.574 |
+
+Interpretation:
+- The estimator is useful for monotonic pressure detection, but it is not calibrated for Qwen/OpenRouter.
+- Under-counting is worse after compaction, likely because provider chat serialization, role/tool-call structure, and non-content message overhead are not represented by `content_chars / 4`.
+- A Qwen/OpenRouter-specific safety multiplier or estimator calibration should be considered before relying on estimate percentages as hard exhaustion gates.
+
+---
+
 ## Runtime State at Termination
 
 | Metric | Value |
@@ -40,11 +128,11 @@ Despite this frequency, the compaction was entirely transparent to the agent:
 - The agent continued making tool calls uninterrupted
 - The system prefix never grew, confirming elision was working
 
-### 2. AI-Based Compaction Is Not Live
+### 2. AI-Based Compaction Status Was Misreported
 
-**0 compaction_ai_applied** throughout the entire run. The AI-based compaction path documented in `design_docs/compaction_ai.md` was never invoked.
+The original run reported **0 compaction_ai_applied** throughout runtime status snapshots. Follow-up investigation showed this was a telemetry bug, not proof that AI compaction was disabled.
 
-This means only structural/token-based compaction runs — the pipeline checks token budget thresholds (70%, 85%, 95%) and elides old message content, but does not use language model summarization or intelligent content reduction.
+The generated extension registry assigns suffixed IDs such as `compaction_ai#0`, while runtime status counted only exact `compaction_ai`. This has been fixed in `src/core/session.ail`. Later live logs show AI compaction events are present.
 
 ### 3. System Prefix Is Stable Under Heavy Load
 
@@ -95,7 +183,7 @@ The History type is sealed via `MkHistory` — structurally opaque against exter
 Token estimation: `content_chars / 4`. This is a rough heuristic. The 95% exhaustion threshold triggers compaction. The policy DST in `scripts/compaction_policy_dst.ail` confirms multi-tier thresholds (70%, 85%, 95%).
 
 ### Extension Hooks (`ext/runtime.ail`)
-Nine extension hook points exist:
+Eight extension hook points exist in the current extension ABI:
 1. `on_build_system_prompt`
 2. `on_budget_plan`
 3. `on_pre_step` ← compaction triggered here
@@ -104,9 +192,8 @@ Nine extension hook points exist:
 6. `on_response_intercept`
 7. `on_solver_candidate`
 8. `on_describe_tools`
-9. `on_compact_state`
 
-The `on_compact_state` hook exists but was never invoked (0 compaction_ai_applied). This is the hook that would fire the AI-based compaction summarization path.
+Both `compaction_ai` and `compaction_structural` run through `on_pre_step`. The original `0 compaction_ai_applied` observation was caused by runtime-status counting exact extension IDs only; generated IDs are suffixed.
 
 ---
 
@@ -125,9 +212,9 @@ The `on_compact_state` hook exists but was never invoked (0 compaction_ai_applie
 4. **Model call phases**: Currently all phases used ReadFile/Search/BashExec. Adding CallModel phases (via the actual tool_dispatch_adapter) would test compaction during actual multi-turn conversations.
 
 ### Potential Issues
-1. **Token estimation accuracy**: The `content_chars / 4` heuristic may over- or under-estimate actual token counts. Without comparing estimated vs. actual token counts per compaction, we cannot verify the estimation accuracy.
+1. **Token estimation accuracy**: Now measurable via `provider_call_prepared.estimated_input_tokens` joined with `thinking.input_tokens`. Latest Qwen/OpenRouter run shows systematic undercounting: overall estimate/actual ratio ~0.731, dropping to ~0.431 during the compaction/retry window.
 2. **Prefix growth**: While the prefix stayed at 16,229 chars in this session, we did not test sessions lasting 100+ steps to see if the prefix eventually grows (which would indicate a memory leak in prefix materialization).
-3. **Stage vs. AI gap**: The gap between stage_applied (27) and compaction_ai_applied (0) is a structural gap in the pipeline. The `on_compact_state` extension hook never fires, which means no extension (including compaction_ai) can customize or observe AI-based compaction decisions.
+3. **Stage vs. AI telemetry semantics**: `stage_applied_total` counts all applied compaction stages, while `compaction_ai_applied` counts only AI stages. Raw JSONL compaction events and runtime-status snapshots can diverge when retry errors occur after the last status poll.
 
 ---
 
@@ -145,25 +232,25 @@ The difference likely reflects:
 The `PLAN-compaction-dst-scenarios.md` and `PLAN-long-qwen-compaction-session-dst.md` documents describe expected compaction behaviors:
 - Compaction should fire when token usage exceeds 95%
 - The pipeline should elide oldest messages while preserving the system prefix
-- Compaction AI should be optional (and is — it's currently disabled)
+- Compaction AI should be optional; in current live runs it is enabled through `on_pre_step`
 
-This session confirms the basic pipeline works but does not test the AI path (0 applied) or the edge cases documented in `compaction_regression_stress.ail`.
+The original session appeared not to test the AI path because runtime status undercounted suffixed extension IDs. Follow-up live logs confirm AI compaction applies, while edge cases documented in `compaction_regression_stress.ail` remain separate stress targets.
 
 ---
 
 ## Recommendations
 
-1. **Enable compaction_ai**: The infrastructure exists (`on_compact_state` hook, compaction_ai extension). The 0 invocations suggest it is either not enabled in config or the pipeline does not route to it. Verify and enable.
+1. **Keep compaction_ai telemetry fixed**: AI compaction is live. The gap was runtime-status undercounting for suffixed extension IDs (`compaction_ai#...`). Keep the regression test covering this.
 
 2. **Measure cache performance**: Add a cache-warming phase to measure baseline cache hit rates. This would inform whether the token drain is primarily due to cache misses or genuine context growth.
 
 3. **Run to 100 steps**: The remaining 58 steps would reveal whether compaction frequency plateaus (as expected if the prefix is stable and compaction elides old context) or increases (indicating the prefix is growing).
 
-4. **Add token estimation verification**: Compare `content_chars / 4` estimates against actual provider-reported token counts for each compaction. This would validate or calibrate the estimation heuristic.
+4. **Calibrate token estimation**: `estimated_input_tokens` is now emitted. Use live JSONL to compare against provider `input_tokens`. Qwen/OpenRouter currently undercounts by ~27% overall and much more after compaction; consider a model/provider-specific multiplier or structural overhead term.
 
 5. **Test prefix stability under stress**: A 100-step run with large outputs (BashExec producing thousands of lines) would stress-test the prefix materialization. If the prefix grows beyond 16,229 chars, the materialization has a bug.
 
-6. **Document the stage vs. AI gap**: The pipeline has two compaction paths (structural/token and AI) but only one fires. This should be documented in the compaction DST whether this is intentional (AI compaction is experimental) or a bug (routing is broken).
+6. **Document stage vs. AI telemetry semantics**: The pipeline has two compaction paths (AI summary and structural elision) and both can fire in the same pre-step chain. Runtime-status counters should count suffixed extension IDs consistently, and live analysis should distinguish raw compaction events from status snapshots.
 
 ---
 
@@ -221,10 +308,10 @@ Files read during this calibration:
 
 This calibration confirms the compaction pipeline is functional, stable, and active. The system prefix never grew (16,229 chars, same digest throughout), compaction successfully elided context on 27 out of 42 steps (64%), and no compaction attempts were rejected.
 
-The primary gaps identified are:
-1. AI-based compaction (compaction_ai) is never invoked
+The primary gaps identified and current status are:
+1. AI-based compaction (compaction_ai) appeared not to be invoked — **resolved as telemetry bug; fixed and tested**
 2. No cache utilization (0 reads)
-3. Token estimation accuracy is unverified
+3. Token estimation accuracy is unverified — **observability added; latest Qwen run shows systematic undercounting**
 4. The 100-step budget was not exhausted, so long-term prefix stability is untested
 
-These are all addressable in follow-up sessions. The foundation — the compaction pipeline, the prefix materialization, the extension hook system — is solid.
+The foundation — the compaction pipeline, the prefix materialization, and the extension hook system — remains solid. The main remaining action is estimator calibration for Qwen/OpenRouter and cache behavior confirmation per provider/model.
