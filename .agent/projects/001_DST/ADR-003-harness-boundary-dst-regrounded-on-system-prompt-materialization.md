@@ -251,7 +251,10 @@ not conflated. No DST gate depends on WI-1/WI-2 until they land.
 - **Moving the spawn mechanism into core / AILANG-as-entry.** Settled (policy-vs-mechanism NOTE):
   blocked on `std/process` env/cwd/sandbox primitives (`backend.ail:5,:58` shows only
   `spawnProcess(cmd, args)` — no child-env arg), does not address the data-authority root, pays off
-  only inside a larger rewrite. Long-horizon option, not this work.
+  only inside a larger rewrite. Long-horizon option, not this work — but it is the **critical-path
+  blocker for pure-AILANG headless**; see Consequences §"Long-term: pure-AILANG headless" for how that
+  goal reframes this ADR (outer-tier vs sandboxed-core, the one-process-vs-two fork, WI-1/WI-2 as the
+  migration seam).
 - **Re-guarding #76's in-core symptom** — `empty_system_prompt_rejected` exists (004 ADR-002) for the
   non-headless path. This ADR *flags* the headless gap (Finding 5) but does not fix it in core; if a
   fix is wanted, it is `require_system_prompt` policy work, a separate WI.
@@ -289,6 +292,56 @@ Negative / accepted: the **general scrub class stays untested until WI-1/WI-2** 
 exist yet) — made explicit rather than papered over. The **headless in-core gap** (empty prompt not
 rejected when `MOTOKO_HEADLESS=1`) is documented but left to a separate policy WI; until then Layer-2
 is the only guard there, which is exactly why it lands now.
+
+### Long-term: pure-AILANG headless
+
+The standing goal is to run headless Motoko as a **pure-AILANG system with no TypeScript**. Grounding
+the launch path shows how that goal frames this ADR — and corrects one of its claims:
+
+- **The real boundary is *unsandboxed-launcher* vs *sandboxed-core*, not TS vs AILANG.** Today TS
+  (`index.ts` + `runtime-process.ts`) is only a **thin pre-spawn launcher tier**: resolve config,
+  materialize the external prompt, build `childEnv` (incl. `AILANG_FS_SANDBOX=workdir`), decide
+  `MOTOKO_HEADLESS`, then `spawn`. It spawns `ailang run … src/core/supervisor.ail`
+  (`runtime-process.ts:515-528`), and **`supervisor.ail:main` already owns config loading, backend
+  spawn, and the whole agent loop** in AILANG. So the pure-AILANG goal does not *remove* the boundary;
+  it moves the launcher tier from TS into a small `launcher.ail`. Two authority levels persist because
+  the sandbox is the point.
+- **Correction to this ADR's own framing:** "materialization is permanently host-side / can't move
+  into core" is precise only if *core* = the **sandboxed** `supervisor.ail` (which runs under
+  `AILANG_FS_SANDBOX=workdir` and therefore cannot read an out-of-sandbox source). It is **not**
+  intrinsically TypeScript — it can move into an **unsandboxed outer AILANG tier**. Read every
+  "host-side" in this ADR as **"outer-tier."** The language-neutral invariant is: *the actor that
+  materializes the external prompt must hold FS authority the sandboxed agent lacks; the agent reads
+  the prompt only as a workdir-relative path under its sandbox.*
+- **Critical-path blocker (promote from Out of scope):** an AILANG launcher tier needs
+  `std/process` to spawn a child with a **child env / cwd / sandbox** — `spawnProcess(cmd, args)`
+  (`backend.ail:58`) has none. This is the gating upstream WI for the goal, to be filed against
+  `sunholo-data/ailang`, not a someday footnote.
+- **Open design fork that changes what primitive to ask for — one process or two?** `AILANG_FS_SANDBOX`
+  is currently a **process-start env var** (global), which *forces* the two-process split (an
+  unsandboxed parent must set it for the child). If AILANG instead exposed the sandbox as a
+  **runtime-narrowable FS capability** — read the external prompt with a broad FS cap, materialize into
+  workdir, then narrow to workdir before entering the agent loop — headless collapses to a **single
+  AILANG process** and the spawn-with-env blocker above **evaporates**. Which primitive AILANG builds
+  (process-boundary env vs runtime-scoped cap) decides single- vs two-binary headless. Settle this
+  *before* requesting the primitive.
+- **WI-1/WI-2 are the migration seam, not just drift-guards.** WI-2 ("AILANG-owned `env_manifest`
+  export") *is* the outer tier learning to construct `childEnv` declaratively from the same manifest
+  core reads; WI-1 (`CORE_MAP`-derived `childEnv`) is its precondition. This roughly doubles their
+  value: they guard the scrub class **and** pave the launcher migration.
+- **Layer-2 is written to survive the migration.** Its four scenarios are language-neutral **contract**
+  (ids + invariants: content byte-equality, dest-inside-sandbox, empty-on-missing/escape,
+  prompt-by-reference); only the **runner** (`bun test`) is throwaway — the contract ports to an AILANG
+  scenario when `launcher.ail` lands. Assert **thick on the contract, thin on the TS mechanism**
+  (`process.env.SYSTEM_MD` repoint, `process.argv` save/restore, the `.motoko-system-prompt.md` literal
+  are the non-portable parts). Headless is the right **pilot** for pure-AILANG precisely because it has
+  no TUI (the one irreducibly-TS chunk), so this boundary is the leading edge of the whole effort.
+- **Do not let the goal defer the near-term guard.** #76 is live *now* in TS-headless where the in-core
+  `seal` is off (Finding 5); skipping Layer-2 until the rewrite ships the regression surface unguarded
+  for the entire interim. Sequence: **(1)** guard now (contract-shaped bun test) → **(2)** file the
+  `std/process` primitive upstream (after settling the one-vs-two fork) → **(3)** port the launcher
+  (TS → `launcher.ail`, `childEnv` from the WI-1/WI-2 manifest) → **(4)** port the guard to an AILANG
+  scenario and retire the bun-test runner.
 
 ## Rejected alternatives
 
