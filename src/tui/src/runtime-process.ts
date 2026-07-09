@@ -314,6 +314,106 @@ function mirrorAbsoluteProfile(workdir: string, profile: string): string {
   return basename;
 }
 
+export function buildChildEnv(
+  workdir: string,
+  profile: string,
+  openaiBaseUrl: string,
+  aiOptionsJson: string,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+    GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+    EXA_API_KEY: process.env.EXA_API_KEY,
+    CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
+    AILANG_FS_SANDBOX: workdir,
+    AILANG_NO_VERSION_WARNINGS: process.env.AILANG_NO_VERSION_WARNINGS ?? "1",
+    MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
+    MOTOKO_HEADLESS:
+      process.env.MOTOKO_HEADLESS ??
+      (process.stdin.isTTY ? "" : "1"),
+    MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
+    MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
+    MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+    AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
+    AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",
+    MOTOKO_COST_INPUT_PER_1M_MILLICENTS:
+      process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
+    MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
+      process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
+  };
+  if (process.env.AILANG_STDLIB_PATH) {
+    childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
+  }
+  if (process.env.MOTOKO_OTEL && process.env.MOTOKO_OTEL.trim() !== "") {
+    childEnv.MOTOKO_OTEL = process.env.MOTOKO_OTEL;
+    childEnv.OTEL_EXPORTER_OTLP_ENDPOINT =
+      process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://clickstack:4318";
+    childEnv.OTEL_EXPORTER_OTLP_PROTOCOL =
+      process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
+    childEnv.OTEL_SERVICE_NAME =
+      process.env.OTEL_SERVICE_NAME ?? "motoko-agent";
+    childEnv.AILANG_TRACE = process.env.AILANG_TRACE ?? "standard";
+    childEnv.AILANG_TRACE_MAX_SPANS =
+      process.env.AILANG_TRACE_MAX_SPANS ?? "100";
+    if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
+      childEnv.OTEL_EXPORTER_OTLP_HEADERS =
+        process.env.OTEL_EXPORTER_OTLP_HEADERS;
+    }
+    if (process.env.OTEL_RESOURCE_ATTRIBUTES) {
+      childEnv.OTEL_RESOURCE_ATTRIBUTES =
+        process.env.OTEL_RESOURCE_ATTRIBUTES;
+    }
+    for (const key of [
+      "OTEL_TRACES_EXPORTER",
+      "OTEL_METRICS_EXPORTER",
+      "OTEL_EXPORTER_OTLP_TIMEOUT",
+      "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+      "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+      "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+      "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+      "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+      "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
+    ]) {
+      const value = process.env[key];
+      if (value && value.trim() !== "") {
+        childEnv[key] = value;
+      }
+    }
+  }
+  if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
+  if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
+  return childEnv;
+}
+
+export function buildSupervisorArgs(
+  resolvedProfile: string,
+  model: string,
+  workdir: string,
+  port: number,
+  systemPrompt: string,
+  task: string,
+): string[] {
+  const supervisorArgs = [
+    "--profile",
+    resolvedProfile,
+    "--model",
+    model,
+    "--workdir",
+    supervisorWorkdirArg(workdir),
+    "--port",
+    String(port),
+  ];
+  if (systemPrompt.trim() !== "") {
+    supervisorArgs.push("--system-prompt", systemPrompt);
+  }
+  supervisorArgs.push(task);
+  return supervisorArgs;
+}
+
 export class RuntimeProcess {
   private proc: ChildProcess;
   private dead = false;
@@ -339,133 +439,7 @@ export class RuntimeProcess {
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
       : "ailang";
-    const childEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
-      GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
-      EXA_API_KEY: process.env.EXA_API_KEY,
-      CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
-      AILANG_FS_SANDBOX: workdir,
-      AILANG_NO_VERSION_WARNINGS: process.env.AILANG_NO_VERSION_WARNINGS ?? "1",
-      MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
-      // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
-      // MOTOKO_HEADLESS=1 so the AILANG runtime's conversation_loop_v2
-      // skips its readLine() drain (which blocks indefinitely on non-TTY
-      // stdin instead of returning EOF) and exits cleanly after the first
-      // task completes. Manual override: set MOTOKO_HEADLESS in the parent
-      // env to force either mode regardless of TTY state.
-      // See agent_loop_v2.ail conversation_loop_v2 for the AILANG-side gate.
-      MOTOKO_HEADLESS:
-        process.env.MOTOKO_HEADLESS ??
-        (process.stdin.isTTY ? "" : "1"),
-      // M-MOTOKO-PERSIST-NUDGE: forward the loop-persistence retry budget so
-      // agent_loop_v2.ail's NoDecision branch can read it. Without this the
-      // explicit env allowlist scrubs it and the feature is silently off —
-      // same gotcha as MOTOKO_REPO / the pricing vars below. Empty = off.
-      MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
-      // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): forward
-      // MOTOKO_REPO so the AILANG runtime can fall back to the fork's
-      // bundled profile (.motoko/config/<profile>) when WORKDIR is a
-      // per-task scratch dir without its own .motoko/config. Without
-      // this, eval-harness runs see extensions.order=[] and other
-      // profile defaults silently mask user-configured behavior.
-      MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
-      // MOTOKO_PROFILE_DIR — absolute path to the active profile's config
-      // directory. Standalone AILANG extension packages (motoko-ext-*) read
-      // their own JSON config here (e.g. motoko-ext-compaction-ai reads
-      // ${MOTOKO_PROFILE_DIR}/compaction_ai.json). Without this var, the
-      // packages fall back to "." which resolves to the AILANG runtime's
-      // CWD (motoko_agent root) → "no such file or directory" panics on
-      // first turn. The original src/core/config.ail path-built the same
-      // location internally; the env-var split happened when extensions
-      // moved out into separate packages without a corresponding launcher
-      // wiring.
-      MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
-      // M-OLLAMA-PER-MODEL-MAX-TOKENS: forward the per-model output budget so the
-      // AILANG runtime's ollama /v1 path (resolveOllamaMaxTokens) uses the model's
-      // declared max_output_tokens instead of the 4096 std/ai default. Qwen3.6
-      // reasons thousands of tokens before the tool call and truncates
-      // (finish_reason=length) at 4096 → 0 tool calls (disengagement). Without this
-      // allowlist entry the explicit childEnv whitelist drops it — same gotcha as
-      // MOTOKO_REPO / the pricing vars. Empty = the AILANG-side 16384 floor applies.
-      AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
-      // Forward the ollama /v1 HTTP timeout (AILANG default 300s). Large-context tasks
-      // accumulate a big prompt; a single qwen request can exceed 5 min on a local GPU and
-      // the AILANG runtime aborts with `context deadline exceeded`, killing the run mid-task.
-      // Without this allowlist entry the var set by the launcher is dropped — same gotcha as
-      // AILANG_OLLAMA_MAX_TOKENS above.
-      AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",
-      // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
-      // pricing env vars set by the AILANG adapter from Task.Budget. Without
-      // this, the AILANG-side fix (load_cost_rates reads these env vars) is
-      // a no-op because the explicit whitelist drops them — same gotcha as
-      // MOTOKO_REPO above (gap #6). Empty string falls through to motoko's
-      // profile config fallback inside load_cost_rates.
-      MOTOKO_COST_INPUT_PER_1M_MILLICENTS:
-        process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
-      MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
-        process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
-    };
-    // AILANG v0.15.x migration: forward AILANG_STDLIB_PATH if set in the
-    // parent env so callers can point the runtime at an upstream stdlib
-    // checkout (e.g. /Users/mark/dev/sunholo/ailang/std). Without this,
-    // the agent fails with "stdlib module not found: std/ai/streaming"
-    // because it falls back to system paths that don't have the new modules.
-    if (process.env.AILANG_STDLIB_PATH) {
-      childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
-    }
-    // ClickStack/OTLP handoff: the launcher uses an explicit env whitelist,
-    // so tracing variables must be copied deliberately. Keep export gated so
-    // default dev runs do not attempt OTLP delivery when the opt-in sidecar is
-    // down.
-    if (process.env.MOTOKO_OTEL && process.env.MOTOKO_OTEL.trim() !== "") {
-      childEnv.MOTOKO_OTEL = process.env.MOTOKO_OTEL;
-      childEnv.OTEL_EXPORTER_OTLP_ENDPOINT =
-        process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://clickstack:4318";
-      childEnv.OTEL_EXPORTER_OTLP_PROTOCOL =
-        process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
-      childEnv.OTEL_SERVICE_NAME =
-        process.env.OTEL_SERVICE_NAME ?? "motoko-agent";
-      childEnv.AILANG_TRACE = process.env.AILANG_TRACE ?? "standard";
-      childEnv.AILANG_TRACE_MAX_SPANS =
-        process.env.AILANG_TRACE_MAX_SPANS ?? "100";
-      if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
-        childEnv.OTEL_EXPORTER_OTLP_HEADERS =
-          process.env.OTEL_EXPORTER_OTLP_HEADERS;
-      }
-      if (process.env.OTEL_RESOURCE_ATTRIBUTES) {
-        childEnv.OTEL_RESOURCE_ATTRIBUTES =
-          process.env.OTEL_RESOURCE_ATTRIBUTES;
-      }
-      for (const key of [
-        "OTEL_TRACES_EXPORTER",
-        "OTEL_METRICS_EXPORTER",
-        "OTEL_EXPORTER_OTLP_TIMEOUT",
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
-        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-        "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
-      ]) {
-        const value = process.env[key];
-        if (value && value.trim() !== "") {
-          childEnv[key] = value;
-        }
-      }
-    }
-    // M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 cutover (2026-05-06): the
-    // upstream std/ai.step() typed-tool-use loop is now the default and
-    // only loop. The MOTOKO_AGENT_V2 env var is no longer consulted by
-    // the runtime — forwarding has been removed. All 6 legacy decision
-    // points (extension intercept, tool gating, tool-handle routing,
-    // ohmy_pi backend split, hybrid mode, multi-turn conversation_loop)
-    // are migrated and validated by the M9 25/25 provider matrix.
-    if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
-    if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
+    const childEnv = buildChildEnv(workdir, profile, openaiBaseUrl, aiOptionsJson);
 
     // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): mirror the
      // requested profile dir from MOTOKO_REPO into <workdir>/.motoko/config
@@ -494,20 +468,7 @@ export class RuntimeProcess {
       );
     }
 
-    const supervisorArgs = [
-      "--profile",
-      resolvedProfile,
-      "--model",
-      model,
-      "--workdir",
-      supervisorWorkdirArg(workdir),
-      "--port",
-      String(port),
-    ];
-    if (systemPrompt.trim() !== "") {
-      supervisorArgs.push("--system-prompt", systemPrompt);
-    }
-    supervisorArgs.push(task);
+    const supervisorArgs = buildSupervisorArgs(resolvedProfile, model, workdir, port, systemPrompt, task);
 
     this.proc = spawn(
       ailangBin,
