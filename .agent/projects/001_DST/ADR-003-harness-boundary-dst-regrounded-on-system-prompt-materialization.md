@@ -115,7 +115,7 @@ HEAD and splits the work accordingly.
    (any path, incl. outside the workspace), **writes the content into `<workdir>/.motoko-system-prompt.md`**,
    and repoints `process.env.SYSTEM_MD` at that in-sandbox file (`index.ts:740-744`).
    `systemPromptForWorkspace` then converts it to a workdir-relative path; core reads that path under
-   the sandbox (`rpc.ail:197-201`, `readFile(system_md_path)`; argv precedence at `config.ail:487`,
+   the sandbox (`rpc.ail:201-205`, `readFile(system_md_path)`; argv precedence at `config.ail:487`,
    parse at `config.ail:226`). **Correction to 004 ADR-002 §5:** "delivered by value as a
    `--system-prompt` argv … an argv cannot be scrubbed" is imprecise — the argv carries a **path**, and
    correctness still depends on the **content being materialized inside the sandbox**. The env-scrub of
@@ -129,7 +129,7 @@ HEAD and splits the work accordingly.
    **net-new**, not an extension of an existing family.
 
 5. **The in-core backstop is off in headless mode.** `require_system_prompt: not headless`
-   (`session.ail:968`; `headless = getEnvOr("MOTOKO_HEADLESS","") == "1"` at `:960`). The launcher
+   (`session.ail:1149`; `headless = getEnvOr("MOTOKO_HEADLESS","") == "1"` at `:1141`). The launcher
    sets `MOTOKO_HEADLESS=1` whenever stdin is not a TTY (`runtime-process.ts:361-363`) — i.e. CI, the
    eval harness, and every non-interactive `--system-prompt` injection. In that path
    `seal_compacted_payload(..., require_system_prompt=false)` **does not reject** an empty prefix, so
@@ -150,7 +150,7 @@ HEAD and splits the work accordingly.
 - Don't assert over a delivery mechanism that didn't ship (Findings 1–3). Every invariant needs a
   referent at HEAD.
 - Target the **live** path: `materializeSystemPromptArg` + `systemPromptForWorkspace` +
-  `--system-prompt` argv + `rpc.ail:197` readFile, not `SYSTEM_MD`-in-child-env.
+  `--system-prompt` argv + `rpc.ail:205` readFile, not `SYSTEM_MD`-in-child-env.
 - Prefer the cheapest layer that catches the bug. #76's host half is two pure-ish functions over the
   filesystem — bun-test-able directly, no AILANG runtime, no spawn, no providers.
 - Keep DST decoupled from unbuilt seams: the AILANG manifest scenario waits on WI-1/WI-2 exactly as
@@ -208,10 +208,10 @@ not conflated. No DST gate depends on WI-1/WI-2 until they land.
 - **R11 (undefined L3 "runtime probe").** For #76 the L3 probe **collapses**: the acceptance criterion
   "a configured non-empty prompt produces a non-empty runtime observation" is discharged by the
   composition **Layer-2 (materialization observable via function return values) ∘ in-core
-  (`readFile(system_md_path)` at `rpc.ail:201`, then the `seal` gate)** — no bespoke probe binary or
+  (`readFile(system_md_path)` at `rpc.ail:205`, then the `seal` gate)** — no bespoke probe binary or
   `std/ai.step` stub is required. Contract, if an end-to-end check is ever wanted (optional, not in
   scope): spawn the real `supervisor.ail` against a materialized prompt with a scripted/stub step and
-  assert it does **not** emit the `rpc.ail:205` "system prompt file not found" warning — the probe
+  assert it does **not** emit the `rpc.ail:209` "system prompt file not found" warning — the probe
   must emit that warning event on a missing path and must refuse to use a path that escaped the
   sandbox. Given the headless gap (Finding 5), the **higher-value** end-to-end is a regression test
   that a headless run with a materialized prompt serves non-empty content, since the in-core `seal`
@@ -321,6 +321,13 @@ is the only guard there, which is exactly why it lands now.
 
 ## Grounding and anchor log (HEAD `4786355`, v0.26.0 / `3b52a24`)
 
+> **Re-grounded 2026-07-09 at HEAD `df85703`** (`4786355` is an ancestor; toolchain unchanged
+> v0.26.0 / `3b52a24`). AILANG line anchors were refreshed for forward drift — `session.ail` moved
+> ~+180–210 lines (`:960→:1141`, `:968→:1149`, `:1398→:1609`, `:1400→:1611`), `rpc.ail` +4–7
+> (`:197→:201`, `:228→:235`), `phase_vocab.ail` `:140→:144`. TS anchors (`index.ts`,
+> `runtime-process.ts`, `config.ts`) and `config.ail` `:226`/`:487` were exact and unchanged. All
+> findings, decisions, and semantics hold; the ADR remains **Proposed** (`harness-dst.test.ts` unbuilt).
+
 - Host materialization: `src/tui/src/index.ts` — `systemPromptForWorkspace:409` (workdir-relative,
   `""` on missing `:414` / sandbox-escape `:419`), `materializeSystemPromptArg:430` (readFileSync
   source `:436`, write `<workdir>/.motoko-system-prompt.md` `:441`, `null`+log on unreadable `:438`),
@@ -332,11 +339,11 @@ is the only guard there, which is exactly why it lands now.
 - Manifest source (for gated WI): `src/tui/src/config.ts` — `CORE_MAP:22`,
   `"agent.system_prompt": { env: "SYSTEM_MD" }` `:30`, `EXTENSION_MAPS:57`.
 - In-core delivery: `src/core/config.ail` — argv parse `--system-prompt` `:226`, argv-over-config
-  precedence `:487`; `src/core/rpc.ail` — `cfg.agent.system_prompt` (a **path**) `:197`,
-  `readFile`/missing-warning `:200-205`, `dispatch_build_system_prompt` `:228`.
-- In-core guard + headless gate: `src/core/session.ail` — `headless` `:960`, `require_system_prompt:
-  not headless` `:968`, `seal` call `:1398`, `SystemPromptEmpty` error `:1400`; `seal_compacted_payload`
-  `src/core/phase_vocab.ail:140`; existing scenario `empty_system_prompt_rejected` in
+  precedence `:487`; `src/core/rpc.ail` — `cfg.agent.system_prompt` (a **path**) `:201`,
+  `readFile`/missing-warning `:205-210`, `dispatch_build_system_prompt` `:235`.
+- In-core guard + headless gate: `src/core/session.ail` — `headless` `:1141`, `require_system_prompt:
+  not headless` `:1149`, `seal` call `:1609`, `SystemPromptEmpty` error `:1611`; `seal_compacted_payload`
+  `src/core/phase_vocab.ail:144`; existing scenario `empty_system_prompt_rejected` in
   `scripts/phase_c_l1_scenarios.ail`.
 - Absent on this branch (verified): `src/tui/src/runtime-process-env.test.ts`, `autoForwardedEnvKeys`,
   PR #76 `c5b0924`.
