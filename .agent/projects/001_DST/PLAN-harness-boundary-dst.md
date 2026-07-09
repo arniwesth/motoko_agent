@@ -145,17 +145,52 @@ enough to exercise the path.
 
 ---
 
+## Test-file skeleton (`src/tui/src/harness-dst.test.ts`)
+
+```ts
+import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+// WI-1a exports (BLOCKED on G3): import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-prompt.js";
+import { buildChildEnv, buildSupervisorArgs } from "./runtime-process.js";   // WI-1b
+
+let workdir: string;
+let savedEnv: string | undefined;
+let savedArgv: string[];
+beforeEach(() => {
+  workdir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dst-"));
+  savedEnv = process.env.SYSTEM_MD;          // ADR-003 harness discipline
+  savedArgv = process.argv;
+});
+afterEach(() => {
+  if (savedEnv === undefined) delete process.env.SYSTEM_MD; else process.env.SYSTEM_MD = savedEnv;
+  process.argv = savedArgv;
+  fs.rmSync(workdir, { recursive: true, force: true });
+});
+```
+
+Match the codebase's `import * as fs from "fs"` style (not `node:fs`). Each `describe` name **is** the
+scenario id (e.g. `describe("harness.external_system_md_materialized", ...)`) — that is the ADR-003
+reporting contract. The env/argv save-restore and the `.motoko-system-prompt.md` literal are
+**mechanism** (thin); assert **thick** on the contract rows in §"Contract vs. mechanism".
+
 ## Work breakdown
 
-Establish the baseline **first** (see WI-0). Every step's verification is the same scoped command,
-run from `src/tui/`:
+Establish the baseline **first** (see WI-0). Every step's verification is ADR-003 crit 1's exact
+command, run from **repo root**:
 
 ```
-cd src/tui && bun test src/harness-dst.test.ts
+bun test src/tui/src/harness-dst.test.ts
 ```
 
-(Equivalent to ADR-003's `bun test src/tui/src/harness-dst.test.ts` from repo root; running from
-`src/tui/` is the form verified this session.)
+Verified this session that this repo-root form runs a `src/tui/src/*.test.ts` family file green (bun
+resolves `node_modules`/`@jest/globals` upward from the test file, so cwd does not matter). The
+`cd src/tui && bun test src/harness-dst.test.ts` form is equivalent.
+
+**Gating note (ADR gap G3):** WI-1a + scenarios **1–3** (WI-2/3/4) require a production change the
+handoff did **not** authorize — hold them until the ADR owner rules on G3. WI-1b + scenario **4**
+(WI-5) are handoff-authorized and can land independently.
 
 ### WI-0 — precondition: prove the *slice* is green (do not adopt the red repo)
 
@@ -174,20 +209,27 @@ block on the two unrelated scratchpad WebSocket/loopback failures surfaced by `b
 
 **Rollback.** n/a (read-only).
 
-### WI-1a — extract host prompt functions into `src/tui/src/system-prompt.ts` (production, behavior-preserving)
+### WI-1a — extract host prompt functions into `src/tui/src/system-prompt.ts` (production, behavior-preserving) — **BLOCKED ON G3 DECISION**
 
 **Purpose.** Make `systemPromptForWorkspace` / `materializeSystemPromptArg` importable in isolation so
-scenarios 1–3 observe the **real** #76 host logic (survey finding 1; D-P2). **Flagged: exceeds the
-ADR's sanctioned production-change scope — see ADR gap G3; confirm with the ADR owner before landing.**
+scenarios 1–3 observe the **real** #76 host logic (survey finding 1; D-P2). **This exceeds the ADR's /
+handoff's sanctioned production-change scope (only the scenario-4 helpers were authorized) — do NOT
+land it until the ADR owner rules on ADR gap G3.** Scenario 4 (WI-1b + WI-5) does not depend on this.
 
 **File-level changes.**
 - **New** `src/tui/src/system-prompt.ts`: move the bodies of `systemPromptForWorkspace` (`index.ts:409-421`)
-  and `materializeSystemPromptArg` (`index.ts:430-449`) **verbatim**; add `export` to both; add
-  `import fs from "node:fs"; import path from "node:path";` (match index.ts's import style). Keep the
-  doc comment on `materializeSystemPromptArg` (`index.ts:423-429`).
-- **Edit** `src/tui/src/index.ts`: delete the two function definitions; add `import {
+  and `materializeSystemPromptArg` (`index.ts:430-449`) **verbatim**; add `export` to both; import fs/path
+  in **index.ts's own style** — `import * as fs from "fs"; import * as path from "path";` (verified
+  `index.ts:20-21`). Keep the doc comment on `materializeSystemPromptArg` (`index.ts:423-429`).
+- **Edit** `src/tui/src/index.ts`: delete the two function definitions (verified the only other
+  occurrences are the two call sites + doc comments — grep this session); add `import {
   systemPromptForWorkspace, materializeSystemPromptArg } from "./system-prompt.js";`. Call sites
-  (`:741`, `:766`) unchanged.
+  (`:741`, `:766`) unchanged. `main()`'s self-execution (`:1007`) untouched.
+
+**Alternative the owner may prefer (equal G3 weight):** keep both functions in `index.ts`, add `export`
+to each, and guard the launch with `if (import.meta.main) main().catch(...)`. Rejected as the default
+because it changes `index.ts`'s entry behavior (relies on `import.meta.main` being true under the real
+launch path), whereas the module extraction leaves `main()` untouched.
 
 **Behavior-preserving because:** pure textual move; both functions reference only `fs`/`path`/`process`,
 no `index.ts`-local symbols. `main()`'s self-execution (`:1007`) is untouched.
@@ -265,11 +307,12 @@ must FAIL (source is outside); revert.
 - Assert (contract): return value === `"prompt.md"` (the workdir-relative path, unchanged); **no**
   `.motoko-system-prompt.md` exists in `workdir` (`!fs.existsSync(path.join(workdir,
   ".motoko-system-prompt.md"))`).
-- Edge (ADR-003 §Decision detail 1 note): when the configured file sits at the **workdir root** such
-  that `path.relative` is `""`, `systemPromptForWorkspace` returns `"."` (`index.ts:418` — **note: the
-  handoff cites `:417`; actual is `:418`, ADR gap G4**). Add a sub-case asserting `"."` for a file
-  whose resolved path equals `workdir` itself is **not** applicable here (the file is a child); instead
-  document the `"."` branch in a comment and cover it only if a natural root-file fixture exists.
+- Edge sub-case — the `"."` branch (`index.ts:418`; the handoff cites `:417`, actual is `:418` — ADR
+  gap G4). `systemPromptForWorkspace` returns `"."` **only when the configured path resolves to the
+  workdir directory itself** (`rel === ""`), not for a child file. Cover it directly: set
+  `process.env.SYSTEM_MD = path.resolve(workdir)` (absolute), then assert the return is `"."`
+  (`existsSync(workdir)` is true since it is a directory). This pins the one non-obvious return in the
+  function.
 
 **Verification / Teeth / Rollback.** As WI-2. Teeth: create a `.motoko-system-prompt.md` in workdir
 before the assertion → the "no managed file written" assertion must FAIL; revert.
@@ -283,8 +326,10 @@ operative guard there. **Record this in a test-file comment** (the ADR reporting
 **Test, three cases.**
 - Missing file: `SYSTEM_MD` points at a non-existent in-workdir path ⇒ `systemPromptForWorkspace`
   returns `""` (`index.ts:414`).
-- Sandbox escape: `SYSTEM_MD` absolute or `../…` resolving outside `workdir` ⇒ `""` (`rel` starts
-  `..`/absolute, `index.ts:419`).
+- Sandbox escape: **create a real file in a second `mkdtemp` dir outside `workdir`** and set
+  `SYSTEM_MD` to its absolute path ⇒ `""` (`rel` starts `..`/absolute, `index.ts:419`). The file
+  **must exist**, else the missing branch (`:414`) fires first and the escape branch (`:419`) is never
+  exercised — both return `""` so the test would pass for the wrong reason.
 - Unreadable materialization source: `materializeSystemPromptArg(<path to a dir, or a missing file>,
   workdir)` ⇒ returns `null` (and logs to stderr, `index.ts:438`). Assert `null`; optionally spy on
   `console.error` to confirm the log (mechanism — keep thin).
@@ -299,8 +344,11 @@ the child env, and the sandbox is set. Must **fail** if a future change reintrod
 `childEnv` without materialization.
 
 **Test, over the WI-1b helpers (no spawn).**
-- `childEnv = buildChildEnv(workdir, "someprofile", "", "")`. Assert (contract):
-  `childEnv.AILANG_FS_SANDBOX === workdir`; `!("SYSTEM_MD" in childEnv)` (SYSTEM_MD **absent**).
+- **Set `process.env.SYSTEM_MD` to a sentinel** (e.g. `"/tmp/leak-sentinel.md"`) first, so the test
+  proves the parent's `SYSTEM_MD` is **not forwarded** — not merely that it happened to be unset.
+  `childEnv = buildChildEnv(workdir, "someprofile", "", "")`. Assert (contract):
+  `childEnv.AILANG_FS_SANDBOX === workdir`; `!("SYSTEM_MD" in childEnv)` (SYSTEM_MD **absent** despite
+  being present in `process.env`).
 - `args = buildSupervisorArgs("someprofile", "some/model", workdir, 12345, "prompt.md", "do a task")`.
   Assert (contract): `args` contains the **adjacent pair** `["--system-prompt", "prompt.md"]` (find
   index of `"--system-prompt"`, assert `args[i+1] === "prompt.md"`); and with `systemPrompt = ""`,
@@ -328,6 +376,10 @@ git status --porcelain | grep -E '\.ail$' && echo "FIX: .ail changed" || echo "g
 ---
 
 ## Acceptance gate — the six ADR-003 §"Acceptance criteria" (final checklist)
+
+> Crits 1, 2, 4 cover scenarios 1–3, which are **contingent on the G3 decision** (WI-1a). Scenario 4
+> (crit 3) and crits 5–6 are reachable independently. A partial landing of only scenario 4 satisfies
+> crits 3, 5, 6 and the scenario-4 half of crit 1.
 
 1. **Four Layer-2 scenarios green** under `bun test src/tui/src/harness-dst.test.ts`, each using a
    `mkdtemp` workdir and restoring `process.env`/`process.argv`; no AILANG, no spawn, no network; each
