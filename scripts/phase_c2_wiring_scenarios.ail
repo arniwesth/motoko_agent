@@ -54,6 +54,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   Compacted
 )
 import pkg/sunholo/motoko_ext_empty_stop_guard/empty_stop_guard (decide_with_budget)
+import pkg/sunholo/motoko_ext_progress_contract_guard/progress_contract_guard (decide_with_budget as pc_decide_with_budget)
 
 type ScenarioFailure = {
   failed_invariant: string,
@@ -164,6 +165,12 @@ func assert_decisions(trace: LedgerTrace, expected: [string]) -> Result[(), Scen
 
 func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   Session.run_v2_session_traced(rt, "task", "", false, budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
+}
+
+-- Task-bearing runner for progress-contract scenarios: the guard reads ctx.task,
+-- and run_scripted hardcodes "task", so those scenarios need to inject a contract.
+func run_scripted_task(rt: ExtRuntime, task: string, script: [ScriptedStep]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(rt, task, "", false, budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
 }
 
 func scenario_traced_prose_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -299,6 +306,58 @@ func guard_rt() -> ExtRuntime {
     strict_mode: false,
     verification: v
   }
+}
+
+func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  pc_decide_with_budget(ctx, text, 2)
+}
+
+func pc_guard_hook() -> ExtensionHooks {
+  {
+    id: "progress_contract_guard",
+    provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      PassThrough
+    },
+    on_tool_policy: no_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: pc_guard_solver
+  }
+}
+
+func pc_guard_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  {
+    registry: { hooks: [pc_guard_hook()] },
+    strict_mode: false,
+    verification: v
+  }
+}
+
+-- empty_stop_guard first, then progress_contract_guard, mirroring profile order.
+func combined_guard_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  {
+    registry: { hooks: [guard_hook(), pc_guard_hook()] },
+    strict_mode: false,
+    verification: v
+  }
+}
+
+func pc_contract_task() -> string {
+  "Do not stop early. Complete at least 200 phases. Check MotokoRuntimeStatus current_step and step_budget."
+}
+
+func pc_compaction_task() -> string {
+  "Continue until the task is done or until the runtime compacts. Complete at least 200 phases."
+}
+
+func pc_failure_candidate() -> string {
+  "**Phase 51 complete.** Step 53/200. Context is growing. Continuing Phase 52."
 }
 
 func stage_rt() -> ExtRuntime {
@@ -532,6 +591,122 @@ func empty_stop_floor_without_guard_scenario() -> Scenario {
   { id: "empty_stop_floor_without_guard", run: scenario_empty_stop_floor_without_guard }
 }
 
+-- 1. Catches the latest live failure shape: a non-empty stop that self-reports
+--    "Continuing Phase 52" against an explicit progress contract, then finalizes on
+--    a genuine completion.
+func scenario_progress_contract_catches_failure_shape() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted_task(pc_guard_rt(), pc_contract_task(), [
+    prose_step(pc_failure_candidate()),
+    prose_step("Reached 200/200. Final summary: all phases complete.")
+  ]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "InjectUserMessage", "CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "progress contract catches failure shape", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func progress_contract_catches_failure_shape_scenario() -> Scenario {
+  { id: "progress_contract_catches_failure_shape", run: scenario_progress_contract_catches_failure_shape }
+}
+
+-- 2. Budget exhaustion: the same self-contradictory candidate three times. Budget 2
+--    injects twice, then NoDecision finalizes on the non-empty candidate. No core
+--    floor event is required.
+func scenario_progress_contract_budget_exhaustion_finalizes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted_task(pc_guard_rt(), pc_contract_task(), [
+    prose_step(pc_failure_candidate()),
+    prose_step(pc_failure_candidate()),
+    prose_step(pc_failure_candidate())
+  ]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "InjectUserMessage", "CallModel", "InjectUserMessage", "CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "progress contract budget exhaustion finalizes", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func progress_contract_budget_exhaustion_finalizes_scenario() -> Scenario {
+  { id: "progress_contract_budget_exhaustion_finalizes", run: scenario_progress_contract_budget_exhaustion_finalizes }
+}
+
+-- 3a. Blank candidate is not the progress guard's business: it returns NoDecision, so
+--     the core empty-stop floor still fires and the run finalizes without looping.
+func scenario_progress_contract_ignores_blank() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted_task(pc_guard_rt(), pc_contract_task(), [prose_step("")]);
+  match traced.result {
+    Ok(_) => {
+      match assert_decisions(traced.trace, ["CallModel", "Finalize"]) {
+        Err(f) => Err(f),
+        Ok(_) => assert_has_empty_stop_finalize(traced.trace, "progress guard leaves blank to empty-stop floor")
+      }
+    },
+    Err(e) => Err({ failed_invariant: "progress contract ignores blank run succeeds", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func progress_contract_ignores_blank_scenario() -> Scenario {
+  { id: "progress_contract_ignores_blank", run: scenario_progress_contract_ignores_blank }
+}
+
+-- 3b. Combined chain (empty_stop_guard before progress_contract_guard): a blank stop
+--     is owned by the empty-stop guard, which injects feedback and loops.
+func scenario_progress_contract_combined_chain_blank_owned_by_empty_stop() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted_task(combined_guard_rt(), pc_contract_task(), [prose_step(""), prose_step("done")]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "InjectUserMessage", "CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "combined chain blank owned by empty stop", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func progress_contract_combined_chain_blank_owned_by_empty_stop_scenario() -> Scenario {
+  { id: "progress_contract_combined_chain_blank_owned_by_empty_stop", run: scenario_progress_contract_combined_chain_blank_owned_by_empty_stop }
+}
+
+-- 4. Legitimate completion passes: an explicit "Reached 200/200" finalizes immediately.
+func scenario_progress_contract_completion_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted_task(pc_guard_rt(), pc_contract_task(), [
+    prose_step("Reached 200/200. Final summary: all phases complete.")
+  ]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "progress contract completion passes", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func progress_contract_completion_passes_scenario() -> Scenario {
+  { id: "progress_contract_completion_passes", run: scenario_progress_contract_completion_passes }
+}
+
+-- 5. Allowed compaction stop passes: the task permits stopping on runtime compaction,
+--    so a candidate that reports it finalizes even though it also says "Continuing".
+func scenario_progress_contract_allowed_compaction_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted_task(pc_guard_rt(), pc_compaction_task(), [
+    prose_step("Runtime compaction occurred. Continuing is unnecessary. Final summary: state saved.")
+  ]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "progress contract allowed compaction passes", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func progress_contract_allowed_compaction_passes_scenario() -> Scenario {
+  { id: "progress_contract_allowed_compaction_passes", run: scenario_progress_contract_allowed_compaction_passes }
+}
+
+-- 6. No explicit progress contract: "continuing" in ordinary prose must not trigger.
+func scenario_progress_contract_no_contract_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted_task(pc_guard_rt(), "Write a short poem.", [
+    prose_step("Continuing to refine the poem. Step 1/3.")
+  ]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "progress contract no contract passes", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func progress_contract_no_contract_passes_scenario() -> Scenario {
+  { id: "progress_contract_no_contract_passes", run: scenario_progress_contract_no_contract_passes }
+}
+
 func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let trace = ledger_append(empty_ledger_trace(), DecisionRecord({ step: 2, decision: "CallModel" }));
   match trace.records {
@@ -564,7 +739,14 @@ export func main() -> () ! {IO} {
 	    compactor_chain_order_is_registry_order_scenario(),
 	    empty_stop_guard_loops_within_budget_scenario(),
 	    empty_stop_guard_budget_exhaustion_floors_scenario(),
-	    empty_stop_floor_without_guard_scenario()
+	    empty_stop_floor_without_guard_scenario(),
+	    progress_contract_catches_failure_shape_scenario(),
+	    progress_contract_budget_exhaustion_finalizes_scenario(),
+	    progress_contract_ignores_blank_scenario(),
+	    progress_contract_combined_chain_blank_owned_by_empty_stop_scenario(),
+	    progress_contract_completion_passes_scenario(),
+	    progress_contract_allowed_compaction_passes_scenario(),
+	    progress_contract_no_contract_passes_scenario()
 	  ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then

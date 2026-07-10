@@ -46,7 +46,7 @@ import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision)
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
-import src/core/context_usage (catalog_context_limit_for)
+import src/core/context_usage (resolve_context_limit)
 import src/core/ext/runtime (
   dispatch_response_intercept,
   dispatch_solver_candidate,
@@ -1176,7 +1176,7 @@ func session_policy_init(model: string, step_budget: int, max_cost_millicents: i
       checkpoint_enabled: false,
       checkpoint_pct: 90,
       compaction: {
-        context_limit: catalog_context_limit_for(model),
+        context_limit: resolve_context_limit(model),
         elide_tier_pct: 70,
         elide_hard_tier_pct: 85,
         emergency_pct: exhaustion_pct()
@@ -1200,7 +1200,7 @@ pure func session_policy_with_model(policy: SessionPolicy, model: string) -> Ses
       checkpoint_enabled: policy.step.checkpoint_enabled,
       checkpoint_pct: policy.step.checkpoint_pct,
       compaction: {
-        context_limit: catalog_context_limit_for(model),
+        context_limit: resolve_context_limit(model),
         elide_tier_pct: policy.step.compaction.elide_tier_pct,
         elide_hard_tier_pct: policy.step.compaction.elide_hard_tier_pct,
         emergency_pct: policy.step.compaction.emergency_pct
@@ -1488,7 +1488,7 @@ func c2_loop(
             step: done_step,
             input_tokens: st.telemetry.last_input_tokens,
             estimated_input_tokens: st.telemetry.last_estimated_input_tokens,
-            context_limit: catalog_context_limit_for(model)
+            context_limit: resolve_context_limit(model)
           });
           let trace_after_empty_floor =
             if trim(info.output) == "" then {
@@ -1563,7 +1563,7 @@ func c2_loop(
               let raw = readLine();
               let resolution = resolve_approval(raw, req.default_allow, raw == "");
               let tool_step_idx = c2_done_step(st.step_idx);
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), catalog_context_limit_for(model), ext_ports_for_provider(rt, c2_pending_context(st), st.provider), st.ext_artifacts, st.telemetry);
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), resolve_context_limit(model), ext_ports_for_provider(rt, c2_pending_context(st), st.provider), st.ext_artifacts, st.telemetry);
               match resolution {
                 ApprovalDenied(reason) => {
                   let _ = ledger_emit(session_id, NativeToolDenied({
@@ -1590,7 +1590,7 @@ func c2_loop(
           let calls = c2_tool_plan_calls(plan.entries);
           let request_id = "step-${show(tool_step_idx)}";
           let ctx_msgs = c2_pending_context(st);
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, catalog_context_limit_for(model), ext_ports_for_provider(rt, ctx_msgs, st.provider), st.ext_artifacts, st.telemetry);
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_for_provider(rt, ctx_msgs, st.provider), st.ext_artifacts, st.telemetry);
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let _ = if emit_calls then
             ledger_emit(session_id, NativeToolCalls({
@@ -1632,7 +1632,7 @@ func c2_loop(
         },
         CallModel(_) => {
           let step_idx = st.step_idx;
-          let context_limit = catalog_context_limit_for(model);
+          let context_limit = resolve_context_limit(model);
           let split = split_for_compaction(st.msgs);
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);

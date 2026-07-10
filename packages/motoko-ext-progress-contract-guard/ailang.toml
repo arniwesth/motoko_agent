@@ -1,0 +1,23 @@
+[package]
+name = "sunholo/motoko_ext_progress_contract_guard"
+version = "0.1.0"
+edition = "1"
+ailang = ">=0.26.0"
+description = "Finalize hook guard that continues when a non-empty stop candidate self-reports the task is still in progress against an explicit progress contract"
+license = "Apache-2.0"
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_progress_contract_guard/progress_contract_guard",
+  "sunholo/motoko_ext_progress_contract_guard/register"
+]
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+
+[effects]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream"]
+
+[metadata]
+tags = ["motoko", "extension", "finalize", "guard"]
+ai_summary = "Progress-contract finalize guard: rejects self-contradictory stops that say the task is still in progress."

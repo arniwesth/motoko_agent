@@ -63,3 +63,45 @@ export func catalog_context_limit_for(model: string) -> int ! {Env, FS} {
     }
   }
 }
+
+-- Active profile directory, mirroring the launcher's convention: an explicit
+-- MOTOKO_PROFILE_DIR wins (set by verify_extensions and the live launcher),
+-- else `.motoko/config/<MOTOKO_CONFIG|default>` under an optional MOTOKO_REPO.
+func profile_dir_path() -> string ! {Env} {
+  let explicit = getEnvOr("MOTOKO_PROFILE_DIR", "");
+  if explicit != "" then explicit
+  else {
+    let profile = getEnvOr("MOTOKO_CONFIG", "default");
+    let repo = getEnvOr("MOTOKO_REPO", "");
+    if repo != "" then "${repo}/.motoko/config/${profile}"
+    else ".motoko/config/${profile}"
+  }
+}
+
+-- Deployment-scoped context-limit override from the active profile's
+-- `agent.context_limit`. Context size is a property of the *endpoint* (a local
+-- server may serve 100K while the same model on a cloud provider serves 1M), so
+-- a profile can declare its serving context here instead of overloading the
+-- model identifier in the shared catalog. Returns 0 (no override) when absent.
+func config_context_limit_override() -> int ! {Env, FS} {
+  let path = "${profile_dir_path()}/config.json";
+  if not fileExists(path) then 0
+  else match decode(readFile(path)) {
+    Err(_) => 0,
+    Ok(root) => match get(root, "agent") {
+      Some(agent) => match getInt(agent, "context_limit") {
+        Some(n) => if n > 0 then n else 0,
+        None => 0
+      },
+      None => 0
+    }
+  }
+}
+
+-- Effective context limit for a model in the current deployment: the profile's
+-- `agent.context_limit` override wins, else the per-model catalog value, else 0
+-- ("unknown" — compaction extensions skip context-aware behaviour).
+export func resolve_context_limit(model: string) -> int ! {Env, FS} {
+  let override = config_context_limit_override();
+  if override > 0 then override else catalog_context_limit_for(model)
+}
