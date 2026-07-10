@@ -9,7 +9,7 @@ import std/json (Json, jo, kv, js, jnum, get, getInt, asString)
 import std/list (length as list_length)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
-import std/string (contains)
+import std/string (contains, substring, length as string_length)
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, PreStepDecision, PassThrough, Compacted, Msg, ToolCall)
 import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
@@ -53,12 +53,17 @@ func format_msgs_for_summary(msgs: [Msg]) -> string {
 func summarization_prompt(old_turns: [Msg], recent_turns: [Msg]) -> string {
   let old_text = format_msgs_for_summary(old_turns);
   let recent_count = list_length(recent_turns);
-  "Summarize the following conversation history in 2-3 sentences.
+  "Summarize the following conversation history in 2-3 sentences for a continuing agent session.
 Preserve:
 - Key decisions made
 - Files modified
 - Errors encountered and how they were resolved
-- Current task state
+- Original task objective and current task state
+- Unresolved stop conditions, progress gates, and status/reporting cadence
+- Latest status/progress facts and the next required action
+
+Do not frame this as a new session, fresh context window, or handoff. Do not ask the user what to do
+next unless the old turns prove the original task is complete.
 
 OLD TURNS (summarize these):
 ${old_text}
@@ -66,7 +71,7 @@ ${old_text}
 RECENT TURNS (keep these verbatim - ${show(recent_count)} messages):
 [... see recent context ...]
 
-Provide a concise summary that captures essential context for continuing the task."
+Provide a concise summary that captures essential context for continuing the original task."
 }
 
 export func summarize_with_ai(ctx: ExtCtx, prompt: string, model: string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
@@ -167,8 +172,96 @@ func split_msgs(msgs: [Msg], keep_recent: int) -> SplitResult {
   { prefix: p.prefix, old: body.old, recent: body.recent }
 }
 
-func summary_msg(summary: string) -> Msg {
-  { role: "assistant", content: "[CONTEXT SUMMARY] ${summary}", tool_calls: [], tool_call_id: "" }
+func status_call_ids(calls: [ToolCall]) -> [string] {
+  match calls {
+    [] => [],
+    c :: rest =>
+      if c.name == "MotokoRuntimeStatus" then c.id :: status_call_ids(rest)
+      else status_call_ids(rest)
+  }
+}
+
+func contains_id(ids: [string], wanted: string) -> bool {
+  match ids {
+    [] => false,
+    id :: rest => if id == wanted then true else contains_id(rest, wanted)
+  }
+}
+
+func latest_runtime_status_result_rec(msgs: [Msg], status_ids: [string], latest: Option[string]) -> Option[string] {
+  match msgs {
+    [] => latest,
+    m :: rest => {
+      if m.role == "assistant" then
+        latest_runtime_status_result_rec(rest, status_ids ++ status_call_ids(m.tool_calls), latest)
+      else if m.role == "tool" && contains_id(status_ids, m.tool_call_id) then
+        latest_runtime_status_result_rec(rest, status_ids, Some(m.content))
+      else latest_runtime_status_result_rec(rest, status_ids, latest)
+    }
+  }
+}
+
+func latest_status_marker_fallback(msgs: [Msg], latest: Option[string]) -> Option[string] {
+  match msgs {
+    [] => latest,
+    m :: rest => {
+      let next =
+        if m.role == "tool" && contains(m.content, "\"tool\":\"MotokoRuntimeStatus\"") then Some(m.content)
+        else latest;
+      latest_status_marker_fallback(rest, next)
+    }
+  }
+}
+
+func latest_runtime_status_result(msgs: [Msg]) -> Option[string] {
+  match latest_runtime_status_result_rec(msgs, [], None) {
+    Some(content) => Some(content),
+    None => latest_status_marker_fallback(msgs, None)
+  }
+}
+
+func bounded_status_excerpt(content: string) -> string {
+  let max = 1200;
+  if string_length(content) <= max then content else "${substring(content, 0, max)}...[truncated]"
+}
+
+func status_section(status: Option[string]) -> string {
+  match status {
+    None => "not observed in compacted segment",
+    Some(content) => "- correlated MotokoRuntimeStatus result observed\n- bounded_excerpt: ${bounded_status_excerpt(content)}"
+  }
+}
+
+func summary_msg(ctx: ExtCtx, summary: string, status: Option[string]) -> Msg {
+  {
+    role: "assistant",
+    content: "[RUNTIME COMPACTION SUMMARY]
+This message was inserted by Motoko compaction. It is not a new user request, not a fresh session,
+and not permission to stop. Continue the original task.
+
+ORIGINAL TASK:
+${ctx.task}
+
+RUNTIME STATE:
+- current_step_before_request: ${show(ctx.step)}
+- model: ${ctx.model}
+- context_limit: ${show(ctx.context_limit)}
+- compaction: active; older turns were summarized for this request only
+
+ACTIVE CONTROL OBLIGATIONS:
+- Continue satisfying ORIGINAL TASK.
+- Do not ask what to work on next unless ORIGINAL TASK is complete.
+- Preserve explicit stop conditions from ORIGINAL TASK.
+- If ORIGINAL TASK requires tool/status cadence, continue that cadence.
+
+LATEST RUNTIME STATUS:
+${status_section(status)}
+
+AI SUMMARY OF OLDER CONTEXT:
+${summary}",
+    tool_calls: [],
+    tool_call_id: ""
+  }
 }
 
 func canonical_msgs(msgs: [Msg]) -> string {
@@ -237,7 +330,8 @@ export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -
         Some(cached) => cached,
         None => summarize_with_ai(ctx, summarization_prompt(old_turns, recent_turns), cfg.model)
       };
-      let compacted = split_result.prefix ++ [summary_msg(summary)] ++ recent_turns;
+      let status = latest_runtime_status_result(msgs);
+      let compacted = split_result.prefix ++ [summary_msg(ctx, summary, status)] ++ recent_turns;
       let new_pct = usage_percent(ctx, compacted, ctx.context_limit);
       if new_pct > pct then PassThrough
       else Compacted(compacted, "AI-summarized ${show(list_length(old_turns))} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary, ctx.step))
@@ -349,5 +443,41 @@ func test_ai_rate_limit_gap_and_same_step_cache() -> bool
           Compacted(_, _, _) => false
         }
       }
+    }
+  }
+
+func test_summary_capsule_preserves_control_state() -> bool
+  tests [((), true)]
+  {
+    let ctx = { test_ctx(7, 1000, empty_ext_artifacts()) | task: "Run until phase 200; report MotokoRuntimeStatus every 10 phases; do not stop early." };
+    let m = summary_msg(ctx, "What would you like to work on?", None);
+    contains(m.content, "[RUNTIME COMPACTION SUMMARY]")
+      && contains(m.content, "ORIGINAL TASK")
+      && contains(m.content, "not a fresh session")
+      && contains(m.content, "Continue the original task")
+      && contains(m.content, ctx.task)
+      && contains(m.content, "What would you like to work on?")
+  }
+
+func runtime_status_call_msg(id: string) -> Msg {
+  { role: "assistant", content: "status", tool_calls: [{ id: id, name: "MotokoRuntimeStatus", arguments: "{}" }], tool_call_id: "" }
+}
+
+func other_tool_call_msg(id: string) -> Msg {
+  { role: "assistant", content: "other", tool_calls: [{ id: id, name: "OtherTool", arguments: "{}" }], tool_call_id: "" }
+}
+
+func test_latest_runtime_status_prefers_correlated_result() -> bool
+  tests [((), true)]
+  {
+    let msgs = [
+      other_tool_call_msg("other-1"),
+      tool_result_msg("other-1", "unrelated mention \"tool\":\"MotokoRuntimeStatus\" current_step bad"),
+      runtime_status_call_msg("status-1"),
+      tool_result_msg("status-1", "{\"tool\":\"MotokoRuntimeStatus\",\"current_step\":47,\"step_budget\":100,\"finish_reason_so_far\":\"tool_calls\",\"stage_applied_total\":9,\"compaction_ai_applied\":8}")
+    ];
+    match latest_runtime_status_result(msgs) {
+      None => false,
+      Some(content) => contains(content, "\"current_step\":47") && not contains(content, "current_step bad")
     }
   }

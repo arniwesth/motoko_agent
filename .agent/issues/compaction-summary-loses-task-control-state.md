@@ -1,7 +1,7 @@
 # AI compaction summary loses task-control state
 
 ## Status
-open
+implemented
 
 ## Branch
 arniwesth/mot-36-compactor-strategy-refinement
@@ -57,4 +57,3 @@ original task.
 - Do not persist compaction into `st.msgs`.
 - Do not change token calibration.
 - Do not bound retained history growth.
-
