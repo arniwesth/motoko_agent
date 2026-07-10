@@ -70,6 +70,41 @@ Every claim below re-verified at current HEAD (anchors drifted from the ADR; the
 
 ---
 
+## Code-graph grounding
+
+Cross-checked the structural claims against `ailang-graph` (`tools/code-graph/`, profile `core`,
+built at HEAD `b961ac6`: 34 modules / 633 funcs / 870 invokes; `coverage ok=34/34`,
+`stale=false`, `incomplete=false`). Call edges are **source-parsed approximations**
+(`approximate=true`) — treated as corroboration, not compiler proof — but every load-bearing edge
+below is exact and consistent with the direct reads above.
+
+- **Finalize match lives in `c2_loop`.** `invokes` into `dispatch_solver_candidate` are exactly
+  `session#c2_loop` (production) and `ext/runtime#dispatch_smoke_record_hooks` (a smoke helper).
+  Precedence chain intact: `merge_finalize_decisions ← dispatch_solver_candidate` (sole caller) and
+  `first_continue ← merge_finalize_decisions`.
+- **Gap A corroborated structurally.** `c2_after_dp7`'s direct callees are exactly
+  `{dp7_rejection_errors, count_persist_nudges, c2_loop}` — it **re-enters `c2_loop`** and does
+  **not** reach any finalize emission. The success-path `emit_run_summary` is invoked only from
+  `c2_fail` and `c2_loop`, so the run actually ends inside `c2_loop` (the `Finalize` arm), not in
+  `c2_after_dp7`. (`DoneEvent` is a constructor, so it has no `invokes` rows — confirmed present once
+  via grep at `session.ail:1487` and as a `ctors` row in `phase_vocab`; the `emit_run_summary` edge
+  is the graph-side witness for the same arm.)
+- **WI-4 / OQ4 dependencies reachable at the Finalize arm.** `catalog_context_limit_for` exists
+  (`src/core/context_usage`) and is **already invoked by `c2_loop`** — the size fields need no new
+  import. `mk_v2_ext_ctx` is invoked **only** by `c2_loop` (the `post_ctx` build site) and itself
+  invokes `messages_to_msgs` — the exact `history_slice = messages_to_msgs(full history)` chain the
+  OQ5 resolution rests on.
+- **WI-3 sibling pattern + no collisions.** `ctors` shows `DoneEvent`, `ExtSolverFeedback`,
+  `PersistNudge` all in `src/core/phase_vocab` (where `EmptyStopFinalize` will join them);
+  `EmptyStopFinalize` is absent. No `empty_stop` / `EmptyStop` symbol exists anywhere in core
+  (`funcs` query empty; `search empty_stop` → 0 rows) — all new names are collision-free.
+- **Coverage caveat.** The `core` profile excludes `packages/**`, so the extension-side claims
+  (WI-1/WI-2: the `register.ail` mirror, the `registry_generated` `resolve` arm, sibling ext hooks
+  returning `NoDecision`) are grounded by direct reads above, not by this graph. Re-run
+  `tools/code-graph/extract.sh --profile=all` if a reviewer wants those edges in-graph.
+
+---
+
 ## Work items
 
 Each WI names the file(s), the change, and the `make` gate that proves it.
