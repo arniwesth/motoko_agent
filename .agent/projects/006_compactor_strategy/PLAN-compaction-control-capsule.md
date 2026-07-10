@@ -36,7 +36,7 @@ summarizer returns hostile prose such as "What would you like to work on?".
 | File | Kind | Change |
 |------|------|--------|
 | `packages/motoko-ext-compaction-ai/compaction_ai.ail` | **extension** | Replace `summary_msg(summary)` with a context-aware control-capsule builder; thread `ctx` and optional status facts into the compacted summary message; harden `summarization_prompt`; add pure extraction helpers for latest `MotokoRuntimeStatus` facts; add unit tests. |
-| `scripts/long_qwen_compaction_dst.ail` | test | Add a deterministic direct-compactor scenario with a hostile/weak summarizer and a task containing explicit stop/status obligations; assert the compacted payload preserves the capsule and still passes `validate_compactor_output`. |
+| `scripts/long_qwen_compaction_dst.ail` | test | Update the existing direct-compactor scenarios and add one hostile/weak summarizer scenario with a task containing explicit stop/status obligations; assert the compacted segment preserves the capsule and still passes `validate_compactor_output`. |
 | `.agent/issues/compaction-summary-loses-task-control-state.md` | docs | Update status when implemented. |
 | `ailang.lock` | metadata | Refresh only if package content hashes change during implementation. Do not churn it for plan-only edits. |
 
@@ -143,16 +143,25 @@ Minimum viable implementation:
 - Use `ctx.task` verbatim for `ORIGINAL TASK`.
 - Use `ctx.step`, `ctx.model`, and `ctx.context_limit` for `RUNTIME STATE`.
 - Include static obligations exactly as strings.
+- Build the capsule at compaction time from `ctx` and the current `msgs`; cache only the AI prose
+  summary. Do not cache the entire capsule under the old-turn digest, because step/status/task fields
+  are request-local and would become stale if replayed from artifacts.
 
 Optional but recommended in the same work:
-- Detect the latest `MotokoRuntimeStatus` tool result in `msgs` before splitting, parse only cheap
-  string markers if full JSON parsing is awkward, and mirror:
+- Detect the latest `MotokoRuntimeStatus` tool result in `msgs` before splitting. Prefer correlation
+  over content guessing: find assistant tool calls whose `name == "MotokoRuntimeStatus"`, then find
+  matching tool messages by `tool_call_id`. A content marker fallback
+  (`"tool":"MotokoRuntimeStatus"`) is acceptable only for legacy/fixture messages.
+- Parse only cheap JSON/string markers if full JSON parsing is awkward, and mirror:
   - `current_step`
   - `step_budget`
   - `finish_reason_so_far`
   - `stage_applied_total`
   - `compaction_ai_applied`
 - If no status result exists, emit `LATEST RUNTIME STATUS: not observed in compacted segment`.
+- If using a raw excerpt fallback, bound it tightly (for example 1-2 KB) and prefer whitelisted field
+  lines over copying the full tool result; the capsule should not re-inflate the context it is trying
+  to shrink.
 
 Do not make this extraction a hard dependency on well-formed status JSON; malformed/missing status
 must still produce the deterministic capsule.
@@ -198,13 +207,17 @@ Changes:
   output shape.
 
 Tests:
-- Direct compactor unit test with a hostile summary string like `"What would you like to work on?"`.
+- Pure builder unit test with a hostile summary string like `"What would you like to work on?"`.
+  This can call the capsule helper directly; the DST below covers the full `compact_with_ai` path
+  through `summary_ports`.
 - Assert the compacted output contains:
   - `[RUNTIME COMPACTION SUMMARY]`
   - `ORIGINAL TASK`
   - `not a fresh session`
   - `Continue the original task`
   - the exact `ctx.task`
+- Update existing direct DST assertions that currently expect `[CONTEXT SUMMARY]`; after this change
+  they should assert the new capsule header and cached AI prose, not the old wrapper.
 
 ### WI-2: prompt hardening
 
@@ -225,16 +238,20 @@ Files:
 - `packages/motoko-ext-compaction-ai/compaction_ai.ail`
 
 Changes:
-- Add a pure extractor over `[Msg]` that finds the latest tool message content containing
-  `"tool":"MotokoRuntimeStatus"`.
-- For MVP, extract by robust `contains`/substring-style helpers or copy a bounded excerpt from that
-  tool message. Avoid fragile full JSON parsing unless local helpers make it simple.
+- Add a pure extractor over `[Msg]` that walks the transcript in order, remembers tool call ids from
+  assistant messages where a call has `name == "MotokoRuntimeStatus"`, and records the latest matching
+  tool message by `tool_call_id`.
+- For MVP, extract by robust `contains`/substring-style helpers from the matched result, or copy a
+  bounded excerpt from that tool message. Avoid fragile full JSON parsing unless local helpers make it
+  simple.
 - Include extracted facts or excerpt in `LATEST RUNTIME STATUS`.
 
 Tests:
-- Direct unit test with an old `MotokoRuntimeStatus` tool result outside the preserved tail. Assert
-  the final summary message still contains `current_step` / `step_budget` or the bounded status
-  excerpt.
+- Direct unit test with an old `MotokoRuntimeStatus` assistant call and matching tool result outside
+  the preserved tail. Assert the final summary message still contains `current_step` / `step_budget`
+  or the bounded status excerpt.
+- Negative unit test or fixture shape: an unrelated tool result whose content happens to mention
+  `MotokoRuntimeStatus` should not win over a properly correlated runtime-status result.
 
 ### WI-4: deterministic live-shape DST
 
@@ -243,9 +260,17 @@ Files:
 
 Changes:
 - Add a direct compactor scenario using `summary_ports("What would you like to work on?")`.
-- Use a task with explicit stop/control conditions.
-- Assert `validate_compactor_output` still accepts the output and the summary capsule preserves the
-  task/control fields.
+- Use a task with explicit stop/control conditions. The current `direct_ctx(...)` helper hardcodes
+  `task: "direct"`, so either add a `direct_ctx_with_task(...)` helper or extend `direct_ctx` to accept
+  the task string before asserting exact task preservation.
+- Assert `validate_compactor_output` still accepts the compacted segment and the summary capsule
+  preserves the task/control fields.
+- Keep validation scoped to the unpinned compaction segment passed to `compact_with_ai`. Do not call
+  `validate_compactor_output` on a sealed payload that includes system messages; conformance rejects
+  system messages in compactor output by design.
+- Update the artifact-cache direct scenario so it checks that the cached AI prose is reused while the
+  deterministic capsule is rebuilt from the current context. The conformance cache scenario uses the
+  same context twice, so byte-identical output should still hold there.
 
 Gate:
 - `make compaction_dst`
