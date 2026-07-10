@@ -467,12 +467,17 @@ pure func runtime_status_json(
     ])),
     kv("context_window", jo([
       kv("context_limit", jnum(_int_to_float(limit))),
-      kv("actual_input_tokens", jnum(_int_to_float(actual_input_tokens))),
-      kv("actual_usage_pct", jnum(_int_to_float(actual_pct))),
-      kv("estimated_input_tokens", jnum(_int_to_float(estimated_input_tokens))),
-      kv("estimated_usage_pct", jnum(_int_to_float(estimated_pct))),
-      kv("calibrated_input_tokens", jnum(_int_to_float(calibrated_input_tokens))),
-      kv("calibrated_usage_pct", jnum(_int_to_float(calibrated_pct)))
+      kv("last_sent", jo([
+        kv("input_tokens", jnum(_int_to_float(actual_input_tokens))),
+        kv("usage_pct", jnum(_int_to_float(actual_pct)))
+      ])),
+      kv("uncompacted_pending", jo([
+        kv("estimated_tokens", jnum(_int_to_float(estimated_input_tokens))),
+        kv("estimated_pct", jnum(_int_to_float(estimated_pct))),
+        kv("calibrated_tokens", jnum(_int_to_float(calibrated_input_tokens))),
+        kv("calibrated_pct", jnum(_int_to_float(calibrated_pct)))
+      ])),
+      kv("note", js("last_sent = real provider tokens of the previous compacted request; uncompacted_pending = the full retained history before this step's ephemeral compaction. They measure different windows by design."))
     ])),
     kv("usage", jo([
       kv("input_tokens", jnum(_int_to_float(st.totals.input_tokens))),
@@ -2495,8 +2500,11 @@ pure func test_runtime_status_reports_actual_context_window() -> bool
     let encoded = encode(runtime_status_json(st, policy, 0));
     -- actual = 500 provider tokens against a 1000 limit => 50%
     contains(encoded, "\"context_limit\":1000")
-      && contains(encoded, "\"actual_input_tokens\":500")
-      && contains(encoded, "\"actual_usage_pct\":50")
+      && contains(encoded, "\"last_sent\"")
+      && contains(encoded, "\"input_tokens\":500")
+      && contains(encoded, "\"usage_pct\":50")
+      && contains(encoded, "\"uncompacted_pending\"")
+      && contains(encoded, "\"note\"")
   }
 
 pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool

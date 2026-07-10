@@ -5,12 +5,14 @@ module sunholo/motoko_ext_compaction_ai/compaction_ai
 
 import std/ai (Message)
 import std/crypto (sha256Hex)
-import std/json (Json, jo, kv, js, get, asString)
+import std/json (Json, jo, kv, js, jnum, get, getInt, asString)
 import std/list (length as list_length)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
+import std/string (contains)
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, PreStepDecision, PassThrough, Compacted, Msg, ToolCall)
 import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/compaction (calibrated_usage_percent_anchored)
 
 func msg_to_message(m: Msg) -> Message {
@@ -104,19 +106,58 @@ func has_tool_result_for(calls: [ToolCall], msgs: [Msg]) -> bool {
   }
 }
 
+func split_at(msgs: [Msg], n: int) -> { old: [Msg], recent: [Msg] } {
+  if n <= 0 then { old: [], recent: msgs }
+  else match msgs {
+    [] => { old: [], recent: [] },
+    m :: rest => {
+      let next = split_at(rest, n - 1);
+      { old: m :: next.old, recent: next.recent }
+    }
+  }
+}
+
+func recent_starts_with_tool(recent: [Msg]) -> bool {
+  match recent {
+    [] => false,
+    m :: _ => m.role == "tool"
+  }
+}
+
+func old_has_tool_result_in_recent(old: [Msg], recent: [Msg]) -> bool {
+  match old {
+    [] => false,
+    m :: rest =>
+      if list_length(m.tool_calls) > 0 && has_tool_result_for(m.tool_calls, recent) then true
+      else old_has_tool_result_in_recent(rest, recent)
+  }
+}
+
+func move_boundary_earlier(old: [Msg], recent: [Msg]) -> { old: [Msg], recent: [Msg], moved: bool } {
+  match old {
+    [] => { old: [], recent: recent, moved: false },
+    m :: [] => { old: [], recent: m :: recent, moved: true },
+    m :: rest => {
+      let next = move_boundary_earlier(rest, recent);
+      { old: m :: next.old, recent: next.recent, moved: next.moved }
+    }
+  }
+}
+
+func adjust_split_boundary(old: [Msg], recent: [Msg]) -> { old: [Msg], recent: [Msg] } {
+  if recent_starts_with_tool(recent) || old_has_tool_result_in_recent(old, recent) then {
+    let moved = move_boundary_earlier(old, recent);
+    if moved.moved then adjust_split_boundary(moved.old, moved.recent)
+    else { old: old, recent: recent }
+  } else { old: old, recent: recent }
+}
+
 func split_body(body: [Msg], keep_recent: int) -> { old: [Msg], recent: [Msg] } {
   let n = list_length(body);
   if n <= keep_recent then { old: [], recent: body }
-  else match body {
-    [] => { old: [], recent: [] },
-    m :: rest => {
-      if list_length(rest) < keep_recent then { old: [], recent: body }
-      else if list_length(m.tool_calls) > 0 && has_tool_result_for(m.tool_calls, rest) then { old: [], recent: body }
-      else {
-        let next = split_body(rest, keep_recent);
-        { old: m :: next.old, recent: next.recent }
-      }
-    }
+  else {
+    let initial = split_at(body, n - keep_recent);
+    adjust_split_boundary(initial.old, initial.recent)
   }
 }
 
@@ -155,11 +196,22 @@ func cached_summary(artifacts: Json, digest: string) -> Option[string] {
   }
 }
 
-func cache_artifact(digest: string, summary: string) -> Json {
+func last_ran_step(artifacts: Json) -> int {
+  match get(artifacts, "compaction_ai") {
+    None => -1,
+    Some(node) => match getInt(node, "last_ran_step") {
+      None => -1,
+      Some(step) => step
+    }
+  }
+}
+
+func cache_artifact(digest: string, summary: string, step: int) -> Json {
   jo([
     kv("compaction_ai", jo([
       kv("segment_digest", js(digest)),
-      kv("summary", js(summary))
+      kv("summary", js(summary)),
+      kv("last_ran_step", jnum(_int_to_float(step)))
     ]))
   ])
 }
@@ -167,6 +219,7 @@ func cache_artifact(digest: string, summary: string) -> Json {
 export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
   let pct = usage_percent(ctx, msgs, ctx.context_limit);
   if pct < cfg.threshold_pct then PassThrough
+  else if cfg.rate_limit_enabled && last_ran_step(ctx.artifacts) >= 0 && (ctx.step - last_ran_step(ctx.artifacts)) > 0 && (ctx.step - last_ran_step(ctx.artifacts)) < cfg.min_gap_steps && pct < cfg.hard_override_pct then PassThrough
   else {
     let keep_recent = if pct >= 90 then (cfg.keep_recent / 2) else cfg.keep_recent;
     let split_result = split_msgs(msgs, keep_recent);
@@ -175,6 +228,10 @@ export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -
 
     if list_length(old_turns) == 0 then PassThrough
     else {
+      let projected = split_result.prefix ++ recent_turns;
+      let projected_pct = usage_percent(ctx, projected, ctx.context_limit);
+      if pct - projected_pct < cfg.min_relief_pct then PassThrough
+      else {
       let digest = segment_digest(old_turns);
       let summary = match cached_summary(ctx.artifacts, digest) {
         Some(cached) => cached,
@@ -182,7 +239,115 @@ export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -
       };
       let compacted = split_result.prefix ++ [summary_msg(summary)] ++ recent_turns;
       let new_pct = usage_percent(ctx, compacted, ctx.context_limit);
-      Compacted(compacted, "AI-summarized ${show(list_length(old_turns))} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary))
+      if new_pct > pct then PassThrough
+      else Compacted(compacted, "AI-summarized ${show(list_length(old_turns))} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary, ctx.step))
+      }
     }
   }
 }
+
+func test_cfg(rate_limit_enabled: bool) -> CompactionAiConfig {
+  {
+    model: "test-summarizer",
+    threshold_pct: 1,
+    keep_recent: 4,
+    min_relief_pct: 5,
+    rate_limit_enabled: rate_limit_enabled,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  }
+}
+
+func test_ctx(step: int, limit: int, artifacts: Json) -> ExtCtx {
+  {
+    task: "t",
+    step: step,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1, solver: 1, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: [],
+    state_key: "k",
+    context_limit: limit,
+    ports: noop_ext_ports(),
+    artifacts: artifacts,
+    telemetry: zero_token_telemetry()
+  }
+}
+
+func user(content: string) -> Msg {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func assistant(content: string) -> Msg {
+  { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func tool_call_msg(id: string) -> Msg {
+  { role: "assistant", content: "calling ${id}", tool_calls: [{ id: id, name: "Tool", arguments: "{}" }], tool_call_id: "" }
+}
+
+func tool_result_msg(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func old_pair(n: int, content: string) -> [Msg] {
+  [user("question ${show(n)}"), tool_call_msg("call-${show(n)}"), tool_result_msg("call-${show(n)}", content), assistant("observed ${show(n)}")]
+}
+
+func repeated_pairs(n: int, content: string) -> [Msg] {
+  if n <= 0 then [] else old_pair(n, content) ++ repeated_pairs(n - 1, content)
+}
+
+func long_content() -> string {
+  "deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789"
+}
+
+func test_ai_drip_projected_relief_passthrough() -> bool
+  tests [((), true)]
+  {
+    let msgs = repeated_pairs(2, "tiny");
+    match compact_with_ai(test_ctx(1, 500, empty_ext_artifacts()), msgs, test_cfg(false)) {
+      PassThrough => true,
+      Compacted(_, _, _) => false
+    }
+  }
+
+func test_ai_batch_compacts_many_old_messages() -> bool
+  tests [((), true)]
+  {
+    let msgs = repeated_pairs(8, long_content());
+    match compact_with_ai(test_ctx(1, 250, empty_ext_artifacts()), msgs, test_cfg(false)) {
+      Compacted(out, note, _) =>
+        contains(note, "AI-summarized")
+          && list_length(out) < list_length(msgs)
+          && not recent_starts_with_tool(out),
+      PassThrough => false
+    }
+  }
+
+func test_ai_rate_limit_gap_and_same_step_cache() -> bool
+  tests [((), true)]
+  {
+    let msgs = repeated_pairs(8, long_content());
+    let cfg = test_cfg(true);
+    match compact_with_ai(test_ctx(10, 1000, empty_ext_artifacts()), msgs, cfg) {
+      PassThrough => false,
+      Compacted(out1, _, artifacts) => {
+        let later = compact_with_ai(test_ctx(11, 1000, artifacts), msgs, cfg);
+        let same_step = compact_with_ai(test_ctx(10, 1000, artifacts), msgs, cfg);
+        match later {
+          PassThrough =>
+            match same_step {
+              Compacted(out2, _, _) => list_length(out1) == list_length(out2),
+              PassThrough => false
+            },
+          Compacted(_, _, _) => false
+        }
+      }
+    }
+  }

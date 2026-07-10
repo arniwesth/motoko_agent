@@ -225,7 +225,15 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
 }
 
 func compaction_ai_hook() -> ExtensionHooks {
-  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 60, keep_recent: 8 };
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 60,
+    keep_recent: 8,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
   {
     id: "compaction_ai",
     provided_tools: [],
@@ -302,6 +310,12 @@ func long_tool_hook() -> ExtensionHooks {
 func long_runtime() -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   let reg: ExtRegistry = { hooks: [compaction_ai_hook(), structural_hook(), long_tool_hook()] };
+  { registry: reg, strict_mode: false, verification: v }
+}
+
+func structural_only_runtime() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let reg: ExtRegistry = { hooks: [structural_hook()] };
   { registry: reg, strict_mode: false, verification: v }
 }
 
@@ -568,6 +582,35 @@ func scenario_multiple_compactions() -> Result[(), ScenarioFailure] ! {AI, FS, P
   }
 }
 
+func scenario_seal_side_exhaustion() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let history = [
+    msg("system", "seal-side exhaustion system prompt"),
+    msg("user", "prose bulk ${repeat_block(80)}")
+  ];
+  let result = Session.run_v2_session_traced(
+    structural_only_runtime(),
+    "seal-side exhaustion dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    history,
+    ".",
+    4,
+    false,
+    0,
+    no_rates(),
+    Ported(long_ports(1))
+  );
+  let records = result.trace.records;
+  match result.result {
+    Ok(_) => Err({ failed_invariant: "oversized non-tool window is rejected by seal", trace: projection_records(records) }),
+    Err(e) =>
+      if contains(e.message, "compaction_exhausted") && has_exhausted_or_system_empty(records) then Ok(())
+      else Err({ failed_invariant: "CompactionExhausted event and error are emitted", trace: ["${e.code}: ${e.message}"] ++ projection_records(records) })
+  }
+}
+
 func same_string_list(a: [string], b: [string]) -> bool {
   match a {
     [] => match b { [] => true, _ => false },
@@ -655,7 +698,15 @@ func contains_summary_msg(msgs: [Msg], text: string) -> bool {
 
 func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let input = direct_msgs();
-  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 1, keep_recent: 4 };
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 1,
+    keep_recent: 4,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
   match compact_with_ai(direct_ctx(100, summary_ports("DIRECT-SUMMARY"), empty_ext_artifacts()), input, cfg) {
     PassThrough => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=PassThrough"] }),
     Compacted(out, _, _) => {
@@ -670,7 +721,15 @@ func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Pro
 
 func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let input = direct_msgs();
-  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 1, keep_recent: 4 };
+  let cfg: CompactionAiConfig = {
+    model: qwen_model,
+    threshold_pct: 1,
+    keep_recent: 4,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  };
   match compact_with_ai(direct_ctx(100, summary_ports("CACHED-SUMMARY-A"), empty_ext_artifacts()), input, cfg) {
     PassThrough => Err({ failed_invariant: "first cache run compacts", trace: ["decision=PassThrough"] }),
     Compacted(out1, _, artifacts) => {
@@ -702,12 +761,17 @@ func artifact_cache_scenario() -> Scenario {
   { id: "compaction.compaction_ai_artifact_cache_stable", run: scenario_artifact_cache_stable }
 }
 
+func seal_side_exhaustion_scenario() -> Scenario {
+  { id: "compaction.structural_seal_side_exhaustion", run: scenario_seal_side_exhaustion }
+}
+
 export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let scenarios = [
     multiple_compactions_scenario(),
     replay_deterministic_scenario(),
     output_shape_scenario(),
-    artifact_cache_scenario()
+    artifact_cache_scenario(),
+    seal_side_exhaustion_scenario()
   ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then println("long_qwen_compaction_dst PASS count=${show(length(scenarios))}")
