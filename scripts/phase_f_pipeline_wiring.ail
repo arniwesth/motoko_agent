@@ -52,7 +52,7 @@ func state_with_pressure(context_limit: int) -> Result[StepState, string] {
     Ok(h) => Ok({
       step_idx: 0,
       history: h,
-      telemetry: { last_input_tokens: context_limit + 1, last_output_tokens: 0 },
+      telemetry: { last_input_tokens: context_limit + 1, last_output_tokens: 0, last_estimated_input_tokens: 0 },
       totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
       nudges_used: 0,
       ext_artifacts: jo([]),
@@ -67,7 +67,7 @@ func check_project_non_failing_prep() -> CheckResult {
   match history_from_seed([msg("system", "pinned"), msg("user", "a"), msg("assistant", "b")]) {
     Err(e) => { ok: false, name: "project_non_failing_prep", detail: "seed failed: ${e}" },
     Ok(h) =>
-      match project(h, { last_input_tokens: 999, last_output_tokens: 0 }, policy(1).compaction) {
+      match project(h, { last_input_tokens: 999, last_output_tokens: 0, last_estimated_input_tokens: 0 }, policy(1).compaction) {
         Err(e) => { ok: false, name: "project_non_failing_prep", detail: "project failed early: ${e}" },
         Ok(p) => {
           let ok = List.length(p.split.pinned) == 1 && List.length(segment_messages(p.split.segment)) == 2;

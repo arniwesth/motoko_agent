@@ -27,6 +27,7 @@ import src/core/phase_vocab (
   history_from_seed,
   history_len,
   history_usage_percent,
+  history_usage_percent_calibrated,
   checkpoint_would_relieve,
   project
 )
@@ -83,8 +84,8 @@ func should_checkpoint(s: StepState, pol: StepPolicy) -> bool {
   let plan = mk_checkpoint_plan(s);
   let limit = pol.compaction.context_limit;
   pol.checkpoint_enabled
-    && history_usage_percent(s.history, limit) >= pol.checkpoint_pct
-    && checkpoint_would_relieve(s.history, plan, limit, pol.checkpoint_pct)
+    && history_usage_percent_calibrated(s.history, limit, s.telemetry) >= pol.checkpoint_pct
+    && checkpoint_would_relieve(s.history, plan, limit, pol.checkpoint_pct, s.telemetry)
 }
 
 func call_model_or_fail(s: StepState, pol: StepPolicy) -> StepDecision {
@@ -153,7 +154,7 @@ func mk_state_with_messages(reason: string, response: string, pending: [ToolCall
     Ok(h) => Ok({
       step_idx: step_idx,
       history: h,
-      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0 },
+      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0, last_estimated_input_tokens: 0 },
       totals: { input_tokens: 0, output_tokens: 0, cost_millicents: cost, cost_warned_pct: 0 },
       nudges_used: 0,
       ext_artifacts: jo([]),

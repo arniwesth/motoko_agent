@@ -12,9 +12,11 @@ export type ModelPhaseOutput = {
   phase: PhaseResult
 }
 
-export pure func result_delta(result: StepResult) -> StateDelta {
+-- sent_estimate is the char/4 estimate of the window that produced this result;
+-- it is stored so the compaction gate can calibrate against provider truth.
+export pure func result_delta(result: StepResult, sent_estimate: int) -> StateDelta {
   {
-    telemetry: Some({ last_input_tokens: result.input_tokens, last_output_tokens: result.output_tokens }),
+    telemetry: Some({ last_input_tokens: result.input_tokens, last_output_tokens: result.output_tokens, last_estimated_input_tokens: sent_estimate }),
     totals: None,
     nudges_used: None,
     ext_artifacts: None,
@@ -24,9 +26,9 @@ export pure func result_delta(result: StepResult) -> StateDelta {
   }
 }
 
-export pure func phase_from_result(result: StepResult, step: int, tool_calls: int, cost_usd: float, cost_delta_millicents: int) -> PhaseResult {
+export pure func phase_from_result(result: StepResult, step: int, tool_calls: int, cost_usd: float, cost_delta_millicents: int, sent_estimate: int) -> PhaseResult {
   {
-    delta: result_delta(result),
+    delta: result_delta(result, sent_estimate),
     transcript_append: [step_result_to_message(result)],
     events: [ProviderResult({
       step: step,
@@ -55,8 +57,12 @@ pure func test_phase_from_result_preserves_live_thinking_fields() -> bool
       cache_read_input_tokens: 3,
       cache_creation_input_tokens: 0
     };
-    let phase = phase_from_result(result, 4, List.length(result.tool_calls), 0.125, 12500);
+    let phase = phase_from_result(result, 4, List.length(result.tool_calls), 0.125, 12500, 9);
     phase.cost_delta_millicents == 12500
+      && match phase.delta.telemetry {
+        Some(t) => t.last_input_tokens == 11 && t.last_estimated_input_tokens == 9,
+        None => false
+      }
       && match phase.events {
         ProviderResult(info) :: [] =>
           info.step == 4

@@ -29,6 +29,83 @@ export pure func usage_percent_with_limit(msgs: [Message], limit: int) -> int {
 
 export pure func exhaustion_pct() -> int { 95 }
 
+-- Density of the actual tokenizer relative to char/4, in permille. char/4
+-- assumes 4 chars/token; real mixed code+prose runs ~3.25 chars/token, so real
+-- content tokens are ~1.235x the char/4 estimate. Only applied to the content
+-- DELTA (see affine_calibrate), so a small error here is a small error on the
+-- newly-added content, not the whole window. Tunable.
+export pure func delta_token_density_permille() -> int { 1235 }
+
+-- Affine calibration of char/4 against provider truth.
+--
+-- Provider input_tokens are NOT `density * content`; they are affine:
+--   real ≈ density * char4_content_estimate + fixed_overhead
+-- where fixed_overhead is the request framing char/4 never sees (system prompt
+-- serialization, the ~7 tool-schema JSON blobs, role scaffolding) — measured at
+-- ~19k tokens on this workload. A pure multiplicative ratio (real/est) cannot
+-- represent the additive term: anchored on a heavily-compacted window it
+-- explodes (overhead dominates the tiny content) and then over-estimates a large
+-- window ~2x, causing a compaction feedback loop.
+--
+-- So we anchor the overhead on ground truth instead of extrapolating it:
+--   overhead      = anchor_real - density * anchor_est   (the fixed framing)
+--   calibrated    = density * raw_est + overhead
+--                 = anchor_real + density * (raw_est - anchor_est)
+-- The bulk of the size (anchor_real) is provider truth; density is applied only
+-- to the char/4 DELTA between the current window and the last-sent one. This is
+-- stable across anchor window size — a compacted anchor and a large anchor yield
+-- ~the same calibrated result. Floored at the raw char/4 estimate so calibration
+-- can only ever raise usage (never suppress compaction the raw policy would
+-- trigger), and falls back to raw when the anchor is absent (either scalar 0).
+export pure func affine_calibrate(raw_est: int, anchor_real: int, anchor_est: int) -> int {
+  if anchor_real > 0 && anchor_est > 0
+  then {
+    let scaled = anchor_real + ((raw_est - anchor_est) * delta_token_density_permille()) / 1000;
+    if scaled > raw_est then scaled else raw_est
+  }
+  else raw_est
+}
+
+-- contracts: SKIPPED — depends on foldl-based estimate_tokens_messages
+export pure func calibrated_tokens_anchored(msgs: [Message], anchor_actual: int, anchor_estimate: int) -> int {
+  affine_calibrate(estimate_tokens_messages(msgs), anchor_actual, anchor_estimate)
+}
+
+-- Calibrated context usage as integer percent (0-100+). 0 for unknown limits.
+-- contracts: SKIPPED — depends on calibrated_tokens_anchored
+export pure func calibrated_usage_percent_anchored(msgs: [Message], limit: int, anchor_actual: int, anchor_estimate: int) -> int {
+  if limit == 0 then 0
+  else (calibrated_tokens_anchored(msgs, anchor_actual, anchor_estimate) * 100) / limit
+}
+
+-- The defining property: affine calibration is STABLE across anchor window size.
+-- Same current window (raw 200000), same underlying density+overhead, but one
+-- anchor is a heavily-compacted window (real 40000/est 16000) and the other is a
+-- large window (real 185000/est 135000) — both yield ~266k, within ~1%. The old
+-- multiplicative ratio exploded here (compacted anchor => 2.6x => ~520k).
+func affine_stable_across_anchor_size() -> bool
+  tests [((), true)]
+  {
+    let compacted_anchor = affine_calibrate(200000, 40000, 16000);
+    let large_anchor = affine_calibrate(200000, 185000, 135000);
+    let diff = if compacted_anchor > large_anchor then compacted_anchor - large_anchor else large_anchor - compacted_anchor;
+    compacted_anchor > 260000 && compacted_anchor < 272000 && diff < 3000
+  }
+
+-- Floored at raw: a degenerate anchor (huge real for a tiny sent window, e.g. a
+-- stub with a constant token count) cannot pull calibration below char/4.
+func affine_floors_at_raw() -> bool
+  tests [((), true)]
+  {
+    affine_calibrate(200, 100, 100000) == 200
+  }
+
+func affine_without_anchor_is_raw() -> bool
+  tests [((), true)]
+  {
+    affine_calibrate(500, 0, 0) == 500
+  }
+
 func estimate_tokens_rounds_up() -> bool
   tests [((), true)]
   {
