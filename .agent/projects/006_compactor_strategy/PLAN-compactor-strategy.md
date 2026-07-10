@@ -59,6 +59,33 @@ WS1/WS2 are entirely extension-resident (004 `ADR-001` D9).
 
 ---
 
+## Code-graph grounding
+
+Grounded against `tools/code-graph` (`AGENTS.md`), re-extracted this session at **`--profile=all`**
+(169 modules — the default `core` profile excludes `packages/**` where WS1/WS2 live). Call edges are
+**source-parsed approximations** (`approximate=true`); effect rows carry coverage caveats (see the
+last row). Each row below is a plan claim checked against the graph.
+
+| Plan claim | Graph evidence (`invokes` / `effect_edges`) | Verdict |
+|---|---|---|
+| WS1/WS2 change surface is a single hook function reached by **dynamic dispatch**, not a static core edge | `compact_for_pre_step` and `compact_with_ai` have **no production static caller** — only their own in-module tests. Production entry is `src/core/session#c2_loop → dispatch_pre_step_chain` (`runtime.ail` fold), which invokes the `on_pre_step` **function-value**. | ✅ Confirms the ephemeral hook-dispatch model (§1.1–1.2); no other module statically depends on either function. |
+| Leaving elision mechanics untouched keeps WS1 inside the structural module | `elide_old_tool_results` callers are **all** in `compaction_structural`: `compact_for_pre_step`, `compact_step_with_limit`, `try_emergency_compaction_with_limit`, +2 tests. Nothing external. | ✅ §2.4 holds — mechanics have no cross-module dependents. |
+| `compact_step_with_limit` is test-only, can be left as-is | Single caller: `test_single_tier_ladder_selects_correctly`. | ✅ §2.4 holds. |
+| The calibration fn I reuse for candidate measurement has one prod site | `calibrated_usage_percent_with_limit` prod caller = **only** `compact_for_pre_step` (+1 test). | ✅ §2.2 reuse is consistent — no other prod semantics to preserve. |
+| Extending `cache_artifact` for `last_ran_step` is safe | `cache_artifact` and `cached_summary` each have a **single** caller: `compact_with_ai`. `split_body → split_msgs → compact_with_ai` all in-module. | ✅ §3.3 — one writer, one reader; contained to the AI module. |
+| WS3 relabel affects exactly one AILANG test | `runtime_status_json` callers: `c2_loop` (prod) + two tests. Only `test_runtime_status_reports_actual_context_window` (`:2451`) asserts `context_window` fields; `test_runtime_status_includes_prior_conversation_counts` (`:2369`) asserts only `provider_calls_*` / `steps_executed_so_far`. | ✅ §4.3 names the right test; the second caller is **unaffected**. |
+| The two-window story is real in the call graph | `c2_pending_context` callers = `c2_loop` + `runtime_status_json`; the status block's est/calib flow from it while `actual` flows from `st.telemetry`. | ✅ Grounds §1.4 / WS3. |
+| No AILANG consumer parses the `context_window` fields (so the only field-shape risk is external) | `runtime_status_json`'s single prod consumer `c2_loop` encodes it to a **string** tool-result; no AILANG caller reads the keys. TS/web/deploy consumers are **outside this graph** (AILANG-only). | ✅ Confirms the WS3 ripple caveat (§4.3 / Blast radius) is the correct **external** check — the graph cannot see it, so grep it manually. |
+| Effect claims for the two extension functions | **Coverage gap:** the typed/effect pass covers `src/core/**` (1170 effect rows) but **not** the package logic modules — `compaction_ai#compact_with_ai` / `compaction_structural#compact_for_pre_step` have **zero** effect rows (only their `register`/`_smoke` modules are covered). Per `AGENTS.md`, `incomplete`→"unknown", not "no". | ⚠️ Effects/purity for these two taken from **source declarations** (`pure func compact_for_pre_step`; `compact_with_ai … ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream}`), **not** the graph. `runtime_status_json` purity **is** graph-confirmed (core covered, no effect edges) and matches its `pure func` decl. |
+
+**Net:** the graph corroborates the plan's containment claims — WS1 and WS2 are single hook
+functions with no external static dependents, their helpers are module-local, and WS3 touches one
+core function with one affected test and zero in-graph field consumers. The one thing the graph
+**cannot** confirm is the TS/web/deploy consumers of the status JSON (out of profile) — which is
+exactly why the Blast-radius section flags a manual grep there rather than relying on the graph.
+
+---
+
 ## 0. Scope, in one screen
 
 Three defects, **all within the deliberately-ephemeral per-step compaction model** (the returned
@@ -368,6 +395,10 @@ Restructure the `context_window` object (`session.ail:468-476`) so the two windo
 - `src/core/session.ail:2451` `test_runtime_status_reports_actual_context_window` asserts flat
   `"actual_usage_pct":50` / `"actual_input_tokens":500`. Update its `contains` assertions to the new
   nested path (e.g. assert `"last_sent"` block carries `"usage_pct":50` and `"input_tokens":500`).
+- `src/core/session.ail:2369` `test_runtime_status_includes_prior_conversation_counts` — the graph's
+  *other* `runtime_status_json` caller — asserts only `provider_calls_*` / `steps_executed_so_far`,
+  **not** `context_window`, so it is **unaffected** by the regrouping (verified in Code-graph
+  grounding). No change needed there.
 - `scripts/runtime_status_tool_dst.ail` `first_tool_status_ok` (`:198-211`) checks
   `current_step` / `provider_calls_*` / `system_prefix.digest` but **not** the `context_window`
   fields — so the DST is unaffected by the regrouping. Add a positive assertion for the new labels
