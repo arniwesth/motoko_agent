@@ -11,7 +11,8 @@ Relates to:
   is the decision record for that proposal's boundary question.
 - `../../issues/ephemeral-compaction-and-ai-noop-thrash.md` — the compactor-strategy problems
   that gutted the context which drove the empty stop. **Out of scope here** (compaction is
-  already correctly extension-resident; its *strategy* fixes are a separate decision).
+  already correctly extension-resident, and ephemeral-by-design; its *strategy* fixes are a
+  separate PLAN, not a decision — see Non-goals).
 - `../001_DST/ADR-003-harness-boundary-dst-regrounded-on-system-prompt-materialization.md` —
   uses "harness boundary" for a **different seam**: the AILANG-core ↔ TS-host process boundary
   where the system prompt / tool schemas are materialized into the provider request. This ADR is
@@ -207,10 +208,13 @@ process boundary.
 
 ## Non-goals
 
-- **Compaction-persistence decision** (ephemeral re-compaction vs persist-into-history vs
-  result-based tier selection) — a real, open fork tracked in
-  `ephemeral-compaction-and-ai-noop-thrash.md`. It is a *strategy* decision for an
-  already-extension-resident concern, not a boundary decision. Deliberately left undecided here.
+- **Compaction persistence model** — *not* an open fork. Ephemeral per-step compaction (session log
+  unchanged) is a **documented decision**: `design_docs/planned/m-motoko-conversation-compaction.md:52`
+  ("the returned `msgs` replaces the input **for this step only**"), consistent with the phase-core
+  seed/append-only history. So there is no persistence ADR to write here. The residual compactor
+  problems (emergency-tier over-escalation, AI no-op thrash, shadow-vs-sent observability) are
+  *strategy* refinements **within** that ephemeral model — extension-side, already covered by
+  `ephemeral-compaction-and-ai-noop-thrash.md`, and are **PLAN-level, not a decision**.
 - **Affine token calibration** — already shipped on this branch (`src/core/compaction.ail`
   `affine_calibrate` / `delta_token_density_permille`, mirrored in the compaction extensions).
   Rationale belongs in the calibration NOTE, not this ADR.
