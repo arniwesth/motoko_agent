@@ -85,6 +85,7 @@ import src/core/phase_vocab (
   ExtInterceptHandled,
   HybridBashExtracted,
   DoneEvent,
+  EmptyStopFinalize,
   ExtSolverFeedback,
   PersistNudge,
   NativeToolCalls,
@@ -1483,13 +1484,24 @@ func c2_loop(
         },
         Finalize(info) => {
           let done_step = c2_done_step(st.step_idx);
+          let empty_event = EmptyStopFinalize({
+            step: done_step,
+            input_tokens: st.telemetry.last_input_tokens,
+            estimated_input_tokens: st.telemetry.last_estimated_input_tokens,
+            context_limit: catalog_context_limit_for(model)
+          });
+          let trace_after_empty_floor =
+            if trim(info.output) == "" then {
+              let _ = ledger_emit(session_id, empty_event);
+              ledger_append(trace_with_decision, WireRecord(empty_event))
+            } else trace_with_decision;
           let _ = emit_run_summary(session_id, model, st.totals, st.step_idx, 0, "", started_at_ms);
           let _ = ledger_emit(session_id, DoneEvent({
             step: done_step,
             output: info.output,
             source: st.finalize_source
           }));
-          { result: Ok(st.msgs), trace: trace_with_decision }
+          { result: Ok(st.msgs), trace: trace_after_empty_floor }
         },
         InjectUserMessage(msg) => {
           let next_msgs = st.msgs ++ [msg];

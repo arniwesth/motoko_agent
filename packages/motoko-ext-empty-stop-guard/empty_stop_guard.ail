@@ -1,0 +1,150 @@
+module sunholo/motoko_ext_empty_stop_guard/empty_stop_guard
+
+import std/string (trim, contains)
+import std/json (Json, jo)
+import std/result (Result, Err)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
+
+export pure func is_blank(s: string) -> bool {
+  trim(s) == ""
+}
+
+export pure func guard_marker() -> string {
+  "[motoko-empty-stop-guard]"
+}
+
+export pure func guard_message() -> string {
+  "You returned an empty response but the task is not marked complete. Continue working on the task, or if you are genuinely finished, state your final answer or conclusion explicitly. ${guard_marker()}"
+}
+
+export pure func budget() -> int {
+  2
+}
+
+export pure func count_markers(history: [Msg]) -> int {
+  match history {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "user" && contains(m.content, guard_marker()) then 1 else 0;
+      here + count_markers(rest)
+    }
+  }
+}
+
+export pure func decide_with_budget(ctx: ExtCtx, candidate: string, max_feedback: int) -> FinalizeDecision {
+  if is_blank(candidate) && count_markers(ctx.history_slice) < max_feedback
+  then ContinueWithFeedback(guard_message())
+  else NoDecision
+}
+
+export pure func decide(ctx: ExtCtx, candidate: string) -> FinalizeDecision {
+  decide_with_budget(ctx, candidate, budget())
+}
+
+func user(content: string) -> Msg {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func assistant(content: string) -> Msg {
+  { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  Err("ext ai_step port unavailable")
+}
+
+func noop_proc_exec(_cmd: string, _cwd: string) -> string ! {IO, Process, FS} {
+  ""
+}
+
+func noop_clock_now() -> int ! {Clock} {
+  0
+}
+
+func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
+  fallback
+}
+
+func noop_ext_ports() -> ExtPorts {
+  {
+    ai_step: noop_ai_step,
+    proc_exec: noop_proc_exec,
+    clock_now: noop_clock_now,
+    env_get: noop_env_get
+  }
+}
+
+pure func empty_ext_artifacts() -> Json {
+  jo([])
+}
+
+pure func zero_token_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}
+
+func test_ctx(history: [Msg]) -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "m",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: { total: 1, solver: 1, verifier: 0 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: history,
+    state_key: "k",
+    context_limit: 0,
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry()
+  }
+}
+
+pure func test_blank_detection() -> bool
+  tests [((), true)]
+  {
+    is_blank("") && is_blank(" \n\t ") && not is_blank("done")
+  }
+
+pure func test_marker_count_counts_only_user_messages() -> bool
+  tests [((), true)]
+  {
+    count_markers([
+      user("a ${guard_marker()}"),
+      assistant("b ${guard_marker()}"),
+      user("c")
+    ]) == 1
+  }
+
+pure func test_decide_continues_under_budget() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx([user("first ${guard_marker()}")]), " ", 2) {
+      ContinueWithFeedback(msg) => contains(msg, guard_marker()),
+      _ => false
+    }
+  }
+
+pure func test_decide_stops_at_budget() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx([
+      user("first ${guard_marker()}"),
+      user("second ${guard_marker()}")
+    ]), "", 2) {
+      NoDecision => true,
+      _ => false
+    }
+  }
+
+pure func test_decide_ignores_non_blank_candidate() -> bool
+  tests [((), true)]
+  {
+    match decide_with_budget(test_ctx([]), "done", 2) {
+      NoDecision => true,
+      _ => false
+    }
+  }
