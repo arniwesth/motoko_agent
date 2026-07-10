@@ -56,7 +56,7 @@ This cleanly separates the two concerns: the affine-calibration fix held (accura
 - **Fix the observability** so the metric is not self-contradictory: make the status tool's `est`/`calib` measure the same window as `actual` (the sent window) once compaction is active, **or** relabel them explicitly as "uncompacted pending" vs "last sent" so a 114%-vs-10% reading is legible rather than alarming.
 - **Explicitly out of scope:** persisting compaction into history (overturns the documented ephemeral decision) and bounding retained-history growth (a separate revisit of the "session log unchanged" tradeoff — see Consequence 1).
 
-This is **PLAN-level work, not an ADR** — it refines an already-extension-resident strategy without changing any documented decision. Track alongside `../projects/005_harness_policy_boundary/` as a sibling `PLAN-compactor-strategy.md` (with its own HANDOFF), or in a dedicated project.
+This is **PLAN-level work, not an ADR** — it refines an already-extension-resident strategy without changing any documented decision. Tracked in `../projects/006_compactor_strategy/` (`HANDOFF-write-compactor-strategy-plan.md` → `PLAN-compactor-strategy.md`).
 
 ---
 
