@@ -36,7 +36,8 @@ this stop be honored?"), pre-step (compaction), tool approval, response intercep
 **extension** side of the `ExtensionHooks` ABI. The **core** keeps only (a) the *mechanism* — the
 step loop, provider/tool dispatch, and the act of invoking each hook and honoring its returned
 decision-as-data — and (b) a small set of **safety-floor invariants** that must hold with **zero
-extensions loaded**, chief among them: *an empty-response finalize is never silent.*
+extensions loaded**, chief among them: *an empty-response finalize is never mistaken for a
+substantive completion.*
 
 Concretely, for the motivating case:
 1. The **empty-stop guard** is a new extension implementing `on_solver_candidate`; it returns
@@ -57,28 +58,46 @@ separate) and **not** the affine token-calibration change (already shipped on th
 
 ## Context
 
-Three live `make live_qwen36_compaction_heavy_headless` runs (model
-`openrouter/qwen/qwen3.6-35b-a3b`) drove this out:
+Surfaced across live `make live_qwen36_compaction_heavy_headless` runs (model
+`openrouter/qwen/qwen3.6-35b-a3b`); three findings drove this decision:
 
-1. A calibration bug made the compactors over-fire; the context was elided to `keep_last=3`
-   stubs (~650 of 655 messages) and the reasoning model, handed an incoherent context, returned
-   `finish_reason: "stop"` with **empty content and no tool calls** at step 96. The step machine
-   treats any `"stop"` as `Finalize({reason:"model_stop", output: last_response_text})`, so the
-   run ended with `done{output:""}` — a clean, silent, empty "success" (`silent-empty-stop-finalize.md`).
-2. Investigating the finalize path surfaced that **there is no empty-response guard anywhere** in
-   `session.ail` / `step_machine.ail`, and the one mechanism that could catch a premature stop —
-   the persist-nudge — is (a) disabled by default (`MOTOKO_PERSIST_RETRIES=0`), (b) gated on
-   `not any_writefile_attempt(...)` with a hardcoded *"use the WriteFile tool to save your
-   solution"* message (`recovery.ail:48`), i.e. coding-task-specific, and (c) aimed at the wrong
-   symptom (lazy prose, not empty output).
-3. The finalize gate **already exposes an extension seam** built for exactly this decision:
-   `on_solver_candidate(ctx, candidate) -> FinalizeDecision`
+1. **The failure.** In session `2026-07-09T20-16-49-594Z`, a compactor calibration bug made the
+   compactors over-fire; the context was elided to `keep_last=3` stubs (~650 of 655 messages) and
+   the reasoning model, handed an incoherent context, returned `finish_reason: "stop"` with
+   **empty content and no tool calls** at step 96. The step machine treats any `"stop"` as
+   `Finalize({reason:"model_stop", output: last_response_text})`, so the run ended with
+   `done{output:""}` — reading as a clean, empty "success" (`silent-empty-stop-finalize.md`).
+   The subsequent affine-calibration fix removed *this instance's* trigger: a later run
+   (`2026-07-09T20-50-38-105Z`) did **not** reproduce the empty stop, yet still gutted the context
+   to ~13K tokens / 371 messages before being stopped manually at step 127. So the silent-finalize
+   gap is **independent** of the (now-fixed) calibration cause — any future context degradation,
+   provider hiccup, or reasoning stall re-triggers it.
+2. **The gap.** Investigating the finalize path surfaced that **there is no empty-response guard
+   anywhere** in `session.ail` / `step_machine.ail`, and the one mechanism that could catch a
+   premature stop — the persist-nudge — is (a) disabled by default (`MOTOKO_PERSIST_RETRIES=0`),
+   (b) gated on `not any_writefile_attempt(...)` with a hardcoded *"use the WriteFile tool to save
+   your solution"* message (`recovery.ail:48`), i.e. coding-task-specific, and (c) aimed at the
+   wrong symptom (lazy prose, not empty output).
+3. **The seam already exists.** The finalize gate **already exposes an extension seam** built for
+   exactly this decision:
+   `on_solver_candidate(ctx: ExtCtx, candidate: string) -> FinalizeDecision`
    (`packages/motoko-ext-abi/types.ail:159`), where
    `FinalizeDecision = Accept(string) | ContinueWithFeedback(string) | NoDecision` (`types.ail:133`).
+   The `candidate` passed is the raw model output — `result.message.content`
+   (`session.ail:1800`) — so a blank candidate ⟺ an empty stop.
    `ContinueWithFeedback(msg)` means "don't finalize — inject `msg` and continue"; core already
-   loops on it (`ContinueWithFeedback` → `solver_feedback` finish_reason → `InjectUserMessage` →
-   next model call, `session.ail:1819`). `merge_finalize_decisions` gives `ContinueWithFeedback`
-   precedence over `Accept` over `NoDecision` (`ext/runtime.ail:314`).
+   loops on it (`ContinueWithFeedback(feedback)` → emit `ExtSolverFeedback` → `solver_feedback`
+   finish_reason → next `c2_loop` with the feedback injected, `session.ail:1803-1826`).
+   `merge_finalize_decisions` gives `ContinueWithFeedback` precedence over `Accept` over
+   `NoDecision` (`ext/runtime.ail:314`).
+
+The hook is reached on a stop path (`finish_reason != "tool_calls"`) once two other extension
+seams decline: `on_response_intercept` returns `NoIntercept`, and — with `hybrid: true`, as the
+qwen profile sets — hybrid bash extraction finds no fenced command (`session.ail:1799-1800`). An
+**empty** response has no bash fence and nothing to intercept, so it reliably reaches
+`on_solver_candidate`. Both *finalize* routes downstream of that hook — `Accept(output)` and the
+`NoDecision`-with-no-nudge fall-through — converge on `c2_after_dp7(...)` (`session.ail:1802`,
+`1858`), which is the single choke point where the run actually ends.
 
 So the reactive fix requires **no new core mechanism**; the only real question is *where the
 policy lives*. That is a boundary decision, which is why it belongs in an ADR rather than
@@ -124,10 +143,16 @@ at N. The transcript is the state; core adds no counter.
    (a) *Mechanism*: the hooks, the decision types, invoking the hook chain at each decision
    point, and honoring the merged decision (all already present).
    (b) *A safety floor that does not depend on any extension being loaded*: **an empty-`stop`
-   finalize (blank content, no tool calls) must never be silent.** Core emits a distinct ledger
-   event (e.g. `EmptyStopFinalize`) and/or marks `run_summary` at that point. This is a
-   policy-free observability invariant — ~one event emission, no task-specific logic — so a
-   profile with **no** guard extension still fails *loud*, not silent.
+   finalize (blank content, no tool calls) must never be indistinguishable from a substantive
+   completion.** Today it is — the run ends with `done{output:""}` and a `finish_reason:"stop"`
+   `run_summary`, i.e. present in the log but reading as an ordinary success. Core emits a distinct
+   ledger event (e.g. `EmptyStopFinalize`) and/or flags `run_summary` at the finalize choke point
+   (`c2_after_dp7`, where both routes converge — see Context 3), so a profile with **no** guard
+   extension still ends *loud*, not as a silent empty success. This is a policy-free observability
+   invariant — a ledger emission at one convergence point, no task-specific logic.
+   This floor is also the backstop for D2: when a guard's continue-budget is spent it returns
+   `NoDecision`, and the eventual empty finalize is then made observable by D3(b) rather than
+   slipping through silently.
 
 **D4. The persist-nudge migrates to this seam (follow-on).** The hardcoded, WriteFile-specific
 persist-nudge in `session.ail:1828-1857` / `recovery.ail:44-55` is policy on the mechanism side.
@@ -137,14 +162,15 @@ core. Not part of this ADR's immediate change; tracked as a follow-on plan.
 ## Alternatives considered
 
 - **Put the empty-stop guard in core** (mirror persist-nudge). Rejected: it repeats the exact
-  mistake this ADR names — task-specific policy accreting in a 2455-line `session.ail`, invisible
-  to composition, un-swappable per profile. The seam already exists; using it costs less.
+  mistake this ADR names — task-specific policy accreting in an already-large `session.ail`
+  (~2500 lines), invisible to composition, un-swappable per profile. The seam already exists;
+  using it costs less.
 - **Just raise `MOTOKO_PERSIST_RETRIES`.** Rejected: persist-nudge is coding-specific in gating
   and message, and targets lazy-prose, not empty output. It cannot express "continue this
   research task" and would inject a nonsensical "write a solution file" nudge.
-- **Do nothing (accept empty stops as success).** Rejected: the failure is silent — no error, no
-  signal — and recurs whenever context degrades or a provider hiccups. Even without a guard,
-  D3(b) makes it observable.
+- **Do nothing (accept empty stops as success).** Rejected: the failure raises no error and is
+  indistinguishable from a real completion, and it recurs whenever context degrades or a provider
+  hiccups. Even without a guard, D3(b) makes it observable.
 - **Push *everything*, including the safety floor, into an extension.** Rejected: safety that
   depends on an extension being present in `extensions.order` is not safety. "Never silently
   finalize" must hold with zero extensions, so it stays a core invariant (mechanism), while the
@@ -192,15 +218,30 @@ process boundary.
 
 ## Open questions
 
-- **OQ1.** Does `on_solver_candidate`'s `ctx` expose enough to detect "empty stop" precisely? The
-  hook receives the candidate *text* and is only reached when the model wants to stop (no tool
-  calls), so blank text ⟺ empty stop — believed sufficient, to be confirmed when the guard is
-  built.
-- **OQ2.** Default-profile inclusion: should the empty-stop guard ship in the default
+- **OQ1 (resolved during review).** Confirmed the guard has what it needs: `on_solver_candidate`
+  receives the candidate string (`result.message.content`) and reliably fires on an empty stop
+  (no bash fence, nothing to intercept — see Context 3). Detecting "blank candidate" is
+  sufficient; no extra `ctx` plumbing is required.
+- **OQ2 (false positives).** The guard treats *empty stop* as *premature stop*. That is right for
+  almost all agent tasks, but a task can legitimately end with an empty final turn. The cost of a
+  wrong nudge is bounded (the continue-budget caps retries, and a genuinely-finished model can
+  re-affirm completion in prose on the nudge), so the default leans toward nudging — but the
+  message wording and budget should make the assumption cheap to be wrong about. Decide when
+  building the guard.
+- **OQ3.** Default-profile inclusion: should the empty-stop guard ship in the default
   `extensions.order`, or be opt-in with only the D3(b) floor on by default? (Leaning: floor
   always; guard in default order.)
-- **OQ3.** Should D3(b)'s event also carry the calibrated/actual context-window sizes at finalize,
-  to make "died because context was gutted" self-diagnosing?
+- **OQ4.** Should D3(b)'s event also carry the calibrated/actual context-window sizes at finalize,
+  to make "ended because context was gutted" self-diagnosing?
+- **OQ5 (budget durability under compaction).** D2 counts the guard's marker messages in the
+  history to enforce its continue-budget. Structural compaction only elides `role=="tool"`
+  messages, so `user`/`assistant` markers survive it — but the **AI compactor summarizes old
+  `user`/`assistant` turns**, which could fold a marker into a summary and reset the budget,
+  letting the guard loop more than intended (ironic, given compaction is the theme). The guard
+  must count markers on a view that retains them (full history, not a compacted `ctx.history_slice`),
+  use a marker phrase the summarizer is instructed to preserve, or track the count in a durable
+  `ctx` field. Resolve when building the guard; note that persist-nudge today counts on the full
+  `msgs`, not a slice.
 
 ## Follow-on (to be authored fresh, bridged by HANDOFFs from the authoring session)
 
