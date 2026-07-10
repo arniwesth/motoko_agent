@@ -10,6 +10,55 @@ sections' Consequences + Fix lists are the acceptance criteria.
 
 ---
 
+## TL;DR
+
+The compactor works *ephemerally by design* (send-only payload; full history retained) — that stays.
+Three strategy bugs *within* that model:
+
+1. **Structural over-escalates.** It picks the elision tier from the *uncompacted* window's calibrated
+   pct (which reads 114-133% because the anchor is the last compacted window), so it pins to emergency
+   `keep_last=3` and guts the sent window to ~5% of the limit. **Fix:** pick the **gentlest**
+   `keep_last` whose *resulting* window lands under **70%**, measured with the same affine calibration
+   — so a 300-message history compacts to `keep_last=10`, not emergency. Extension-only.
+2. **AI compactor thrashes.** It summarizes ~1 old turn for ~0% relief *every step*, spending an AI
+   call each time. **Fix:** **batch** (summarize everything older than `keep_recent`, pairs intact) +
+   **pre-call no-op guard** (project relief before spending the call; `PassThrough` if trivial) +
+   **rate-limit** (don't re-summarize for a few steps after a real pass, with a `95%` safety
+   override). Rate-limit state lives in the cross-step **artifacts** channel. Extension-only.
+3. **Status tool lies.** `context_window` mixes the uncompacted-pending window (`calibrated 114%`)
+   with the last-sent window (`actual 10%`), reading as self-contradictory. **Fix:** **relabel** into
+   `last_sent` vs `uncompacted_pending` sub-objects + a `note`. The only **core** touch; pure
+   presentation.
+
+Verification is offline/deterministic via the existing `make compaction_dst` + `make conformance`
+harnesses plus new scripted-provider scenarios. See [Blast radius](#blast-radius--every-file-touched)
+for the exact file list.
+
+---
+
+## Blast radius — every file touched
+
+| File | WS | Kind | Change |
+|------|----|------|--------|
+| `packages/motoko-ext-compaction-structural/compaction_structural.ail` | 1 | **extension** | New `select_by_result` + `result_target_pct` helpers; rewrite **selection** inside `compact_for_pre_step` (`:148-168`). Elision mechanics (`elide_old_tool_results:103`, `elide_walk:83`, `elide_content:73`) **untouched**. Add a WS1 unit test. |
+| `packages/motoko-ext-compaction-ai/compaction_ai.ail` | 2 | **extension** | Batch `split_body` (`:107`); pre-call no-op guard + post-call growth check around `summarize_with_ai`/`new_pct` (`:181-185`); rate-limit read/write via `last_ran_step`; extend `cache_artifact` (`:158`) to carry it. Add WS2 unit tests. |
+| `packages/motoko-ext-compaction-ai/types.ail` | 2 | **extension** | *(Optional, recommended)* add `min_relief_pct` / `min_gap_steps` / `hard_override_pct` to `CompactionAiConfig` + `default_config`, keeping fallback-safe defaults. |
+| `src/core/session.ail` | 3 | **CORE** | Regroup the `context_window` object in `runtime_status_json` (`:468-476`) into `last_sent` / `uncompacted_pending` + `note`. **No computation change.** Update `test_runtime_status_reports_actual_context_window` (`:2451`). |
+| `scripts/runtime_status_tool_dst.ail` | 3 | test | Add assertions for the new `context_window` labels (`first_tool_status_ok`, `:198`). |
+| `scripts/long_qwen_compaction_dst.ail` | 1,2 | test | Add WS1 "not-emergency" + WS2 drip/batch/rate-limit scenarios; **re-tune** `scenario_multiple_compactions`'s `applied ≥ 3` assertion (`:548-559`) to the new bounded cadence (intended delta, not a regression). |
+
+**Reaches beyond these files?** One risk only: TS/web/deploy consumers of the flat
+`context_window.*_usage_pct` keys (WS3). **Grep `actual_usage_pct` / `calibrated_usage_pct` across
+`src/tui`, `web/`, `deploy/` before committing**; if any read the flat keys, keep flat aliases
+alongside the nested block or update the consumer in the same PR. Nothing else in core changes —
+WS1/WS2 are entirely extension-resident (004 `ADR-001` D9).
+
+**Does NOT touch:** `src/core/compaction.ail` (calibration — frozen), `st.msgs` / history persistence
+(`session.ail:1705` — the ephemeral guarantee), the elision mechanics, the `ExtensionHooks` /
+`PreStepDecision` ABI (`packages/motoko-ext-abi/types.ail`), and the summary cache.
+
+---
+
 ## 0. Scope, in one screen
 
 Three defects, **all within the deliberately-ephemeral per-step compaction model** (the returned
