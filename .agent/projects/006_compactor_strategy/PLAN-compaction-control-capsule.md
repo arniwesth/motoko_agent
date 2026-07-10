@@ -14,6 +14,43 @@ handoff, not a continuation of the original stress task.
 
 ---
 
+## TL;DR
+
+The previous compactor-strategy fix made compaction effective, but the live stress run exposed a
+new upstream control-loss problem: the AI summary shrank the sent window correctly, then Qwen read
+the `[CONTEXT SUMMARY]` as a fresh-session handoff and stopped at step 47. Do **not** solve this by
+changing core stop/finalize behavior here; that is already tracked by
+`.agent/issues/silent-empty-stop-finalize.md`.
+
+Fix the AI compactor summary format so task-control state is deterministic, not summarizer-dependent:
+wrap the AI prose in a runtime control capsule containing `ctx.task`, current step/model, "this is not
+a fresh session", active continuation/stop obligations, and mirrored runtime-status facts when
+available. Harden the summarizer prompt too, but treat it as quality improvement only; correctness
+comes from the deterministic capsule. Verify with direct compactor tests and a DST where the
+summarizer returns hostile prose such as "What would you like to work on?".
+
+---
+
+## Blast Radius
+
+| File | Kind | Change |
+|------|------|--------|
+| `packages/motoko-ext-compaction-ai/compaction_ai.ail` | **extension** | Replace `summary_msg(summary)` with a context-aware control-capsule builder; thread `ctx` and optional status facts into the compacted summary message; harden `summarization_prompt`; add pure extraction helpers for latest `MotokoRuntimeStatus` facts; add unit tests. |
+| `scripts/long_qwen_compaction_dst.ail` | test | Add a deterministic direct-compactor scenario with a hostile/weak summarizer and a task containing explicit stop/status obligations; assert the compacted payload preserves the capsule and still passes `validate_compactor_output`. |
+| `.agent/issues/compaction-summary-loses-task-control-state.md` | docs | Update status when implemented. |
+| `ailang.lock` | metadata | Refresh only if package content hashes change during implementation. Do not churn it for plan-only edits. |
+
+**Expected not to touch:**
+- `src/core/step_machine.ail` and `src/core/session.ail` stop/finalize behavior. That belongs to
+  `.agent/issues/silent-empty-stop-finalize.md`.
+- `src/core/compaction.ail` calibration.
+- structural compaction (`packages/motoko-ext-compaction-structural/**`).
+- retained history persistence (`st.msgs` remains full/uncompacted).
+- `packages/motoko-ext-abi/types.ail`; no ABI change is needed because `ExtCtx` already exposes the
+  required state.
+
+---
+
 ## 0. Scope
 
 Fix the AI compactor so its inserted summary cannot erase or reframe the active control contract.
@@ -259,4 +296,3 @@ Required gates:
 - A future rate-limit default change may reduce repeated AI compaction calls, but it does not remove
   the need for this capsule. Any compaction summary that replaces old control-bearing turns must
   preserve the control contract deterministically.
-
