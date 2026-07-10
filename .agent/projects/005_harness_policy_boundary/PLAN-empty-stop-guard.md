@@ -133,8 +133,16 @@ Each WI names the file(s), the change, and the `make` gate that proves it.
 - `register.ail` — `register_with_config(_cfg: a) -> ExtensionHooks`, mirroring
   `motoko-ext-compaction-structural/register.ail` (all other hooks no-op: `on_pre_step`
   `PassThrough`, `on_tool_policy` `NoOpinion`, `on_tool_handle` `Delegate`, `on_response_intercept`
-  `NoIntercept`, empty tools/prompt/budget). `id: "empty_stop_guard"`; `on_solver_candidate`
-  delegates to `empty_stop_guard.decide`. Config-agnostic (`_cfg: a`) like `test_dummy`.
+  `NoIntercept`, empty tools/prompt/budget). `id: "empty_stop_guard"`; `on_solver_candidate` wraps
+  `empty_stop_guard.decide` in a `func(...) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net,
+  SharedMem, Clock, Stream}` (the ABI hook carries the full effect row even though `decide` is pure —
+  same as `compaction_structural`). Config-agnostic (`_cfg: a`) like `test_dummy`.
+- **Naming convention (gotcha):** directory is hyphenated `motoko-ext-empty-stop-guard`, but the
+  **module path and package id are underscored** — `module sunholo/motoko_ext_empty_stop_guard/register`
+  / `.../empty_stop_guard`, package `sunholo/motoko_ext_empty_stop_guard@0.1.0`. The registry
+  `resolve` name is the `motoko_ext_`-stripped basename → `empty_stop_guard` (matches the profile
+  order token and `id`). Same split as every sibling (`motoko-ext-compaction-structural` ↔
+  `sunholo/motoko_ext_compaction_structural`).
 - `ailang.toml` / `motoko.pkg` package manifest matching a sibling ext package's shape.
 
 **Gate:** `ailang check packages/motoko-ext-empty-stop-guard/register.ail` and the package's own
@@ -193,7 +201,8 @@ In `src/core/session.ail`, the `Finalize(info)` arm (`1484-1493`):
 - Gate = **blank finalize output** only. "No tool calls" is already implied: `decide` returns
   `Finalize` **only** for `last_finish_reason ∈ {stop, dp7_approved, dp7_fail_open}`
   (`step_machine.ail:118-119`) — all non-tool-call stop paths. So `blank(info.output)` ⟺ the empty
-  stop of the issue. (`is_blank_output` = `trim == ""`; reuse a core helper or inline `Str`.)
+  stop of the issue. (`is_blank_output` = `trim(info.output) == ""`; `trim` is **already imported**
+  in `session.ail:35` — no new import.)
 - **Do not** place this in `c2_after_dp7` (where the ADR points): an empty candidate that DP7
   *rejects* re-loops instead of finalizing, so an emit there would be a false positive. The
   `Finalize` arm is the one point every finalize route (Accept, NoDecision-no-nudge, dp7_fail_open,
@@ -208,13 +217,17 @@ In `src/core/session.ail`, the `Finalize(info)` arm (`1484-1493`):
 
 ### WI-5 — (optional, recommended) flag `run_summary` on empty finalize
 
-D3(b) permits "and/or flags `run_summary`". `emit_run_summary` (`session.ail:1486`) currently passes
-`finish_reason` implicitly as the loop's; an empty stop still reports `finish_reason:"stop"`
-(indistinguishable in the summary). Minimal option: leave `run_summary` as-is and rely on the
-distinct `EmptyStopFinalize` event (cheapest, satisfies the invariant). Recommended-but-deferrable:
-thread an `empty: bool` or a distinct `finish_reason:"empty_stop"` into the summary. **Decision:**
-ship the event (WI-4) as the invariant; defer the `run_summary` flag unless downstream log tooling
-needs it — noted so a reviewer can pull it forward without re-litigating.
+D3(b) permits "and/or flags `run_summary`". The `Finalize` arm calls `emit_run_summary(session_id,
+model, st.totals, st.step_idx, 0, "", started_at_ms)` (`session.ail:1486`); the summary's
+`finish_reason` is derived from the **`finish_code: int`** parameter (`emit_run_summary` sig
+`session.ail:776-782`; `0 → "stop"` via `finish_reason_str`, `session.ail:764`), **not** a
+finish-reason string. So an empty stop currently reports `finish_reason:"stop"`, indistinguishable in
+the summary. Flagging it would mean either a new `finish_code` value mapping to `"empty_stop"` (and a
+`finish_reason_str` arm + its own golden) or an added summary field — a wider change touching the
+`run_summary` schema and its goldens. **Decision:** ship the distinct `EmptyStopFinalize` event
+(WI-4) as the invariant (cheapest, self-contained, satisfies "never a silent empty success"); defer
+the `run_summary` flag unless downstream log tooling needs to key off the summary alone — noted so a
+reviewer can pull it forward without re-litigating.
 
 ### WI-6 — DST scenario (offline, deterministic)
 
@@ -223,22 +236,40 @@ Add scenarios to `scripts/phase_c2_wiring_scenarios.ail` (run by `make phase_c_l
 harness (`run_scripted(rt, script)` / `Session.run_v2_session_traced*`, `stub_step.prose_step`).
 `prose_step("")` yields `finish_reason:"stop"` with empty content — the exact trigger.
 
-Build a `guard_rt()` helper mirroring `stub_step.deny_all_rt()` but whose single hook's
-`on_solver_candidate` is the real `empty_stop_guard.decide` (budget 2). Three assertions:
+Build a `guard_rt()` helper mirroring `stub_step.deny_all_rt()` (which sets `verification.enabled =
+false`, so DP7 auto-approves and the empty stop reaches `Finalize` — confirmed
+`stub_step.ail:271-273`, `session.ail:1092`) but whose single hook's `on_solver_candidate` is the
+real `empty_stop_guard.decide`. **Pin the budget explicitly to 2** in the helper (construct the hook
+with an explicit-budget variant, or set `EMPTY_STOP_GUARD_BUDGET=2`) so the scenario stays
+deterministic regardless of the shipped default. All scenarios use `run_scripted(rt, script)` (plain
+runner, `persist_retries=0` — `phase_c2_wiring_scenarios.ail:162`), so the persist-nudge never fires
+and the guard is the sole injector. Three assertions:
 
 - **(a) guard injects + loops within budget.** `run_scripted(guard_rt(), [prose_step(""),
   prose_step("done")])` → decisions `["CallModel", "InjectUserMessage", "CallModel", "Finalize"]`
   (empty → `ContinueWithFeedback` → `solver_feedback` → `InjectUserMessage`; second step non-blank →
-  `Accept`/`NoDecision` → finalize). Mirrors `scenario_traced_persist_nudge_decisions`
-  (`phase_c2_wiring_scenarios.ail:190-215`).
+  `NoDecision` → finalize). Identical decision-name trace to the existing
+  `scenario_traced_persist_nudge_decisions` (`phase_c2_wiring_scenarios.ail:190-215`), since both
+  `solver_feedback` and `persist_nudge` map to `InjectUserMessage` in `decide`.
 - **(b) budget exhaustion → NoDecision → floor fires.** `run_scripted(guard_rt(),
-  [prose_step(""), prose_step(""), prose_step("")])` with budget 2 → two injections, then the third
-  empty stop finds `count_markers == 2` (not `< 2`) → `NoDecision` → `Finalize` → assert the trace
-  contains an `EmptyStopFinalize` wire record (add an `event_names`/`assert_contains_event` helper
-  alongside `decision_names`, `phase_c2_wiring_scenarios.ail:139-161`).
+  [prose_step(""), prose_step(""), prose_step("")])` with budget 2 → two injections (marker lands as
+  a `user` message in `st.msgs` before each next candidate check), then the third empty stop finds
+  `count_markers == 2` (not `< 2`) → `NoDecision` → `Finalize` → `EmptyStopFinalize`. Decisions
+  `["CallModel","InjectUserMessage","CallModel","InjectUserMessage","CallModel","Finalize"]`, **and**
+  the trace contains an `EmptyStopFinalize` record.
 - **(c) floor fires with NO guard loaded.** `run_scripted(empty_rt(), [prose_step("")])` → decisions
   `["CallModel", "Finalize"]` **and** trace contains `EmptyStopFinalize`. This is the
   zero-extensions safety-floor proof (default `persist_retries=0`, `NoDecision`, no nudge).
+
+**Asserting the event (important — the generic name helper won't work).** `ledger_record_name`
+(`phase_vocab.ail:558-575`) collapses every wire event except `ProviderCallPrepared` /
+`ExtCompactionRejected` to the string `"wire"`, so an `EmptyStopFinalize` is **not** distinguishable
+by name through it. The DST helper must pattern-match the constructor directly, e.g.
+`has_empty_stop_finalize(trace) = any over trace.records of \r. match r { WireRecord(EmptyStopFinalize(_)) => true, _ => false }`.
+(Alternatively add an `EmptyStopFinalize(_) => "empty_stop_finalize"` arm to `ledger_record_name` —
+a trivial, reusable core one-liner — but the direct match keeps the change in the test file.) This is
+also why WI-4 must **append** the event to the returned trace, not only `ledger_emit` it: the plain
+`ledger_emit` writes to the IO ledger the DST does not read.
 
 **Gate:** `make phase_c_l1`.
 
@@ -247,6 +278,24 @@ Build a `guard_rt()` helper mirroring `stub_step.deny_all_rt()` but whose single
 `make check_core && make phase_c_l1 && ailang test src/core/phase_vocab.ail && make verify_extensions`
 (and `make compaction_dst` unaffected but run to prove no regression). Bump `motoko-ext-abi`
 consumers? **No** — the ABI is untouched (no `ExtensionHooks` change), so no abi major bump.
+
+### Sequencing & dependencies
+
+The two **deliverables** are independent and can land in either order (extension = WI-1/2/parts of
+6; floor = WI-3/4). **Within** them the order is constrained:
+
+- **WI-3 before WI-4.** `to_schema_v1_kvs` is an exhaustive match on `LedgerEvent` with no catch-all
+  (`phase_vocab.ail:664`), so the `EmptyStopFinalize` constructor + its projection arm must exist
+  before `session.ail` (WI-4) constructs it — otherwise neither module compiles.
+- **WI-1 → WI-2 (`ailang.toml` + `ailang lock`) before WI-6.** The DST imports the guard module
+  (`pkg/sunholo/motoko_ext_empty_stop_guard/empty_stop_guard`), which only resolves once the package
+  is declared in `ailang.toml [extensions].packages` and hydrated into the lock. The registry
+  regen and profile-order edits (rest of WI-2) are **not** prerequisites of the DST — it constructs
+  `guard_rt()` directly, bypassing the profile order.
+- **WI-6(b) needs WI-1 + WI-3 + WI-4** together (it asserts both the guard loop and the floor
+  event); WI-6(c) needs only WI-3 + WI-4. So the full `make phase_c_l1` gate passes only after the
+  floor and the guard both land, even though each could be developed against its own narrower gate
+  first.
 
 ---
 
@@ -316,10 +365,13 @@ consumers? **No** — the ABI is untouched (no `ExtensionHooks` change), so no a
 
 - The guard runs inside the merged finalize chain. `merge_finalize_decisions` →
   `first_continue` returns the **first** `ContinueWithFeedback` in registry order
-  (`ext/runtime.ail:306-326`); `ContinueWithFeedback` beats `Accept` beats `NoDecision`. With only
-  `empty_stop_guard` returning a decision (all other loaded hooks `NoDecision` on solver-candidate —
-  verified: compaction exts return `NoDecision` in `register.ail:38`), its `ContinueWithFeedback`
-  wins. ✔
+  (`ext/runtime.ail:298-326`); `ContinueWithFeedback` beats `Accept` beats `NoDecision`.
+  **Verified across every shipped extension:** all 13 `motoko-ext-*` packages' `on_solver_candidate`
+  return `NoDecision` today — plain (`compaction-{ai,structural}`, `scratchpad`, `omnigraph`,
+  `microrag`, `decision-framework`, `a2a`, `mcp`, `ailang-docs`, `exa-search`, `compose`) or after a
+  fire-and-forget side effect (`context-mode` `finalize_with_index` →
+  `context_mode.ail:186 NoDecision`). So `empty_stop_guard` is the **only** finalize hook returning a
+  non-`NoDecision`, and its `ContinueWithFeedback` wins regardless of order. ✔
 - **Co-loading a second finalize guard** (the future persist-nudge migration, D4): if both return
   `ContinueWithFeedback` on the same candidate, `first_continue` picks the one **earlier in
   `extensions.order`**. Document in `PLAN-persist-nudge-migration.md` that on an empty candidate the
