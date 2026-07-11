@@ -1,0 +1,227 @@
+# PLAN: re-derivation & context strategy (pi-grounded)
+
+**Status**: Plan (not started). PLAN-level within the ephemeral model — no persistence change, no ADR.
+Refines an already-extension-resident strategy (`../004_phase_core_refactor/ADR-001-phase-oriented-core.md`
+D9; `../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md` §Non-goals).
+**Branch**: `arniwesth/mot-38-progress-contract-finalize-guard-extension`
+**Grounded at**: HEAD `bd4ce58` (all `file:line` anchors below verified at this commit; note
+`compaction_ai.ail` was edited this session — the summarizer-hang/degrade fix — so its lines differ from
+`PLAN-compactor-strategy.md`, which was grounded at `aeb8a69`).
+**Source issue (normative)**: `../../issues/compaction-rederive-cost-dominates-after-strategy-fixes.md` —
+its Recommended-direction list is the acceptance criteria.
+**Sibling plan (disjoint)**: `PLAN-compactor-strategy.md` fixes the *strategy* defects (structural
+over-escalation, AI drip/no-op, status labeling) and **explicitly excludes** re-derivation, persistence,
+and history-bounding. This plan is the residual it parked. **Land that plan first** — its no-op guard and
+result-based tier selection are assumed here.
+
+---
+
+## TL;DR
+
+After the strategy fixes, compaction *works* every step but the run's cost is dominated by
+**re-deriving an ever-growing summary from scratch, every step**. A live qwen36 datapoint:
+**4.2M billed input tokens** for 20K output — almost entirely re-summarization of history that is
+discarded each step (`session.ail:1660` compacted payload is send-only; `:1722`
+`msgs_with_assistant = st.msgs ++ [assistant_msg]` keeps the full uncompacted history). On the free-tier
+hunyuan run the same mechanism re-summarized ~1,880 turns *per step* from ~step 300 on, and multiplied
+the summarizer-hang surface (`../../issues/compaction-summarizer-hang-and-degrade.md`).
+
+The reference small-model harness — **little-coder** (`itayinbarr/little-coder`), primary target
+**Qwen3.6-35B-A3B, the exact model these runs use**) on engine **pi** (`earendil-works/pi`) — never pays
+this, and the source shows why: compaction is a **rare, persistent, incremental** event, not a per-step
+transform. This plan ports pi's cost profile **into the ephemeral model** (audit log untouched) as four
+extension-resident workstreams, by leverage:
+
+1. **WS1 — Trigger on real usage** (not the always-over-threshold shadow). Cheapest, highest leverage.
+2. **WS2 — Cached incremental fold + big verbatim tail** (pi's `previousSummary` merge in `artifacts`).
+3. **WS3 — Durability layer** (model-controlled evidence store; re-surface a *pointer*, not payload).
+4. **WS4 — Input bounding** (read-guard-style truncation of oversized tool reads, gated on live usage).
+
+WS1+WS2 are the core; WS3+WS4 are force-multipliers that let the summary be lossier/cheaper safely.
+Content-addressed chunk memoization (the earlier "Option B") is the **fallback** for WS2 if merge-drift
+degrades quality. Adopting pi's *persistent* model is a **separate ADR** (see §Decision fork), not this
+plan.
+
+---
+
+## Prior art, verified from source (2026-07-11)
+
+Read verbatim: `pi/packages/coding-agent/src/core/compaction/compaction.ts` +
+`branch-summarization.ts` + `utils.ts`; little-coder `.pi/extensions/{context-watchdog,evidence,
+evidence-compact,read-guard}/index.ts`. Decisive mechanics (external `file:line`):
+
+| Mechanism | pi/little-coder source | Motoko today |
+|---|---|---|
+| Trigger | `compaction.ts:209` `contextTokens > window - reserveTokens(16384)`, `contextTokens` from **real last-assistant `usage`** + trailing estimate (`:176`) | `compaction_ai.ail:361` `pct < threshold` on the **ephemeral calibrated shadow** — always over |
+| Frequency | `context-watchdog:96` fires only at `usage ≥ 80%` w/ in-flight lock; persistent → usage drops after | pre-step chain **every step** (`session.ail:1641`) |
+| Reuse | `compaction.ts:633` `previousSummary` + `firstKeptEntryId` boundary → fold only new turns (`UPDATE_SUMMARIZATION_PROMPT:474`) | digest cache (`compaction_ai.ail:315`) keyed on the **growing** old-span → misses every step |
+| Verbatim tail | `findCutPoint:377` keeps ~`keepRecentTokens(20000)` | `keep_recent` 6–10 **messages** |
+| Fidelity | structured schema (`:441`) + cumulative file-op channel (`:812`) + durable evidence store | runtime-status capsule re-injects **data** every summary |
+| Timeout | `generateSummary` takes `signal: AbortSignal` (`:546`) | `ai_step` has none (substrate gap) |
+
+**Correction carried from the issue note:** the field is *persistent* and *does* memoize — via a fixed
+boundary + incremental merge, not the stable-prefix digest cache first floated here.
+
+---
+
+## Scope, in one screen
+
+All four workstreams stay **within the deliberately-ephemeral per-step model** (`st.msgs` keeps the full
+history — `design_docs/planned/m-motoko-conversation-compaction.md:52`; wiring `session.ail:1722`). The
+port is: cache the rolling `{summary, boundary}` in the cross-step **artifacts** channel (already the AI
+compactor's state channel — `compaction_ai.ail:315` `cached_summary` / `cache_artifact`), keep the audit
+log intact.
+
+| WS | Change | Where | Kind |
+|---|---|---|---|
+| WS1 | Gate the AI pass on **actual current usage** + in-flight guard, not `pct` on the shadow | `compaction_ai.ail:359-362` `compact_with_ai` | extension |
+| WS2 | Cache `{summary, boundary}`; fold only the delta past the boundary; `keep_recent` as a **token budget** (~20k) | `compaction_ai.ail` `compact_with_ai` / `split_msgs:206` / `cache_artifact` / `types.ail` | extension |
+| WS3 | Model-controlled durable evidence store; re-surface a **pointer** after compaction | new `packages/motoko-ext-*` (or extend `scratchpad`) + capsule at `compaction_ai.ail` `finalize_compaction:351` | extension |
+| WS4 | Truncate oversized tool reads gated on live usage (read-guard) | new extension on the tool-result path (`src/core/tool_runtime.ail` result surface) | extension |
+
+**Out of scope (guardrails — any plan touching these is wrong):**
+- Persisting compaction into history / mutating `st.msgs` (`session.ail:1722`). Ephemeral is documented
+  (audit / DST replay / un-compaction). The persistent fork is a **separate ADR** (§Decision fork).
+- Re-opening token calibration (`src/core/compaction.ail` `affine_calibrate` — shipped, correct; we
+  *use* it).
+- The strategy defects owned by `PLAN-compactor-strategy.md` (structural tier selection, drip/no-op,
+  status labeling). Land that first; this plan assumes its no-op guard.
+
+---
+
+## Workstreams
+
+### WS1 — Trigger on real usage (highest leverage, cheapest)
+
+**Problem.** `compact_with_ai` fires whenever `pct ≥ threshold` (`compaction_ai.ail:361`), where `pct`
+is the calibrated estimate of the ephemeral shadow — which only grows, so it is *always* over threshold
+once crossed. The rate-limit gate (`:362`) is additionally short-circuited at `pct ≥ hard_override_pct`,
+so at 638% it ran every step. This is the frequency half of the cost.
+
+**Change.** Gate on *actual* current context usage (the last-sent window / `st.telemetry`, the same
+`actual_usage_pct` the status tool already computes — cf. WS3 of the sibling plan), plus an in-flight /
+min-gap guard that is **not** bypassed by a hard override derived from the shadow. Concretely: only run
+the AI fold when (a) the **last-sent** usage is under-relieved (i.e. the previous fold's result is itself
+approaching the limit) **or** (b) enough new turns have accrued since the last fold to be worth a call.
+This is pi's "usage dropped after compaction, don't re-fire until it climbs back" behavior expressed in
+the ephemeral model via the cached boundary (WS2).
+
+**Acceptance.** On the qwen36 stress log shape, AI folds drop from ~every step (40→99) to O(new-turns /
+tail-budget). No fold when the delta since the last boundary is trivial. DST-checkable via
+`scripts/long_qwen_compaction_dst.ail` (assert fold cadence, not every-step).
+
+### WS2 — Cached incremental fold + big verbatim tail (engine)
+
+**Problem.** Even when it should fold, `compact_with_ai` re-summarizes the whole old-span from scratch,
+and the digest cache (`:315`) misses because the old-span grows each step.
+
+**Change (pi's mechanism, ported to `artifacts`):**
+- Store `{summary, boundary_marker, covered_upto}` in the artifacts channel (extend `cache_artifact`).
+  `boundary_marker` is a stable id/index of the last summarized turn (analog of pi's `firstKeptEntryId`).
+- Each fold summarizes **only turns after `boundary_marker`**, merged into the cached `summary` via an
+  update prompt (analog of `UPDATE_SUMMARIZATION_PROMPT`) — bounded delta input, O(new turns).
+- Make `keep_recent` a **token budget** (~20k, config-driven) rather than a message count — walk the
+  tail accumulating calibrated tokens to a cut point that never splits a tool_call from its result
+  (Motoko's `split_msgs:206` already respects this; extend it to a token budget).
+- Adopt a **structured summary schema** (Goal / Constraints / Progress / Key Decisions / Next Steps /
+  Critical Context; preserve exact paths/names) and append a **cumulative file-op line**.
+
+**Config.** Extend `CompactionAiConfig` (`types.ail`) with `keep_recent_tokens`, schema/update prompts
+opt-in, fallback-safe defaults so existing `.motoko` configs still parse (mirror the existing
+`default_config` discipline).
+
+**Fallback (Option B).** If repeated `UPDATE`-merge drift degrades summary quality on the target model,
+switch WS2's engine to content-addressed **chunk** memoization: fixed ~20-turn chunks, each summarized
+once and cached by its own digest, concatenated — no drift, perfect cache hits on stable chunks. Same
+artifacts channel; strictly more machinery, so only if drift is measured.
+
+**Acceptance.** Per-fold summarizer *input* is bounded to the delta (not the full history). Cache hits
+across steps (the current cross-step miss is gone). Sent window stays under limit. Summarizer-hang
+surface shrinks in proportion to fold frequency (WS1) × input size (WS2) — directly relieves
+`compaction-summarizer-hang-and-degrade.md`.
+
+### WS3 — Durability layer (evidence store + pointer bridge)
+
+**Problem.** The runtime-status capsule (`finalize_compaction:351` via `latest_runtime_status_result`)
+re-injects *data* into every summary; and there is no model-controlled channel for findings the model
+wants to keep, so the summary must carry everything → lossy compaction is riskier and the summary is
+bigger.
+
+**Change (little-coder's pattern).** Add a model-controlled durable store (tools `EvidenceAdd/Get/List`,
+snippet-capped) in **ext-state / artifacts, outside the message array** — Motoko's `scratchpad`
+extension is the natural host, so this may be a `scratchpad` extension rather than a new package. After a
+fold, re-surface only a **pointer** (`N entries … via EvidenceList/EvidenceGet`), not the payload
+(cheaper than the current capsule). Keep the harness-controlled control-state capsule for step
+budget/task, but shrink it toward a pointer where possible.
+
+**Acceptance.** Findings survive compaction without living in the summarizable window; post-fold
+re-injection cost is a pointer line, not the data. Deterministic bridge string (replay-stable), tested in
+the extension's `_smoke.ail`.
+
+### WS4 — Input bounding (read-guard)
+
+**Problem.** Nothing stops a large tool read from entering the window, so the shadow reaches 638% and
+forces heavy folds. The stress task reads big files in full every phase; real workloads do too.
+
+**Change (little-coder `read-guard`).** A tool-result interceptor for read-like tools: when
+`current_tokens + est(chars) > context_limit` (est `ceil(chars/3.5)`; fallback `0.5×window` when usage
+unknown, e.g. right after a fold), replace the result with its first ~30 lines + a "search instead
+(grep / offset+limit); do not re-read in full" directive. Gated on **live** usage
+(`resolve_context_limit` + `st.telemetry`). Emitted as a uniform harness-intervention event.
+
+**Acceptance.** An oversized read never lands whole in context; small reads pass untouched. DST scenario:
+a big-file read at high usage is trimmed to head+directive; at low usage it is not.
+
+---
+
+## Blast radius — every file touched
+
+| File | WS | Kind | Change |
+|------|----|------|--------|
+| `packages/motoko-ext-compaction-ai/compaction_ai.ail` | 1,2 | extension | Real-usage trigger + in-flight/min-gap guard in `compact_with_ai:359`; `{summary,boundary}` cache via `cache_artifact`; delta-only fold + update prompt; token-budget tail via `split_msgs:206`; structured schema + file-op line in `finalize_compaction:351`. New WS1/WS2 unit tests. |
+| `packages/motoko-ext-compaction-ai/types.ail` | 1,2 | extension | `keep_recent_tokens`, schema/update-prompt opt-ins, trigger tunables on `CompactionAiConfig` + `default_config` (fallback-safe). |
+| `packages/motoko_scratchpad/*` (or new `motoko-ext-evidence`) | 3 | extension | `EvidenceAdd/Get/List` durable store + post-fold pointer bridge; `_smoke.ail`. |
+| new `packages/motoko-ext-read-guard/*` | 4 | extension | Tool-result read truncation gated on live usage; `_smoke.ail`. |
+| `scripts/long_qwen_compaction_dst.ail` | 1,2 | test | Fold-cadence + bounded-input + cache-hit-across-steps scenarios. |
+| `.motoko/config/*/compaction_ai.json` | 1,2 | config | Set `keep_recent_tokens` etc. for the live profiles (esp. hunyuan3/qwen36). |
+
+**Does NOT touch:** `src/core/compaction.ail` (calibration — frozen), `st.msgs` / history persistence
+(`session.ail:1722` — the ephemeral guarantee), the `ExtensionHooks` / `PreStepDecision` ABI
+(`packages/motoko-ext-abi/types.ail`). WS4 registers on the existing tool-result surface; confirm the ABI
+exposes a result-mutation hook before committing (if not, WS4 needs an ABI note — flag, don't assume).
+
+---
+
+## Verification
+
+- **Offline/deterministic:** `make compaction_dst` + new `long_qwen_compaction_dst.ail` scenarios
+  (fold cadence, delta-bounded input, cross-step cache hit, read-guard trim/pass). `make conformance`
+  for ABI. Per-package `_smoke.ail` for WS3/WS4 boot + behavior.
+- **Live corroboration:** re-run `make live_qwen36_compaction_heavy_headless` and confirm billed input
+  tokens drop by ~an order of magnitude vs the 4.2M datapoint, with the sent window still under limit and
+  the model still productive (`finish_reason:"tool_calls"` per step). Re-run
+  `live_hunyuan3_free_compaction_heavy_headless` and confirm folds are rare and no summarizer hang
+  recurs.
+- **Gate the slice:** `AILANG_RELAX_MODULES=1 ailang test packages/motoko-ext-compaction-ai/compaction_ai.ail`
+  and `MOTOKO_CONFIG=hunyuan3-free-compaction-live make verify_extensions`.
+
+---
+
+## Decision fork (separate ADR — not this plan)
+
+3 of 4 surveyed agents (Claude Code, Codex, OpenCode) are **persistent**; pi is persistent too. Persistent
+compaction would delete re-derivation outright (no cached-fold machinery needed) — but it overturns
+doc:52's ephemeral guarantee (audit / DST replay / un-compaction). Whether that guarantee is load-bearing
+in practice is an ADR-level call. If it is *not*, the cheaper long-term answer is to go persistent and
+retire WS1/WS2's ephemeral-port complexity. This plan deliberately delivers value **without** forcing that
+decision; the ADR can supersede WS1/WS2 later if it lands.
+
+---
+
+## Sequencing
+
+1. Land `PLAN-compactor-strategy.md` (no-op guard, result-based tiering) — prerequisite.
+2. **WS1** (trigger) — biggest cost/hang reduction, smallest change, no engine commitment.
+3. **WS2** (cached fold + tail) — the engine; measure merge-drift → decide Option A vs B fallback.
+4. **WS4** (read-guard) and **WS3** (evidence) in parallel — force-multipliers; independent of WS1/WS2.
+5. Re-measure live; open the persistence ADR only if the residual justifies it.
