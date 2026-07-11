@@ -26,16 +26,18 @@ discarded each step (`session.ail:1660` compacted payload is send-only; `:1722`
 hunyuan run the same mechanism re-summarized ~1,880 turns *per step* from ~step 300 on, and multiplied
 the summarizer-hang surface (`../../issues/compaction-summarizer-hang-and-degrade.md`).
 
-The reference small-model harness — **little-coder** (`itayinbarr/little-coder`), primary target
+The reference small-model harness — **little-coder** (`itayinbarr/little-coder`, primary target
 **Qwen3.6-35B-A3B, the exact model these runs use**) on engine **pi** (`earendil-works/pi`) — never pays
 this, and the source shows why: compaction is a **rare, persistent, incremental** event, not a per-step
-transform. This plan ports pi's cost profile **into the ephemeral model** (audit log untouched) as four
-extension-resident workstreams, by leverage:
+transform. This plan ports pi's cost profile **into the ephemeral model** (audit log untouched) as
+extension-resident workstreams:
 
-1. **WS1 — Trigger on real usage** (not the always-over-threshold shadow). Cheapest, highest leverage.
-2. **WS2 — Cached incremental fold + big verbatim tail** (pi's `previousSummary` merge in `artifacts`).
-3. **WS3 — Durability layer** (model-controlled evidence store; re-surface a *pointer*, not payload).
-4. **WS4 — Input bounding** (read-guard-style truncation of oversized tool reads, gated on live usage).
+1. **WS1+WS2 — the compaction engine** (one deliverable): a **cached incremental fold** whose **trigger**
+   gates the AI *call* (refresh vs. reuse the cache) on real usage, while still emitting a bounded
+   `Compacted` payload every step. Big verbatim tail; pi's `previousSummary`-style merge, cached in
+   `artifacts`. This is the core cost fix.
+2. **WS3 — Durability layer** (model-controlled evidence store; re-surface a *pointer*, not payload).
+3. **WS4 — Input bounding** (read-guard-style truncation of oversized tool reads, gated on live usage).
 
 WS1+WS2 are the core; WS3+WS4 are force-multipliers that let the summary be lossier/cheaper safely.
 WS2's engine has **two co-primary variants** — rolling fold (A, pi's mechanism, best for interactive
@@ -75,8 +77,7 @@ log intact.
 
 | WS | Change | Where | Kind |
 |---|---|---|---|
-| WS1 | Gate the AI pass on **actual current usage** + in-flight guard, not `pct` on the shadow | `compaction_ai.ail:359-362` `compact_with_ai` | extension |
-| WS2 | Cache `{summary, boundary}`; fold only the delta past the boundary; `keep_recent` as a **token budget** (~20k) | `compaction_ai.ail` `compact_with_ai` / `split_msgs:206` / `cache_artifact` / `types.ail` | extension |
+| WS1+WS2 | One engine: emit a bounded `Compacted(prefix+summary+tail)` **every** over-threshold step; gate the AI *refresh call* on real `last_sent` usage (reuse cache otherwise); fold only the delta past the boundary; `keep_recent` as a **token budget** (~20k) | `compaction_ai.ail` `compact_with_ai:359` / `split_msgs:206` / `cache_artifact` / `types.ail` | extension |
 | WS3 | Model-controlled durable evidence store; re-surface a **pointer** after compaction | new `packages/motoko-ext-*` (or extend `scratchpad`) + capsule at `compaction_ai.ail` `finalize_compaction:351` | extension |
 | WS4a | Cap oversized single tool-results in `on_pre_step` (pi's post-exec hook has no ABI equivalent — see WS4) | `compaction_structural.ail` `compact_for_pre_step:158` | extension |
 
@@ -90,26 +91,67 @@ log intact.
 
 ---
 
+## Pre-step chain composition (ground truth — read before WS1/WS2)
+
+Verified at HEAD: `fold_pre_step_chain_rec` (`src/core/ext/runtime.ail:152`) folds the hooks **in order**,
+threading each `Compacted` output into the next hook's input; a `PassThrough` passes `msgs` unchanged.
+Live extension order (`config.json`): `… compaction_ai … compaction_structural` — so **`compaction_ai`
+runs before `compaction_structural`**, and structural sees whatever AI produced (or the raw msgs if AI
+passed through).
+
+Two consequences that constrain this plan:
+
+1. **Structural is not a long-run backstop.** `compaction_structural.elide_walk`
+   (`compaction_structural.ail:85`) elides only `role == "tool"` message *content*; **old user /
+   assistant / thinking turns pass through untouched** (`:100`). So if `compaction_ai` `PassThrough`s,
+   the sent window still accumulates every old prose turn — bounded for tool output, **unbounded for
+   conversation**. Over a long run that overflows regardless of structural.
+2. **Therefore the AI summary is the only thing that collapses old prose turns** — and in the ephemeral
+   model it is discarded every step. So once over threshold the AI compactor must **return a `Compacted`
+   payload every step** (`prefix + summary + recent tail`); it must **never `PassThrough` to the raw
+   history**. The division of labor is: **`compaction_ai` collapses old prose** (via summary),
+   **`compaction_structural` caps tool-result bloat** (via elision). Both are load-bearing.
+
+This is why WS1 (trigger) and WS2 (cache+fold) are **one engine, not two independent steps** — see WS1.
+
+---
+
 ## Workstreams
 
-### WS1 — Trigger on real usage (highest leverage, cheapest)
+### WS1 — Trigger: gate the AI *refresh call*, not the compaction (ships with WS2)
 
-**Problem.** `compact_with_ai` fires whenever `pct ≥ threshold` (`compaction_ai.ail:361`), where `pct`
-is the calibrated estimate of the ephemeral shadow — which only grows, so it is *always* over threshold
-once crossed. The rate-limit gate (`:362`) is additionally short-circuited at `pct ≥ hard_override_pct`,
-so at 638% it ran every step. This is the frequency half of the cost.
+**Problem.** `compact_with_ai` re-summarizes whenever `pct ≥ threshold` (`compaction_ai.ail:361`), where
+`pct` is the calibrated estimate of the ephemeral shadow — which only grows, so it is *always* over
+threshold once crossed → a fresh AI fold every step. (In the hunyuan run `rate_limit_enabled` was `false`
+by default, so the only gate was the threshold; note also that even with rate-limit *on*, its gate at
+`:362` is bypassed once `pct ≥ hard_override_pct`, so a growing shadow defeats it either way.) This is the
+frequency half of the cost.
 
-**Change.** Gate on *actual* current context usage (the last-sent window / `st.telemetry`, the same
-`actual_usage_pct` the status tool already computes — cf. WS3 of the sibling plan), plus an in-flight /
-min-gap guard that is **not** bypassed by a hard override derived from the shadow. Concretely: only run
-the AI fold when (a) the **last-sent** usage is under-relieved (i.e. the previous fold's result is itself
-approaching the limit) **or** (b) enough new turns have accrued since the last fold to be worth a call.
-This is pi's "usage dropped after compaction, don't re-fire until it climbs back" behavior expressed in
-the ephemeral model via the cached boundary (WS2).
+**Key correction (see §Pre-step chain composition).** The trigger does **not** decide "compact or not" —
+in the ephemeral model a `PassThrough` sends the raw growing history (structural only trims tool results,
+not prose), which overflows on a long run. The compactor must return a `Compacted` payload **every step**
+once over threshold; the trigger only decides whether that payload is built from a **fresh AI fold** or by
+**reusing the cached summary** (WS2). So WS1 is the *policy* half of one engine whose *mechanism* half is
+WS2 — **they ship together; WS1 has no standalone value.**
 
-**Acceptance.** On the qwen36 stress log shape, AI folds drop from ~every step (40→99) to O(new-turns /
-tail-budget). No fold when the delta since the last boundary is trivial. DST-checkable via
-`scripts/long_qwen_compaction_dst.ail` (assert fold cadence, not every-step).
+**Change.** On each over-threshold step, return `Compacted(prefix + cached_summary + tail)` where the
+`tail` is **contiguous from the boundary** — `tail = turns after boundary_marker`, recomputed from
+current msgs each step (cheap, no AI). This is the key to gaplessness: `cached_summary` covers
+`[0..boundary]`, `tail` covers `[boundary+1..now]`, so nothing is ever dropped. Then:
+- **Reuse** the cached summary (no AI call) while the `tail` still fits the token budget (~20k) — the tail
+  just grows as new turns arrive;
+- **Refresh** (one AI fold, WS2 engine) when the `tail` exceeds the budget: fold the oldest slice of the
+  tail into the summary, advance `boundary_marker`, shrink the tail back under budget, update the cache.
+
+So the refresh trigger is "the contiguous tail overflowed its budget" (mirrors pi's `findCutPoint` keeping
+`keepRecentTokens` back to the last cut point), **not** the shadow `pct`. `ctx.telemetry.last_input_tokens`
+/ `ctx.context_limit` (the sibling plan's `last_sent` usage) is a secondary safety check — force a refresh
+if the last actual send was over target even when the tail-budget heuristic said reuse.
+
+**Acceptance.** On the qwen36 stress log shape, **AI calls** drop from ~every step (40→99) to
+O(evicted-turns / refresh-budget), while the **sent window stays bounded every step** (Compacted-from-cache
+on non-refresh steps — never the raw history). DST-checkable via `scripts/long_qwen_compaction_dst.ail`
+(assert AI-call cadence *and* that every over-threshold step emits a bounded Compacted payload).
 
 ### WS2 — Cached incremental fold + big verbatim tail (engine)
 
@@ -222,8 +264,9 @@ So the literal pi port is **not** extension-only. Two options:
   becomes the default read-guard implementation.
 
 **Change (WS4a).** Cap oversized single tool-results in `compaction_structural.compact_for_pre_step`,
-gated on the same calibrated usage the tier ladder already uses (`est ≈ ceil(chars/3.5)`; the existing
-tier pct as the fallback). Uniform harness-intervention-style note in the elision.
+using **Motoko's own** per-message size estimate (`compaction.ail`'s char/4 estimator / the module's
+`calibrated_usage_percent_with_limit` — **not** little-coder's 3.5 ratio) against `ctx.context_limit`.
+Uniform harness-intervention-style note in the elision.
 
 **Acceptance.** An oversized read never lands whole in the *sent* window (even when recent); small reads
 pass untouched. DST scenario: a big-file read at high usage is trimmed to head+directive on the next
@@ -258,9 +301,12 @@ note.
 - **Offline/deterministic:** `make compaction_dst` + new `long_qwen_compaction_dst.ail` scenarios
   (fold cadence, delta-bounded input, cross-step cache hit, read-guard trim/pass). `make conformance`
   for ABI. Per-package `_smoke.ail` for WS3/WS4 boot + behavior.
-- **Live corroboration:** re-run `make live_qwen36_compaction_heavy_headless` and confirm billed input
-  tokens drop by ~an order of magnitude vs the 4.2M datapoint, with the sent window still under limit and
-  the model still productive (`finish_reason:"tool_calls"` per step). Re-run
+- **Live corroboration:** re-run `make live_qwen36_compaction_heavy_headless` and confirm the
+  **summarizer input** collapses (delta-only folds instead of re-reading the full growing history) and
+  **AI-fold count** drops from ~every-step to O(run/tail-budget) — the two components that made up most of
+  the 4.2M-input datapoint. Total billed input also drops but is floored by the per-step main-model send
+  (~compacted payload × steps), so expect a large drop, not necessarily a full order of magnitude. Sent
+  window stays under limit and the model stays productive (`finish_reason:"tool_calls"` per step). Re-run
   `live_hunyuan3_free_compaction_heavy_headless` and confirm folds are rare and no summarizer hang
   recurs.
 - **Gate the slice:** `AILANG_RELAX_MODULES=1 ailang test packages/motoko-ext-compaction-ai/compaction_ai.ail`
@@ -298,8 +344,10 @@ Recommendation: land **#1** on its own merits (independent of WS4a↔WS4b); do *
 
 3 of 4 surveyed agents (Claude Code, Codex, OpenCode) are **persistent**; pi is persistent too. A new
 `PreStepDecision` variant that the core writes back to `st.msgs` (instead of send-only) would let Motoko
-adopt pi's model directly and **collapse WS1+WS2's entire ephemeral-port machinery** — the summary just
-*is* the history, folded incrementally like pi. That is the cheapest long-term engine.
+adopt pi's model directly and **retire WS1/WS2's ephemeral-specific machinery** — the per-step
+Compacted-from-cache reconstruction and boundary bookkeeping that exist *only* because ephemeral discards
+the result. (The trigger and the incremental fold themselves remain — that's what pi does — so persistence
+simplifies, it doesn't delete, the engine.) That is the cheapest long-term engine.
 
 But it overturns doc:52's ephemeral guarantee (*"the returned `msgs` replaces the input for this step
 only — the session log is unchanged"*; audit / DST replay / un-compaction). An ABI change makes it
@@ -312,10 +360,11 @@ value **without** forcing that decision; the ADR can supersede WS1/WS2 later if 
 ## Sequencing
 
 1. Land `PLAN-compactor-strategy.md` (no-op guard, result-based tiering) — prerequisite.
-2. **WS1** (trigger) — biggest cost/hang reduction, smallest change, no engine commitment.
-3. **WS2** (cached fold + tail) — the engine. Build **Engine A** (rolling fold) first; measure
-   summary drift over a long (≥several-hundred-step) run → keep A for interactive lengths, switch to
-   **Engine B** (frozen chunks) for the long-horizon path if decay shows (hybrid only if both bite).
+2. **WS1+WS2 together** (the engine — WS1 is not viable alone; see §Pre-step chain composition). The
+   cache/trigger must land as one change: emit a bounded `Compacted` every over-threshold step, AI-fold
+   only on refresh. Build **Engine A** (rolling fold) first (simpler, pi-validated); measure summary
+   drift over a long (≥several-hundred-step) run → keep A for interactive lengths, switch to **Engine B**
+   (frozen chunks) for the long-horizon path if decay shows (hybrid only if both bite).
 4. **WS4a** (structural single-result cap) and **WS3** (evidence, FS-backed) in parallel —
    force-multipliers; independent of WS1/WS2.
 5. **Re-measure live.** Then decide two independent things against the residual:
