@@ -7,6 +7,20 @@
 AI compactions, but the current ABI erased every `compaction_ai` terminal `PassThrough` reason
 (`.motoko/logfile/session_2026-07-11T10-20-34-975Z.jsonl`).
 
+## TL;DR
+
+`compaction_ai` currently loses every reason attached to a returned `PassThrough`, so a completed live
+run can show zero AI compactions without revealing whether the threshold was missed, relief was too small,
+the summarizer failed, or the summary output was rejected. Add ABI 4.0
+`PassThroughObserved(code, fields)` with bounded scalar fields. Core transports it exactly like ordinary
+pass-through, records one ordered `extension_diagnostic` event, and changes no messages, artifacts, or
+compaction counters. Instrument only terminal over-threshold AI exits; below-threshold stays silent.
+
+This is an atomic ABI/conformance major rollout, not a compaction-policy change. Raw `Json` diagnostics,
+identity `Compacted` diagnostics, in-flight callbacks, persistent history, and cache-policy changes are
+out of scope. Malformed cache state attempts a fresh fold and is replaced rather than becoming a recurring
+diagnostic pass.
+
 ## Decision
 
 Add a first-class, structured, observable pass-through decision to the pre-step ABI and carry it through
@@ -141,6 +155,29 @@ the call never returns. A future `ExtPorts.emit_diagnostic` callback could emit
 of every extension port record. The completed 100-step run needs terminal reasons, not in-flight events,
 so that addition is deliberately excluded. Revisit it with the summarizer-hang issue if returned
 diagnostics still leave an actual stalled call ambiguous.
+
+## Blast radius
+
+The implementation is cross-cutting because the new ABI constructor and stage outcomes require exhaustive
+match updates. Re-grep at implementation HEAD; this table records ownership and expected change, not a
+frozen site count.
+
+| Area | Files / packages | Required change |
+|---|---|---|
+| ABI surface | `packages/motoko-ext-abi/types.ail`, `packages/motoko-ext-abi/ailang.toml` | Add `DiagnosticField` and `PassThroughObserved`; bump ABI to 4.0. |
+| Runtime chain | `src/core/ext/runtime.ail` | Normalize observations, add `StageObserved`, preserve message/artifact flow, update test-dummy and unit matches. |
+| Typed trace and wire vocabulary | `src/core/phase_vocab.ail` | Add `TraceStageObserved`, diagnostic info/event, record name, schema-v1 projection, and goldens. |
+| Stage mapping | `src/core/hook_phase.ail` | Map normalized runtime observations into the in-memory trace. |
+| Session emission and counters | `src/core/session.ail` | Emit `extension_diagnostic`; update exhaustive trace/status aggregation while keeping counters neutral. |
+| Initial producer | `packages/motoko-ext-compaction-ai/compaction_ai.ail` | Return stable observed codes on four terminal over-threshold paths; distinguish malformed cache and recover through a fresh fold. |
+| Conformance 4.0 | `packages/motoko_ext_conformance/{ailang.toml,invariants.ail,harness.ail,fixtures/*}` | Bump kit/banner; certify identity, normalization bounds, ordering, replay, and counter neutrality. |
+| Core/DST scripts | `scripts/long_qwen_compaction_dst.ail`, `scripts/smoke_v2_compaction_chain.ail`, `scripts/phase_c2_wiring_scenarios.ail`, `scripts/phase_c_l1_scenarios.ail`, phase event-parity scripts | Update exhaustive outcomes and add deterministic terminal-code/event scenarios. |
+| Extension consumers | Every package importing `sunholo/motoko_ext_abi`, plus generated registry inputs | Resolve ABI 4.0 atomically; hook literals returning plain `PassThrough` generally recompile without logic edits, but exhaustive matches must change. |
+| Hydration and gates | `ailang.lock`, affected package manifests, generated registry/cache state, `Makefile` only where a missing authoritative gate must be added | Prevent mixed ABI 3/4 hydration and run the complete gate set. Preserve unrelated existing hunks. |
+| Documentation | This note and `HANDOFF-implement-abi-pre-step-observability.md` | Freeze the reviewed contract and implementation discipline before source work. |
+
+Explicitly untouched: persistent session history and `st.msgs`, token calibration, compaction thresholds,
+tail budgets, prompts, tool-hook ABI, evidence storage, and `ExtPorts`.
 
 ## Migration
 
