@@ -22,6 +22,7 @@ import src/core/phase_vocab (
   InMemoryStageOutcome,
   TraceStageApplied,
   TraceStageRejected,
+  TraceStageObserved,
   TraceStagePassed,
   LedgerEvent,
   ProviderCallPrepared,
@@ -44,6 +45,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   FinalizeDecision,
   PreStepDecision,
   PassThrough,
+  PassThroughObserved,
   Compacted,
   Allow,
   Delegate,
@@ -358,6 +360,7 @@ func record_projection(r: LedgerRecord) -> string {
       let tag = match s.outcome {
         TraceStageApplied(note) => "applied:${note}",
         TraceStageRejected(reason) => "rejected:${reason}",
+        TraceStageObserved(code, fields) => "observed:${code}:${show(fields)}",
         TraceStagePassed => "passed"
       };
       "stage step=${show(s.step)} ext=${s.ext_id} ${tag}"
@@ -727,6 +730,7 @@ func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Pro
   };
   match compact_with_ai(direct_ctx(100, summary_ports("DIRECT-SUMMARY"), empty_ext_artifacts()), input, cfg) {
     PassThrough => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=PassThrough"] }),
+    PassThroughObserved(code, _) => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=${code}"] }),
     Compacted(out, _, _) => {
       if not contains_summary_msg(out, "[RUNTIME COMPACTION SUMMARY]") then Err({ failed_invariant: "runtime capsule emitted", trace: ["out_len=${show(length(out))}"] })
       else if not contains_summary_msg(out, "DIRECT-SUMMARY") then Err({ failed_invariant: "ai summary prose preserved", trace: ["out_len=${show(length(out))}"] })
@@ -753,10 +757,12 @@ func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, 
   };
   match compact_with_ai(direct_ctx(100, summary_ports("CACHED-SUMMARY-A"), empty_ext_artifacts()), input, cfg) {
     PassThrough => Err({ failed_invariant: "first cache run compacts", trace: ["decision=PassThrough"] }),
+    PassThroughObserved(code, _) => Err({ failed_invariant: "first cache run compacts", trace: ["decision=${code}"] }),
     Compacted(out1, _, artifacts) => {
       if not contains_summary_msg(out1, "CACHED-SUMMARY-A") then Err({ failed_invariant: "first run records cached summary", trace: [] })
       else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts, "direct cache second task", 12), input, cfg) {
         PassThrough => Err({ failed_invariant: "second cache run compacts", trace: ["decision=PassThrough"] }),
+        PassThroughObserved(code, _) => Err({ failed_invariant: "second cache run compacts", trace: ["decision=${code}"] }),
         Compacted(out2, _, _) => {
           if contains_summary_msg(out2, "CACHED-SUMMARY-A")
             && not contains_summary_msg(out2, "CACHE-MISS-FAIL")
@@ -784,6 +790,7 @@ func scenario_hostile_summary_preserves_control_capsule() -> Result[(), Scenario
   };
   match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("What would you like to work on?"), empty_ext_artifacts(), task, 48), input, cfg) {
     PassThrough => Err({ failed_invariant: "hostile summary compact_with_ai compacts", trace: ["decision=PassThrough"] }),
+    PassThroughObserved(code, _) => Err({ failed_invariant: "hostile summary compact_with_ai compacts", trace: ["decision=${code}"] }),
     Compacted(out, _, _) => {
       if not contains_summary_msg(out, "[RUNTIME COMPACTION SUMMARY]") then Err({ failed_invariant: "hostile path emits capsule", trace: ["out_len=${show(length(out))}"] })
       else if not contains_summary_msg(out, task) then Err({ failed_invariant: "capsule preserves exact task", trace: [] })
@@ -798,6 +805,30 @@ func scenario_hostile_summary_preserves_control_capsule() -> Result[(), Scenario
       }
     }
   }
+}
+
+func decision_code_is(d: PreStepDecision, code: string) -> bool {
+  match d { PassThroughObserved(actual, _) => actual == code, _ => false }
+}
+
+func scenario_terminal_observations() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let input = direct_msgs();
+  let base: CompactionAiConfig = {
+    model: qwen_model, threshold_pct: 1, keep_recent: 4, keep_recent_tokens: 300,
+    min_relief_pct: 5, rate_limit_enabled: false, min_gap_steps: 3, hard_override_pct: 95
+  };
+  let no_prefix = compact_with_ai(direct_ctx(10, summary_ports("unused"), empty_ext_artifacts()), [abi_msg("user", repeat_block(4))], { base | keep_recent_tokens: 100000 });
+  let insufficient = compact_with_ai(direct_ctx(100, summary_ports("unused"), empty_ext_artifacts()), input, { base | min_relief_pct: 1000 });
+  let failed = compact_with_ai(direct_ctx(100, summary_ports(""), empty_ext_artifacts()), input, base);
+  let not_relieving = compact_with_ai(direct_ctx(100, summary_ports(repeat_block(200)), empty_ext_artifacts()), input, base);
+  ok_or_failure(
+    decision_code_is(no_prefix, "compaction_ai.no_foldable_prefix")
+      && decision_code_is(insufficient, "compaction_ai.insufficient_relief")
+      && decision_code_is(failed, "compaction_ai.summarizer_failed")
+      && decision_code_is(not_relieving, "compaction_ai.output_not_relieving"),
+    "all terminal over-threshold paths are observed",
+    [show(no_prefix), show(insufficient), show(failed), show(not_relieving)]
+  )
 }
 
 func multiple_compactions_scenario() -> Scenario {
@@ -820,6 +851,10 @@ func hostile_summary_scenario() -> Scenario {
   { id: "compaction.compaction_ai_hostile_summary_control_capsule", run: scenario_hostile_summary_preserves_control_capsule }
 }
 
+func terminal_observations_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_terminal_observations", run: scenario_terminal_observations }
+}
+
 func seal_side_exhaustion_scenario() -> Scenario {
   { id: "compaction.structural_seal_side_exhaustion", run: scenario_seal_side_exhaustion }
 }
@@ -831,6 +866,7 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     output_shape_scenario(),
     artifact_cache_scenario(),
     hostile_summary_scenario(),
+    terminal_observations_scenario(),
     seal_side_exhaustion_scenario()
   ];
   let failed = run_all(scenarios, 0);

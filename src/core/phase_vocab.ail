@@ -17,6 +17,7 @@ import std/string as Str (length)
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, calibrated_tokens_anchored, calibrated_usage_percent_anchored)
 import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
 import src/core/types (Msg)
+import pkg/sunholo/motoko_ext_abi/types (DiagnosticField)
 
 -- ============================================================================
 -- History: sealed. MkHistory is deliberately NOT exported.
@@ -540,8 +541,9 @@ export type StreamStartInfo = { step: int, stream_id: string, model: string }
 export type StreamEndInfo = { step: int, stream_id: string, status: string }
 export type StreamErrorRetryInfo = { step: int, error: string }
 export type StreamDeltaInfo = { step: int, stream_id: string, seq: int, kind: string, text: string }
+export type ExtensionDiagnosticInfo = { step: int, extension: string, code: string, fields: [DiagnosticField] }
 
-export type InMemoryStageOutcome = TraceStageApplied(string) | TraceStageRejected(string) | TraceStagePassed
+export type InMemoryStageOutcome = TraceStageApplied(string) | TraceStageRejected(string) | TraceStageObserved(string, [DiagnosticField]) | TraceStagePassed
 export type LedgerRecord
   = WireRecord(LedgerEvent)
   | CompactionStageRecord({ step: int, ext_id: string, outcome: InMemoryStageOutcome })
@@ -562,6 +564,7 @@ export pure func ledger_record_name(record: LedgerRecord) -> string {
       match event {
         ProviderCallPrepared(_) => "provider_call_prepared",
         ExtCompactionRejected(_) => "ext_compaction_rejected",
+        ExtensionDiagnostic(_) => "extension_diagnostic",
         _ => "wire"
       }
     },
@@ -569,6 +572,7 @@ export pure func ledger_record_name(record: LedgerRecord) -> string {
       match r.outcome {
         TraceStageApplied(_) => "stage_applied",
         TraceStageRejected(_) => "stage_rejected",
+        TraceStageObserved(_, _) => "stage_observed",
         TraceStagePassed => "stage_passed"
       },
     DecisionRecord(_) => "decision"
@@ -605,6 +609,7 @@ export type LedgerEvent
   | CompactionApplied(CompactionInfo)        -- [prod] compaction_extension
   | CompactionExhausted(CompactionExhaustedInfo) -- [prod] compaction_exhausted
   | ExtCompactionRejected(CompactionInfo)    -- [NEW]  ext_compaction_rejected
+  | ExtensionDiagnostic(ExtensionDiagnosticInfo) -- [NEW] extension_diagnostic
   | ThinkingStreamStart(StreamStartInfo)     -- [prod] thinking_stream_start
   | ThinkingStreamEnd(StreamEndInfo)         -- [prod] thinking_stream_end
   | StreamErrorRetry(StreamErrorRetryInfo)   -- [prod] stream_error_retry
@@ -663,6 +668,13 @@ func done_kvs(i: DoneInfo) -> [{key: string, value: Json}] {
   if i.source == "" then base else base ++ [kv("source", js(i.source))]
 }
 
+func diagnostic_fields_json(fields: [DiagnosticField]) -> [Json] {
+  match fields {
+    [] => [],
+    f :: rest => jo([kv("key", js(f.key)), kv("value", js(f.value))]) :: diagnostic_fields_json(rest)
+  }
+}
+
 export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
   match e {
     ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("system_prefix_count", jnum(_int_to_float(i.system_prefix_count))), kv("system_prefix_chars", jnum(_int_to_float(i.system_prefix_chars))), kv("system_prefix_digest", js(i.system_prefix_digest)), kv("payload_digest", js(i.payload_digest)), kv("model", js(i.model))],
@@ -679,6 +691,7 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     CompactionApplied(i) => [kv("type", js("compaction_extension")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))],
     CompactionExhausted(i) => [kv("type", js("compaction_exhausted")), kv("step", jnum(_int_to_float(i.step))), kv("model", js(i.model)), kv("reason", js(i.reason))],
     ExtCompactionRejected(i) => [kv("type", js("ext_compaction_rejected")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))],
+    ExtensionDiagnostic(i) => [kv("type", js("extension_diagnostic")), kv("step", jnum(_int_to_float(i.step))), kv("extension", js(i.extension)), kv("code", js(i.code)), kv("fields", ja(diagnostic_fields_json(i.fields)))],
     ThinkingStreamStart(i) => [kv("type", js("thinking_stream_start")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("model", js(i.model))],
     ThinkingStreamEnd(i) => [kv("type", js("thinking_stream_end")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("status", js(i.status))],
     StreamErrorRetry(i) => [kv("type", js("stream_error_retry")), kv("step", jnum(_int_to_float(i.step))), kv("error", js(i.error))],
@@ -1102,6 +1115,7 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(CompactionApplied({ step: 1, note: "n" }), "{\"type\":\"compaction_extension\",\"step\":1,\"note\":\"n\"}")
     && golden(CompactionExhausted({ step: 1, model: "m", reason: "full" }), "{\"type\":\"compaction_exhausted\",\"step\":1,\"model\":\"m\",\"reason\":\"full\"}")
     && golden(ExtCompactionRejected({ step: 1, note: "invalid" }), "{\"type\":\"ext_compaction_rejected\",\"step\":1,\"note\":\"invalid\"}")
+    && golden(ExtensionDiagnostic({ step: 1, extension: "compaction_ai", code: "compaction_ai.summarizer_failed", fields: [{ key: "attempts", value: "2" }, { key: "pct", value: "81" }] }), "{\"type\":\"extension_diagnostic\",\"step\":1,\"extension\":\"compaction_ai\",\"code\":\"compaction_ai.summarizer_failed\",\"fields\":[{\"key\":\"attempts\",\"value\":\"2\"},{\"key\":\"pct\",\"value\":\"81\"}]}")
     && golden(ThinkingStreamStart({ step: 1, stream_id: "s", model: "m" }), "{\"type\":\"thinking_stream_start\",\"step\":1,\"stream_id\":\"s\",\"model\":\"m\"}")
     && golden(ThinkingStreamEnd({ step: 1, stream_id: "s", status: "completed" }), "{\"type\":\"thinking_stream_end\",\"step\":1,\"stream_id\":\"s\",\"status\":\"completed\"}")
     && golden(StreamErrorRetry({ step: 1, error: "oops" }), "{\"type\":\"stream_error_retry\",\"step\":1,\"error\":\"oops\"}")

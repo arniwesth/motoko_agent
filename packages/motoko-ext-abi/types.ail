@@ -139,9 +139,13 @@ export type FinalizeDecision
 
 -- Decision type for pre-step compaction hooks.
 -- PassThrough: no compaction needed, proceed with original msgs
+-- PassThroughObserved: no compaction, but record one bounded diagnostic
 -- Compacted: extension has compacted the message list, use the new one
+export type DiagnosticField = { key: string, value: string }
+
 export type PreStepDecision
   = PassThrough
+  | PassThroughObserved(code: string, fields: [DiagnosticField])
   | Compacted(msgs: [Msg], note: string, artifacts: Json)
   deriving (Eq)
 export type ExtensionHooks = {

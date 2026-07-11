@@ -11,6 +11,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   Msg,
   PreStepDecision,
   PassThrough,
+  PassThroughObserved,
   Compacted,
   TokenTelemetry,
   ToolCall
@@ -184,6 +185,7 @@ export pure func same_msgs(a: [Msg], b: [Msg]) -> bool {
 func decision_msgs(input: [Msg], d: PreStepDecision) -> [Msg] {
   match d {
     PassThrough => input,
+    PassThroughObserved(_, _) => input,
     Compacted(msgs, _, _) => msgs
   }
 }
@@ -191,6 +193,7 @@ func decision_msgs(input: [Msg], d: PreStepDecision) -> [Msg] {
 func decision_artifacts(d: PreStepDecision) -> Json {
   match d {
     PassThrough => empty_ext_artifacts(),
+    PassThroughObserved(_, _) => empty_ext_artifacts(),
     Compacted(_, _, artifacts) => artifacts
   }
 }
@@ -200,7 +203,8 @@ export func compaction_occurred(hooks: ExtensionHooks) -> bool ! {IO, Process, F
   let ctx = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
   match hooks.on_pre_step(ctx, segment) {
     Compacted(_, _, _) => true,
-    PassThrough => false
+    PassThrough => false,
+    PassThroughObserved(_, _) => false
   }
 }
 

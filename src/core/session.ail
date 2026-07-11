@@ -54,6 +54,7 @@ import src/core/ext/runtime (
   PreStepStage,
   StageApplied,
   StageRejected,
+  StageObserved,
   StagePassed
 )
 import src/core/phase_vocab (
@@ -79,6 +80,7 @@ import src/core/phase_vocab (
   CompactionApplied,
   CompactionExhausted,
   ExtCompactionRejected,
+  ExtensionDiagnostic,
   ThinkingStreamStart,
   ThinkingStreamEnd,
   ProviderResult,
@@ -107,6 +109,7 @@ import src/core/phase_vocab (
   WireRecord,
   TraceStageApplied,
   TraceStageRejected,
+  TraceStageObserved,
   empty_ledger_trace,
   ledger_append,
   apply_state_delta,
@@ -306,6 +309,12 @@ func emit_pre_step_stages(session_id: string, step_idx: int, stages: [PreStepSta
           step: step_idx,
           note: reason
         })),
+        StageObserved(code, fields) => ledger_emit(session_id, ExtensionDiagnostic({
+          step: step_idx,
+          extension: s.ext_id,
+          code: code,
+          fields: fields
+        })),
         StagePassed => ()
       };
       emit_pre_step_stages(session_id, step_idx, rest)
@@ -405,6 +414,7 @@ pure func runtime_status_counts_rec(records: [LedgerRecord], counts: RuntimeStat
             stage_rejected_total: counts.stage_rejected_total + 1,
             compaction_ai_applied: counts.compaction_ai_applied
           },
+          TraceStageObserved(_, _) => counts,
           _ => counts
         },
         _ => counts
@@ -2533,6 +2543,11 @@ pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool
           step: 3,
           ext_id: "compaction_structural#3",
           outcome: TraceStageApplied("structural: tier=emergency keep_last=3")
+        }),
+        CompactionStageRecord({
+          step: 3,
+          ext_id: "compaction_ai#0",
+          outcome: TraceStageObserved("compaction_ai.summarizer_failed", [{ key: "attempts", value: "2" }])
         })
       ]
     };

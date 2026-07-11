@@ -22,6 +22,7 @@ import src/core/phase_vocab (
   TraceStageApplied,
   TraceStagePassed,
   TraceStageRejected,
+  TraceStageObserved,
   WireRecord,
   empty_ledger_trace,
   ledger_append,
@@ -470,6 +471,7 @@ func stage_tag(r: LedgerRecord) -> string {
         TraceStagePassed => "${s.ext_id}:pass",
         TraceStageApplied(_) => "${s.ext_id}:apply",
         TraceStageRejected(_) => "${s.ext_id}:reject"
+        ,TraceStageObserved(_, _) => "${s.ext_id}:observe"
       },
     _ => ""
   }
