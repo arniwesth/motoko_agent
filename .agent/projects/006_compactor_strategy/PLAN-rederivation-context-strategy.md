@@ -77,7 +77,7 @@ log intact.
 | WS1 | Gate the AI pass on **actual current usage** + in-flight guard, not `pct` on the shadow | `compaction_ai.ail:359-362` `compact_with_ai` | extension |
 | WS2 | Cache `{summary, boundary}`; fold only the delta past the boundary; `keep_recent` as a **token budget** (~20k) | `compaction_ai.ail` `compact_with_ai` / `split_msgs:206` / `cache_artifact` / `types.ail` | extension |
 | WS3 | Model-controlled durable evidence store; re-surface a **pointer** after compaction | new `packages/motoko-ext-*` (or extend `scratchpad`) + capsule at `compaction_ai.ail` `finalize_compaction:351` | extension |
-| WS4 | Truncate oversized tool reads gated on live usage (read-guard) | new extension on the tool-result path (`src/core/tool_runtime.ail` result surface) | extension |
+| WS4a | Cap oversized single tool-results in `on_pre_step` (pi's post-exec hook has no ABI equivalent — see WS4) | `compaction_structural.ail` `compact_for_pre_step:158` | extension |
 
 **Out of scope (guardrails — any plan touching these is wrong):**
 - Persisting compaction into history / mutating `st.msgs` (`session.ail:1722`). Ephemeral is documented
@@ -154,6 +154,15 @@ fold, re-surface only a **pointer** (`N entries … via EvidenceList/EvidenceGet
 (cheaper than the current capsule). Keep the harness-controlled control-state capsule for step
 budget/task, but shrink it toward a pointer where possible.
 
+**ABI gap (investigated 2026-07-11).** The `artifacts` state channel is **write-only from
+`on_pre_step`**: `PreStepDecision.Compacted(msgs, note, artifacts)` is the *only* hook return that
+carries `artifacts` back (`types.ail:143`); `on_tool_handle` returns `Handled | Delegate` with **no**
+state-write channel. So a model-controlled `EvidenceAdd` tool **cannot persist into `artifacts` across
+steps** today — extension-only, it must be **FS-backed** (write a scratchpad file via the `FS` effect,
+which `on_tool_handle` has), then read back in `on_pre_step`. That works but is out-of-band and not
+DST-deterministic. A clean, in-band store needs ABI addition #2 (§ABI additions). **WS3 ships FS-backed
+by default; upgrade to the artifacts-backed store if #2 lands.**
+
 **Acceptance.** Findings survive compaction without living in the summarizable window; post-fold
 re-injection cost is a pointer line, not the data. Deterministic bridge string (replay-stable), tested in
 the extension's `_smoke.ail`.
@@ -163,14 +172,41 @@ the extension's `_smoke.ail`.
 **Problem.** Nothing stops a large tool read from entering the window, so the shadow reaches 638% and
 forces heavy folds. The stress task reads big files in full every phase; real workloads do too.
 
-**Change (little-coder `read-guard`).** A tool-result interceptor for read-like tools: when
-`current_tokens + est(chars) > context_limit` (est `ceil(chars/3.5)`; fallback `0.5×window` when usage
-unknown, e.g. right after a fold), replace the result with its first ~30 lines + a "search instead
-(grep / offset+limit); do not re-read in full" directive. Gated on **live** usage
-(`resolve_context_limit` + `st.telemetry`). Emitted as a uniform harness-intervention event.
+**ABI investigation (resolved 2026-07-11 — see `../../issues/compaction-rederive-cost-dominates-after-strategy-fixes.md`).**
+pi's `read-guard` hooks a **post-execution** `tool_result` event to observe-and-replace a read's output.
+Motoko's ABI has **no such hook** and cannot get one extension-only:
+- `ExtensionHooks` (`packages/motoko-ext-abi/types.ail:147`) exposes only *pre-execution* tool hooks —
+  `on_tool_policy` (Allow/Deny) and `on_tool_handle` (`Handled` = the extension *produces* the whole
+  result / `Delegate` = never sees it). Neither observes a harness-produced result to trim it.
+- Builtins bypass the hook layer entirely: `dispatch_tool_entries_with_builtin`
+  (`src/core/tool_phase.ail:318`) tries `builtin(call)` **first** and short-circuits on `Some`;
+  `ReadFile` is a builtin (`tool_runtime.ail:167` `run_read_file`), so it never reaches
+  `on_tool_policy`/`on_tool_handle`.
 
-**Acceptance.** An oversized read never lands whole in context; small reads pass untouched. DST scenario:
-a big-file read at high usage is trimmed to head+directive; at low usage it is not.
+So the literal pi port is **not** extension-only. Two options:
+
+- **WS4a (recommended — ABI-native, no core change).** `on_pre_step` sees the whole `[Msg]` and can
+  return a trimmed `Compacted` payload — and `compaction_structural` already elides tool-result content
+  there (`compact_for_pre_step:158` → `elide_old_tool_results` → `elide_content`). Extend it to also cap
+  **any single** tool-result over a token threshold, *even inside* the `keep_last` verbatim window
+  (currently 10/5/3/1 recent results are kept whole, so one huge recent read still lands full),
+  replacing the overflow with head + "search instead (grep / offset+limit); do not re-read in full".
+  A few lines in `elide_walk`/`compact_for_pre_step`, reusing `elide_content`; deterministic (no AI).
+  **Difference from pi:** trim is applied at *send time* (model sees it next step), not in the same
+  turn. Acceptable for context bounding.
+- **WS4b (faithful port — needs ABI + core change).** ABI addition **#1** (§ABI additions): an
+  `on_tool_result` hook giving the in-turn trim + directive pi has. Escalate WS4a→WS4b only if the
+  next-step delay of WS4a is measured to matter — but note #1 is worth landing on its own merits
+  (it unlocks a whole extension family, not just read-guard), so if #1 lands for other reasons, WS4b
+  becomes the default read-guard implementation.
+
+**Change (WS4a).** Cap oversized single tool-results in `compaction_structural.compact_for_pre_step`,
+gated on the same calibrated usage the tier ladder already uses (`est ≈ ceil(chars/3.5)`; the existing
+tier pct as the fallback). Uniform harness-intervention-style note in the elision.
+
+**Acceptance.** An oversized read never lands whole in the *sent* window (even when recent); small reads
+pass untouched. DST scenario: a big-file read at high usage is trimmed to head+directive on the next
+send; at low usage it is not.
 
 ---
 
@@ -181,14 +217,18 @@ a big-file read at high usage is trimmed to head+directive; at low usage it is n
 | `packages/motoko-ext-compaction-ai/compaction_ai.ail` | 1,2 | extension | Real-usage trigger + in-flight/min-gap guard in `compact_with_ai:359`; `{summary,boundary}` cache via `cache_artifact`; delta-only fold + update prompt; token-budget tail via `split_msgs:206`; structured schema + file-op line in `finalize_compaction:351`. New WS1/WS2 unit tests. |
 | `packages/motoko-ext-compaction-ai/types.ail` | 1,2 | extension | `keep_recent_tokens`, schema/update-prompt opt-ins, trigger tunables on `CompactionAiConfig` + `default_config` (fallback-safe). |
 | `packages/motoko_scratchpad/*` (or new `motoko-ext-evidence`) | 3 | extension | `EvidenceAdd/Get/List` durable store + post-fold pointer bridge; `_smoke.ail`. |
-| new `packages/motoko-ext-read-guard/*` | 4 | extension | Tool-result read truncation gated on live usage; `_smoke.ail`. |
+| `packages/motoko-ext-compaction-structural/compaction_structural.ail` | 4a | extension | Cap any single oversized tool-result in `compact_for_pre_step:158` / `elide_walk`, reusing `elide_content`. New unit test. **No new package** (pi's post-exec hook has no ABI equivalent — see WS4). |
+| *(WS4b only)* `packages/motoko-ext-abi/types.ail` + `src/core/tool_phase.ail` + all ext hook records + conformance | 4b | **ABI + CORE** | New `on_tool_result` hook. Separate ABI note (004/ADR-001 D9). Only if WS4a's next-step delay is measured to matter. |
 | `scripts/long_qwen_compaction_dst.ail` | 1,2 | test | Fold-cadence + bounded-input + cache-hit-across-steps scenarios. |
 | `.motoko/config/*/compaction_ai.json` | 1,2 | config | Set `keep_recent_tokens` etc. for the live profiles (esp. hunyuan3/qwen36). |
 
-**Does NOT touch:** `src/core/compaction.ail` (calibration — frozen), `st.msgs` / history persistence
-(`session.ail:1722` — the ephemeral guarantee), the `ExtensionHooks` / `PreStepDecision` ABI
-(`packages/motoko-ext-abi/types.ail`). WS4 registers on the existing tool-result surface; confirm the ABI
-exposes a result-mutation hook before committing (if not, WS4 needs an ABI note — flag, don't assume).
+**Does NOT touch (WS1/WS2/WS3/WS4a):** `src/core/compaction.ail` (calibration — frozen), `st.msgs` /
+history persistence (`session.ail:1722` — the ephemeral guarantee), the `ExtensionHooks` /
+`PreStepDecision` ABI (`packages/motoko-ext-abi/types.ail`). **WS4a is deliberately routed through
+`on_pre_step` inside `compaction_structural` precisely because the ABI has no post-execution
+tool-result hook and builtins bypass the pre-execution ones** (`tool_phase.ail:318` builtin-first) — so
+WS4a needs no ABI change. Only the optional **WS4b** touches the ABI/core, and it is gated behind its own
+note.
 
 ---
 
@@ -207,14 +247,44 @@ exposes a result-mutation hook before committing (if not, WS4 needs an ABI note 
 
 ---
 
-## Decision fork (separate ADR — not this plan)
+## ABI additions (if an ABI change is allowed)
 
-3 of 4 surveyed agents (Claude Code, Codex, OpenCode) are **persistent**; pi is persistent too. Persistent
-compaction would delete re-derivation outright (no cached-fold machinery needed) — but it overturns
-doc:52's ephemeral guarantee (audit / DST replay / un-compaction). Whether that guarantee is load-bearing
-in practice is an ADR-level call. If it is *not*, the cheaper long-term answer is to go persistent and
-retire WS1/WS2's ephemeral-port complexity. This plan deliberately delivers value **without** forcing that
-decision; the ADR can supersede WS1/WS2 later if it lands.
+WS1/WS2 (the compaction engine) are **extension-only regardless** — WS1 gates on real usage via
+`ctx.telemetry` + `ctx.context_limit` (already in `ExtCtx`), WS2 caches in `artifacts` (already threaded
+through `on_pre_step`). An ABI change does **not** simplify them and they should stay extension-resident.
+Where an ABI change *does* pay off is the **input-bounding and durability** layers — the little-coder
+"prevent growth upstream" family that Motoko's ABI currently cannot express at all. Three candidate
+additions, ranked:
+
+| # | Addition | Unlocks | Blast radius | Governed by |
+|---|---|---|---|---|
+| **1** | `on_tool_result: (ExtCtx, ToolResultEnvelope) -> Keep \| Replace(ToolResultEnvelope)`, fired after `builtin(call)` / `execute_allowed_tool_call` in `dispatch_tool_entries_with_builtin` (`tool_phase.ail:314-357`) | **WS4b** + the whole read-guard / write-guard / output-parser / retention family (little-coder builds ~4 extensions on this surface) | ABI type + core dispatch (**must envelope builtin results** — they emit a `Message` directly at `:320`, so core does result→envelope→hook→message) + every ext hook record + conformance + noop ports | `004/ADR-001` D9 |
+| **2** | State-write for tool hooks: let `on_tool_handle` (and #1's `on_tool_result`) return updated `artifacts` (or a dedicated per-ext state channel) | Clean, DST-deterministic model-controlled store (**WS3** in-band instead of FS-backed); any stateful ext tool | ABI decision types + core threading; same hook records | `004/ADR-001` D9 |
+| **3** | `on_post_compaction` event (or fold into #2) | Cross-extension pointer bridge after a fold (evidence ext ≠ compaction ext) | small; avoidable if evidence+compaction coordinate via shared `artifacts` | — |
+
+**#1 is the highest-leverage single addition** — general, and the thing little-coder proves matters most
+(rare compaction + aggressive upstream bounding). **#2** is a smaller complementary fix that de-risks WS3.
+Both are ABI-boundary changes → each needs its own note under `004/ADR-001` D9 before implementation.
+Recommendation: land **#1** on its own merits (independent of WS4a↔WS4b); do **#2** if WS3 is in scope;
+**#3** only if the bridge can't be coordinated via `artifacts`.
+
+**What an ABI change does *not* do:** it removes the *mechanical* blocker for persistent compaction (a
+`st.msgs` write-back) but does **not** resolve the doc:52 decision — see below.
+
+---
+
+## Decision fork — persistence (separate ADR)
+
+3 of 4 surveyed agents (Claude Code, Codex, OpenCode) are **persistent**; pi is persistent too. A new
+`PreStepDecision` variant that the core writes back to `st.msgs` (instead of send-only) would let Motoko
+adopt pi's model directly and **collapse WS1+WS2's entire ephemeral-port machinery** — the summary just
+*is* the history, folded incrementally like pi. That is the cheapest long-term engine.
+
+But it overturns doc:52's ephemeral guarantee (*"the returned `msgs` replaces the input for this step
+only — the session log is unchanged"*; audit / DST replay / un-compaction). An ABI change makes it
+*implementable*; whether doc:52's guarantee is load-bearing enough to keep is a **decision on its own
+merits**, not a free win. Tracked as `ADR-001-compaction-persistence.md` (Proposed). This plan delivers
+value **without** forcing that decision; the ADR can supersede WS1/WS2 later if it lands persistent.
 
 ---
 
@@ -223,5 +293,11 @@ decision; the ADR can supersede WS1/WS2 later if it lands.
 1. Land `PLAN-compactor-strategy.md` (no-op guard, result-based tiering) — prerequisite.
 2. **WS1** (trigger) — biggest cost/hang reduction, smallest change, no engine commitment.
 3. **WS2** (cached fold + tail) — the engine; measure merge-drift → decide Option A vs B fallback.
-4. **WS4** (read-guard) and **WS3** (evidence) in parallel — force-multipliers; independent of WS1/WS2.
-5. Re-measure live; open the persistence ADR only if the residual justifies it.
+4. **WS4a** (structural single-result cap) and **WS3** (evidence, FS-backed) in parallel —
+   force-multipliers; independent of WS1/WS2.
+5. **Re-measure live.** Then decide two independent things against the residual:
+   - **ABI additions** (§ABI additions) — land #1 (`on_tool_result`) if the upstream-bounding family is
+     wanted (promotes WS4a→WS4b, WS3→in-band via #2). Each needs its own note under `004/ADR-001` D9.
+   - **Persistence** — `ADR-001-compaction-persistence.md` (Proposed stub). Resolve *is doc:52
+     load-bearing?* first; if not (esp. if the append-only ledger already affords the audit side-channel),
+     persistent supersedes WS1/WS2. Open only if the post-WS1/WS2 residual justifies a core change.
