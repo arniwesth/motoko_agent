@@ -1,14 +1,15 @@
 # Ephemeral re-derivation is now the dominant compaction cost (post strategy-fix live datapoint)
 
 ## Status
-open — source-grounded against prior art (2026-07-11); plan drafted
-(`../projects/006_compactor_strategy/PLAN-rederivation-context-strategy.md`). Residual of Consequence 1
+in progress — Engine A and WS4a implemented in `9dde8b0` and `1fa1aaf`; WS3 and live drift/cost
+measurement remain (see
+`../projects/006_compactor_strategy/NOTE-rederivation-implementation-findings.md`). Residual of Consequence 1
 of [`ephemeral-compaction-and-ai-noop-thrash.md`](ephemeral-compaction-and-ai-noop-thrash.md), which the
 already-scoped [`PLAN-compactor-strategy.md`](../projects/006_compactor_strategy/PLAN-compactor-strategy.md)
 explicitly excludes.
 
 ## Branch
-arniwesth/mot-38-progress-contract-finalize-guard-extension
+arniwesth/mot-39-rederivation-context-strategy
 
 ## Description
 Follow-up live datapoint from a `make live_qwen36_compaction_heavy_headless` run captured while
