@@ -38,9 +38,10 @@ extension-resident workstreams, by leverage:
 4. **WS4 — Input bounding** (read-guard-style truncation of oversized tool reads, gated on live usage).
 
 WS1+WS2 are the core; WS3+WS4 are force-multipliers that let the summary be lossier/cheaper safely.
-Content-addressed chunk memoization (the earlier "Option B") is the **fallback** for WS2 if merge-drift
-degrades quality. Adopting pi's *persistent* model is a **separate ADR** (see §Decision fork), not this
-plan.
+WS2's engine has **two co-primary variants** — rolling fold (A, pi's mechanism, best for interactive
+lengths) and frozen chunk memoization (B, the earlier "Option B", best for long-horizon runs like the
+1000-step stress target); build A first, let a drift measurement pick the long-horizon engine (§WS2).
+Adopting pi's *persistent* model is a **separate ADR** (see §Decision fork), not this plan.
 
 ---
 
@@ -115,25 +116,45 @@ tail-budget). No fold when the delta since the last boundary is trivial. DST-che
 **Problem.** Even when it should fold, `compact_with_ai` re-summarizes the whole old-span from scratch,
 and the digest cache (`:315`) misses because the old-span grows each step.
 
-**Change (pi's mechanism, ported to `artifacts`):**
-- Store `{summary, boundary_marker, covered_upto}` in the artifacts channel (extend `cache_artifact`).
-  `boundary_marker` is a stable id/index of the last summarized turn (analog of pi's `firstKeptEntryId`).
-- Each fold summarizes **only turns after `boundary_marker`**, merged into the cached `summary` via an
-  update prompt (analog of `UPDATE_SUMMARIZATION_PROMPT`) — bounded delta input, O(new turns).
+**Common to both engines** (shared by A and B below):
 - Make `keep_recent` a **token budget** (~20k, config-driven) rather than a message count — walk the
   tail accumulating calibrated tokens to a cut point that never splits a tool_call from its result
   (Motoko's `split_msgs:206` already respects this; extend it to a token budget).
 - Adopt a **structured summary schema** (Goal / Constraints / Progress / Key Decisions / Next Steps /
   Critical Context; preserve exact paths/names) and append a **cumulative file-op line**.
+- Cache lives in the `artifacts` channel (extend `cache_artifact`); config via `CompactionAiConfig`
+  (`types.ail`) with `keep_recent_tokens` + schema/prompt opt-ins, fallback-safe defaults so existing
+  `.motoko` configs still parse.
 
-**Config.** Extend `CompactionAiConfig` (`types.ail`) with `keep_recent_tokens`, schema/update prompts
-opt-in, fallback-safe defaults so existing `.motoko` configs still parse (mirror the existing
-`default_config` discipline).
+Two engines produce the cached summary. **They are workload-split co-primaries, not primary/fallback**
+(the earlier "A leads, B is the fallback" framing undersold B — see the drift analysis below). **Build A
+first** (simpler, and validated on the target model by pi); the drift measurement decides which is the
+long-horizon engine.
 
-**Fallback (Option B).** If repeated `UPDATE`-merge drift degrades summary quality on the target model,
-switch WS2's engine to content-addressed **chunk** memoization: fixed ~20-turn chunks, each summarized
-once and cached by its own digest, concatenated — no drift, perfect cache hits on stable chunks. Same
-artifacts channel; strictly more machinery, so only if drift is measured.
+**Engine A — rolling fold (pi's `previousSummary` mechanism).**
+- Store `{summary, boundary_marker, covered_upto}` in artifacts. `boundary_marker` is a stable id/index
+  of the last summarized turn (analog of pi's `firstKeptEntryId`).
+- Each fold summarizes **only turns after `boundary_marker`**, merged into the cached `summary` via an
+  update prompt (analog of `UPDATE_SUMMARIZATION_PROMPT`) — bounded delta input, O(new turns).
+- **Best for** typical / interactive-length sessions (pi's workload). **Weakness:** every fold
+  re-processes the *whole prior summary* ("PRESERVE all existing… ADD new"), so over a long run the
+  oldest information is folded hundreds of times → **cumulative decay**; and it makes an AI call on
+  *every* fold event.
+
+**Engine B — frozen chunk memoization (the earlier "Option B"; co-primary for long horizons).**
+- Partition the old span into fixed ~20-turn **chunks**; summarize each chunk **once** from source,
+  cache by its own content digest; the compacted summary is the concatenation of chunk summaries + tail.
+- A completed chunk's digest never changes → it is **never re-summarized**. **No cumulative drift**
+  (turn-1's chunk is frozen after one pass) and **~zero steady-state AI cost** (one call per completed
+  chunk, ≈1 per 20 steps; pure cache hits otherwise — which also shrinks #3's hang surface further).
+- **Best for** Motoko's actual stress target — **1000-step autonomous runs** — where A's decay and
+  per-fold cost compound. Cost: more machinery (a chunk map, not one summary) and concatenated summaries
+  may read less coherently than A's single evolving one.
+
+**Engine A+B — hybrid (if both weaknesses bite).** Freeze the stable prefix as B-style chunks (no drift,
+cached) and rolling-fold only the newest not-yet-frozen span into a single coherent head. Best of both;
+most machinery. Note as an option; don't build unless A's coherence *and* B's readability both prove
+necessary.
 
 **Acceptance.** Per-fold summarizer *input* is bounded to the delta (not the full history). Cache hits
 across steps (the current cross-step miss is gone). Sent window stays under limit. Summarizer-hang
@@ -292,7 +313,9 @@ value **without** forcing that decision; the ADR can supersede WS1/WS2 later if 
 
 1. Land `PLAN-compactor-strategy.md` (no-op guard, result-based tiering) — prerequisite.
 2. **WS1** (trigger) — biggest cost/hang reduction, smallest change, no engine commitment.
-3. **WS2** (cached fold + tail) — the engine; measure merge-drift → decide Option A vs B fallback.
+3. **WS2** (cached fold + tail) — the engine. Build **Engine A** (rolling fold) first; measure
+   summary drift over a long (≥several-hundred-step) run → keep A for interactive lengths, switch to
+   **Engine B** (frozen chunks) for the long-horizon path if decay shows (hybrid only if both bite).
 4. **WS4a** (structural single-result cap) and **WS3** (evidence, FS-backed) in parallel —
    force-multipliers; independent of WS1/WS2.
 5. **Re-measure live.** Then decide two independent things against the residual:
