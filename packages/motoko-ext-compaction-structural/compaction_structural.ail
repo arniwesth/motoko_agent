@@ -82,6 +82,18 @@ pure func elide_content(content: string) -> string {
   }
 }
 
+pure func cap_oversized_tool_results(msgs: [Msg], limit: int) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      let oversized = limit > 0 && m.role == "tool" && ((length(m.content) + 3) / 4) * 100 / limit >= 30;
+      let shortened = elide_content(m.content);
+      let updated = if oversized && length(shortened) < length(m.content) then { m | content: "${shortened}\n[large tool result capped; use grep or offset+limit instead of re-reading in full]" } else m;
+      updated :: cap_oversized_tool_results(rest, limit)
+    }
+  }
+}
+
 pure func elide_walk(msgs: [Msg], total: int, keep_last: int, seen: int) -> [Msg] {
   match msgs {
     [] => [],
@@ -158,24 +170,25 @@ pure func candidate_fits(ctx: ExtCtx, msgs: [Msg]) -> bool {
 export pure func compact_for_pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision {
   if candidate_fits(ctx, msgs) then PassThrough
   else {
-    let tier1 = elide_old_tool_results(msgs, elide_keep_last());
+    let capped = cap_oversized_tool_results(msgs, ctx.context_limit);
+    let tier1 = elide_old_tool_results(capped, elide_keep_last());
     if not same_msgs(msgs, tier1) && candidate_fits(ctx, tier1) then
-      Compacted(tier1, structural_note("tier1", elide_keep_last()), jo([]))
+      Compacted(tier1, structural_note("tier1", elide_keep_last()), ctx.artifacts)
     else {
-      let hard = elide_old_tool_results(msgs, elide_hard_keep_last());
+      let hard = elide_old_tool_results(capped, elide_hard_keep_last());
       if not same_msgs(msgs, hard) && candidate_fits(ctx, hard) then
-        Compacted(hard, structural_note("hard", elide_hard_keep_last()), jo([]))
+        Compacted(hard, structural_note("hard", elide_hard_keep_last()), ctx.artifacts)
       else {
-        let emergency = elide_old_tool_results(msgs, emergency_keep_last());
+        let emergency = elide_old_tool_results(capped, emergency_keep_last());
         if not same_msgs(msgs, emergency) && candidate_fits(ctx, emergency) then
-          Compacted(emergency, structural_note("emergency", emergency_keep_last()), jo([]))
+          Compacted(emergency, structural_note("emergency", emergency_keep_last()), ctx.artifacts)
         else {
-          let floor = elide_old_tool_results(msgs, emergency_final_keep_last());
+          let floor = elide_old_tool_results(capped, emergency_final_keep_last());
           if same_msgs(msgs, floor) then PassThrough
           else if candidate_fits(ctx, floor) then
-            Compacted(floor, structural_note("emergency", emergency_final_keep_last()), jo([]))
+            Compacted(floor, structural_note("emergency", emergency_final_keep_last()), ctx.artifacts)
           else
-            Compacted(floor, structural_note("floor", emergency_final_keep_last()), jo([]))
+            Compacted(floor, structural_note("floor", emergency_final_keep_last()), ctx.artifacts)
         }
       }
     }
@@ -311,5 +324,24 @@ func test_pre_step_selects_gentlest_result_tier() -> bool
           && contains(note, "keep_last=10")
           && candidate_fits(ctx, out),
       PassThrough => false
+    }
+  }
+
+func test_oversized_recent_tool_result_is_capped_under_pressure() -> bool
+  tests [((), true)]
+  {
+    let input = [user("context ${very_long_tool_content()}"), tool("recent", very_long_tool_content())];
+    match compact_for_pre_step(test_ctx(300), input) {
+      Compacted(out, _, _) => contains(show(out), "large tool result capped") && length(show(out)) < length(show(input)),
+      PassThrough => false
+    }
+  }
+
+func test_small_recent_tool_result_is_untouched() -> bool
+  tests [((), true)]
+  {
+    match compact_for_pre_step(test_ctx(10000), [tool("recent", "small result")]) {
+      PassThrough => true,
+      Compacted(_, _, _) => false
     }
   }
