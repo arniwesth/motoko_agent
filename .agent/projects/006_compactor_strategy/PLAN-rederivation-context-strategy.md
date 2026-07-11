@@ -4,15 +4,42 @@
 Refines an already-extension-resident strategy (`../004_phase_core_refactor/ADR-001-phase-oriented-core.md`
 D9; `../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md` §Non-goals).
 **Branch**: `arniwesth/mot-38-progress-contract-finalize-guard-extension`
-**Grounded at**: HEAD `bd4ce58` (all `file:line` anchors below verified at this commit; note
-`compaction_ai.ail` was edited this session — the summarizer-hang/degrade fix — so its lines differ from
-`PLAN-compactor-strategy.md`, which was grounded at `aeb8a69`).
+**Grounded at**: HEAD `af615cb` (key anchors re-verified at this commit after the summarizer-hang/degrade
+fix landed as `550b8bb`). The sibling `PLAN-compactor-strategy.md` is **already implemented** (`7a8177c`),
+so its result-based structural tiering + AI no-op guard are live — but it shipped with different symbol
+names than that plan proposed (e.g. `compaction_structural.ail:155` `calibrated_ctx_usage(...) <
+result_target_pct()`, not `select_by_result`). Re-grep symbols before trusting any inherited anchor.
 **Source issue (normative)**: `../../issues/compaction-rederive-cost-dominates-after-strategy-fixes.md` —
 its Recommended-direction list is the acceptance criteria.
 **Sibling plan (disjoint)**: `PLAN-compactor-strategy.md` fixes the *strategy* defects (structural
 over-escalation, AI drip/no-op, status labeling) and **explicitly excludes** re-derivation, persistence,
 and history-bounding. This plan is the residual it parked. **Land that plan first** — its no-op guard and
 result-based tier selection are assumed here.
+
+---
+
+## Governance — what this needs to proceed
+
+**The core plan needs no ADR and no ABI change.** WS1+WS2, WS3 (FS-backed), and WS4a are **all
+extension-resident** (`compaction_ai.ail`, `types.ail`, `motoko_scratchpad`/new ext,
+`compaction_structural.ail`) and touch **zero** core/ABI files — they stay inside the ephemeral doc:52
+contract (emit send-only `Compacted`, `st.msgs` untouched) and are pre-authorized by `004/ADR-001` **D9**
+(*compaction policy is extension-resident*). The **only** prerequisite is landing the sibling
+`PLAN-compactor-strategy.md` first (also a plan, not an ADR).
+
+Two things this plan mentions are **optional and gated behind measurement**, each with a no-decision
+fallback already in the core plan — so neither is needed to ship value:
+
+| Optional move | Needs | Fallback that ships without it |
+|---|---|---|
+| `ADR-001-compaction-persistence.md` (persistent engine) | an **ADR** — it's the *alternative* to WS1/WS2, would **supersede** them, not enable them | WS1/WS2 (ephemeral cache) — the core plan |
+| WS4b (faithful in-turn read-guard) | an **ABI note** (addition #1, `on_tool_result`) under D9 — *not* the persistence ADR | WS4a (structural single-result cap) |
+| In-band WS3 (artifacts-backed store) | an **ABI note** (addition #2, tool-hook state-write) under D9 | WS3 FS-backed |
+
+Net: **implement WS1+WS2 → WS4a + WS3(FS-backed) with zero decision records.** Revisit the ADR / ABI notes
+only if the post-implementation residual justifies them. Trade-off: this is the *more-code* path
+(ephemeral-port machinery); the ADR would be less machinery but requires making the doc:52 decision now —
+which this plan is deliberately structured to defer.
 
 ---
 
