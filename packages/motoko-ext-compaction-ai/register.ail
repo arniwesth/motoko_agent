@@ -53,6 +53,10 @@ func read_compaction_ai_config(profile_dir: string) -> CompactionAiConfig ! {Env
             None => default_config().keep_recent,
             Some(k) => k
           };
+          let keep_recent_tokens = match getInt(json, "keep_recent_tokens") {
+            None => default_config().keep_recent_tokens,
+            Some(k) => k
+          };
           let min_relief_pct = match getInt(json, "min_relief_pct") {
             None => default_config().min_relief_pct,
             Some(v) => v
@@ -73,6 +77,7 @@ func read_compaction_ai_config(profile_dir: string) -> CompactionAiConfig ! {Env
             model: model,
             threshold_pct: threshold_pct,
             keep_recent: keep_recent,
+            keep_recent_tokens: keep_recent_tokens,
             min_relief_pct: min_relief_pct,
             rate_limit_enabled: rate_limit_enabled,
             min_gap_steps: min_gap_steps,
