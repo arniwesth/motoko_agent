@@ -420,12 +420,55 @@ func finalize_compaction(ctx: ExtCtx, msgs: [Msg], prefix: [Msg], recent_turns: 
   }
 }
 
+-- The summarizer's raw provider text is deliberately kept out of the ledger
+-- event (replay-stable, no request-specific numbers). Classify the known
+-- failure modes into stable reason_class values instead. `context_overflow`
+-- is the summarizer request exceeding the model context window (input +
+-- reserved output > limit) — the dominant cause of over-threshold AI folds
+-- failing, now bounded by max_fold_tokens.
+func is_context_overflow(reason: string) -> bool {
+  contains(reason, "maximum context length")
+    || contains(reason, "context length is")
+    || contains(reason, "reduce the length")
+    || contains(reason, "prompt is too long")
+    || contains(reason, "too many tokens")
+}
+
 func summarizer_reason_class(reason: string) -> string {
-  if reason == "empty summary" then "empty_response" else "provider_error"
+  if reason == "empty summary" then "empty_response"
+  else if is_context_overflow(reason) then "context_overflow"
+  else "provider_error"
+}
+
+-- Upper bound (in char/4-estimated tokens) on the `old` segment folded into a
+-- single summarizer request. The provider rejects a request whose real input
+-- plus reserved output exceeds the model context window
+-- (`compaction_ai.summarizer_failed` / `provider_error`); because compaction is
+-- ephemeral the folded history can grow well past 100% of the window, so bound
+-- it. Half the window leaves room for the reserved output budget and for the
+-- char/4 estimate undercounting the model's real tokenizer (~1.3-1.5x on
+-- code/path content). Returns 0 (no cap) for the tiny context limits used by
+-- unit/DST fixtures so their full-body folds are preserved.
+func max_fold_tokens(ctx: ExtCtx) -> int {
+  if ctx.context_limit < 8000 then 0 else ctx.context_limit / 2
+}
+
+-- Raise the recent (verbatim) budget when the body would otherwise fold more
+-- than max_fold_tokens, so `old` stays within the summarizer request budget.
+-- Returns `budget` unchanged when no cap applies (cap disabled, or the body
+-- already fits under the cap).
+func bounded_fold_budget(ctx: ExtCtx, body: [Msg], budget: int) -> int {
+  let cap = max_fold_tokens(ctx);
+  if cap <= 0 then budget
+  else {
+    let needed = msgs_tokens(body) - cap;
+    if needed > budget then needed else budget
+  }
 }
 
 func fresh_compaction(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig, pct: int, p: { prefix: [Msg], rest: [Msg] }, budget: int) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
-  let split_result = if budget > 0 then { prefix: p.prefix, old: split_body_tokens(p.rest, budget).old, recent: split_body_tokens(p.rest, budget).recent } else split_msgs(msgs, cfg.keep_recent);
+  let eff_budget = bounded_fold_budget(ctx, p.rest, budget);
+  let split_result = if budget > 0 then { prefix: p.prefix, old: split_body_tokens(p.rest, eff_budget).old, recent: split_body_tokens(p.rest, eff_budget).recent } else split_msgs(msgs, cfg.keep_recent);
   if list_length(split_result.old) == 0 then PassThroughObserved("compaction_ai.no_foldable_prefix", [
     { key: "pct", value: show(pct) },
     { key: "tail_budget", value: show(budget) },
@@ -465,7 +508,8 @@ export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -
         if (budget <= 0 || msgs_tokens(tail) <= budget) && not safety_refresh then
           finalize_compaction(ctx, msgs, p.prefix, tail, cache.boundary_marker, segment_digest(drop_msgs(p.rest, cache.boundary_marker)), cache.summary, cache.boundary_marker, pct, false)
         else {
-          let cut = if budget > 0 then split_body_tokens(tail, budget) else split_body(tail, cfg.keep_recent);
+          let cut_budget = bounded_fold_budget(ctx, tail, budget);
+          let cut = if budget > 0 then split_body_tokens(tail, cut_budget) else split_body(tail, cfg.keep_recent);
           if list_length(cut.old) == 0 then
             finalize_compaction(ctx, msgs, p.prefix, tail, cache.boundary_marker, segment_digest(tail), cache.summary, cache.boundary_marker, pct, false)
           else match summarize_with_ai_result(ctx, update_summarization_prompt(cache.summary, cut.old, cut.recent), cfg.model) {
@@ -558,6 +602,37 @@ func repeated_pairs(n: int, content: string) -> [Msg] {
 func long_content() -> string {
   "deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789"
 }
+
+func repeat_str(n: int, s: string) -> string {
+  if n <= 0 then "" else "${s}${repeat_str(n - 1, s)}"
+}
+
+-- A summarizer request that overflows the model context window is classified
+-- as context_overflow (not the generic provider_error), so the terminal
+-- diagnostic names the actual cause. Empty and other errors keep their classes.
+func test_summarizer_reason_class_maps_context_overflow() -> bool
+  tests [((), true)]
+  {
+    (summarizer_reason_class("400: This endpoint's maximum context length is 262144 tokens. However, you requested about 300000 tokens. Please reduce the length of either one.") == "context_overflow")
+      && (summarizer_reason_class("empty summary") == "empty_response")
+      && (summarizer_reason_class("503: upstream connect error") == "provider_error")
+  }
+
+-- bounded_fold_budget raises the recent budget so the folded `old` segment
+-- stays within max_fold_tokens on a realistically-sized context window, is a
+-- no-op for the tiny limits used by fixtures, and leaves small bodies alone.
+func test_bounded_fold_budget_caps_large_body() -> bool
+  tests [((), true)]
+  {
+    let big = [assistant(repeat_str(80, long_content()))];
+    let big_tokens = msgs_tokens(big);
+    let ctx_real = test_ctx(1, 8000, empty_ext_artifacts());
+    let ctx_tiny = test_ctx(1, 250, empty_ext_artifacts());
+    (bounded_fold_budget(ctx_real, big, 120) == big_tokens - 4000)
+      && (bounded_fold_budget(ctx_real, big, 120) > 120)
+      && (bounded_fold_budget(ctx_tiny, big, 120) == 120)
+      && (bounded_fold_budget(ctx_real, [assistant("hi")], 120) == 120)
+  }
 
 func test_ai_drip_projected_relief_passthrough() -> bool
   tests [((), true)]
