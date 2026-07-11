@@ -151,7 +151,14 @@ leverage:
    after compaction with a **pointer, not payload** — cheaper than the current re-inject-the-data
    runtime-status capsule, and it lets the summary be lossier/cheaper safely.
 4. **Input bounding.** A `read-guard`-style truncation of oversized tool reads gated on live usage, so
-   the shadow rarely grows large in the first place.
+   the shadow rarely grows large in the first place. **ABI note (investigated 2026-07-11):** pi's
+   `read-guard` uses a *post-execution* `tool_result` hook; Motoko's ABI has none, and builtins
+   (`ReadFile`) bypass the pre-execution tool hooks entirely (`tool_phase.ail:318` builtin-first;
+   `ExtensionHooks` at `motoko-ext-abi/types.ail:147` has only `on_tool_policy`/`on_tool_handle`). So the
+   pi port is **not** extension-only. Do it ABI-natively by capping oversized single tool-results inside
+   `compaction_structural`'s existing `on_pre_step` elision (which already trims tool-result content but
+   keeps the last N verbatim); a faithful in-turn hook is a separate ABI change (004/ADR-001 D9). See the
+   plan's WS4.
 
 **Separate ADR-level fork (out of scope here):** adopt pi's *persistent* model (summary replaces
 history) and delete re-derivation outright. 3 of 4 surveyed agents chose persistent; whether doc:52's
