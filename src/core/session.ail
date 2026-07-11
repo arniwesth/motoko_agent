@@ -34,6 +34,7 @@ import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
+import std/fs (writeFileResult)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
 import std/trace as Trace
@@ -612,6 +613,42 @@ func c2_initial_state_with_counts(history: [Message], provider: StepProvider, pr
 
 func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState {
   c2_initial_state_with_counts(history, provider, zero_runtime_status_counts())
+}
+
+-- Serialize the exact [Message] payload a provider rejected, so a
+-- non-retryable ProtocolError (e.g. hy3:free/Novita "invalid request error")
+-- can be inspected/replayed offline. Off by default; enabled by setting
+-- MOTOKO_CAPTURE_FAILED_PAYLOAD (writes .motoko/failing_payload.json). Useful
+-- for diagnosing the intermittent Novita rejections during hy3:free runs.
+func dbg_toolcall_json(c: ToolCall) -> Json {
+  jo([kv("id", js(c.id)), kv("name", js(c.name)), kv("arguments", js(c.arguments))])
+}
+
+func dbg_toolcalls_json(cs: [ToolCall]) -> [Json] {
+  match cs { [] => [], c :: rest => dbg_toolcall_json(c) :: dbg_toolcalls_json(rest) }
+}
+
+func dbg_message_json(m: Message) -> Json {
+  jo([
+    kv("role", js(m.role)),
+    kv("content", js(m.content)),
+    kv("tool_calls", ja(dbg_toolcalls_json(m.tool_calls))),
+    kv("tool_call_id", js(m.tool_call_id))
+  ])
+}
+
+func dbg_messages_json(msgs: [Message]) -> [Json] {
+  match msgs { [] => [], m :: rest => dbg_message_json(m) :: dbg_messages_json(rest) }
+}
+
+func capture_failing_payload(e: AIError, msgs: [Message]) -> () ! {FS} {
+  let payload = encode(jo([
+    kv("error_code", js(e.code)),
+    kv("error_message", js(e.message)),
+    kv("retryable", jb(e.retryable)),
+    kv("messages", ja(dbg_messages_json(msgs)))
+  ]));
+  match writeFileResult(".motoko/failing_payload.json", payload) { Ok(_) => (), Err(_) => () }
 }
 
 func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
@@ -1695,7 +1732,8 @@ func c2_loop(
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
                   let _ = ledger_emit(session_id, end_event);
-                  if should_retry_stream_error(policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
+                  let _ = if not e.retryable && getEnvOr("MOTOKO_CAPTURE_FAILED_PAYLOAD", "") != "" then capture_failing_payload(e, compacted_msgs) else ();
+                  if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
                     let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
                     let _ = ledger_emit(session_id, retry_event);
                     let next_state: C2LoopState = {
