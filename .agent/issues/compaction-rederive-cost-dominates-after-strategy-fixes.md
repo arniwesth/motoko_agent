@@ -1,8 +1,11 @@
 # Ephemeral re-derivation is now the dominant compaction cost (post strategy-fix live datapoint)
 
 ## Status
-open — documented tradeoff, not yet actioned (Consequence 1 of
-[`ephemeral-compaction-and-ai-noop-thrash.md`](ephemeral-compaction-and-ai-noop-thrash.md))
+open — source-grounded against prior art (2026-07-11); plan drafted
+(`../projects/006_compactor_strategy/PLAN-rederivation-context-strategy.md`). Residual of Consequence 1
+of [`ephemeral-compaction-and-ai-noop-thrash.md`](ephemeral-compaction-and-ai-noop-thrash.md), which the
+already-scoped [`PLAN-compactor-strategy.md`](../projects/006_compactor_strategy/PLAN-compactor-strategy.md)
+explicitly excludes.
 
 ## Branch
 arniwesth/mot-38-progress-contract-finalize-guard-extension
@@ -79,17 +82,82 @@ under it, guards correctly silent. This is the healthy counterpart to
    scratch every step. This follows directly from the documented "session log is unchanged"
    decision and is **not** fixable without revisiting that decision.
 
-## Possible directions (none in scope without a decision)
-- **Memoize the ephemeral compaction** across steps: cache the summary of the stable prefix keyed
-  by a digest of the turns it covers, so an unchanged prefix isn't re-summarized every step. This
-  keeps the persisted log unchanged (audit/replay intact) while removing the redundant AI calls —
-  it is a *cache*, not persistence. Likely the highest-leverage option.
-- **Rate-limit / relief-guard** consecutive AI passes (already contemplated in the prior issue's
-  section 2) so the compactor doesn't pay for a full re-summary every single step once the prefix
-  hasn't materially changed.
-- **Revisit retained-history growth** as a separate decision (bounded working set + seed replay)
-  only if long-session cost/rework becomes a real constraint — this overturns the "session log
-  unchanged" tradeoff and must be argued on its own merits, not slipped in here.
+## Prior art — how other agents avoid this (read from source, 2026-07-11)
+
+Surveyed Claude Code / Codex CLI / OpenCode / Amp (secondary sources) and **read the source verbatim**
+for `little-coder` (`itayinbarr/little-coder`) + its engine `pi` (`earendil-works/pi`,
+`@earendil-works/pi-coding-agent`). little-coder is the load-bearing datapoint: it is a small-model-first
+harness whose **primary tuning target is Qwen3.6-35B-A3B — the exact model this issue's runs use.**
+
+**The field never hits this cost, because compaction is a rare, persistent, incremental event — not a
+per-step transform.** Verbatim from `pi/packages/coding-agent/src/core/compaction/compaction.ts`:
+- **Trigger on real usage.** `shouldCompact = contextTokens > contextWindow - reserveTokens` (`:209`,
+  `reserveTokens` 16384). `contextTokens` (`estimateContextTokens`, `:176`) is the **last assistant
+  message's actual provider `usage`** plus an estimate of only the *trailing* messages — ground truth,
+  not a from-scratch calibrated estimate of a growing shadow. After a persistent compaction it drops and
+  *stays* down, so compaction fires seldom.
+- **Incremental / memoized by boundary.** `prepareCompaction` (`:633`) sets
+  `previousSummary = prevCompaction.summary` and `boundaryStart = prevCompaction.firstKeptEntryId`, so
+  only messages **since the last compaction** are summarized, folded into the prior summary via
+  `UPDATE_SUMMARIZATION_PROMPT` (`:474`). Bounded delta input per compaction — memoization via
+  persistence + a boundary id, not content-addressed chunks.
+- **Big verbatim tail.** `findCutPoint` (`:377`) keeps ~`keepRecentTokens` (20000) verbatim; cuts only
+  at valid points (never a `toolResult`).
+- **Structured summary schema as a fidelity contract** (`:441`): Goal / Constraints / Progress
+  (Done/In-Progress/Blocked) / Key Decisions / Next Steps / Critical Context, "preserve exact file
+  paths, function names, error messages". Plus a **separate cumulative file-op channel** appended to
+  every summary (`readFiles`/`modifiedFiles`, `:812`) — kept *out* of the lossy prose.
+- **Cancellable summarizer.** `signal?: AbortSignal` threaded through `generateSummary` (`:546`) — the
+  reference has exactly the per-call timeout Motoko's `ai_step` lacks (ties to
+  `compaction-summarizer-hang-and-degrade.md`).
+
+little-coder layers *around* that engine (all verbatim-read):
+- `context-watchdog/index.ts` — fires `ctx.compact()` on `turn_start` **only when live
+  `getContextUsage()` ≥ 80%** with an in-flight `compacting` lock; `ctx.compact()` is persistent
+  ("summarizes, then reconnects the agent"), resumed via a `RESUME_MESSAGE`.
+- `read-guard/index.ts` — replaces a `read` **tool_result** with its first `HEAD_LINES` (30) + a
+  "search instead (grep/offset-limit)" directive **only when `currentTokens + est > contextWindow`**
+  (`est = ceil(chars/3.5)`); keeps oversized files out of context at the source.
+- `evidence/index.ts` + `evidence-compact/index.ts` — a model-controlled durable store
+  (`EvidenceAdd/Get/List`, 1 KB snippet cap) held in **extension-state, outside the message array**, so
+  it survives compaction automatically; after `session_compact` the model gets only a **pointer** back
+  (`N entries … via EvidenceList/EvidenceGet`), not the payload.
+
+**Corrections to earlier framing in this file:** the field is *persistent*, and it *does* memoize —
+just via persistence + a boundary pointer + incremental `previousSummary` merge, not the
+"digest of the stable prefix" chunk cache this note first floated. Motoko's existing digest cache
+(`compaction_ai.ail:315` `cached_summary`) misses every step precisely because it keys on the whole
+*growing* old-span; pi keys on a *fixed* boundary and folds only the delta.
+
+## Recommended direction (within the ephemeral model — no persistence change)
+
+Port pi's cost profile into the ephemeral model by caching the rolling summary + boundary in the
+cross-step **artifacts** channel (audit log in `st.msgs` untouched — `session.ail:1722`). Sequenced by
+leverage:
+
+1. **Trigger on real usage, not the growing shadow (highest leverage, cheapest).** Gate the AI pass on
+   *actual* current context usage crossing a threshold with an in-flight guard, instead of
+   `pct < threshold` against the ephemeral shadow that is *always* over threshold
+   (`compaction_ai.ail:361`; the rate-limit at `:362` is additionally bypassed at
+   `pct ≥ hard_override_pct`, which is why it fired every step at 638%). Removes most re-derivations and
+   shrinks the summarizer-hang surface — independent of the engine choice.
+2. **Cached incremental fold + big verbatim tail (engine).** Cache `{summary, boundary}` in artifacts;
+   each pass folds prior summary + only the turns past the boundary (pi's `previousSummary` merge,
+   moved to ext-state); raise `keep_recent` to a **token budget** (≈20k), not 6–10 messages. Adopt the
+   structured summary schema + a cumulative file-op line so lossy summaries stay safe. *(This is the
+   incremental-fold "Option A"; content-addressed chunk memoization is the fallback if merge-drift
+   degrades quality.)*
+3. **Durability layer.** A model-controlled evidence store (Motoko's `scratchpad` ≈ this) surfaced
+   after compaction with a **pointer, not payload** — cheaper than the current re-inject-the-data
+   runtime-status capsule, and it lets the summary be lossier/cheaper safely.
+4. **Input bounding.** A `read-guard`-style truncation of oversized tool reads gated on live usage, so
+   the shadow rarely grows large in the first place.
+
+**Separate ADR-level fork (out of scope here):** adopt pi's *persistent* model (summary replaces
+history) and delete re-derivation outright. 3 of 4 surveyed agents chose persistent; whether doc:52's
+audit/replay guarantee is load-bearing enough to keep is its own decision, not this note's to make.
+
+Plan: `../projects/006_compactor_strategy/PLAN-rederivation-context-strategy.md`.
 
 ## Notes
 - This note is deliberately separate from `ephemeral-compaction-and-ai-noop-thrash.md` (whose two
