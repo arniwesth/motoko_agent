@@ -77,7 +77,7 @@ compaction_dst:
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
 	MOTOKO_MODELS_FILE=scripts/fixtures/qwen36-small-model-catalog.json \
 	  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
-	  scripts/long_qwen_compaction_dst.ail < /dev/null
+	  scripts/dst/long_qwen_compaction_dst.ail < /dev/null
 
 conformance:
 	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/invariants.ail
