@@ -67,9 +67,13 @@ smoke_parity:
 	fi'
 
 phase_c_l1: compaction_dst
-	ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
+	 ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
 	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
-	ailang run --caps IO,Env,Clock,FS,Trace --entry main scripts/dst/phase_c2_wiring_scenarios.ail
+	 ailang run --caps IO,Env,Clock,FS,Trace --entry main scripts/dst/phase_c2_wiring_scenarios.ail
+
+.PHONY: dst
+dst:
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 smoke_parity dst_l2
 
 compaction_dst:
 	ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail
