@@ -26,6 +26,26 @@ runtime_status.*, conformance.*, and harness.* IDs stay unchanged.
 No scenario body, invariant, threshold, policy, provider payload, extension behavior, conformance
 kit source, or ABI-lockstep version changes are in scope.
 
+## Blast radius
+
+- **Files moved:** the ten Makefile-backed gate entrypoints move from `scripts/` to
+  `scripts/dst/`; `src/core/test/dst_harness.ail` is added. The Makefile updates those paths and
+  adds `dst`; the GitHub workflow remains target-only and does not gain script paths.
+- **Scenario output:** all migrated in-repo `Scenario` failures gain `seed=fixed`; bare IDs become
+  the dotted IDs in the manifest below. Pass lines, scenario order, pass counts, invariants,
+  traces, scripted inputs, and provider wire payloads remain unchanged. Direct catalog/approval
+  probes and package-owned conformance output retain their existing reporter shape.
+- **Execution:** the same deterministic commands, capability sets, AI stubs, model-catalog
+  fixture, `/dev/null` input, parity captures, and Layer-2 Bun test continue to run. `make dst`
+  adds one convenience entrypoint for the existing five Track 1 gate targets; it adds no new
+  scenario execution.
+- **CI and rollback:** Track 1's required target names remain stable, so each one-file migration
+  commit is independently verifiable and rollback is a path/module/Makefile revert. The only
+  expected CI-visible changes are renamed failure IDs and the shared fixed-seed field.
+- **Unchanged surfaces:** no production modules, `smoke_v2_*` files, live-provider targets,
+  advisory Z3 scope, Layer-2 test code, `packages/motoko_ext_conformance`, or ABI-lockstep
+  versioning are modified.
+
 ## Scope and invariants
 
 In scope:
