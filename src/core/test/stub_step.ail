@@ -240,6 +240,13 @@ export pure func tool_step(tool: string, args_json: string, step_id: string) -> 
   }
 }
 
+-- Like tool_step but with a caller-chosen finish_reason. Exercises providers
+-- (e.g. hy3:free/Novita) that return tool_calls with finish_reason != "tool_calls";
+-- the loop must still run the tools rather than dropping them and finalizing.
+export pure func tool_step_finish(tool: string, args_json: string, step_id: string, finish: string) -> ScriptedStep {
+  { tool_step(tool, args_json, step_id) | finish_reason: finish }
+}
+
 export pure func token_step(prose: string, input_tok: int, output_tok: int) -> ScriptedStep {
   {
     prose: prose,
