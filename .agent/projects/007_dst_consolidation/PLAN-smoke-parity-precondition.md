@@ -11,6 +11,28 @@ It does not edit `.github/workflows/verify-extensions.yml`, enable a required ch
 the Makefile parity contract, add tests, or alter production/DST/conformance behavior. No new
 ADR is required; the governing decisions are ADR-001 and the DST CI-gates plan.
 
+## TL;DR
+
+Make the parity runner pass `--ai-stub` only to its eight AI-capable runs, remove its stale
+network-allow flags, and seed five empty full-loop fixtures with one stable non-empty system
+message. Keep the existing scripted-port provider, event assertions, output layout, and
+two-capture `diff -r` contract. Track 1 remains blocked until the repaired target is green.
+
+## Blast radius
+
+- **Changed:** `scripts/phase_a_event_parity.sh` and five existing parity fixtures:
+  cost-budget, compaction, pending, DP7, and Phase-A tool parity. The compaction assertion's
+  expected provider message count is re-grounded from 13 to 14 because of the pinned seed.
+- **Execution:** eight full-loop entries run with local `--ai-stub` support and no network-allow
+  flags; two unit entries and the IO-only tier entry receive no AI stub. The default target
+  still makes two fresh captures: 11 logical entries per capture, 22 executions total.
+- **Unchanged:** `Makefile`, workflow wiring, `require_system_prompt`, sealing/compaction core,
+  scripted-port helpers, already-seeded fixtures, DST scenarios, conformance behavior, and
+  production code. No provider credentials, live model, or live network is introduced.
+- **Review risk:** the pinned system message contributes to compaction sizing, so all five
+  compaction outcomes and the deterministic capture assertions must be revalidated before
+  handoff.
+
 ## Ground truth and reproduction
 
 The checkout is `arniwesth/mot-41-dts-consolidation` at `765b094`. The only commits after
