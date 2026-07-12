@@ -2,6 +2,7 @@
 
 Date: 2026-07-05
 Status: Proposed
+As-built: the implemented DST framework is documented in `design_docs/implemented/motoko_agent/m-motoko-dst-framework.md`
 Pinned toolchain: AILANG **v0.26.0** (commit `3b52a24`); `ailang.lock` → `ailang_version: "v0.26.0"`
 
 Relates to:

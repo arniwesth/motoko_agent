@@ -1,5 +1,7 @@
 # ADR-001: A phase-oriented core designed for Deterministic Simulation Testing
 
+As-built: the implemented DST framework is documented in `design_docs/implemented/motoko_agent/m-motoko-dst-framework.md`
+
 Date: 2026-07-02; revised 2026-07-03 after three independent review passes (see Review
 Comments and the Author Response & Disposition log at the end); amended same day by **D9**
 (operator decision: compaction policy is extension-resident — compactor chain over a core
