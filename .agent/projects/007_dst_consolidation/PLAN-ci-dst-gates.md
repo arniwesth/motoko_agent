@@ -1,8 +1,9 @@
 # Plan: wire deterministic DST gates as blocking PR checks
 
-Date: 2026-07-12  
-Status: proposed; operator-confirmed Track 1 scope retained  
-Grounded HEAD: `83e0262`
+Date: 2026-07-12
+Status: proposed; implementation-ready after WI-0; operator-confirmed Track 1 scope retained
+Grounded source HEAD: `83e0262`
+Review changes are plan-only.
 
 This plan changes GitHub Actions wiring and adds the one missing Make target for the
 Layer-2 Bun test. It does not change a DST scenario, invariant, conformance fixture, or
@@ -74,6 +75,9 @@ that for `smoke_parity`:
 
 - `make smoke_parity` exits 1 after 4.063s because the parity runner invokes AI-capable
   programs without an `--ai` model in this environment.
+- The delegated parity runner requests full `Net,AI,...` capabilities and supplies neither
+  `--ai` nor `--ai-stub` (`scripts/phase_a_event_parity.sh:18,69-81`), so any remediation
+  must preserve scripted, offline execution rather than add a real provider or secret.
 - A read-only temporary substitution of `--ai-stub` reaches the actual replay and exits 1
   on `SystemPromptEmpty`; the current fixtures pass an empty system prefix while
   `src/core/phase_vocab.ail:145-148` requires one.
@@ -92,31 +96,39 @@ get a green rollout.
 Before enabling the required CI check, run the exact current Make target after the normal
 hydration sequence and capture a successful result for `make smoke_parity`. Record the
 reason for any fix in its owning work item. Do not alter a scenario or invariant in this
-Track 1 plan.
+Track 1 plan. Any fix must remain deterministic and network-free; do not make the target
+green by adding live-provider credentials, a real `--ai` model, or a `live_*` target.
 
-The other blocking gates are green at HEAD, so this is a narrow readiness check rather than
-a reason to redesign the gate set.
+The other existing gates and the underlying Layer-2 command are green at source HEAD, so
+this is a narrow readiness check rather than a reason to redesign the gate set.
 
 ### WI-1 — Keep hydration and pin validation behind Make
 
 Files: `Makefile`, `.github/workflows/verify-extensions.yml`.
 
 Preserve the existing AILANG floor/install-pin sanity check, but move its shell logic into
-the existing `sync_packages` recipe before package sync. The recipe should continue to:
+the existing `sync_packages` recipe before package sync, guarded by an explicit `CI=1`
+mode. This keeps ordinary local `make build` callers from acquiring a new installer-pin
+precondition. Use the Make variable `$(CI)` for this guard because the workflow passes
+`CI=1` as a command-line Make variable. The recipe should:
 
-1. compare the version parsed from `ailang.toml` with the pinned installer ref;
-2. run the package synchronization; and
-3. run root `ailang lock`.
+1. when `CI=1`, compare the version parsed from `ailang.toml` with the pinned installer ref;
+2. always run the package synchronization; and
+3. always run root `ailang lock`.
 
 Then replace the workflow's direct sync step and separate `ailang lock` step with:
 
 ```yaml
 - name: Hydrate extension packages
-  run: make sync_packages
+  run: make CI=1 sync_packages
 ```
 
+Delete the workflow-local `script_ref` comparison block as part of this move; leaving it
+behind would retain a direct `scripts/install-prerequisites.sh` path and duplicate the
+validation.
+
 This preserves the dependency-hydration barrier while ensuring the workflow does not invoke
-a script path. Keep `make sync_packages` before `make check_core` and before all DST gates.
+a script path. Keep `make CI=1 sync_packages` before `make check_core` and before all DST gates.
 The later `conformance` registry probe remains the execution-level proof that generated
 registry imports resolve; a successful lock alone is not treated as sufficient.
 
@@ -167,7 +179,7 @@ new post-hydration gate envelope is small and deterministic. Keep the workflow's
 trigger unchanged.
 
 After this edit, the workflow file must contain no direct script-path invocation. In
-particular, `sync-extension-packages.sh` is reached only through `make sync_packages`, and
+particular, `sync-extension-packages.sh` is reached only through `make CI=1 sync_packages`, and
 the new DST steps mention Make targets only.
 
 ### WI-4 — Add the independent Layer-2 job
@@ -213,7 +225,7 @@ Measured locally on 2026-07-12 with AILANG v0.26.0 and Bun 1.3.14:
 | `make verify_core` | pass; advisory | 7.831s |
 | `make test_core` | pass; not in floor | 3.452s |
 | `make test_integration` | pass; not in floor | 1.725s |
-| `compaction_ai/_smoke.ail` with `--ai-stub` | pass; local probe only | 0.377s |
+| `AILANG_RELAX_MODULES=1 ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream --ai-stub --entry main packages/motoko-ext-compaction-ai/_smoke.ail` | pass; local probe only | 0.377s |
 | `make smoke_parity` | red at current HEAD | 4.063s to failure |
 
 The measured successful blocking subset is 7.511s locally (combined AILANG DST group plus
@@ -258,4 +270,3 @@ source coupling is introduced.
 Out of scope: moving or consolidating scripts, adding a `make dst` umbrella (Track 2),
 retiring `smoke_v2_*`, fixing the Jest-under-Bun npm script, changing parity fixtures,
 changing conformance ABI behavior, adding live-provider checks, or adding new tests.
-
