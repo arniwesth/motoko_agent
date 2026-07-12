@@ -93,14 +93,14 @@ func check_decide_pressure_calls_model() -> CheckResult {
   }
 }
 
-func run_all(results: [CheckResult], failed: int) -> int ! {IO} {
+func run_checks(results: [CheckResult], failed: int) -> int ! {IO} {
   match results {
     [] => failed,
     r :: rest => {
-      if r.ok then run_all(rest, failed)
+      if r.ok then run_checks(rest, failed)
       else {
         let _ = println("phase_f_pipeline_wiring FAIL ${r.name}: ${r.detail}");
-        run_all(rest, failed + 1)
+        run_checks(rest, failed + 1)
       }
     }
   }
@@ -111,7 +111,7 @@ export func main() -> () ! {IO} {
     check_project_non_failing_prep(),
     check_decide_pressure_calls_model()
   ];
-  let failed = run_all(results, 0);
+  let failed = run_checks(results, 0);
   if failed == 0 then println("phase_f_pipeline_wiring PASS count=${show(List.length(results))}")
   else exit(1)
 }
