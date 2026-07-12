@@ -1810,7 +1810,15 @@ func c2_loop(
                       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                     },
                     NoIntercept => {
-                      if result.finish_reason == "tool_calls" then {
+                      -- Execute tool calls whenever the model emitted any, not
+                      -- only when finish_reason=="tool_calls". Some providers
+                      -- (e.g. hy3:free/Novita) return tool_calls with a
+                      -- different finish_reason; gating on the string alone
+                      -- drops the call and runs the finalize/guard path, which
+                      -- injects a nudge after an unanswered tool_call and ships
+                      -- a malformed [assistant(tool_calls) -> user] payload the
+                      -- provider then rejects (400 invalid_request_error).
+                      if result.finish_reason == "tool_calls" || n_calls > 0 then {
                         let next_state: C2LoopState = {
                           msgs: msgs_with_assistant,
 	                          step_idx: step_idx + 1,
