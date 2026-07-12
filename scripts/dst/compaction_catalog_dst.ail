@@ -1,13 +1,13 @@
-module scripts/compaction_catalog_dst
+module scripts/dst/compaction_catalog_dst
 
 import std/io (println, exit)
 import src/core/context_usage (catalog_context_limit_for)
 
 export func main() -> () ! {IO, Env, FS} {
   let n = catalog_context_limit_for("ollama/qwen3.6:35b-a3b-mxfp8");
-  if n == 262144 then println("scenario=catalog_limit_qwen ok")
+  if n == 262144 then println("scenario=compaction.catalog_limit_qwen ok")
   else {
-    let _ = println("scenario=catalog_limit_qwen invariant=qwen maps to 262144 actual=${show(n)}");
+    let _ = println("scenario=compaction.catalog_limit_qwen invariant=qwen maps to 262144 actual=${show(n)}");
     let _ = println("compaction_catalog_dst FAIL");
     exit(1)
   }
