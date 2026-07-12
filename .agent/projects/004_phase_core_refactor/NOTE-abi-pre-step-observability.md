@@ -1,6 +1,7 @@
 # ABI note: observable pre-step pass-through decisions
 
-**Status:** Proposed
+**Status:** Implemented 2026-07-12 (rollout `e90ded1`; live acceptance and scope partition recorded
+in `NOTE-abi-pre-step-observability-closeout.md`)
 **Date:** 2026-07-11
 **Governed by:** `ADR-001-phase-oriented-core.md` D9
 **Trigger:** A 100-step qwen36 stress run completed with 64 structural compactions and zero observable
