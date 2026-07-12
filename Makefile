@@ -58,11 +58,11 @@ smoke_no_delegated_storm:
 smoke_parity:
 	@bash -euo pipefail -c '\
 	if [ -n "$${PARITY_BASELINE:-}" ]; then \
-		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_after; \
+		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_after; \
 		diff -r "$$PARITY_BASELINE" /tmp/phase_a_parity_after; \
 	else \
-		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_a; \
-		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_b; \
+		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_a; \
+		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_b; \
 		diff -r /tmp/phase_a_parity_a /tmp/phase_a_parity_b; \
 	fi'
 
