@@ -3,7 +3,7 @@
 -- Phase C2 positive wiring scenario harness. WI-C9 establishes the in-memory
 -- DecisionRecord instrument; WI-C11 adds live-cycle assertions that consume it.
 
-module scripts/phase_c2_wiring_scenarios
+module scripts/dst/phase_c2_wiring_scenarios
 
 import std/io (println, exit)
 import std/list (length)
@@ -31,6 +31,7 @@ import src/core/phase_vocab (
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
 import src/core/test/stub_step (Scripted, ScriptedStep, prose_step, tool_step, tool_step_finish, empty_rt, deny_all_rt)
+import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/types (Msg)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -56,55 +57,6 @@ import pkg/sunholo/motoko_ext_abi/types (
 )
 import pkg/sunholo/motoko_ext_empty_stop_guard/empty_stop_guard (decide_with_budget)
 import pkg/sunholo/motoko_ext_progress_contract_guard/progress_contract_guard (decide_with_budget as pc_decide_with_budget)
-
-type ScenarioFailure = {
-  failed_invariant: string,
-  trace: [string]
-}
-
-type Scenario = {
-  id: string,
-  run: () -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace}
-}
-
-func print_trace(lines: [string]) -> () ! {IO} {
-  match lines {
-    [] => (),
-    line :: rest => {
-      let _ = println("trace ${line}");
-      print_trace(rest)
-    }
-  }
-}
-
-func run_one(s: Scenario) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  match s.run() {
-    Ok(_) => {
-      println("scenario=${s.id} ok");
-      true
-    },
-    Err(f) => {
-      let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
-      let _ = print_trace(f.trace);
-      false
-    }
-  }
-}
-
-func run_all(scenarios: [Scenario], failed: int) -> int ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  match scenarios {
-    [] => failed,
-    s :: rest => {
-      let ok = run_one(s);
-      run_all(rest, if ok then failed else failed + 1)
-    }
-  }
-}
-
-func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
-  if ok then Ok(())
-  else Err({ failed_invariant: invariant_name, trace: trace })
-}
 
 func msg(role: string, content: string) -> Message {
   { role: role, content: content, tool_calls: [], tool_call_id: "" }
@@ -183,7 +135,7 @@ func scenario_traced_prose_decisions() -> Result[(), ScenarioFailure] ! {AI, FS,
 }
 
 func traced_prose_decisions_scenario() -> Scenario {
-  { id: "traced_prose_decisions", run: scenario_traced_prose_decisions }
+  { id: "phase_c.c2.traced_prose_decisions", seed: "fixed", run: scenario_traced_prose_decisions }
 }
 
 func scenario_traced_tool_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -195,7 +147,7 @@ func scenario_traced_tool_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, 
 }
 
 func traced_tool_decisions_scenario() -> Scenario {
-  { id: "traced_tool_decisions", run: scenario_traced_tool_decisions }
+  { id: "phase_c.c2.traced_tool_decisions", seed: "fixed", run: scenario_traced_tool_decisions }
 }
 
 -- Regression: a step that emits a tool_call but reports finish_reason="stop"
@@ -211,7 +163,7 @@ func scenario_tool_call_with_stop_finish_still_runs() -> Result[(), ScenarioFail
 }
 
 func tool_call_with_stop_finish_still_runs_scenario() -> Scenario {
-  { id: "tool_call_with_stop_finish_still_runs", run: scenario_tool_call_with_stop_finish_still_runs }
+  { id: "phase_c.c2.tool_call_with_stop_finish_still_runs", seed: "fixed", run: scenario_tool_call_with_stop_finish_still_runs }
 }
 
 func scenario_traced_persist_nudge_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -238,7 +190,7 @@ func scenario_traced_persist_nudge_decisions() -> Result[(), ScenarioFailure] ! 
 }
 
 func traced_persist_nudge_decisions_scenario() -> Scenario {
-  { id: "traced_persist_nudge_decisions", run: scenario_traced_persist_nudge_decisions }
+  { id: "phase_c.c2.traced_persist_nudge_decisions", seed: "fixed", run: scenario_traced_persist_nudge_decisions }
 }
 
 func no_describe() -> [ToolSchema] { [] }
@@ -432,7 +384,7 @@ func scenario_traced_approval_default_deny() -> Result[(), ScenarioFailure] ! {A
 }
 
 func traced_approval_default_deny_scenario() -> Scenario {
-  { id: "traced_approval_default_deny", run: scenario_traced_approval_default_deny }
+  { id: "phase_c.c2.traced_approval_default_deny", seed: "fixed", run: scenario_traced_approval_default_deny }
 }
 
 func has_stage_passed(records: [LedgerRecord]) -> bool {
@@ -520,7 +472,7 @@ func scenario_traced_stage_records() -> Result[(), ScenarioFailure] ! {AI, FS, P
 }
 
 func traced_stage_records_scenario() -> Scenario {
-  { id: "traced_stage_records", run: scenario_traced_stage_records }
+  { id: "phase_c.c2.traced_stage_records", seed: "fixed", run: scenario_traced_stage_records }
 }
 
 func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -538,7 +490,7 @@ func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFa
 }
 
 func compactor_chain_order_is_registry_order_scenario() -> Scenario {
-  { id: "compactor_chain_order_is_registry_order", run: scenario_compactor_chain_order_is_registry_order }
+  { id: "phase_c.c2.compactor_chain_order_is_registry_order", seed: "fixed", run: scenario_compactor_chain_order_is_registry_order }
 }
 
 func has_empty_stop_finalize(records: [LedgerRecord]) -> bool {
@@ -572,7 +524,7 @@ func scenario_empty_stop_guard_loops_within_budget() -> Result[(), ScenarioFailu
 }
 
 func empty_stop_guard_loops_within_budget_scenario() -> Scenario {
-  { id: "empty_stop_guard_loops_within_budget", run: scenario_empty_stop_guard_loops_within_budget }
+  { id: "phase_c.c2.empty_stop_guard_loops_within_budget", seed: "fixed", run: scenario_empty_stop_guard_loops_within_budget }
 }
 
 func scenario_empty_stop_guard_budget_exhaustion_floors() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -589,7 +541,7 @@ func scenario_empty_stop_guard_budget_exhaustion_floors() -> Result[(), Scenario
 }
 
 func empty_stop_guard_budget_exhaustion_floors_scenario() -> Scenario {
-  { id: "empty_stop_guard_budget_exhaustion_floors", run: scenario_empty_stop_guard_budget_exhaustion_floors }
+  { id: "phase_c.c2.empty_stop_guard_budget_exhaustion_floors", seed: "fixed", run: scenario_empty_stop_guard_budget_exhaustion_floors }
 }
 
 func scenario_empty_stop_floor_without_guard() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -606,7 +558,7 @@ func scenario_empty_stop_floor_without_guard() -> Result[(), ScenarioFailure] ! 
 }
 
 func empty_stop_floor_without_guard_scenario() -> Scenario {
-  { id: "empty_stop_floor_without_guard", run: scenario_empty_stop_floor_without_guard }
+  { id: "phase_c.c2.empty_stop_floor_without_guard", seed: "fixed", run: scenario_empty_stop_floor_without_guard }
 }
 
 -- 1. Catches the latest live failure shape: a non-empty stop that self-reports
@@ -624,7 +576,7 @@ func scenario_progress_contract_catches_failure_shape() -> Result[(), ScenarioFa
 }
 
 func progress_contract_catches_failure_shape_scenario() -> Scenario {
-  { id: "progress_contract_catches_failure_shape", run: scenario_progress_contract_catches_failure_shape }
+  { id: "phase_c.c2.progress_contract_catches_failure_shape", seed: "fixed", run: scenario_progress_contract_catches_failure_shape }
 }
 
 -- 2. Budget exhaustion: the same self-contradictory candidate three times. Budget 2
@@ -643,7 +595,7 @@ func scenario_progress_contract_budget_exhaustion_finalizes() -> Result[(), Scen
 }
 
 func progress_contract_budget_exhaustion_finalizes_scenario() -> Scenario {
-  { id: "progress_contract_budget_exhaustion_finalizes", run: scenario_progress_contract_budget_exhaustion_finalizes }
+  { id: "phase_c.c2.progress_contract_budget_exhaustion_finalizes", seed: "fixed", run: scenario_progress_contract_budget_exhaustion_finalizes }
 }
 
 -- 3a. Blank candidate is not the progress guard's business: it returns NoDecision, so
@@ -662,7 +614,7 @@ func scenario_progress_contract_ignores_blank() -> Result[(), ScenarioFailure] !
 }
 
 func progress_contract_ignores_blank_scenario() -> Scenario {
-  { id: "progress_contract_ignores_blank", run: scenario_progress_contract_ignores_blank }
+  { id: "phase_c.c2.progress_contract_ignores_blank", seed: "fixed", run: scenario_progress_contract_ignores_blank }
 }
 
 -- 3b. Combined chain (empty_stop_guard before progress_contract_guard): a blank stop
@@ -676,7 +628,7 @@ func scenario_progress_contract_combined_chain_blank_owned_by_empty_stop() -> Re
 }
 
 func progress_contract_combined_chain_blank_owned_by_empty_stop_scenario() -> Scenario {
-  { id: "progress_contract_combined_chain_blank_owned_by_empty_stop", run: scenario_progress_contract_combined_chain_blank_owned_by_empty_stop }
+  { id: "phase_c.c2.progress_contract_combined_chain_blank_owned_by_empty_stop", seed: "fixed", run: scenario_progress_contract_combined_chain_blank_owned_by_empty_stop }
 }
 
 -- 4. Legitimate completion passes: an explicit "Reached 200/200" finalizes immediately.
@@ -691,7 +643,7 @@ func scenario_progress_contract_completion_passes() -> Result[(), ScenarioFailur
 }
 
 func progress_contract_completion_passes_scenario() -> Scenario {
-  { id: "progress_contract_completion_passes", run: scenario_progress_contract_completion_passes }
+  { id: "phase_c.c2.progress_contract_completion_passes", seed: "fixed", run: scenario_progress_contract_completion_passes }
 }
 
 -- 5. Allowed compaction stop passes: the task permits stopping on runtime compaction,
@@ -707,7 +659,7 @@ func scenario_progress_contract_allowed_compaction_passes() -> Result[(), Scenar
 }
 
 func progress_contract_allowed_compaction_passes_scenario() -> Scenario {
-  { id: "progress_contract_allowed_compaction_passes", run: scenario_progress_contract_allowed_compaction_passes }
+  { id: "phase_c.c2.progress_contract_allowed_compaction_passes", seed: "fixed", run: scenario_progress_contract_allowed_compaction_passes }
 }
 
 -- 6. No explicit progress contract: "continuing" in ordinary prose must not trigger.
@@ -722,7 +674,7 @@ func scenario_progress_contract_no_contract_passes() -> Result[(), ScenarioFailu
 }
 
 func progress_contract_no_contract_passes_scenario() -> Scenario {
-  { id: "progress_contract_no_contract_passes", run: scenario_progress_contract_no_contract_passes }
+  { id: "phase_c.c2.progress_contract_no_contract_passes", seed: "fixed", run: scenario_progress_contract_no_contract_passes }
 }
 
 func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -743,7 +695,7 @@ func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFai
 }
 
 func decision_record_append_name_round_trip_scenario() -> Scenario {
-  { id: "decision_record_append_name_round_trip", run: scenario_decision_record_append_name_round_trip }
+  { id: "phase_c.c2.decision_record_append_name_round_trip", seed: "fixed", run: scenario_decision_record_append_name_round_trip }
 }
 
 export func main() -> () ! {IO} {
