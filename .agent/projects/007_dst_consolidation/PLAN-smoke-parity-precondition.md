@@ -2,7 +2,8 @@
 
 Date: 2026-07-12  
 Status: proposed; precondition work outside Track 1  
-Grounded source HEAD: `e839114abde95f466e46447bc1f4ba965367b7fe`  
+Grounded checkout HEAD: `765b094a8f0ff8e5644165b36d7c66ea962a730b`
+Relevant source baseline: `e839114abde95f466e46447bc1f4ba965367b7fe` (unchanged at the grounded checkout)
 Toolchain observed at authoring: AILANG `v0.26.0`, Bun `1.3.14`
 
 This plan repairs only the existing parity runner and the existing parity fixture setup.
@@ -12,7 +13,9 @@ ADR is required; the governing decisions are ADR-001 and the DST CI-gates plan.
 
 ## Ground truth and reproduction
 
-The checkout is `arniwesth/mot-41-dts-consolidation` at `e839114`. After:
+The checkout is `arniwesth/mot-41-dts-consolidation` at `765b094`. The only commits after
+the reproduced source baseline add the handoff and this plan; the runner, fixtures, Makefile,
+and core files cited below are byte-identical to `e839114`. After:
 
 ```bash
 ./scripts/sync-extension-packages.sh
@@ -31,15 +34,16 @@ The required baseline reproduction was:
 make smoke_parity
 ```
 
-It failed in 3.238s locally. The runner checked and began
+It failed in 3.900s in the final current-HEAD review (the initial authoring run was 3.238s).
+The runner checked and began
 `smoke_v2_cost_budget_full_loop`, then printed AILANG's warning that `--caps AI` had no
 `--ai` model or `--ai-stub`; it reached the next full-loop fixture and exited before a
 successful parity capture/diff. The Make recipe returned nonzero (`make` status 2 in this
 shell).
 
 A read-only substitution of `--ai-stub` into both full-cap `ailang run` branches was then
-run with the source script supplied through process substitution. It failed in 3.268s and
-the captures contained:
+run with the source script supplied through process substitution. The final current-HEAD
+review failed in 3.616s (the initial authoring run was 3.268s), and the captures contained:
 
 ```text
 type=error source=system_prompt code=SystemPromptEmpty
@@ -88,12 +92,27 @@ in both the normal-stdin and `/dev/null` `ailang run` branches. This covers all 
 `FULL_CAPS` entries and makes the choice explicit at the runner boundary. Do not add a real
 `--ai` model, provider selection, credential lookup, or fallback behavior.
 
+The flag only satisfies AILANG's AI-capability setup. The fixture's actual model path remains
+the caller-supplied `Ported` provider from `run_v2_with_scripted_ports`; the AILANG stub is not
+used as a second source of model responses.
+
+The shell change should be equivalent to this shape, with the same `ai_args` expansion in
+both branches:
+
+```bash
+local -a ai_args=()
+case ",${caps}," in
+  *,AI,*) ai_args=(--ai-stub) ;;
+esac
+ailang run --caps "$caps" "${ai_args[@]}" --entry main "$file"
+```
+
 Remove the stale `--net-allow-http` and `--net-allow-localhost` flags from those runner
 invocations. None of the 11 fixtures performs a network operation, and no network permission
 is needed for the local scripted-port provider. Keep the `Net` effect name in `FULL_CAPS`
 because it is part of the existing full-loop effect row; capability declaration is not an
-invitation to contact a target. The unit-cap entries receive no `--ai-stub` flag and otherwise
-remain their existing unit-mode invocations.
+invitation to contact a target. The unit-cap entries receive no `--ai-stub` flag; they also
+run without the stale network-allow flags.
 
 Keep unchanged:
 
@@ -101,14 +120,16 @@ Keep unchanged:
 - `MOTOKO_SESSION_ID=phase-a-parity`;
 - duration and `make[N]` normalization;
 - all existing event/order assertions, including the ext-fixture, stream, and compaction-chain
-  checks;
+  checks; the compaction full-loop count assertion is retained with its expected count
+  re-grounded from 13 to 14 solely because the repaired fixture adds one pinned message;
 - the output directory layout, `PARITY_STRIP_TYPES` handling, and zero-event failure;
 - the `make smoke_parity` two-fresh-capture `diff -r` contract in `Makefile:44-53`.
 
 The `smoke_v2_compaction_full_loop` provider-count assertion must not be deleted. Because its
 12-tool history currently has 13 messages and the repair adds one pinned system message, the
 expected provider payload count should be re-grounded to 14 after the fixture edit. This is
-an explicit expected-wire-shape review item, not an incidental assertion relaxation.
+an explicit expected-wire-shape review item, not an incidental assertion relaxation; if the
+observed count is not 14, stop and investigate rather than broadening the matcher.
 
 ### 2. Seed only the five empty full-loop fixtures
 
@@ -169,10 +190,16 @@ Run from a hydrated checkout with `PARITY_BASELINE` unset.
    - no provider credential is required or read;
    - the five edited fixtures reach `Ported(scripted_ports_from_steps(...))`, while the
      remaining entries are direct/pure checks;
-   - run once with the usual provider credential variables unset and, where available, under
-     a network syscall monitor or network-disabled wrapper; require no `connect`, `sendto`,
-     `recvfrom`, provider endpoint, or credential access. A failure here is a stop condition,
-     not a reason to reintroduce a live provider.
+   - statically confirm that all eight full-loop fixtures use
+     `run_v2_with_scripted_ports`/`Ported(scripted_ports_from_steps(...))`, and that the three
+     unit/tier entries are direct or pure checks with no provider/network call path;
+   - run once with all provider credential variables unset and a deliberate invalid HTTP/HTTPS
+     proxy tripwire (for example, loopback port 9 with `NO_PROXY` empty); the parity target
+     must still pass. This proves the target does not depend on a provider or external network.
+     A network-syscall audit (`connect`, `sendto`, `recvfrom`) or network-disabled wrapper is
+     useful corroborating evidence when available, but is not a new required tool dependency.
+     If the static audit or tripwire run fails, stop and report it; do not reintroduce a live
+     provider.
 3. Re-run the existing AILANG gates:
 
    ```bash
@@ -197,14 +224,22 @@ Run from a hydrated checkout with `PARITY_BASELINE` unset.
    Require a zero exit status, two newly created capture directories, successful `diff -r`,
    and no `SystemPromptEmpty`, missing-AI-handler warning, provider error, or network error.
    Record the measured wall time from `end-start` and retain the final output status. The
-   final parity scenario count is 11 runner entries: 8 full-loop, 2 unit-cap, and 1 tier
-   entry; record any internal fixture pass counts separately if the implementation handoff
-   reports them.
+   final logical parity count is 11 runner entries per capture: 8 full-loop, 2 unit-cap, and
+   1 tier entry. The default `make smoke_parity` performs two fresh captures, so it executes
+   22 fixture entries in total; report both counts, plus any internal fixture pass counts if
+   the implementation handoff reports them.
 
 5. Inspect the fresh captures for the preserved event assertions, including non-zero system
    prefix fields on all provider calls, the updated compaction payload count, stream ordering,
    chain ordering/counts, and deterministic digests after normalization. Repeat the runner if
    either fresh capture differs.
+
+6. Perform a scope audit. The only implementation files permitted to differ are
+   `scripts/phase_a_event_parity.sh` and the five edited fixtures listed above. In particular,
+   `Makefile`, `src/core/session.ail`, `src/core/phase_vocab.ail`,
+   `src/core/test/scripted_ports.ail`, `src/core/test/stub_step.ail`, all already-seeded
+   parity fixtures, conformance/DST files, and
+   `.github/workflows/verify-extensions.yml` must remain unchanged.
 
 No new test file or test case is authorized. The existing smoke fixtures are repaired only so
 they supply the production-required system-prefix precondition.
@@ -212,8 +247,9 @@ they supply the production-required system-prefix precondition.
 ## Handoff and stop conditions
 
 The implementation handoff to Track 1 must report the exact authorized files changed, the
-`--ai-stub`/offline execution mode, the final 11-entry parity count, `make smoke_parity` wall
-time and status, the AILANG DST/conformance results, and confirmation that
+`--ai-stub`/offline execution mode, the final 11-entry logical count and 22-entry two-capture
+execution count, `make smoke_parity` wall time and status, the AILANG DST/conformance results,
+and confirmation that
 `.github/workflows/verify-extensions.yml` was not changed. Only then may Track 1 apply its
 existing `make CI=1 sync_packages`, DST-gate, advisory `verify_core`, and `dst_l2` workflow
 changes.
