@@ -421,7 +421,7 @@ and compare its count to the baseline table.
 ~~~make
 .PHONY: dst
 dst:
-        +$(MAKE) --keep-going compaction_dst conformance phase_c_l1 smoke_parity dst_l2
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 smoke_parity dst_l2
 ~~~
 
 Keep compaction_dst, conformance, and phase_c_l1 as stable component targets/compatibility
