@@ -12,8 +12,9 @@ implements this plan must write HANDOFF-write-dst-as-built-doc.md for the as-bui
 ## TL;DR
 
 Add src/core/test/dst_harness.ail with the one maximal-effect Scenario and ScenarioFailure
-records, the recursive runner, and the common failure reporter. Migrate the four full-row L1
-runners plus the IO-only compaction-policy runner to it, and let the conformance selftest reuse
+records, the recursive runner, and the common failure reporter. Migrate the four runner-bearing
+L1 scripts (three full-row and the pure/IO-only Phase-C L1 script) plus the IO-only
+compaction-policy runner to it, and let the conformance selftest reuse
 only the shared reporting adapter while retaining the package-owned conformance Scenario type and
 run_scenario semantics.
 
@@ -30,7 +31,8 @@ kit source, or ABI-lockstep version changes are in scope.
 
 - **Files moved:** the ten Makefile-backed gate entrypoints move from `scripts/` to
   `scripts/dst/`; `src/core/test/dst_harness.ail` is added. The Makefile updates those paths and
-  adds `dst`; the GitHub workflow remains target-only and does not gain script paths.
+  adds `dst`. `scripts/phase_f_pipeline_wiring.ail` receives only the unrelated helper rename
+  described below; the GitHub workflow remains target-only and does not gain script paths.
 - **Scenario output:** all migrated in-repo `Scenario` failures gain `seed=fixed`; bare IDs become
   the dotted IDs in the manifest below. Pass lines, scenario order, pass counts, invariants,
   traces, scripted inputs, and provider wire payloads remain unchanged. Direct catalog/approval
@@ -51,13 +53,18 @@ kit source, or ABI-lockstep version changes are in scope.
 In scope:
 
 - src/core/test/dst_harness.ail, beside stub_step.ail, scripted_ports.ail, and ext_fixture.ail.
-- The four full-row scenario runners: phase_c2_wiring_scenarios.ail,
-  long_qwen_compaction_dst.ail, runtime_status_tool_dst.ail, and phase_c_l1_scenarios.ail.
+- The four runner-bearing L1 scenario scripts: phase_c2_wiring_scenarios.ail,
+  long_qwen_compaction_dst.ail, runtime_status_tool_dst.ail, and phase_c_l1_scenarios.ail. The
+  first three use the maximal effect row; Phase-C L1's callbacks are pure/IO-only and are the
+  lower-capability case covered by the harness probe.
 - The IO-only compaction_policy_dst.ail, because it contains the same runner machinery and is
   part of the compaction_dst gate.
 - The gate-only entrypoints compaction_catalog_dst.ail, phase_c_approval_protocol.ail,
   conformance_selftest.ail, conformance_registry_probe.ail, and phase_a_event_parity.sh, for the
   scripts/dst/ layout.
+- A mechanical helper-name cleanup in the non-gate phase_f_pipeline_wiring.ail: rename its
+  unrelated CheckResult aggregator from run_all to run_checks so the required runner-deletion
+  audit is unambiguous. Preserve its two checks, output, and direct-run behavior.
 - Makefile path updates and the new dst umbrella.
 - Updating consumers of renamed output IDs found by the scenario= audit.
 
@@ -276,13 +283,25 @@ a probe, not a Makefile gate; it is not moved.
 Before changing any ID, run this audit over tracked source and documentation:
 
 ~~~bash
-rg -n 'scenario=' --glob '!**/.ailang/**' --glob '!node_modules/**' .
+rg --hidden -n 'scenario=' --glob '!.git/**' --glob '!**/.ailang/**' --glob '!node_modules/**' .
 ~~~
 
 Update only real consumers of the old IDs. At this HEAD there are no CI greps or docs parsers
 that consume the bare IDs; the output sites are the gate scripts and the package harness, whose
 four IDs are already dotted. The implementation must repeat the audit after every rename and must
 not mistake the old-to-new table in this plan for a live consumer.
+
+Run a separate path-consumer audit after each move:
+
+~~~bash
+rg --hidden -n --glob '!.git/**' --glob '!**/.ailang/**' --glob '!node_modules/**' \
+  'scripts/(phase_a_event_parity|compaction_(catalog|policy)_dst|conformance_(selftest|registry_probe)|long_qwen_compaction_dst|phase_c2_wiring_scenarios|phase_c_approval_protocol|phase_c_l1_scenarios|runtime_status_tool_dst)\.(ail|sh)' .
+~~~
+
+Update executable consumers and current operational instructions, especially the Makefile, in
+the same migration commit as each move. Classify old references in historical ADRs, completed
+handoffs, generated diagrams, and superseded plans instead of bulk-rewriting them; they document
+the pre-consolidation state. The Track 3 as-built document must use only the final paths.
 
 ## Re-established baseline
 
@@ -353,44 +372,49 @@ and compare its count to the baseline table.
 
 1. Harness foundation. Add src/core/test/dst_harness.ail, run its check and the effect-row probe.
    No existing gate path changes.
-2. Compaction policy runner. Move scripts/compaction_policy_dst.ail to scripts/dst/, import the
+2. Existing helper-name collision. In phase_f_pipeline_wiring.ail, rename only the local
+   CheckResult aggregator run_all and its recursive calls to run_checks. Run its existing
+   IO-only commands (`ailang check scripts/phase_f_pipeline_wiring.ail` and
+   `ailang run --caps IO --entry main scripts/phase_f_pipeline_wiring.ail`) and confirm the two
+   check results and PASS output are unchanged.
+3. Compaction policy runner. Move scripts/compaction_policy_dst.ail to scripts/dst/, import the
    shared types/runner/helper, remove its private Scenario, ScenarioFailure, print_trace, run_one,
    and run_all, add seed: "fixed" to each of its three records, and update the three IDs only if
    the final map says so (they are already dotted). Update the compaction_dst command and module
    declaration. Preserve --caps IO.
-3. Compaction catalog gate. Move compaction_catalog_dst.ail, update its module and Make path,
+4. Compaction catalog gate. Move compaction_catalog_dst.ail, update its module and Make path,
    rename the one reported ID to compaction.catalog_limit_qwen, and preserve --caps IO,Env,FS and
    its direct check.
-4. Runtime-status runner. Move runtime_status_tool_dst.ail, remove its private runner block,
+5. Runtime-status runner. Move runtime_status_tool_dst.ail, remove its private runner block,
    import the shared maximal-row harness, add seed: "fixed" to both records, preserve its two
    already-dotted IDs, and retain the broad caps, --ai-stub, and /dev/null input.
-5. Long-Qwen runner. Move long_qwen_compaction_dst.ail, remove its private runner block, import
+6. Long-Qwen runner. Move long_qwen_compaction_dst.ail, remove its private runner block, import
    the shared harness, add seed: "fixed" to all eight records, prefix only
    strict_provider_orphaned_toolcall, and preserve the fixture catalog environment, broad caps,
-   --ai-stub, input redirection, scenario order, and all six existing dotted IDs.
-6. Phase-C L1 runner. Move phase_c_l1_scenarios.ail, remove its exported local types and runner,
+   --ai-stub, input redirection, scenario order, and all seven existing dotted IDs.
+7. Phase-C L1 runner. Move phase_c_l1_scenarios.ail, remove its exported local types and runner,
    import the shared harness, add seed: "fixed" to all 15 records, and apply all 15 phase_c.l1.*
    IDs. Preserve the IO-only Make invocation and the pure scenario bodies.
-7. Approval protocol gate. Move phase_c_approval_protocol.ail, update its module and Make path,
+8. Approval protocol gate. Move phase_c_approval_protocol.ail, update its module and Make path,
    prefix all seven case IDs in its failure-report strings, and preserve the seven-case order and
    --caps IO invocation. This is a case-runner migration, not a new Scenario type.
-8. Phase-C2 runner. Move phase_c2_wiring_scenarios.ail, remove its duplicated runner, import the
+9. Phase-C2 runner. Move phase_c2_wiring_scenarios.ail, remove its duplicated runner, import the
    shared harness, add seed: "fixed" to all 18 records, and apply all 18 phase_c.c2.* IDs.
    Preserve its original caps (IO,Env,Clock,FS,Trace in Make), scripted provider setup, effectful
    scenario bodies, and order.
-9. Conformance selftest adapter. Move conformance_selftest.ail and update its Make path. Keep the
+10. Conformance selftest adapter. Move conformance_selftest.ail and update its Make path. Keep the
    package Scenario, ScenarioFailure, run_scenario, four constructors, hook fixtures,
    expected-failure matrix, and ABI version untouched. Import only the shared failure reporter/
    adapter; it reports seed=fixed for in-repo selftest failures and preserves the existing
    labels and 20 invocations. Its package scenario IDs are already dotted and must not be renamed.
-10. Conformance registry probe. Move conformance_registry_probe.ail and update its Make path/module.
+11. Conformance registry probe. Move conformance_registry_probe.ail and update its Make path/module.
     Do not alter registry order, package calls, or package scenario IDs. This is a gate-entrypoint
     move, not a conformance-kit consolidation.
-11. Parity gate runner. Move phase_a_event_parity.sh to scripts/dst/ and update only the
+12. Parity gate runner. Move phase_a_event_parity.sh to scripts/dst/ and update only the
     smoke_parity Make recipe's runner path. Keep every subordinate scripts/smoke_v2_* path,
     fixture, assertion, deterministic stub, capture normalization, and two-capture diff
     unchanged. This step must not reopen the deferred smoke audit.
-12. Umbrella target. Add make dst after all gate paths work. It must invoke the complete Track 1
+13. Umbrella target. Add make dst after all gate paths work. It must invoke the complete Track 1
     deterministic set in one recursive Make call so compaction_dst is de-duplicated through
     phase_c_l1:
 
@@ -463,7 +487,7 @@ After the final runner migration:
 
 ~~~bash
 rg -n 'func run_all|type ScenarioFailure|type Scenario|println\("scenario=' scripts src/core/test packages/motoko_ext_conformance
-rg -n 'func run_all' scripts
+rg -n '^func run_all' scripts
 rg -n 'ScenarioFailure|Scenario|run_all|run_one|print_trace' scripts/dst
 ~~~
 
