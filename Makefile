@@ -83,10 +83,10 @@ conformance:
 	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/invariants.ail
 	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/harness.ail
 	ailang check scripts/dst/conformance_selftest.ail
-	ailang check scripts/conformance_registry_probe.ail
+	ailang check scripts/dst/conformance_registry_probe.ail
 	ailang test packages/motoko_ext_conformance/invariants.ail
 	ailang run --caps IO,Env,FS --entry main scripts/dst/conformance_selftest.ail
-	ailang run --caps IO,Env,FS --entry main scripts/conformance_registry_probe.ail
+	ailang run --caps IO,Env,FS --entry main scripts/dst/conformance_registry_probe.ail
 
 # Type-check every AILANG core runtime module in src/core/, then
 # runtime-boot-probe every extension in the active profile's registry
