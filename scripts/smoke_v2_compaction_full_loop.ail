@@ -10,8 +10,8 @@
 --   1. Light history (~10% usage) → no elision, loop completes Ok.
 --   2. Moderate history (~75% usage, tier 1) → loop still completes Ok;
 --      compaction's elision is silent to the caller.
---   3. Extreme history (~96% usage, tier 3) → loop returns Err with
---      "compaction_exhausted" propagated from DP0 refusing the step.
+--   3. Extreme history (~96% raw usage) → structural elision caps the oversized
+--      tool result and the loop completes Ok.
 --
 -- Run:
 --   ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace \
@@ -51,10 +51,14 @@ func mk_tool(id: string, content: string) -> Message {
   { role: "tool", content: content, tool_calls: [], tool_call_id: id }
 }
 
+func parity_system_message() -> Message {
+  { role: "system", content: "parity system prefix", tool_calls: [], tool_call_id: "" }
+}
+
 func mk_history(content_chars: int) -> [Message] {
   -- One user msg ("hi", 2 chars) + one tool msg (content_chars - 2).
   let payload = repeat("x", content_chars - 2);
-  [mk_user("hi"), mk_tool("t1", payload)]
+  [parity_system_message(), mk_user("hi"), mk_tool("t1", payload)]
 }
 
 func grow_string(s: string, target: int) -> string {
@@ -76,7 +80,7 @@ func build_tools(count: int, chars_each: int, idx: int, acc: [Message]) -> [Mess
 func multi_tool_history() -> [Message] {
   -- 12 * 50k chars = ~150k estimated tokens against the 200k Sonnet window:
   -- tier 1 (75%), and the first two tool messages are outside keep_last=10.
-  build_tools(12, 50000, 0, [mk_user("multi")])
+  [parity_system_message()] ++ build_tools(12, 50000, 0, [mk_user("multi")])
 }
 
 func no_rates() -> CostRates {
@@ -124,10 +128,12 @@ func test_tier1_history_completes() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
   }
 }
 
--- 3. Extreme history (385 chars total = ~96.5% usage, tier 3). DP0 refuses
--- the step; run_v2_with_scripted_ports returns Err with the compaction_exhausted
--- reason propagated through the loop.
-func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+-- 3. Extreme history (385 chars total = ~96.5% raw usage). With the required
+-- system prefix pinned, structural pre-step compaction caps the oversized tool
+-- result and the loop completes Ok. Before this fixture supplied a system
+-- prefix, the same case returned Err(SystemPromptEmpty) before seal exhaustion;
+-- it was not exercising the intended compaction-exhausted outcome.
+func test_extreme_history_compacts() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let history = mk_history(385);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_scripted_ports(
@@ -136,8 +142,8 @@ func test_tier3_history_refused() -> bool ! {AI, FS, Process, IO, Env, Net, Shar
     0, no_rates(), script
   );
   match result {
-    Ok(_) => false,
-    Err(_) => true
+    Ok(_) => true,
+    Err(_) => false
   }
 }
 
@@ -186,8 +192,8 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   report("light history (~2% usage) → Ok",            r1);
   let r2 = test_tier1_history_completes();
   report("tier 1 history (~75% usage) → Ok with elision", r2);
-  let r3 = test_tier3_history_refused();
-  report("tier 3 history (~96% usage) → Err refused",   r3);
+  let r3 = test_extreme_history_compacts();
+  report("extreme history (~96% raw usage) → Ok after elision", r3);
   let r4 = test_unknown_model_fail_open();
   report("unknown model fail-open (no compaction)",     r4);
   let r5 = test_multi_tool_tier1_elides();

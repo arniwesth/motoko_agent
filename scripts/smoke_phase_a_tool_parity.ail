@@ -24,6 +24,10 @@ func mk_budget() -> BudgetPlan {
   { total: 4, solver: 4, verifier: 0 }
 }
 
+func parity_system_message() -> Message {
+  { role: "system", content: "parity system prefix", tool_calls: [], tool_call_id: "" }
+}
+
 func seed_fixture(workdir: string, rel_path: string) -> bool ! {IO, FS} {
   match mkdirAllResult(workdir) {
     Err(msg) => {
@@ -61,7 +65,7 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
       false,
       mk_budget(),
       "openrouter/z-ai/glm-5",
-      [],
+      [parity_system_message()],
       workdir,
       4,
       false,

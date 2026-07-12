@@ -56,6 +56,10 @@ func mk_budget() -> BudgetPlan {
   { total: 4, solver: 4, verifier: 0 }
 }
 
+func parity_system_message() -> Message {
+  { role: "system", content: "parity system prefix", tool_calls: [], tool_call_id: "" }
+}
+
 -- 1. Broken workdir: check_core always fails. The script just declares done.
 --    With DP7 active, the loop must NOT terminate at the first done attempt
 --    because the gate rejects. With a small step_budget, the loop will eventually
@@ -66,7 +70,7 @@ func test_dp7_rejects_broken_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
     enabled_rt("/tmp/dp7-smoke", "make check_core"),
     "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
-    [],
+    [parity_system_message()],
     "/tmp/dp7-smoke",   -- workdir whose make check_core always fails
     4,                  -- small step_budget — loop must hit it because DP7 keeps rejecting
     false,
@@ -87,7 +91,7 @@ func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
     enabled_rt("/tmp/dp7-smoke-pass", "make check_core"),
     "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
-    [],
+    [parity_system_message()],
     "/tmp/dp7-smoke-pass",  -- workdir whose make check_core always passes
     4,
     false,
@@ -111,7 +115,7 @@ func test_dp7_fail_open_on_missing_make() -> bool ! {AI, FS, Process, IO, Env, N
     enabled_rt("/tmp/dp7-smoke-empty", "make check_core"),
     "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5",
-    [],
+    [parity_system_message()],
     "/tmp/dp7-smoke-empty",
     4,
     false,
