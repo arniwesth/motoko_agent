@@ -226,6 +226,95 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- Strict-provider fixture (models hy3:free/Novita). Rejects any payload that
+-- contains an assistant tool_call without a matching tool result (an orphaned
+-- tool_call — invalid per the OpenAI tool-call protocol). The scripted run's
+-- SECOND agent turn emits a tool_call with finish_reason="stop" (the hy3:free
+-- quirk); the loop must still run that tool and continue, so the strict
+-- provider never sees an orphaned-tool-call payload.
+-- ---------------------------------------------------------------------------
+
+func strict_has_tool_result_for(msgs: [Message], id: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => if m.role == "tool" && m.tool_call_id == id then true else strict_has_tool_result_for(rest, id)
+  }
+}
+
+func strict_calls_all_answered(all: [Message], calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => if strict_has_tool_result_for(all, c.id) then strict_calls_all_answered(all, rest) else false
+  }
+}
+
+func strict_orphan_scan(all: [Message], rest: [Message]) -> bool {
+  match rest {
+    [] => false,
+    m :: tail =>
+      if m.role == "assistant" && length(m.tool_calls) > 0 && not strict_calls_all_answered(all, m.tool_calls)
+      then true
+      else strict_orphan_scan(all, tail)
+  }
+}
+
+func payload_has_orphaned_toolcall(msgs: [Message]) -> bool {
+  strict_orphan_scan(msgs, msgs)
+}
+
+func routed_step_strict(_model: string, msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+  if payload_has_orphaned_toolcall(msgs) then
+    Err({ code: "ProtocolError", message: "strict provider: payload contains an unanswered tool_call", retryable: false })
+  else if is_summarizer_prompt(msgs) then
+    Ok(step_result("strict summary", [], "stop"))
+  else {
+    let idx = highest_agent_idx_from_markers(msgs, 4);
+    if idx <= 3 then {
+      -- idx==2 is the hy3:free quirk: tool_calls present, finish_reason="stop".
+      let finish = if idx == 2 then "stop" else "tool_calls";
+      Ok(step_result("calling LongResult ${step_marker(idx)} - task still in progress, continuing", [tool_call(step_marker(idx))], finish))
+    } else if not contains_marker(msgs, runtime_status_call_id) then
+      Ok(step_result("checking runtime status after compaction", [runtime_status_call()], "tool_calls"))
+    else
+      Ok(step_result("strict deterministic run complete", [], "stop"))
+  }
+}
+
+func strict_ports() -> Ports ! {AI, IO, Trace} {
+  let model_step = func(model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+    routed_step_strict(model, msgs, on_chunk)
+  };
+  let base = ports_shape_probe(model_step, runtime_hooks);
+  {
+    model_step: base.model_step,
+    approval_read: base.approval_read,
+    clock_now: fixed_clock,
+    env_get: fixed_env,
+    tool_exec: fixed_exec,
+    hooks_runtime: runtime_hooks
+  }
+}
+
+func run_strict() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    long_runtime(),
+    "strict provider orphaned-toolcall dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    initial_history(),
+    ".",
+    40,
+    false,
+    0,
+    no_rates(),
+    Ported(strict_ports())
+  )
+}
+
 func compaction_ai_hook() -> ExtensionHooks {
   let cfg: CompactionAiConfig = {
     model: qwen_model,
@@ -641,6 +730,38 @@ func scenario_replay_deterministic() -> Result[(), ScenarioFailure] ! {AI, FS, P
   }
 }
 
+-- A stop-finish tool turn must run its tool and continue (never ship an
+-- orphaned tool_call). Two failure modes are both caught:
+--   (1) the loop drops the tool_call and finalizes early -> never reaches
+--       step-3 in the final history;
+--   (2) it drops the call but a later turn ships the orphaned payload -> the
+--       strict provider rejects it (session result is Err).
+-- Also asserts the strict run replays deterministically.
+func scenario_strict_provider_rejects_orphaned_toolcall() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let r1 = run_strict();
+  let recs1 = projection_records(r1.trace.records);
+  match r1.result {
+    Err(e) =>
+      Err({ failed_invariant: "strict provider must never receive an orphaned tool_call payload", trace: ["${e.code}: ${e.message}"] ++ recs1 }),
+    Ok(final_history) =>
+      if not contains_marker(final_history, step_marker(3)) then
+        Err({ failed_invariant: "stop-finish tool turn must run its tool and continue past step-3", trace: recs1 ++ ["final digest=${digest_msgs(final_history, 0)}"] })
+      else {
+        let r2 = run_strict();
+        let recs2 = projection_records(r2.trace.records);
+        if same_string_list(recs1, recs2) then {
+          let _ = println("strict_provider_orphaned_toolcall ok deterministic=true records=${show(length(recs1))}");
+          Ok(())
+        } else
+          Err({ failed_invariant: "strict provider run replays deterministically", trace: ["left=${show(length(recs1))}", "right=${show(length(recs2))}"] ++ recs1 })
+      }
+  }
+}
+
+func strict_provider_orphaned_toolcall_scenario() -> Scenario {
+  { id: "strict_provider_orphaned_toolcall", run: scenario_strict_provider_rejects_orphaned_toolcall }
+}
+
 func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: string, step: int) -> ExtCtx {
   {
     task: task,
@@ -867,7 +988,8 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     artifact_cache_scenario(),
     hostile_summary_scenario(),
     terminal_observations_scenario(),
-    seal_side_exhaustion_scenario()
+    seal_side_exhaustion_scenario(),
+    strict_provider_orphaned_toolcall_scenario()
   ];
   let failed = run_all(scenarios, 0);
   if failed == 0 then println("long_qwen_compaction_dst PASS count=${show(length(scenarios))}")
