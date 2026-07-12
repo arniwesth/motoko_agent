@@ -2,7 +2,7 @@
 
 Date: 2026-07-12
 Track: 3 after Track 2 DST code consolidation
-Implementation HEAD: `67bc9e5` (`Refresh moved DST source headers`)
+Implementation HEAD: `970def4` (`Avoid core/package compaction config name collision`)
 Source baseline: `3ee3667` (Track 1 implemented)
 
 ## Actual consolidated end state
@@ -30,6 +30,9 @@ The implementation commits, in order, are:
 14. `617faae` — normalize two accidental recipe-indentation changes.
 15. `d67545e` — refresh the root AILANG lock for the new core test module.
 16. `67bc9e5` — refresh moved-file header comments to their final paths.
+17. `970def4` — rename the core-local `CompactionAiConfig` to
+    `CoreCompactionAiConfig` so clean-cache extension boot checks cannot collide with the
+    package's distinct eight-field `CompactionAiConfig`.
 
 ## Shared harness API
 
@@ -197,7 +200,8 @@ shapes. Package conformance IDs and reporting remain package-owned.
 `packages/motoko_ext_conformance` has no Track 2 source diff. Its package version remains 4.0.0,
 its conformance ABI remains 4.0, and its `Scenario.run` signature still accepts `ExtensionHooks`.
 The smoke_v2 sources and fixtures also have no Track 2 diff. The only root generated artifact
-updated is `ailang.lock`, whose `motoko_core` content hash now includes the new shared test module.
+updated is `ailang.lock`, whose `motoko_core` content hash now includes the new shared test module
+and the core config type-name fix.
 
 The Track 1 workflow remains target-only and unchanged from `3ee3667`; no `scripts/dst/...` path
 was added to GitHub Actions. Historical ADRs, handoffs, generated diagrams, and superseded plans
@@ -212,7 +216,7 @@ Hydration completed successfully with:
 make CI=1 sync_packages
 ```
 
-The final `make dst` at `67bc9e5` passed all component targets. Its summary was:
+The final `make dst` at `970def4` passed all component targets. Its summary was:
 
 ```text
 compaction_policy_dst PASS count=3
@@ -242,3 +246,5 @@ git diff --check                            # passed
 No remote GitHub Actions run was observed in this implementation session. The operator-confirmed
 Track 1 blocking set was run locally after every migration commit and is green at the final HEAD:
 `make --keep-going compaction_dst conformance phase_c_l1`, `make smoke_parity`, and `make dst_l2`.
+The CI failure mode was reproduced with `AILANG_NO_CACHE=1 make check_core`; after the type-name
+fix it passed with 7 extension boots and 34 core modules checked.
