@@ -9,6 +9,28 @@ This plan changes GitHub Actions wiring and adds the one missing Make target for
 Layer-2 Bun test. It does not change a DST scenario, invariant, conformance fixture, or
 the broken repository-wide Jest runner.
 
+## TL;DR
+
+Extend the existing AILANG workflow job with the blocking `compaction_dst`, `conformance`,
+`phase_c_l1`, and `smoke_parity` Make gates; add a parallel Bun-only `dst_l2` job for
+`src/tui/src/harness-dst.test.ts`; and make both jobs required on every PR. Hydration stays
+before all gates through `make CI=1 sync_packages`. Do not enable the workflow until the
+current `make smoke_parity` precondition is green.
+
+## Blast radius
+
+- **Changed:** `.github/workflows/verify-extensions.yml` and the existing `Makefile`
+  hydration recipe, plus one additive `dst_l2` target.
+- **CI cost:** the AILANG job timeout rises from 15 to 20 minutes; the independent Bun job
+  has a five-minute timeout. The measured deterministic gate payload is sub-second for L2
+  and 7.444 seconds for the combined AILANG DST group locally, excluding the currently red
+  parity target.
+- **Required checks:** the existing AILANG job remains required and `dst_l2` becomes a new
+  required PR check. `verify_core` remains advisory-only.
+- **Unchanged:** no production behavior, DST scenario/invariant, conformance-kit contract,
+  live-provider path, full TUI suite, or Jest npm script. Rollback is a workflow revert;
+  the additive Make target is harmless if left behind.
+
 ## Decision summary
 
 Use the existing `.github/workflows/verify-extensions.yml` workflow, with two jobs:
