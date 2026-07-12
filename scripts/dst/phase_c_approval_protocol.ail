@@ -4,7 +4,7 @@
 -- the approve/deny/default-ordering scenarios; WI-C0 only pins the command
 -- shape and minimal-caps execution.
 
-module scripts/phase_c_approval_protocol
+module scripts/dst/phase_c_approval_protocol
 
 import std/ai (ToolCall)
 import std/io (println, exit)
@@ -107,13 +107,13 @@ func run_cases(results: [CaseResult], failed: int) -> int ! {IO} {
 
 export func main() -> () ! {IO} {
   let results = [
-    scenario("approve", "{\"type\":\"approve\"}", false, false, true, ""),
-    scenario("deny_with_reason", "{\"type\":\"deny\",\"reason\":\"blocked\"}", false, true, false, "blocked"),
-    scenario("deny_default_reason", "{\"type\":\"deny\"}", false, true, false, "denied by operator"),
-    scenario("eof_default_allow", "", true, true, true, ""),
-    scenario("eof_default_deny", "", true, false, false, "timeout — no approval received"),
-    scenario("unparseable_default_deny", "wat", false, false, false, "unparseable response — default deny applied"),
-    scenario("unknown_default_deny", "{\"type\":\"later\"}", false, false, false, "unknown approval command — default deny applied")
+    scenario("phase_c.approval.approve", "{\"type\":\"approve\"}", false, false, true, ""),
+    scenario("phase_c.approval.deny_with_reason", "{\"type\":\"deny\",\"reason\":\"blocked\"}", false, true, false, "blocked"),
+    scenario("phase_c.approval.deny_default_reason", "{\"type\":\"deny\"}", false, true, false, "denied by operator"),
+    scenario("phase_c.approval.eof_default_allow", "", true, true, true, ""),
+    scenario("phase_c.approval.eof_default_deny", "", true, false, false, "timeout — no approval received"),
+    scenario("phase_c.approval.unparseable_default_deny", "wat", false, false, false, "unparseable response — default deny applied"),
+    scenario("phase_c.approval.unknown_default_deny", "{\"type\":\"later\"}", false, false, false, "unknown approval command — default deny applied")
   ];
   let failed = run_cases(results, 0);
   if failed == 0 then println("phase_c_approval_protocol PASS count=${show(List.length(results))}")
