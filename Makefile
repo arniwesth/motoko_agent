@@ -15,6 +15,20 @@ prune:
 
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
+	@set -eu; \
+	if [ "$(CI)" = "1" ]; then \
+		version=$$(grep -E '^ailang\s*=' ailang.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1); \
+		if [ -z "$$version" ]; then \
+			echo "Could not parse ailang floor from ailang.toml" >&2; \
+			exit 1; \
+		fi; \
+		ref="v$$version"; \
+		script_ref=$$(grep -E '^AILANG_REF=' scripts/install-prerequisites.sh | head -n1 | cut -d'"' -f2); \
+		if [ "$$script_ref" != "$$ref" ]; then \
+			echo "Version mismatch: ailang.toml floor=$$ref but install-prerequisites.sh AILANG_REF=$$script_ref — bump them together." >&2; \
+			exit 1; \
+		fi; \
+	fi
 	./scripts/sync-extension-packages.sh
 	ailang lock
 
@@ -195,6 +209,10 @@ deepseekv4_flash_compaction_heavy_headless: build
 # Install all prerequisites (Go, Bun, Node, context-mode, AILANG, TUI deps)
 install:
 	./scripts/install-prerequisites.sh	
+
+.PHONY: dst_l2
+dst_l2:
+	cd src/tui && bun test src/harness-dst.test.ts
 
 # Run all core runtime module tests
 test_core:

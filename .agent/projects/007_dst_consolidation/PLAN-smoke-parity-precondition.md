@@ -1,7 +1,7 @@
 # Plan: make `smoke_parity` deterministic and green
 
 Date: 2026-07-12  
-Status: proposed; precondition work outside Track 1  
+Status: Completed 2026-07-12 (implementation commit `22f494e`; review amendment recorded)
 Grounded checkout HEAD: `765b094a8f0ff8e5644165b36d7c66ea962a730b`
 Relevant source baseline: `e839114abde95f466e46447bc1f4ba965367b7fe` (unchanged at the grounded checkout)
 Toolchain observed at authoring: AILANG `v0.26.0`, Bun `1.3.14`
@@ -16,7 +16,9 @@ ADR is required; the governing decisions are ADR-001 and the DST CI-gates plan.
 Make the parity runner pass `--ai-stub` only to its eight AI-capable runs, remove its stale
 network-allow flags, and seed five empty full-loop fixtures with one stable non-empty system
 message. Keep the existing scripted-port provider, event assertions, output layout, and
-two-capture `diff -r` contract. Track 1 remains blocked until the repaired target is green.
+two-capture `diff -r` contract. The extreme compaction fixture is approved to report `Ok`
+after structural tier-1 elision: its former `Err` was caused by `SystemPromptEmpty`, not
+compaction exhaustion. Track 1 remains blocked until the repaired target is green.
 
 ## Blast radius
 
@@ -29,9 +31,9 @@ two-capture `diff -r` contract. Track 1 remains blocked until the repaired targe
 - **Unchanged:** `Makefile`, workflow wiring, `require_system_prompt`, sealing/compaction core,
   scripted-port helpers, already-seeded fixtures, DST scenarios, conformance behavior, and
   production code. No provider credentials, live model, or live network is introduced.
-- **Review risk:** the pinned system message contributes to compaction sizing, so all five
-  compaction outcomes and the deterministic capture assertions must be revalidated before
-  handoff.
+- **Review risk:** the pinned system message contributes to compaction sizing. The extreme
+  compaction expectation therefore receives an explicit correction below; all five compaction
+  outcomes and the deterministic capture assertions must be revalidated before handoff.
 
 ## Ground truth and reproduction
 
@@ -191,14 +193,31 @@ Re-evaluate, before changing any expected result, all five compaction cases:
 
 - light history remains `Ok`;
 - tier-1 history remains `Ok` with elision;
-- the extreme history retains the intended exhausted/refused result;
+- the extreme history applies structural tier-1 elision and completes `Ok` after the required
+  system prefix is present; the former `Err` was `SystemPromptEmpty`, not exhaustion;
 - unknown-model behavior remains fail-open;
 - the multi-tool history still exercises structural tier-1 elision.
 
 The pinned prompt reduces the effective compaction limit and contributes to the final sealed
 payload estimate. If an expectation or threshold must change, document the before/after
 calculation and obtain plan-level review; do not adjust a threshold merely to get a green
-capture. No scenario name, event type, event order, or DST/conformance contract may change.
+capture. No DST scenario ID, event type, event order, or DST/conformance contract may change.
+
+### Approved correction to the extreme compaction expectation
+
+The original `test_tier3_history_refused` expectation was not exercising compaction exhaustion.
+With an empty initial history, normal non-headless policy rejected the payload first with
+`SystemPromptEmpty`. After the required system message is seeded, the existing structural
+compaction hook legitimately applies tier-1 elision (`keep_last=10`) to the oversized tool
+history, and the loop completes `Ok`.
+
+This is an approved correction to the existing parity fixture's label and assertion, not a
+production or policy change. The fixture keeps the original 385-character load, model, tool
+history shape, structural extension, and event contract; no threshold is changed. The direct
+implementation run at commit `22f494e` observed the structural tier-1 event, `Ok`, and the
+expected `msg_count:14` provider payload. The fixture name/report may therefore be
+`test_extreme_history_compacts` / `Ok after elision`. Any future exhaustion coverage must be
+planned as a separate fixture change rather than restoring the unreachable pre-seed `Err`.
 
 ## Verification and acceptance
 
@@ -252,9 +271,9 @@ Run from a hydrated checkout with `PARITY_BASELINE` unset.
    the implementation handoff reports them.
 
 5. Inspect the fresh captures for the preserved event assertions, including non-zero system
-   prefix fields on all provider calls, the updated compaction payload count, stream ordering,
-   chain ordering/counts, and deterministic digests after normalization. Repeat the runner if
-   either fresh capture differs.
+   prefix fields on all provider calls, the structural tier-1/`Ok` extreme compaction result,
+   the updated compaction payload count, stream ordering, chain ordering/counts, and deterministic
+   digests after normalization. Repeat the runner if either fresh capture differs.
 
 6. Perform a scope audit. The only implementation files permitted to differ are
    `scripts/phase_a_event_parity.sh` and the five edited fixtures listed above. In particular,
@@ -270,8 +289,8 @@ they supply the production-required system-prefix precondition.
 
 The implementation handoff to Track 1 must report the exact authorized files changed, the
 `--ai-stub`/offline execution mode, the final 11-entry logical count and 22-entry two-capture
-execution count, `make smoke_parity` wall time and status, the AILANG DST/conformance results,
-and confirmation that
+execution count, the approved structural tier-1/`Ok` extreme compaction result,
+`make smoke_parity` wall time and status, the AILANG DST/conformance results, and confirmation that
 `.github/workflows/verify-extensions.yml` was not changed. Only then may Track 1 apply its
 existing `make CI=1 sync_packages`, DST-gate, advisory `verify_core`, and `dst_l2` workflow
 changes.
