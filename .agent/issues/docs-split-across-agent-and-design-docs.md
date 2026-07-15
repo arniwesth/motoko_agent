@@ -78,6 +78,9 @@ link between them.
   insufficient.
 
 ## Notes
+- **Project opened (2026-07-15):** `.agent/projects/008_docs_system/` — specifying a formalized
+  planning-documentation system (convention + frontmatter + code-graph integration). Discussion
+  state: `projects/008_docs_system/NOTE-docs-system-design-discussion.md`.
 - Process guard added to memory this session (`check-design-docs-before-proposing-adr.md`): grep
   `design_docs/` + `.agent/projects/*/ADR-*.md` before calling a decision "open." That mitigates the
   symptom for an agent with memory, but does not fix the underlying fragmentation for humans or fresh
