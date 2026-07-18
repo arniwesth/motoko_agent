@@ -73,7 +73,10 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 smoke_parity dst_l2
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 smoke_parity dst_l2 dst_seeded
+
+dst_seeded:
+	ailang run --caps IO,Env,Rand --entry main scripts/dst/compaction_seeded_dst.ail
 
 compaction_dst:
 	ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail

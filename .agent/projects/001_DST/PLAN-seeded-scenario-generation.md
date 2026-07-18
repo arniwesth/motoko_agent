@@ -22,9 +22,10 @@ changing the `std/rand` algorithm between versions.
 **Small and additive.** No production (`src/core` runtime, extension) code changes.
 
 - `src/core/test/dst_harness.ail` — the only shared file touched. `report_failure` gains a
-  `seed` parameter and `run_one` passes it. Every existing gate compiles against the harness,
-  so all DST gates recompile; output stays byte-identical because every current scenario has
-  `seed: "fixed"`. Verified by `make dst` diffing clean.
+  `seed` parameter and `run_one` passes it; **no callers of either exist outside the harness
+  itself** (verified by grep across `src/`, `scripts/`, `packages/`), so the signature change
+  cannot ripple. All DST gates recompile; output stays byte-identical because every current
+  scenario has `seed: "fixed"`. Verified by `make dst` diffing clean.
 - New files (`dst_gen.ail`, `compaction_seeded_dst.ail`) — zero impact on existing gates.
 - `Makefile` — new `dst_seeded` target added to the `dst` aggregate; existing targets
   unchanged. Anyone running `make dst` locally now also runs 5 seeded scenarios (~seconds).
@@ -84,11 +85,9 @@ toolchain upgrade could silently change what a recorded seed reproduces. Mitigat
 - every failure **echoes its drawn parameters** into the trace, so a historical failure is
   human-readable even if its seed no longer reproduces.
 
-Consequence of global state: all draws happen at *expansion time* (in the gate's `main`,
-per family per seed: `rand_seed(seed)` then draw all params immediately); the generated
-`Scenario.run` closure closes over the drawn values. Each scenario's params are then a pure
-function of its seed regardless of run order, and `Scenario.run`'s effect row is unchanged
-(it does not include `Rand`).
+Consequence of global state: each seeded case calls `rand_seed(seed)` and immediately draws
+all its params before doing anything else, so its inputs are a pure function of its seed
+regardless of run order. See D5 for how this removes the need for closures entirely.
 
 ### D2. Nightly base seed: date-derived
 
@@ -99,7 +98,9 @@ failure line.
 ### D3. Seed config channel: `std/env` in the gate script
 
 `getEnvOr("DST_SEEDS", "5")` / `getEnvOr("DST_BASE_SEED", "1")`, parsed with
-`std/string.stringToInt` (returns `Option[int]`; fall back to the default on `None`). Adds
+`std/string.stringToInt` (returns `Option[int]`). Unset vars get the defaults via
+`getEnvOr`; a var that is *set but unparseable*, or `DST_SEEDS < 1`, is a hard config error
+(`exit(1)`) — never a silent fallback or a silent zero-scenario pass. Adds
 `Env` to the seeded gate's caps — acceptable under the narrowest-caps rule; it is the
 established repo pattern (`src/core/config.ail`, `src/core/session.ail`, extension
 `register.ail` files).
@@ -109,6 +110,23 @@ established repo pattern (`src/core/config.ail`, `src/core/session.ail`, extensi
 Prove the whole pipeline (RNG → gen → family → harness → replay contract) on the cheapest
 gate. The fixed gate `scripts/dst/compaction_policy_dst.ail` stays untouched and
 byte-deterministic under `--caps IO`; seeded scenarios live in a **new** script.
+
+### D5. Direct seed loop — no `Scenario` closures (review finding)
+
+The note's original design stored generated params in `Scenario.run` closures and reused
+`run_all`. Plan review found the repo **never stores a capturing closure in a record
+field** — every `run:` field in every gate and every `ExtPorts` field is a named top-level
+function, and no lambda syntax appears anywhere in `src/` or `scripts/`. The closure design
+would therefore rest on unverified AILANG behavior (lambda capture plus effect-row
+subsumption inside record fields).
+
+Deferred execution buys nothing here anyway: draws happen at expansion time regardless (D1).
+So the seeded gate loops seeds directly — generate, check, report, next seed — and reuses
+the harness's reporting helpers (`report_failure` post-Step-0, `print_trace`,
+`ok_or_failure`, `failure`) without importing `Scenario`/`run_all`. The printed contract is
+identical to what the closure design would have produced. If a later AILANG version makes
+capturing closures well-supported, families can migrate to `Scenario` records without
+changing a byte of output.
 
 ## Implementation Steps
 
@@ -124,53 +142,72 @@ byte-deterministic under `--caps IO`; seeded scenarios live in a **new** script.
 ### Step 1 — Generator helpers: `src/core/test/dst_gen.ail` (new)
 
 Thin layer over `std/rand`, all `! {Rand}`:
-- `pick(xs: [a]) -> a` — uniform pick via `rand_int(0, length(xs) - 1)`; caller guarantees
-  non-empty (true by construction for fixed choice lists).
-- `weighted_bool(pct: int) -> bool` — `rand_int(1, 100) <= pct`.
+- `pick_int(xs: [int]) -> int` — uniform pick via `rand_int(0, length(xs) - 1)`; caller
+  guarantees non-empty (true by construction for fixed choice lists). Monomorphic on
+  purpose: v1 only picks from int lists, and a generic effectful `pick(xs: [a])` would be
+  another construct with no precedent in the repo — generalize only when a family needs it.
 - `int_in(lo, hi)` is just `rand_int` directly — no wrapper.
 
-Keep minimal; grow combinators only when a family needs them.
+Keep minimal; grow combinators (e.g. `weighted_bool`) only when a family needs them. v1
+needs only `pick_int` plus direct `rand_int` calls.
 
 ### Step 2 — Seeded gate: `scripts/dst/compaction_seeded_dst.ail` (new)
 
 Reuses the fixed gate's building blocks: same imports from
 `pkg/sunholo/motoko_ext_compaction_structural/compaction_structural` (exported thresholds
 `elide_tier_pct`/`elide_hard_tier_pct`/`emergency_pct`, `compact_for_pre_step`,
-`estimate_tokens_messages`, `usage_percent_with_limit`); copy the small private helpers from
-`compaction_policy_dst.ail` (`tool`/`user`/`assistant`/`call` constructors, `ctx(limit)`,
-`limit_for_pct`, `count_kept_tools`, `same_tool_ids`).
+`estimate_tokens_messages`, `usage_percent_with_limit`); copy only the private helpers the
+gate actually uses from `compaction_policy_dst.ail` (`tool`/`user`/`assistant`/`call`
+constructors, `ctx(limit)`, `limit_for_pct`) — the invariants-only assertion set does not
+need `count_kept_tools`/`same_tool_ids` (that ground is covered by
+`validate_compactor_output`).
 
-**RNG canary** — first scenario, id `compaction.gen.rng_canary`, seed `"fixed"`:
-`rand_seed(12345)` then assert the next 3 `rand_int(0, 2147483646)` values equal golden
-constants (record them once during implementation against the pinned v0.26.0 binary).
-Failure message: "std/rand sequence changed — recorded seeds no longer reproduce historical
-inputs".
+Structure (per D5, a direct loop — imports `report_failure`, `print_trace`, `ok_or_failure`,
+`failure` from the harness, but not `Scenario`/`run_all`):
 
-**Family v1: `compaction.gen.tool_heavy`** — `gen_tool_heavy(seed: int) -> Scenario ! {Rand}`:
-1. `rand_seed(seed)`; draw `n_tools` in `[3, 30]`, `content_len` in `[40, 400]` (build
-   content by repetition to that length), and a target usage pct via `pick` over points
-   straddling the exported thresholds — e.g. `[elide-5, elide+5, hard-5, hard+5,
-   emergency-3, emergency+2]` computed from the exported functions, never literals.
+**RNG canary** — `run_rng_canary() -> bool`, runs first, reported as
+`scenario=compaction.gen.rng_canary seed=fixed`: `rand_seed(12345)` then assert the next 3
+`rand_int(0, 2147483646)` values equal golden constants (record them once during
+implementation against the pinned v0.26.0 binary). Failure message: "std/rand sequence
+changed — recorded seeds no longer reproduce historical inputs".
+
+**Family v1: `compaction.gen.tool_heavy`** — `run_tool_heavy(seed: int) -> bool` (effect
+row annotated to match what `compact_for_pre_step` requires plus `Rand`/`IO`; exact row
+settled by `ailang check` at implementation, mirroring how the fixed gate annotates its
+scenario functions):
+1. `rand_seed(seed)`; immediately draw all params: `n_tools` in `[3, 30]`, `content_len` in
+   `[40, 400]` (build content by repetition to that length), and a target usage pct via
+   `pick_int` over points straddling the exported thresholds — e.g. `[elide-5, elide+5,
+   hard-5, hard+5, emergency-3, emergency+2]` computed from the exported functions, never
+   literals.
 2. Build a legal-by-construction history: leading `user` msg, then an `assistant` msg whose
    tool calls pair 1:1 with the subsequent `tool` results (ids `t0..tn`) — mirroring the
    fixed gate's `tool_heavy_msgs()` / `scenario_tool_shape_preserved_by_elision` shapes.
 3. `limit = limit_for_pct(msgs, pct)`; run `compact_for_pre_step(ctx(limit), msgs)`.
-4. Assert **invariants only** (no exact-output expectations — draws straddle thresholds):
+4. Assert **invariants only** (no exact-output expectations — draws straddle thresholds,
+   and small `n_tools` can make every tier a legitimate no-op/`PassThrough`):
    - `validate_compactor_output(input, output)` from
      `packages/motoko_ext_conformance/invariants.ail` (system-prefix, tool pairing, id
-     preservation; already imported alongside abi `Msg` by `phase_c_l1_scenarios.ail`, so
-     types align);
+     preservation; it uses the same abi `Msg` type — verified: `invariants.ail` imports
+     `Msg` from `pkg/sunholo/motoko_ext_abi/types`, same as the compaction gate);
    - estimate monotonicity: `estimate_tokens_messages(out) <= estimate_tokens_messages(input)`;
    - length preservation on `Compacted` (elision keeps message count);
    - if drawn pct `< elide_tier_pct()`, decision must be `PassThrough`.
-5. Return `{ id: "compaction.gen.tool_heavy", seed: show(seed), run: <closure over drawn
-   msgs/limit> }`.
+5. On success print `scenario=compaction.gen.tool_heavy seed=<s> ok`; on failure call
+   `report_failure("compaction.gen.tool_heavy", show(seed), f)` (post-Step-0 signature) and
+   return `false`.
 6. **Every failure trace echoes the drawn params**:
    `trace param n_tools=.. content_len=.. pct=.. limit=.. usage=..` — no shrinking, so a
-   failing seed must be readable, not just re-runnable.
+   failing seed must be readable, not just re-runnable. Build the param trace lines once
+   after drawing and pass them into every `ok_or_failure` call.
 
-**`main`** (`! {IO, Env, Rand}`): read config, expand the family over seeds
-`base .. base+N-1` into a plain `[Scenario]`, prepend the canary, `run_all` via the harness.
+**`run_seeds(base: int, n: int) -> int`** — recursive loop over `base .. base+n-1` calling
+`run_tool_heavy`, returning the failure count (same accumulator shape as the harness's
+`run_all`).
+
+**`main`** (`! {IO, Env, Rand}`, exact row settled by `ailang check`): read config; if
+either env var is present but unparseable, or `DST_SEEDS < 1`, print a config error and
+`exit(1)` (never silently run zero scenarios); run canary + `run_seeds`.
 
 **Output contract** — do **not** reuse the fixed gates' `PASS count=N` shape (the
 "pass count must increase by exactly your additions" oracle breaks when counts depend on
@@ -196,15 +233,22 @@ dst_seeded:
 
 ### Step 4 — CI wiring (`.github/workflows/verify-extensions.yml`)
 
-CI references make targets only (standing rule). In the `verify_extensions` job, after the
-"DST AILANG gates" step (~line 95), add a step running `make dst_seeded` with
-event-dependent env:
-- PR / push: pinned `DST_SEEDS=5 DST_BASE_SEED=1` (fast gate stays byte-deterministic).
-- `schedule` (the existing nightly cron trigger, 06:00 UTC): `DST_SEEDS=500`,
-  `DST_BASE_SEED=$(date +%Y%m%d)`.
+CI references make targets only (standing rule). In the `verify_extensions` job, insert a
+step directly after the existing `- name: DST AILANG gates` step (verified at line ~95):
 
-Implement as one step with a small `if [ "$GITHUB_EVENT_NAME" = schedule ]` shell prelude
-(or two `if:`-guarded steps — whichever reads cleaner in the file).
+```yaml
+      - name: DST seeded gate
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            DST_SEEDS=500 DST_BASE_SEED=$(date +%Y%m%d) make dst_seeded
+          else
+            DST_SEEDS=5 DST_BASE_SEED=1 make dst_seeded
+          fi
+```
+
+- PR / push: pinned `DST_SEEDS=5 DST_BASE_SEED=1` (fast gate stays byte-deterministic).
+- `schedule` (the existing nightly cron trigger, 06:00 UTC): 500 date-derived seeds
+  (ADR-001 nightly target).
 
 ## Files Touched
 

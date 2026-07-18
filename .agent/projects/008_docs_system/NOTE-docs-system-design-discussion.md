@@ -145,6 +145,33 @@ Grounding: the source index is glob-driven (`HOST_FILE_GLOBS`,
   carry `status`/`type` (an overlap with an *implemented* doc means "already shipped", with a
   *planned* doc "already queued", mirroring AILANG's two-threshold gate). Does not require (a)
   to be useful; (a) makes its output status-aware.
+- **(f) Docs↔code provenance: derive, then verify** *(added 2026-07-15, operator-raised)*.
+  Enforce that planning docs link to the code they result in — but as **derived attribution
+  verified at the status transition**, not authored metadata checked by a linter. Grounding:
+  the extractor has no git pass today, and current commit messages carry no doc references, so
+  all linking machinery is net-new.
+  - **Diff level is the ground truth.** A commit SHA is immutable, free to collect, and captures
+    the *actual* end state — mechanizing `compare-speculated-end-state-to-actual`. Method-level
+    links stored directly would churn with renames/splits (same staleness argument as mandatory
+    `code:` in fork 2).
+  - **Method level is a projection, not storage.** `doc → commits → hunks → funcs at that commit
+    → funcs at HEAD` via existing sha256/slug machinery (or blame). Serves (c)'s docs-for-code
+    query as a recomputable view over diff-level facts — never stale-by-storage.
+  - **Attribution sources**: (i) going forward, one lightweight convention — a `Doc:` commit
+    trailer, or the existing branch↔ticket↔project mapping (`arniwesth/mot-41-*`); (ii) for the
+    backlog, heuristics — commits touching doc + code in one diff, commits within a project
+    branch's lifetime, and semantic plan-section↔hunk matching classified
+    `implemented/partial/unrelated` (already designed in 002's research; (e)'s validated
+    embedding layer is the recall mechanism).
+  - **Enforcement point: the status transition.** A doc cannot become `status: implemented` with
+    an empty attribution set; the tool *presents* derived commits/functions, the author confirms
+    or corrects — enforcing a review, not data entry (AILANG's implementation-report discipline,
+    mechanized). A commit-time warning (diff touches paths an `active` doc governs, no trailer)
+    is a follow-on and needs (c); do not start there — highest friction, lowest trust.
+  - **Caveat**: (f) pays off only if the reverse query gets used at the moment of the next
+    change. Sequence after (a)+(e). Lifecycle coverage: (e) prevents duplicates at creation,
+    (f) closes docs with verified provenance at implementation, (b) detects drift in between —
+    (f) alone is well-maintained metadata nobody queries.
 
 ### Migration stance
 
@@ -176,7 +203,9 @@ the issue, since it is the documented failure case.
    mostly *already built* (project 002's embedding layer) and works on the documented failure
    case, including surfacing the nearly-re-litigated persistence ADR at rank 1. That reorders
    the value-per-effort ranking: (e) is now the cheapest high-value increment, independent of
-   (a). Fork: first iteration = (e) packaged + (a), (a) + (d), or straight for (b)?
+   (a). (f) is agreed to sequence after (a)+(e) — it completes the lifecycle but is not
+   first-iteration material. Fork: first iteration = (e) packaged + (a), (a) + (d), or straight
+   for (b)?
 
 ## Expected artifact sequence
 

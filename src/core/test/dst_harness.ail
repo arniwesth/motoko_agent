@@ -35,8 +35,8 @@ export pure func ok_or_failure(ok: bool, invariant_name: string, trace: [string]
   if ok then Ok(()) else Err(failure(invariant_name, trace))
 }
 
-export func report_failure(scenario: string, f: { failed_invariant: string, trace: [string] }) -> () ! {IO} {
-  let _ = println("scenario=${scenario} seed=fixed invariant=${f.failed_invariant}");
+export func report_failure(scenario: string, seed: string, f: { failed_invariant: string, trace: [string] }) -> () ! {IO} {
+  let _ = println("scenario=${scenario} seed=${seed} invariant=${f.failed_invariant}");
   print_trace(f.trace)
 }
 
@@ -47,7 +47,7 @@ export func run_one(s: Scenario) -> bool ! {AI, FS, Process, IO, Env, Net, Share
       true
     },
     Err(f) => {
-      let _ = report_failure(s.id, f);
+      let _ = report_failure(s.id, s.seed, f);
       false
     }
   }

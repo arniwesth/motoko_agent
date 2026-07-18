@@ -1,7 +1,7 @@
 # Seeded Scenario Generation (ADR-001 Phase 4) — Design Discussion
 
 **Date**: 2026-07-15
-**Status**: Design discussion — not yet planned or implemented
+**Status**: Superseded by `PLAN-seeded-scenario-generation.md`
 **Context**: PR #84 (`mot-41` DST consolidation) landed the DST framework as-built and explicitly
 deferred seeded scenario generation. This note records the design discussion for implementing it.
 **Author**: Motoko session with operator

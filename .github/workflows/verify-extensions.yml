@@ -95,6 +95,14 @@ jobs:
       - name: DST AILANG gates
         run: make --keep-going compaction_dst conformance phase_c_l1
 
+      - name: DST seeded gate
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            DST_SEEDS=500 DST_BASE_SEED=$(date +%Y%m%d) make dst_seeded
+          else
+            DST_SEEDS=5 DST_BASE_SEED=1 make dst_seeded
+          fi
+
       - name: smoke_parity
         run: make smoke_parity
 
