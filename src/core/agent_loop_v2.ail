@@ -387,7 +387,10 @@ func step_result_to_message(result: StepResult) -> Message {
     content: result.message.content,
     tool_calls: result.tool_calls,
     tool_call_id: "",
-    images: result.message.images
+    -- NOT result.message.images: the v0.30 Go builtin (makeOkStepResult)
+    -- omits the field from the returned record, so reading it panics at
+    -- runtime. Assistant output carries no vision input anyway.
+    images: []
   }
 }
 
@@ -501,7 +504,8 @@ func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
     role: "tool",
     content: result_env_model_content(envelope),
     tool_calls: [],
-    tool_call_id: envelope.tool_call_id
+    tool_call_id: envelope.tool_call_id,
+    images: []
   }
 }
 
@@ -1347,7 +1351,9 @@ func loop_v2(
                     content: result.message.content,
                     tool_calls: [synth_call],
                     tool_call_id: "",
-                    images: result.message.images
+                    -- see step_result_to_message: result.message has no
+                    -- images field at runtime (Go builtin gap)
+                    images: []
                   };
                   let msgs_with_augmented = msgs ++ [augmented_assistant_msg];
                   let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);

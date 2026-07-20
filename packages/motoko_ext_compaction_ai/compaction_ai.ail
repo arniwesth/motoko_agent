@@ -1,0 +1,200 @@
+-- AI-powered conversation compaction extension.
+-- Uses a cheap model to summarize old turns when context fills up.
+-- Returns Compacted(msgs, note) with the summarized message list.
+
+module sunholo/motoko_ext_compaction_ai/compaction_ai
+
+import std/ai (Message, step)
+import std/result (Result, Ok, Err)
+import std/string (length, contains)
+import std/list (length as list_length, take, drop, reverse)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, PreStepDecision, PassThrough, Compacted, Msg)
+import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
+
+-- v0.2.0 (2026-05-17): the previous duplicate context_limit_for() heuristic
+-- has been deleted. The host (motoko_agent) populates ctx.context_limit via
+-- src/core/context_usage.context_limit_for(model) on every ext-hook call,
+-- so the extension reads it directly. Eliminates the perpetual drift between
+-- this package's substring-match table and motoko_agent's authoritative
+-- Z3-verified equality-match registry.
+--
+-- Fallback: when ctx.context_limit == 0 (host doesn't recognise the model),
+-- usage_percent returns 0 → compact_with_ai sees "below threshold" → no
+-- compaction. That's the right behaviour: rather than guess with a stale
+-- heuristic and fire premature compaction (cost foot-gun), we just trust
+-- the host's "I don't know this model" signal and let the conversation run.
+
+-- Token estimate: content length / 4
+func estimate_tokens(content: string) -> int {
+  (length(content) + 3) / 4
+}
+
+-- Estimate total tokens in message list
+func estimate_msgs_tokens(msgs: [Msg]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => estimate_tokens(m.content) + estimate_msgs_tokens(rest)
+  }
+}
+
+-- Context usage as integer percent (0-100). Uses host-supplied limit
+-- (ctx.context_limit) so we never disagree with motoko_agent's own
+-- compaction.compact_step about how much room is left.
+func usage_percent(msgs: [Msg], context_limit: int) -> int {
+  if context_limit == 0 then 0
+  else (estimate_msgs_tokens(msgs) * 100) / context_limit
+}
+
+-- Format a message for the summarization prompt
+func format_msg(m: Msg) -> string {
+  "[${m.role}] ${m.content}"
+}
+
+-- Format message list for the summarization prompt
+func format_msgs_for_summary(msgs: [Msg]) -> string {
+  match msgs {
+    [] => "",
+    m :: [] => format_msg(m),
+    m :: rest => "${format_msg(m)}\n${format_msgs_for_summary(rest)}"
+  }
+}
+
+-- The summarization prompt: a STRUCTURED running-state checkpoint, not prose.
+-- Pins the task as the Goal and instructs the summarizer to report the honest,
+-- INCOMPLETE state (never claim completion) and preserve exact paths/names/errors.
+-- This replaces the old "2-3 sentences" prompt, which produced lossy, often
+-- misleading summaries (e.g. claiming a task was "finalized" when it had failed).
+func summarization_prompt(task: string, old_turns: [Msg]) -> string {
+  let old_text = format_msgs_for_summary(old_turns);
+  "You are creating a STRUCTURED context checkpoint that another LLM will use to CONTINUE this task. Output ONLY the filled template below. Preserve exact file paths, function names, and error messages. Do NOT claim the task is complete — report the real, current, INCOMPLETE state honestly.
+
+THE TASK (the goal — never changes):
+${task}
+
+Fill this template from the conversation:
+
+## Progress
+Done: <items completed AND verified working; if none verified, write: none verified yet>
+In progress: <what is being worked on right now>
+Blocked: <anything stuck and why, or: none>
+## Current errors
+<exact outstanding compile / type / test errors, verbatim, or: unknown, need to re-run a check>
+## Key decisions
+<facts learned, approaches chosen, what did and did not work>
+## Next action
+<the single concrete next step>
+
+CONVERSATION TO SUMMARIZE:
+${old_text}"
+}
+
+-- Call AI to summarize old turns. step returns Result[StepResult, AIError]
+-- so we MUST match on it — accessing .message.content directly would unwrap
+-- Err(AIError) to its .message string (network blips, rate limits, model
+-- timeouts on long agent loops) and then crash on .content with
+-- "cannot access field of non-record value: *eval.StringValue". Fixed in
+-- 0.1.4 — returns a structural fallback string on summarizer failure so the
+-- agent loop continues with an indicative summary marker rather than dying.
+export func summarize_with_ai(prompt: string, model: string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  -- qwen reasoning models return EMPTY content via /api/chat unless thinking is
+  -- disabled: at large summary inputs they spend the whole token budget "thinking"
+  -- and return nothing (measured: 19/30 empty summaries on a docx run, which made
+  -- the agent lose its context ~2/3 of rounds). Appending /no_think fixes it and is
+  -- inert text for non-qwen models.
+  let msgs: [Message] = [{ role: "user", content: "${prompt}\n/no_think", tool_calls: [], tool_call_id: "", images: [] }];
+  match step(model, msgs, []) {
+    Ok(result) => result.message.content,
+    Err(e) => "[summarizer unavailable: ${e.code}: ${e.message}]"
+  }
+}
+
+-- Split result as a record (AILANG doesn't support tuple destructuring)
+type SplitResult = { old: [Msg], recent: [Msg] }
+
+-- Split messages into old and recent, keeping last N turns intact
+func split_msgs(msgs: [Msg], keep_recent: int) -> SplitResult {
+  let n = list_length(msgs);
+  if n <= keep_recent then { old: [], recent: msgs }
+  else {
+    let rev = reverse(msgs);
+    let recent = reverse(take(keep_recent, rev));
+    let old = reverse(drop(keep_recent, rev));
+    { old: old, recent: recent }
+  }
+}
+
+-- Create a summary message.
+-- Includes empty tool_calls + tool_call_id so the Msg matches the v2.1.0
+-- abi shape (M-ABI-MSG-WIRE-PARITY): assistant summary doesn't carry
+-- tool dispatch state, so both fields default to empty.
+func summary_msg(summary: string) -> Msg {
+  { role: "assistant", content: "[CONTEXT SUMMARY] ${summary}", tool_calls: [], tool_call_id: "" }
+}
+
+-- Pin the original task so it is never summarized away. Sits at the top of the
+-- compacted list every round, so the model never loses the goal even after many
+-- compactions (the original task is a turn-0 user message that would otherwise be
+-- folded into the lossy summary).
+func task_msg(task: string) -> Msg {
+  { role: "user", content: "[TASK] ${task}", tool_calls: [], tool_call_id: "" }
+}
+
+-- Partition out ALL system messages (the AILANG reference / instructions). They are
+-- the single most load-bearing content and MUST be preserved verbatim across compaction.
+-- We pull them from ANYWHERE in the list (not just index 0): a previous compaction or the
+-- structural layer can shuffle the reference off the front, and a head-only check would then
+-- intermittently DROP it — measured live: kept on some compactions, dropped on others, which
+-- made the model lose its syntax reference and drift into another language's syntax.
+type SysSplit = { sys: [Msg], rest: [Msg] }
+
+func split_system(msgs: [Msg]) -> SysSplit {
+  match msgs {
+    [] => { sys: [], rest: [] },
+    m :: tail => {
+      let r = split_system(tail);
+      if m.role == "system" then { sys: m :: r.sys, rest: r.rest }
+      else { sys: r.sys, rest: m :: r.rest }
+    }
+  }
+}
+
+-- Main compaction logic
+-- v0.2.0: reads ctx.context_limit (populated by the host from
+-- motoko_agent/src/core/context_usage.context_limit_for(model)) instead of
+-- running a duplicate heuristic. When the host signals "unknown model"
+-- (context_limit == 0), usage_percent returns 0 → PassThrough → no
+-- compaction. Better than guessing.
+export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  let pct = usage_percent(msgs, ctx.context_limit);
+
+  -- Don't compact if we have plenty of room (use configured threshold)
+  if pct < cfg.threshold_pct then PassThrough
+  else {
+    -- How many recent turns to keep intact? Use configured value, reduce at 90%+
+    let keep_recent = if pct >= 90 then (cfg.keep_recent / 2) else cfg.keep_recent;
+    -- Preserve ALL system messages (the AILANG reference / instructions) VERBATIM:
+    -- pull them out from anywhere, never summarize them, re-prepend them. Robust to the
+    -- reference being shuffled off index 0 (which made a head-only check drop it intermittently).
+    let sys_split = split_system(msgs);
+    let sys_prefix = sys_split.sys;
+    let body = sys_split.rest;
+    let split_result = split_msgs(body, keep_recent);
+    let old_turns = split_result.old;
+    let recent_turns = split_result.recent;
+
+    -- Nothing to compact
+    if list_length(old_turns) == 0 then PassThrough
+    else {
+      -- Summarize old turns into a structured running-state checkpoint
+      let prompt = summarization_prompt(ctx.task, old_turns);
+      let summary = summarize_with_ai(prompt, cfg.model);
+
+      -- Build compacted list: SYSTEM REFERENCE + pinned task + structured summary + recent
+      let compacted = sys_prefix ++ [task_msg(ctx.task), summary_msg(summary)] ++ recent_turns;
+
+      -- Log the summary text in the note so it is auditable (ailang chains / jsonl);
+      -- previously the summary was invisible and its quality could not be checked.
+      Compacted(compacted, "AI-summarized ${show(list_length(old_turns))} turns (${show(pct)}% -> ${show(usage_percent(compacted, ctx.context_limit))}%) [sys_kept=${show(list_length(sys_prefix))}]\n${summary}")
+    }
+  }
+}

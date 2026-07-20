@@ -14,12 +14,15 @@ ailang = ">=0.24.2"
 "sunholo/motoko_ext_context_mode" = { path = "packages/motoko-ext-context-mode" }
 "sunholo/motoko_ext_mcp" = "0.2.7"
 "sunholo/motoko_ext_exa_search" = "0.2.7"
-"sunholo/motoko_ext_ai_compat" = "0.2.1"
+# Vendored with the M-STD-AI-VISION-INPUT images-field patch until upstream
+# republishes against ailang >= v0.30.0 (registry 0.2.1 / 0.2.0 still carry
+# 4-field std/ai.Message literals and fail closed-record unification).
+"sunholo/motoko_ext_ai_compat" = { path = "packages/motoko_ext_ai_compat" }
 "sunholo/motoko_ext_compose" = "0.2.4"
 "sunholo/motoko_ext_a2a" = "0.2.2"
 "sunholo/motoko_ext_decision_framework" = "0.2.2"
 "sunholo/motoko_ext_microrag" = "0.4.2"
-"sunholo/motoko_ext_compaction_ai" = "0.2.0"
+"sunholo/motoko_ext_compaction_ai" = { path = "packages/motoko_ext_compaction_ai" }
 "sunholo/motoko_ext_ailang_docs" = "0.1.4"
 "sunholo/motoko_ext_scratchpad" = { path = "packages/motoko_scratchpad" }
 
