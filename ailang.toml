@@ -3,7 +3,10 @@ name = "local/motoko_agent"
 version = "0.1.0"
 edition = "1"
 module_prefix = "src"
-ailang = ">=0.24.2"
+# v0.30.0 floor: std/ai.Message is a 5-field closed record (images,
+# M-STD-AI-VISION-INPUT); the literals in src/core/ match that shape and
+# do not compile against older stdlibs.
+ailang = ">=0.30.0"
 
 [dependencies]
 "sunholo/logging" = "0.4.0"
