@@ -370,8 +370,9 @@ func msgs_to_messages(msgs: [Msg]) -> [Message] {
       role: m.role,
       content: m.content,
       tool_calls: m.tool_calls,
-      tool_call_id: m.tool_call_id
-    } :: msgs_to_messages(rest))
+      tool_call_id: m.tool_call_id,
+      images: []
+      } :: msgs_to_messages(rest))
   }
 }
 
@@ -383,8 +384,9 @@ func step_result_to_message(result: StepResult) -> Message {
     role: "assistant",
     content: result.message.content,
     tool_calls: result.tool_calls,
-    tool_call_id: ""
-  }
+    tool_call_id: "",
+    images: []
+    }
 }
 
 pure func cap_tool_message_content(content: string) -> string {
@@ -482,8 +484,9 @@ func tool_result_message(call: ToolCall, content: string) -> Message {
     role: "tool",
     content: cap_tool_message_content(content),
     tool_calls: [],
-    tool_call_id: call.id
-  }
+    tool_call_id: call.id,
+    images: []
+    }
 }
 
 -- Build a tool-role Message from a ToolResultEnvelope returned by an
@@ -496,8 +499,9 @@ func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
     role: "tool",
     content: result_env_model_content(envelope),
     tool_calls: [],
-    tool_call_id: envelope.tool_call_id
-  }
+    tool_call_id: envelope.tool_call_id,
+    images: []
+    }
 }
 
 -- Build the per-turn ExtCtx that motoko's extension hooks receive. Mirrors
@@ -683,8 +687,9 @@ func delegated_deferred_message(call: ToolCall) -> Message {
     role: "tool",
     content: payload,
     tool_calls: [],
-    tool_call_id: call.id
-  }
+    tool_call_id: call.id,
+    images: []
+    }
 }
 
 -- Build a denial tool-role Message for a ToolCall the policy gate rejected.
@@ -702,8 +707,9 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
     role: "tool",
     content: denial_payload,
     tool_calls: [],
-    tool_call_id: call.id
-  }
+    tool_call_id: call.id,
+    images: []
+    }
 }
 
 -- Dispatch each ToolCall through the full per-call rpc_loop pipeline:
@@ -823,8 +829,9 @@ func dispatch_calls(
                     role: "tool",
                     content: result_env_model_content(result_env),
                     tool_calls: [],
-                    tool_call_id: call.id
-                  };
+                    tool_call_id: call.id,
+                    images: []
+                    };
                   handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
                 },
                 Delegate => {
@@ -887,8 +894,9 @@ func dispatch_calls(
               role: "tool",
               content: result_env_model_content(result_env),
               tool_calls: [],
-              tool_call_id: call.id
-            };
+              tool_call_id: call.id,
+              images: []
+              };
             handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
           } else {
             let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
@@ -910,8 +918,9 @@ func dispatch_calls(
                 role: "tool",
                 content: result_env_model_content(result_env),
                 tool_calls: [],
-                tool_call_id: call.id
-              };
+                tool_call_id: call.id,
+                images: []
+                };
               handled_msg :: dispatch_calls(rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, session_id)
             },
             Delegate => {
@@ -1045,8 +1054,9 @@ func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string
         role: "user",
         content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${errors}",
         tool_calls: [],
-        tool_call_id: ""
-      })
+        tool_call_id: "",
+        images: []
+        })
     }
   }
 }
@@ -1335,8 +1345,9 @@ func loop_v2(
                     role: "assistant",
                     content: result.message.content,
                     tool_calls: [synth_call],
-                    tool_call_id: ""
-                  };
+                    tool_call_id: "",
+                    images: []
+                    };
                   let msgs_with_augmented = msgs ++ [augmented_assistant_msg];
                   let tool_msgs = dispatch_calls(rt, ctx, [synth_call], workdir, step_idx, stream_id, ohmy_pi, session_id);
                   let next_msgs = msgs_with_augmented ++ tool_msgs;
@@ -1381,8 +1392,9 @@ func loop_v2(
                     role: "user",
                     content: feedback,
                     tool_calls: [],
-                    tool_call_id: ""
-                  };
+                    tool_call_id: "",
+                    images: []
+                    };
                   let next_msgs = msgs_with_assistant ++ [feedback_msg];
                   loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                 },
@@ -1404,8 +1416,9 @@ func loop_v2(
                       role: "user",
                       content: "${persist_nudge_marker()} You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs.",
                       tool_calls: [],
-                      tool_call_id: ""
-                    };
+                      tool_call_id: "",
+                      images: []
+                      };
                     let next_msgs = msgs_with_assistant ++ [nudge_msg];
                     loop_v2(rt, task, env_url, hybrid_tools, budget, model, next_msgs, workdir, step_idx + 1, step_budget - 1, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms)
                   } else {
@@ -1626,8 +1639,9 @@ export func conversation_loop_v2(
           role: "user",
           content: content,
           tool_calls: [],
-          tool_call_id: ""
-        };
+          tool_call_id: "",
+          images: []
+          };
         let next_history = history ++ [user_msg];
         let _ = emit_event(session_id, "session_start", [
           kv("task", js(content)),
@@ -1779,7 +1793,7 @@ pure func kv_len(xs: [{key: string, value: Json}]) -> int {
 
 pure func mk_test_step_result(input: int, output: int, cr: int, cc: int) -> StepResult {
   {
-    message: { role: "assistant", content: "", tool_calls: [], tool_call_id: "" },
+    message: { role: "assistant", content: "", tool_calls: [], tool_call_id: "", images: [] },
     tool_calls: [],
     finish_reason: "stop",
     input_tokens: input,

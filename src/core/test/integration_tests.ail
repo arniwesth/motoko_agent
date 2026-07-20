@@ -31,14 +31,16 @@ pure func test_compaction_fires_above_70pct() -> bool
       role: "tool",
       content: repeat("x", 380),
       tool_calls: [],
-      tool_call_id: "t"
-    };
+      tool_call_id: "t",
+      images: []
+      };
     let user_msg: Message = {
       role: "user",
       content: "test",
       tool_calls: [],
-      tool_call_id: ""
-    };
+      tool_call_id: "",
+      images: []
+      };
     match compact_step_with_limit([user_msg, big_msg], "test/tiny", 100) {
       Err(_) => true,
       Ok(_)  => false

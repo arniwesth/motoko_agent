@@ -86,7 +86,8 @@ pure func elide_walk(msgs: [Message], total: int, keep_last: int, seen: int) -> 
           role: m.role,
           content: new_content,
           tool_calls: m.tool_calls,
-          tool_call_id: m.tool_call_id
+          tool_call_id: m.tool_call_id,
+          images: m.images
         };
         updated :: elide_walk(rest, total, keep_last, seen + 1)
       } else
@@ -148,7 +149,7 @@ func unknown_model_skips_compaction() -> bool
   tests [((), true)]
   {
     let msgs: [Message] = [
-      { role: "user", content: "hello", tool_calls: [], tool_call_id: "" }
+      { role: "user", content: "hello", tool_calls: [], tool_call_id: "", images: [] }
     ];
     usage_percent(msgs, "totally-unknown") == 0
   }
@@ -158,7 +159,7 @@ func below_threshold_passthrough() -> bool
   tests [((), true)]
   {
     let msgs: [Message] = [
-      { role: "user", content: "hello", tool_calls: [], tool_call_id: "" }
+      { role: "user", content: "hello", tool_calls: [], tool_call_id: "", images: [] }
     ];
     match compact_step(msgs, "anthropic/claude-sonnet-4-6") {
       Ok(ms) => _list_length(ms) == 1,
@@ -171,7 +172,7 @@ func elide_preserves_length() -> bool
   tests [((), true)]
   {
     let tool = func(id: string) -> Message {
-      { role: "tool", content: "some tool output", tool_calls: [], tool_call_id: id }
+      { role: "tool", content: "some tool output", tool_calls: [], tool_call_id: id, images: [] }
     };
     let msgs = [tool("t1"), tool("t2"), tool("t3"), tool("t4"), tool("t5")];
     _list_length(elide_old_tool_results(msgs, 2)) == 5
@@ -182,10 +183,10 @@ func count_tool_messages() -> bool
   tests [((), true)]
   {
     let msgs: [Message] = [
-      { role: "user",      content: "q",   tool_calls: [], tool_call_id: "" },
-      { role: "assistant", content: "a",   tool_calls: [], tool_call_id: "" },
-      { role: "tool",      content: "r1",  tool_calls: [], tool_call_id: "c1" },
-      { role: "tool",      content: "r2",  tool_calls: [], tool_call_id: "c2" }
+      { role: "user",      content: "q",   tool_calls: [], tool_call_id: "", images: [] },
+      { role: "assistant", content: "a",   tool_calls: [], tool_call_id: "", images: [] },
+      { role: "tool",      content: "r1",  tool_calls: [], tool_call_id: "c1", images: [] },
+      { role: "tool",      content: "r2",  tool_calls: [], tool_call_id: "c2", images: [] }
     ];
     count_tool_msgs(msgs) == 2
   }
@@ -200,8 +201,8 @@ func elide_all_tool_results() -> bool
     -- test should still drive the genuine elision path with content > 100.
     let original = "long tool output that genuinely exceeds eighty characters in length and then keeps on going for a while longer until it definitely passes the elide threshold and triggers actual shortening of the message body";
     let msgs: [Message] = [
-      { role: "user", content: "q", tool_calls: [], tool_call_id: "" },
-      { role: "tool", content: original, tool_calls: [], tool_call_id: "c1" }
+      { role: "user", content: "q", tool_calls: [], tool_call_id: "", images: [] },
+      { role: "tool", content: original, tool_calls: [], tool_call_id: "c1", images: [] }
     ];
     let compacted = elide_old_tool_results(msgs, 0);
     -- user msg unchanged; tool msg content elided (original > 80 chars)
@@ -223,7 +224,7 @@ func emergency_compaction_tries_elision() -> bool
     let tool_content = "tool result content that is reasonably long so that elision will actually reduce the size of the message when the compaction logic runs and tries to shrink things down";
     -- Create 50 tool messages (will be far under 95% for claude-sonnet-4-6)
     let msgs: [Message] = [
-      { role: "user", content: "task", tool_calls: [], tool_call_id: "" }
+      { role: "user", content: "task", tool_calls: [], tool_call_id: "", images: [] }
     ];
     -- For the test to pass, we just verify that compact_step returns Ok
     -- when there's reasonable headroom (not actually at 95%)
