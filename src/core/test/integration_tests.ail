@@ -20,16 +20,21 @@ pure func test_cost_budget_exhausted() -> bool
     step_cost * 3 < 50000 && step_cost * 4 >= 50000
   }
 
--- Test 2: Context exhaustion with an explicit tiny test limit.
--- A 380-char tool message + 4-char user message = 384 chars total.
--- estimate_tokens_messages: (384 + 3) / 4 = 96 tokens → usage = 96% >= 95%.
--- compact_step_with_limit returns Err("compaction_exhausted: ...") at >= 95%.
+-- Test 2: Context exhaustion with an explicit small test limit.
+-- usage_percent_with_limit reserves 75000 tokens for output, so with limit 80000
+-- the effective window is 5000 tokens. (A limit at or below the reserve gives
+-- effective <= 0 → usage pinned at 0 → compaction never fires — fail open.)
+-- A 34000-char tool message + 4-char user message = 34004 chars total.
+-- estimate_tokens_messages: (34004 + 6) / 7 = 4858 tokens → usage = 97% >= 95%.
+-- Emergency compaction keeps the last 1 tool result — the big message itself — so
+-- nothing shrinks and compact_step_with_limit returns Err("compaction_exhausted: ...").
 pure func test_compaction_fires_above_70pct() -> bool
   tests [((), true)]
   {
     let big_msg: Message = {
       role: "tool",
-      content: repeat("x", 380),
+      -- nested repeat: 340 * 100 = 34000 chars without tripping the recursion-depth cap
+      content: repeat(repeat("x", 100), 340),
       tool_calls: [],
       tool_call_id: "t"
     };
@@ -39,7 +44,7 @@ pure func test_compaction_fires_above_70pct() -> bool
       tool_calls: [],
       tool_call_id: ""
     };
-    match compact_step_with_limit([user_msg, big_msg], "test/tiny", 100) {
+    match compact_step_with_limit([user_msg, big_msg], "test/small", 80000) {
       Err(_) => true,
       Ok(_)  => false
     }
