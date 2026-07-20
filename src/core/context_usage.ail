@@ -44,6 +44,10 @@ pure func context_limit_base(model: string) -> int
     else if startsWith(model, "deepseek/deepseek-v4") then 1000000
     else if startsWith(model, "ollama/qwen3") then 262144
     else if model == "test/tiny" then 100
+    -- test/small: smallest limit that survives the 75k output-headroom reserve in
+    -- usage_percent (effective = 80000 - 75000 = 5000 tokens). test/tiny's effective
+    -- is <= 0, so compaction tests that must actually fire use test/small.
+    else if model == "test/small" then 80000
     else 0
   }
 
