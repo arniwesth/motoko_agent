@@ -77,6 +77,7 @@ dst:
 
 dst_seeded:
 	ailang run --caps IO,Env,Rand --entry main scripts/dst/compaction_seeded_dst.ail
+	ailang run --caps IO,Env,Rand --entry main scripts/dst/phase_c_seeded_dst.ail
 
 compaction_dst:
 	ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail
