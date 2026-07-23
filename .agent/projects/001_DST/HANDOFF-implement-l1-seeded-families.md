@@ -58,9 +58,22 @@ not re-open them. No CI changes, no shared-file changes.
   `should_checkpoint` (83-89) requires `checkpoint_enabled` AND calibrated usage ≥
   `checkpoint_pct` AND `checkpoint_would_relieve` — hence the plan's one-sided
   assertions.
-- **Calibration fallback**: with zero telemetry (`last_input_tokens` and
-  `last_estimated_input_tokens` = 0) calibrated usage equals the raw `Σchars/4` estimate,
-  so drawn usage targets are computable via the L0 `limit_for_pct` trick.
+- **Calibration fallback** (read directly, `compaction.ail:60-67`): `affine_calibrate`
+  returns the raw estimate when either anchor is 0, so with zero telemetry the calibrated
+  usage `should_checkpoint` uses EQUALS the exported `history_usage_percent(h, limit)` —
+  use that function for family B's below-threshold recompute.
+- **Checkpoint termination is production-guaranteed**: `checkpoint_would_relieve`
+  (`phase_vocab.ail:391-394`) requires the *projected* post-checkpoint usage
+  `< checkpoint_pct` at decision time, so family B's "next `decide` is `CallModel`"
+  assertion is sound for ANY drawn params — a violation is a real spin bug.
+- **Copy sources in the fixed L1 gate**: `msg` builder (line 51); 12-field `policy`
+  builder (59-73); **zero-telemetry `StepState` literal at lines 117-127** (needs
+  `import std/json (jo)` for `ext_artifacts`); `apply_checkpoint` → `{state, event}` with
+  `CheckpointTaken(info)` unwrap and `validate_checkpoint_chain(before, [info], after)`
+  usage all demonstrated in scenarios at lines 111-180.
+- **`stage_record` returns a `LedgerRecord`** via the `CompactionStageRecord` constructor
+  (`hook_phase.ail:15-23`); unwrap with `match r { CompactionStageRecord(x) => ... }`;
+  expected `TraceStage*` constructors are exported by `src/core/phase_vocab`.
 - The fixed L1 gate runs everything needed at `--caps IO`; the seeded gate needs exactly
   `--caps IO,Env,Rand` (Env for seed config, Rand for generation). Nothing here needs
   FS/Clock/AI.

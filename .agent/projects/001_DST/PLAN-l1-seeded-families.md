@@ -94,12 +94,14 @@ from its `trace param` echo.
 Copy the L0 gate's skeleton (`compaction_seeded_dst.ail`): env config block
 (`DST_SEEDS`/`DST_BASE_SEED` via `getEnvOr` + `stringToInt`, set-but-unparseable or `< 1`
 ⇒ `CONFIG ERROR` + `exit(1)`), per-family seed loops, output contract. Copy fixture
-builders from the fixed L1 gate (`msg(role, content)`, `policy(context_limit)`,
-`policy_with_checkpoint`-style builder with a **drawn** `checkpoint_pct`, a zero-telemetry
-`StepState` builder — note the fixed gate's `state_from_msgs` sets
-`last_input_tokens = context_limit`, which engages calibration; the seeded builder must
-zero it per Non-Goals). Reuse `pick_int` from `src/core/test/dst_gen` and
-`limit_for_pct`-style computation against the **core** `estimate_tokens_messages`.
+builders from the fixed L1 gate: `msg(role, content)` (line 51), the 12-field
+`policy(context_limit)` builder (lines 59-73, parameterized over `checkpoint_pct` and
+`checkpoint_enabled` instead of hardcoding), and the **zero-telemetry `StepState` literal
+from lines 117-127** (the `history_rewrite` scenario) — NOT `state_from_msgs` (line 295),
+which sets `last_input_tokens = context_limit` and silently engages calibration. The state
+literal needs `import std/json (jo)` for `ext_artifacts: jo([])`. Reuse `pick_int` from
+`src/core/test/dst_gen` and `limit_for_pct`-style computation against the **core**
+`estimate_tokens_messages`.
 
 Families (ids `phase_c.gen.<family>`; every failure echoes all drawn params in one
 `trace param ...` line):
@@ -111,7 +113,11 @@ oracle composed from exported functions:
   `[exhaustion-5, exhaustion-1, exhaustion, exhaustion+5]` (from `exhaustion_pct()`).
 - Build msgs: `n_systems` system messages then `n_tail` user/assistant messages (contiguous
   prefix by construction); `split = split_for_compaction(msgs)`;
-  `limit = estimate*100/pct`.
+  **`chain = segment_messages(split.segment)`** (the non-system tail — NOT the full list,
+  which would duplicate the pinned prefix in the payload since seal prepends
+  `split.pinned`); `limit = estimate_tokens_messages(msgs)*100/pct` (note
+  `pinned ++ chain == msgs` by construction, so the estimate over `msgs` is the payload
+  estimate).
 - Expected outcome recomputed from **actual** values (rounding-proof, uses only exported
   production functions — composition test, not a re-implementation):
   - `require_system_prompt && system_prefix_chars(split.pinned) == 0` ⇒
@@ -133,12 +139,20 @@ invariants (mirrors the L0 invariants-only style; `should_checkpoint` also requi
   telemetry; fresh `StepState` (no pending tools, fresh finish reason, `step_idx` 0).
 - `context_limit = estimate*100/target_usage`; policy-off and policy-on variants per seed:
   - policy off (`checkpoint_enabled: false`): `decide` must NOT be `TakeCheckpoint`;
-  - policy on, actual usage `< checkpoint_pct` (recomputed via the exported usage
-    function): must NOT be `TakeCheckpoint`;
-  - policy on, decision IS `TakeCheckpoint`: `apply_checkpoint` then assert
-    `history_valid_transcript`, `validate_checkpoint_chain(before, [cp], after)`,
-    `history_len == n_systems + 1`, and the *next* `decide` is `CallModel`
-    (terminates, no checkpoint spin).
+  - policy on, actual usage `< checkpoint_pct` — recompute via the exported
+    `history_usage_percent(h, limit)` (`phase_vocab.ail:368`), which under zero telemetry
+    equals the calibrated value `should_checkpoint` uses (verified: `affine_calibrate`
+    falls back to the raw estimate when either anchor is 0, `compaction.ail:60-67`):
+    must NOT be `TakeCheckpoint`;
+  - policy on, decision IS `TakeCheckpoint(plan)`: `apply_checkpoint(state, plan)` then
+    assert `history_valid_transcript`, `validate_checkpoint_chain(before, [info], after)`
+    (unwrap `CheckpointTaken(info)` from the applied event, mirroring the fixed
+    `checkpoint_output_is_valid_transcript` scenario), `history_len == 2` (one system +
+    the checkpoint summary), and the *next* `decide` on the applied state is `CallModel`.
+    The termination assertion is universally sound: `checkpoint_would_relieve` already
+    required the *projected* post-checkpoint usage `< checkpoint_pct` at decision time
+    (`phase_vocab.ail:391-394`), so a re-checkpoint on the next decide would be a genuine
+    production spin bug for any drawn params.
 
 **C. `phase_c.gen.split_prefix`** — split/pinning laws over drawn shapes:
 - Draw: `n_systems ∈ [0,4]`, `n_tail ∈ [0,12]`, `content_len ∈ [10,200]`. The
@@ -155,7 +169,13 @@ invariants (mirrors the L0 invariants-only style; `should_checkpoint` also requi
   `"gen_ext_<i>"`.
 - Map each through `stage_record(step, stage)`; assert record count, ext-id order
   preservation, per-element outcome mapping, and `step` field fidelity — the generated
-  analog of the two fixed literal-list scenarios.
+  analog of the two fixed literal-list scenarios. Note `stage_record` returns a
+  `LedgerRecord` wrapped via the `CompactionStageRecord` *constructor*
+  (`hook_phase.ail:15-23`): assertions unwrap with
+  `match r { CompactionStageRecord(x) => ... }`, and the expected `TraceStageApplied` /
+  `TraceStageRejected` / `TraceStagePassed` constructors are imported from
+  `src/core/phase_vocab` (as `hook_phase` itself does). Use a recursive checker over the
+  generated list, not the fixed scenarios' 3-element pattern match.
 
 Output contract (same shapes as L0): per-seed
 `scenario=phase_c.gen.<family> seed=<s> ok` lines; per-family
