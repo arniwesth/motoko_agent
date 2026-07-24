@@ -28,6 +28,11 @@ Relates to:
   remains extension-resident; this ADR controls the effects through which that policy observes and
   acts on the world.
 - `NOTE-scope-and-sequence.md` — project boundary, rollout order, and acceptance gates.
+- [`sunholo-data/ailang-world`](https://github.com/sunholo-data/ailang-world) and
+  `NOTE-ailang-world-overlap.md` — AILANG World's persistent production effect broker, immutable
+  transition history, and replay machinery overlap conceptually with this ADR's effect boundary
+  and artifacts. The note records the layer boundary, possible reuse, and terminology risk; AILANG
+  World does not replace the seed-driven deterministic test world.
 
 ## TL;DR
 
