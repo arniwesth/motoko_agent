@@ -9,7 +9,7 @@ import std/ai (Message, ToolCall)
 import std/env (getEnvOr)
 import std/io (println, exit)
 import std/json (jo)
-import std/list (length)
+import std/list (length, foldl)
 import std/option (Some, None)
 import std/rand (rand_seed, rand_int)
 import std/result (Result, Ok, Err)
@@ -549,9 +549,14 @@ func run_config(base: int, seeds: int) -> () ! {IO, Rand} {
       if stage_failed == 0 then
         println("family=phase_c.gen.stage_records seeds=${show(seeds)} ok")
       else ();
-    let failed = seal_failed + checkpoint_failed + split_failed + stage_failed;
+    -- Derive both the family count and the failure total from one list so a
+    -- dropped family moves families= (and a dangling reference fails to compile),
+    -- instead of a literal that can print families=4 having run three.
+    let family_failures = [seal_failed, checkpoint_failed, split_failed, stage_failed];
+    let families = length(family_failures);
+    let failed = foldl(\acc x. acc + x, 0, family_failures);
     if failed == 0 then
-      println("phase_c_seeded_dst PASS families=4 base_seed=${show(base)} seeds=${show(seeds)}")
+      println("phase_c_seeded_dst PASS families=${show(families)} base_seed=${show(base)} seeds=${show(seeds)}")
     else {
       let _ = println("phase_c_seeded_dst FAIL failed=${show(failed)}");
       exit(1)
