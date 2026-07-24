@@ -17,9 +17,10 @@ PRs #99 and #100 added a seeded axis: a PRNG-seeded generator draws input parame
 production transition code (`scripts/dst/compaction_seeded_dst.ail`,
 `scripts/dst/phase_c_seeded_dst.ail`).
 
-The branch names (`mot-43-l1-seeded-families`) and the make targets (`dst_seeded`) all carry the
-word "simulation." A review of what actually landed at HEAD found that the term is being applied
-to something that does not yet meet the established engineering definition of DST — and, more
+The branch name (`mot-43-l1-seeded-families`) and the make target (`dst_seeded`) carry the "DST"
+label — whose middle word is *Simulation*. A review of what actually landed at HEAD found the
+label is being applied to something that does not yet meet the established engineering definition
+of DST — and, more
 importantly, that **the canonical definition of DST cannot be met by an agent harness as-written,
 and should not be the target.** The physical-environment simulation that DST-the-artifact
 (FoundationDB, TigerBeetle, Antithesis) is built around is overkill here; but "therefore drop the
@@ -36,11 +37,12 @@ Grounded against HEAD (branch `arniwesth/mot-43-l1-seeded-families`):
   `src/core/agent_loop_v2.ail:102-104,120-122`.
 - No scheduling / interleaving / fault-injection / virtual-clock vocabulary exists anywhere in
   `.ail` (grep over `src/`, `scripts/`: every `crash`/`partition` hit is a production-behavior
-  comment, never a test-injected fault). The clock is nulled in the seeded path, not virtualized.
+  comment, never a test-injected fault). The seeded path has no clock dimension at all; the
+  framework normalizes clock-derived fields rather than virtualizing them (`../001_DST/ADR-001`).
 
 ## Definition of DST (the engineering artifact)
 
-DST, as coined by FoundationDB and productized by TigerBeetle / Antithesis / Resonate, is:
+DST, as pioneered by FoundationDB and productized by TigerBeetle / Antithesis / Resonate, is:
 
 > Run the **real system logic**, as one or more logical actors, against a **simulated
 > environment** whose entire behavior — event orderings, fault timings, clock advances, and all
@@ -99,10 +101,14 @@ by omission:
      dangling tool call the next provider turn rejects — a real ledger-integrity bug class.
 
 3. **Physical-fault and multi-actor simulation are OUT OF SCOPE by decision.** Torn writes,
-   partitions, and peer consensus faults test a correctness contract Motoko does not have (no
-   replication, no consensus, no durability-across-crash guarantee). Simulating them would test a
-   property we do not hold. This is a decided exclusion, revisited only if Motoko grows a
-   distributed component.
+   block-level corruption, partitions, and peer consensus faults test a correctness contract
+   Motoko does not have: no replication, no consensus, and no *physical* durability contract
+   (no fsync/recovery/replication). The boundary is physical vs. logical, not durability-in-
+   general: the ledger's guarantee that a `run_summary` is emitted on *every* termination path —
+   success and the abnormal ones (`cost_exhausted`, `dp7_rejected`, `compaction_exhausted`,
+   `max_steps`; `src/core/session.ail:826-829`) — is a *logical* completeness invariant that IS in
+   scope and assertable over the `LedgerTrace`. This exclusion is revisited only if Motoko grows a
+   distributed or crash-recoverable-storage component.
 
 ### D2. The seven-pillar checklist is the conformance definition
 
@@ -110,6 +116,8 @@ Motoko is entitled to the unqualified word **"DST" / "simulation"** in code, CI 
 descriptions, and docs only when it meets, at the logical-fault / single-actor level:
 
 - Pillar 1 (hermetic determinism) — **met**.
+- Pillar 2-logical (the provider/tool protocol modeled as `ScriptedStep`, incl. fault variants;
+  same mechanism as pillar 4) — **required** (D4).
 - Pillar 3 (seed generates the trajectory of environment events) — **required**.
 - Pillar 4 (seed injects logical faults from the D1.2 catalogue) — **required**.
 - Pillar 5 (a stepped virtual clock carried in the script; timeouts reachable) — **required**.
@@ -122,7 +130,7 @@ Until pillars 3/4/5 are met, the method is **not** DST regardless of how much ma
 ### D3. HEAD is not DST; name it honestly until D2 is met
 
 At HEAD the seeded axis meets pillars 1 and 6 solidly, half of 7 (repro substrate without the
-schema-version key), and **none of 3, 4, 5**. The honest label for HEAD is
+schema-version key), and **none of 2-logical, 3, 4, 5**. The honest label for HEAD is
 **"seeded deterministic scenario + parameter-generation testing"** — property-based testing over
 agent-loop state. It is *strictly stronger than trace replay* (you cannot replay a trace never
 recorded; the inputs here were never observed) and *strictly weaker than DST*.
@@ -155,22 +163,22 @@ This single move installs pillar 3 (linear ordering), re-introduces pillar 5 (cl
 script rather than deleted), opens pillar 4 (fault variants in `ScriptedStep`), and closes the
 standing gap that **no generated family asserts over the ledger** — the layer the framework is
 built around. `stub_step` already carries `Scripted`/`ScriptedStep`; the ledger already *is* the
-trace. That work is tracked as mot-44.
+trace. That work is the proposed next item (mot-44).
 
 ## HEAD scorecard (branch `arniwesth/mot-43-l1-seeded-families`)
 
 | Pillar | Status at HEAD | Evidence |
 |--------|----------------|----------|
-| 1 Hermetic determinism | **Met, stronger than canon** — effect-enforced (`--caps IO` fails at perform time), not convention-enforced | conformance uses caps-as-proof |
-| 2 Simulated environment | **Absent** — model port is a fake returning generated scalars, no environment model | `phase_c_seeded_dst.ail` draws `content_len`/`n_tail`/`n_systems` |
+| 1 Hermetic determinism | **Met, stronger than canon** — effect-enforced, not convention-enforced: the gate runs under a narrow `--caps IO,Env,Rand` and any unmodeled effect fails at perform time | caps-as-conformance |
+| 2 Simulated environment (logical) | **Absent** — model port is a fake returning generated scalars, no environment-response model | `phase_c_seeded_dst.ail` draws `content_len`/`n_tail`/`n_systems` |
 | 3 Seed-driven schedule | **Absent** — seed draws input params; `checkpoint_pressure`'s 2 steps are a *fixed authored* sequence | no scheduler vocabulary in `.ail` |
 | 4 Fault injection | **Absent** — no seed-timed crash/denial/truncation | grep clean |
-| 5 Virtual time | **Absent — deleted, not virtualized** (the inversion of DST) | clock nulled in seeded path |
+| 5 Virtual time | **Absent — normalized away, not virtualized** (the inversion of DST) | no clock dimension in seeded path |
 | 6 Invariant oracle | **Met** — one-sided properties, `checkpoint_pressure` liveness assertion | property discipline held |
-| 7 Search economics + repro | **Half** — RNG canary pins PRNG; but `DST_SEEDS=5 DST_BASE_SEED=1` = 25 fixed cases, no shrink, no schema-version key | see finding below |
+| 7 Search economics + repro | **Half** — RNG canary pins PRNG; but the default `DST_SEEDS=5 DST_BASE_SEED=1` yields 25 fixed cases (5 families — 4 in `phase_c` + 1 in `compaction` — × 5 seeds), identical every run: no shrink, no schema-version key | Open Questions |
 
 **Verdict:** 2 of 7 solid (1, 6), one half (7), none of the three that constitute simulation
-(3, 4, 5) — with pillar 5 actively removed. HEAD is PBT, not DST.
+(3, 4, 5) — with pillar 5 normalized away rather than virtualized. HEAD is PBT, not DST.
 
 ## Consequences
 
@@ -188,7 +196,7 @@ Negative / costs:
   this is a naming discipline the team must actually keep.
 - `ScriptedStep` must grow fault variants, and every consumer match becomes non-exhaustive until
   updated — an ABI-lockstep-style ripple the conformance kit will surface (by design).
-- Virtual time re-introduces a controlled clock the seeded path had removed for simplicity.
+- Virtual time re-introduces a controlled clock the seeded path never modeled.
 
 ## Rejected Alternatives
 
