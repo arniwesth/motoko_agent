@@ -31,6 +31,32 @@ AILANG v0.26.0 API:
 `probe_real_stream_callback.ail` is the positive control: with `--ai-stub`, the actual API invokes
 an IO-only callback twice (`ContentDelta`, then `Usage`) and returns a final successful result.
 
+## Toolchain resolution caveat (added 2026-07-24)
+
+**`probe_real_stream_callback.ail` only passes under project module resolution.** Run from this
+directory it now fails with a `Message` record-field mismatch (`missing fields: images`), because
+`ailang` resolves a *different, newer* `std/ai` for files outside a project source root — one whose
+`Message` carries the v0.30.0 vision-input `images` field.
+
+This is **not** an API regression and the probe does **not** need editing. Under the project's
+pinned stdlib `Message` still has four fields; `src/core/ai_compat.ail:193` constructs exactly that
+shape in production and checks clean. To reproduce the recorded positive-control result, copy the
+probe to a project source path and give it a matching module name:
+
+```bash
+sed 's|^module .*|module scripts/dst/zz_pc|' \
+  .agent/projects/009_motoko_dst_execution/spike/probe_real_stream_callback.ail > scripts/dst/zz_pc.ail
+ailang run --caps AI,IO --ai-stub --entry main scripts/dst/zz_pc.ail   # PASS real_stream_callback stop
+rm -f scripts/dst/zz_pc.ail
+```
+
+The two expected-negative probes and `stream_capture_probe.ail` are unaffected — they reproduce
+identically in both resolution contexts (re-verified 2026-07-24, including
+`parallel_passes=8 bad_markers=0`).
+
+Generalise the lesson before quoting any of this upstream: **a loose `ailang check` does not
+resolve the project's stdlib.** Validate under a project module path.
+
 ## Commands
 
 ```bash
