@@ -1,6 +1,7 @@
 # Upstream request (DRAFT — not submitted): recorded-stream API for `std/ai.stepWithStream`
 
-**Status**: Draft for review. **Nothing has been sent.**
+**Status**: Draft, revised after independent review and a working local implementation.
+**Nothing has been sent.**
 **Target**: `sunholo-data/ailang`
 **Blocks**: `ADR-001-deterministic-test-world-architecture.md` (this project) — acceptance is gated
 on this API landing plus a direct positive integration probe against the pinned runtime.
@@ -17,10 +18,19 @@ skill's pattern table.)
 
 ## Submission fields
 
-- **title**: `Feature: recorded-stream API — stepWithStream cannot return the observed chunks`
+- **title**: `Feature: recorded-stream API — stepWithStream cannot return the observed chunks (implementation available)`
 - **category**: `feature`
-- **ailang_version**: `AILANG v0.26.0` (commit `3b52a24d24431c372ed5605289ef039592209514`, built
-  2026-07-15) — verified locally with `ailang --version`; repo floor is `ailang = ">=0.26.0"`.
+- **ailang_version** — verbatim `ailang --version` on the pinned toolchain:
+
+  ```text
+  AILANG v0.26.0
+  Commit: 3b52a24
+  Full:   3b52a24d24431c372ed5605289ef039592209514
+  Built:  2026-07-15_08:04:20
+  ```
+
+  Repo floor is `ailang = ">=0.26.0"` (`ailang.toml:6`). Also reproduced on the released v0.30.0 and
+  on `dev` — see *Version coverage*.
 - **from**: `motoko_agent`
 
 ## Body (submission-ready)
@@ -35,6 +45,12 @@ and exact capture.
 
 We would like an API that preserves immediate callback delivery **and** returns the exact ordered
 observed chunks.
+
+We have implemented one against `dev` and it is small — an accumulator beside the existing chunk
+counter, above the provider layer, with no change to `Provider.StepWithStream`, to SSE handling, or
+to `stepWithStream` itself. Details and test results are in *Proposed remedy* below. **We are happy
+to open a PR if you want it in this shape**, or to drop it if you would rather design the surface
+yourselves — the evidence below stands either way.
 
 ### Why this matters
 
@@ -115,12 +131,40 @@ gap, not a diagnostics problem.
 `IO`-only callback is invoked twice (`ContentDelta`, then `Usage`) and a final typed result is
 returned:
 
+```ailang
+module probe_old_api
+
+import std/ai (stepWithStream, Message, StreamChunk, ContentDelta, ThinkingDelta, Usage)
+import std/io (println)
+
+func render(chunk: StreamChunk) -> () ! {IO} {
+  match chunk {
+    ContentDelta(text) => println("LIVE content ${text}"),
+    ThinkingDelta(_) => println("LIVE thinking"),
+    Usage(_) => println("LIVE usage")
+  }
+}
+
+export func main() -> () ! {AI, IO} {
+  let messages: [Message] = [{
+    role: "user", content: "old api regression probe",
+    tool_calls: [], tool_call_id: "", images: []
+  }];
+  match stepWithStream("", messages, [], [], render) {
+    Ok(result) => println("PASS old_api ${result.finish_reason}"),
+    Err(error) => println("FAIL old_api ${error.code}")
+  }
+}
+```
+
 ```text
-$ ailang run --caps AI,IO --ai-stub --entry main probe_real_stream_callback.ail
+$ ailang run --caps AI,IO --ai-stub --entry main probe_old_api.ail
 LIVE content {"kind":"Wait"}
 LIVE usage
-PASS real_stream_callback stop
+PASS old_api stop
 ```
+
+(Drop `images: []` when running against v0.26.0, where `Message` has four fields.)
 
 The only thing we cannot do is *retain* those two chunks.
 
@@ -146,58 +190,115 @@ partial-stream-then-error), 17/17 projection parity (exactly one projection per 
 and 8 parallel independent evaluators using identical fixed scopes all pass with no cross-process
 collision. So the blocker is purely the callback/result contract, not the recording design.
 
-### Requested remedy
+### Proposed remedy (implemented against `dev`)
 
-**Preferred** — a recorded-stream entry point (new function or richer result type) that keeps
-immediate callback delivery and additionally returns the exact ordered observed chunks. Sketch
-mirroring the existing `stepWithCache`/`stepWithStream` parameter shape — not a prescription:
+An **additive** entry point that keeps immediate callback delivery and additionally returns the
+exact ordered observed chunks. Implemented and tested at
+`24120ade2ade3560af35e45fddd496fb1901c836`:
 
 ```ailang
--- identical arguments to stepWithStream; returns the final result *and* the
--- chunks exactly as they were delivered to on_chunk
-stepWithStreamRecorded(
+export func stepWithStreamRecorded(
   model: string,
   messages: [Message],
   tools: [ToolSchema],
   cache_breakpoints: [CacheBreakpoint],
   on_chunk: (StreamChunk) -> () ! {IO}
-) -> Result[{ result: StepResult, chunks: [StreamChunk] }, AIError] ! {AI}
+) -> { chunks: [StreamChunk], outcome: Result[StepResult, AIError] } ! {AI}
 ```
 
-**Fallback** — widen the callback's effect row (row-polymorphic, or `{IO, SharedMem}`) so a caller
-can install its own recorder. We consider this strictly worse for our use case: it pulls
-`SharedMem` into a capability profile we deliberately keep narrow, weakening the
-capability-based hermeticity the deterministic profile relies on. It would need a separate
-capability judgment on our side.
+Three properties are load-bearing for us. If you reshape the surface, these are what we actually
+need — the signature above is just one way to get them:
 
-Either remedy unblocks us; the first requires no capability-model change.
+1. **Both delivery and capture, not either.** `on_chunk` must still fire as each chunk arrives.
+   Returning the list at the end *instead of* invoking the callback would silently remove live
+   streaming, which is the reason we cannot simply buffer today.
+2. **Chunks on both outcomes.** This is why the return is a record rather than
+   `Result[{result, chunks}, AIError]` — that shape has nowhere to put chunks when the stream
+   fails, and a partial stream followed by an error is precisely the run we most need a trace for.
+   Our deterministic-execution ADR requires the emission log alongside the final
+   `StepResult`/`AIError`, and names partial-stream-then-error as a required fault class.
+3. **Identity, not reconstruction.** The returned chunks must be the values delivered to
+   `on_chunk`, in the same order — not re-derived from the final message. Concatenating the
+   `ContentDelta` payloads must still equal `StepResult.message.content`, per your own documented
+   invariant. Our test asserts this by value identity, not equality.
 
-### Version note
+**Why additive.** `stepWithStreamRecorded` breaks no existing caller. Widening `stepWithStream`'s
+own return type would break every current user. We prefer the additive form for that reason and
+because it is likelier to land — while acknowledging it adds a fourth `step*` variant, which you
+may reasonably not want. **If you would rather have one entry point with a richer result, we are
+happy either way**; the three properties matter, the spelling does not.
 
-Reproduced on **v0.26.0** (our pinned floor). We also checked **v0.30.0**, the current latest, via
-the public AILANG docs MCP on 2026-07-24 and believe the blocker persists — but please correct us
-if the released signature differs from what the published docs describe:
+**Fallback we are not asking for** — widening the callback's effect row (row-polymorphic, or
+`{IO, SharedMem}`) so a caller can install its own recorder. This also works, but is strictly worse
+for us: it pulls `SharedMem` into a capability profile we deliberately keep narrow, weakening the
+capability-based hermeticity our deterministic profile relies on. We mention it only so the design
+space is complete.
 
-- The v0.30.0 `std/ai` module docs describe `StreamChunk` as *"one event emitted by
-  stepWithStream's on_chunk callback"* — i.e. chunks are still delivered only as a callback side
-  effect.
-- The v0.30.0 guide *"Browser `ai.step` with BYO API key"* documents the `stepWithStream` handler
-  contract as `(model, messages, tools, breakpoints, onChunk) => Promise<Response>`, and the
-  `Response` shape it specifies carries `message`, `tool_calls`, token counts, `finish_reason`, and
-  `model` — **no chunk list**. So the result still discards the observed chunks.
+#### What the implementation touches
 
-Three caveats on that check, stated plainly:
+Three files, no provider changes:
 
-1. We did not install and compile against a v0.30.0 release.
-2. The v0.30.0 stdlib snapshot served by the docs MCP does not list a `stepWithStream` entry under
-   `std/ai` at all — its function list ends at `stepWithCache` — so we could not read the exact
-   v0.30.0 signature or callback effect row from the docs. If that is a snapshot gap rather than an
-   API removal, it may be worth fixing independently.
-3. Files compiled *outside* a project source root on this machine resolve a newer `std/ai` than our
-   pinned one — one whose `Message` already carries the v0.30.0 `images` field. The two failures
-   above reproduce under **both** that newer stdlib and our pinned one, which is some evidence the
-   callback contract is unchanged across the two — but we state it as an observation, not a claim
-   about the released v0.30.0.
+| File | Change |
+|---|---|
+| `internal/effects/ai_step.go` | `aiStepWithStream` becomes a thin wrapper over a shared `runStepWithStream` that also returns the accumulated chunks; new `aiStepWithStreamRecorded` returns the `{chunks, outcome}` record |
+| `internal/builtins/ai_step.go` | registers `_ai_step_with_stream_recorded` and its type |
+| `std/ai.ail` | exports `stepWithStreamRecorded` |
+
+The recording happens where the AILANG closure is already wrapped into the Go `onChunk` callback —
+one `append` beside the existing `chunkCount++`, using the value `encodeStreamChunk` already
+builds. `Provider.StepWithStream`, its five implementations, and SSE handling are untouched, so no
+provider needs to change and the NO-OP fallback path is inherited unchanged.
+
+Tests added in `internal/effects/ai_step_with_stream_recorded_test.go`:
+
+```text
+--- PASS: TestAIStepWithStreamRecorded_ReturnsDeliveredChunksOnSuccess
+--- PASS: TestAIStepWithStreamRecorded_ReturnsChunksOnErrorPath
+--- PASS: TestAIStepWithStreamRecorded_ContentDeltaConcatEqualsMessageContent
+--- PASS: TestAIStepWithStream_UnchangedByRecordedVariant
+```
+
+plus the five pre-existing `TestAIStepWithStream_*` tests, all still passing. The error-path test
+needed a new fake handler that emits chunks *then* fails — the existing `fakeStepHandler` aborts
+before emitting anything, so that case was previously untested.
+
+End-to-end from AILANG under `--ai-stub`:
+
+```text
+LIVE content {"kind":"Wait"}      <- callback still fires live
+LIVE usage
+RETURNED count=2                  <- and the same chunks come back
+RETURNED order=content:{"kind":"Wait"}|usage|
+PASS concat_equals_message_content
+PASS recorded_stream stop
+```
+
+**Known gap**: the variant is native-only. `cmd/wasm/effects.go` has its own
+`WasmAIHandler.StepWithStream` and a documented `ailangSetAIStepWithStreamHandler` JS hook; we did
+not add a browser-side counterpart, since the JS `Response` contract is yours to extend and we did
+not want to presume its shape.
+
+### Version coverage
+
+The gap is current at three points, each checked by compiling — not by reading docs:
+
+| Version | Evidence |
+|---|---|
+| **v0.26.0** (our pinned floor) | Both repros above, commit `3b52a24d24431c372ed5605289ef039592209514` |
+| **v0.30.0** (released) | Both repros reproduce identically. Release archive SHA-256 `58561c11ca7be7710b3b4eca9ddfdf263f39bc4e36428969a1968175f10b84b6`, compiler reports commit `e37b370d1d7a9c4e7136b319e38bec4d5f2bd9a0`. `std/ai.ail:331-337` carries the same signature: `on_chunk: (StreamChunk) -> () ! {IO}`, returning `Result[StepResult, AIError]` |
+| **`dev`** (`24120ade2ade3560af35e45fddd496fb1901c836`) | `std/ai.ail:330-337` unchanged; a full-source search finds no recorded-stream variant. This is where we implemented the proposal |
+
+On v0.30.0 the positive control additionally needs `images: []` added to its `Message` literal —
+that is the v0.30.0 vision-input widening, unrelated to streaming, and we mention it only so the
+change is not misread as a streaming regression.
+
+**One docs-side observation, offered separately.** The stdlib snapshot served by the public docs MCP
+for `0.30.0` does not list `stepWithStream` under `std/ai` at all — its function list ends at
+`stepWithCache`, and `runTools` is likewise absent — even though the same version's `StreamChunk`
+docstring still describes it as *"one event emitted by stepWithStream's on_chunk callback"* and the
+guide *"Browser `ai.step` with BYO API key"* documents its handler contract. That looks like a
+snapshot/indexing gap rather than an API removal, and may be worth fixing independently of this
+request.
 
 ---
 
@@ -216,50 +317,55 @@ Every quoted command output in the body was produced during this review, not tra
   `PASS scoped.{success,partial_error,two_scope_isolation,collision_and_cleanup}`, and
   `live_projections=17 final_passes=1 bad_markers=0` — the cited 6/6 and 17/17.
 - **8-way parallel isolation re-run**: `parallel_passes=8 bad_markers=0`. Claim confirmed.
+- **v0.30.0 release** — both repros compiled against the checksum-verified release binary.
+- **`dev`** — cloned, built, and the proposal implemented and tested against it.
 
-### A false finding this review caught and removed
+### Two false findings caught before sending
 
-An earlier draft of this document reported, as a secondary bug, that `std/ai.Message` was
-unconstructible (a literal supplying `images: []` was rejected as missing `images`, and `ImagePart`
-was not exported). **That was wrong and has been deleted.** It was an artifact of running scratch
-files *outside* a project source root, where this machine resolves a newer `std/ai` than the
-project's pinned one. Under project module resolution the pinned `Message` has four fields, a
-four-field literal checks clean (`src/core/ai_compat.ail:193` does exactly this in production), and
-the spike's positive control passes. Filing it would have been a false bug report.
+**1. The `Message`/`ImagePart` bug (caught by the drafting session).** An earlier draft reported, as
+a secondary bug, that `std/ai.Message` was unconstructible. That was wrong and was deleted. Under
+the pinned stdlib `Message` has four fields, a four-field literal checks clean, and
+`src/core/ai_compat.ail:193` constructs exactly that shape in production. Filing it would have been
+a false bug report.
 
-The operational lesson, worth keeping: **`ailang check` on a loose file does not resolve the same
-stdlib as the project.** Any repro destined for upstream must be validated under a project module
-path, not just in a scratch directory.
+**2. The stated *cause* of #1 was also wrong (caught by the independent review).** The draft
+attributed it to AILANG module resolution — "files outside a project source root resolve a newer
+`std/ai`" — and shipped that sentence to upstream in the version note. It is false. A loose file in
+a scratch directory outside every project resolves the *pinned* stdlib correctly. The real cause is
+a **stale local compile cache**: `spike/.ailang/cache/compile/modules/std__ai` holds a v0.30.0
+interface left behind by the 2026-07-24 audit run, and the pinned v0.26.0 compiler silently reuses
+it. Removing that directory makes the spike directory behave like every other. Both false claims had
+the same root; only the second one was headed out the door.
+
+The operational lesson, corrected: **a stale `.ailang/cache/compile` from a different compiler
+version silently poisons type resolution, and the resulting error blames your source.** Validate any
+upstream-bound repro on a clean cache, and treat a type error that contradicts the stdlib you think
+you are using as a cache-invalidation suspect first.
+
+That cache behaviour is itself a defensible AILANG bug — a v0.26.0 compiler consuming a v0.30.0
+cached interface without a version check, then reporting a type error against correct user source.
+It is a **separate** report and must not be bolted onto this one.
 
 ## Reviewer checklist before sending
 
-Everything factual in this report has been verified. What remains are five judgment calls. Each is
-stated with what is at stake and a recommendation.
+Everything factual in this report has been verified. The four review findings that blocked sending
+(R1-R4) are resolved in the body. What remains are judgment calls, each stated with what is at stake
+and a recommendation.
 
-### 1. The remedy sketch — the only proposal in the document
+### 1. The proposal — RESOLVED by implementation, one decision left
 
-This will anchor the upstream design discussion, so it is worth more scrutiny than anything else
-here. Four sub-decisions:
+All four sub-decisions the earlier draft flagged are now settled in code rather than argued in
+prose: the shape is additive, chunks are returned on both outcomes, `on_chunk` still fires live, and
+the identity guarantee is asserted by a test. The body states all four as requirements.
 
-- **New function vs. changing `stepWithStream`'s return type.** As drafted we ask for an *additive*
-  `stepWithStreamRecorded`, which breaks no existing caller. Widening `stepWithStream` itself to
-  return chunks would be a breaking change for every current user. *Recommend keeping it additive* —
-  it is far likelier to land — while acknowledging in the issue that it adds a fourth `step*`
-  variant, which they may reasonably push back on. If they prefer one entry point with a richer
-  result, we should say we are happy either way.
-- **⚠ The sketch loses chunks on the error path.** `Result[{result, chunks}, AIError]` returns
-  chunks only on `Ok`. But partial-stream-then-error is a case we *explicitly validated* in the
-  spike (`PASS returned.partial_error`, `PASS scoped.partial_error`) — a trace that drops the
-  chunks observed before a failure is exactly the trace we need for a failed run. **This is a real
-  omission in the current draft.** *Recommend* asking for observed chunks on **both** outcomes,
-  e.g. an error variant that carries them, or a top-level `{chunks, outcome}` shape.
-- **Keep the callback.** We need live delivery *and* capture. If we only ask for "return the
-  chunks," a reasonable implementer might drop the callback and hand back the list at the end —
-  which silently breaks live streaming, our whole reason for asking. The draft keeps `on_chunk`;
-  make sure any rewording preserves that both are required.
-- **State the identity guarantee.** The returned list must be *the chunks as delivered to the
-  callback*, not re-derived from the final message — and their `ContentDelta` concatenation should
-  still equal `message.content`, per their own documented invariant.
+**The one decision left is whether to offer the PR at all**, and it is a real one. Offering it makes
+the ask concrete and hard to defer. It also spends social capital: an unsolicited implementation in
+someone else's codebase can read as presumptuous, especially when it adds a fourth `step*` variant
+they may not want. *Recommend offering, not attaching* — the body says "happy to open a PR if you
+want it in this shape," which leaves them the design call. **Do not open a PR before they answer.**
+
+Secondary: whether to mention the native-only wasm gap. *Recommend yes* — it is better that they
+hear it from us than find it. It is already in the body.
 
 ### 2. `feature` vs `limitation`
 
@@ -270,22 +376,24 @@ have proposed its shape. Low-regret either way; it is a label, not the argument.
 
 ### 3. Link the spike, or stay self-contained
 
-*Recommend staying self-contained, and offering the spike on request.* Two reasons: the report
-already carries the essential evidence (both repros, the positive control, the validation figures),
-and `.agent/projects/` is our internal working record — linking it exposes project 009's
-architecture and roadmap to an external reader for little gain. **Check before linking anything:
-confirm whether `arniwesth/motoko_agent` is actually public**, or the links are both useless and a
-signal of internal structure.
+*Recommend staying self-contained, and offering the spike on request.* `arniwesth/motoko_agent` is
+public (verified — `"private": false`), so links would resolve; the "useless links" half of the
+earlier argument is void. What remains is the reason that matters: `.agent/projects/` is our
+internal working record, and linking it exposes project 009's architecture and roadmap to an
+external reader for little gain. The report already carries the essential evidence.
 
 ### 4. Pre-flight
 
-- `gh auth status` — confirm we can file, and note *which account* files it, since that is public
+- **`gh` is not installed on this machine** (`gh: command not found`), and `~/.ailang/config.yaml`
+  does not exist. That rules out Channel 2 entirely. Channel 1 is unaffected — the issue form is a
+  browser URL — so file it there, under an account someone actually watches, since that is public
   attribution.
 - **Search upstream first**: check `sunholo-data/ailang` issues for an existing recorded-stream or
-  streaming-capture request before opening a duplicate. If one exists, add our repros as a comment
-  instead — a second reproduction on an existing issue is worth more than a new thread.
-- If `gh` is unavailable, Channel 3 (MCP `submit_feedback`) needs no auth, at the cost of a ticket
-  id instead of a URL.
+  streaming-capture request before opening a duplicate. If one exists, add our repros and the
+  implementation as a comment instead — a second reproduction on an existing issue is worth more
+  than a new thread.
+- Channel 3 (MCP `submit_feedback`) remains the no-auth fallback, at the cost of a ticket id
+  instead of a URL the ADR can cite.
 
 ### 5. Follow-up contact
 
@@ -301,6 +409,14 @@ blocker we want to hear back on.
 Reviewer: `claude-opus-5`, 2026-07-25. Independent pre-send review. **Nothing was sent.** Every
 quoted figure below was re-executed on this machine; no result was transcribed from `spike/README.md`
 or from the drafting session's verification record.
+
+> **Resolution (2026-07-25, same session).** R1-R8 are all addressed in the body above; the findings
+> are kept below as the audit trail, not as open items. R1 and R2 were fixed by deleting the two
+> false caveats and replacing them with compiled evidence. R3 and R4 were resolved not by rewording
+> but by **implementing** the API against `dev` — the error-path shape, the identity guarantee, and
+> "both delivery and capture" are now asserted by passing tests rather than requested in prose. See
+> *Proposed remedy (implemented against `dev`)*. The send/hold recommendation at the end has been
+> updated accordingly.
 
 ### R1 — Version-note caveat 3 is false, and it misattributes the cause to AILANG module resolution
 
@@ -547,6 +663,8 @@ The real spike probes, the Makefile, and CI were not touched.
 
 ## Send/hold recommendation
 
+### Original (pre-implementation)
+
 **Hold.** Send after three body edits: fix the two false version-note caveats (R1, R2) and rewrite the
 remedy sketch to return chunks on both outcomes (R3). R4 should ride along in the same pass — it is
 three sentences and it is what stops upstream from building the wrong thing. R5–R8 are polish and can
@@ -557,8 +675,34 @@ upstream says yes. R1 is the more urgent correction, though — R3 costs us a fo
 shipping a demonstrably false claim about their toolchain costs us the credibility that makes the
 rest of the report persuasive.
 
-**Residual risk after all edits**: unchanged and not removable by editing. The ask is only as good as
-upstream's willingness to add API surface at all, and a fourth `step*` variant is a reasonable thing
-for them to push back on. The error-path shape is the part most likely to need a second round even if
-they agree in principle — expect to negotiate `{chunks, outcome}` versus an error variant carrying
-chunks, and decide in advance which we can live with.
+### Updated (post-implementation, 2026-07-25)
+
+**Send, after the two human pre-flight steps.** The blockers are cleared: the false claims are gone,
+and the ask is no longer a sketch that would have produced the wrong API. Remaining before filing —
+both require a human, neither is a rewrite:
+
+1. **Search `sunholo-data/ailang` issues** for an existing recorded-stream or streaming-capture
+   request. If one exists, comment on it instead of opening a new thread.
+2. **File via the GitHub web form** under an account someone watches (`gh` is unavailable here).
+
+**Do not open a PR unless they ask.** The body offers one; that offer is the ask.
+
+### Residual risk
+
+Lower than before, but not zero, and the shape of it has changed.
+
+- **Retired**: the error-path gap, the identity guarantee, and the "could they drop the callback"
+  ambiguity. These are now demonstrated, not requested.
+- **Reduced**: "will they add API surface at all." A working, tested, additive patch with no
+  provider changes is much harder to defer than a feature request — but it is still their call, and
+  a fourth `step*` variant remains a reasonable thing to decline.
+- **Unchanged**: they may prefer a different spelling (one entry point with a richer result). The
+  body explicitly accepts that, so it costs a round of discussion, not a redesign.
+- **New**: the implementation is native-only; the wasm/browser handler has no recorded counterpart.
+  If they want parity before merging, that is additional work on a JS contract we do not own.
+- **New**: the patch tracks `dev` at `24120ade2`. It will drift. If this sits unanswered for long,
+  re-verify against `dev` HEAD before offering the PR.
+
+The ADR stays blocked either way until an upstream remedy actually lands and the spike gains its
+direct positive integration probe against a repinned toolchain. A local prototype is evidence, not
+the unblock.

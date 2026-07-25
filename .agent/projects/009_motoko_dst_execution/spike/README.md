@@ -1,8 +1,10 @@
 # Streaming-capture substrate spike
 
-Date: 2026-07-24
+Date: 2026-07-24 (integration probe added 2026-07-25)
 Toolchain: AILANG v0.26.0 (`3b52a24d24431c372ed5605289ef039592209514`)
-Status: Complete — current callback API cannot satisfy the ADR; upstream API work is required
+Status: Negative result complete — the current callback API cannot satisfy the ADR. A direct
+positive integration probe now exists and **passes against a local prototype** of the proposed
+upstream API; the D1 gate remains open until that API lands and the toolchain is repinned.
 
 This spike dispositions the streaming-capture gate in
 `../ADR-001-deterministic-test-world-architecture.md`. It is validation scaffolding, not a
@@ -31,31 +33,196 @@ AILANG v0.26.0 API:
 `probe_real_stream_callback.ail` is the positive control: with `--ai-stub`, the actual API invokes
 an IO-only callback twice (`ContentDelta`, then `Usage`) and returns a final successful result.
 
-## Toolchain resolution caveat (added 2026-07-24)
+## Direct positive integration probe (added 2026-07-25)
 
-**`probe_real_stream_callback.ail` only passes under project module resolution.** Run from this
-directory it now fails with a `Message` record-field mismatch (`missing fields: images`), because
-`ailang` resolves a *different, newer* `std/ai` for files outside a project source root — one whose
-`Message` carries the v0.30.0 vision-input `images` field.
+`probe_recorded_stream_integration.ail` + `run_integration_probe.sh` are the direct positive probe
+D1 requires for acceptance. Unlike `stream_capture_probe.ail`, which *models* the provider, this one
+drives the real path: a native SSE stream, the real `std/ai` chunk callback, and the proposed
+`stepWithStreamRecorded` API.
 
-This is **not** an API regression and the probe does **not** need editing. Under the project's
-pinned stdlib `Message` still has four fields; `src/core/ai_compat.ail:193` constructs exactly that
-shape in production and checks clean. To reproduce the recorded positive-control result, copy the
-probe to a project source path and give it a matching module name:
+**It does not close the D1 gate.** It passes against a *local prototype* of the upstream API, not a
+pinned release. D1 requires the API to have landed and the toolchain to be repinned. What this probe
+buys us now is different and still worth having: it validates the proposed API shape end-to-end from
+a consumer's perspective *before* upstream builds anything, so a shape problem surfaces while it is
+still cheap to change.
+
+### What it asserts
+
+All five D1 properties, on **both** outcomes:
+
+| Property | How it is asserted |
+|---|---|
+| immediate projection | every `LIVE` line falls between `CALL begin` and `RETURNED`, so chunks reached the sink during the call rather than batched after it |
+| exact returned-log parity | returned count and order equal the supplied sequence |
+| no duplicate delivery | projected count == supplied count == returned count |
+| success | server `MODE=success` → `OUTCOME ok stop` |
+| partial-stream-then-error | server `MODE=partial_error` → `OUTCOME err ConnectionFailed`, with both pre-failure chunks still returned |
+
+The probe cannot accumulate its own projections — that is precisely the capability the upstream
+request is about — so parity is asserted externally by comparing projected stdout lines against the
+returned list, the same method `stream_capture_probe.ail` uses.
+
+`fault_sse_server.py` is a minimal OpenAI-shaped SSE endpoint. In `partial_error` mode it emits two
+real content deltas and then drops the connection mid-chunked-body. The `OPENAI_BASE_URL`
+environment variable redirects AILANG's OpenAI provider at it, so no compiler patching is needed to
+induce the fault. This matters: a config-driven provider could not be used, because `stepWithStream`
+falls back to a NO-OP synthetic-chunk path for those, which cannot produce a *partial* stream.
+
+### Running it
 
 ```bash
-sed 's|^module .*|module scripts/dst/zz_pc|' \
-  .agent/projects/009_motoko_dst_execution/spike/probe_real_stream_callback.ail > scripts/dst/zz_pc.ail
-ailang run --caps AI,IO --ai-stub --entry main scripts/dst/zz_pc.ail   # PASS real_stream_callback stop
-rm -f scripts/dst/zz_pc.ail
+AILANG_SRC=~/src/ailang AILANG_BIN=~/src/ailang/bin/ailang ./run_integration_probe.sh
 ```
 
-The two expected-negative probes and `stream_capture_probe.ail` are unaffected — they reproduce
-identically in both resolution contexts (re-verified 2026-07-24, including
-`parallel_passes=8 bad_markers=0`).
+`AILANG_SRC` must be the toolchain source root — the compiler resolves its stdlib from the working
+directory, and the probe needs a `std/ai` exporting `stepWithStreamRecorded`.
 
-Generalise the lesson before quoting any of this upstream: **a loose `ailang check` does not
-resolve the project's stdlib.** Validate under a project module path.
+Recorded result against the prototype (`AILANG dev`, `24120ade2`):
+
+```text
+mode=success
+  PASS no_duplicate_delivery (projected=2)
+  PASS returned_parity_count (returned=2)
+  PASS returned_parity_order
+  PASS outcome
+  PASS immediate_projection (all LIVE within the call)
+
+mode=partial_error
+  PASS no_duplicate_delivery (projected=2)
+  PASS returned_parity_count (returned=2)
+  PASS returned_parity_order
+  PASS outcome
+  PASS immediate_projection (all LIVE within the call)
+
+integration_probe: PASS — all five D1 properties hold on both outcomes
+```
+
+The harness is load-bearing: run against the stock v0.26.0 toolchain it fails all ten assertions and
+exits 1, because `stepWithStreamRecorded` does not resolve.
+
+```bash
+AILANG_BIN=~/.local/bin/ailang ./run_integration_probe.sh   # exit 1, as it must
+```
+
+### What the partial-error result settles
+
+Both chunks observed before the failure come back:
+
+```text
+LIVE partial-1
+LIVE partial-2
+RETURNED count=2 order=partial-1|partial-2|
+OUTCOME err ConnectionFailed
+```
+
+That is the case a `Result[{result, chunks}, AIError]` shape would silently discard, and it is the
+concrete reason the upstream request asks for `{chunks, outcome}` instead. It is now demonstrated
+against a real stream rather than argued from the ADR.
+
+## D1 world-protocol vertical slice (added 2026-07-25)
+
+`probe_world_protocol_slice.ail` + `run_world_slice.sh` exist to answer a different question from
+every probe above. Those ask *"does the API return the chunks?"*. This one asks the question that
+actually decides adequacy: **can a driver satisfy D1 with it?**
+
+It runs a full discovery → replay cycle in one process:
+
+1. **Discovery** — a live provider exchange via `stepWithStreamRecorded`. Chunks project at
+   arrival; the returned list becomes the record.
+2. **Program** — the recorded emission log, which is exactly what the live exchange returned. *This
+   is the step the current callback-only API makes impossible* — the list would be empty.
+3. **Replay** — a deterministic exchange consuming that program, projecting each emission at its
+   virtual arrival point, calling no provider.
+4. **Parity** — emission logs, traces, and successor state must match.
+
+Run it:
+
+```bash
+AILANG_SRC=~/src/ailang AILANG_BIN=~/src/ailang/bin/ailang ./run_world_slice.sh
+```
+
+Recorded result on the error path — the live and deterministic traces are identical:
+
+```text
+PHASE discovery
+PROJECT live content:partial-1
+PROJECT live content:partial-2
+PHASE replay
+PROJECT replay content:partial-1
+PROJECT replay content:partial-2
+SLICE live_trace=content:partial-1/content:partial-2/outcome:err:code:ConnectionFailed/
+SLICE replay_trace=content:partial-1/content:partial-2/outcome:err:code:ConnectionFailed/
+```
+
+Both modes pass. The runner also fails all eight assertions and exits 1 against the stock v0.26.0
+toolchain, so the harness is load-bearing rather than vacuously green. The `program_non_empty`
+assertion exists specifically to catch a vacuous pass: two *empty* emission logs are trivially
+equal, and an empty log is exactly what the current API produces.
+
+### What the slice established
+
+- **The proposed shape destructures cleanly into D1.** `{chunks, outcome}` maps onto
+  `{intermediate_emissions[], response}` with no contortion — `emissions: map(describe,
+  recorded.chunks)`, `outcome: summarize(recorded.outcome)`. The probe compiled first try. This was
+  the main open question and the answer is favourable.
+- **Live/deterministic parity holds on both outcomes**, including partial-stream-then-error, which
+  is the case the trace contract most depends on.
+- **Chunk arrival times cannot be observed.** The callback's closed `{IO}` row rejects `Clock`
+  exactly as it rejects `SharedMem`:
+
+  ```text
+  incompatible closed rows: r1 has extra labels [], r2 has extra labels [Clock]
+  ```
+
+  and the returned `[StreamChunk]` carries no offsets. This looked like a gap against D2's "ordered
+  stream chunks with non-decreasing virtual offsets" — but it is not one: discovery **generates**
+  latency from the seeded generator rather than observing it, and replay takes offsets from the
+  recorded program. The live adapter only ever needs arrival *order*, which it has. Recorded here so
+  a future reader does not re-derive it, and so the upstream ask can stay focused rather than
+  acquiring a speculative timestamp requirement.
+- **Projection and trace-append are necessarily separate transitions for stream chunks.** Projection
+  happens inside the callback, during the provider call; the append happens after it returns. D6
+  asks the implementation to centralize "append to returned trace + emit projection" so neither
+  channel can be updated silently without the other — for chunks that is structurally impossible,
+  and the invariant has to be enforced by a parity check instead of by a shared code path. D1
+  already anticipates the split; this is a note for the implementation plan, not a defect.
+
+## Stale-compile-cache caveat (added 2026-07-24, corrected 2026-07-25)
+
+> **Correction.** This section previously claimed that `ailang` resolves a *different, newer*
+> `std/ai` for files outside a project source root. **That is false** and was independently
+> disproved on 2026-07-25: a loose file in a scratch directory outside every project resolves the
+> pinned stdlib correctly. The original diagnosis was wrong, and the wrong version of it reached a
+> draft of `../UPSTREAM-REQUEST-ailang-recorded-stream-api.md` before review caught it. The real
+> cause is below.
+
+For a period, `probe_real_stream_callback.ail` failed when run **from this directory** with a
+`Message` record-field mismatch over the v0.30.0 vision-input `images` field, while the same file
+checked clean everywhere else.
+
+The cause was a **stale local compile cache**. The 2026-07-24 v0.30.0 audit was run from this
+directory and left `spike/.ailang/cache/compile/modules/std__ai` holding a v0.30.0 `std/ai`
+interface. The pinned v0.26.0 compiler then silently reused that cached interface — no version
+check, no warning — and reported a type error against correct source. Removing the cache directory
+restored normal behaviour:
+
+```bash
+cp -r spike /tmp/spikecopy && cd /tmp/spikecopy
+ailang check probe_real_stream_callback.ail   # record field mismatch ... extra fields: images
+rm -rf /tmp/spikecopy/.ailang
+ailang check probe_real_stream_callback.ail   # ✓ No errors found!
+```
+
+The stale cache has been deleted. The probe needs no editing and never did; it passes from this
+directory on a clean cache. The two expected-negative probes and `stream_capture_probe.ail` were
+unaffected throughout — they reproduce identically in every context (re-verified 2026-07-25,
+including `live_projections=17 final_passes=1 bad_markers=0` and `parallel_passes=8 bad_markers=0`).
+
+The lesson, corrected: **a stale `.ailang/cache/compile` written by a different compiler version
+silently poisons type resolution, and the resulting error blames your source.** When a type error
+contradicts the stdlib you believe you are using, suspect cache invalidation before you suspect the
+compiler — and clear the cache before quoting any result upstream. (That missing version check is
+itself a defensible AILANG bug, and a separate report from the recorded-stream request.)
 
 ## Commands
 

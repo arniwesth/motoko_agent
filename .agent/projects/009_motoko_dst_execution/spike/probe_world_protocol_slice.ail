@@ -1,0 +1,222 @@
+-- Vertical slice of the ADR-001 D1 world protocol, over the real provider.
+--
+-- The other probes ask "does the recorded-stream API return the chunks?".
+-- This one asks the question that actually decides whether the API is
+-- adequate: **can a driver use it to satisfy D1?**
+--
+-- D1 requires two adapters behind one request/response shape:
+--
+--   handle(world_state, world_request)
+--     -> { intermediate_emissions[], response, next_world_state, observations }
+--
+--   * a LIVE adapter projects each chunk to the UI at arrival, then the driver
+--     appends the identical emission log to the trace in arrival order, before
+--     applying the final response transition;
+--   * a DETERMINISTIC adapter supplies the same emissions from a recorded
+--     program and projects each at its virtual arrival point;
+--   * "The two paths must produce the same event ordering and content without
+--     double-projecting live chunks."
+--
+-- So this probe runs a full discovery -> replay cycle in one process:
+--
+--   1. DISCOVERY  — live provider exchange via stepWithStreamRecorded.
+--                   Chunks project live; the returned list becomes the record.
+--   2. PROGRAM    — the recorded emission log, which is exactly what the live
+--                   exchange returned. This step is the one the current
+--                   callback-only API makes impossible.
+--   3. REPLAY     — deterministic exchange consuming that program.
+--   4. PARITY     — emission logs, traces, and next-state must match.
+--
+-- Requires a toolchain containing stepWithStreamRecorded. See README.
+--
+-- Run: ./run_world_slice.sh
+
+module probe_world_protocol_slice
+
+import std/ai (
+  stepWithStreamRecorded,
+  Message,
+  StepResult,
+  AIError,
+  StreamChunk,
+  ContentDelta,
+  ThinkingDelta,
+  Usage
+)
+import std/io (println)
+import std/list (length, map, concat)
+import std/result (Result, Ok, Err)
+
+-- ============================================================================
+-- D1 shapes
+-- ============================================================================
+
+-- One provider exchange as D1 describes it: the ordered intermediate emissions
+-- observed during the call, the final response, and the successor world state.
+type ProviderExchange = {
+  emissions: [string],
+  outcome: Result[string, string],
+  next_cursor: int
+}
+
+-- The D2 ExecutionProgram fragment for one provider exchange. Discovery writes
+-- it; replay consumes it and never calls the generator.
+type RecordedExchange = {
+  emissions: [string],
+  outcome: Result[string, string]
+}
+
+-- ============================================================================
+-- Pure helpers
+-- ============================================================================
+
+pure func strings_equal(left: [string], right: [string]) -> bool {
+  match left {
+    [] => match right { [] => true, _ => false },
+    x :: xs =>
+      match right {
+        [] => false,
+        y :: ys => x == y && strings_equal(xs, ys)
+      }
+  }
+}
+
+-- Stable rendering of a chunk, so emissions from the two paths are comparable
+-- as values rather than by identity.
+pure func describe(chunk: StreamChunk) -> string {
+  match chunk {
+    ContentDelta(text) => "content:${text}",
+    ThinkingDelta(text) => "thinking:${text}",
+    Usage(_) => "usage"
+  }
+}
+
+-- Collapse the typed provider result to a comparable summary. Production code
+-- still owns interpreting StepResult/AIError; the world boundary ends here.
+pure func summarize(outcome: Result[StepResult, AIError]) -> Result[string, string] {
+  match outcome {
+    Ok(result) => Ok("finish:${result.finish_reason}"),
+    Err(error) => Err("code:${error.code}")
+  }
+}
+
+pure func outcome_record(outcome: Result[string, string]) -> string {
+  match outcome {
+    Ok(summary) => "outcome:ok:${summary}",
+    Err(summary) => "outcome:err:${summary}"
+  }
+}
+
+-- The driver's trace transition: append every emission in arrival order, THEN
+-- the final response record. D1 requires that ordering explicitly.
+pure func append_trace(trace: [string], exchange: ProviderExchange) -> [string] {
+  concat(trace, concat(exchange.emissions, [outcome_record(exchange.outcome)]))
+}
+
+pure func render_trace(trace: [string]) -> string {
+  match trace {
+    [] => "",
+    x :: xs => "${x}/${render_trace(xs)}"
+  }
+}
+
+-- ============================================================================
+-- Projection sink (shared by both adapters)
+-- ============================================================================
+
+func project(label: string, description: string) -> () ! {IO} {
+  println("PROJECT ${label} ${description}")
+}
+
+-- The live callback. Its row is closed to {IO}, which is why it can only
+-- project — it cannot record, and it cannot read the clock.
+func project_live(chunk: StreamChunk) -> () ! {IO} {
+  project("live", describe(chunk))
+}
+
+func project_recorded(descriptions: [string]) -> () ! {IO} {
+  match descriptions {
+    [] => (),
+    description :: rest => {
+      let _ = project("replay", description);
+      project_recorded(rest)
+    }
+  }
+}
+
+-- ============================================================================
+-- The two adapters
+-- ============================================================================
+
+-- LIVE: real provider, real SSE, chunks projected at arrival and returned.
+func live_exchange(cursor: int, messages: [Message]) -> ProviderExchange ! {AI, IO} {
+  let recorded = stepWithStreamRecorded("", messages, [], [], project_live);
+  {
+    emissions: map(describe, recorded.chunks),
+    outcome: summarize(recorded.outcome),
+    next_cursor: cursor + 1
+  }
+}
+
+-- DETERMINISTIC: no provider. Emissions come from the program and are
+-- projected at their virtual arrival points.
+func deterministic_exchange(cursor: int, program: RecordedExchange) -> ProviderExchange ! {IO} {
+  let _ = project_recorded(program.emissions);
+  {
+    emissions: program.emissions,
+    outcome: program.outcome,
+    next_cursor: cursor + 1
+  }
+}
+
+-- ============================================================================
+-- Driver
+-- ============================================================================
+
+func check(label: string, condition: bool) -> () ! {IO} {
+  if condition then println("PASS ${label}") else println("FAIL ${label}")
+}
+
+export func main() -> () ! {AI, IO} {
+  let messages: [Message] = [{
+    role: "user",
+    content: "world protocol slice",
+    tool_calls: [],
+    tool_call_id: "",
+    images: []
+  }];
+
+  -- 1. DISCOVERY against the live world.
+  let _ = println("PHASE discovery");
+  let live = live_exchange(0, messages);
+  let live_trace = append_trace([], live);
+
+  -- 2. PROGRAM. The recorded emission log IS what the live exchange returned.
+  --    Under the current callback-only API this list would be empty, and the
+  --    replay below would have nothing to consume.
+  let program: RecordedExchange = {
+    emissions: live.emissions,
+    outcome: live.outcome
+  };
+
+  -- 3. REPLAY through the deterministic world.
+  let _ = println("PHASE replay");
+  let replay = deterministic_exchange(0, program);
+  let replay_trace = append_trace([], replay);
+
+  -- 4. PARITY.
+  let _ = println("PHASE assert");
+  let _ = println("SLICE emissions=${show(length(live.emissions))}");
+  let _ = println("SLICE live_trace=${render_trace(live_trace)}");
+  let _ = println("SLICE replay_trace=${render_trace(replay_trace)}");
+
+  -- Guard against a vacuous pass: two empty logs are trivially equal, and that
+  -- is exactly what the current API would produce.
+  let _ = check("program_non_empty", length(live.emissions) > 0);
+  let _ = check("emission_parity", strings_equal(live.emissions, replay.emissions));
+  let _ = check("trace_parity", strings_equal(live_trace, replay_trace));
+  let _ = check("state_transition_parity", live.next_cursor == replay.next_cursor);
+  let _ = check("trace_length",
+    length(live_trace) == length(live.emissions) + 1);
+  println("SLICE done")
+}
