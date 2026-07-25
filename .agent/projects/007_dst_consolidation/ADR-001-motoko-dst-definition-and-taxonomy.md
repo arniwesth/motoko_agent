@@ -12,6 +12,31 @@ the implementation architecture required to meet this ADR's conformance bar.
 As-built: `design_docs/implemented/motoko_agent/m-motoko-dst-framework.md` describes the current
 framework and must be updated when this decision is accepted and again when project 009 lands.
 
+## TL;DR
+
+This ADR owns what "DST" is entitled to mean in this repo; it decides no implementation. Motoko's
+target is **single-actor, logical-fault DST**: real session logic driven against a deterministic
+model of its *logical* environment — provider, tool, approval, extension-effect, and time — with
+physical faults (torn writes, partitions, consensus) and multi-actor interleaving excluded by
+decision, because Motoko holds no correctness contract they would test. The seven pillars below are
+adopted as a **repo-specific conformance profile, not a universal field taxonomy**: the deterministic
+environment model (pillar 2) is the definitional center that practitioners agree on, while a
+seed-driven schedule, injected faults, and virtual time (pillars 3–5) are required *here* as local
+policy, because they are what the agent-loop failure surface needs and what the seeded axis lacks.
+
+At HEAD the seeded axis is **property-based testing, not DST**: it meets pillar 1, exercises
+pillar-6-style properties, holds half of 7, and integrates none of 2-logical, 3, 4, or 5. Until the
+full D2 bar is met — proven by automated behavioral evidence, not by the presence of types or
+constructors — the words "DST" and "simulation" are not used for the seeded axis in new
+identifiers, docs, or PR descriptions; the interim name is **"deterministic trajectory testing"**,
+existing `dst` identifiers are grandfathered, and **"Soft DST"** is correct at no point. Reaching
+the bar is not a small `ScriptedStep` change: `ScriptedStep` is a success-only record, approvals,
+native tools, and session time bypass the ports boundary, and the message-returning entrypoint is
+not a trace oracle. That work is delegated to
+`../009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md`. This revision
+followed an independent review whose findings are preserved below; a fresh re-review is required
+before acceptance.
+
 ## Context
 
 `../001_DST/ADR-001` named the method "Deterministic Simulation Testing" and built the layered
@@ -120,8 +145,27 @@ by omission:
    that guarantee on all error paths
    (`src/core/session.ail:1525-1529,1609-1614`) and emitted summaries are not necessarily appended
    to the returned trace (`src/core/session.ail:1538-1557`). Closing that gap belongs to project
-   009. The physical exclusion is revisited only if Motoko grows a distributed or
-   crash-recoverable-storage component.
+   009.
+
+**Revisit tripwires.** Both exclusions are conditional, and a future feature can silently
+invalidate them. Per `../009_motoko_dst_execution/NOTE-scope-and-sequence.md` these tripwires
+belong both here and beside the execution runner.
+
+*D1.1 (single-actor)* was verified at HEAD rather than assumed: tool entries are dispatched
+recursively in list order (`src/core/tool_phase.ail:314-357`), native batches are sequential
+(`src/core/tool_runtime.ail:155-160`), and the TUI awaits delegated calls one at a time in a
+`for`-loop rather than `Promise.all` (`src/tui/src/runtime-process.ts:628-634`). Provider
+streaming, MCP subprocesses, and the compose subagent are separate execution machinery that block
+or serialize at the loop boundary; none was found to interleave ledger-mutating actors. **Reopen
+before landing any feature that can concurrently mutate or influence a single session ledger**,
+including: parallel native or delegated tool execution; ledger-sharing subagents; background
+extension callbacks whose result can race the main loop; or streaming callbacks that can
+independently advance session state.
+
+*D1.3 (physical faults)* also holds at HEAD: no fsync, WAL, or ledger-recovery path was found, and
+`restart` emits `SessionSuspend` then exits without restoring history
+(`src/core/session.ail:2209-2216`). **Reopen before adding a crash-recovery, fsync, WAL,
+resume-from-ledger, or replicated-state correctness contract.**
 
 ### D2. The seven-pillar checklist is the conformance definition
 
@@ -250,11 +294,14 @@ Negative / costs:
 ## Rejected Alternatives
 
 ### "Soft DST" as the name
-Rejected. "Soft" reads as *less rigorous*, and rigor is the axis where Motoko is **stronger** than
-the canon — hermeticity is effect-enforced, not convention-enforced. What Motoko gives up is
-**scope** (multi-actor concurrency, physical fault layer), not rigor. Naming the rigor reduction
-misdescribes the artifact. The scope reduction is named directly: **single-actor, logical-fault**
-(D1). If an interim qualifier is wanted, "logical-fault DST" is honest; "Soft DST" is not.
+Rejected. "Soft" names a *rigor* reduction, but what Motoko gives up is **scope** (multi-actor
+concurrency, physical fault layer), not rigor — its hermeticity is effect-enforced rather than
+convention-enforced, subject to the limits the pillar-1 scorecard row records about what the
+granted capability set actually proves. Naming a scope reduction as a rigor reduction misdescribes
+the artifact. The scope reduction is named directly: **single-actor, logical-fault** (D1). Per D3,
+the interim name while project 009 is under construction is **"deterministic trajectory testing"**;
+**"logical-fault DST"** becomes available only once the complete D2 bar is met. "Soft DST" is
+correct at no point.
 
 ### Calling HEAD "DST" / "simulation" now
 Rejected (D3). HEAD meets none of pillars 3/4/5. Using the term now spends the credibility the
@@ -303,6 +350,50 @@ to build the deterministic world. Neither reopens the behavior-preserving consol
 The independent review below was performed against the pre-revision draft. Its findings are
 preserved as the audit record. Because this revision changes the taxonomy language, naming gate,
 empirical scorecard, and implementation handoff, a fresh re-review is required before acceptance.
+
+## Review Disposition
+
+_Dispositioned 2026-07-24 by the authoring session, against the revised body. **No finding was
+rejected**; R1, R2 and R11 were independently re-verified against source before disposition._
+
+Codes: **Accepted** — absorbed into this ADR. **Delegated** — valid, and owned by project 009.
+**Partial** — the ADR-side change landed, but a named residual remains (listed below).
+
+| # | Finding (abbreviated) | Disposition | Landing site / owner |
+|---|---|---|---|
+| R1 | mot-44 unreachable as a small `ScriptedStep` extension | Accepted + Delegated | D4 and "The bar that earns the term" rewritten (`ScriptedStep` named as a success-only record; ports-bypass and trace-oracle gaps stated); seam design → 009 |
+| R2 | `run_summary` completeness premise false | Accepted + Delegated | D1.3 restated as a target invariant with the HEAD gap cited (`session.ail:1525-1529,1609-1614,1538-1557`); contract → 009 Track 1 |
+| R3 | Taxonomy overstates repo policy as field definition | Accepted | Section retitled "DST in field practice and Motoko's conformance profile"; pillar 2 made the definitional center; 3/4/5 labelled local policy; restated in TL;DR |
+| R4 | The ADR does amend the origin ADR | Partial | `Amends:` metadata added to the header; the as-built-doc half is open (folds into R7) |
+| R5 | D3 authorizes the DST name before D2 allows it | Accepted (closed) | D3 revised to require the complete D2 bar; the surviving Rejected-Alternatives echo closed 2026-07-24 |
+| R6 | Scorecard conflates "unused by the seeded gate" with "absent from HEAD" | Accepted | Scorecard rows 2–3 and the verdict re-scoped to the seeded axis; `stage_records` and the checkpoint-taking qualification added |
+| R7 | Stale on the as-built doc and search economics | Partial | Header, pillar-7 row and the rotation Open Question re-grounded on the current workflow; **the as-built doc refresh is open** |
+| R8 | D2 is a checklist, not an enforceable gate | Accepted + Delegated | D2 gained six behavioral evidence criteria and a "behavior, not constructors" rule; detailed acceptance tests → 009 |
+| R9 | Naming grandfather incomplete | Partial | D3 now grandfathers all historical `dst` identifiers by class (targets, modules, PASS labels, workflow text, as-built title); the per-class inventory folds into the R7 pass |
+| R10 | Caps do not prove the broad hermeticity claim | Partial | Pillar-1 row narrowed to "met for the current seeded executions"; the "stronger than canon" echo closed 2026-07-24; **the preventive rule is open** |
+| R11 | The negative vocabulary claim is literally false | Accepted | Grounding bullet replaced with the reproducible narrower result (`config.ail:110` is a production comment; no test scheduler/fault/clock implementation exists) |
+| R12 | Residual "deleted" formulation for pillar 5 | Accepted | Removed from the body; the word now survives only inside the quoted findings |
+
+### Residual items blocking acceptance
+
+1. ~~**Refresh `design_docs/implemented/motoko_agent/m-motoko-dst-framework.md`**~~ (R7, R4, R9) —
+   **closed 2026-07-24.** Added a `Naming` header caveat and an "Amendment: what this framework is
+   *not*" section; added a "The seeded axis" section (5 families, RNG canary, seed config, the
+   two extension rules); added `dst_seeded` to the gate tree, the `*.gen.*` namespaces to the ID
+   table, and the nightly 500-seed / PR 25-case CI split; narrowed the caps-as-conformance claim
+   per R10; added 007 and 009 to the decision-history table; and replaced the stale "seeded
+   generation … not yet built" deferred item with project 009's actual scope.
+2. ~~**Add the D1.1 / D1.3 revisit tripwires to this ADR**~~ (reviewer's recommended action 5) —
+   **closed 2026-07-24.** Added as the "Revisit tripwires" block under D1, with all four grounding
+   anchors independently re-verified at HEAD before citation. The runner-side half remains 009's,
+   per `../009_motoko_dst_execution/NOTE-scope-and-sequence.md`.
+3. **Preventive hermeticity rule** (R10): a gate or review rule barring new input-bearing `IO`/`Env`
+   calls on DST entrypoints. Owned by 009 — it is the concrete form of D2 evidence item 6.
+4. **Per-class naming inventory** (R9): folded into item 1; the blanket grandfather removes the
+   contradiction, but the inventory itself is unwritten.
+
+Items 1, 2 and 4 are ADR/doc work with no upstream dependency. Item 3 is 009's. None of the four
+requires the AILANG recorded-stream API that blocks 009's own acceptance.
 
 ## Review Comments
 
