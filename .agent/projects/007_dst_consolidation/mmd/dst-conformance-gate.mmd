@@ -3,7 +3,7 @@ flowchart TB
   %% Colour = status at HEAD, not role: green met · amber-dashed partial · gray-dashed absent.
   %% Grounded 2026-07-25 against a7932c68b53ba0aa2ef42739e4dbe69296f37a8a
   %% (scorecard ADR:258-272, evidence criteria ADR:189-204, naming rule ADR:206-225).
-  %% Re-render after the RR1-RR10 edits land: criterion 1 and pillar 5 wording both change.
+  %% Re-rendered 2026-07-26 after the RR1-RR10 edits: criterion 1 (RR2) and pillar 5 (RR6) changed.
 
   subgraph PROFILE["D2 · seven-pillar conformance profile — repo policy, not field canon"]
     direction TB
@@ -13,7 +13,7 @@ flowchart TB
     p2["2 · Simulated environment (logical)<br/>absent on the seeded axis<br/>substrate exists: Ports · ScriptedPortsState"]:::absent
     p3["3 · Seed-driven schedule<br/>absent — seed draws input params<br/>stage_records feeds a pure projection"]:::absent
     p4["4 · Fault injection<br/>absent — no seed-timed fault mechanism"]:::absent
-    p5["5 · Time as a controlled dimension<br/>absent — normalized away, not virtualized"]:::absent
+    p5["5 · Time as a controlled dimension<br/>absent — normalized away, not virtualized<br/>bar: advanced by the world, observed by production"]:::absent
   end
 
   subgraph SCOPE["D1 · out of scope by decision — revisit tripwires attached"]
@@ -24,7 +24,7 @@ flowchart TB
 
   subgraph EVIDENCE["The gate is enforceable only with automated evidence — behaviour, not constructors"]
     direction TB
-    e1["1 · seed produces a typed program of ordered<br/>external instructions, kinds and order generated"]:::gate
+    e1["1 · seed produces a typed program of ordered<br/>external instructions, kinds and order generated —<br/><b>and consumed by the real driver as responses to<br/>requests production code issued</b><br/>a list feeding a pure projection does not qualify"]:::gate
     e2["2 · required fault classes reach named<br/>production recovery branches"]:::gate
     e3["3 · two programs differing only in clock advance<br/>produce different timeout/retry/deadline behaviour"]:::gate
     e4["4 · real traced driver returns exactly one terminal<br/>record per terminal path; invariants over that trace"]:::gate
