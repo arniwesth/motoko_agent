@@ -6,9 +6,15 @@ Nothing below this comment is internal. Paste the whole file into the issue form
   Labels: feature
   File at: https://github.com/sunholo-data/ailang/issues/new
 
-Duplicate check performed 2026-07-25: no existing recorded-stream or streaming-capture
-issue. Nearest neighbour is #136 (std/stream WebSocket primitives), a different ask, closed.
-RE-CHECK the duplicate search before filing if this sits unsent much past 2026-08.
+Duplicate check RE-RUN 2026-07-31 (searches must include closed issues — the nearest
+neighbour is closed, so the default is:open filter hides it):
+  is:issue stepWithStream  -> no results
+  is:issue stream chunk    -> #223 (zlib), #136 (closed)
+  is:issue streaming       -> #136 #137 #138 (all closed), #81/#82 (test issues)
+  is:issue recorded        -> nothing relevant
+No duplicate. Nearest neighbour remains #136 (generic std/stream primitives), closed,
+different ask. #137/#138 are closed WASM browser-streaming issues — adjacent to the
+native-only note below, not duplicates.
 
 Body refreshed 2026-07-31 against released v0.31.0. The implementation is public at
   https://github.com/arniwesth/ailang/compare/v0.31.0...spike/motoko-009-prototype-v031
@@ -314,7 +320,8 @@ exactly the API. It also means we are not blocked on you for anything except the
 **Known gap**: the variant is native-only. `cmd/wasm/effects.go` has its own
 `WasmAIHandler.StepWithStream` and a documented `ailangSetAIStepWithStreamHandler` JS hook; we did
 not add a browser-side counterpart, since the JS `Response` contract is yours to extend and we did
-not want to presume its shape.
+not want to presume its shape — and we note #137/#138 covered the browser-side callback contract
+separately, so that seam looks like yours to shape rather than ours to guess at.
 
 ## Version coverage
 
