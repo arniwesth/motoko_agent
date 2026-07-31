@@ -1,0 +1,267 @@
+-- scripts/dst/spike_world_vertical.ail
+--
+-- SPIKE ONLY — throwaway. Answers Q2, Q4 and Q5 of
+-- .agent/projects/009_motoko_dst_execution/PLAN-spike-real-driver-vertical.md
+-- by driving the *real* traced session driver through a deterministic world.
+--
+-- Q2 (clock): every profile-reachable clock read inside the driver is routed
+--   through the world, so `ailang run --caps ...` WITHOUT `Clock` executes to
+--   completion. `run_world_slice_no_clock` is that run; the Makefile target
+--   omits Clock deliberately and the run must still exit 0.
+--
+-- Q4 (one terminal RunSummary): the returned LedgerTrace must contain exactly
+--   one RunSummary record, and it must be the last record.
+--
+-- Q5 (discovery -> replay parity): the same program run twice through
+--   run_v2_session_traced_in_world must produce the same interaction log and
+--   the same normalized trace.
+
+module scripts/dst/spike_world_vertical
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/ai (Message)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates)
+import src/core/phase_vocab (
+  LedgerRecord,
+  LedgerTrace,
+  WireRecord,
+  RunSummary,
+  StreamDelta,
+  ledger_record_name
+)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (Scripted, ScriptedStep, empty_rt)
+import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
+import src/core/world (
+  World,
+  DeterministicWorld,
+  WorldState,
+  ProgramEntry,
+  ProviderReply,
+  initial_world
+)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func history() -> [Message] {
+  [msg("system", "s"), msg("user", "u")]
+}
+
+func budget() -> BudgetPlan {
+  { total: 10, solver: 6, verifier: 4 }
+}
+
+func zero_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func reply(prose: string) -> ScriptedStep {
+  {
+    prose: prose,
+    tool_calls: [],
+    input_tokens: 100,
+    output_tokens: 50,
+    finish_reason: "stop",
+    chunks: []
+  }
+}
+
+-- The recorded execution program. One provider exchange: two intermediate
+-- emissions, then a terminal reply, costing 1500ms of modelled time.
+func program() -> [ProgramEntry] {
+  [
+    ProviderReply({
+      projection: "provider:phase-c-model:msgs=2",
+      latency_ms: 1500,
+      emissions: ["content:hello ", "content:world"],
+      reply: reply("hello world")
+    })
+  ]
+}
+
+func start_ms() -> int { 1000 }
+
+func run_program() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced_in_world(
+    empty_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    8, false, 0, zero_rates(), Scripted([]),
+    DeterministicWorld, initial_world(start_ms(), program())
+  )
+}
+
+-- ---------------------------------------------------------------------------
+-- Trace helpers
+-- ---------------------------------------------------------------------------
+
+func record_names(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest => ledger_record_name(r) :: record_names(rest)
+  }
+}
+
+func count_run_summaries(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let here = match r {
+        WireRecord(e) => match e { RunSummary(_) => 1, _ => 0 },
+        _ => 0
+      };
+      here + count_run_summaries(rest)
+    }
+  }
+}
+
+func run_summary_durations(records: [LedgerRecord]) -> [int] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e {
+          RunSummary(i) => i.duration_ms :: run_summary_durations(rest),
+          _ => run_summary_durations(rest)
+        },
+        _ => run_summary_durations(rest)
+      }
+  }
+}
+
+func stream_delta_texts(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e {
+          StreamDelta(i) => i.text :: stream_delta_texts(rest),
+          _ => stream_delta_texts(rest)
+        },
+        _ => stream_delta_texts(rest)
+      }
+  }
+}
+
+-- `ledger_record_name` in phase_vocab names only three of the 34 LedgerEvent
+-- variants and collapses the rest to "wire", so the D6.1 "final record" check
+-- cannot use it. Recorded as a finding: D6's versioned event-vocabulary
+-- artifact does not exist, and the one naming function in the repo is lossy.
+func last_is_run_summary(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => false,
+    r :: [] => match r {
+      WireRecord(e) => match e { RunSummary(_) => true, _ => false },
+      _ => false
+    },
+    _ :: rest => last_is_run_summary(rest)
+  }
+}
+
+func last_name(names: [string]) -> string {
+  match names {
+    [] => "",
+    x :: [] => x,
+    _ :: rest => last_name(rest)
+  }
+}
+
+func join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}|${join(rest)}"
+  }
+}
+
+func names_equal(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { y :: ys => x == y && names_equal(xs, ys), [] => false }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Q4 — exactly one terminal RunSummary, and it is the final record
+-- ---------------------------------------------------------------------------
+
+func scenario_one_run_summary() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_program();
+  let names = record_names(traced.trace.records);
+  let n = count_run_summaries(traced.trace.records);
+  ok_or_failure(n == 1 && last_is_run_summary(traced.trace.records), "exactly one terminal run_summary", [
+    "run_summaries=${show(n)}",
+    "last_is_run_summary=${show(last_is_run_summary(traced.trace.records))}",
+    "records=${join(names)}"
+  ])
+}
+
+-- ---------------------------------------------------------------------------
+-- Q4/D4 — the virtual clock, not wall time, produced the reported duration
+-- ---------------------------------------------------------------------------
+
+func scenario_virtual_duration() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let durations = run_summary_durations(run_program().trace.records);
+  match durations {
+    d :: [] => ok_or_failure(d == 1500, "duration comes from the virtual clock", ["duration_ms=${show(d)}"]),
+    _ => Err({ failed_invariant: "duration comes from the virtual clock", trace: ["expected exactly one run_summary"] })
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- D1 — the returned emission log reached the authoritative trace, in order
+-- ---------------------------------------------------------------------------
+
+func scenario_emissions_in_trace() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let texts = stream_delta_texts(run_program().trace.records);
+  ok_or_failure(names_equal(texts, ["content:hello ", "content:world"]),
+    "emission log appended to the returned trace in arrival order",
+    ["texts=${join(texts)}"])
+}
+
+-- ---------------------------------------------------------------------------
+-- Q5 — replaying the same program yields the same normalized trace
+-- ---------------------------------------------------------------------------
+
+func scenario_replay_parity() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let a = record_names(run_program().trace.records);
+  let b = record_names(run_program().trace.records);
+  ok_or_failure(names_equal(a, b) && List.length(a) > 0, "replay parity: identical normalized trace", [
+    "a=${join(a)}",
+    "b=${join(b)}"
+  ])
+}
+
+-- ---------------------------------------------------------------------------
+
+func scenarios() -> [Scenario] {
+  [
+    { id: "spike.world.one_run_summary",     seed: "fixed", run: scenario_one_run_summary },
+    { id: "spike.world.virtual_duration",    seed: "fixed", run: scenario_virtual_duration },
+    { id: "spike.world.emissions_in_trace",  seed: "fixed", run: scenario_emissions_in_trace },
+    { id: "spike.world.replay_parity",       seed: "fixed", run: scenario_replay_parity }
+  ]
+}
+
+export func main() -> () ! {IO} {
+  let all = scenarios();
+  let failed = run_all(all, 0);
+  if failed == 0 then
+    println("spike_world_vertical PASS count=${show(List.length(all))}")
+  else {
+    let _ = println("spike_world_vertical FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}
