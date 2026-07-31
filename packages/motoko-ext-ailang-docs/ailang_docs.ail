@@ -40,19 +40,19 @@ export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx
   }
 }
 
-export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS} {
+export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS, Process} {
   let active = workdir_is_ailang_project(workdir);
   let cfg = mcp_config(timeout_ms, max_output_chars);
   let mappings = tool_mappings();
   let tools = if active then all_tool_names(mappings) else [];
   let schemas = if active then tool_schemas() else [];
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     on_tool_handle(cfg, mappings, ctx, call)
   };
-  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     NoIntercept
   };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     NoDecision
   };
   {
@@ -65,7 +65,7 @@ export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) 
         no_budget_patch()
       },
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
         PassThrough
       },
     on_tool_policy:

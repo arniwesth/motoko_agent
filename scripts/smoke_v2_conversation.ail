@@ -23,7 +23,7 @@ import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
 import src/core/ext/runtime (init_runtime)
 import src/core/agent_loop_v2 (conversation_loop_v2)
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let rt = init_runtime();
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
 

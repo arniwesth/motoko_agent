@@ -168,7 +168,7 @@ func fixed_clock() -> int ! {Clock} { 123456789 }
 func fixed_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fixed_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
-func runtime_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func runtime_hooks() -> ExtRuntime ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, Rand[mode=os], SharedMem, Stream, Trace} {
   long_runtime()
 }
 
@@ -259,7 +259,7 @@ func strict_ports() -> Ports ! {AI, IO, Trace} {
   }
 }
 
-func run_strict() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func run_strict() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     long_runtime(),
     "strict provider orphaned-toolcall dst",
@@ -277,7 +277,7 @@ func run_strict() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, Share
   )
 }
 
-func compaction_ai_hook() -> ExtensionHooks {
+func compaction_ai_hook() -> ExtensionHooks ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let cfg: CompactionAiConfig = {
     model: qwen_model,
     threshold_pct: 60,
@@ -294,13 +294,13 @@ func compaction_ai_hook() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
     on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
-    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       compact_with_ai(ctx, msgs, cfg)
     },
     on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
   }
 }
 
@@ -311,13 +311,13 @@ func structural_hook() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
     on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
-    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       compact_for_pre_step(ctx, msgs)
     },
     on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
   }
 }
 
@@ -343,9 +343,9 @@ func long_tool_hook() -> ExtensionHooks {
     on_describe_tools: \_ . [{ name: "LongResult", description: "deterministic long-result fixture", parameters: "{\"type\":\"object\"}" }],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
     on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
-    on_pre_step: \_ _ . PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_pre_step: \_ _ . PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
     on_tool_policy: \_ _ . Allow,
-    on_tool_handle: func(_ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle: func(_ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       let next = next_marker_from_call_id(call.id);
       Handled({
         tool_call_id: call.id,
@@ -356,12 +356,12 @@ func long_tool_hook() -> ExtensionHooks {
         metadata: jo([kv("fixture", js("long_qwen")), kv("next", js(next))])
       })
     },
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
   }
 }
 
-func long_runtime() -> ExtRuntime {
+func long_runtime() -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let v: VerificationConfig = { enabled: false, command: "" };
   let reg: ExtRegistry = { hooks: [compaction_ai_hook(), structural_hook(), long_tool_hook()] };
   { registry: reg, strict_mode: false, verification: v }
@@ -380,7 +380,7 @@ func initial_history() -> [Message] {
   ]
 }
 
-func run_long() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func run_long() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     long_runtime(),
     "long qwen compaction dst",
@@ -614,7 +614,7 @@ func summarize_long_result(result: TracedSessionResult) -> Result[LongStats, Sce
   }
 }
 
-func scenario_multiple_compactions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_multiple_compactions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let result = run_long();
   match summarize_long_result(result) {
     Err(f) => Err(f),
@@ -637,7 +637,7 @@ func scenario_multiple_compactions() -> Result[(), ScenarioFailure] ! {AI, FS, P
   }
 }
 
-func scenario_seal_side_exhaustion() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_seal_side_exhaustion() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let history = [
     msg("system", "seal-side exhaustion system prompt"),
     msg("user", "prose bulk ${repeat_block(80)}")
@@ -673,7 +673,7 @@ func same_string_list(a: [string], b: [string]) -> bool {
   }
 }
 
-func scenario_replay_deterministic() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_replay_deterministic() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let r1 = run_long();
   let r2 = run_long();
   match summarize_long_result(r1) {
@@ -699,7 +699,7 @@ func scenario_replay_deterministic() -> Result[(), ScenarioFailure] ! {AI, FS, P
 --   (2) it drops the call but a later turn ships the orphaned payload -> the
 --       strict provider rejects it (session result is Err).
 -- Also asserts the strict run replays deterministically.
-func scenario_strict_provider_rejects_orphaned_toolcall() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_strict_provider_rejects_orphaned_toolcall() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let r1 = run_strict();
   let recs1 = projection_records(r1.trace.records);
   match r1.result {
@@ -724,7 +724,7 @@ func strict_provider_orphaned_toolcall_scenario() -> Scenario {
   { id: "compaction.strict_provider_orphaned_toolcall", seed: "fixed", run: scenario_strict_provider_rejects_orphaned_toolcall }
 }
 
-func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: string, step: int) -> ExtCtx {
+func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: string, step: int) -> ExtCtx ! {AI, IO, Trace} {
   {
     task: task,
     step: step,
@@ -740,7 +740,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
     history_slice: [],
     state_key: "k",
     ports: {
-      ai_step: func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+      ai_step: func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
         let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
         match ports.model_step(model, msgs_to_messages(msgs), on_chunk).result {
           Ok(r) => Ok(r.message.content),
@@ -756,7 +756,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
   }
 }
 
-func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx {
+func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx ! {AI, IO, Trace} {
   direct_ctx_with_task_step(limit, ports, artifacts, "direct", 0)
 }
 
@@ -799,7 +799,7 @@ func contains_summary_msg(msgs: [Msg], text: string) -> bool {
   }
 }
 
-func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let input = direct_msgs();
   let cfg: CompactionAiConfig = {
     model: qwen_model,
@@ -826,7 +826,7 @@ func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Pro
   }
 }
 
-func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let input = direct_msgs();
   let cfg: CompactionAiConfig = {
     model: qwen_model,
@@ -858,7 +858,7 @@ func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, 
   }
 }
 
-func scenario_hostile_summary_preserves_control_capsule() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_hostile_summary_preserves_control_capsule() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let input = direct_msgs_with_status();
   let task = "Continue the 200-phase compaction stress task. Stop only after phase 200 is complete. Call MotokoRuntimeStatus every 10 phases and do not ask what to work on next.";
   let cfg: CompactionAiConfig = {
@@ -894,7 +894,7 @@ func decision_code_is(d: PreStepDecision, code: string) -> bool {
   match d { PassThroughObserved(actual, _) => actual == code, _ => false }
 }
 
-func scenario_terminal_observations() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_terminal_observations() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let input = direct_msgs();
   let base: CompactionAiConfig = {
     model: qwen_model, threshold_pct: 1, keep_recent: 4, keep_recent_tokens: 300,
@@ -942,7 +942,7 @@ func seal_side_exhaustion_scenario() -> Scenario {
   { id: "compaction.structural_seal_side_exhaustion", seed: "fixed", run: scenario_seal_side_exhaustion }
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let scenarios = [
     multiple_compactions_scenario(),
     replay_deterministic_scenario(),

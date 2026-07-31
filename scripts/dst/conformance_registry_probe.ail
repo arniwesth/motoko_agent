@@ -10,7 +10,7 @@ func registry_names_csv() -> string {
   "test_dummy,omnigraph,context_mode,mcp,exa_search,ailang_docs,compose,a2a,decision_framework,microrag,compaction_ai,scratchpad,compaction_structural"
 }
 
-func run_hooks(hooks: [ExtensionHooks], failed: int) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func run_hooks(hooks: [ExtensionHooks], failed: int) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   match hooks {
     [] => failed,
     h :: rest => {
@@ -20,7 +20,7 @@ func run_hooks(hooks: [ExtensionHooks], failed: int) -> int ! {IO, Process, FS, 
   }
 }
 
-export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func main() -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, Rand[mode=os], SharedMem, Stream, Trace} {
   let cfg = load_runtime_config();
   let registry = parse_core_ext_order(registry_names_csv(), cfg);
   let failures = run_hooks(registry.hooks, 0);

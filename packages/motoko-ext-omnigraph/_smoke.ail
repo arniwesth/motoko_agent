@@ -13,7 +13,7 @@ module sunholo/motoko_ext_omnigraph/_smoke
 import std/io (println)
 import pkg/sunholo/motoko_ext_omnigraph/register (register_with_config)
 
-export func main() -> () ! {Env, FS, IO} {
+export func main() -> () ! {Env, FS, IO, Process} {
   let _ = register_with_config(0);
   println("OK: register_with_config returned without panic")
 }

@@ -27,7 +27,7 @@ func script() -> [ScriptedStep] {
   [chunked_prose_step("full text", ["chunk-a", "chunk-b", "chunk-c"])]
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let result = run_v2_with_scripted_ports(
     empty_rt(),
     "phase-b-stream-parity",

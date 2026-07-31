@@ -34,7 +34,7 @@ func script() -> [ScriptedStep] {
   ]
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let result = run_v2_with_scripted_ports(
     fixture_rt(),
     "phase-b-fixture-parity",

@@ -157,7 +157,7 @@ pure func microrag_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPol
 -- Auto-fire on WriteFile to .ail. For everything else, Delegate to motoko's
 -- default handlers (the actual WriteFile / EditFile / ReadFile path-validation
 -- + sha256 hash + emit_event chain in src/core/tool_runtime.ail).
-func microrag_tool_handle(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func microrag_tool_handle(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   if call.tool == "WriteFile" then {
     let path = get_str(call, "path");
     if is_ail_file(path) then auto_write_with_microrag(call)
@@ -183,17 +183,17 @@ export func register_with_config(_cfg: a) -> ExtensionHooks {
         { requested_total: None, requested_solver: None, requested_verifier: None }
       },
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
         PassThrough
       },
     on_tool_policy: microrag_tool_policy,
     on_tool_handle: microrag_tool_handle,
     on_response_intercept:
-      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
         NoIntercept
       },
     on_solver_candidate:
-      func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
         NoDecision
       }
   }

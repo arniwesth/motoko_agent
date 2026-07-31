@@ -36,7 +36,7 @@ import pkg/sunholo/motoko_ext_compaction_ai/types (default_config)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, BudgetPlan, PassThrough, PassThroughObserved, Compacted)
 
-export func main() -> () ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+export func main() -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   -- Assertion 1: register_with_config doesn't panic
   let _ = register_with_config(0);
   println("OK: register_with_config returned without panic");

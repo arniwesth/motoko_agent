@@ -41,7 +41,7 @@ import src/core/ext/runtime (PreStepStage, StageApplied, StageRejected, StagePas
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 
 func harness_self_test() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   Ok(())
 }
 
@@ -98,7 +98,7 @@ func no_system_in(msgs: [Message]) -> bool {
 }
 
 func scenario_segment_excludes_system_prefix() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let split = split_for_compaction([msg("system", "s1"), msg("system", "s2"), msg("user", "u"), msg("assistant", "a")]);
   let seg = segment_messages(split.segment);
   let pinned_ok = length(split.pinned) == 2;
@@ -110,7 +110,7 @@ func scenario_segment_excludes_system_prefix() -> Result[(), ScenarioFailure]
 }
 
 func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   match history_from_seed([msg("system", "s"), msg("user", "u")]) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(h) => {
@@ -146,7 +146,7 @@ func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), Scenario
 }
 
 func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let input_msgs = [msg("system", "s"), msg("user", "u"), msg("assistant", "a")];
   match history_from_seed(input_msgs) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
@@ -181,7 +181,7 @@ func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFail
 }
 
 func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let msgs = [
     msg("system", "pinned"),
     msg("user", "compactable-a"),
@@ -212,7 +212,7 @@ func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), Scena
 }
 
 func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let split = split_for_compaction([msg("user", "hi")]);
   match seal_compacted_payload(split, [msg("user", "hi")], "phase-c-model", 1000, true) {
     Err(SealSystemPromptEmpty(_)) => Ok(()),
@@ -228,7 +228,7 @@ func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure]
 }
 
 func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let split = split_for_compaction([]);
   match seal_compacted_payload(split, [msg("user", "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 10, false) {
     Err(SealExhausted(_)) => Ok(()),
@@ -244,7 +244,7 @@ func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure]
 }
 
 func scenario_ext_compaction_invalid_rejected() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let input = [
     { role: "assistant", content: "call", tool_calls: [call("tc")], tool_call_id: "" },
     { role: "tool", content: "result", tool_calls: [], tool_call_id: "tc" }
@@ -259,7 +259,7 @@ func scenario_ext_compaction_invalid_rejected() -> Result[(), ScenarioFailure]
 }
 
 func scenario_summary_cache_replay_stable() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let artifact = jo([kv("ext", js("summary")), kv("summary", js("cached summary"))]);
   match history_from_seed([msg("system", "s"), msg("user", "u")]) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
@@ -311,7 +311,7 @@ func state_from_msgs(msgs: [Message], context_limit: int) -> Result[StepState, s
 }
 
 func scenario_checkpoint_never_emitted_when_policy_off() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   match state_from_msgs(pressured_msgs(), 20) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(state) => {
@@ -325,7 +325,7 @@ func scenario_checkpoint_never_emitted_when_policy_off() -> Result[(), ScenarioF
 }
 
 func scenario_checkpoint_emitted_under_pressure() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   match state_from_msgs(pressured_msgs(), 20) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(state) => {
@@ -338,7 +338,7 @@ func scenario_checkpoint_emitted_under_pressure() -> Result[(), ScenarioFailure]
 }
 
 func scenario_checkpoint_terminates_not_spins() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   match state_from_msgs(pressured_msgs(), 20) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(state) => {
@@ -375,7 +375,7 @@ func scenario_checkpoint_terminates_not_spins() -> Result[(), ScenarioFailure]
 }
 
 func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let a: PreStepStage = { ext_id: "A", outcome: StageApplied("a") };
   let b: PreStepStage = { ext_id: "B", outcome: StageRejected("bad") };
   let c: PreStepStage = { ext_id: "C", outcome: StageApplied("c") };
@@ -396,7 +396,7 @@ func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFa
 }
 
 func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let stages: [PreStepStage] = [
     { ext_id: "A", outcome: StageApplied("a") },
     { ext_id: "B", outcome: StageRejected("invalid") },
@@ -414,7 +414,7 @@ func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFail
 }
 
 func scenario_actual_token_pressure_defers_to_seal() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   match history_from_seed([msg("system", "s"), msg("user", "over pressure")]) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(h) => {
@@ -495,7 +495,7 @@ func segment_excludes_system_prefix_scenario() -> Scenario {
   { id: "phase_c.l1.segment_excludes_system_prefix", seed: "fixed", run: scenario_segment_excludes_system_prefix }
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let scenarios = [
     harness_self_test_scenario(),
     segment_excludes_system_prefix_scenario(),

@@ -97,7 +97,7 @@ export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: in
 }
 
 export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net} {
-  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     on_tool_handle(ctx, call, timeout_secs)
   };
   {
@@ -106,10 +106,10 @@ export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net} {
     on_describe_tools: \_ . on_describe_tools(),
     on_build_system_prompt: \_ctx. prompt_patch(),
     on_budget_plan: budget_hook,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { PassThrough },
     on_tool_policy: on_tool_policy,
     on_tool_handle: handle,
-    on_response_intercept: func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-    on_solver_candidate: func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+    on_response_intercept: func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { NoIntercept },
+    on_solver_candidate: func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { NoDecision }
   }
 }

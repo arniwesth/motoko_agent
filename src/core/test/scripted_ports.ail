@@ -71,7 +71,7 @@ func fake_model(_model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> ()
   { emissions: [], result: Err(err) }
 }
 
-func fake_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func fake_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { hooks: [] }, strict_mode: false, verification: v }
 }
@@ -94,7 +94,7 @@ export func run_v2_with_scripted_ports(
   max_cost_millicents: int,
   cost_rates: CostRates,
   script: [ScriptedStep]
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let ports = scripted_ports_from_steps(history, script);
   Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Ported(ports))
 }

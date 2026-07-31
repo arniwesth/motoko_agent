@@ -64,28 +64,28 @@ pure func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecis
 }
 
 pure func handle_tool(_ctx: ExtCtx, call: ToolCallEnvelope)
-  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   if call.tool == "FixtureEcho" then
     Handled(fixture_result("fixture-internal-tool-id", "FixtureEcho", "fixture handled ${call.id}"))
   else Delegate
 }
 
 pure func intercept_response(_ctx: ExtCtx, response: string)
-  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   if contains(response, "[FIXTURE_INTERCEPT]") then
     InterceptHandled(fixture_result("fixture-intercept-id", "FixtureIntercept", "fixture intercept"))
   else NoIntercept
 }
 
 pure func solve_candidate(_ctx: ExtCtx, candidate: string)
-  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   if contains(candidate, "[FIXTURE_CONTINUE]") then
     ContinueWithFeedback("fixture feedback")
   else NoDecision
 }
 
 pure func pre_step(_ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}", empty_ext_artifacts())
 }
 

@@ -53,7 +53,7 @@ func script(rel_path: string) -> [ScriptedStep] {
   [tool_step("ReadFile", args, "call-1"), prose_step("done")]
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let workdir = "/tmp/phase-a-tool-parity";
   let rel_path = "fixture.txt";
   if not seed_fixture(workdir, rel_path) then exit(1)

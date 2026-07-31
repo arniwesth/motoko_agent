@@ -29,7 +29,7 @@ import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, result_to_j
 
 -- Stub that handles any "FakeTool" call by returning a synthetic envelope.
 -- For other tools, returns Delegate so the native path takes over.
-pure func handle_fake_tool(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func handle_fake_tool(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   if call.tool == "FakeTool" then {
     let env: ToolResultEnvelope = {
       tool_call_id: call.id,
@@ -49,11 +49,11 @@ pure func nooppolicy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecisio
   NoOpinion
 }
 
-pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoIntercept
 }
 
-pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoDecision
 }
 
@@ -67,7 +67,7 @@ pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch !
 
 pure func empty_describe_tools() -> [ToolSchema] { [] }
 
-pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   PassThrough
 }
 
@@ -86,7 +86,7 @@ func mk_handle_hook() -> ExtensionHooks {
   }
 }
 
-export func main() -> () ! {IO, Clock, Env} {
+export func main() -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, Rand[mode=os], SharedMem, Stream, Trace} {
   let v: VerificationConfig = { enabled: false, command: "" };
   let rt: ExtRuntime = {
     registry: { hooks: [mk_handle_hook()] },

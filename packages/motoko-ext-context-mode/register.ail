@@ -53,13 +53,13 @@ func config_from_env() -> CtxConfig ! {Env} {
   }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process, SharedMem} {
   let cfg = config_from_env();
   let cached_prompt = load_agent_prompt(getEnvOr("MOTOKO_WORKDIR", "."));
-  let handle = func(ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     on_tool_handle(cfg, ctx, call)
   };
-  let finalize = func(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let finalize = func(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     finalize_with_index(cfg, ctx, candidate)
   };
   {
@@ -68,10 +68,10 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
     on_budget_plan: budget_hook,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { PassThrough },
     on_tool_policy: on_tool_policy,
     on_tool_handle: handle,
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
     on_solver_candidate: finalize
   }
 }

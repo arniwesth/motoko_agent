@@ -116,17 +116,17 @@ func assert_decisions(trace: LedgerTrace, expected: [string]) -> Result[(), Scen
   ])
 }
 
-func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(rt, "task", "", false, budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
 }
 
 -- Task-bearing runner for progress-contract scenarios: the guard reads ctx.task,
 -- and run_scripted hardcodes "task", so those scenarios need to inject a contract.
-func run_scripted_task(rt: ExtRuntime, task: string, script: [ScriptedStep]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func run_scripted_task(rt: ExtRuntime, task: string, script: [ScriptedStep]) -> TracedSessionResult ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(rt, task, "", false, budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
 }
 
-func scenario_traced_prose_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_traced_prose_decisions() -> Result[(), ScenarioFailure] ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let traced = run_scripted(empty_rt(), [prose_step("done")]);
   match traced.result {
     Ok(_) => assert_decisions(traced.trace, ["CallModel", "Finalize"]),
@@ -138,7 +138,7 @@ func traced_prose_decisions_scenario() -> Scenario {
   { id: "phase_c.c2.traced_prose_decisions", seed: "fixed", run: scenario_traced_prose_decisions }
 }
 
-func scenario_traced_tool_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_traced_tool_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(deny_all_rt(), [tool_step("BashExec", "{\"cmd\":\"true\"}", "tc"), prose_step("done")]);
   match traced.result {
     Ok(_) => assert_decisions(traced.trace, ["CallModel", "RunTools", "CallModel", "Finalize"]),
@@ -154,7 +154,7 @@ func traced_tool_decisions_scenario() -> Scenario {
 -- (as hy3:free/Novita does) must still RunTools, not drop the call and
 -- Finalize. The drop produced a malformed [assistant(tool_calls) -> user]
 -- payload the provider rejected with 400 invalid_request_error.
-func scenario_tool_call_with_stop_finish_still_runs() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_tool_call_with_stop_finish_still_runs() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(deny_all_rt(), [tool_step_finish("BashExec", "{\"cmd\":\"true\"}", "tc", "stop"), prose_step("done")]);
   match traced.result {
     Ok(_) => assert_decisions(traced.trace, ["CallModel", "RunTools", "CallModel", "Finalize"]),
@@ -166,7 +166,7 @@ func tool_call_with_stop_finish_still_runs_scenario() -> Scenario {
   { id: "phase_c.c2.tool_call_with_stop_finish_still_runs", seed: "fixed", run: scenario_tool_call_with_stop_finish_still_runs }
 }
 
-func scenario_traced_persist_nudge_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_traced_persist_nudge_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = Session.run_v2_session_traced_with_persist_retries(
     empty_rt(),
     "task",
@@ -211,19 +211,19 @@ func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision
   Pending("approval required", DenyAfterTimeout)
 }
 
-func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   Delegate
 }
 
-func no_intercept(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func no_intercept(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoIntercept
 }
 
-func no_solver(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func no_solver(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoDecision
 }
 
-func guard_solver(ctx: ExtCtx, text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func guard_solver(ctx: ExtCtx, text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   decide_with_budget(ctx, text, 2)
 }
 
@@ -232,7 +232,7 @@ func bad_system_msg() -> Msg {
 }
 
 func stage_hook(id: string, mode: string) -> ExtensionHooks {
-  let on_pre = func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let on_pre = func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     if mode == "pass" then PassThrough
     else if mode == "apply" then Compacted(msgs, "applied", jo([]))
     else Compacted([bad_system_msg()], "rejected", jo([]))
@@ -258,7 +258,7 @@ func guard_hook() -> ExtensionHooks {
     on_describe_tools: no_describe,
     on_build_system_prompt: no_prompt,
     on_budget_plan: no_budget,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       PassThrough
     },
     on_tool_policy: no_policy,
@@ -277,7 +277,7 @@ func guard_rt() -> ExtRuntime {
   }
 }
 
-func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   pc_decide_with_budget(ctx, text, 2)
 }
 
@@ -288,7 +288,7 @@ func pc_guard_hook() -> ExtensionHooks {
     on_describe_tools: no_describe,
     on_build_system_prompt: no_prompt,
     on_budget_plan: no_budget,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       PassThrough
     },
     on_tool_policy: no_policy,
@@ -368,7 +368,7 @@ func has_tool_content(msgs: [Message], needle: string) -> bool {
   }
 }
 
-func scenario_traced_approval_default_deny() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_traced_approval_default_deny() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(pending_rt(), [tool_step("BashExec", "{\"cmd\":\"true\"}", "tc"), prose_step("done")]);
   match traced.result {
     Ok(history_after) => {
@@ -460,7 +460,7 @@ func stage_order_matches(records: [LedgerRecord], expected: [string]) -> bool {
   }
 }
 
-func scenario_traced_stage_records() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_traced_stage_records() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(stage_rt(), [prose_step("done")]);
   match traced.result {
     Ok(_) => {
@@ -475,7 +475,7 @@ func traced_stage_records_scenario() -> Scenario {
   { id: "phase_c.c2.traced_stage_records", seed: "fixed", run: scenario_traced_stage_records }
 }
 
-func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(stage_rt(), [prose_step("done")]);
   match traced.result {
     Ok(_) => {
@@ -515,7 +515,7 @@ func assert_has_empty_stop_finalize(trace: LedgerTrace, invariant_name: string) 
   ])
 }
 
-func scenario_empty_stop_guard_loops_within_budget() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_empty_stop_guard_loops_within_budget() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(guard_rt(), [prose_step(""), prose_step("done")]);
   match traced.result {
     Ok(_) => assert_decisions(traced.trace, ["CallModel", "InjectUserMessage", "CallModel", "Finalize"]),
@@ -527,7 +527,7 @@ func empty_stop_guard_loops_within_budget_scenario() -> Scenario {
   { id: "phase_c.c2.empty_stop_guard_loops_within_budget", seed: "fixed", run: scenario_empty_stop_guard_loops_within_budget }
 }
 
-func scenario_empty_stop_guard_budget_exhaustion_floors() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_empty_stop_guard_budget_exhaustion_floors() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(guard_rt(), [prose_step(""), prose_step(""), prose_step("")]);
   match traced.result {
     Ok(_) => {
@@ -544,7 +544,7 @@ func empty_stop_guard_budget_exhaustion_floors_scenario() -> Scenario {
   { id: "phase_c.c2.empty_stop_guard_budget_exhaustion_floors", seed: "fixed", run: scenario_empty_stop_guard_budget_exhaustion_floors }
 }
 
-func scenario_empty_stop_floor_without_guard() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_empty_stop_floor_without_guard() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(empty_rt(), [prose_step("")]);
   match traced.result {
     Ok(_) => {
@@ -564,7 +564,7 @@ func empty_stop_floor_without_guard_scenario() -> Scenario {
 -- 1. Catches the latest live failure shape: a non-empty stop that self-reports
 --    "Continuing Phase 52" against an explicit progress contract, then finalizes on
 --    a genuine completion.
-func scenario_progress_contract_catches_failure_shape() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_progress_contract_catches_failure_shape() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted_task(pc_guard_rt(), pc_contract_task(), [
     prose_step(pc_failure_candidate()),
     prose_step("Reached 200/200. Final summary: all phases complete.")
@@ -582,7 +582,7 @@ func progress_contract_catches_failure_shape_scenario() -> Scenario {
 -- 2. Budget exhaustion: the same self-contradictory candidate three times. Budget 2
 --    injects twice, then NoDecision finalizes on the non-empty candidate. No core
 --    floor event is required.
-func scenario_progress_contract_budget_exhaustion_finalizes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_progress_contract_budget_exhaustion_finalizes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted_task(pc_guard_rt(), pc_contract_task(), [
     prose_step(pc_failure_candidate()),
     prose_step(pc_failure_candidate()),
@@ -600,7 +600,7 @@ func progress_contract_budget_exhaustion_finalizes_scenario() -> Scenario {
 
 -- 3a. Blank candidate is not the progress guard's business: it returns NoDecision, so
 --     the core empty-stop floor still fires and the run finalizes without looping.
-func scenario_progress_contract_ignores_blank() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_progress_contract_ignores_blank() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted_task(pc_guard_rt(), pc_contract_task(), [prose_step("")]);
   match traced.result {
     Ok(_) => {
@@ -619,7 +619,7 @@ func progress_contract_ignores_blank_scenario() -> Scenario {
 
 -- 3b. Combined chain (empty_stop_guard before progress_contract_guard): a blank stop
 --     is owned by the empty-stop guard, which injects feedback and loops.
-func scenario_progress_contract_combined_chain_blank_owned_by_empty_stop() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_progress_contract_combined_chain_blank_owned_by_empty_stop() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted_task(combined_guard_rt(), pc_contract_task(), [prose_step(""), prose_step("done")]);
   match traced.result {
     Ok(_) => assert_decisions(traced.trace, ["CallModel", "InjectUserMessage", "CallModel", "Finalize"]),
@@ -632,7 +632,7 @@ func progress_contract_combined_chain_blank_owned_by_empty_stop_scenario() -> Sc
 }
 
 -- 4. Legitimate completion passes: an explicit "Reached 200/200" finalizes immediately.
-func scenario_progress_contract_completion_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_progress_contract_completion_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted_task(pc_guard_rt(), pc_contract_task(), [
     prose_step("Reached 200/200. Final summary: all phases complete.")
   ]);
@@ -648,7 +648,7 @@ func progress_contract_completion_passes_scenario() -> Scenario {
 
 -- 5. Allowed compaction stop passes: the task permits stopping on runtime compaction,
 --    so a candidate that reports it finalizes even though it also says "Continuing".
-func scenario_progress_contract_allowed_compaction_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_progress_contract_allowed_compaction_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted_task(pc_guard_rt(), pc_compaction_task(), [
     prose_step("Runtime compaction occurred. Continuing is unnecessary. Final summary: state saved.")
   ]);
@@ -663,7 +663,7 @@ func progress_contract_allowed_compaction_passes_scenario() -> Scenario {
 }
 
 -- 6. No explicit progress contract: "continuing" in ordinary prose must not trigger.
-func scenario_progress_contract_no_contract_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_progress_contract_no_contract_passes() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted_task(pc_guard_rt(), "Write a short poem.", [
     prose_step("Continuing to refine the poem. Step 1/3.")
   ]);
@@ -677,7 +677,7 @@ func progress_contract_no_contract_passes_scenario() -> Scenario {
   { id: "phase_c.c2.progress_contract_no_contract_passes", seed: "fixed", run: scenario_progress_contract_no_contract_passes }
 }
 
-func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_decision_record_append_name_round_trip() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let trace = ledger_append(empty_ledger_trace(), DecisionRecord({ step: 2, decision: "CallModel" }));
   match trace.records {
     record :: [] => {
@@ -698,7 +698,7 @@ func decision_record_append_name_round_trip_scenario() -> Scenario {
   { id: "phase_c.c2.decision_record_append_name_round_trip", seed: "fixed", run: scenario_decision_record_append_name_round_trip }
 }
 
-export func main() -> () ! {IO} {
+export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, Rand, SharedMem, Stream, Trace} {
   let scenarios = [
     decision_record_append_name_round_trip_scenario(),
     traced_prose_decisions_scenario(),

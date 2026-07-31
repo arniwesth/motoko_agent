@@ -93,7 +93,7 @@ func program() -> [ProgramEntry] {
 
 func start_ms() -> int { 1000 }
 
-func run_program() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func run_program() -> TracedSessionResult ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced_in_world(
     empty_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
     8, false, 0, zero_rates(), Scripted([]),
@@ -195,8 +195,7 @@ func names_equal(a: [string], b: [string]) -> bool {
 -- Q4 — exactly one terminal RunSummary, and it is the final record
 -- ---------------------------------------------------------------------------
 
-func scenario_one_run_summary() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_one_run_summary() -> Result[(), ScenarioFailure] ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let traced = run_program();
   let names = record_names(traced.trace.records);
   let n = count_run_summaries(traced.trace.records);
@@ -212,7 +211,7 @@ func scenario_one_run_summary() -> Result[(), ScenarioFailure]
 -- ---------------------------------------------------------------------------
 
 func scenario_virtual_duration() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let durations = run_summary_durations(run_program().trace.records);
   match durations {
     d :: [] => ok_or_failure(d == 1500, "duration comes from the virtual clock", ["duration_ms=${show(d)}"]),
@@ -225,7 +224,7 @@ func scenario_virtual_duration() -> Result[(), ScenarioFailure]
 -- ---------------------------------------------------------------------------
 
 func scenario_emissions_in_trace() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let texts = stream_delta_texts(run_program().trace.records);
   ok_or_failure(names_equal(texts, ["content:hello ", "content:world"]),
     "emission log appended to the returned trace in arrival order",
@@ -237,7 +236,7 @@ func scenario_emissions_in_trace() -> Result[(), ScenarioFailure]
 -- ---------------------------------------------------------------------------
 
 func scenario_replay_parity() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let a = record_names(run_program().trace.records);
   let b = record_names(run_program().trace.records);
   ok_or_failure(names_equal(a, b) && List.length(a) > 0, "replay parity: identical normalized trace", [
@@ -257,7 +256,7 @@ func scenario_replay_parity() -> Result[(), ScenarioFailure]
 -- The two must agree on the interaction log and the normalized trace.
 -- ---------------------------------------------------------------------------
 
-func discover() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func discover() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   Session.run_v2_session_traced_in_world(
     empty_rt(), "task", "", false, budget(), "", history(), ".",
     8, false, 0, zero_rates(), LiveAI,
@@ -265,7 +264,7 @@ func discover() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedM
   )
 }
 
-func replay(program: [ProgramEntry]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func replay(program: [ProgramEntry]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   Session.run_v2_session_traced_in_world(
     empty_rt(), "task", "", false, budget(), "", history(), ".",
     8, false, 0, zero_rates(), Scripted([]),
@@ -293,7 +292,7 @@ func discovered_reply(traced: TracedSessionResult) -> ScriptedStep {
 }
 
 func scenario_discovery_replay_parity() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let d = discover();
   let emissions = d.world.emission_log;
   let interactions = d.world.interaction_log;
@@ -322,6 +321,31 @@ func scenario_discovery_replay_parity() -> Result[(), ScenarioFailure]
 
 -- ---------------------------------------------------------------------------
 
+-- Only the deterministic scenarios. `main_deterministic` runs these, and the
+-- Q2 gate runs that entry WITHOUT the Clock capability: every clock read on
+-- this path is routed through the world, so the run must complete. The
+-- discovery scenario is excluded on purpose — it drives the LIVE world, which
+-- reads std/clock and must therefore trip the same backstop.
+func deterministic_scenarios() -> [Scenario] {
+  [
+    { id: "spike.world.one_run_summary",     seed: "fixed", run: scenario_one_run_summary },
+    { id: "spike.world.virtual_duration",    seed: "fixed", run: scenario_virtual_duration },
+    { id: "spike.world.emissions_in_trace",  seed: "fixed", run: scenario_emissions_in_trace },
+    { id: "spike.world.replay_parity",       seed: "fixed", run: scenario_replay_parity }
+  ]
+}
+
+export func main_deterministic() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
+  let all = deterministic_scenarios();
+  let failed = run_all(all, 0);
+  if failed == 0 then
+    println("spike_world_vertical[deterministic] PASS count=${show(List.length(all))}")
+  else {
+    let _ = println("spike_world_vertical[deterministic] FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}
+
 func scenarios() -> [Scenario] {
   [
     { id: "spike.world.one_run_summary",     seed: "fixed", run: scenario_one_run_summary },
@@ -335,7 +359,7 @@ func scenarios() -> [Scenario] {
 -- Print the recorded program so a reader can see the assertions are not
 -- vacuously comparing two empty logs (the failure mode the earlier
 -- world-protocol slice guarded against with `program_non_empty`).
-func report_evidence() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func report_evidence() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let d = discover();
   let _ = println("EVIDENCE discovery_emissions=${join(d.world.emission_log)}");
   let _ = println("EVIDENCE discovery_interactions=${join(d.world.interaction_log)}");
@@ -346,7 +370,7 @@ func report_evidence() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock,
   println("EVIDENCE replay_virtual_now=${show(r.world.now_ms)}")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let _ = report_evidence();
   let all = scenarios();
   let failed = run_all(all, 0);

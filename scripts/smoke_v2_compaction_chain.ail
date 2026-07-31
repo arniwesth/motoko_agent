@@ -100,7 +100,7 @@ func rewrite_tool(msgs: [Msg]) -> [Msg] {
   }
 }
 
-func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -111,26 +111,26 @@ func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Proces
     },
     on_pre_step: pre,
     on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate },
-    on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-    on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { Delegate },
+    on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { NoIntercept },
+    on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { NoDecision }
   }
 }
 
 func hook_a() -> ExtensionHooks {
-  base_hook("chain_A", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  base_hook("chain_A", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     Compacted(msgs ++ [mk_msg("user", "chain-A")], "A", jo([]))
   })
 }
 
 func hook_b_bad() -> ExtensionHooks {
-  base_hook("chain_B", func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  base_hook("chain_B", func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     Compacted([call_msg("tc-chain")], "B", jo([]))
   })
 }
 
 func hook_c() -> ExtensionHooks {
-  base_hook("chain_C", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  base_hook("chain_C", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     Compacted(rewrite_tool(msgs), "C", jo([]))
   })
 }
@@ -153,7 +153,7 @@ func stages_ok(stages: [PreStepStage]) -> bool {
   }
 }
 
-func direct_section() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func direct_section() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let result = dispatch_pre_step_chain(chain_rt(), mk_ctx(), seed_msgs());
   let msgs_ok = match result.msgs {
     user :: call :: tool :: marker :: [] =>
@@ -167,7 +167,7 @@ func direct_section() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock
   msgs_ok && stages_ok(result.stages)
 }
 
-func full_loop_section() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func full_loop_section() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let script: [ScriptedStep] = [prose_step("done")];
   match run_v2_with_scripted_ports(
     chain_rt(),
@@ -194,7 +194,7 @@ func report(name: string, ok: bool) -> bool ! {IO} {
   ok
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   println("=== smoke_v2_compaction_chain ===");
   let direct_ok = report("direct_chain_fold", direct_section());
   let full_ok = report("full_loop_chain_events", full_loop_section());

@@ -90,7 +90,7 @@ func read_compaction_ai_config(profile_dir: string) -> CompactionAiConfig ! {Env
 }
 
 -- Register the AI compaction extension
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
   let compaction_cfg = read_compaction_ai_config(profile_dir);
   
@@ -100,12 +100,12 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
     on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
-    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       compact_with_ai(ctx, msgs, compaction_cfg)
     },
     on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
   }
 }

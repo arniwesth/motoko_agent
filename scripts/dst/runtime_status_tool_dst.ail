@@ -52,7 +52,7 @@ func zero_rates() -> CostRates {
   { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
 }
 
-func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(rt, "task", "", false, budget(), "runtime-status-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
 }
 
@@ -96,7 +96,7 @@ func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   PassThrough
 }
 
@@ -108,15 +108,15 @@ func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision
   Pending("approval required", DenyAfterTimeout)
 }
 
-func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   Delegate
 }
 
-func no_intercept(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func no_intercept(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoIntercept
 }
 
-func no_solver(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func no_solver(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoDecision
 }
 
@@ -218,7 +218,7 @@ func mixed_tool_order_ok(msgs: [Message]) -> bool {
   }
 }
 
-func scenario_runtime_status_basic() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_runtime_status_basic() -> Result[(), ScenarioFailure] ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let traced = run_scripted(empty_rt(), [status_step("status-basic"), prose_step("done")]);
   match traced.result {
     Ok(history_after) => {
@@ -233,7 +233,7 @@ func scenario_runtime_status_basic() -> Result[(), ScenarioFailure] ! {AI, FS, P
   }
 }
 
-func scenario_runtime_status_mixed_pending() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_runtime_status_mixed_pending() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(pending_rt(), [status_then_bash_step(), prose_step("done")]);
   match traced.result {
     Ok(history_after) => {
@@ -256,7 +256,7 @@ func runtime_status_mixed_pending_scenario() -> Scenario {
   { id: "runtime_status.mixed_pending", seed: "fixed", run: scenario_runtime_status_mixed_pending }
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let scenarios = [
     runtime_status_basic_scenario(),
     runtime_status_mixed_pending_scenario()

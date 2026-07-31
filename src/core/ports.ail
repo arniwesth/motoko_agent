@@ -31,7 +31,7 @@ export type Ports = {
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env},
   tool_exec: (string, string) -> string ! {IO, Process, FS},
-  hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
 }
 
 func deny_approval(_req: ApprovalRequest) -> ApprovalResolution ! {IO} {
@@ -46,7 +46,7 @@ func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" 
 
 export func ports_shape_probe(
   model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> PortExchange ! {AI, IO, Trace},
-  hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
 ) -> Ports {
   {
     model_step: model_step,

@@ -65,11 +65,11 @@ pure func pending_allow_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPo
 
 -- Boilerplate filler hooks (non-policy slots return neutral values).
 
-pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoIntercept
 }
 
-pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoDecision
 }
 
@@ -81,11 +81,11 @@ pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch !
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   Delegate
 }
 
-pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   PassThrough
 }
 
@@ -134,7 +134,7 @@ func no_rates() -> CostRates {
 
 -- 1. Pending(DenyAfterTimeout) + EOF stdin → call denied; loop completes
 --    (the denial message is appended to history; prose_step terminates).
-func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_pending_deny_default_on_eof() -> bool ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let rt = mk_runtime(mk_hook("pending-deny", pending_deny_default));
   let result = run_v2_with_scripted_ports(
     rt, "stub-test", "", false, mk_budget(),
@@ -151,7 +151,7 @@ func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net
 --    via the on_tool_handle (Delegate) → backend (Native) → tool_runtime.
 --    With BashExec we'd actually execute "echo noop" — for safety we use
 --    a noop. The loop should still complete.
-func test_pending_allow_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_pending_allow_default_on_eof() -> bool ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let rt = mk_runtime(mk_hook("pending-allow", pending_allow_default));
   let result = run_v2_with_scripted_ports(
     rt, "stub-test", "", false, mk_budget(),
@@ -169,7 +169,7 @@ func report(name: string, ok: bool) -> () ! {IO} {
   else println("  ✗ ${name}")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} = {
+export func main() -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} = {
   println("=== smoke_v2_pending_full_loop ===");
   let r1 = test_pending_deny_default_on_eof();
   report("Pending(DenyAfterTimeout) + EOF stdin → loop completes (deny applied)",  r1);

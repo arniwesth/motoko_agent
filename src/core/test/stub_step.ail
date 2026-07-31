@@ -143,11 +143,11 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
   [{ position: "system", ttl: "ephemeral" }]
 }
 
-func default_hooks_runtime() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func default_hooks_runtime() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   empty_rt()
 }
 
-export func live_ports(rt: ExtRuntime) -> Ports {
+export func live_ports(rt: ExtRuntime) -> Ports ! {AI} {
   let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> PortExchange ! {AI, IO, Trace} =
     func(model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> PortExchange ! {AI, IO, Trace} {
@@ -157,7 +157,7 @@ export func live_ports(rt: ExtRuntime) -> Ports {
   ports_shape_probe(model_step, default_hooks_runtime)
 }
 
-export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]) -> Ports {
+export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]) -> Ports ! {IO, Trace} {
   let base_assistant_count = assistant_count(history);
   let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> PortExchange ! {AI, IO, Trace} =
     func(_model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
@@ -298,15 +298,15 @@ export func deny_all_rt() -> ExtRuntime {
     Deny("test: all tools denied")
   };
   let no_handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope)
-    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     Delegate
   };
   let no_intercept = func(_ctx: ExtCtx, _text: string)
-    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     NoIntercept
   };
   let no_solver = func(_ctx: ExtCtx, _text: string)
-    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     NoDecision
   };
   let hooks: ExtensionHooks = {
@@ -317,7 +317,7 @@ export func deny_all_rt() -> ExtRuntime {
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       PassThrough
     },
     on_tool_policy: deny_policy,

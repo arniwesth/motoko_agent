@@ -151,11 +151,11 @@ func no_budget_patch() -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-export func make_hooks(cfg: A2AConfig) -> ExtensionHooks {
+export func make_hooks(cfg: A2AConfig) -> ExtensionHooks ! {Net, Rand} {
   let agents = cfg.agents;
   let schemas = collect_schemas(agents);
   let names = collect_tool_names(agents);
-  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     match find_agent_for_tool(agents, call.tool) {
       None  => Delegate,
       Some(a) => {
@@ -165,10 +165,10 @@ export func make_hooks(cfg: A2AConfig) -> ExtensionHooks {
       }
     }
   };
-  let intercept = func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let intercept = func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     NoIntercept
   };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
     NoDecision
   };
   {
@@ -181,7 +181,7 @@ export func make_hooks(cfg: A2AConfig) -> ExtensionHooks {
     on_tool_handle:        handle,
     on_response_intercept: intercept,
     on_solver_candidate:   finalize,
-    on_pre_step:           func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+    on_pre_step:           func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { PassThrough }
   }
 }
 

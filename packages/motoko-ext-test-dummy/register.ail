@@ -78,19 +78,19 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env} {
         else if tool_decision == "deny" then Deny("dummy deny")
         else NoOpinion,
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: list[Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _msgs: list[Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
         PassThrough
       },
     on_tool_handle:
-      func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
         Delegate
       },
     on_response_intercept:
-      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
         NoIntercept
       },
     on_solver_candidate:
-      func(_ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
         if finalize == "accept" then Accept(candidate)
         else if finalize == "continue" then ContinueWithFeedback("dummy feedback")
         else NoDecision

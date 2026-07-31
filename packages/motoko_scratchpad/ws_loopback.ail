@@ -180,7 +180,7 @@ func collect_one(conn, req_path: string, done_path: string) -> () ! {Stream, FS}
   runEventLoop(conn)
 }
 
-func dispatch_deferred_request(rt: ExtRuntime, ctx: ExtCtx, raw_req: string) -> string ! {IO, Clock, FS, Process, AI, Env, Net, SharedMem, Stream} {
+func dispatch_deferred_request(rt: ExtRuntime, ctx: ExtCtx, raw_req: string) -> string ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, Rand[mode=os], SharedMem, Stream, Trace} {
   match decode(raw_req) {
     Err(_) => error_tool_result("", "invalid tool-request frame"),
     Ok(obj) => {
@@ -191,7 +191,7 @@ func dispatch_deferred_request(rt: ExtRuntime, ctx: ExtCtx, raw_req: string) -> 
   }
 }
 
-func loop_until_done(rt: ExtRuntime, ctx: ExtCtx, conn, req_path: string, done_path: string, remaining: int) -> () ! {Stream, FS, IO, Clock, Process, AI, Env, Net, SharedMem} {
+func loop_until_done(rt: ExtRuntime, ctx: ExtCtx, conn, req_path: string, done_path: string, remaining: int) -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, Rand[mode=os], SharedMem, Stream, Trace} {
   if remaining <= 0 then ()
   else if fileExists(done_path) then ()
   else {
@@ -207,7 +207,7 @@ func loop_until_done(rt: ExtRuntime, ctx: ExtCtx, conn, req_path: string, done_p
   }
 }
 
-export func exec_scratchpad_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, cells: Json, timeout_secs: int) -> CellExecResult ! {Stream, FS, IO, Clock, Process, AI, Env, Net, SharedMem} {
+export func exec_scratchpad_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, cells: Json, timeout_secs: int) -> CellExecResult ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, Rand[mode=os], SharedMem, Stream, Trace} {
   if getEnvOr("MOTOKO_SCRATCHPAD_WS_LOOPBACK", "0") != "1" then
     exec_scratchpad_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs)
   else {

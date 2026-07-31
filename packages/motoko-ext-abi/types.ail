@@ -60,7 +60,7 @@ export type VerificationConfig = { enabled: bool, command: string }
 export type BudgetPlan = { total: int, solver: int, verifier: int }
 
 export type ExtPorts = {
-  ai_step: (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream},
+  ai_step: (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace},
   proc_exec: (string, string) -> string ! {IO, Process, FS},
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env}
@@ -154,14 +154,14 @@ export type ExtensionHooks = {
   on_describe_tools: () -> [ToolSchema],
   on_build_system_prompt: (ExtCtx) -> PromptPatch,
   on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS},
-  on_pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+  on_pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
   on_tool_handle: (ExtCtx, ToolCallEnvelope)
-    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
   on_response_intercept: (ExtCtx, string)
-    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
   on_solver_candidate: (ExtCtx, string)
-    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
 }
 
 export type ExtRegistry = { hooks: [ExtensionHooks] }

@@ -71,11 +71,11 @@ pure func always_pending_deny_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> 
 }
 
 -- Boilerplate hook fillers (non-policy hooks return neutral values).
-pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoIntercept
 }
 
-pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   NoDecision
 }
 
@@ -87,11 +87,11 @@ pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch !
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   Delegate
 }
 
-pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   PassThrough
 }
 
@@ -148,7 +148,7 @@ func mk_envelope() -> ToolCallEnvelope {
 }
 
 -- Test runner: dispatch policy and assert the variant.
-func run_case(name: string, hooks: [ExtensionHooks], expect: string) -> bool ! {IO} {
+func run_case(name: string, hooks: [ExtensionHooks], expect: string) -> bool ! {IO, Clock} {
   let rt = mk_runtime(hooks);
   let ctx = mk_ctx();
   let env = mk_envelope();

@@ -20,7 +20,7 @@ import pkg/sunholo/motoko_ext_conformance/fixtures/reject_fixtures (
 import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config as register_ai)
 import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_config as register_structural)
 
-func expect_ok(label: string, hooks: ExtensionHooks, s: Scenario) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_ok(label: string, hooks: ExtensionHooks, s: Scenario) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   match run_scenario(hooks, s) {
     Ok(_) => 0,
     Err(f) => {
@@ -30,7 +30,7 @@ func expect_ok(label: string, hooks: ExtensionHooks, s: Scenario) -> int ! {IO, 
   }
 }
 
-func expect_fail(label: string, hooks: ExtensionHooks, s: Scenario, expected: string) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_fail(label: string, hooks: ExtensionHooks, s: Scenario, expected: string) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   match run_scenario(hooks, s) {
     Ok(_) => {
       let _ = println("selftest FAIL ${label} scenario=${s.id} expected=${expected} got=ok");
@@ -45,7 +45,7 @@ func expect_fail(label: string, hooks: ExtensionHooks, s: Scenario, expected: st
   }
 }
 
-func expect_accept(label: string, hooks: ExtensionHooks) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_accept(label: string, hooks: ExtensionHooks) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let failures =
     expect_ok(label, hooks, scenario_system_prefix_preserved())
     + expect_ok(label, hooks, scenario_tool_pairing_preserved())
@@ -58,7 +58,7 @@ func expect_accept(label: string, hooks: ExtensionHooks) -> int ! {IO, Process, 
   }
 }
 
-func expect_reject_prefix() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_reject_prefix() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let hooks = reject_prefix_hooks();
   expect_fail("reject_prefix", hooks, scenario_system_prefix_preserved(), "no_system_in_output")
     + expect_ok("reject_prefix", hooks, scenario_tool_pairing_preserved())
@@ -66,7 +66,7 @@ func expect_reject_prefix() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, 
     + expect_ok("reject_prefix", hooks, scenario_artifact_cache_effective())
 }
 
-func expect_reject_pair() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_reject_pair() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let hooks = reject_pair_hooks();
   expect_ok("reject_pair", hooks, scenario_system_prefix_preserved())
     + expect_fail("reject_pair", hooks, scenario_tool_pairing_preserved(), "pairing_preserved")
@@ -74,7 +74,7 @@ func expect_reject_pair() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Cl
     + expect_ok("reject_pair", hooks, scenario_artifact_cache_effective())
 }
 
-func expect_reject_nocache() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_reject_nocache() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let hooks = reject_nocache_hooks();
   expect_ok("reject_nocache", hooks, scenario_system_prefix_preserved())
     + expect_ok("reject_nocache", hooks, scenario_tool_pairing_preserved())
@@ -82,7 +82,7 @@ func expect_reject_nocache() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem,
     + expect_fail("reject_nocache", hooks, scenario_artifact_cache_effective(), "artifact_cache_effective")
 }
 
-export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func main() -> () ! {AI[mode=fixed], Clock, Env, FS, IO, Net, Process, Rand[mode=os], SharedMem, Stream, Trace} {
   let ai = register_ai({});
   let structural = register_structural({});
   let failures =

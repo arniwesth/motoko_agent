@@ -14,7 +14,7 @@ export type Scenario = {
   id: string,
   seed: string,
   run: () -> Result[(), ScenarioFailure]
-    ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace}
+    ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand}
 }
 
 export func print_trace(lines: [string]) -> () ! {IO} {
@@ -40,7 +40,7 @@ export func report_failure(scenario: string, seed: string, f: { failed_invariant
   print_trace(f.trace)
 }
 
-export func run_one(s: Scenario) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func run_one(s: Scenario) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   match s.run() {
     Ok(_) => {
       println("scenario=${s.id} ok");
@@ -53,7 +53,7 @@ export func run_one(s: Scenario) -> bool ! {AI, FS, Process, IO, Env, Net, Share
   }
 }
 
-export func run_all(scenarios: [Scenario], failed: int) -> int ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func run_all(scenarios: [Scenario], failed: int) -> int ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   match scenarios {
     [] => failed,
     s :: rest => {
