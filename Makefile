@@ -8,7 +8,7 @@ codex:
 
 claude:
 	clear
-	claude --dangerously-skip-permissions --model claude-opus-4-8
+	claude --dangerously-skip-permissions --model claude-opus-5
 
 prune:
 	docker system prune -a
