@@ -22,14 +22,15 @@
 
 module src/core/world
 
-import std/ai (Message, StepResult, AIError, StreamChunk, ContentDelta, ThinkingDelta, Usage)
+import std/ai (Message, StepResult, AIError, StreamChunk, ContentDelta, ThinkingDelta, Usage, ToolSchema, CacheBreakpoint, stepWithStreamRecorded)
 import std/clock (now)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/string as Str (find, substring, length)
 import std/trace as Trace
 import pkg/sunholo/motoko_ext_abi/types (ExtRuntime)
-import src/core/test/stub_step (StepProvider, ScriptedStep, dispatch_step, scripted_to_step_result)
+import src/core/test/stub_step (StepProvider, ScriptedStep, LiveAI, Scripted, Ported, scripted_to_step_result, terminal_step)
+import src/core/tool_catalog (tools_with_extensions)
 
 -- ---------------------------------------------------------------------------
 -- Program
@@ -175,11 +176,15 @@ export func world_provider_exchange(
       -- cursor is already explicitly threaded through C2LoopState.provider,
       -- which satisfies D1. Capturing it in the adapter froze that cursor and
       -- silently replayed step 0 forever — see spike/README.md, Q1.
-      let d = dispatch_step(provider, model, msgs, rt, project);
+      let d = live_recorded_exchange(provider, model, msgs, rt, project);
       Ok({
-        emissions: [],
+        emissions: d.emissions,
         outcome: d.result,
-        next: { ws | interaction_log: ws.interaction_log ++ [projection] },
+        next: {
+          ws |
+          interaction_log: ws.interaction_log ++ [projection],
+          emission_log: ws.emission_log ++ d.emissions
+        },
         next_provider: d.next_provider
       })
     },
@@ -258,4 +263,72 @@ func project_all(emissions: [string], project: (StreamChunk) -> () ! {IO, Trace}
       project_all(rest, project)
     }
   }
+}
+
+-- ---------------------------------------------------------------------------
+-- Live recorded exchange
+-- ---------------------------------------------------------------------------
+
+-- The live half of D1's "lossless ordered emission log alongside the final
+-- result". `LiveAI` goes through the prototype `stepWithStreamRecorded`, which
+-- projects each chunk at arrival AND returns the identical ordered log.
+--
+-- Ported now carries the log too: `ported_provider` funnels every provider
+-- through Ports.model_step before the loop starts, so the port itself has to
+-- return the emissions or they are lost regardless of the upstream API.
+export type LiveExchange = {
+  emissions: [string],
+  result: Result[StepResult, AIError],
+  next_provider: StepProvider
+}
+
+pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
+  [{ position: "system", ttl: "ephemeral" }]
+}
+
+export func live_recorded_exchange(
+  provider: StepProvider,
+  model: string,
+  msgs: [Message],
+  rt: ExtRuntime,
+  project: (StreamChunk) -> () ! {IO, Trace}
+) -> LiveExchange ! {AI, IO, Trace} {
+  match provider {
+    LiveAI => {
+      let rec = stepWithStreamRecorded(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), project);
+      { emissions: describe_chunks(rec.chunks), result: rec.outcome, next_provider: LiveAI }
+    },
+    Scripted(script) =>
+      match script {
+        [] => { emissions: [], result: Ok(terminal_step()), next_provider: Scripted([]) },
+        s :: rest => {
+          let emissions = tag_content(s.chunks);
+          let _ = project_all(emissions, project);
+          { emissions: emissions, result: Ok(scripted_to_step_result(s)), next_provider: Scripted(rest) }
+        }
+      },
+    Ported(ports) => {
+      let ex = ports.model_step(model, msgs, project);
+      { emissions: describe_chunks(ex.emissions), result: ex.result, next_provider: Ported(ports) }
+    }
+  }
+}
+
+pure func describe_chunks(cs: [StreamChunk]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest => describe_chunk(c) :: describe_chunks(rest)
+  }
+}
+
+pure func tag_content(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => "content:${x}" :: tag_content(rest)
+  }
+}
+
+-- Build a replayable program from what a discovery run observed.
+export pure func program_from_run(emissions: [string], latency_ms: int, projection: string, reply: ScriptedStep) -> [ProgramEntry] {
+  [ProviderReply({ projection: projection, latency_ms: latency_ms, emissions: emissions, reply: reply })]
 }

@@ -14,8 +14,19 @@ import src/core/phase_vocab (ApprovalRequest)
 
 export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
 
+-- D1: "the provider exchange wraps the existing typed Result[StepResult,
+-- AIError] with its ordered intermediate-emission log". The log has to be on
+-- the *port*, not just on the upstream API: `ported_provider` funnels every
+-- provider — LiveAI included — through Ports.model_step before the loop
+-- starts, so a Result-only port discards the emission log no matter what
+-- upstream returns. See spike/README.md, Q5.
+export type PortExchange = {
+  emissions: [StreamChunk],
+  result: Result[StepResult, AIError]
+}
+
 export type Ports = {
-  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
+  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> PortExchange ! {AI, IO, Trace},
   approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env},
@@ -34,7 +45,7 @@ func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 export func ports_shape_probe(
-  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
+  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> PortExchange ! {AI, IO, Trace},
   hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
 ) -> Ports {
   {

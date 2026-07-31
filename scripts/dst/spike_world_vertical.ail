@@ -33,15 +33,17 @@ import src/core/phase_vocab (
 )
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
-import src/core/test/stub_step (Scripted, ScriptedStep, empty_rt)
+import src/core/test/stub_step (LiveAI, Scripted, ScriptedStep, empty_rt)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import src/core/world (
   World,
+  LiveWorld,
   DeterministicWorld,
   WorldState,
   ProgramEntry,
   ProviderReply,
-  initial_world
+  initial_world,
+  program_from_run
 )
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 
@@ -245,17 +247,107 @@ func scenario_replay_parity() -> Result[(), ScenarioFailure]
 }
 
 -- ---------------------------------------------------------------------------
+-- Q5 — discovery -> replay against the real driver
+--
+-- Discovery drives run_v2_session_traced_in_world through the LIVE world: the
+-- real std/ai path (under --ai-stub), the real chunk callback, and the
+-- prototype stepWithStreamRecorded, which returns the ordered emission log the
+-- current callback-only API cannot. That log becomes the program. Replay drives
+-- the same entry point through the deterministic world, calling no provider.
+-- The two must agree on the interaction log and the normalized trace.
+-- ---------------------------------------------------------------------------
+
+func discover() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced_in_world(
+    empty_rt(), "task", "", false, budget(), "", history(), ".",
+    8, false, 0, zero_rates(), LiveAI,
+    LiveWorld, initial_world(start_ms(), [])
+  )
+}
+
+func replay(program: [ProgramEntry]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced_in_world(
+    empty_rt(), "task", "", false, budget(), "", history(), ".",
+    8, false, 0, zero_rates(), Scripted([]),
+    DeterministicWorld, initial_world(start_ms(), program)
+  )
+}
+
+func last_content(msgs: [Message]) -> string {
+  match msgs {
+    [] => "",
+    m :: [] => m.content,
+    _ :: rest => last_content(rest)
+  }
+}
+
+func last_response(traced: TracedSessionResult) -> string {
+  match traced.result {
+    Ok(msgs) => last_content(msgs),
+    Err(_) => ""
+  }
+}
+
+func discovered_reply(traced: TracedSessionResult) -> ScriptedStep {
+  { reply("") | prose: last_response(traced) }
+}
+
+func scenario_discovery_replay_parity() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let d = discover();
+  let emissions = d.world.emission_log;
+  let interactions = d.world.interaction_log;
+  let program = program_from_run(emissions, 1500, join(interactions), discovered_reply(d));
+  let r = replay(program);
+  let d_names = record_names(d.trace.records);
+  let r_names = record_names(r.trace.records);
+  let d_texts = stream_delta_texts(d.trace.records);
+  let r_texts = stream_delta_texts(r.trace.records);
+  ok_or_failure(
+    List.length(emissions) > 0
+      && names_equal(d_texts, r_texts)
+      && names_equal(d_names, r_names)
+      && names_equal(interactions, r.world.interaction_log),
+    "discovery -> replay parity against the real driver",
+    [
+      "program_non_empty=${show(List.length(emissions))}",
+      "discovery_emissions=${join(d_texts)}",
+      "replay_emissions=${join(r_texts)}",
+      "discovery_interactions=${join(interactions)}",
+      "replay_interactions=${join(r.world.interaction_log)}",
+      "discovery_trace=${join(d_names)}",
+      "replay_trace=${join(r_names)}"
+    ])
+}
+
+-- ---------------------------------------------------------------------------
 
 func scenarios() -> [Scenario] {
   [
     { id: "spike.world.one_run_summary",     seed: "fixed", run: scenario_one_run_summary },
     { id: "spike.world.virtual_duration",    seed: "fixed", run: scenario_virtual_duration },
     { id: "spike.world.emissions_in_trace",  seed: "fixed", run: scenario_emissions_in_trace },
-    { id: "spike.world.replay_parity",       seed: "fixed", run: scenario_replay_parity }
+    { id: "spike.world.replay_parity",       seed: "fixed", run: scenario_replay_parity },
+    { id: "spike.world.discovery_replay",    seed: "fixed", run: scenario_discovery_replay_parity }
   ]
 }
 
-export func main() -> () ! {IO} {
+-- Print the recorded program so a reader can see the assertions are not
+-- vacuously comparing two empty logs (the failure mode the earlier
+-- world-protocol slice guarded against with `program_non_empty`).
+func report_evidence() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let d = discover();
+  let _ = println("EVIDENCE discovery_emissions=${join(d.world.emission_log)}");
+  let _ = println("EVIDENCE discovery_interactions=${join(d.world.interaction_log)}");
+  let program = program_from_run(d.world.emission_log, 1500, join(d.world.interaction_log), discovered_reply(d));
+  let r = replay(program);
+  let _ = println("EVIDENCE replay_emissions=${join(r.world.emission_log)}");
+  let _ = println("EVIDENCE replay_interactions=${join(r.world.interaction_log)}");
+  println("EVIDENCE replay_virtual_now=${show(r.world.now_ms)}")
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = report_evidence();
   let all = scenarios();
   let failed = run_all(all, 0);
   if failed == 0 then

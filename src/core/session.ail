@@ -156,9 +156,13 @@ type SessionPolicy = {
   headless: bool
 }
 
+-- D6's SystemRun, as far as the spike needs it: the outcome, the complete
+-- ledger trace, and the world the run ended in (whose interaction_log is the
+-- replay unit). `replay_metadata` is out of scope here.
 export type TracedSessionResult = {
   result: Result[[Message], AIError],
-  trace: LedgerTrace
+  trace: LedgerTrace,
+  world: WorldState
 }
 
 -- Convert Motoko's UI/profile model identifier to the provider API model id
@@ -695,7 +699,7 @@ func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Resu
   -- which for OpenRouter still carries the "openrouter/" routing prefix; sent
   -- raw the provider rejects it with 400 "not a valid model ID", surfacing as
   -- compaction_ai.summarizer_failed / provider_error. Strip it here.
-  match p.model_step(provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk) {
+  match p.model_step(provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk).result {
     Ok(result) => Ok(result.message.content),
     Err(e) => Err("${e.code}: ${e.message}")
   }
@@ -1591,7 +1595,7 @@ func c2_loop(
   match c2_step_state(st) {
     Err(reason) => {
       let result: Result[[Message], AIError] = Err({ code: "InvalidHistory", message: reason, retryable: false });
-      { result: result, trace: c2_finalize(session_id, model, st.totals, st.step_idx, 5, reason, started_at_ms, world_clock_now(w, st.world).value, st.trace) }
+      { result: result, trace: c2_finalize(session_id, model, st.totals, st.step_idx, 5, reason, started_at_ms, world_clock_now(w, st.world).value, st.trace), world: st.world }
     },
     Ok(step_state) => {
       let decision = decide(step_state, policy.step);
@@ -1599,7 +1603,7 @@ func c2_loop(
       match decision {
         Fail(info) => {
           let result = c2_fail_no_summary(session_id, st.totals, st.step_idx, max_cost_millicents, info.code, info.message, info.retryable);
-          { result: result, trace: c2_finalize(session_id, model, st.totals, st.step_idx, c2_fail_finish_code(info.code, info.message), info.message, started_at_ms, world_clock_now(w, st.world).value, trace_with_decision) }
+          { result: result, trace: c2_finalize(session_id, model, st.totals, st.step_idx, c2_fail_finish_code(info.code, info.message), info.message, started_at_ms, world_clock_now(w, st.world).value, trace_with_decision), world: st.world }
         },
         Finalize(info) => {
           let done_step = c2_done_step(st.step_idx);
@@ -1619,7 +1623,7 @@ func c2_loop(
             output: info.output,
             source: st.finalize_source
           }));
-          { result: Ok(st.msgs), trace: c2_finalize(session_id, model, st.totals, st.step_idx, 0, "", started_at_ms, world_clock_now(w, st.world).value, trace_after_empty_floor) }
+          { result: Ok(st.msgs), trace: c2_finalize(session_id, model, st.totals, st.step_idx, 0, "", started_at_ms, world_clock_now(w, st.world).value, trace_after_empty_floor), world: st.world }
         },
         InjectUserMessage(msg) => {
           let next_msgs = st.msgs ++ [msg];
@@ -1678,7 +1682,7 @@ func c2_loop(
             None => {
               let msg = "approval requested without pending approval state";
               let result: Result[[Message], AIError] = Err({ code: "Internal", message: msg, retryable: false });
-              { result: result, trace: c2_finalize(session_id, model, st.totals, st.step_idx, 5, msg, started_at_ms, world_clock_now(w, st.world).value, trace_with_decision) }
+              { result: result, trace: c2_finalize(session_id, model, st.totals, st.step_idx, 5, msg, started_at_ms, world_clock_now(w, st.world).value, trace_with_decision), world: st.world }
             },
             Some(req) => {
               let raw = readLine();
@@ -1768,13 +1772,13 @@ func c2_loop(
               let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
-              { result: result, trace: c2_finalize(session_id, model, st.totals, step_idx, 5, reason, started_at_ms, world_clock_now(w, st.world).value, ledger_append(trace_after_stages, WireRecord(event))) }
+              { result: result, trace: c2_finalize(session_id, model, st.totals, step_idx, 5, reason, started_at_ms, world_clock_now(w, st.world).value, ledger_append(trace_after_stages, WireRecord(event))), world: st.world }
             },
             Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
-              { result: result, trace: c2_finalize(session_id, model, st.totals, step_idx, 3, compaction_reason, started_at_ms, world_clock_now(w, st.world).value, ledger_append(trace_after_stages, WireRecord(event))) }
+              { result: result, trace: c2_finalize(session_id, model, st.totals, step_idx, 3, compaction_reason, started_at_ms, world_clock_now(w, st.world).value, ledger_append(trace_after_stages, WireRecord(event))), world: st.world }
             },
             Ok(payload) => {
               let compacted_msgs = payload_messages(payload);
@@ -1803,7 +1807,7 @@ func c2_loop(
                   let event = ErrorEvent({ source: "harness", code: "HarnessFailure", message: harness_error_message(he) });
                   let _ = ledger_emit(session_id, event);
                   let result: Result[[Message], AIError] = Err({ code: "HarnessFailure", message: harness_error_message(he), retryable: false });
-                  { result: result, trace: ledger_append(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), WireRecord(event)) }
+                  { result: result, trace: ledger_append(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), WireRecord(event)), world: st.world }
                 },
                 Ok(exchange) => {
               let next_provider = exchange.next_provider;
@@ -1839,7 +1843,7 @@ func c2_loop(
                     };
                     c2_loop(rt, w, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                   } else {
-                    { result: Err(e), trace: c2_finalize(session_id, model, st.totals, step_idx, 5, e.message, started_at_ms, world_clock_now(w, exchange.next).value, trace_after_emissions) }
+                    { result: Err(e), trace: c2_finalize(session_id, model, st.totals, step_idx, 5, e.message, started_at_ms, world_clock_now(w, exchange.next).value, trace_after_emissions), world: exchange.next }
                   }
                 },
                 Ok(result) => {
