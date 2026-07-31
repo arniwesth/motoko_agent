@@ -266,7 +266,7 @@ export func checkpoint(h: History, plan: CheckpointPlan)
     MkHistory(xs) => {
       let pinned = take_system_prefix(xs);
       let summary_msg: Message =
-        { role: "assistant", content: "[CHECKPOINT] ${plan.summary}", tool_calls: [], tool_call_id: "" };
+        { role: "assistant", content: "[CHECKPOINT] ${plan.summary}", tool_calls: [], tool_call_id: "", images: [] };
       let rebuilt = MkHistory(pinned ++ [summary_msg]);
       {
         history: rebuilt,
@@ -397,7 +397,7 @@ export pure func checkpoint_would_relieve(h: History, plan: CheckpointPlan, limi
 pure func calibrated_falls_back_without_anchor() -> bool
   tests [((), true)]
   {
-    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "" }];
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
     let t: TokenTelemetry = { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 };
     -- 16 chars => raw estimate 4 tokens; /100 limit *100 == 4%
     calibrated_usage_percent(msgs, 100, t) == 4
@@ -409,7 +409,7 @@ pure func calibrated_falls_back_without_anchor() -> bool
 pure func calibrated_applies_affine_overhead() -> bool
   tests [((), true)]
   {
-    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "" }];
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
     let t: TokenTelemetry = { last_input_tokens: 200, last_output_tokens: 0, last_estimated_input_tokens: 100 };
     calibrated_usage_percent(msgs, 100, t) == 82
   }
@@ -420,7 +420,7 @@ pure func calibrated_applies_affine_overhead() -> bool
 pure func calibrated_floors_at_raw() -> bool
   tests [((), true)]
   {
-    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "" }];
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
     let t: TokenTelemetry = { last_input_tokens: 100, last_output_tokens: 0, last_estimated_input_tokens: 400 };
     calibrated_usage_percent(msgs, 100, t) == 4
   }
@@ -734,8 +734,25 @@ export func msgs_to_messages(msgs: [Msg]) -> [Message] {
       role: m.role,
       content: m.content,
       tool_calls: m.tool_calls,
-      tool_call_id: m.tool_call_id
+      tool_call_id: m.tool_call_id,
+      images: []
     } :: msgs_to_messages(rest))
+  }
+}
+
+-- Message -> Msg. The inverse of msgs_to_messages, needed since std/ai.Message
+-- gained `images` (v0.30.0 vision input) and the two records stopped being
+-- structurally identical. Vision parts are dropped: the ABI Msg is a versioned
+-- extension surface and widening it is a separate decision.
+export func messages_to_msgs(msgs: [Message]) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id
+    } :: messages_to_msgs(rest))
   }
 }
 
@@ -747,7 +764,8 @@ export func step_result_to_message(result: StepResult) -> Message {
     role: "assistant",
     content: result.message.content,
     tool_calls: result.tool_calls,
-    tool_call_id: ""
+    tool_call_id: "",
+    images: []
   }
 }
 
@@ -798,7 +816,8 @@ export func tool_result_message(call: ToolCall, content: string) -> Message {
     role: "tool",
     content: cap_tool_message_content(content),
     tool_calls: [],
-    tool_call_id: call.id
+    tool_call_id: call.id,
+    images: []
   }
 }
 
@@ -812,7 +831,8 @@ export func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
     role: "tool",
     content: result_env_model_content(envelope),
     tool_calls: [],
-    tool_call_id: envelope.tool_call_id
+    tool_call_id: envelope.tool_call_id,
+    images: []
   }
 }
 
@@ -824,7 +844,8 @@ export func handled_tool_message(call_id: string, env: ToolResultEnvelope) -> Me
     role: "tool",
     content: result_env_model_content(env),
     tool_calls: [],
-    tool_call_id: call_id
+    tool_call_id: call_id,
+    images: []
   }
 }
 
@@ -833,7 +854,7 @@ export func handled_tool_message(call_id: string, env: ToolResultEnvelope) -> Me
 -- ============================================================================
 
 pure func mk_msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 pure func test_empty_delta_is_identity_shape() -> bool
@@ -931,7 +952,7 @@ pure func test_ledger_trace_records_wire_and_stage_passed() -> bool
   }
 
 pure func long_msg(content: string) -> Message {
-  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+  { role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 pure func test_seal_compacted_payload_repins_and_seals() -> bool
@@ -1156,7 +1177,7 @@ pure func test_step_result_to_message_copies_tool_calls() -> bool
   {
     let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
     let result: StepResult = {
-      message: { role: "assistant", content: "use tool", tool_calls: [], tool_call_id: "" },
+      message: { role: "assistant", content: "use tool", tool_calls: [], tool_call_id: "", images: [] },
       tool_calls: [call],
       finish_reason: "tool_calls",
       input_tokens: 1,

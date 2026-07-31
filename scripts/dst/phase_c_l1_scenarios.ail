@@ -22,6 +22,7 @@ import src/core/phase_vocab (
   apply_checkpoint,
   checkpoint,
   history_digest,
+  messages_to_msgs,
   history_from_seed,
   history_len,
   history_valid_transcript,
@@ -49,7 +50,7 @@ func harness_self_test_scenario() -> Scenario {
 }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func call(id: string) -> ToolCall {
@@ -159,7 +160,7 @@ func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFail
           };
           let in_seg = segment_messages(split_for_compaction(input_msgs).segment);
           let out_seg = segment_messages(split_for_compaction([msg("system", "s"), msg("assistant", "[CHECKPOINT] summ")]).segment);
-          let segment_law_ok = match validate_compactor_output(in_seg, out_seg) {
+          let segment_law_ok = match validate_compactor_output(messages_to_msgs(in_seg), messages_to_msgs(out_seg)) {
             Ok(_) => true,
             Err(_) => false
           };

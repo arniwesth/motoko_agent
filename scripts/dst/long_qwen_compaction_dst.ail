@@ -14,6 +14,7 @@ import src/core/test/stub_step (StepProvider, Ported)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (
+  msgs_to_messages,
   LedgerTrace,
   LedgerRecord,
   WireRecord,
@@ -75,7 +76,7 @@ func budget() -> BudgetPlan {
 }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func abi_msg(role: string, content: string) -> Msg {
@@ -136,7 +137,7 @@ func highest_agent_idx_from_markers(msgs: [Message], n: int) -> int {
 
 func step_result(content: string, calls: [ToolCall], finish: string) -> StepResult {
   {
-    message: { role: "assistant", content: content, tool_calls: [], tool_call_id: "" },
+    message: { role: "assistant", content: content, tool_calls: [], tool_call_id: "", images: [] },
     tool_calls: calls,
     finish_reason: finish,
     input_tokens: 100,
@@ -741,7 +742,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
     ports: {
       ai_step: func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
         let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
-        match ports.model_step(model, msgs, on_chunk) {
+        match ports.model_step(model, msgs_to_messages(msgs), on_chunk) {
           Ok(r) => Ok(r.message.content),
           Err(e) => Err(e.message)
         }
