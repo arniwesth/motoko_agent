@@ -6,14 +6,22 @@ _Executed `PLAN-spike-real-driver-vertical.md` in full. All five questions resol
 Q5 confirm, Q2's second clause falsifies, Q3 is measured._
 
 _Revision: motoko `91744a0` on throwaway branch `spike/009-real-driver-vertical`, forked from
-`4aaf59f`. Toolchain: **released AILANG v0.31.0** (`1f6f7dd28`), built from the in-repo clone at
-`ailang/` on throwaway branch `spike/motoko-009-prototype-v031` (`d3c9ff680`), carrying one local
-addition — a `stepWithStreamRecorded` prototype. Neither branch merges; neither was pushed._
+`4aaf59f`. That branch never merges; its durable output is this note, `spike/README.md`, the F6
+probe, and the refreshed upstream issue, all cherry-picked onto
+`arniwesth/mot-44-motoko_dst_execution_primer`._
+
+_Toolchain: **released AILANG v0.31.0** (`1f6f7dd28`), carrying one addition — a
+`stepWithStreamRecorded` prototype plus its Go tests. That is published at
+`https://github.com/arniwesth/ailang`, branch `spike/motoko-009-prototype-v031`, with the `v0.31.0`
+tag pushed alongside so the compare against the released base renders for anyone. The in-repo clone
+at `ailang/` is repointed to match: `origin` is that fork, `upstream` is `sunholo-data/ailang` with
+its push URL disabled so an upstream push cannot happen by accident._
 
 The narrative, the executed commands, and the recorded output live in
 `spike/README.md`, section *"Vertical spike through the real driver"*. This note carries only what
-has to be acted on: five findings against the ADR, two measurements the implementation plan should
-cite instead of estimating, and an explicit statement of what the spike does **not** establish.
+has to be acted on: five findings against the ADR (F1–F5), one confirmed defect in the DST harness
+itself (F6), two measurements the implementation plan should cite instead of estimating, and an
+explicit statement of what the spike does **not** establish.
 
 ## What this note does not change
 

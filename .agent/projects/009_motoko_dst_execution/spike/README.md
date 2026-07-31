@@ -366,10 +366,14 @@ v0.31.0 supplies the real `Message` shape natively — `{role, content, tool_cal
 images: [ImagePart]}` with `ImagePart = {source, mime}` — so **Q3 below measures the migration
 against the released record, not a hand-applied approximation.**
 
-What is still local is one thing only: `stepWithStreamRecorded`, added as an effect op + builtin +
-stdlib surface (~235 lines of Go/AILANG) returning
+The one addition on top of the release is `stepWithStreamRecorded` — an effect op, a builtin, a
+stdlib surface, and four Go tests (+452 lines, no deletions) returning
 `{ chunks: [StreamChunk], outcome: Result[StepResult, AIError] }` — chunks on **both** outcomes, the
-shape `../UPSTREAM-REQUEST-ailang-recorded-stream-api.md` asks for.
+shape `../UPSTREAM-REQUEST-ailang-recorded-stream-api.md` asks for. It is published at
+`https://github.com/arniwesth/ailang` on `spike/motoko-009-prototype-v031`, with the `v0.31.0` tag
+pushed alongside, so the diff against the released base is browsable:
+
+    https://github.com/arniwesth/ailang/compare/v0.31.0...spike/motoko-009-prototype-v031
 
 **v0.31.0 std/ai still has no recorded-stream API.** The D1 gate is unchanged and this spike does
 not clear it: a locally-built prototype on top of a released toolchain is still not a released API,
