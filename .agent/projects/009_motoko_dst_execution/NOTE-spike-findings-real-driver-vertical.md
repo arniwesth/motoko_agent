@@ -5,10 +5,12 @@ Date: 2026-07-31. Status: complete, dispositioned into this note.
 _Executed `PLAN-spike-real-driver-vertical.md` in full. All five questions resolved: Q1, Q2, Q4 and
 Q5 confirm, Q2's second clause falsifies, Q3 is measured._
 
-_Revision: motoko `91744a0` on throwaway branch `spike/009-real-driver-vertical`, forked from
-`4aaf59f`. That branch never merges; its durable output is this note, `spike/README.md`, the F6
-probe, and the refreshed upstream issue, all cherry-picked onto
-`arniwesth/mot-44-motoko_dst_execution_primer`._
+_Revision: motoko `6382dc8` on throwaway branch `spike/009-real-driver-vertical`, forked from
+`4aaf59f`. **That branch never merges** — it is published only so the code behind these findings can
+be read (draft PR #103, which would conflict in six files and revert the WI-C13c fix `89a1d67`, a
+commit it predates). It carries the throwaway driver surgery and nothing else: this note,
+`spike/README.md`, the F6 probe and the refreshed upstream issue were stripped from it after being
+cherry-picked here, so there is exactly one copy of each._
 
 _Toolchain: **released AILANG v0.31.0** (`1f6f7dd28`), carrying one addition — a
 `stepWithStreamRecorded` prototype plus its Go tests. That is published at
