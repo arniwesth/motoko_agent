@@ -1,4 +1,4 @@
-# Handoff: execute the throwaway vertical spike through the real driver
+XXX # Handoff: execute the throwaway vertical spike through the real driver
 
 Audience: a fresh agent session with no context from the sessions that wrote the ADR or revised it.
 
