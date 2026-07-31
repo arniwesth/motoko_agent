@@ -448,6 +448,13 @@ are migration ergonomics worth knowing in advance:
 - The chunk callback must be written as `func(c: StreamChunk) -> () ! {IO} { ... }`. The `\c. ...`
   lambda form fails to unify against the closed `{IO}` row.
 
+## Resuming this work
+
+`HANDOFF-post-upstream-recorded-stream-landing.md` is the triggered handoff for the session that
+picks this up — it carries the trigger condition, the ordered open items, the traps that cost time
+during the spike, and the loose threads (including two found here but not dispositioned: the
+hardcoded `checkpoint_enabled: false`, and the unexplained module-sensitivity behind AILANG #386).
+
 ## Disposal
 
 The code dies with the branches — `src/core/world.ail`, `scripts/dst/spike_world_vertical.ail`, the
