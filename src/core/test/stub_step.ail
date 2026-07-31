@@ -177,32 +177,25 @@ export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]
 -- stream content deltas natively; Ollama and config-driven providers fire
 -- one synthetic ContentDelta(full_text) + one Usage at end-of-call. The
 -- callback is wired by agent_loop_v2 to emit thinking_delta events.
+-- Run one provider exchange through the ports seam.
+--
+-- This was a three-way match on StepProvider. WI-C13c ("Wire model dispatch
+-- through ports") made `ported_provider` normalise every caller-supplied
+-- provider into Ports before the loop starts, which left the LiveAI and
+-- Scripted branches here unreachable from every session entry point — while
+-- still looking like the live provider seam, because the LiveAI branch held the
+-- only `stepWithStream` call in the driver's call graph. Taking Ports directly
+-- makes the invariant structural: there is one path, and it is this one.
+--
+-- There is no `next_provider` to return: a Ports is immutable, and the old
+-- Ported branch returned it unchanged.
 export func dispatch_step(
-  provider: StepProvider,
+  ports: Ports,
   model: string,
   msgs: [Message],
-  rt: ExtRuntime,
   on_chunk: (StreamChunk) -> () ! {IO, Trace}
-) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO, Trace} {
-  match provider {
-    Ported(ports) => {
-      { result: ports.model_step(model, msgs, on_chunk), next_provider: Ported(ports) }
-    },
-    LiveAI => {
-      { result: stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk), next_provider: LiveAI }
-    },
-    Scripted(script) => {
-      match script {
-        [] => {
-          { result: Ok(terminal_step()), next_provider: Scripted([]) }
-        },
-        s :: rest => {
-          let _ = play_chunks(s.chunks, on_chunk);
-          { result: Ok(scripted_to_step_result(s)), next_provider: Scripted(rest) }
-        }
-      }
-    }
-  }
+) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+  ports.model_step(model, msgs, on_chunk)
 }
 
 -- Constructor helpers for test scripts
