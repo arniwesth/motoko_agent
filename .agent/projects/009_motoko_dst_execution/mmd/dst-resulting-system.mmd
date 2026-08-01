@@ -1,0 +1,108 @@
+flowchart TB
+  %% THE SYSTEM THIS ADR RESULTS IN - a machinery map of what exists once 009 lands,
+  %% in the register of ../../007_dst_consolidation/mmd/dst-as-built (which maps HEAD).
+  %% Colour = provenance, not status: green = production code, blue = test-only code,
+  %% purple = versioned artifact, cyan = the seam, amber-dashed = arrives only with an
+  %% external event, red-dashed = retired by this ADR.
+  %% Bands 1-7 are the interim system. Band 8 is what the ABI major and the upstream
+  %% release add. Nothing here exists at HEAD.
+  %% Grounded 2026-08-01 at 81b0a899c9338a63a6abfe08172ee6cb15d313ec.
+  %% Decisions behind it: dst-execution-decisions. Agreed target shape: 007's dst-target-system.
+
+  subgraph ENTRY["1 · Three modes, one driver"]
+    direction LR
+    e1["<b>discovery</b><br/>run(DiscoveryConfig)<br/>the generator runs"]:::test
+    e2["<b>replay</b><br/>run(ExecutionProgram)<br/>the generator never runs"]:::test
+    e3["<b>production</b><br/>run_v2_* over LiveWorld"]:::prod
+  end
+
+  subgraph PROD["2 · Production code — same transitions in all three modes"]
+    direction TB
+    driver["<b>session.ail · the real traced driver</b><br/>run_v2_session_traced (or a successor) is the oracle entry point<br/>C2LoopState threads <b>world_state</b> explicitly alongside loop state<br/>one finalization point: append RunSummary to the trace <i>and</i> emit the projection"]:::prod
+    ports["<b>ports.ail · the migration root and live vocabulary</b><br/>model_step : ProviderState, model, msgs, on_chunk<br/>&nbsp;&nbsp;&nbsp;→ emissions, Result[StepResult, AIError], next ProviderState<br/>tool_exec → typed ToolCallEnvelope + deadline + typed result<br/>approval_read → ApprovalResolution · clock_now reads world time, never advances it<br/><b>ProviderState</b> declared here; <b>ScriptedStep relocated</b> here or below"]:::prod
+    decide["<b>step_machine.decide</b> · pure, unchanged<br/><b>phases</b> · model / tool / hook<br/><b>recovery.ail</b> · retry policy unchanged, now <i>observed</i> under a fault catalogue"]:::prodq
+    boundary["<b>the world ends at the external result boundary</b><br/>production still validates and interprets StepResult and AIError, correlates<br/>tool-call ids, converts typed outcomes into history, applies approval and policy,<br/>updates budgets, and records ledger events<br/><i>no production code branches on test mode</i>"]:::rule
+  end
+
+  seam["<b>3 · The one semantic seam</b><br/>handle(world_state, world_request) → emissions, response, next_world_state,<br/>observations — or a typed HarnessError · successor returned on error too<br/><br/>seven request kinds: provider (origin-tagged) · typed tool · approval ·<br/>environment and config reads · runtime randomness · monotonic time ·<br/>conformant extension effects"]:::seam
+
+  subgraph ADAPT["4 · Two adapters — dispatch only, never two behaviours"]
+    direction LR
+    lw["<b>LiveWorld</b><br/>evolved production adapters<br/>real provider, tools, approval, clock<br/>projects each chunk at arrival, then<br/>returns the identical ordered log"]:::prod
+    dw["<b>DeterministicWorld</b><br/>interprets the recorded program · no provider is contacted<br/>owns the virtual clock — the <b>only</b> clock, no runtime mirror<br/>owns generator/replay state, synthetic environment, the random<br/>stream, and the logical resource models the profile promises<br/>supplies timed emissions at their virtual arrival points"]:::seamq
+  end
+
+  subgraph TEST["5 · Test-only code — may not reimplement production transitions"]
+    direction TB
+    gen["<b>seeded generator</b>, schema-versioned<br/>choice = f(generator id/version, seed, generator state, bounded request<br/>projection, world state) · no ambient RNG · declares hard bounds on<br/>interactions, chunks, payload bytes, resource size, and clock advance"]:::test
+    codec["<b>program encoder/decoder + pure structural validator</b><br/>rejects malformed schemas, negative time, duplicate identities,<br/>impossible static references, and absent required initial values<br/>deterministic, diffable encoding with an explicit compatibility policy"]:::test
+    invlib["<b>invariant library</b> (D7) · applied to the returned outcome and complete trace"]:::test
+    runner["<b>runner + replay-metadata collector + program shrinker</b><br/>strict replay for the reproduction contract; regression replay on a newer<br/>revision · shrinking reduces <i>programs</i>, preserving causality and<br/>revalidating the failure after every reduction"]:::test
+  end
+
+  subgraph ART["6 · Versioned artifacts — the five recorded axes, plus the fault catalogue"]
+    direction TB
+    a1[("<b>ExecutionProgram</b> + its schema version<br/>initial_world · execution_manifest · ordered interactions<br/>each with a causal identity carrying a global encounter ordinal,<br/>and a bounded request projection<br/><i>the durable replay unit — a seed alone is not one</i>")]:::art
+    a2[("<b>generator id + version</b><br/>a pinned canary per stable id fails if a PRNG, draw-order,<br/>range, boundary-strategy, or default-world change remaps a seed")]:::art
+    a3[("<b>profile definition</b> (semantic, versioned)<br/>included extensions and per-hook classification · included and excluded<br/>adapter and parser boundaries · promised logical resource models ·<br/>permitted diagnostic projections · forbidden ambient effects ·<br/><b>every required D3 fault class it waives, with the waiving condition</b>")]:::art
+    a4[("<b>execution manifest</b> (per run)<br/>source revision · toolchain · extension, package, and ABI versions ·<br/>profile id/version · event-vocabulary version · normalized config")]:::art
+    a5[("<b>event vocabulary</b> — new construction, not grown from anything<br/>for each of the 34 LedgerEvent variants: wire name · payload schema ·<br/><b>logical or display-only</b> · validated at load, fails closed on an<br/>unclassified variant · preferred form derives the wire name from the type")]:::art
+    a6[("<b>fault catalogue</b> — machine-readable, read by the gate<br/>class id · applicability condition · delivered constructor ·<br/><b>named recovery-branch id</b> · logical state transition")]:::art
+  end
+
+  subgraph OUT["7 · Results, oracle, and gates"]
+    direction TB
+    res["<b>SystemRun</b> — outcome, ledger_trace, interaction_log, replay_metadata ·<br/>exactly one canonical RunSummary as the final record<br/><b>HarnessFailure</b> — kind, interaction_position, actual_request_projection,<br/>partial_ledger_trace · never a synthetic production summary<br/><i>a raw capability bypass is neither: it is an expected non-zero run</i>"]:::out
+    gates["<b>the automated gate a reviewer reads</b><br/>PR fixed bank + rotating scheduled corpus, each asserting an exact minimum ·<br/>class-reached <i>and</i> branch-reached counters · waived classes with conditions ·<br/>hermeticity and poison probes per boundary · the source and ABI routing audit ·<br/>the profile-reachable clock audit · the generator canary · the discovery-contract<br/>invariant · a copy-pasteable local replay command on every failure"]:::gate
+    name["<b>the name unlocks</b> — Motoko single-actor, logical-fault DST, under the<br/>named profile and recorded manifest · never a claim about every installable extension"]:::prod
+  end
+
+  subgraph LATER["8 · What arrives only with an external event"]
+    direction TB
+    up["<b>upstream recorded-stream API, in a release</b><br/>fills one closure in live_ports · unlocks complete streaming trace parity<br/>and the projected-versus-returned-log equality invariant<br/><i>until then the emission log is structurally present and empty on the live path</i>"]:::blocked
+    abi["<b>the extension-ABI major the repin forces</b><br/>ExtPorts.ai_step and the hook results carry a world token and return a<br/>successor · ExtPorts.clock_now gains its first call sites · effectful<br/>extensions become world-mediated and may enter a profile<br/><b>until then: no checked-in configuration is conformance-eligible</b>, because<br/>compaction_ai calls ai_step and is in the order of both of them"]:::blocked
+    prof["<b>profiles widen</b> — the first conformant profile is a purpose-built narrow<br/>one; shipped configurations follow the ABI major, not the interim seam"]:::blocked
+  end
+
+  retired["<b>retired by this ADR</b><br/>C2LoopState.provider as a second cursor home · scripted_ports_from_steps<br/>re-deriving its index from assistant_count · the stringly tool_exec seam ·<br/>Ports.hooks_runtime unless it earns a demonstrated production purpose ·<br/>004's stream-delta ledger-append handle, replaced as unbuildable ·<br/>normalization as the strategy for time-dependent behaviour ·<br/>any reliance on --virtual-time, which virtualizes nothing"]:::retired
+
+  e1 --> driver
+  e2 --> driver
+  e3 --> driver
+  driver --> ports
+  ports --> decide
+  decide --> boundary
+  boundary -.-> retired
+  boundary --> seam
+  seam --> lw
+  seam --> dw
+  lw --> gen
+  dw --> gen
+  gen ~~~ codec
+  codec ~~~ invlib
+  invlib ~~~ runner
+  runner --> a1
+  a1 ~~~ a2
+  a2 ~~~ a3
+  a3 ~~~ a4
+  a4 ~~~ a5
+  a5 ~~~ a6
+  a1 -. "replay consumes the exact program; the generator is never invoked" .-> dw
+  a6 --> res
+  res --> gates
+  gates --> name
+  name --> up
+  up ~~~ abi
+  abi --> prof
+
+  classDef prod fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef prodq fill:#16351f,stroke:#3fb950,color:#c6f0cf,stroke-dasharray:0;
+  classDef test fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef seam fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef seamq fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef art fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef rule fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef out fill:#24262f,stroke:#6e7681,color:#d6dbe2;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef blocked fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef retired fill:#3a1620,stroke:#f7768e,color:#f7c6cf,stroke-dasharray:5 5;

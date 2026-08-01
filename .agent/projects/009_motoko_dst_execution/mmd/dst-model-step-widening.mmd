@@ -1,0 +1,61 @@
+flowchart TB
+  %% Detail view 1 of 3. Overview: dst-execution-decisions.
+  %% One field, Ports.model_step, and the two independent widenings D1 requires of it.
+  %% This is the part of the ADR that is buildable today: it has no upstream dependency.
+  %% Colour = role. Red = a live defect at HEAD. Dashed amber = blocked or excluded.
+  %% Grounded 2026-08-01 at 81b0a899c9338a63a6abfe08172ee6cb15d313ec, after the fourth
+  %% correction pass, whose findings changed sequencing rather than only wording.
+
+  head["<b>HEAD · src/core/ports.ail:18</b><br/>model_step : model, msgs, on_chunk → Result[StepResult, AIError]<br/><br/>no state parameter in · no emission log out · one function-valued field<br/>ported_provider (session.ail:695-701) funnels <b>every</b> provider through it<br/>before the loop starts"]:::head
+
+  f2["<b>F2 · the loss channel</b><br/>on_chunk is a multi-fire (StreamChunk) → () callback whose values the<br/>returning closure discards (stub_step.ail:148-154), while the call returns<br/>only Result[StepResult, AIError] — which structurally cannot carry a log<br/><br/>so <b>adopting the upstream recorded-stream API without widening the port<br/>first changes nothing observable</b>, and guarantees an empty emission log<br/>through the adoption step and most of the migration"]:::fault
+
+  f6["<b>F6 · the cursor defect, live in the harness today</b><br/>the only scripted provider the DST actually runs, scripted_ports_from_steps,<br/>re-derives its index from assistant_count on every call — and compaction<br/>mutates the history it reads<br/><br/>under a folding compactor that index <b>pins</b> rather than rewinds: the payload's<br/>assistant count stops at the compaction floor while real history keeps growing,<br/>the same step is served forever, and the run dies of budget exhaustion in a way<br/>indistinguishable from an ordinary result<br/><i>D2's seeded generation of longer programs is what makes it reachable</i>"]:::fault
+
+  spike["<b>the vertical spike proved the two arrangements are not equivalent</b><br/>placing the provider inside the world adapter — LiveWorld(StepProvider), the<br/>natural reading of 'a live world delegates to evolved production adapters' —<br/>type-checked, kept the type-check gate fully green, and silently failed<br/><b>6 of 18 scenarios</b> by freezing the cursor so every step replayed step 0<br/><i>both arrangements satisfy the letter of 'returns the next state explicitly'</i>"]:::note
+
+  rule["<b>the ordering rule: widen the port before adopting whatever fills it</b><br/>the port is where the information is thrown away<br/><br/><b>scoped to ports with a demonstrated loss channel — today exactly one field.</b><br/>an earlier revision generalized it as 'every Ports field is a lossy crossing of the<br/>same kind', which is not established: approval_read is a synchronous<br/>ApprovalRequest → ApprovalResolution and clock_now is a point read () → int ·<br/>neither has an intermediate channel through which a value could be dropped<br/>the stringly tool_exec does need widening — for a typed ToolCallEnvelope and<br/>deadline contract, a <i>separately named</i> ground, not a discarded emission channel"]:::rule
+
+  w1["<b>widening 1 · handoff item 1 — the result gains an emission log</b><br/>licensed by the loss-channel rule above<br/><b>behaviour-preserving</b>: emissions: [] at every construction site<br/>testable entirely against Scripted providers, with no provider access at all<br/>shrinks the eventual upstream adoption to <b>one closure in live_ports</b><br/><br/><i>this item does not enable item 2 — a successor cursor is not an emission</i>"]:::w1
+
+  w2["<b>widening 2 · handoff item 2 — the field becomes bidirectional</b><br/>model_step takes the current provider state and returns its successor<br/>grounded in D1's cursor-ownership paragraph, <b>not</b> in the loss-channel rule<br/><b>not behaviour-preserving</b>: it changes the port's input shape and every<br/>construction site's contract<br/><br/>plan and review the two as distinct changes even though they touch one field —<br/>where they are confused, the emission widening looks sufficient for F6, and is not"]:::w2
+
+  home["<b>where the successor lives</b><br/>the sole persistent copy is <b>one explicit C2LoopState field, driver-threaded</b> —<br/>not a closure captured in a Ports value, not a provider ADT payload, not<br/>re-derived from message history<br/>subsumed by world_state when it lands, and deleted in the same change<br/><i>C2LoopState.provider is retired rather than leaving two homes for one fact</i>"]:::seam
+
+  subgraph MECH["three mechanical constraints — each found by review, not by design"]
+    direction TB
+    m1["<b>the state type must be concrete and declared at or below ports.ail</b><br/>a named ProviderState in ports.ail — <b>not</b> ScriptedPortsState, which carries<br/>ScriptedStep and whose module imports ports, stub_step, <i>and</i> session, so neither<br/>the module declaring the widened field nor the driver holding the C2LoopState<br/>field can import it without closing a cycle AILANG rejects (LDR002)<br/>the generic escape does not exist either: parameterising Ports over its state type<br/>is accepted as a declaration but fails unification on instantiation, and no<br/>parameterised record type appears anywhere in the tree<br/><br/><b>ScriptedPortsState / scripted_model_next is a design precedent, not reusable<br/>code</b> — making the real thing requires <b>relocating ScriptedStep</b> to ports.ail<br/>or below, a source move that must be budgeted in the plan, not discovered in it"]:::rule
+    m2["<b>the live and caller-supplied adapters return their input state unchanged</b><br/>live_ports is stateless, so the identity transition is the <i>specified</i> answer —<br/>not an implementation detail left to six construction sites<br/>ported_provider returns the initial state alongside the Ports, with the empty<br/>ProviderState for the LiveAI and Ported arms and the script-derived one for<br/>Scripted · only successors replace it thereafter"]:::rule
+    m3["<b>the extension model path cannot carry the token, and is excluded</b><br/>there are <b>two</b> calls through the seam, not one: stub_step.ail:198 in<br/>dispatch_step, and session.ail:662 inside ext_ai_step, which ext_ports_of wraps<br/>as ExtPorts.ai_step and hands to four hook contexts<br/>that ABI returns Result[string, string] and the hook results above it are<br/>decision-only, so a successor has no way back to C2LoopState — discarding it<br/>recreates F6 exactly, capturing it creates the second home D1 prohibits<br/><i>consistent with D5's own coverage criterion, not an exception to it</i>"]:::blocked
+  end
+
+  scope["<b>the consequence is larger than it first appears</b><br/>compaction_ai calls ctx.ports.ai_step, and appears in the extension order of<br/><b>both</b> checked-in configurations, default and ailang<br/><br/><b>no checked-in configuration is conformance-eligible under the interim seam</b> ·<br/>handoff item 2 is a <b>partial</b> cursor fix and says so · the first conformant<br/>profile is a purpose-built narrow one, and the interim milestone must not be<br/>planned as though it delivers a conformant default"]:::blocked
+
+  abi["<b>handoff item 3 · sequence the repin as its own milestone</b><br/>v0.26.0 → v0.31.0 measured: 381 effect-row edits across 71 files, three of them<br/>in motoko-ext-abi/types.ail — ExtPorts.ai_step gains Trace (its row was simply<br/>wrong) and all four ExtensionHooks rows gain Rand and Trace<br/>that file states bumping ExtensionHooks is a major, so the repin forces an<br/><b>ABI major and a coordinated re-release of every extension package</b><br/>two latent under-declarations surface as hard errors at the same time:<br/>agents_md.walk_agents performs FS, omnigraph.register_with_config performs Process<br/><br/><b>that same ABI major must carry the ai_step widening</b>, the larger of the two —<br/>ExtPorts.ai_step, the hook results, and the core dispatch results become the<br/>world-token protocol D5 already requires"]:::abi
+
+  upstream["<b>what the upstream gate actually blocks</b><br/>the content of <b>one closure in live_ports</b>, and the parity proof that depends<br/>on it — immediate projection, exact returned-log parity, success,<br/>partial-stream-then-error, and no duplicate delivery<br/><br/><i>an earlier revision added 'and production migration must not begin' without<br/>qualification, and a planner reading D1 top to bottom sequenced: wait for<br/>upstream → adopt the API → replace Ports later. That ordering is a trap.</i>"]:::blocked
+
+  head --> f2
+  head --> f6
+  f6 --> spike
+  f2 --> rule
+  rule --> w1
+  spike --> w2
+  f6 --> w2
+  w1 -. "one field, two grounds" .- w2
+  w2 --> home
+  w2 --> MECH
+  m3 --> scope
+  scope --> abi
+  w1 --> upstream
+  home --> abi
+
+  classDef head fill:#24262f,stroke:#6e7681,color:#d6dbe2;
+  classDef fault fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+  classDef rule fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef seam fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef w1 fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef w2 fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef blocked fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef abi fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef note fill:#123038,stroke:#2ac3de,color:#bdeef5;
