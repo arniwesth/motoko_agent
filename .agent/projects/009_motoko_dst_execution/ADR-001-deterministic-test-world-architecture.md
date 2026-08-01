@@ -5932,3 +5932,968 @@ buildable at the specified layer, but R1-R4 leave two required gates ambiguous o
 R5-R8 leave factual/history precision defects; the upstream API blocker remains fully in force and
 still requires a recorded-stream API in a released AILANG version, a repository repin to that
 release, and the positive integration probe passing.**
+
+## Review Comments
+
+_Reviewer: Claude Code (model: `claude-opus-5`), 2026-08-01. **Delta review of the fifth correction
+pass**, per `HANDOFF-delta-review-fifth-correction-pass.md`. **Twelfth section**: two reviews
+2026-07-26, three verifications of the F1–F6 revision 2026-08-01, four delta reviews of the second and
+third correction passes, two of the fourth, this delta._
+
+_Reviewed at `e8242f1570078337c203606b6ae5792108628876` (the fifth correction pass). The working tree
+is `1d3f1c4d5ecc520645c0c336b656f62fdc3d894b`; `git diff e8242f1..HEAD` over this ADR is empty, so the
+reviewed text is the text at HEAD. Target range `git diff b042757..e8242f1 --
+.agent/projects/009_motoko_dst_execution/` — one commit, 146 insertions, 63 deletions, one file. The
+untracked `mmd/` is out of scope. Toolchain `AILANG v0.26.0` (commit `3b52a24`), matching
+`ailang.toml:6` and `scripts/install-prerequisites.sh:39`. Every probe below was built and run in a
+scratch directory outside the repository, so no `.ailang` cache in this tree could contribute a
+phantom result._
+
+_The pass answers all eight findings of the tenth and eleventh sections. R2, R4, R5, R6, R7 of both
+are fixed and confirmed below. R1 and R3 are fixed in form but not in substance (R1, R2, R3 here), and
+R8's replacement anchor is wrong (R8 here)._
+
+### R1. Classifier 1 still fails open, for the third consecutive revision — the module set it derives cannot see effect-bearing stdlib modules whose effects come from AILANG source rather than builtins, and two of them are called in-tree, one from the core driver
+
+**Defect:** ADR:1036-1038 defines classifier 1's detection set *by construction* — "obtained by
+filtering `ailang builtins list -json` on `is_pure == false` and **projecting the `module` field**".
+That projection yields 21 modules. `std/sem` and `std/extension` are not among them, yet both export
+effectful functions that this repository imports and calls, including a `SharedMem` write reached from
+`src/core`.
+
+**Grounding:** the derivation, run on the pin:
+
+```text
+$ ailang builtins list -json > b.json && python3 -c "
+import json; d=json.load(open('b.json'))['builtins']
+c1=sorted({b['module'] for b in d if not b['is_pure']})
+print('classifier 1 modules:',len(c1))
+print('std/sem in set?','std/sem' in c1,'| std/sem rows:',[(b['name'],b['is_pure']) for b in d if b['module']=='std/sem'])
+print('std/extension in set?','std/extension' in c1,'| std/extension rows:',len([b for b in d if b['module']=='std/extension']))"
+classifier 1 modules: 21
+std/sem in set? False | std/sem rows: [('_embedding_decode', True), ('_embedding_encode', True)]
+std/extension in set? False | std/extension rows: 0
+```
+
+Both modules are effect-bearing in the pinned stdlib source, and the effects are the ones D5:949 names
+as hermeticity failures:
+
+```text
+$ grep -n "export func \(store_frame\|load_frame\)" /home/motoko/.local/share/ailang/std/sem.ail
+374:export func load_frame(key: string) -> Option[sem_frame] ! {SharedMem} {
+385:export func store_frame(key: string, frame: sem_frame) -> unit ! {SharedMem} {
+$ grep -n "export func.*! *{" /home/motoko/.local/share/ailang/std/extension.ail
+27:export func requireWorkdirFile(workdir: string, rel: string) -> Result[(), string] ! {FS} =
+```
+
+`std/sem` carries a real runtime capability requirement, not just a declared row — a scratch probe
+outside the repository:
+
+```text
+$ cd /tmp/.../c1probe && ailang run --entry main mod/main.ail
+→ Type checking...
+→ Effect checking...
+✓ Running mod/main.ail
+Error: execution failed: effect 'SharedMem' requires capability, but none provided
+Hint: Run with --caps SharedMem
+```
+
+Both are live in-tree, and one is in the core driver, therefore profile-reachable under clause 1 in
+*every* profile:
+
+```text
+$ grep -n "import std/sem\|store_frame\|load_frame" src/core/cache.ail
+29:import std/sem    (make_frame_at, store_frame, load_frame)
+60:  match load_frame(key) {
+75:  store_frame(key, frame)
+$ grep -rn "get_hint" src --include=*.ail | grep -v "^src/core/cache.ail"
+src/core/rpc.ail:24:import src/core/cache   (get_hint)
+src/core/rpc.ail:200:  let hint = get_hint(task);
+$ grep -rn "^import std/extension" src packages --include=*.ail
+packages/motoko-ext-omnigraph/register.ail:4:import std/extension (requireWorkdirFile)
+```
+
+Neither `std/sem` nor `std/extension` appears anywhere in this ADR (`grep -n "std/sem\|std/extension"`
+returns nothing), so the hole is unacknowledged as well as unclosed.
+
+**Failure scenario:** an implementer builds classifier 1 exactly as ADR:1036-1038 specifies, scans
+`src` + `packages` for imports of the 21 derived modules, finds `src/core/rpc.ail:200` clean because
+`std/sem` is not in the set, and certifies a complete routing inventory over an unrouted `SharedMem`
+read-write pair in the core driver. D4's all-or-nothing rule then rests on a count that is not
+complete, which is the exact defect the two previous revisions of this obligation were rewritten to
+close.
+
+**Why the prescription missed it:** both fourth-pass reviews checked that every `is_pure == false`
+*row* carries a real `std/*` module — true, and confirmed again below — and inferred that the
+projection is therefore total. It is not: the question is not whether the derived rows have modules,
+it is whether every effect-bearing *module the repo imports* has a derived row. Ten of the twenty-one
+`std/*` modules this repo imports have no effect-bearing row, and two of those ten export effectful
+functions.
+
+**Action:** the detection set cannot be the builtin projection alone. Either (a) union the builtin
+projection with a scan of the pinned stdlib's own `.ail` sources for `export func … ! {…}` with a
+non-empty row — derivable from `~/.local/share/ailang/std/*.ail` on the pin, same repin trigger, and
+it recovers `std/sem` and `std/extension` mechanically; or (b) invert the classifier to a deny-list —
+treat *every* imported `std/*` module as effect-bearing unless it appears in a derived
+all-rows-pure allow-list, which fails closed by construction and is the direction the rest of
+obligation 2 already argues for. State which, and record that the builtin surface alone is
+insufficient and why, so a fourth revision does not rediscover it.
+
+### R2. Classifier 2's stated criterion selects all four `ExtPorts` fields, not one — and applied literally it rejects the very remedy D5's clock gate mandates three bullets earlier
+
+**Defect:** ADR:1054-1055 defines classifier 2 as "the fields of `ExtPorts` … **that do not yet return
+world state** — today `ai_step`". None of the four fields returns world state. The parenthetical
+"today `ai_step`" is the intended set; the criterion is not the criterion that produces it.
+
+**Grounding:**
+
+```text
+$ sed -n '62,67p' packages/motoko-ext-abi/types.ail
+export type ExtPorts = {
+  ai_step: (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream},
+  proc_exec: (string, string) -> string ! {IO, Process, FS},
+  clock_now: () -> int ! {Clock},
+  env_get: (string, string) -> string ! {Env}
+}
+```
+
+`Result[string, string]`, `string`, `int`, `string` — four non-world-mediated returns. The ADR's own
+framing agrees that nothing is world-mediated yet: D5:956-960 requires "an explicit/opaque world token
+… and return the successor token with the hook decision", which no field does.
+
+**The contradiction this creates is load-bearing, not academic.** D5:974-977 makes routing *into*
+`ExtPorts.clock_now` the condition of conformance for a clock-reading extension:
+
+> a profile installing `compose` cannot claim conformance until its eight clock reads route through
+> `ExtPorts.clock_now`
+
+D5:980-982 then fails profile-definition validation closed "when an installed extension references a
+non-world-mediated `ExtPorts` field from a hook the profile has not excluded". Under the stated
+criterion `clock_now` is a non-world-mediated field, so a `compose` profile that does what :976-977
+requires becomes a profile-definition rejection under :981-982. The prescribed remedy triggers the
+prescribed rejection, six lines apart.
+
+**"Retired field by field" is decorative under the narrow reading and unbudgeted under the wide one.**
+If the set is `{ai_step}`, a one-element set does not retire field by field. If it is all four, the
+world-token widening Consequences budgets (ADR:1505-1510: "`ExtPorts.ai_step`, the hook results that
+carry its outcome, and the core dispatch results") covers only one of them, and the other three need
+their own ABI majors that nothing schedules.
+
+**Action:** state the criterion that actually selects `ai_step`, which is not "does not return world
+state" but *"is the extension-side entry to a core seam that D1 requires to thread a cursor, and
+cannot return it"* — `Ports.model_step`'s successor is the only cursor D1 currently demands, so
+`ai_step` is the only member today. Then say explicitly that `clock_now`, `proc_exec`, and `env_get`
+are **not** classifier-2 members in the interim and why, because D5:976-977 depends on `clock_now`
+being a legal routing destination. If the intended set really is all four, say so and reconcile
+:976-977, or the clock gate is unreachable.
+
+### R3. "Every hook that can reach the port" is a call-graph property with no instrument, in the same document that just built one for the structurally identical core problem — and four sites state three different predicates
+
+**Defect:** D1:365 makes the rejection turn on "excluding every hook that **can reach** the port".
+Classifier 2 (ADR:1056) inventories "their **field-reference sites**" — textual, at site granularity.
+Nothing maps a reference site to the hooks that can reach it. Clause 3 solved exactly this problem for
+core, three hundred lines earlier, with a versioned site-to-hook attribution table; classifier 2 gets
+no such instrument.
+
+**Grounding:** the mapping the rule needs, re-derived rather than inherited, is four call-graph edges
+across two modules with a self-recursive callee:
+
+```text
+$ grep -n "compact_with_ai\|summarize_with_ai_result\|summarize_attempt\|ports.ai_step" \
+    packages/motoko-ext-compaction-ai/register.ail packages/motoko-ext-compaction-ai/compaction_ai.ail
+register.ail:103:    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepDecision ! {...} {
+register.ail:104:      compact_with_ai(ctx, msgs, compaction_cfg)
+compaction_ai.ail:498:export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {...}
+compaction_ai.ail:484:    else match summarize_with_ai_result(ctx, summarization_prompt(...), cfg.model) {
+compaction_ai.ail:515:          else match summarize_with_ai_result(ctx, update_summarization_prompt(...), cfg.model) {
+compaction_ai.ail:119:export func summarize_with_ai_result(ctx: ExtCtx, prompt: string, model: string) -> Result[string, string] ! {...}
+compaction_ai.ail:120:  summarize_attempt(ctx, prompt, model, summarizer_max_attempts())
+compaction_ai.ail:104:func summarize_attempt(ctx: ExtCtx, prompt: string, model: string, attempts_left: int) -> Result[string, string] ! {...}
+compaction_ai.ail:106:  match ctx.ports.ai_step(model, prompt_msgs) {
+```
+
+That is a manual walk. ADR:865-866 says of the identical shape in core: "Clause 3 is answered by an
+explicit recorded artifact, **not by inspection**." Classifier 2 asks for inspection.
+
+**The predicate also drifts across the four sites the split is asserted at**, which is what makes the
+gap hard to see:
+
+| Site | Predicate |
+|---|---|
+| D1:365 | hook that **can reach** the port (call-graph) |
+| D5:941 | extension that **reaches a non-world-mediated seam** (call-graph, and *seam* is broader than `ExtPorts` field — `Ports.model_step` is a seam) |
+| D5:981-982, ADR:1056-1058 | extension that **references** a non-world-mediated `ExtPorts` **field** (textual, site granularity) |
+| Acceptance row ADR:1397 | extension **reaching** a non-world-mediated `ExtPorts` field from an un-excluded hook |
+
+D5:941's "seam" is the widest and, read literally at HEAD where nothing is routed, would reject every
+extension-installing profile. The textual "references" is the only one a detector can answer.
+
+**Failure scenario:** a profile author greps for `ports.ai_step`, finds
+`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`, and must now decide *which hooks to
+exclude*. With no attribution artifact the safe answer is "all of them" and the ADR's answer is
+"`on_pre_step`" (ADR:373) — but nothing in the ADR licenses the narrower one, so two authors reading
+the same text ship different profiles and only one of them is conservative.
+
+**Action:** pick one predicate and give it the instrument clause 3 already has. The cheapest sound
+rule needs no call-graph at all: **an installed extension with any classifier-2 field reference is
+rejected unless every hook it registers is excluded.** That is decidable from a grep plus the
+extension's `register.ail`, it is conservative, and it costs only the ability to keep one hook of a
+referencing extension. If the narrower per-hook rule is wanted instead, extend clause 3's versioned
+site-to-hook attribution table to cover extension packages and say that classifier 2 reads it —
+which also gives the table a second consumer and makes R5 below cheaper to answer.
+
+### R4. Implementation Handoff item 2 still says an `ai_step`-installing profile is non-conformant — the exact claim this pass overturned, in the third of the three sites both fourth-pass reviews named
+
+**Defect:** the pass corrected D1 (:353-378) and Consequences (:1511-1516) but not Handoff item 2,
+which still carries the overturned strong reading.
+
+**Grounding:**
+
+```text
+$ awk 'NR>=1558 && NR<=1561' .agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md
+   **This item does not fix the extension model path**, and that is a decision, not an oversight:
+   `ext_ai_step` reaches the same seam through an ABI that cannot return a successor (D1). It fixes
+   the main loop, and profiles installing an `ai_step`-calling extension stay non-conformant until
+   the world-token ABI lands.
+```
+
+Against ADR:353 ("That is a coverage cost, **not a conformance disqualification**") and ADR:939
+("Exclusion is a coverage cost, not a conformance disqualification"). The tenth section's R2 named the
+three sites as ADR:344-345, ADR:1430, ADR:1477; the eleventh named ADR:339-343, :1423-1433, :1475-1478.
+Both included the Handoff item. Two of three were fixed.
+
+**Failure scenario:** the Implementation Handoff is the section a plan author reads *first and often
+only*. It tells them the interim milestone cannot produce a conformant profile from any shipped
+configuration, which is the conclusion this pass exists to retract.
+
+**Action:** at ADR:1560, replace "stay non-conformant until the world-token ABI lands" with "are
+conformant only by excluding every hook that reaches the port — a coverage cost, and a
+profile-definition rejection if they do not (D1, D5)". Then re-grep `non-conformant`,
+`conformance-eligible`, and `disqualif` across the body before committing; the same grep is what would
+have caught this one.
+
+### R5. The site-to-hook attribution table is a required artifact with no producer, no validator, no schema, and no slot in the versioned profile definition it is named after
+
+**Defect:** clause 3 now turns on "the profile's **versioned** site-to-hook attribution table"
+(ADR:862-863) and gives it a fail-closed default (ADR:878-882). It gives it nothing else — and the
+versioned profile definition that enumerates what a profile records does not list it.
+
+**Grounding:** the profile-definition record, in full:
+
+```text
+$ awk 'NR>=910 && NR<=919' .agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md
+A versioned profile definition records:
+- profile id/version;
+- included extension ids and per-hook classifications (effect-free, world-mediated, or explicitly
+  excluded);
+- included and excluded provider/tool adapter and parser boundaries;
+- logical resource models promised by the profile;
+- permitted diagnostic projections;
+- forbidden ambient effects/capabilities during execution; and
+- every required D3 fault class the profile waives, each with the condition that waives it.
+```
+
+Seven bullets, none of them the attribution table. The execution manifest (ADR:921-923) lists source
+revision, toolchain, package versions, ABI version, profile id/version, event-vocabulary version, and
+normalized configuration — also not it. So the artifact clause 3 calls "the profile's versioned …
+table" is versioned by nothing and stored nowhere.
+
+**The contrast with D6 is the measure of the gap.** The event-vocabulary artifact (ADR:1207-1240) gets
+enumerated contents, an explicit "this is new construction" ruling, a fail-closed validator at load, a
+scheduling prohibition on dependent checks until it exists, a preferred derivable form that makes
+drift a compile error, a manifest slot, and a version-change rule. The attribution table gets a name
+and a default.
+
+**Failure scenario:** the plan schedules the routing audit, discovers there is no table, and either
+writes one by hand — reintroducing the hand-maintained-list rot ADR:1038-1041 rejects for classifier
+1 — or falls back to clause 1 for every core effect site, which raises the driver's clock obligation
+from four to five and makes D4's 4 / 12 / 13 arithmetic wrong.
+
+**Action:** add the table to the ADR:910-919 record as an eighth bullet, and specify the three things
+D6 got and this did not: **what makes an attribution correct** (a claim that the named hook's
+installation is a necessary condition of the site executing — not that it is sufficient, per
+ADR:880-882), **when it is validated** (at profile load, failing closed on a site not in the table and
+not in core-unconditional), and **who produces it** (construction, in the same change that builds the
+classifiers). Also state the D6-style scheduling prohibition: no D4 routing-completeness claim before
+the table exists, because until then "four driver reads" is not derivable.
+
+### R6. The Status header undercounts delta reviews for the second consecutive pass, and contradicts itself three lines later and again at line 29
+
+**Defect:** ADR:6-7 now says "**four independent delta reviews (two of the second correction pass, two
+of the third)** … recorded below". Six are recorded below at this commit. The pass applied both
+fourth-pass R6 actions verbatim — correct at `81b0a89`, stale at `e8242f1`, because the two fourth-pass
+reviews were themselves committed into the ADR at the baseline `b042757`.
+
+**Grounding:**
+
+```text
+$ grep -n "^## Review Comments" .agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md
+1698 2158            <- two full reviews, 2026-07-26
+2635 2950 3229       <- three F1-F6 verifications
+3616 4021            <- two delta reviews, second correction pass
+4299 4749            <- two delta reviews, third correction pass
+5135 5590            <- two delta reviews, FOURTH correction pass (baseline b042757)
+```
+
+Six delta reviews, not four. Two further inconsistencies inside the same block:
+
+- ADR:9 was not touched and still reads "**the two delta reviews** returned *Revise* and converged on
+  another" — three lines under a corrected count of four. The eleventh section's R6 action asked for
+  exactly this ("revise the defect-set count so the opening agrees"); the tenth's did not, and the
+  pass followed the tenth.
+- ADR:29-32 says "**The four delta reviews** additionally confirmed … and — **in the fourth-pass
+  round**, by two independent three-module probes — that the … exclusion is the right disposition".
+  It attributes to "the four" a ruling from a round the parenthetical at :6-7 excludes from the four.
+
+**Action:** "six independent delta reviews (two each of the second, third, and fourth correction
+passes)"; update ADR:9 to match; and drop "in the fourth-pass round" at :30 or keep it and let the
+count include that round — one or the other, not both.
+
+### R7. `compaction_ai` does not have one hook — it registers seven, and excluding only `on_pre_step` is not obviously sufficient under D5's own hermeticity clause
+
+**Defect:** ADR:373 says excluding `compaction_ai`'s `on_pre_step` "disables the extension's **only**
+hook". The extension registers seven hooks.
+
+**Grounding:**
+
+```text
+$ awk 'NR>=99 && NR<=110' packages/motoko-ext-compaction-ai/register.ail
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ . { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { ... } ! {Env, FS},
+    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      compact_with_ai(ctx, msgs, compaction_cfg)
+    },
+    on_tool_policy: \_ _ . Allow,
+    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+```
+
+The **conclusion** survives — the other six are constant-returning lambdas, so excluding `on_pre_step`
+does leave the extension inert on the compaction path, which is what the paragraph is arguing. The
+stated fact does not.
+
+**The secondary point is not cosmetic.** Three of the six trivial lambdas *declare*
+`{IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}` while performing nothing. D5:949 fails a
+profile on "direct `AI`, `Process`, `Net`, `FS`, `SharedMem`, `Clock`, environment, or random effects
+from a reached hook", and D5's per-hook classification (ADR:913-914) admits only effect-free,
+world-mediated, or excluded. Whether a declared-but-unperformed row classifies as effect-free is
+undecided here, and ADR:1104 concedes the reconciling detector "is not available today". Under the
+declared-row reading, four hooks need exclusion, not one.
+
+**Action:** "its only non-trivial hook, and the only one that reaches the port" at ADR:373. Separately,
+state whether per-hook classification reads declared or performed effect rows in the interim — the
+answer changes how many hooks a `compaction_ai` profile must exclude, and the successor detector that
+would settle it is explicitly deferred.
+
+### R8. The replacement compose anchor is wrong — `on_response_intercept` is `:761-790`, not `:761-771` — making this the fifth consecutive pass to ship an anchor error, in the edit whose only purpose was to fix an anchor
+
+**Defect:** ADR:781 now reads "(`packages/motoko-ext-compose/compose.ail:767`, inside
+`on_response_intercept` at `:761-771`)". The `:767` half is correct. The range asserts the function's
+extent and is nineteen lines short.
+
+**Grounding:**
+
+```text
+$ awk 'NR==761 || NR==771 || NR==790 || NR==792 {printf "%d: %s\n", NR, $0}' packages/motoko-ext-compose/compose.ail
+761: export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptDecision ! {IO, Process, FS, Clock} {
+771:       let _ = writeFile(path, "${compose_module_header(name)}\n\n${clean}");
+790: }
+792: func no_budget_patch() -> BudgetPatch {
+```
+
+`:771` is a `writeFile` in the middle of the inner `else` block; the function closes at `:790`. Both
+fourth-pass reviews proposed "`:761-771` or simply `:767`" without stating the function's extent, and
+the pass adopted the range *and* attached the words "`on_response_intercept` at" to it, converting a
+loose citation into a false claim.
+
+**A second, smaller instance in the same pass.** ADR:885-886 says `emit_dummy_hook` sits "behind five
+call sites all of the form `if is_test_dummy(h.id) then emit_dummy_hook(...)` (`:206`, `:222`, `:245`,
+`:287`, `:374`)". Three of those five lines are not of that form:
+
+```text
+$ grep -rn "is_test_dummy\|emit_dummy_hook" src/core/ext/runtime.ail
+206:      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_build_system_prompt", ...) else ();
+222:      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_budget_plan", ...) else ();
+239:      let _ = if is_test_dummy(h.id) then {
+245:        emit_dummy_hook("on_pre_step", "decision", tag)
+280:  let _ = if is_test_dummy(h.id) then {
+287:    emit_dummy_hook("on_tool_policy", "decision", tag)
+368:  let _ = if is_test_dummy(h.id) then {
+374:    emit_dummy_hook("on_solver_candidate", "decision", tag)
+```
+
+The guards are `206, 222, 239, 280, 368`; the calls are `206, 222, 245, 287, 374`. The count of five is
+right and the tenth section stated both lists correctly; the pass merged them and cited the call lines
+under the guard's syntactic form.
+
+**Action:** `:761-790`, or drop the range and cite `:767` alone. At ADR:885-886, either cite the guard
+lines with the guard form, or say "five `emit_dummy_hook` calls (`:206`, `:222`, `:245`, `:287`,
+`:374`), each guarded by `if is_test_dummy(h.id)` (`:206`, `:222`, `:239`, `:280`, `:368`)". And
+update ADR:68 — "anchor errors in four consecutive passes" is now five.
+
+## What is accurate
+
+Everything below was re-run at `e8242f1` on `AILANG v0.26.0`, not inherited from any prior section.
+
+**Classifier 1's corrected label and module arithmetic — every number confirmed.**
+
+```text
+$ ailang builtins list -json | python3 -c "..."
+total rows: 324 | effect-bearing rows: 115 | pure rows: 209
+output groups (Pure + effects): 18
+effect labels (is_pure==false): 17
+modules from effect-bearing rows: 21, non-std/* among them: []
+$ python3 -c "import re; ... ailang.toml max"
+12 ['IO','Env','AI','Net','FS','Process','SharedMem','Clock','Stream','SharedIndex','Rand','Trace']
+```
+
+"Seventeen effect labels plus `Pure`" is exact; `[effects] max` is twelve at `ailang.toml:54`; the two
+enumerations do disagree, so neither alone is a classifier. `Pure` is the largest group (209 of 324),
+and projecting `module` over *all* rows would include `std/list`, `std/string`, `std/json` and the rest
+of the pure surface — so "`Pure` must be filtered out explicitly" is a real and necessary instruction.
+Every `is_pure == false` row does carry a real `std/*` module; there are no `$builtin`/`core` rows in
+the effect-bearing set. The "module plus exported symbol" diagnosis is correct: the emitted `name` is
+the internal builtin and no row carries `now`. **The correction the two fourth-pass reviews prescribed
+was necessary and is faithfully applied. R1 is that it is not sufficient, which neither review tested.**
+
+**D4's clock arithmetic survives the clause-3 rewrite unchanged.** Re-derived, not inherited:
+
+```text
+$ grep -rn "now()" src packages --include=*.ail
+```
+
+Thirteen live reads — `session.ail:791, 842, 1991, 2089` (`:785` is a comment), `ext/runtime.ail:190`,
+`compose.ail:362, 503, 597, 651, 681, 767`, `author_tools.ail:101`, `authoring/dispatcher.ail:217`. The
+four `noop_clock_now` *definitions* (`ctx_defaults.ail:15`, `progress_contract_guard.ail:144`,
+`harness.ail:40`, `empty_stop_guard.ail:60`) match the grep on their names only and are not reads.
+4 / 12 / 13 holds for the three installation cases, and clause 3's new form preserves it: attributing
+`:190` to `test_dummy` keeps the driver obligation at four rather than five, which is what the table
+needs. Nothing is routed at HEAD.
+
+**Configuration facts.** Fourteen tracked `.motoko/config/*/config.json`, all fourteen with
+`compaction_ai` in `extensions.order`, none without. The "all fourteen" correction is right at all
+three sites (ADR:372, :1513, and the Status block).
+
+**Anchors confirmed.** `packages/motoko-ext-abi/types.ail:62-67` is exactly the `ExtPorts` declaration
+through its closing brace. `src/core/tool_phase.ail:222` is exactly
+`if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {`, and it is a real
+live mixed guard over an effectful call at `:223` — the motivating counterexample is correctly stated.
+`src/core/ext/runtime.ail:206, 222, 245, 287, 374` are the five `emit_dummy_hook` calls, and the count
+of five is now right (subject to R8's form/line conflation).
+`packages/motoko-ext-compaction-ai/compaction_ai.ail:106` is `match ctx.ports.ai_step(model,
+prompt_msgs) {`. `packages/motoko-ext-compose/compose.ail:767` is the response-intercept clock read.
+Only the `:761-771` range is wrong.
+
+**The Status block's corrected metric — both numbers recounted independently, both right.** I
+enumerated the `### R` headings in all four rounds rather than trusting the tenth section's arithmetic:
+
+```text
+second-pass round: 7 findings (ADR:3638-3857) + 8 (ADR:4032-4193) = 15
+third-pass round:  6 findings (ADR:4329-4574) + 6 (ADR:4778-4990) = 12
+```
+
+*Anchor/provenance, second pass:* Claude R4 (`175-204`), R5 (two anchors off by one), R7 (`88-99`);
+Codex R5 (omitted edit account), R6 (two source ranges), R7 (off by one) = **six of fifteen** ✓.
+*Third pass:* Claude R6 (ADR:4574) and Codex R6 (ADR:4990), both on `stub_step.ail`'s deferred comment
+range = **two of twelve, both on the same range** ✓. *Provenance alone:* Codex R5 is the only
+second-pass member — Claude's R6 and Codex's R8 are about a handoff overstating a verification count,
+which is a different category and defensibly excluded — and the third-pass round has none, so **one of
+fifteen against none** ✓. The retraction is honest and the arithmetic behind it holds. This is the
+one place the pass improved on its own inputs rather than transcribing them.
+
+**Collateral that is clean.** D11 (ADR:1348-1374) carries class-reached and branch-reached counters and
+no hook-coverage counter, so nothing there contradicts the split. The profile-definition record's
+per-hook classifications — "effect-free, world-mediated, or **explicitly excluded**" (ADR:913-914) —
+are exactly the three categories the split needs, and an un-excluded reaching hook is unclassifiable
+under them, which is the right shape for a definition-time rejection. Consequences (ADR:1505-1516) is
+correctly rewritten. The acceptance row (ADR:1397) is correctly rewritten in substance, though
+"validation **rejected no** installed extension reaching…" is ambiguous between "found nothing to
+reject" (intended) and "failed to reject" (the defect); "no installed extension … was rejected, and
+none required rejection" would not be.
+
+### Ruling 1 — is the coverage/rejection line in the right place, and does it have a detector? (A1)
+
+**The line is in the right place, the timing argument is sound, and the detector does not exist.**
+
+*Axis 1 — timing.* Sound, and I verified both halves against D5's machinery. An excluded hook that
+dispatch reaches raises a fail-closed `HarnessFailure` (ADR:935-937), so it is a run-time-detectable
+event and a coverage bookkeeping question. An un-excluded hook that reaches `ai_step` returns
+`Result[string, string]` (`types.ail:63`) into a decision-only `PreStepDecision`, so the successor has
+nowhere to go and the run completes normally with the cursor silently dropped — no failure, no counter,
+no trace record. The two failures genuinely differ in detectability, and that asymmetry is the correct
+reason to move one to definition time. **This is the pass's best work and neither review proposed it.**
+
+*Axis 2 — "can reach".* It does reintroduce the trap. See R3: the predicate is a call-graph property,
+classifier 2 is a textual site inventory, and clause 3 built the missing instrument for the identical
+problem in core without extending it here. **Ruling: the same instrument should govern classifier 2**,
+or the rule should be restated at extension granularity where a grep decides it. Nothing else in the
+ADR closes this.
+
+*Axis 3 — is "conformant and inert" worth having?* **Yes, and it is bookkeeping rather than
+laundering — but the ADR should say one more sentence than it does.** The claim a conformant-and-inert
+profile makes is narrow and true: *this* profile's world is honest about *its* boundary, and the paths
+it does not test are named. That is exactly what D5's honesty criterion is for, and refusing the label
+would mean a profile becomes non-conformant by installing something it then correctly excludes — which
+punishes disclosure. The laundering risk is real but lives one level up, in what a *reader* does with
+the word: ADR:377-378 already anticipates it ("must not be planned as though it delivers a conformant
+*and covering* `default`"). What is missing is the acceptance-side consequence: D11 reports coverage
+counters but nothing requires a profile to *have* non-zero hook coverage, so "conformant" is currently
+satisfiable by a profile that excludes everything. **Add a floor** — a conformant profile must cover at
+least one hook of every extension it installs, or must declare the extension itself excluded rather
+than installed-and-fully-excluded. That closes the laundering path without weakening the split.
+
+*Axis 4 — consistency.* Substantively consistent at all four sites; the *predicate* is not (R3's
+table). D1:365, D5:941, D5:981-982, ADR:1056, and ADR:1397 use "can reach", "reaches a seam",
+"references a field", and "reaching a field" for what must be one rule.
+
+### Ruling 2 — is classifier 2's scope correctly bounded? (A2)
+
+**No.** The set as defined by the ADR's own criterion is all four `ExtPorts` fields; the set the ADR
+names is one; and the gap is not cosmetic because D5:976-977 makes `ExtPorts.clock_now` the mandatory
+routing destination for the clock gate, which the criterion then rejects (R2). The handoff's framing —
+"the ADR says the former and means the latter" — is exactly right, and the latter needs to be written
+down. "Retired field by field" is decorative if the set is `{ai_step}` and unbudgeted if it is not.
+
+Classifier 2's *soundness boundary by reference* to classifier 1's, however, does transfer correctly:
+classifier 1's three stated limits (ADR:1080-1089) are out-of-tree effects, non-reachability, and roots
+outside `src` + `packages`, and all three apply verbatim to an ABI-field scan. The alias/wrapper caveat
+at ADR:1061-1063 is an honest addition and I confirmed nothing at HEAD aliases `ai_step` — the only two
+reference sites are `compaction_ai.ail:106` and
+`packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:90`.
+
+### Ruling 3 — is clause 3's attribution table an artifact or an intention? (A3)
+
+**An intention.** It has a name, a versioning adjective, a fail-closed default, and a correct
+semantics clause (ADR:880-882: attribution is necessity, not sufficiency — which is the right choice
+and answers the mixed-guard problem properly). It has no producer, no validator, no schema, no storage
+location, and no slot in the seven-bullet profile-definition record that is supposed to version it
+(R5). Measured against D6's event-vocabulary artifact in the same document, it is missing five of the
+six things that made D6 buildable.
+
+*On the sub-question of whether failing closed into clause 1 is always conservative:* **for the routing
+gate, yes** — clause 1 forces routing, and routing a site no run reaches costs work, not correctness.
+I found no case at HEAD where it is the wrong answer rather than the expensive one. One boundary worth
+recording: ADR:962-965 places host configuration discovery, package hydration, and child-process setup
+*outside* the simulation boundary, so a core effect site that is genuinely pre-boundary would be forced
+by clause 1 into a routing obligation the ADR elsewhere says it does not have. No such site exists
+today — all four driver clock reads are already ruled in-scope by D4 — but the two rules have not been
+reconciled and the table is where that reconciliation would live.
+
+### What I could not clear
+
+The upstream blocker is untouched by this pass and unchanged. The reviewed range ships no
+recorded-stream API in an AILANG release, does not repin this repository, and passes no positive
+integration probe. `arniwesth/ailang`'s `stepWithStreamRecorded` on the `v0.31.0` tag is a prototype
+and satisfies none of D1's three conditions.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. **R2** — restate classifier 2's criterion so it selects `ai_step` and not `clock_now`, and reconcile
+   with D5:976-977. Everything about the split's detector is downstream of what the set *is*.
+2. **R1** — close classifier 1's derivation. It is the more severe defect but is independent of (1),
+   and the two belong in one edit so the classifiers stay specified side by side. Do not ship a third
+   revision without checking the derived set against the repo's actual `std/*` imports; that check is
+   two commands and is what the last two revisions both skipped.
+3. **R3** — pick one predicate for the rejection rule and give it an instrument. If the extension-
+   granularity rule is chosen, this closes without new machinery. If the per-hook rule is kept, it
+   depends on (5).
+4. **R4** — correct Handoff item 2, then re-grep the body for the overturned vocabulary.
+5. **R5** — give the attribution table the D6 treatment: an eighth bullet at ADR:910-919, a load-time
+   fail-closed validator, a correctness criterion, and a scheduling prohibition on D4
+   routing-completeness claims until it exists.
+6. **R6, R7, R8** — the three precision corrections, independent of each other and of the above.
+   Recount the review sections at the commit being written, not at the commit being answered.
+
+**Belongs to the implementation plan, not this ADR:**
+
+- Building both classifiers and wiring their repin re-derivation; neither is in CI, the Makefile, or
+  `scripts/` today.
+- Producing the first attribution table, once the ADR says what one is.
+- Naming the first purpose-built narrow conformant profile and validating it against the R3 detector.
+  Still unnamed, as the tenth section flagged; `empty_stop_guard` and `progress_contract_guard` remain
+  the obvious candidates.
+- Whether per-hook classification reads declared or performed effect rows (R7's second half), and the
+  `ProviderState` field shape and approval/clock cursor question the fourth-pass round deferred.
+- The `stub_step.ail:171-173` deletion.
+
+## Accept / revise recommendation
+
+**Revise — the pass's central judgment is right and better than either review that prompted it: the
+coverage-versus-rejection split is correctly placed, its timing argument is sound and verified against
+D5's machinery, "conformant and inert" is honest bookkeeping rather than laundering, clause 3's
+attribution semantics (necessity, not sufficiency) is the correct answer to the mixed-guard problem,
+and the Status block's self-correction is the first metric in this document that survives an
+independent recount. But R1 leaves classifier 1 fail-open on a live `SharedMem` site in the core
+driver — the third consecutive revision of that obligation to fail open, and the first to do so on
+evidence sitting in `src/core`; R2 leaves classifier 2's stated criterion rejecting the clock gate's
+own mandated remedy; R3 leaves the rejection rule without the attribution instrument clause 3 just
+built for the identical problem; and R4 leaves the overturned "non-conformant" claim standing in the
+section a plan author reads first. The upstream API blocker is untouched by this pass and remains
+fully in force — it still requires the recorded-stream API in an actual AILANG *release*, this
+repository repinned to that release, and the positive integration probe passing; the `v0.31.0` fork
+prototype satisfies none of the three.**
+
+**Residual risk if the six actions land as recommended:** the classifiers remain textual and inherit
+their stated soundness boundary — an `ai_step` reached through an alias or a re-exported wrapper is
+still invisible, and nothing prevents one; the stdlib-source scan proposed in R1's action is itself a
+textual derivation over a directory the toolchain owns, so a stdlib module whose effects arrive
+through a mechanism neither builtins nor `export func … ! {…}` expresses would still be missed;
+neither classifier has a CI mechanism, so "re-derived on every repin" remains a process obligation
+carried by a milestone rather than a check; and the first conformant profile is still unnamed, so
+"purpose-built narrow one" is a claim the plan, not this ADR, will have to make good.
+
+## Review Comments
+
+_Reviewer: Codex (model: `GPT-5`), 2026-08-01. Independent delta review of the fifth correction
+pass. Reviewed commit: `e8242f1570078337c203606b6ae5792108628876`. Target range:
+`b0427570cff3dcc8128b7ac7062c1081413f7ea9..e8242f1570078337c203606b6ae5792108628876` over
+`.agent/projects/009_motoko_dst_execution/`._
+
+_The reviewed commit contains eleven `## Review Comments` sections. This is the thirteenth heading in
+the current worktree because a pre-existing uncommitted twelfth section was retained verbatim at the
+user's direction. Later handoff/visualization commits and `mmd/` are outside the reviewed range. The
+target range itself is one commit, one changed file, 146 insertions and 63 deletions._
+
+### R1. Classifier 1's corrected builtin projection is still fail-open because source-defined effectful stdlib modules need not have an impure builtin row
+
+**Defect:** Filtering builtin rows on `is_pure == false` and projecting `module` omits at least
+`std/sem` and `std/extension`, even though the pinned stdlib gives them concrete `Clock`, `SharedMem`,
+`SharedIndex`, and `FS` operations used under the classifier's `src` + `packages` roots.
+
+**Grounding:** exact commands and output from pinned AILANG v0.26.0:
+
+```text
+$ ailang builtins list -json | python3 -c 'import json,sys; d=json.load(sys.stdin)["builtins"]; ms={b["module"] for b in d if b["is_pure"] is False}; print("modules",len(ms)); print("std/sem in set", "std/sem" in ms, [(b["name"],b["is_pure"],b.get("effect")) for b in d if b["module"]=="std/sem"]); print("std/extension in set", "std/extension" in ms, [(b["name"],b["is_pure"],b.get("effect")) for b in d if b["module"]=="std/extension"])'
+modules 21
+std/sem in set False [('_embedding_decode', True, None), ('_embedding_encode', True, None)]
+std/extension in set False []
+
+$ rg -n 'export func (make_frame|load_frame|store_frame|requireWorkdirFile).*![[:space:]]*\{' /home/motoko/.local/share/ailang/std/sem.ail /home/motoko/.local/share/ailang/std/extension.ail
+/home/motoko/.local/share/ailang/std/extension.ail:27:export func requireWorkdirFile(workdir: string, rel: string) -> Result[(), string] ! {FS} =
+/home/motoko/.local/share/ailang/std/sem.ail:191:export func make_frame(id: string, content: string, opaque: bytes) -> sem_frame ! {Clock} {
+/home/motoko/.local/share/ailang/std/sem.ail:374:export func load_frame(key: string) -> Option[sem_frame] ! {SharedMem} {
+/home/motoko/.local/share/ailang/std/sem.ail:385:export func store_frame(key: string, frame: sem_frame) -> unit ! {SharedMem} {
+/home/motoko/.local/share/ailang/std/sem.ail:466:export func store_frame_ns(ns: namespace, frame: sem_frame) -> unit ! {SharedMem, SharedIndex} {
+```
+
+The omitted modules are used at `src/core/cache.ail:29,60,75`,
+`packages/motoko-ext-context-mode/context_mode.ail:6,19,28,36,45`, and
+`packages/motoko-ext-omnigraph/register.ail:4,26`.
+
+**Action:** derive classifier 1 from the complete pinned stdlib interface/source surface as well as
+the builtin registry, and treat an imported `std/*` module not proven effect-free as a fail-closed
+candidate. Add a required comparison between the derived set and the repository's actual `std/*`
+imports before the routing inventory may be cited.
+
+### R2. Classifier 2's criterion selects all four `ExtPorts` fields while its asserted result names only `ai_step`, making D5's clock remedy reject itself
+
+**Defect:** “Fields that do not yet return world state” describes `ai_step`, `proc_exec`, `clock_now`,
+and `env_get`, not only `ai_step`; under that literal set, routing `compose` reads through
+`ExtPorts.clock_now` as D5 requires triggers classifier 2's own profile-definition rejection.
+
+**Grounding:** `packages/motoko-ext-abi/types.ail:62-67` is:
+
+```text
+export type ExtPorts = {
+  ai_step: (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream},
+  proc_exec: (string, string) -> string ! {IO, Process, FS},
+  clock_now: () -> int ! {Clock},
+  env_get: (string, string) -> string ! {Env}
+}
+```
+
+D5 requires a `compose` profile's reads to route through `ExtPorts.clock_now` at ADR:974-977, then
+rejects un-excluded references to a non-world-mediated field at ADR:980-982. Classifier 2's
+“retired field by field” text is also unsupported: the consequence scheduled at ADR:1505-1510 is one
+ABI-major widening centered on `ai_step`, not four independently scheduled retirements.
+
+The reference to classifier 1's soundness boundary is only partly transferable. Fixed scan roots and
+the refusal to decide reachability apply to both scans; classifier 1's out-of-tree ambient-effect
+limit is not by itself a boundary definition for an ABI-field matcher, which instead needs its own
+alias, re-export, computed-field, and wrapper rules. ADR:1061-1063 names only part of that boundary.
+
+**Action:** define the set by the property the ADR means: fields whose call loses successor state that
+D1 requires the underlying core seam to return — today `ai_step`. Explicitly state why `proc_exec`,
+`clock_now`, and `env_get` are not classifier-2 members under this interim rule; replace or precisely
+explain “retired field by field”; and state classifier 2's own matching/soundness boundary.
+
+### R3. The coverage-versus-rejection split has the right timing but no detector for its per-hook “can reach” predicate
+
+**Defect:** Classifier 2 inventories textual field-reference sites, while D1 rejects a definition
+unless every hook that *can reach* each site is excluded; no specified artifact or analysis maps an
+extension reference site to its reaching hooks.
+
+**Grounding:** the only live production `ctx.ports.ai_step` reference is
+`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`, but attributing it to `on_pre_step` requires
+this manual chain:
+
+```text
+$ rg -n 'compact_with_ai|summarize_with_ai_result|summarize_attempt|ports\.ai_step' packages/motoko-ext-compaction-ai/register.ail packages/motoko-ext-compaction-ai/compaction_ai.ail
+packages/motoko-ext-compaction-ai/register.ail:104:      compact_with_ai(ctx, msgs, compaction_cfg)
+packages/motoko-ext-compaction-ai/compaction_ai.ail:104:func summarize_attempt(...)
+packages/motoko-ext-compaction-ai/compaction_ai.ail:106:  match ctx.ports.ai_step(model, prompt_msgs) {
+packages/motoko-ext-compaction-ai/compaction_ai.ail:119:export func summarize_with_ai_result(...)
+packages/motoko-ext-compaction-ai/compaction_ai.ail:120:  summarize_attempt(...)
+packages/motoko-ext-compaction-ai/compaction_ai.ail:484:    else match summarize_with_ai_result(...) {
+packages/motoko-ext-compaction-ai/compaction_ai.ail:498:export func compact_with_ai(...)
+packages/motoko-ext-compaction-ai/compaction_ai.ail:515:          else match summarize_with_ai_result(...) {
+```
+
+The four normative statements also drift: D1:365 says “can reach the port”; D5:941 says “reaches a
+non-world-mediated seam”; D5:981-982 and classifier 2 say “references a ... field”; and the acceptance
+row at ADR:1397 says “reaching a ... field from an un-excluded hook.” Only the reference-site
+predicate is answered by the named textual scan.
+
+**Action:** use one predicate everywhere. Either extend the versioned site-to-hook attribution
+artifact to extension-package classifier-2 sites and make validation consume it, or adopt the coarser
+mechanical rule that any installed extension containing such a reference must exclude every hook it
+registers. The narrower per-hook rule is not a gate until one of those detectors exists.
+
+### R4. Clause 3's site-to-hook attribution table is an intention, not a specified artifact, and an incorrect attribution can still fail open
+
+**Defect:** The table has a name and a conservative default but no producer, schema, storage/version
+slot, correctness rule, drift check, or validator, so nothing prevents falsely attributing an
+unconditional site to an uninstalled hook and removing it from the routing obligation.
+
+**Grounding:** clause 3 introduces the table at ADR:862-866 and its un-attributed fallback at
+ADR:878-882. The complete versioned profile record at ADR:910-919 has seven fields and does not include
+the table; the manifest at ADR:921-923 does not include it either. By contrast, D6's event-vocabulary
+artifact at ADR:1207-1240 specifies contents, load-time validation, a manifest slot, a version-change
+rule, and a prohibition on scheduling dependent checks before it exists.
+
+Failing an *un-attributed* in-boundary core site into clause 1 is conservative: it forces excess
+routing rather than omitting routing. That does not protect against a wrong positive attribution, and
+the mechanical rule should be scoped explicitly to effect sites after the simulation boundary at
+ADR:962-965 so pre-boundary setup is not silently pulled into the world.
+
+**Action:** add the table to the versioned profile definition and specify: the construction owner; a
+source-revision-bound schema; the correctness condition that site execution implies activation of at
+least one attributed hook; how that implication is derived or independently checked; load-time
+validation that fails closed on missing, stale, unknown, or malformed entries; and a prohibition on
+D4/D5 routing-completeness claims before the table exists and validates. Then use the same artifact
+for R3 if the per-hook classifier-2 rule is retained.
+
+### R5. Implementation Handoff item 2 still states the conformance claim that this pass says it overturned
+
+**Defect:** The handoff still says every profile installing an `ai_step`-calling extension remains
+non-conformant, contradicting the new coverage-cost/profile-rejection split in D1, D5, Consequences,
+and the acceptance table.
+
+**Grounding:** ADR:1558-1561 says:
+
+```text
+**This item does not fix the extension model path**, and that is a decision, not an oversight:
+`ext_ai_step` reaches the same seam through an ABI that cannot return a successor (D1). It fixes
+the main loop, and profiles installing an `ai_step`-calling extension stay non-conformant until
+the world-token ABI lands.
+```
+
+The contrary corrected statements are ADR:353-378, ADR:939-947, ADR:1397, and ADR:1511-1516.
+
+**Action:** rewrite Handoff item 2 in the same vocabulary as D1/D5: such a profile is conformant only
+when all reaching hooks are explicitly excluded, and definition validation rejects it otherwise.
+Re-run the body-only searches for `non-conformant`, `conformance-eligible`, and `disqualif` after the
+edit.
+
+### R6. The Status block records four delta reviews where the reviewed commit contains six, and it contradicts that count twice
+
+**Defect:** ADR:6-7 counts only the second- and third-pass delta reviews even though the two
+fourth-pass reviews are already the tenth and eleventh committed sections at baseline `b042757`; the
+same block then says “the two delta reviews” at ADR:9 and attributes fourth-pass evidence to “the four
+delta reviews” at ADR:29-32.
+
+**Grounding:** exact command and output at the reviewed commit:
+
+```text
+$ git show e8242f1:.agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md | rg -n '^## Review Comments$'
+1698:## Review Comments
+2158:## Review Comments
+2635:## Review Comments
+2950:## Review Comments
+3229:## Review Comments
+3616:## Review Comments
+4021:## Review Comments
+4299:## Review Comments
+4749:## Review Comments
+5135:## Review Comments
+5590:## Review Comments
+```
+
+Sections 1-2 are full reviews, 3-5 are F1-F6 verifications, and 6-11 are six delta reviews — two each
+of correction passes two, three, and four.
+
+**Action:** say “six independent delta reviews (two each of the second, third, and fourth correction
+passes)” and make ADR:9 and ADR:29-32 use the same six-review history.
+
+### R7. `compaction_ai` registers eight hooks, not one, leaving its remaining per-hook classifications unstated
+
+**Defect:** ADR:373 says excluding `on_pre_step` disables the extension's “only hook,” but the
+extension registers eight hooks and three of the seven constant-returning hooks carry broad declared
+effect rows.
+
+**Grounding:** `packages/motoko-ext-compaction-ai/register.ail:99-110` registers
+`on_describe_tools`, `on_build_system_prompt`, `on_budget_plan`, `on_pre_step`, `on_tool_policy`,
+`on_tool_handle`, `on_response_intercept`, and `on_solver_candidate` fields; excluding the required
+`provided_tools` field leaves eight hooks. Only `on_pre_step` calls `compact_with_ai`, but
+`on_tool_handle`, `on_response_intercept`, and `on_solver_candidate` declare
+`{IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}` while returning constants.
+
+**Action:** change “only hook” to “only non-trivial hook and the only hook that reaches `ai_step`,”
+and state whether D5's interim per-hook classification is based on performed effects or declared
+effect rows. The profile-definition record must classify all eight hooks even if only one requires
+classifier-2 exclusion.
+
+### R8. Two replacement anchors are still factually wrong: the compose hook range is truncated and three dummy-hook guard lines are cited as call lines
+
+**Defect:** ADR:781 presents `:761-771` as the enclosing `on_response_intercept` range although the
+function closes at `:790`, while ADR:884-886 describes five cited call lines as five syntactic guard
+sites even though three guards begin earlier.
+
+**Grounding:** source locations; the second command's call arguments are abbreviated in the displayed
+output because the cited line numbers, rather than the elided arguments, ground the finding:
+
+```text
+$ awk 'NR==761 || NR==767 || NR==771 || NR==790 || NR==792 {printf "%d: %s\n", NR, $0}' packages/motoko-ext-compose/compose.ail
+761: export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptDecision ! {IO, Process, FS, Clock} {
+767:       let name = "inline_${show(now())}";
+771:       let _ = writeFile(path, "${compose_module_header(name)}\n\n${clean}");
+790: }
+792: func no_budget_patch() -> BudgetPatch {
+
+$ rg -n 'is_test_dummy|emit_dummy_hook' src/core/ext/runtime.ail
+206:      let _ = if is_test_dummy(h.id) then emit_dummy_hook(...) else ();
+222:      let _ = if is_test_dummy(h.id) then emit_dummy_hook(...) else ();
+239:      let _ = if is_test_dummy(h.id) then {
+245:        emit_dummy_hook(...)
+280:  let _ = if is_test_dummy(h.id) then {
+287:    emit_dummy_hook(...)
+368:  let _ = if is_test_dummy(h.id) then {
+374:    emit_dummy_hook(...)
+```
+
+The mixed-guard counterexample is correctly anchored at `src/core/tool_phase.ail:222`, with the
+effectful `exec_scratchpad_cell_ws` call at `:223`. The `ExtPorts` and `ai_step` anchors at
+`types.ail:62-67` and `compaction_ai.ail:106` are also correct.
+
+**Action:** cite `on_response_intercept` as `:761-790` (or cite only the clock site at `:767`), and
+separate the dummy-hook call sites `206,222,245,287,374` from their guard starts
+`206,222,239,280,368`. Update the Status statement from four to five consecutive correction passes
+with anchor defects.
+
+## What is accurate
+
+All confirmations below were re-run against `e8242f1` and pinned AILANG v0.26.0.
+
+**A1 ruling — the line is conceptually correct and its timing argument is sound, but the stated rule
+has no complete detector.** An excluded hook is named as uncovered and fails closed if runtime
+dispatch reaches it (ADR:935-937). An un-excluded `ai_step` path returns only
+`Result[string, string]` through `ExtPorts` (`types.ail:63`) and only a decision through
+`on_pre_step`; after the interim `Ports.model_step` widening there is no return channel for the
+successor, so discarding it completes silently. Definition-time rejection is therefore the correct
+side of the timing boundary. R3 is why it is not enforceable yet.
+
+“Conformant and inert” is honest profile bookkeeping, not coverage laundering, provided the result
+continues to name every excluded hook and awards it no coverage, as ADR:935-940 requires. A fully
+excluded extension contributes no extension-path evidence; that makes the profile low-utility, not
+dishonest. The ADR already warns that this must not be represented as a conformant *and covering*
+`default` (ADR:370-378). The implementation report should keep conformance and hook coverage visibly
+separate; D11's class/branch counters do not replace that disclosure.
+
+**A2 ruling — classifier 2 is not correctly bounded.** Its literal criterion selects all four fields,
+its intended criterion selects one, “retired field by field” does not match the one scheduled
+ABI-major change, and classifier 1's soundness boundary cannot be inherited wholesale by a different
+kind of matcher. R2 states the required correction.
+
+**A3 ruling — clause 3 is still an intention rather than a buildable artifact.** Its necessity-not-
+sufficiency attribution semantics are the right response to mixed guards, and missing attribution
+failing into clause 1 is conservative for post-boundary routing sites. It lacks the production and
+validation contract needed to make either that claim or an incorrect-positive attribution safe.
+
+**Classifier arithmetic confirmed, but not completeness.** The corrected arithmetic is exact:
+
+```text
+$ ailang builtins list -json | python3 -c 'import json,sys; d=json.load(sys.stdin)["builtins"]; imp=[b for b in d if b["is_pure"] is False]; print("rows",len(d),"impure",len(imp),"pure",sum(b["is_pure"] is True for b in d)); print("labels",len({b["effect"] for b in imp}),sorted({b["effect"] for b in imp})); print("groups",len({"Pure" if b["is_pure"] else b["effect"] for b in d})); print("modules",len({b["module"] for b in imp}),"non_std",[(b["name"],b["module"]) for b in imp if not b["module"].startswith("std/")])'
+rows 324 impure 115 pure 209
+labels 17 ['AI', 'Clock', 'Cog', 'DOM', 'Debug', 'Env', 'FS', 'IO', 'Msg', 'Net', 'Process', 'Rand', 'Secret', 'SharedIndex', 'SharedMem', 'Stream', 'Trace']
+groups 18
+modules 21 non_std []
+```
+
+`ailang.toml:53-54` lists twelve `[effects] max` labels. Thus seventeen effect labels plus `Pure`, the
+explicit `Pure` filter, 21 projected effect-bearing modules, no non-`std/*` impure rows, and the count
+of twelve are all correct. R1 rules that the 21-module projection is necessary but not sufficient.
+
+**Clock arithmetic and routing state confirmed.** `rg -n '\bnow\(\)' src packages -g '*.ail'`
+returns thirteen live reads: four in `session.ail`, one in `ext/runtime.ail`, and eight in the compose
+package. None has been replaced by a world-clock call at HEAD. With the runtime site correctly
+attributed to `test_dummy`, the installation-scoped counts remain 4 / 12 / 13. Until R4's table exists,
+however, that attribution is not valid gate evidence and the fail-closed fallback would count the
+runtime site unconditionally.
+
+**Configuration and remaining anchors confirmed.** The exact configuration recount was:
+
+```text
+$ git ls-files '.motoko/config/*/config.json' | wc -l
+14
+$ git ls-files '.motoko/config/*/config.json' | xargs -n1 jq -r '(.extensions.order // []) | index("compaction_ai") != null' | sort | uniq -c
+     14 true
+```
+
+`types.ail:62-67`, `tool_phase.ail:222`, `compose.ail:767`, and `compaction_ai.ail:106` are accurate;
+R8 records the two range/form errors.
+
+**Status metrics confirmed independently.** The finding counts for review sections 6-9 are
+`7 + 8 = 15` for the second-pass round and `6 + 6 = 12` for the third-pass round. The six
+anchor/provenance findings in the former are sections 6 R4/R5/R7 and 7 R5/R6/R7. Narrowly defined as
+edit provenance, section 7 R5 is one of fifteen and the third-pass round has none. The two third-pass
+anchor findings are sections 8 R6 and 9 R6, both on the same deferred `stub_step.ail` comment range.
+Thus “six of fifteen,” “two of twelve,” and “one of fifteen against none” hold; the header's count of
+four delta reviews does not.
+
+**Collateral consistency confirmed subject to the findings.** D11 reports fault-class and
+production-branch reach, not hook coverage, and does not contradict the split. D5's profile record
+has the three required per-hook classifications — effect-free, world-mediated, excluded — although
+R4 shows it omits the attribution table and R7 shows all registered hooks still require a
+classification. Consequences uses the corrected split. D1, D5's exclusion paragraph, D5 validation,
+and the acceptance row agree on coverage versus definition-time rejection in substance, but their
+reach/reference predicates drift as R3 records. Handoff item 2 is the one remaining normative
+disqualification statement (R5).
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. Close classifier 1's full-stdlib completeness hole (R1); the routing inventory cannot be cited
+   while source-defined effect modules are invisible.
+2. Define classifier 2's actual one-field criterion and its own matcher boundary (R2).
+3. Specify and version the site-to-hook artifact, including correctness, production, validation, and
+   scheduling rules (R4).
+4. Normalize the coverage/rejection predicate and make classifier 2 consume that artifact, or adopt
+   the conservative extension-level rule (R3).
+5. Correct the remaining conformance contradiction and state how all eight `compaction_ai` hooks are
+   classified (R5, R7).
+6. Correct the review history and both anchors, then re-run body-wide terminology and anchor checks
+   (R6, R8).
+
+**Belongs to the implementation plan, after the ADR defines the contracts:**
+
+- Build both classifiers, derive them on the repin milestone, and wire fail-closed profile-load
+  validation.
+- Produce the initial source-revision-bound site-to-hook table and its drift validator.
+- Implement runtime exclusion dispatch and profile-definition rejection, with separate conformance
+  and per-hook coverage reporting.
+- Name and validate the first useful narrow profile; no checked-in configuration supplies covering
+  `compaction_ai` behavior under the interim ABI.
+
+## Accept / revise recommendation
+
+**Revise — the fifth pass's coverage-versus-rejection timing is sound, but neither classifier nor the
+attribution artifact is yet a complete enforceable gate, and R5-R8 leave normative/history/anchor
+contradictions. The upstream API blocker remains fully in force and unchanged: acceptance still
+requires a recorded-stream API in an actual AILANG release, this repository repinned to that release,
+and the positive integration probe passing; the fork prototype clears none of those conditions.**
