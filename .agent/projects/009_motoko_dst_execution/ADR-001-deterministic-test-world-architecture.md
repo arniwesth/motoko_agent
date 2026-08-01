@@ -748,6 +748,16 @@ profile-reachable time read is a precondition of conformance, because there is n
 virtualization layer under which an unrouted read would still be deterministic. A profile may be
 narrow, but within its declared scope the clock seam is all-or-nothing.
 
+**"Profile-reachable" is installation-scoped, not the result of a reachability analysis**, and the
+distinction is load-bearing because D5's inventory explicitly does not decide reachability. A read is
+profile-reachable when it occurs in the core driver or in a module the profile *installs* — a
+question answered by the profile's own extension list and the module inventory, both of which are
+enumerable today. It does **not** mean "a read some execution path can actually perform"; deciding
+that would require the reachability analysis D5 obligation 3 declines to require and nothing here
+builds. The consequence is deliberately conservative: a read in an installed extension counts and
+must be routed even if no run in the corpus reaches it. Withholding the `Clock` capability remains
+the per-run backstop for anything that slips through, and it catches executed paths only.
+
 ### D5. Execution uses the real traced driver and a named conformant profile
 
 The runner executes an `ExecutionProgram` through `Session.run_v2_session_traced` or a successor
