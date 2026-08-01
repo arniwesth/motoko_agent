@@ -3,8 +3,8 @@
 Date: 2026-07-24
 Status: Proposed — author self-review, streaming spike, two independent reviews, a vertical spike
 through the real driver, AILANG v0.31.0 upstream recheck, and **three independent verifications of
-the F1–F6 revision** and **six independent delta reviews (two each of the second,
-third, and fourth correction passes)** (all 2026-08-01,
+the F1–F6 revision** and **eight independent delta reviews (two each of the
+second, third, fourth, and fifth correction passes)** (all 2026-08-01,
 recorded below) complete. The three verifications returned *Revise* and converged on one defect set;
 each delta round returned *Revise* and converged on another, twice overturning this side's own
 diagnosis. Every set is now corrected.
@@ -26,7 +26,7 @@ a delta review and (1) is an actual release event.
 **What is required next is a delta review of the sixth correction pass, not another full round.**
 F1, F2, F3, F5, F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were
 each independently confirmed by all three verifications, and D6.1's zero-`RunSummary` claim by two of
-the three. The six delta reviews additionally confirmed D4's clock count (13) and routing state,
+the three. The eight delta reviews additionally confirmed D4's clock count (13) and routing state,
 corrections C3/C4/C5/C9/C14, every configuration fact, and — in the fourth-pass round, by two
 independent three-module probes — that the extension-model-path **exclusion is the right
 disposition** and that `ProviderState`'s home in `src/core/ports.ail` is **buildable as specified**.
