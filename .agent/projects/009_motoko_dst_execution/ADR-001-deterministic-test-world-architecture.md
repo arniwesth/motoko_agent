@@ -1,11 +1,47 @@
 # ADR-001: Deterministic Test-World Architecture for Motoko Logical-Fault DST
 
 Date: 2026-07-24
-Status: Proposed — author self-review, streaming spike, and AILANG v0.30.0 upstream recheck
-complete; upstream recorded-stream API and independent review required
-Grounded at: `7b9b4a4c266b229be85de5c09342f2b654c89fe7`
-Upstream rechecked at: AILANG v0.30.0 release commit
-`e37b370d1d7a9c4e7136b319e38bec4d5f2bd9a0`
+Status: Proposed — author self-review, streaming spike, two independent reviews, a vertical spike
+through the real driver, AILANG v0.31.0 upstream recheck, and **three independent verifications of
+the F1–F6 revision** (all 2026-08-01, recorded below) complete. All three returned *Revise* and
+converged on the same defect set; those defects are corrected in the 2026-08-01 second pass
+described under *Grounded at* below. **One acceptance blocker remains and it is now purely a release
+event**: the upstream recorded-stream API is specified and agreed but not shipped in a released
+binary.
+
+**What is required next is a fresh delta review, not a fourth full round.** The corrections listed
+below post-date all three verification sections, so no reviewer has seen them; but F1, F2, F3, F5,
+F6, D6.1, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were each
+independently confirmed by all three and are not reopened by this pass. A delta reviewer's target is
+the corrected text alone.
+
+**There is no separate `## Spike-findings disposition (F1–F6)` section, and there was never meant to
+be one.** An earlier draft of this Status block and of
+`HANDOFF-review-adr-001-f1-f6-revision.md` both referred to one; two of the three verifications
+correctly reported it absent. The reference was the error, not the omission: **the normative body is
+the disposition record.** Each of F1–F6 is answered where the decision it affects lives — F1 and F2
+in D1, F3 and F4 in D4, F5 in D6, F6 in D1 and Implementation Handoff item 2 — and each says in the
+decision's own voice what changed and why, including where an earlier revision was wrong. A separate
+defendant's summary written after three verdicts would be a reconstruction, not a record. The
+handoff has been corrected to match.
+
+Grounded at: `7b9b4a4c266b229be85de5c09342f2b654c89fe7`, **partially re-grounded at
+`99749c7d` on 2026-08-01 (two passes).** Both prior reviews certified that
+`git diff --stat 7b9b4a4c..HEAD -- src packages scripts Makefile .github` was empty, so every anchor
+was evaluable at the grounding revision. **That is no longer true**: `89a1d67` (WI-C13c) changed
+`src/core/session.ail` (93 lines) and `src/core/test/stub_step.ail` (37).
+
+The first re-grounding pass corrected two Context rows and claimed "the rest verified unchanged."
+**That claim was false and is retracted**: all three verifications independently found a third stale
+row (`stub_step.ail`, provider chunk ordering), and two of them found an arithmetic error introduced
+*by* the correction pass itself. Three rows anchoring into the two changed files are now corrected
+and marked re-grounded; rows in files untouched since `7b9b4a4c` were spot-checked by all three
+reviewers and hold. The lesson is recorded rather than paraphrased: **a "re-grounded" label is a
+claim to re-verify, not a warrant.** A fresh reviewer must re-verify anchors rather than inherit
+them, including these.
+Upstream rechecked at: AILANG v0.31.0 release commit `1f6f7dd28`; upstream request filed as
+[`sunholo-data/ailang#546`](https://github.com/sunholo-data/ailang/issues/546) and reviewed
+2026-07-31 — see *Upstream recorded-stream API status* below.
 
 Depends on:
 - `../007_dst_consolidation/ADR-001-motoko-dst-definition-and-taxonomy.md` after review disposition
@@ -62,9 +98,17 @@ fail-closed profile. The checked streaming spike proved that pinned AILANG v0.26
 provider chunks immediately visible and return the identical ordered chunks in the immutable
 trace: the API rejects both state-returning callbacks and callback-side `SharedMem` capture. Before
 this ADR can be accepted, an upstream recorded-stream API must land and pass the spike's direct
-integration probe. A 2026-07-24 recheck using the repository-configured AILANG MCP identified
-v0.30.0 as latest; its released source and compiler preserve the same callback and result contract,
-so upgrading from v0.26.0 to v0.30.0 does not remove this blocker.
+integration probe. Rechecks at v0.30.0 (2026-07-24) and v0.31.0 (2026-07-31) both preserve the same
+callback and result contract, so upgrading does not by itself remove this blocker.
+
+**What changed on 2026-07-31 is the character of that blocker, not its existence.** Upstream
+reviewed `ailang#546`, reproduced the constraint first-party, and recommended adopting this
+project's reference implementation with its `{chunks, outcome}` shape intact. The design question
+is therefore settled and the remaining gate is a release event. Two consequences follow and are
+carried in the decisions below: the API's *shape* may now be designed against, and — separately, and
+independently of upstream — a vertical spike through the real driver established that adopting that
+API changes nothing observable until Motoko widens its own `Ports.model_step`, because the chunks
+are discarded one layer above `std/ai` (D1, F2).
 
 ## Context
 
@@ -125,10 +169,10 @@ Load-bearing current-source anchors:
 | Existing scripted state demonstrates explicit `result + next` for three separate queues, but is not threaded through the session | `src/core/test/scripted_ports.ail:20-65` |
 | `ScriptedStep` contains only successful-result fields | `src/core/test/stub_step.ail:34-41` |
 | `TracedSessionResult` currently contains only `result + trace` | `src/core/session.ail:146-149` |
-| Approval and session clock bypass `Ports` | `src/core/session.ail:1610-1617,1989-1995` |
-| Success emits `RunSummary`/`DoneEvent` without appending them to the returned trace; other errors return directly | `src/core/session.ail:1525-1557,1609-1614` |
+| Approval and session clock bypass `Ports` | `src/core/session.ail:1619` (`readLine`), `1991`, `2089` (`now()`) — re-grounded 2026-08-01 |
+| Success emits `RunSummary`/`DoneEvent` without appending them to the returned trace; other errors return directly | **Five** `emit_run_summary` call sites in `src/core/session.ail` — `1325`, `1554`, `1704`, `1711`, `1762` (`1554-1555` is the success path; `1325` is the shared `c2_fail` helper, so call sites do **not** equal terminal paths). The "return directly" clause is grounded separately on the two terminal returns that emit no summary at all: invalid history at `1528-1531` and the approval-state invariant at `1614-1616` — re-grounded 2026-08-01 (second pass) |
 | Native tools execute sequentially and directly against FS/Process | `src/core/tool_runtime.ail:151-165` |
-| Core tool dispatch is serial; MCP execution is a blocking call; provider chunks are callback-ordered | `src/core/tool_phase.ail:302-357`; `packages/motoko-ext-mcp/exec.ail:63-70,165-176`; `src/core/test/stub_step.ail:175-204` |
+| Core tool dispatch is serial; MCP execution is a blocking call; provider chunks are callback-ordered | `src/core/tool_phase.ail:302-357`; `packages/motoko-ext-mcp/exec.ail:63-70,165-176`; `src/core/test/stub_step.ail:88-99` (`play_chunks`), `148-154` (the live closure passing `on_chunk` to `stepWithStream`), `157-168` (the scripted closure), `192-199` (the one-arm `dispatch_step` pass-through) — re-grounded 2026-08-01 (second pass); the previously cited `:175-204` predates `89a1d67` and now contains only comment text, part of which is itself stale (see *Known stale source comment* below) |
 | The current streaming wrapper cannot return the chunks it projects live | `packages/motoko-ext-ai-compat/ai_compat.ail:31-37,60-71,197-220` |
 | Neither state-returning nor `SharedMem`-capturing callbacks fit the pinned real API | `spike/README.md`; `spike/probe_state_returning_callback_rejected.ail`; `spike/probe_sharedmem_callback_rejected.ail` |
 | Latest upstream does not close the streaming-capture gap | AILANG MCP `ailang_versions` reports v0.30.0 latest; release `std/ai.ail:330-337` at `e37b370d1d7a9c4e7136b319e38bec4d5f2bd9a0` retains `on_chunk: (StreamChunk) -> () ! {IO}` and returns only `Result[StepResult, AIError]`; both negative probes reproduce under the checksum-verified v0.30.0 compiler |
@@ -137,6 +181,15 @@ Load-bearing current-source anchors:
 | The extension ABI exposes function-valued `ExtPorts`, while reached hooks may perform broad effects | `packages/motoko-ext-abi/types.ail:62-66,151-164` |
 | Effectful extensions can bypass `ExtCtx.ports` | `packages/motoko_scratchpad/scratchpad.ail:90-101`; `packages/motoko-ext-mcp/exec.ail:165-170` |
 | Core provider retry policy is count/budget based | `src/core/recovery.ail:12-18` |
+
+**Known stale source comment.** `src/core/test/stub_step.ail:170-171` still states that `dispatch_step`
+"Returns both the step result and the updated provider (tail of script for `Scripted`)" and that
+"Loop callers thread `next_provider`" — the pre-`89a1d67` signature, which that commit deleted. The
+same comment block contradicts itself twenty lines later at `:189-190` ("There is no `next_provider`
+to return"). The premise the row above grounds is unaffected — both closures fire `on_chunk` serially
+— but the stale half must be deleted as a source fix, and this ADR's anchors into that file
+re-grounded in the same change. Recorded here rather than silently repaired, because moving source
+under this ADR is the specific pattern that produced the stale anchors above.
 
 ## Decision
 
@@ -161,6 +214,38 @@ hide the program cursor or clock in `SharedMem`, process-global mutation, an amb
 mutable test singleton: those would reintroduce order dependence and make parallel test processes
 unsafe. The clock is no exception and gets no exemption: per D4 the explicit value in `world_state`
 is the only clock, and no runtime clock participates in a deterministic run.
+
+**`world_state` owns every replay and generator cursor, and it is the only owner.** An earlier
+revision of this decision listed only the hiding places above, which left an already-threaded cursor
+unaddressed — and Motoko has one: `StepProvider` carries the remaining `Scripted` script in its ADT
+payload. Both available arrangements satisfy the letter of "returns the next state explicitly", and
+the vertical spike proved they are not equivalent. Placing the provider inside the world adapter —
+`LiveWorld(StepProvider)`, the natural reading of *"a live world delegates requests to evolved
+production adapters"* below — type-checked, kept the type-check gate fully green, and silently
+failed 6 of 18 scenarios by freezing the script cursor so every step replayed step 0. The
+implementation plan therefore retires `C2LoopState.provider` rather than leaving two homes for the
+same fact.
+
+**"The only owner" is the end-state invariant, and the interim home is named rather than left to an
+implementer.** `world_state` does not exist yet, while the F6 cursor defect is live today and is
+sequenced ahead of it (Implementation Handoff item 2). Between now and the migration the scripted
+cursor lives in **one explicit field on `C2LoopState`, threaded by the driver** — not in a
+closure captured inside a `Ports` value, not in a provider ADT payload, and not re-derived from
+message history. That interim field is subsumed by `world_state` when it lands and is deleted in the
+same change. The prohibition that matters throughout is the one this decision opens with: exactly one
+home, visibly threaded. An interim explicit field satisfies it; a second closure-captured cursor
+alongside `world_state` would not.
+
+**Deriving a replay position from mutable message history is prohibited by name.** It is not merely
+one more hiding place; it is the arrangement that currently executes, and compaction mutates the
+history it reads. The only scripted provider the DST actually runs
+(`scripted_ports_from_steps`) re-derives its index from `assistant_count` on every call, while both
+implementations that thread a cursor explicitly are disconnected from the driver. Under a folding
+compactor that derived index **pins** rather than rewinds: the payload's assistant count stops at the
+compaction floor while real history keeps growing, the same step is served forever, and the run dies
+of budget exhaustion in a way indistinguishable from an ordinary result. That is a confirmed defect
+in the harness today (F6), and it is the concrete reason this sentence is normative rather than
+stylistic. D2's seeded generation of longer programs is what makes it reachable.
 
 A request may yield ordered intermediate emissions before its final response. Provider stream
 chunks are the current case. The provider exchange result must contain a lossless ordered emission
@@ -204,7 +289,38 @@ current live UX semantics.
 Before this ADR is accepted, the upstream recorded-stream API must be pinned and a direct positive
 version of the spike must prove immediate projection, exact returned-log parity, success,
 partial-stream-then-error, and no duplicate delivery. Until then, complete streaming trace parity
-is blocked and production migration must not begin.
+is blocked.
+
+**That gate blocks streaming trace parity. It does not block the port widening, and an earlier
+revision of this clause wrongly implied that it did** by adding "and production migration must not
+begin" without qualification. A planner reading D1 top to bottom sequenced: wait for upstream →
+adopt the new API → replace `Ports` later. That ordering is a trap. `Ports.model_step` returns
+`Result[StepResult, AIError]`, which structurally cannot carry an emission log, and
+`ported_provider` funnels **every** provider through it before the loop starts — so adopting the
+upstream API without widening the port first changes nothing observable, and guarantees an empty
+emission log through the adoption step and most of the migration. The widening has no upstream
+dependency: the field can be widened today with `emissions: []` at every construction site, and the
+change is independently testable against `Scripted` providers with no provider access at all.
+
+The ordering rule is: **widen the port before adopting whatever fills it**, since the port is where
+the information is thrown away. **The rule is scoped to ports with a demonstrated loss channel, and
+today that is exactly one field.** An earlier revision justified it as general "because every `Ports`
+field is a lossy crossing of the same kind." That is not established. `model_step` takes a multi-fire
+`(StreamChunk) -> () ! {IO}` callback whose values the returning closure discards
+(`src/core/test/stub_step.ail:148-154`) while returning only `Result[StepResult, AIError]` — a
+concrete, demonstrated loss. `approval_read` is a synchronous `ApprovalRequest -> ApprovalResolution`
+and `clock_now` is a point read `() -> int`; neither has an intermediate channel through which a
+value could be silently dropped, and this decision's own bullets below preserve both result types
+unchanged. Generalizing to them would mandate widenings this ADR neither names nor justifies. The
+stringly `tool_exec` also needs widening, but for a separately named reason — a typed
+`ToolCallEnvelope` and deadline contract, below — not because of a discarded emission channel.
+Extending the rule to a further field requires identifying that field's loss channel and its richer
+producer contract first.
+
+Doing the provider case first shrinks the upstream dependency's blast radius to a
+single closure in `live_ports`, which is the strongest de-risking available on this gate. What
+remains blocked until the API lands is the content of that one closure and the parity proof that
+depends on it — not the migration.
 
 `world_state` is more than a cursor. It contains the virtual clock, generator/replay state,
 synthetic environment and runtime-random stream, and any logical resource state promised by the
@@ -227,7 +343,10 @@ The existing `src/core/ports.ail` record is the migration root and live-adapter 
 function-valued shape is not itself the final world protocol. In particular:
 
 - the provider exchange wraps the existing typed `Result[StepResult, AIError]` with its ordered
-  intermediate-emission log;
+  intermediate-emission log. **The site is `Ports.model_step`**, named here as concretely as
+  `tool_exec` is named below, because this is an edit to a record that exists today and not only a
+  property of the future world protocol. The emission log is a property of the **port**; the
+  upstream API and the world protocol are both consumers of it;
 - the tool contract must carry a typed `ToolCallEnvelope`, timeout/deadline information, and a typed
   result/error rather than `tool_exec(string, string) -> string`;
 - approval remains a typed `ApprovalResolution`; and
@@ -474,10 +593,52 @@ incrementally.** With no runtime virtualization there is no interval in which a 
 `std/clock.now` read is merely unrecorded-but-deterministic — such a read is nondeterministic, so it
 is a hermeticity failure like any other unrouted ambient effect, and it is caught by the same D5
 mechanisms rather than by a clock-specific one. Two detectors apply, and they are different in kind:
-the **source and ABI routing audit** locates such reads precisely and is the one a profile depends
+the **source and ABI routing audit** enumerates such reads — conservatively and with over-approximate
+bias, per D5 — and is the one a profile depends
 on; **withholding the `Clock` capability** from a deterministic run is a coarse fail-closed backstop
-that stops the run rather than returning a typed result, so it is a build-and-profile-level gate,
-not an in-execution one.
+that stops the run rather than returning a typed result.
+
+That backstop is a **run-time** check, and an earlier revision of this decision described it as
+"a build-and-profile-level gate, not an in-execution one". It is neither. `{Clock}` stays in the
+effect row and AILANG fails only when a read is actually *performed*: a function whose row contains
+`{Clock}` but whose taken branch never calls `now()` runs to completion with the capability
+withheld. Verified against the real driver — the deterministic entry point completes with `Clock`
+withheld while the live world on the same driver dies with `effect 'Clock' requires capability, but
+none provided`.
+
+The correction cuts both ways and both halves matter to a profile. The backstop is **stronger** than
+previously assumed, because it catches unrouted reads on the paths a run actually takes rather than
+merely declared ones. It is also **weaker**, because it says nothing about reachable paths a given
+run did not exercise, so it cannot on its own discharge the all-or-nothing routing requirement
+above. The source/ABI audit remains the primary detector; this is a per-run backstop.
+
+**The profile-reachable clock set is larger than earlier revisions assumed, and most of it is not in
+the core.** The count at HEAD `99749c7d` on pinned v0.26.0 is **13 distinct call sites, not 4**:
+
+| Location | Sites | Routed at HEAD |
+|---|---|---|
+| `src/core/session.ail` driver (`791`, `842`, `1991`, `2089`) | 4 | no |
+| `src/core/ext/runtime.ail` `test_dummy` hook (`190`) | 1 | no |
+| `packages/motoko-ext-compose` (`compose` 6, `author_tools` 1, `authoring/dispatcher` 1) | 8 | no |
+
+**Nothing is routed at HEAD.** An earlier revision of this table reported 14 sites, added a separate
+`conversation_loop_v2` row, and said "only the first row is routed" — all three were measured on the
+spike's surgically-modified driver and imported into this ADR as HEAD state. Corrected: the driver
+has exactly four `now()` sites (`now` has a single binding, `import std/clock (now)` at `session.ail:30`,
+so no alias hides a fifth); `conversation_loop_v2` performs no read of its own; and the path the
+fifth row was reaching for is real but is not a distinct site — `run_v2_with_conversation` calls
+`derive_session_id`, whose fallback branch is the already-counted `:791`. The spike demonstrated
+that the four driver sites *can* be routed on a throwaway branch; that surgery is not at HEAD and is
+not gate evidence.
+
+The eight `compose` reads are reachable under the *default* profile, not an exotic one:
+`handle_compose_tool` is the `on_tool_handle` hook, so any session in which the model calls `Compose`
+performs them. Counting the `test_dummy` hook, nine of the thirteen sit behind an extension hook
+rather than in the driver. The seam that would route them already exists — `ExtPorts.clock_now` in
+`packages/motoko-ext-abi/types.ail` — and it has **zero call sites repo-wide**, so it has never been
+exercised and may not survive first contact unchanged. Routing the clock is therefore not a
+core-only task, and the implementation plan must budget the extension-side work and its version
+surfaces rather than discovering them inside Track 1.
 
 Because no real sleeping occurs, modeled time is free: a program that advances the clock past a
 thirty-second deadline costs no wall-clock time, where the mirrored design would have blocked for
@@ -580,11 +741,46 @@ Capability flags are necessary but not sufficient because broad `IO` can permit 
 hermeticity gate therefore combines:
 
 - the narrowest executable capabilities, with generation and reporting separated where practical;
-- a source/ABI routing audit for direct ambient calls in every in-profile module;
+- a source/ABI routing audit for direct ambient calls in every in-profile module, subject to the
+  structural-first rule below;
+- a profile-reachable clock audit that includes extension packages: a profile installing `compose`
+  cannot claim conformance until its eight clock reads route through `ExtPorts.clock_now` (D4);
 - poison/negative probes for provider, tool, approval, environment, clock, random, and reached
   extension-effect bypasses; and
 - profile-definition validation and runtime routing that fail closed when an unclassified
   extension, hook, or adapter is loaded or reached.
+
+**The routing audit is structural first and inventory second, and neither is a reachability
+analysis.** An earlier revision required the audit to be "reachability-aware, not textual." That
+named a property rather than a buildable analysis, and this repo cannot answer the question it
+implies: `tools/code-graph` emits function-to-function edges only
+(`INVOKE_FIELDS = ["from_slug", "to_slug", "resolution", "approximate"]`), its parser is regex-based
+and self-described as a source-parsed approximation, `ctors.csv` indexes constructor *declarations*
+rather than constructor flow, and its default `core` profile excludes `src/core/test/**` — the very
+directory holding `dispatch_step`, `live_ports`, and `scripted_ports_from_steps`, which are
+production-executed despite the path. "Can any reachable caller produce the variant this match arm
+consumes" is unanswerable from those tables. The requirement is replaced by three ordered
+obligations:
+
+1. **Prefer making the defect unrepresentable.** Where a seam admits a dead dispatch arm, narrow the
+   type instead of auditing the arm. This is the fix that actually resolved the motivating instance:
+   `89a1d67` retyped `C2LoopState.provider` from `StepProvider` to `Ports` and deleted the
+   unreachable `LiveAI`/`Scripted` branches, converting a runtime invariant into a compile-time fact
+   strictly stronger than any audit this gate could run. A profile may not cite an audit where
+   narrowing was available and declined.
+2. **For the residual ambient-effect inventory, use a conservatively over-approximate function-level
+   audit** whose profile scope explicitly includes production code under `src/core/test/**`, with
+   fail-closed manual triage of its false positives. Over-approximation is the correct bias here:
+   an inventory that reports more possible ambient calls than exist forces routing work, which fails
+   closed. This is a different use than the one that failed in F2 — there a textual scan was asked
+   *which seam is live*, a question over-approximation answers wrongly, and it certified
+   `std/ai.stepWithStream` as the live provider seam when the only hit was an unreachable ADT branch
+   (the same was true of `tools_with_extensions(rt)` and `system_prompt_cache_breakpoint()`).
+   Architecture discovery and hermeticity inventory are not the same detector and must not share a
+   justification.
+3. **If constructor-level reachability is ever genuinely required**, specify the analysis, its
+   soundness boundary, its profile roots, and its fail-closed behavior *before* naming it as
+   name-adoption gate evidence. Nothing in this ADR currently requires it.
 
 Test-only code may:
 
@@ -623,7 +819,19 @@ HarnessFailure {
 The exact representation may reuse existing types, but the contract is:
 
 1. Every `SystemRun`, whether successful or failed, has exactly one canonical `RunSummary` record in
-   `ledger_trace`; it is the final record for the established run.
+   `ledger_trace`; it is the final record for the established run. **The starting count at HEAD is
+   zero on every terminal path, not one on some.** Every terminal summary routes through
+   `emit_run_summary` (`src/core/session.ail:833`, five call sites at `1325`, `1554`, `1704`, `1711`,
+   `1762`, of which `1325` is a shared error-return helper reached from several terminal paths), and
+   that function's only ledger operation is `ledger_emit` — which is an effectful *projection*,
+   `-> () ! {IO, Trace}` at `src/core/session.ail:290`, not an append. The pure function that builds
+   the returned trace is `ledger_append` (`src/core/phase_vocab.ail:557`), and no terminal path calls
+   it with a `RunSummary`. The returned `LedgerTrace` therefore contains no `RunSummary` on any path.
+   That is the exact case item 4 warns about, true of the entire driver
+   today rather than of a hypothetical future event. The spike confirmed the requirement is
+   reachable without restructuring the driver — routing all seven through one finalization point that
+   emits the projection *and* appends the same record was sufficient — but the plan should treat this
+   as unimplemented everywhere rather than partially satisfied.
 2. A typed internal termination reason maps exhaustively to the wire `finish_reason`. Success,
    budget exhaustion, maximum steps, compaction exhaustion, provider failure, unrecovered tool
    failure, invalid history, and internal driver failure are distinguishable. The implementation
@@ -675,7 +883,19 @@ mention it. One artifact binds, for every `LedgerEvent` variant:
 
 At HEAD the vocabulary has 34 variants whose wire names live in trailing source comments rather
 than in a type, and whose consumer is a `switch` in a separate TypeScript process. That is a mapping
-which can drift silently, and once the returned trace is the oracle it must not. The artifact is
+which can drift silently, and once the returned trace is the oracle it must not.
+
+**This is new construction, and nothing in the repo is a partial implementation of it.** The one
+naming function that exists — `src/core/phase_vocab.ail:561 ledger_record_name` — names **3 of the
+34** variants and collapses the other 31 to the literal string `"wire"`. It is not a seed that can be
+grown into the artifact; it is a different thing that happens to share a subject. The vertical spike
+found this the hard way: its check that the `RunSummary` is the final record in the returned trace
+could not be written against `ledger_record_name` and needed a bespoke matcher. The implementation
+plan must therefore schedule the artifact as construction with a fail-closed validator, and **must
+not schedule any D7 parity invariant or acceptance row that depends on the logical/display-only
+classification before the artifact exists** — those checks are undecidable until it does.
+
+The artifact is
 validated at load and **fails closed on an unclassified variant**, so a new event cannot enter the
 ledger without declaring which side of the logical/display-only line it falls on. The preferred form
 derives the wire name from the type, making drift a compile error rather than a runtime surprise;
@@ -931,12 +1151,22 @@ Costs and risks:
 
 - Threading world state touches session recursion, provider dispatch, tool/approval phases, and
   traced entry points.
-- Complete returned streaming traces depend on an upstream recorded-stream API that neither pinned
-  AILANG v0.26.0 nor latest-checked v0.30.0 provides; this external prerequisite blocks production
-  migration.
+- Complete returned streaming traces depend on an upstream recorded-stream API that no released
+  AILANG through v0.31.0 provides. That prerequisite blocks streaming trace parity; it does **not**
+  block the `Ports.model_step` widening, which must precede it (D1).
 - The typed tool/deadline boundary replaces the current stringly `Ports.tool_exec` seam.
 - Effectful extension coverage may require an extension-ABI major and lockstep package rollout;
   until then those extensions remain outside the baseline profile.
+- **Repinning the toolchain forces an extension-ABI major on its own, for a reason unrelated to
+  extension coverage.** Measured v0.26.0 → v0.31.0: 381 effect-row edits across 71 files, of which
+  three change `packages/motoko-ext-abi/types.ail` — `ExtPorts.ai_step` gains `Trace` (its declared
+  row was simply wrong), and all four `ExtensionHooks` rows gain `Rand` and `Trace`. Since that file
+  states bumping `ExtensionHooks` is a major version, the repin forces an ABI major **and a
+  coordinated re-release of every extension package**. This is a scheduling fact independent of what
+  upstream does about the recorded-stream API, and D1 requires the repin, so it is on the critical
+  path and must be sequenced rather than discovered mid-migration. Two latent under-declarations
+  that v0.26.0 accepted surface as hard errors at the same time: `agents_md.walk_agents` performs
+  `FS` undeclared, and `motoko_ext_omnigraph.register_with_config` performs `Process` undeclared.
 - The trace contract changes error handling and may expose terminal cases currently visible only in
   logs.
 - A typed program schema, request matchers, interaction log, and compatibility policy become
@@ -956,14 +1186,35 @@ Costs and risks:
 ## Implementation handoff
 
 The checked spike in `spike/` is complete and negative against pinned AILANG v0.26.0, and its two
-load-bearing negative compiler results reproduce on latest-checked AILANG v0.30.0. Before
-acceptance, the upstream recorded-stream API selected by D1 must land, the toolchain must be
+load-bearing negative compiler results reproduce on latest-checked AILANG v0.30.0 and v0.31.0.
+Before acceptance, the upstream recorded-stream API selected by D1 must land, the toolchain must be
 repinned to a version containing it, and the direct positive integration probe must pass. This
-prerequisite may change the AILANG dependency and spike artifacts, but it must not begin the Motoko
-production migration or silently select the forbidden delayed-projection fallback.
+prerequisite may change the AILANG dependency and spike artifacts, and it must not silently select
+the forbidden delayed-projection fallback.
 
-After that upstream gate passes and this ADR and the project-007 taxonomy ADR are accepted, a fresh
-session should survey every effect call site and write the implementation plan. It must re-verify:
+**Work that does not wait for that gate.** An earlier revision of this section read as though the
+whole migration queued behind the upstream API. Three items have no upstream dependency and should
+be sequenced first, because two of them change what the migration costs and one is a live defect:
+
+1. **Widen `Ports.model_step`** (D1, F2). Behaviour-preserving with `emissions: []` at every
+   construction site, testable entirely against `Scripted` providers, and it shrinks the eventual
+   adoption to one closure in `live_ports`.
+2. **Fix the scripted cursor** (D1, F6). It rides on item 1: once `model_step` returns a record it can
+   return next-state too. `ScriptedPortsState` already models a threaded cursor and is unit-tested
+   but never wired in. `scripts/dst/spike_scripted_cursor_probe.ail` is the executable statement of
+   the defect and becomes a passing regression test when fixed. Per D1, the returned successor goes
+   in **one explicit `C2LoopState` field** until `world_state` subsumes it; do not park it in a
+   closure inside the `Ports` value.
+3. **Sequence the repin as its own milestone**, budgeting the extension-ABI major it forces
+   (Consequences). It is on the critical path because D1 requires it.
+
+A fresh, source-grounded session writes the implementation plan once this ADR and the project-007
+taxonomy ADR are accepted; the plan does not wait on the upstream release either, since only the
+content of one closure and the parity proof depend on it. **Cite the spike's measurements rather
+than re-estimating them** — M1 (the `Message` migration: 14 minutes, 28 files, 69 additive sites,
+and 7 sites needing genuine judgement that a grep-derived estimate misses entirely) and M2 (the
+repin) are in `NOTE-spike-findings-real-driver-vertical.md`. The plan must survey every effect call
+site and re-verify:
 
 - the direct positive D1 streaming-capture evidence and the recorded-stream API's ABI/runtime
   impact;
@@ -1011,6 +1262,43 @@ at commit `e37b370d1d7a9c4e7136b319e38bec4d5f2bd9a0`. The authoritative result i
 - AILANG's v0.30.0 IO-only streaming example checks and runs under `--ai-stub`.
 
 Ruling: no ADR decision changes. The D1 acceptance blocker is current through AILANG v0.30.0.
+
+## Upstream recorded-stream API status
+
+Date: 2026-08-01. Tracking issue:
+[`sunholo-data/ailang#546`](https://github.com/sunholo-data/ailang/issues/546) (open, `enhancement`).
+
+Released v0.31.0 (`1f6f7dd28`) still exports no recorded-stream API, so the D1 substrate gate is
+**not cleared**. What changed is that the gate stopped being a design question.
+
+Upstream triaged the request on 2026-07-31 and reviewed it the same day. It reproduced the
+constraint first-party at HEAD `130ad1da2` — an `{IO}` rendering callback type-checks; an `{FS}`
+callback appending each chunk to a file fails with `incompatible closed rows` — and independently
+confirmed this ADR's finding. Its verdict was to **adopt this project's reference implementation
+rather than reinvent it**: the patch applies clean, is purely additive (+452 lines, 5 files, 0
+deletions), its tests pass, and the surrounding suite stays green. The
+`{chunks: [StreamChunk], outcome: Result[StepResult, AIError]}` shape was judged correct for the
+reason the request gave — a `Result[{result, chunks}, err]` discards every chunk observed before a
+mid-stream failure, which is the case replay depends on most. A design doc has landed upstream
+(`design_docs/planned/v0_31_0/m-recorded-stream-api.md`) at P0, and authorship is to be credited.
+
+The work is **parked** on one scope question that is explicitly *not* about direction: whether the
+fail-loud path's unbounded drain requires adding cancellation to the provider interface. This
+project's answer, filed 2026-08-01, is recorded in `REPLY-546-park-unbounded-drain.md`.
+
+**Two facts from that exchange are load-bearing for this ADR:**
+
+1. **None of the parked options changes the `{chunks, outcome}` type.** The shape survived two
+   quorum rounds and the park concerns drain semantics beneath it. The API's shape may therefore be
+   designed against now, and the adapter seam this ADR requires can be typed before the release
+   exists.
+2. **No date was promised**, and upstream explicitly advised keeping this project blocked rather than
+   waiting. Combined with F2 — that adoption changes nothing observable until `Ports.model_step` is
+   widened — the correct response is to proceed with the upstream-independent work rather than to
+   idle. D1 and the implementation handoff are revised accordingly.
+
+Ruling: no decision changes; the blocker narrows from "an API must be designed and land" to "a
+released binary must ship an API whose shape is already agreed."
 
 ## Author self-review record
 
@@ -1982,3 +2270,982 @@ repinned. Clearing that blocker belongs upstream and is not claimed by this revi
 ## Accept / revise recommendation
 
 **Revise.** D1 is threadable and the streaming/sequential architecture is sound, but R1 makes D4 and one gate row false, R2/R5/R7 leave required evidence non-mechanical, and R3/R4/R6/R8–R11 require bounded architectural corrections; the unlanded recorded-stream API remains a separate external blocker that this review does not clear.
+
+## Review Comments
+
+_Reviewer: Claude (model: `claude-sonnet-5`), 2026-08-01. Third independent review — verification of
+the F1–F6 disposition revision, per
+`HANDOFF-review-adr-001-f1-f6-revision.md`. This round adjudicates nothing; it verifies the
+authoring side's own disposition of F1–F6._
+
+_Revision reviewed: the working-tree ADR at HEAD `99749c7d29d013adac9e252c982d297ace984ba8`
+(branch `arniwesth/mot-44-motoko_dst_execution_primer`), i.e. the F1–F6 revision as staged, unmerged.
+Toolchain executed: pinned AILANG v0.26.0 (`3b52a24d24431c372ed5605289ef039592209514`, built
+2026-08-01). No upstream or forked toolchain was used; every claim below was checked against the
+pinned toolchain and HEAD source only. `git diff --stat 7b9b4a4c..HEAD -- src packages scripts
+Makefile .github` was re-run rather than inherited (see anchor ruling below)._
+
+### R1. D5's "reachability-aware, not textual" routing-audit requirement is not shown to be buildable, and the repo's own call-graph tool demonstrates the opposite on the exact case that motivated it
+
+**Defect:** ADR:677-684 requires the hermeticity gate's source/ABI routing audit to be
+"reachability-aware, not textual," grounded in F2's finding that a textual audit certifies
+`dispatch_step`'s dead `stepWithStream` branch as live. The only reachability infrastructure in this
+repo — `tools/code-graph` — does not support the granularity this requirement needs, and in its
+default configuration cannot even see the file the defect lived in.
+
+**Grounding:**
+
+```text
+$ python3 tools/code-graph/query/cgq.py q callers dispatch_step      # default `core` profile
+{"data": [], ..., "rows_returned": 0}
+```
+
+`dispatch_step` is defined in `src/core/test/stub_step.ail`, and `tools/code-graph/README.md:29-31`
+states the default `core` profile excludes `src/core/test/**` — exactly the directory where
+`dispatch_step`, `scripted_ports_from_steps`, and `live_ports` live, despite that code being
+production-executed (it is not test code by function, only by path). Re-extracting with
+`--include-tests` makes the function visible:
+
+```text
+$ tools/code-graph/extract.sh --include-tests
+$ python3 tools/code-graph/query/cgq.py q callers dispatch_step
+{"data": [{"caller": "src/core/session#c2_loop", "distance": 1}, ... 27 rows], "rows_returned": 27}
+```
+
+but this only proves the tool can answer *function-level* reachability, and at HEAD `dispatch_step`
+now has exactly one match arm (`89a1d67` deleted the other two), so the branch-level question F2
+actually turned on — "is this specific ADT arm of a reachable function reachable" — is no longer
+even askable against current source, and the tool has no mechanism for it in general: `invokes.csv`
+records function calls, not which constructor of a multi-arm `match` a given caller can produce.
+Confirming this isn't a fixable configuration slip: the concrete fix applied to this exact instance
+(`89a1d67`, "Make the invariant structural instead of conventional") did not add an audit at all — it
+retyped `C2LoopState.provider` from `StepProvider` to `Ports` and deleted the dead arms, turning a
+runtime/audit-time invariant into a compile-time fact. The ADR's D5 change doesn't mention that this
+is the pattern that actually worked here, and doesn't name what would make "reachability-aware"
+implementable for the cases where narrowing isn't available (e.g. `ExtPorts`/`ExtensionHooks`, which
+stay broad by ABI necessity).
+
+**Action:** Either narrow D5 to what's demonstrated — prefer type-narrowing/structural invariants
+over auditing wherever the dead-arm pattern recurs, reserving "reachability-aware audit" for the
+genuinely audit-shaped part of the gate (unrouted ambient effects, not ADT dispatch dead code) — or
+specify the analysis precisely enough to be buildable (branch/constructor-level, not function-level;
+a profile scope that cannot silently exclude load-bearing code under `src/core/test/**`) before this
+becomes a name-adoption gate requirement.
+
+### R2. F4's "14, not 4" recount does not hold at HEAD on the pinned toolchain
+
+**Defect:** D4 (ADR:557-563) and the D5 hermeticity bullet (ADR:685-686) both cite a
+profile-reachable clock count of 14, broken down as 4 (`session.ail` driver) + 1
+(`conversation_loop_v2`, "above the traced entry") + 1 (`ext/runtime.ail` `test_dummy`) + 8
+(`motoko-ext-compose` family). Verified at HEAD on pinned v0.26.0: `session.ail` contains exactly
+four `now()` call sites total, not five, and none of them is attributable to a fifth,
+`conversation_loop_v2`-specific read.
+
+**Grounding:**
+
+```text
+$ grep -n "now()" src/core/session.ail
+791:  else "session_${show(now())}"
+842:  let now_ms = now();
+1991:  let started_at_ms = now();
+2089:  let started_at_ms = now();
+$ grep -n "^import" src/core/session.ail | grep clock
+30:import std/clock (now)
+```
+
+`now` has exactly one binding (line 30), so no alias hides a fifth call. `conversation_loop_v2` is
+defined at `session.ail:2251-2269`; its body calls only `ported_provider` and
+`conversation_loop_v2_with_policy` and contains no `now()` call of its own.
+`git show 89a1d67 -- src/core/session.ail | grep -- '-.*now\|-.*Clock'` shows no removed
+`now()`/`Clock` line, so the missing fifth read is not a casualty of WI-C13c; it traces to the
+spike's modified driver (which "carries the throwaway driver surgery," per
+`NOTE-spike-findings-real-driver-vertical.md:8-13`), not to mainline `session.ail`. The other two
+rows check out exactly: `ext/runtime.ail:190` is the sole hit, and `motoko-ext-compose` totals 8
+(`compose.ail` 6 at lines 362,503,597,651,681,767; `author_tools.ail:101`; `authoring/dispatcher.ail:217`).
+True total at HEAD: **13, not 14.**
+
+**Action:** Correct the table to 13 (or locate and cite an actual fifth session-adjacent read if one
+exists in the profile-reachable set, rather than `conversation_loop_v2`, which has none). The
+qualitative conclusion — far above 4, extension-dominated — is unaffected, but this number is now
+written into two decisions (D4, D5) in their second revision and should not carry an unverified
+figure forward a third time.
+
+### R3. One of the two Context anchor rows marked "re-grounded 2026-08-01" contains an arithmetic error introduced by this revision
+
+**Defect:** ADR:147 grounds the `RunSummary`-bypass premise at "`src/core/session.ail:1554-1555`,
+and the **other six** `emit_run_summary` calls at `1325`, `1704`, `1711`, `1762`" — four line
+numbers, labeled six. Three hundred lines later in the same revision, D6.1 (ADR:731) correctly states
+"five call sites at `1325`, `1554`, `1704`, `1711`, `1762`" — i.e. four others besides 1554, matching
+the four numbers actually listed at line 147, not six.
+
+**Grounding:**
+
+```text
+$ grep -n "emit_run_summary(" src/core/session.ail
+1325:  let _ = emit_run_summary(...)
+1554:          let _ = emit_run_summary(...)
+1704:              let _ = emit_run_summary(...)
+1711:              let _ = emit_run_summary(...)
+1762:                    let _ = emit_run_summary(...)
+```
+
+Five sites, confirmed independently. Both the count at line 147 ("six") and the count at line 731
+("five call sites") were edited in this same revision pass (both are new text per the diff against
+the pre-revision ADR); one is right and one is wrong.
+
+**Action:** Change "six" to "four" at ADR:147 (or restate the row as "five call sites total," without
+a subtracted count, to remove the off-by-two arithmetic entirely). More significant than the typo
+itself: this is the second miscount surviving in this revision's freshly re-verified numbers (with
+R2), both introduced during the very re-grounding pass meant to fix stale ones. Treat "re-grounded
+2026-08-01" as a claim to re-verify, not a warrant — it does not yet mean what its label implies.
+
+### R4. D1's generalized port-widening rule is stated as fact but demonstrated for only one of the three ports it's applied to
+
+**Defect:** ADR:260-262 asserts the ordering rule — widen the port before adopting whatever fills it
+— is general "because every `Ports` field is a lossy crossing of the same kind." The source note this
+draws from (`NOTE-spike-findings-real-driver-vertical.md:219-224`) names `approval_read` and
+`clock_now` as instances but hedges: "narrow enough that the loss is invisible today." The ADR drops
+that hedge and states the rule as established fact. `model_step`'s lossiness is directly demonstrated
+— it takes a multi-fire `on_chunk` callback whose values are discarded one layer above `std/ai`
+before the call returns (`stub_step.ail:148-155`, cited at ADR:85). `approval_read` and `clock_now`
+have no comparable channel:
+
+**Grounding:** `src/core/ports.ail:17-24`:
+
+```ailang
+export type Ports = {
+  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
+  approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
+  clock_now: () -> int ! {Clock},
+  ...
+}
+```
+
+`approval_read` is a plain synchronous request/response; `clock_now` is a plain point-read. Neither
+has a callback parameter or any other channel through which an intermediate value could be silently
+dropped the way `model_step`'s stream chunks are. No loss analogous to F2's has been observed or
+argued for either field — the generalization is asserted, not shown.
+
+**Action:** Scope the rule to ports with a callback/emission channel (currently only `model_step`),
+or, if the concern is that a future richer `ApprovalResolution`/`clock_now` could lose timing or
+channel metadata, say what would need to be true to establish that for those two fields specifically,
+rather than inheriting the conclusion from one unrelated instance.
+
+### R5. D1 states `world_state` is the cursor's sole owner as an absolute, but the sequenced near-term F6 fix necessarily places the cursor somewhere else first, and the ADR doesn't reconcile the two
+
+**Defect:** ADR:183-192 states "`world_state` owns every replay and generator cursor, and it is the
+only owner," and separately that "the implementation plan therefore retires `C2LoopState.provider`."
+Implementation Handoff item 2 (ADR:1109-1112) sequences the F6 fix — wiring `ScriptedPortsState`'s
+already-tested threaded cursor into the scripted provider — ahead of, and independent of,
+`world_state`, which does not exist yet and is the rest of the D1 migration. Wiring a threaded cursor
+before `world_state` exists means it has to live somewhere in the interim — most plausibly an
+explicit field alongside `provider: Ports` on `C2LoopState` — which the ADR's own absolute wording
+does not sanction. An implementer who takes "the only owner" literally has nowhere ADR-approved to
+put the interim state; one who doesn't risks recreating a second home for the same fact, the pattern
+F1 was written to rule out, just with a different pair of homes (`Ports`-closure state vs. an
+explicit sibling field).
+
+**Grounding:** `C2LoopState.provider: Ports` at `src/core/session.ail:344` (confirmed retyped by
+`89a1d67`, not `StepProvider`); `ScriptedPortsState` is defined and unit-tested in
+`src/core/test/scripted_ports.ail` but is not a field of `C2LoopState` today, so item 2 as written
+requires adding one.
+
+**Action:** Add one sentence to D1 or to Implementation Handoff item 2 naming the interim home for
+the cursor (e.g., "a new explicit field on `C2LoopState`, not a second closure-captured cursor, until
+`world_state` subsumes it"), so "the only owner" reads as the end-state invariant it's meant to be
+rather than a constraint the very next action item can't literally satisfy.
+
+## What is accurate
+
+**F1 (cursor ownership) — resolved for the concrete defect, with the R5 gap.** The prohibition on
+deriving replay position from mutable history (ADR:194-203) is stated by name and matches a
+confirmed-still-live defect: `scripted_ports_from_steps` (`src/core/test/stub_step.ail:157-168`)
+still derives its index from `assistant_count(msgs) - base_assistant_count` over the compacted
+payload, unchanged by `89a1d67`. An implementer following the ADR could not repeat F1's specific
+`LiveWorld(StepProvider)` mistake, since that arrangement is now named and excluded. The "sole
+owner" framing has the R5 gap for the period before `world_state` exists.
+
+**F2 (port-widening ordering) — resolved, and stronger at HEAD than the text argues.** Re-derived
+independently: `Ports.model_step` returns `Result[StepResult, AIError] ! {AI, IO, Trace}`
+(`stub_step.ail:149`, `dispatch_step` at `192-199`), structurally incapable of carrying an emission
+log. `ported_provider` (`session.ail:695-701`) is invoked at all six current entry-point call sites
+(`2015, 2051, 2114, 2137, 2267, 2295`) before any loop starts, exactly as claimed. Since `89a1d67`
+this is actually stronger than the ADR states: `C2LoopState.provider` is now typed `Ports` directly,
+not `StepProvider`, so the funnel is a compile-time guarantee rather than merely a checkable runtime
+invariant — the ADR still argues the weaker, pre-`89a1d67` case. The generalization of this to every
+`Ports` field is not equally supported (R4).
+
+**F3 (the Clock backstop is a runtime, not build-time, check) — confirmed by direct, independent
+reproduction on the pinned toolchain**, not merely re-read:
+
+```text
+$ ailang run --caps IO clock_probe.ail        # {Clock,IO} row, branch not taken
+taking non-clock branch
+completed with result: 0
+$ ailang run --caps IO clock_probe2.ail       # same function, branch taken
+Error: execution failed: effect 'Clock' requires capability, but none provided
+```
+
+This matches the ADR's corrected framing exactly: the row survives declaration but fails only on
+actual invocation.
+
+**F4 (profile-reachable clock count) — does not hold as stated; see R2.** The qualitative conclusion
+(far above 4, extension-dominated) survives; the specific "14" and the `conversation_loop_v2` row do
+not.
+
+**F5 (event-vocabulary artifact is new construction) — resolved, and the added prohibition has real
+teeth, contrary to the concern that it might be inert.** `ledger_record_name`
+(`phase_vocab.ail:561-579`) names exactly 3 of the 34 `LedgerEvent` variants (counted directly off
+the type at `phase_vocab.ail:596-629`) — the 3-of-34 claim is exact. D7's parity invariant ("parity
+between all logical ledger emissions and returned trace records," ADR:821) and acceptance row 7
+("all logical ledger emissions appear in the returned trace," ADR:973) both use "logical," which is
+precisely the undefined classification F5 says doesn't exist yet — so the prohibition on scheduling
+those checks before the artifact exists is not decorative.
+
+**F6 (scripted cursor pins under folding compaction) — confirmed still live at HEAD, correctly
+sequenced, not yet fixed.** The `assistant_count`-derivation mechanism is unchanged by `89a1d67`;
+Implementation Handoff item 2 correctly treats this as open and dependent on item 1, not as already
+resolved.
+
+**The narrowed D1 blocking clause is correctly scoped and does not license starting the migration
+before this ADR is accepted.** `Ports.model_step`'s structural incapacity to carry an emission log
+(verified above under F2) supports treating the widening as behavior-preserving and
+upstream-independent, so carving it out of the streaming-parity gate is sound reasoning, not a
+loophole. Implementation Handoff's "work that does not wait for that gate" list (items 1–3,
+ADR:1102-1114) is followed immediately by the sentence tying "the plan" to "once this ADR and the
+project-007 taxonomy ADR are accepted" (ADR:1116), and the Status line still requires this
+independent review plus the unlanded upstream release. Read in isolation, the three-item list risks
+being mistaken for permission to start now — a presentational risk worth tightening — but the
+surrounding text does not actually grant that; it corrects planner sequencing within the still-gated
+eventual plan, not the acceptance gate itself.
+
+**The uncorrected Context anchors spot-checked hold.**
+`git diff --stat 7b9b4a4c..HEAD -- src packages scripts Makefile .github` was re-run rather than
+inherited and returns `Makefile` (2-line, unrelated CLI-alias change), the new
+`scripts/dst/spike_scripted_cursor_probe.ail`, `src/core/session.ail`, and
+`src/core/test/stub_step.ail` — confirming no other anchored file moved. Three rows grounded in
+untouched files were opened directly and match current source exactly: `src/core/ports.ail:17-24`
+(function-valued `Ports`, stringly `tool_exec`); `packages/motoko-ext-abi/types.ail:62-66,151-164`
+(function-valued `ExtPorts`/`ExtensionHooks` with broad rows); `src/core/tool_runtime.ail:151-165`
+(`run_native_batch_rec`, sequential recursion). The inference that unchanged-file anchors are still
+good holds on this sample — but R3 shows that of the two rows the revision *did* touch, only one was
+correctly fixed, so the inference should not be extended to the touched rows without checking each.
+
+**The two corrected Context anchors are accurate apart from R3's count.** `readLine()` at
+`session.ail:1619` and `now()` at `1991` and `2089` (ADR:146) verified present exactly as cited.
+
+**The upstream status section holds and does not overstate.** `REPLY-546-park-unbounded-drain.md:137`
+states, in the project's own posted reply, "None of (a), (b) or (c) changes the `{chunks, outcome}`
+type" — the ADR's load-bearing claim (ADR:1196) restates the project's own filed position rather than
+inferring it. The section correctly states the tracking issue is open and unmerged, and that no
+ship date was promised.
+
+**M2's checkable claims hold.** `packages/motoko-ext-abi/types.ail:7` states verbatim "Bumping
+`ExtensionHooks` is a major version of motoko-ext-abi," matching the ADR's citation exactly. One of
+the two "latent under-declaration" claims is independently reproducible at HEAD without doing the
+repin: `agents_md.ail:106`'s `walk_agents` calls `fileExists(...)` (an `FS` effect) while declaring no
+effect row at all — a real, currently-uncaught under-declaration. The 381-edits/71-files/3-widenings
+figures are correctly framed throughout as a spike measurement rather than a HEAD-verifiable
+certainty, consistent with treating M2 as a measurement to cite rather than re-run.
+
+## Recommended pre-acceptance actions
+
+In dependency order:
+
+1. Fix R2 and R3 — both are numeric corrections to tables/rows already written into D4/D5/Context,
+   no architectural change required.
+2. Resolve R4: scope "every `Ports` field is a lossy crossing" to what's demonstrated (`model_step`),
+   or gather equivalent grounding for `approval_read`/`clock_now` before generalizing the rule to
+   them.
+3. Resolve R1 before D5's reachability-aware audit is treated as a name-adoption gate requirement:
+   either specify the analysis precisely enough to be buildable (branch/constructor-level, scoped to
+   include `src/core/test/**`), or replace it with the structural (type-narrowing) approach that is
+   the one demonstrated fix for the concrete instance that motivated it.
+4. Add the one sentence R5 asks for, naming the interim home for the scripted cursor between now and
+   full `world_state` migration.
+5. Not this ADR's to clear: the upstream recorded-stream API must still land in a released binary
+   before acceptance, per the Implementation Handoff's own unmodified opening paragraph and the
+   Upstream status section's own ruling.
+
+Items 1–2 belong to this ADR directly. Item 3 is this ADR's requirement but its resolution may
+legitimately defer detail to the implementation plan, provided the plan is told which shape of
+analysis to build rather than left to infer "reachability-aware" on its own. Item 4 is a one-sentence
+ADR fix. Item 5 is external and unowned by any reviewer.
+
+## Accept / revise recommendation
+
+**Revise.** The F1, F2, F3, F5, and F6 dispositions hold up under independent re-derivation — F2's
+case is stronger at HEAD than the text argues, since `89a1d67` already made the invariant structural
+rather than conventional. F4's recount needs a numeric fix (R2), compounded by an unrelated
+arithmetic slip introduced in the same re-grounding pass (R3) — together these mean this revision's
+"re-grounded"/"measured" labels should be re-verified rather than trusted at face value even after a
+second pass. D5's new reachability-aware-audit requirement (R1) and D1's generalized port-widening
+rule (R4) are new normative claims this round introduces without adequate support and should be
+narrowed before acceptance. None of R1–R5 reopens D1's core threadability or the streaming
+architecture, and none licenses starting the migration early — the ADR's own gating text still
+requires this review plus the upstream release before any of that begins. The upstream
+recorded-stream API blocker remains open, unmerged, and is not this review's to clear.
+
+## Review Comments
+
+_Reviewer: Codex (model: `GPT-5`), 2026-08-01. Independent verification of the F1–F6 revision._
+
+_Revision reviewed: working-tree ADR blob
+`374d46fbe39ccb77b2fd4a5e71b3dabc0c70f741` before this section was appended, at HEAD
+`99749c7d29d013adac9e252c982d297ace984ba8` on branch
+`arniwesth/mot-44-motoko_dst_execution_primer`; pinned AILANG v0.26.0
+(`3b52a24d24431c372ed5605289ef039592209514`). The file already contained an uncommitted Claude
+third-review section when this session began. It was preserved verbatim, so this is necessarily the
+fourth `## Review Comments` heading rather than an overwrite of user-owned review history._
+
+### R1. D5's reachability-aware routing audit is not specified as a buildable acceptance gate
+
+**Defect:** Requiring the source/ABI audit to be “reachability-aware, not textual” makes a precise
+constructor/branch analysis normative without defining that analysis, its soundness boundary, or a
+tool capable of performing it.
+
+**Grounding:** `tools/code-graph/README.md:7-9` calls this repository's call/effect graph a
+source-parsed approximation; `:29-33` says the default `core` profile excludes
+`src/core/test/**`, although the motivating production seam lives in
+`src/core/test/stub_step.ail`. With `--include-tests` already enabled, the executed query was:
+
+```text
+$ python3 tools/code-graph/query/cgq.py q callers dispatch_step
+... "include_tests": true, "approximate": true ...
+... {"caller":"src/core/session#c2_loop","distance":1} ...
+... "rows_returned": 27 ...
+```
+
+That establishes function-level reachability only. The emitted schema is exactly
+`INVOKE_FIELDS = ["from_slug", "to_slug", "resolution", "approximate"]`
+(`tools/code-graph/extractor/emit.py:24`), and its parser finds calls with a regex
+(`tools/code-graph/extractor/source_parser.py:14,176-199`); it records neither match arm nor
+constructor flow. The actual repair for F2 instead made the invariant structural:
+`C2LoopState.provider: Ports` (`src/core/session.ail:338-356`) and
+`dispatch_step(ports: Ports, ...)` (`src/core/test/stub_step.ail:192-199`) make the deleted
+`StepProvider` arms unrepresentable. No reachability audit was built.
+
+**Action:** Make the gate enforceable in one of two ways: prefer structural type narrowing/deletion
+where the dead-arm pattern occurs and use a conservative source/ABI inventory for remaining direct
+ambient calls, or specify a sound branch/constructor-level analysis, its profile roots (including
+production code under `src/core/test/**`), and its fail-closed behavior before naming it as required
+acceptance evidence.
+
+### R2. F4's clock disposition reports both the wrong count and spike-only routing as HEAD state
+
+**Defect:** D4 says there are 14 profile-reachable reads and that the four driver reads are routed,
+but HEAD has 13 distinct direct `now()` call sites and all four core sites still call ambient
+`std/clock.now`.
+
+**Grounding:** Recounted on pinned v0.26.0 with comments excluded:
+
+```text
+$ awk '!/^[[:space:]]*--/ && /(^|[^[:alnum:]_])now\(\)/ {n++} END {print n+0}' \
+    src/core/session.ail src/core/ext/runtime.ail \
+    packages/motoko-ext-compose/compose.ail \
+    packages/motoko-ext-compose/author_tools.ail \
+    packages/motoko-ext-compose/authoring/dispatcher.ail
+13
+$ rg 'world_state|WorldState|LiveWorld|DeterministicWorld' src packages scripts --glob '*.ail' | wc -l
+0
+$ rg '\.clock_now\s*\(' src packages scripts --glob '*.ail' | wc -l
+0
+```
+
+The 13 sites are four in `src/core/session.ail:791,842,1991,2089`, one at
+`src/core/ext/runtime.ail:190`, and eight in `packages/motoko-ext-compose`
+(`compose.ail:362,503,597,651,681,767`, `author_tools.ail:101`,
+`authoring/dispatcher.ail:217`). `conversation_loop_v2` at
+`src/core/session.ail:2251-2269` contains no separate read; `run_v2_with_conversation` calls
+`derive_session_id`, which reaches the already-counted site at `:791`. The spike routed the four
+driver sites on its throwaway branch, but that surgery is not at HEAD.
+
+**Action:** Change the table to 13 and distinguish source states explicitly: HEAD routes none; the
+throwaway spike demonstrated that the four driver sites can be routed; the nine extension-side
+sites remain un-routed. Keep the independently confirmed eight-`compose` D5 obligation.
+
+### R3. D1 over-generalizes F2's port-widening rule beyond the only lossy crossing demonstrated
+
+**Defect:** “Every `Ports` field is a lossy crossing of the same kind” is false or undecidable for
+the fields to which no richer producer contract or required widened result is named.
+
+**Grounding:** `src/core/ports.ail:17-23` defines six unlike contracts. `model_step` has a multi-fire
+chunk callback but returns only `Result[StepResult, AIError]`, so its information loss is concrete.
+By contrast, `approval_read` is a synchronous `ApprovalRequest -> ApprovalResolution` and
+`clock_now` is `() -> int`; D1 itself preserves those results at ADR:294-295. Neither has an
+intermediate channel whose values the port discards, and the revision specifies no widening target
+or gate evidence for either. The same blanket sentence also reaches `env_get`, `tool_exec`, and
+`hooks_runtime`, even though D1 separately gives only `tool_exec` a named replacement contract and
+rejects `hooks_runtime` as a world carrier.
+
+**Action:** Scope “widen before adoption” to `Ports.model_step` and any future port for which a
+specific richer producer contract is identified; keep the typed-tool widening as its separately
+named decision instead of turning one observed ordering bug into an unenforceable rule over every
+field.
+
+### R4. The uncorrected provider-callback Context anchor no longer reaches the implementation it claims to ground
+
+**Defect:** The Context row at ADR:149 still cites `stub_step.ail:175-204` for callback-ordered
+provider chunks even though WI-C13c moved both live and scripted provider implementations outside
+that range.
+
+**Grounding:** At HEAD, `src/core/test/stub_step.ail:148-154` contains the live closure that passes
+`on_chunk` to `stepWithStream`, and `:157-168` contains the scripted closure that calls
+`play_chunks` before returning the result. The cited `:175-204` now contains explanatory comments,
+the one-arm `dispatch_step` pass-through at `:192-199`, and the start of a constructor helper. At
+`7b9b4a4c`, the cited range contained the old `LiveAI`/`Scripted` match arms; `git diff
+7b9b4a4c..HEAD -- src/core/test/stub_step.ail` shows those arms were deleted by `89a1d67`.
+
+**Action:** Re-ground that cell on `src/core/test/stub_step.ail:148-168,192-199` (and retain the
+upstream API anchor for arrival ordering). The premise remains true; the claimed “remaining anchors
+verified unchanged” does not.
+
+### R5. The re-grounded RunSummary Context row miscounts its own citations and omits the direct-return evidence
+
+**Defect:** ADR:147 calls four listed sites “the other six” and does not cite the two terminal
+returns that support its claim that other errors return directly.
+
+**Grounding:** The executed inventory is:
+
+```text
+$ rg -n 'emit_run_summary\(' src/core/session.ail
+833:func emit_run_summary(
+1325:  let _ = emit_run_summary(...)
+1554:          let _ = emit_run_summary(...)
+1704:              let _ = emit_run_summary(...)
+1711:              let _ = emit_run_summary(...)
+1762:                    let _ = emit_run_summary(...)
+```
+
+There are five call sites total, hence four besides `1554`, exactly as D6.1 states at ADR:731-732.
+The uncited direct terminal returns are invalid history at `src/core/session.ail:1528-1531` and an
+approval-state invariant failure at `:1612-1616`; neither emits a summary.
+
+**Action:** State “five call sites total” and cite the two direct returns separately. Do not derive a
+terminal-path count from call-site count; `c2_fail` at `:1301-1327` is one call site shared by
+several typed `Fail` reasons.
+
+### R6. The promised Spike-findings disposition section is absent
+
+**Defect:** The revision and its handoff claim a historical `## Spike-findings disposition (F1–F6)`
+section exists “below,” but the ADR contains no such section, leaving no author-owned per-finding
+disposition record to verify.
+
+**Grounding:** At the pre-review blob:
+
+```text
+$ rg '^## Spike-findings disposition \(F1–F6\)$' .agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md | wc -l
+0
+$ rg '^## Review Comments$' .agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md | wc -l
+3
+```
+
+ADR:8 nevertheless says “the F1–F6 round below was dispositioned by the authoring side,” and the
+handoff names the missing section as input 2. The normative body contains responses to the findings,
+but it is not the historical defendant's summary the review was instructed to preserve.
+
+**Action:** The authoring side should add the promised F1–F6 disposition record without rewriting
+the independent reviews, or correct the status/handoff if the intentional record is the body alone.
+
+## What is accurate
+
+**F1 — resolved.** The end-state owner is now decidable: `world_state` is the sole cursor owner,
+history-derived position is prohibited by name, and `C2LoopState.provider` is explicitly retired.
+Keeping `StepProvider` as an entry argument does not prevent this: `Scripted(script)` can seed the
+initial world program/cursor without remaining a cursor owner inside the loop. HEAD is openly
+identified as non-conformant (`scripted_ports_from_steps` still derives
+`assistant_count(msgs) - base_assistant_count` at `stub_step.ail:157-165`), and Implementation
+Handoff item 2 sequences the repair. An implementer cannot reproduce the specific
+`LiveWorld(StepProvider)` freeze or retain history-derived replay position while complying with D1.
+
+**F2 — resolved for `model_step`, with R3 limited to the unsupported generalization.**
+`Ports.model_step` returns only `Result[StepResult, AIError]` (`ports.ail:17-18`), so it cannot carry
+an emission log. `ported_provider` returns `Ports` (`session.ail:695-701`), and its six call sites at
+`:2015,2051,2114,2137,2267,2295` normalize every `StepProvider` entry before the loop. Since
+`89a1d67`, `C2LoopState.provider` is itself `Ports`, making the funnel structural rather than a
+convention. Widening this port before adopting the upstream filler is mandatory and correctly
+sequenced.
+
+**F3 — resolved and reproduced.** The existing substrate smoke declares `{Clock, Env, IO}` on both
+entries. With only `IO`, the fake branch completes while the taken live clock read fails:
+
+```text
+$ ailang run --caps IO --entry main scripts/smoke_ports_record.ail
+... [fake] scripted: 7, 11, -1
+$ ailang run --caps IO --entry main_live scripts/smoke_ports_record.ail
+Error: execution failed: effect 'Clock' requires capability, but none provided
+main_rc=0 live_rc=1
+```
+
+D4's “stronger and weaker” framing is exact: capability denial catches a read on an executed path
+but proves nothing about reachable, untaken paths.
+
+**F4 — not resolved as written.** The qualitative conclusion survives: the set is extension-heavy,
+the eight `compose` sites are real, and `ExtPorts.clock_now` has zero reads repo-wide. R2 records the
+numeric and source-state corrections.
+
+**F5 — resolved.** The executed counts were `LedgerEvent variants=34` and `named variants=3` from
+`phase_vocab.ail:597-631` and `ledger_record_name` at `:561-579`. D7's parity invariant at ADR:821
+and acceptance row 7 at ADR:973 both quantify over “logical” events, so forbidding those checks
+before the classification artifact exists has real scheduling force.
+
+**F6 — resolved at the ADR level and still open in implementation, as the revision says.** The HEAD
+probe was re-run on pinned v0.26.0: the control served `[s0,s1,s2,s3,done]`, the folding case served
+`[s0,s1,s2,s2,s2,s2,s2,s2,s2,s2,s2,s2]`, ended in step-budget exhaustion, and exited
+`probe_rc=1` by design. D1 excludes the mechanism and the handoff makes the probe a future passing
+regression rather than claiming HEAD is fixed.
+
+**The narrowed D1 blocking clause is correct and does not authorize migration before acceptance.**
+The port widening is upstream-independent, while only the live closure's recorded content and parity
+proof need the released API. ADR:1095-1100 still requires the API to land, the repin, and the positive
+probe before acceptance; ADR:1116 says the implementation plan is written only once this ADR is
+accepted. “Can be widened today” describes dependency order, not present authorization.
+
+**D6.1's zero-RunSummary claim holds at HEAD.** `emit_run_summary` constructs the only production
+`RunSummary` in `session.ail` and performs only `ledger_emit` (`:833-870`). The five callers listed
+under R5 never append that value; every `ledger_append` site in `session.ail` appends a decision,
+stage, or another named wire event. The two direct terminal returns also append no summary. Thus no
+terminal path places `RunSummary` in the returned `LedgerTrace`, even though the projection is
+visible. The throwaway spike's finalizer is not at HEAD.
+
+**The upstream return-shape ruling holds and the status section does not claim a merge.** Re-read
+from upstream's design object rather than inheriting this project's reply:
+`git -C ailang show 386cf6d15:design_docs/planned/v0_31_0/m-recorded-stream-api.md` defines
+`RecordedStream = {chunks: [StreamChunk], outcome: Result[StepResult, AIError]}` and presents the
+parked choices at lines 38-42: (a) land with the drain caveat, (b) add provider cancellation first,
+or (c) bound the drain locally. (a) changes documentation, (b) the Go provider interface, and (c)
+the recorded operation's local drain; none changes the public record. Current `upstream/dev`
+contains the parked design doc but `git -C ailang grep stepWithStreamRecorded upstream/dev -- std
+internal cmd examples` returns no source hit, and no released tag contains the design commit. The ADR
+correctly says PARKED/open/unmerged and promises no date.
+
+**M2 is accurately framed as a spike measurement.** Current
+`packages/motoko-ext-abi/types.ail:7` says “Bumping `ExtensionHooks` is a major version of
+motoko-ext-abi.” `git diff 4aaf59f..6382dc8 -- packages/motoko-ext-abi/types.ail` shows the three
+semantic widenings: `ExtPorts.ai_step` gains `Trace`, and all four hook rows gain `Rand` and
+`Trace`. Consequences labels 381 edits/71 files as “Measured v0.26.0 → v0.31.0”; it does not present
+that edit count as a fresh HEAD recount.
+
+**The unchanged-file Context-anchor inference holds; the blanket uncorrected-anchor claim does
+not.** `git diff --name-only 7b9b4a4c..HEAD` over every anchored source file returns only
+`src/core/session.ail` and `src/core/test/stub_step.ail`. Spot checks in untouched files still match:
+`ports.ail:17-23` is function-valued/stringly, `motoko-ext-abi/types.ail:62-66,151-164` has the
+claimed function-valued ABI/broad rows, and `tool_runtime.ail:151-165` is sequential recursion.
+Within the changed files, `ScriptedStep` (`stub_step.ail:34-41`) and `TracedSessionResult`
+(`session.ail:146-149`) still match, but R4 and R5 mean the revising session's inference does not
+cover every uncorrected/touched row.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. Resolve R1 before D5's hermeticity audit becomes name-adoption evidence: specify a buildable
+   analysis or use conservative inventory plus structural invariants.
+2. Correct F4 per R2, including both 13-versus-14 and HEAD-versus-spike routing state.
+3. Scope D1's port-widening rule to demonstrated contracts (R3).
+4. Repair the two Context anchors (R4/R5) and restore or explicitly dispose of the missing
+   author-owned F1–F6 disposition record (R6).
+5. After those edits, obtain a fresh independent verification; do not treat either appended review
+   as clearing revisions it has not seen.
+
+**The implementation plan, after acceptance, owns:** widening `Ports.model_step` first; moving the
+scripted cursor into the sole world state and turning the F6 probe green; constructing the event
+vocabulary before classification-dependent D7/acceptance checks; routing every in-profile clock
+site, including the eight `compose` reads, through the world; and sequencing the measured
+toolchain/extension-ABI major rollout. It must not substitute the throwaway spike for any gate.
+
+**External and not this ADR's author or reviewer's to clear:** the recorded-stream API must land in
+a released AILANG binary, Motoko must repin to that release, and the direct positive integration
+probe must pass before acceptance, exactly as D1 and the handoff require.
+
+## Accept / revise recommendation
+
+**Revise.** F1, F2, F3, F5, F6, D6.1, the narrowed blocker, the upstream return shape, and M2 survive
+independent execution/source checks; F4 does not, D5 still names an unspecified static analysis as a
+gate, and the anchor/disposition record is incomplete. The upstream API remains parked, unmerged,
+unreleased, and is not cleared by this review.
+
+## Review Comments
+
+_Reviewer: Kimi (model: `moonshotai/kimi-k3` via OpenRouter), 2026-08-01. Third independent
+verification of the F1–F6 revision, per `HANDOFF-review-adr-001-f1-f6-revision.md`._
+
+_Revision reviewed: the working-tree ADR at HEAD `99749c7d29d013adac9e252c982d297ace984ba8` (branch
+`arniwesth/mot-44-motoko_dst_execution_primer`) — i.e. the F1–F6 revision body, which is itself
+**uncommitted** (`git diff HEAD --numstat` on this file: 814 insertions, 27 deletions, of which the
+last ~597 lines are the two prior 2026-08-01 verification sections). Toolchain executed: pinned
+AILANG v0.26.0 (`3b52a24d24431c372ed5605289ef039592209514`, `~/.local/bin/ailang`). Every claim below
+was re-run or re-read by me before I compared notes with the two uncommitted 2026-08-01
+verifications already in this file; the convergence recorded at the end is therefore independent,
+not inherited. This is the fifth `## Review Comments` heading, not the third the handoff's output
+contract anticipated — see R8. Nothing above this section was edited._
+
+### R1. F4's clock disposition is wrong three ways at HEAD: the count is 13 not 14, the `conversation_loop_v2` row misattributes the fifth read, and "Only the first row is routed" imports spike-branch state as HEAD state
+
+**Defect:** D4 (ADR:557-568) claims a measured 14 profile-reachable clock reads with a separate
+`conversation_loop_v2` row, and asserts "Only the first row is routed" (ADR:566). At HEAD on pinned
+v0.26.0 there are 13 distinct `now()` call sites in the named set; `conversation_loop_v2` performs
+no read of its own; and **no** row is routed — the routing existed only on the throwaway spike
+branch.
+
+**Grounding:** Recounted by me, comments/imports excluded:
+
+```text
+$ grep -n 'now()' src/core/session.ail …        → 791, 842, 1991, 2089        (4, driver)
+$ grep -n 'now()' src/core/ext/runtime.ail      → 190                         (1, test_dummy)
+$ grep -n 'now()' packages/motoko-ext-compose/  → compose.ail: 362,503,597,651,681,767 (6)
+                                                  author_tools.ail: 101 (1); authoring/dispatcher.ail: 217 (1)
+```
+
+Total: 4+1+8 = **13 distinct sites**. `now` has a single binding in `session.ail`
+(`import std/clock (now)`, line 30), so no alias hides a fifth driver read. `conversation_loop_v2`
+(`session.ail:2251-2269`) calls only `ported_provider` and `conversation_loop_v2_with_policy` — no
+`now()` in its body, and it takes `session_id` as a parameter. The read the spike's own table
+attributed to `session.ail:2374 (run_v2_with_conversation)` resolves at HEAD to
+`run_v2_with_conversation` calling `derive_session_id()` at `session.ail:2293`, whose fallback
+branch is the already-counted site `:791` (`else "session_${show(now())}"`) — a real reachability
+path "above the traced entry" but the *same call site*, so the table double-counts it. At HEAD,
+`session.ail:2374` is inside `test_millicents_to_usd_fraction`. The spike measured on its own
+surgically-modified driver (`NOTE-spike-findings-real-driver-vertical.md:8-13`: "carries the
+throwaway driver surgery"), which explains both the line drift and the fifth row. For the
+routed-state clause: all four driver sites at HEAD call ambient `std/clock.now` directly
+(`derive_session_id` at 791, `emit_run_summary` at 842, `1991`, `2089`); no world clock exists at
+HEAD (`rg 'world_state|WorldState|LiveWorld|DeterministicWorld' src packages scripts --glob '*.ail'
+→ 0` hits), so "Only the first row is routed" is false at HEAD — it restates the spike table's
+"routed through the world" State cell, which described the throwaway branch. Corollary: ADR:568's
+"nine of the fourteen" should be "nine of the thirteen". The D5 bullet's "eight clock reads"
+(ADR:686) is exact and survives.
+
+**Action:** Correct the table to 13 distinct sites; replace the `conversation_loop_v2` row with the
+accurate statement (the M8 entry `run_v2_with_conversation` reaches the already-counted
+`derive_session_id` fallback at `:791` above the traced entry); and state the routing status as it
+is at HEAD — none routed at HEAD, four demonstrated routable on the throwaway spike, nine
+extension-side reads still unrouted. Do not carry a third revision forward with "measured" numbers
+that were measured on a different tree.
+
+### R2. D5's "reachability-aware, not textual" audit requirement names a property, not a buildable analysis — and the one fix that actually landed was structural, which the ADR does not say
+
+**Defect:** ADR:677-684 makes a reachability-aware source/ABI routing audit a hermeticity-gate
+requirement, motivated by F2's dead-ADT-arm false positive. Nothing in this repo can answer the
+branch-level question that motivation turns on, and the ADR neither specifies the analysis nor
+mentions that the concrete instance was fixed by type narrowing, not by any audit.
+
+**Grounding:** Executed against the repo's only call-graph infrastructure:
+
+```text
+$ python3 tools/code-graph/query/cgq.py q callers dispatch_step
+{"data": [{"caller": "src/core/session#c2_loop", "distance": 1}, …], …}
+$ sed -n '24p' tools/code-graph/extractor/emit.py
+INVOKE_FIELDS = ["from_slug", "to_slug", "resolution", "approximate"]
+$ sed -n '14,18p' tools/code-graph/extractor/source_parser.py
+DECL_RE / CALL_RE = regex-based extraction
+```
+
+Edges are function-to-function only; `ctors.csv` (101 rows) indexes constructor *declarations*
+(`slug,module,name,type_slug,source`), not constructor flow, so "can any reachable caller produce
+the variant this match arm consumes" is unanswerable from the emitted tables. `tools/code-graph/README.md:7-9`
+calls the call graph a "source-parsed approximation" and `:29-31` states the default `core` profile
+excludes `src/core/test/**` — the directory containing `dispatch_step`, `scripted_ports_from_steps`,
+and `live_ports`, which are production-executed despite the path (the current `.out` happens to be
+an `--include-tests` build; the default still excludes them). Meanwhile `89a1d67` repaired the
+motivating instance structurally: `C2LoopState.provider: Ports` (`session.ail:344`) and
+`dispatch_step(ports: Ports, …)` (`stub_step.ail:192-199`) make the dead arms unrepresentable — a
+compile-time invariant, strictly stronger than any audit this gate could plausibly run. The ADR's
+F2 grounding paragraph even narrates this deletion but draws no lesson from it.
+
+**Action:** Narrow D5 to what is demonstrably buildable, in order of preference: (1) require the
+structural pattern first — dead-arm seams of this class must be made unrepresentable by type
+narrowing, as `89a1d67` did, with the audit as backstop rather than primary; (2) for the residual
+ambient-effect inventory, name the actual analysis (a function-level, conservatively
+over-approximate call graph with a profile scope that explicitly includes production code under
+`src/core/test/**`, plus fail-closed manual triage of its false positives — noting that for a
+*hermeticity* audit over-approximation fails closed, which the F2 case did not); or (3) if
+constructor-level reachability is genuinely required, specify it (analysis, soundness boundary,
+profile roots, fail-closed behavior) before it becomes name-adoption gate evidence. As written the
+gate demands a detector no one has built or specified.
+
+### R3. The revision header's "the rest verified unchanged" is falsified by one uncorrected Context row in the touched files: `stub_step.ail:175-204` no longer grounds "provider chunks are callback-ordered"
+
+**Defect:** The header (ADR:14-16) claims the five Context rows anchoring into the two files changed
+by `89a1d67` were re-checked, two corrected, and "the rest verified unchanged". Context row ADR:149
+cites `src/core/test/stub_step.ail:175-204` for callback-ordered provider chunks; at HEAD that range
+contains only comment text and the one-arm `dispatch_step` pass-through — the constructs that ground
+the premise moved.
+
+**Grounding:**
+
+```text
+$ grep -n 'func play_chunks\|stepWithStream(model\|export func dispatch_step' src/core/test/stub_step.ail
+88:func play_chunks(chunks, on_chunk: (StreamChunk) -> () ! {IO, Trace}) …
+152:      stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk)
+192:export func dispatch_step(
+```
+
+The live streaming call is at `:152`, the scripted chunk playback at `:88-99`, the scripted closure
+at `:157-165` — all outside the cited `:175-204`. Worse, the cited range's own comment block is now
+internally contradictory: `:171-173` still says dispatch "Returns both the step result and the
+updated provider (tail of script for Scripted)" and that "Loop callers thread next_provider", while
+`:191` in the same block says "There is no `next_provider` to return" — the stale half describes the
+pre-`89a1d67` signature the commit deleted. The premise remains true (both closures fire `on_chunk`
+serially), but the row as cited grounds it in a comment that also asserts a false return shape, and
+the header's blanket claim does not survive contact with this row. `git diff --stat 7b9b4a4c..HEAD
+-- src packages scripts Makefile .github` re-run by me returns exactly `Makefile` (2-line CLI-alias
+change), the new `scripts/dst/spike_scripted_cursor_probe.ail`, `src/core/session.ail`, and
+`src/core/test/stub_step.ail` — so no *other* anchored file moved, and the two prior reviews'
+certification covers rows in untouched files; the gap is confined to this one row inside the changed
+set.
+
+**Action:** Re-ground the row on `src/core/test/stub_step.ail:88-99,148-165,192-199`; correct the
+header claim (or re-verify the remaining touched-file rows individually and say which); and delete
+the stale `next_provider` comment half in `stub_step.ail` as part of the same fix (source edit,
+noted here because the ADR anchors into it).
+
+### R4. The re-grounded RunSummary Context row labels four line numbers "the other six"
+
+**Defect:** ADR:147 reads "`src/core/session.ail:1554-1555`, and the **other six** `emit_run_summary`
+calls at `1325`, `1704`, `1711`, `1762`" — four numbers, labeled six; D6.1 (ADR:731-732) correctly
+says five call sites in the same revision.
+
+**Grounding:**
+
+```text
+$ grep -n 'emit_run_summary(' src/core/session.ail
+833 (defn); call sites: 1325, 1554, 1704, 1711, 1762 — five total, four besides 1554
+```
+
+Both counts were introduced in this same re-grounding pass; one is right (D6.1) and one is wrong
+(Context). Two further nits in the same row: "other errors return directly" is grounded by the
+InvalidHistory return at `session.ail:1528-1530` and the approval-invariant return at `:1612-1615`,
+neither of which the row cites; and the note's original "seven terminal returns" was never a
+call-site count — `git grep -c emit_run_summary 4aaf59f -- src/core/session.ail` shows the same five
+call sites pre-`89a1d67` — so the correction to citing sites is right, and the original number is a
+live example of why spike numbers must be re-run, exactly as the handoff warned.
+
+**Action:** Restate as "five call sites total" (or "the other four"), and cite the two direct
+terminal returns for the second clause.
+
+### R5. D1's "every `Ports` field is a lossy crossing of the same kind" is demonstrated for exactly one field
+
+**Defect:** ADR:260-262 states the general rule — widen the port before adopting whatever fills it
+— as established fact "because every `Ports` field is a lossy crossing of the same kind". The
+source note hedges (`approval_read`/`clock_now` are "narrow enough that the loss is invisible
+today"); the ADR drops the hedge. Only `model_step` has a demonstrated loss channel.
+
+**Grounding:** `src/core/ports.ail:17-24`: `model_step` takes a multi-fire
+`(StreamChunk) -> () ! {IO}` callback whose values the returning closure discards
+(`stub_step.ail:148-155`) — the F2 loss, directly demonstrated. `approval_read:
+(ApprovalRequest) -> ApprovalResolution ! {IO}` is a synchronous request/response with no
+intermediate channel; `clock_now: () -> int ! {Clock}` is a point read; neither has anything
+analogous to a dropped emission log. The ADR's own D1 bullets preserve those two result types
+unchanged (ADR:294-295: "approval remains a typed `ApprovalResolution`", "clock reads return the
+current world time"), so the rule as stated would mandate widenings the same decision neither names
+nor justifies.
+
+**Action:** Scope the rule to ports with a demonstrated loss channel (today: `model_step`; the
+stringly `tool_exec` has its own separately-named typed-envelope widening), or state what evidence
+would establish lossiness for `approval_read`/`clock_now` specifically. Keep "widen before adopting"
+for `model_step` — that case is proven and the sequencing is correct.
+
+### R6. "The only owner" is stated as an absolute, but the ADR's own handoff item 2 must house the scripted cursor somewhere else first
+
+**Defect:** ADR:183-191 makes `world_state` the sole cursor owner and retires
+`C2LoopState.provider`, while Implementation Handoff item 2 (ADR:1109-1112) sequences the F6 fix —
+a threaded scripted cursor — ahead of, and independent of, `world_state`, which does not exist yet.
+The interim home for that cursor is unnamed, so the next implementation action cannot literally
+comply with the absolute wording.
+
+**Grounding:** `C2LoopState.provider: Ports` at `session.ail:344` (immutable record value);
+`ScriptedPortsState` (`src/core/test/scripted_ports.ail:20-65`) is unit-tested
+(`test_scripted_model_threads_state`) but consumed nowhere — `run_v2_with_scripted_ports`
+(`scripted_ports.ail:99`) still routes through `scripted_ports_from_steps`. Item 2's own mechanism
+("once `model_step` returns a record it can return next-state too") implies the driver must store
+that successor somewhere — a new explicit field on `C2LoopState` or a replaced provider value —
+which is a second, non-`world_state` home for the cursor by construction.
+
+**Action:** Add one sentence to D1 or to handoff item 2 naming the interim home (e.g. an explicit
+`C2LoopState` field until `world_state` subsumes it), so "the only owner" reads as the end-state
+invariant it is meant to be.
+
+### R7. The `## Spike-findings disposition (F1–F6)` section the revision and handoff both reference does not exist
+
+**Defect:** ADR:8 says "the F1–F6 round below was dispositioned by the authoring side", and the
+handoff names the disposition section as review input 2 and as a historical record not to be
+edited; no such section exists in the committed blob or the working tree.
+
+**Grounding:**
+
+```text
+$ grep -c '^## Spike-findings disposition' ADR-001-….md   → 0 (working tree)
+$ git show HEAD:…ADR-001….md | grep -c 'Spike-findings disposition' → 0 (committed blob)
+$ grep -c '^## Review Comments' ADR-001-….md              → 5 (working tree, incl. this section)
+```
+
+The normative body does carry per-finding responses, but the author-owned defendant's summary the
+review process was built around is absent.
+
+**Action:** The authoring side adds the disposition record (without touching any review section),
+or corrects ADR:8 and the handoff to name the body as the record.
+
+### R8. The entire F1–F6 acceptance record is uncommitted, and this handoff has already been executed twice — the output contract's "append a third section" would falsify the record if followed literally
+
+**Defect:** The F1–F6 revision body, the claude-sonnet-5 verification, and the GPT-5 verification
+are all uncommitted working-tree content on top of HEAD `99749c7d`; the committed ADR contains none
+of it. The handoff describes "two existing review sections" and instructs appending "a third" — two
+executions of that same handoff later, this is the fifth `## Review Comments` heading and the third
+independent verification of the revision.
+
+**Grounding:**
+
+```text
+$ git status --short →  M .agent/…/ADR-001-….md ; M .agent/…/REPLY-546-….md ; ?? HANDOFF-review-…md
+$ git show HEAD:…ADR-001….md | grep -c '^## Review Comments' → 2
+$ git diff HEAD --numstat — ADR: 814 insertions / 27 deletions across Status, Context, D1, D4, D5,
+  D6, Consequences, the new Upstream section, and the two appended verifications
+```
+
+Consequences, not complaint: (a) anyone reading the committed ADR sees none of the revision this
+round verifies; (b) the Status line's "a fresh independent review of this revision is also required"
+is currently satisfiable only by uncommitted text; (c) my findings below converge with the two prior
+verifications because the defects are real and were re-derived independently — but the record
+should show that there *are* three verifications, not one.
+
+**Action:** Commit the revision together with all three verification sections (or deliberately
+restart the round); do not squash, reorder, or "correct" the prior sections — they are historical
+records. Any body edit made in response to R1–R7 post-dates all three verifications and needs a
+fresh delta review, not a fourth full round.
+
+## What is accurate
+
+Re-run or re-read by me at HEAD `99749c7d` + working-tree revision, on pinned v0.26.0. The three
+requested rulings first.
+
+**Ruling 1 — per-finding dispositions.** **F1: resolved.** `world_state` as sole cursor owner plus
+the by-name prohibition on history-derived position (ADR:183-203) excludes the failing arrangement
+by mechanism, not merely by naming it: an adapter holding the cursor violates "sole owner"
+regardless of how explicitly it threads state. HEAD is openly named non-conformant ("the arrangement
+that currently executes … a confirmed defect in the harness today (F6)"), the transition is
+sequenced (handoff items 1-2), and "the implementation plan therefore retires
+`C2LoopState.provider`" (ADR:191) is a ruling, not a deferral. `Scripted(script)` remaining the
+entry-point argument (`scripts/dst/phase_c2_wiring_scenarios.ail:120,126,184`) does not undermine
+this — `ported_provider` (`session.ail:695-701`) already normalizes it before loop state exists.
+Caveat: R6's interim-home gap. **F2: resolved for `model_step`.** `Ports.model_step` returns
+`Result[StepResult, AIError] ! {AI, IO, Trace}` (`ports.ail:17-18`) and structurally cannot carry an
+emission log; `ported_provider` is invoked at all six entry-point sites
+(`session.ail:2015,2051,2114,2137,2267,2295`) before any loop starts; since `89a1d67` the funnel is
+a compile-time fact (`C2LoopState.provider: Ports`), stronger than the ADR's checkable-invariant
+argument. The generalization beyond `model_step` is R5. **F3: resolved, exactly.** Re-ran both
+probes on pinned v0.26.0 — synthetic: a `{Clock, IO}` function taking the non-clock branch
+completes under `--caps IO` (rc=0), the clock branch dies `effect 'Clock' requires capability`
+(rc=1); real driver: `scripts/smoke_ports_record.ail` `main` rc=0 vs `main_live` rc=1 with the same
+error. "Stronger and weaker" is the correct framing and D4 does not under-claim.
+**F4: not resolved as written — R1.** The qualitative conclusion (extension-dominated, 8-of-13 in
+`compose`, default-profile reachable via `handle_compose_tool`) survives; the number, the
+attribution, and the routed-state clause do not. `ExtPorts.clock_now` has zero invocation sites
+repo-wide (`.clock_now(` → no matches; constructions only), so the D5 conformance condition is
+load-bearing and correct. **F5: resolved, with real teeth.** Counted directly:
+`ledger_record_name` (`phase_vocab.ail:561-579`) names 3 of the 34 `LedgerEvent` variants
+(`:596-630`, all 34 wire names in trailing comments, `StreamDelta` mapping to two) and collapses 31
+to `"wire"`. D7's parity invariant (ADR:821) and acceptance row 7 (ADR:973) both quantify over
+"logical" emissions — the undefined classification — so the prohibition on scheduling those checks
+before the artifact exists is not inert. **F6: resolved at the ADR level, live in code as stated.**
+Re-ran `scripts/dst/spike_scripted_cursor_probe.ail` at HEAD on pinned v0.26.0: control
+`served=[s0,s1,s2,s3,done]` advancing=true; folding `served=[s0,s1,s2,s2,s2,s2,s2,s2,s2,s2,s2,s2]`,
+`assistants_out` pinned at 2 while `segment_in` grows to 23, death by step-budget exhaustion, rc=1
+by design. The ADR correctly treats it as open and sequenced, not fixed.
+
+**Ruling 2 — the narrowed blocking clause is correct and opens no hole.** The port widening is
+upstream-independent (a record-field addition testable against `Scripted` providers), and what
+remains gated is exactly the live closure's recorded content plus the parity proof. The narrowing
+does not license pre-acceptance migration: the Status block (ADR:5-8) still names the upstream
+release and an independent review as the acceptance blockers, and the handoff binds the
+implementation plan to "once this ADR and the project-007 taxonomy ADR are accepted" (ADR:1116).
+"Can be widened today" describes dependency order inside that plan, not present authorization. The
+one presentational risk — the three-item "work that does not wait" list readable in isolation as
+permission — is covered by the immediately following gating sentence; acceptable as written.
+
+**Ruling 3 — the uncorrected Context anchors hold in untouched files; the header's blanket claim
+does not hold inside the two changed files.** Re-ran the diff myself (four files: `Makefile`,
+probe, `session.ail`, `stub_step.ail`). Spot-checked ten rows in untouched files, all exact:
+`ports.ail:17-24` (six function-valued fields, stringly `tool_exec`); `scripted_ports.ail:20-65`;
+`tool_runtime.ail:151-165`; `tool_phase.ail:302-357`; `motoko-ext-mcp/exec.ail:63-70,165-176`;
+`ai_compat.ail:31-37,60-71,197-220` (`chunks: []` on both arms); `motoko-ext-abi/types.ail:62-66,151-164`;
+`motoko_scratchpad/scratchpad.ail:90-101` (direct `{Net}`); `recovery.ail:12-18` (count/budget
+retry); `phase_vocab.ail:557,561,596-630`. Inside the changed files: `ScriptedStep`
+(`stub_step.ail:34-41`) and `TracedSessionResult` (`session.ail:146-149`) still exact; the two
+corrected rows are right apart from R4's arithmetic (`readLine()` at `session.ail:1619`; `now()` at
+`1991`,`2089`; the five `emit_run_summary` sites); and R3's row is stale. The inference the handoff
+asked about — prior certification covers unchanged-file anchors — holds on this sample and is worth
+stating as a ruling; it must not be extended to rows inside the two changed files.
+
+**D6.1's zero-`RunSummary` claim holds at HEAD, verified path by path.** `emit_run_summary`
+(`session.ail:833-870`) contains exactly one ledger operation, `ledger_emit(session_id,
+RunSummary({…}))` at `:857`; `RunSummary` appears nowhere else in `session.ail` but its import, so
+no `ledger_append` ever receives one. Five call sites (R4); `1325` is `c2_fail`, the shared
+error-return helper reached through the `Fail` decision's several finish codes; the Finalize branch
+(`:1554-1559`) emits `RunSummary`/`DoneEvent` and returns `trace_after_empty_floor` containing
+neither; the two direct returns (InvalidHistory `:1528-1530`, approval-invariant `:1612-1615`)
+return with no summary at all; `1704`/`1711`/`1762` append their error events, never the summary.
+The spike's `c2_finalize` fix is not at HEAD, and the ADR correctly instructs treating D6.1 as
+unimplemented everywhere.
+
+**The upstream status section is accurate and does not overstate.** Re-derived from the upstream
+design doc itself (`git -C ailang show
+386cf6d15:design_docs/planned/v0_31_0/m-recorded-stream-api.md`): status PARKED,
+`needs-human-review`; the offered shape `RecordedStream = {chunks: [StreamChunk], outcome:
+Result[StepResult, AIError]}`; options (a) land-with-caveat (documentation), (b) provider-interface
+cancellation (Go `AIHandler`, 7 implementers), (c) bound the drain locally (chunk/byte budget) —
+none touches the AILANG-level `{chunks, outcome}` record, which is what licenses designing against
+the shape now. The ADR's "survived two quorum rounds" matches the doc's "Quorum BLOCKED twice … the
+design DIRECTION … survived both rounds"; "recommended adoption, parked on scope" matches the
+ADOPT-direction/PARKED-on-scope split. The API is absent upstream: `git -C ailang grep
+stepWithStreamRecorded upstream/dev -- std internal cmd examples` → no hits, and no recent tag
+contains it. "Not merged, no date promised" is stated plainly; the fork prototype is not treated as
+the gate anywhere in the ADR.
+
+**M2 is real and correctly framed.** `packages/motoko-ext-abi/types.ail:7` states verbatim "Bumping
+`ExtensionHooks` is a major version of motoko-ext-abi". The three widenings verified on the spike
+branch: `git diff 4aaf59f..6382dc8 -- packages/motoko-ext-abi/types.ail` shows `ExtPorts.ai_step`
+gaining `Trace` and all four `ExtensionHooks` rows gaining `Rand` and `Trace` — at HEAD the hook
+rows are still `{IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}` with neither. The
+Consequences text cites "381 effect-row edits across 71 files" as "Measured v0.26.0 → v0.31.0" —
+measurement framing, not a forecast.
+
+## Recommended pre-acceptance actions
+
+This ADR must fix, in dependency order:
+
+1. **R1** — correct the F4 disposition (13, the attribution, the routed-state clause). It is written
+   into D4 and cited by D5, so it lands first.
+2. **R3 + R4** — repair the two Context rows and the header's "the rest verified unchanged" claim;
+   same re-grounding pass, same files.
+3. **R2** — narrow or specify the reachability-aware audit before it becomes gate evidence; prefer
+   the structural pattern `89a1d67` demonstrated.
+4. **R5** — scope the port-widening rule to demonstrated loss channels.
+5. **R6** — one sentence naming the interim cursor home.
+6. **R7** — restore the disposition record or correct the references to it.
+7. **R8** — commit the revision and all three verification sections as one record; any body edit
+   from items 1-6 post-dates all three verifications and requires a fresh delta review, which the
+   Status line should say.
+
+Belonging to the implementation plan, not this ADR: the `Ports.model_step` widening; the scripted
+cursor fix that turns `spike_scripted_cursor_probe.ail` into a passing regression test; the
+event-vocabulary construction ahead of any classification-dependent D7/acceptance check; routing
+all 13 profile-reachable clock reads including the eight `compose` sites through the world/
+`ExtPorts.clock_now`; and sequencing the measured extension-ABI major. The throwaway spike branch
+must not be cited as gate evidence for any of it.
+
+External and not this review's to clear: the recorded-stream API must land in a released AILANG
+binary, the toolchain must be repinned to it, and the direct positive integration probe must pass
+before acceptance. It is parked upstream, unmerged, unreleased, and unchanged by anything in this
+round.
+
+## Accept / revise recommendation
+
+**Revise.** The architecture and the F1/F2/F3/F5/F6 dispositions survive a third independent
+execution-grounded verification — the third verifier to reach that conclusion, independently — but
+the F4 disposition carries false numbers and false state into two decisions (R1), D5 names an
+unspecified analysis as a gate (R2), the re-grounding pass falsified its own completeness claim
+(R3/R4), and the acceptance record exists only in an uncommitted working tree (R7/R8). This is the
+same core defect set found by both prior 2026-08-01 verifications; three independent convergences
+on identical findings is the strongest evidence they are real. The upstream recorded-stream blocker
+remains exactly where the ADR puts it — open, parked, external — and is not cleared by this review.
