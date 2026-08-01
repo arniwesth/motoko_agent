@@ -36,7 +36,8 @@ inside `ext_ai_step` — behind an `ExtPorts` ABI that cannot return a successor
 extension-issued model calls from the interim state-threaded seam and from every conformant profile
 until the world-token ABI lands, which makes Implementation Handoff item 2 a **partial** cursor fix
 and makes any profile installing an `ai_step`-calling extension non-conformance-eligible in the
-interim — including the checked-in default, which installs `compaction_ai`.
+interim. Both checked-in configurations install `compaction_ai`, which calls it, so the first
+conformant profile is a purpose-built narrow one rather than a shipped configuration.
 
 **The second correction pass marked an open defect in D5 that was itself misdiagnosed, and both
 delta reviews overturned it.** That marker claimed the routing audit failed open because
@@ -339,11 +340,23 @@ in the closure creates the second home this decision prohibits. **The interim se
 the main loop only, and extension-issued model calls are excluded from every conformant profile until
 the world-token ABI D5 already requires has landed.** Two consequences follow and neither is
 cosmetic: **Implementation Handoff item 2 is a partial cursor fix and says so**, and **a profile
-installing any extension that calls `ExtPorts.ai_step` is not conformance-eligible in the interim** —
-which today includes `compaction_ai`, and `compaction_ai` is in the checked-in default extension
-order. Widening `ExtPorts.ai_step` and the hook results to carry the token is the eventual path, it
-belongs to the ABI major the repin already forces (*Consequences*), and it must not be smuggled into
-the interim step.
+installing any extension that calls `ExtPorts.ai_step` is not conformance-eligible in the interim.**
+
+The scope of that second consequence is larger than it first appears and is stated plainly rather
+than left to be discovered: `compaction_ai` calls `ctx.ports.ai_step`
+(`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`), and `compaction_ai` appears in the
+extension order of **both** checked-in configurations, `default` and `ailang`. **No checked-in
+configuration is conformance-eligible under the interim seam.** That does not make the interim step
+pointless — D5 already contemplates that "pure guards and deterministic fixture hooks may form the
+initial profile", and the first conformant profile is a purpose-built narrow one rather than a
+shipped configuration — but it does mean the interim milestone must not be planned as though it
+delivers a conformant `default`.
+
+Widening `ExtPorts.ai_step` and the hook results to carry the token is the eventual path, it belongs
+to the ABI major the repin already forces (*Consequences*), and it must not be smuggled into the
+interim step. This exclusion is consistent with D5's own coverage criterion rather than an exception
+to it: D5 admits an effectful hook only when it is "effectful only through D1 world-mediated ports,
+with explicit world state returned to the host", and `ai_step` returns none.
 
 **Deriving a replay position from mutable message history is prohibited by name.** It is not merely
 one more hiding place; it is the arrangement that currently executes, and compaction mutates the
@@ -1415,7 +1428,9 @@ Costs and risks:
   `ExtPorts.ai_step`, the hook results that carry its outcome, and the core dispatch results — the
   world-token protocol D5 already requires — alongside the mechanical `Trace`/`Rand` row edits above.
   Until it lands, any profile installing an `ai_step`-calling extension is not conformance-eligible,
-  and `compaction_ai` is in the checked-in default extension order.
+  and `compaction_ai` — which calls it — is in the extension order of **both** checked-in
+  configurations, so the first conformant profile must be a purpose-built narrow one rather than a
+  shipped configuration.
 - The trace contract changes error handling and may expose terminal cases currently visible only in
   logs.
 - A typed program schema, request matchers, interaction log, and compatibility policy become
