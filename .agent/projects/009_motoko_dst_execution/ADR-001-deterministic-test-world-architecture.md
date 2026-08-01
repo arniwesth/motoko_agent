@@ -3270,3 +3270,688 @@ unspecified analysis as a gate (R2), the re-grounding pass falsified its own com
 same core defect set found by both prior 2026-08-01 verifications; three independent convergences
 on identical findings is the strongest evidence they are real. The upstream recorded-stream blocker
 remains exactly where the ADR puts it — open, parked, external — and is not cleared by this review.
+
+---
+
+## Review Comments
+
+_Reviewer: Claude Code (model: `claude-opus-5`), 2026-08-01. **Delta review** of the F1–F6
+correction pass, per `HANDOFF-delta-review-adr-001-f1-f6-corrections.md`. Sixth section: two reviews
+2026-07-26, three verifications 2026-08-01, this delta._
+
+Reviewed at `5eadee76dc66d687d697e277784e82a991d79bfb` (working tree clean), corrections committed as
+`d3bd9cd` plus the two ADR edits in `5eadee7`. Toolchain `AILANG v0.26.0` (commit `3b52a24`),
+matching `scripts/install-prerequisites.sh:39`. Scope is the corrected text only; F1, F2, F3, F5, F6,
+D6.1, the narrowed D1 blocking clause, the upstream return-shape ruling, M2, and the architecture are
+not reopened.
+
+The pre-correction blob is confirmed unretrievable, so no correction could be isolated by diff:
+
+```text
+$ git cat-file -e 374d46fbe39ccb77b2fd4a5e71b3dabc0c70f741 || echo "NOT IN OBJECT STORE"
+NOT IN OBJECT STORE
+```
+
+Every claim below was re-executed at HEAD. Nothing is inherited from the handoff's enumeration, from
+the spike branch, or from the three prior verifications.
+
+### R1. D5 obligation 2 does fail open, but not for the reason the OPEN DEFECT gives — the real hole is profile scope, and run as written the inventory misses 8 of the 13 clock reads D4 depends on
+
+**Defect:** The marked OPEN DEFECT (ADR:791-805) attributes obligation 2's fail-open to
+`_resolve_call` discarding `ports.model_step(...)`. That mechanism does not establish fail-open, and
+resting the repair on it will produce the wrong fix. The tool captures direct ambient calls in both
+syntactic forms; what it drops is calls *through* the seam, which are already routed. The actual
+fail-open is that obligation 2 names only one scope correction (`src/core/test/**`) while the
+default profile is `("src/core",)` and excludes `packages/` — where D4 itself puts 8 of the 13
+reads.
+
+**Grounding.** The tool resolves bare selective imports (`source_parser.py:193-198`) and qualified
+std calls (`:186-187`, which returns without any membership check — a permissive, genuinely
+over-approximate path). Executed against the real extractor:
+
+```text
+$ python3 -c "...sp.parse_all([session.ail, compose.ail, stub_step.ail])..."
+src/core/session      std_calls now: derive_session_id, emit_run_summary,
+                                     run_v2_from_messages_traced_with_policy_and_counts,
+                                     run_v2_from_messages_with_policy_and_counts   (4)
+compose               std_calls now: snippet_meta_json, one_attempt, one_attempt,
+                                     run_attempts, handle_compose_tool, on_response_intercept
+stub_step             model_step edges: []
+```
+
+The four `session.ail` rows are exactly D4's four attributed driver functions — i.e. the inventory
+obligation 2 is *for* works. The empty `model_step` edge list is the drop the OPEN DEFECT cites, and
+it is a routed call, not an ambient one. Any direct ambient effect is written literally at some
+definition site inside the scanned tree, and the tool sees the literal form there; the seam-drop
+hides the *edge*, not the *call*, and a module-level inventory does not need edges.
+
+The scope hole, executed across all three profiles (`tools/code-graph/extractor/config.py:13-17`,
+`source_parser.py:37-39,53-56`):
+
+```text
+profile=core include_tests=False: files=34  clock_std_calls=5
+profile=core include_tests=True:  files=43  clock_std_calls=5
+profile=all  include_tests=False: files=178 clock_std_calls=14
+```
+
+Obligation 2 as written — `core`, plus `src/core/test/**` — yields **5**. It misses all 8
+`motoko-ext-compose` reads, which D5's own third bullet (ADR:749-751) makes a conformance
+precondition. `include_tests=True` changes nothing, because the `core` profile's root tuple never
+contained `packages/`. That is a 62% miss on the one measurement D4 and D5 jointly depend on.
+
+A second, independent defect in the same tool: its output is neither a site count nor a stable
+function count. The plain-call path dedups on `(from_slug, std_module, symbol)`
+(`source_parser.py:257-262`), so N ambient calls in one function collapse to one row; the
+interpolation path (`:267-281`) carries no `seen` check, so interpolated calls emit unconditionally.
+`compose#one_attempt` appears twice because `:503` is interpolated and `:597` is plain, while a
+function with two plain calls would appear once. The audit therefore cannot reproduce D4's "13
+distinct call sites" and cannot certify routing *completeness* — only that a function mentions an
+ambient symbol.
+
+**Ruling on the handoff's A1 question.** The correction has the tool preference inverted, and a
+conservative textual inventory is the right primary detector for *this* use. D4's 13 was reproduced
+here by exactly that method:
+
+```text
+$ grep -rn "\bnow\s*(" --include=*.ail src packages
+```
+
+which returned all 13 in-profile sites plus `scripts/smoke_ports_record.ail:65` — over-approximate
+and complete, which is the required bias. D5's disparagement of "grep-based audit" is correct only
+for F2's architecture-discovery use, which obligation 2 already separates by name; it should not
+carry over to hermeticity inventory.
+
+**On effect rows as primary detector:** not viable alone at HEAD. `src/core/agents_md.ail:106`
+declares `func walk_agents(current: string, acc: [string]) -> [string]` with no effect row while
+calling `fileExists(...)` at `:109` — a live `FS` under-declaration. Rows are the right *eventual*
+primary, because they are compiler-checked and cannot silently rot, but only behind a
+declared-versus-performed reconciliation gate that does not exist.
+
+**Action:** Replace obligation 2's tool with a conservative textual inventory of ambient-effect
+imports and call names, per in-profile module, at **site** granularity, with fail-closed manual
+triage; state its profile roots as `src` + `packages` explicitly, and state its soundness boundary
+(it cannot see effects performed outside the scanned AILANG tree — e.g. TypeScript child processes —
+and cannot see which sites are reachable). Delete the over-approximation argument that rests on the
+call-graph. Name effect-row reconciliation as the successor detector and its blocker. Constructing
+the inventory belongs to the implementation plan; naming the detector and its boundary belongs to
+this ADR, because D5 is what the name-adoption gate cites.
+
+### R2. The OPEN DEFECT's non-citability is marked only in D5, while D4 restates the same unsupported bias and requires the same audit for the clock gate, unmarked
+
+**Defect:** D5's marker ends "**D5's routing audit must not be cited as name-adoption gate evidence
+until it does**" (ADR:805). But D4:601-604 independently asserts the property the marker retracts,
+and D4 is the section a profile reads for the clock:
+
+> the **source and ABI routing audit** enumerates such reads — conservatively and with
+> over-approximate bias, per D5 — and is the one a profile depends on
+
+That is C10's softened text, and it now propagates a claim D5 has withdrawn, with no marker. D5's
+own third hermeticity bullet (ADR:749-751) makes the same audit a conformance precondition —
+"cannot claim conformance until its eight clock reads route through `ExtPorts.clock_now` (D4)" — and
+is likewise unmarked. A reader entering at D4 or at the hermeticity bullet list gets the retracted
+claim with no signal.
+
+**Grounding:** `ADR:601-604`, `ADR:749-751`, `ADR:805`.
+
+**Action:** Either propagate the non-citability marker to D4:601-604 and D5's third bullet, or —
+better — repair obligation 2 per R1 and delete all three markers together. Do not leave the
+retraction reachable from only one of the three places that assert it.
+
+### R3. C8 names the interim cursor's home but no mechanism reaches it, and the only mechanism available under the widening Handoff item 1 specifies violates C8's own prohibition
+
+**Defect:** C8 (ADR:235-244) puts the interim scripted cursor in "**one explicit field on
+`C2LoopState`, threaded by the driver** — not in a closure captured inside a `Ports` value". C13
+(ADR:1223-1228) supplies the mechanism: "It rides on item 1: once `model_step` returns a record it
+can return next-state too." But item 1 (ADR:1220-1222) specifies the widening as
+"Behaviour-preserving with `emissions: []` at every construction site" — an emissions field and
+nothing else — and C9 (ADR:305-319) scopes the port-widening rule to `model_step`'s *demonstrated
+emission* loss channel specifically. A successor cursor is not an emission. Item 1 as specified does
+not enable item 2.
+
+Working the mechanism through to HEAD source, the two candidate completions both fail:
+
+- If the successor returned is a `Ports`, the driver stores it in `C2LoopState.provider`
+  (`src/core/session.ail:344`, already `provider: Ports`) and the cursor lives inside that value's
+  closure — precisely "a closure captured inside a `Ports` value", which C8 prohibits by name.
+- If the successor is a bare cursor, the scripted closure must receive it back on the next call. It
+  cannot: `Ports.model_step` is `(string, [Message], (StreamChunk) -> () ! {IO}) -> ...`
+  (`src/core/ports.ail:18`) with no state parameter. The pre-built state machine C13 points at is
+  shaped `scripted_model_next(state) -> {result, next}` (`src/core/test/scripted_ports.ail:38-48`)
+  — state in *and* out — which is not `model_step`'s shape at either end.
+
+So the F6 fix requires `model_step` to gain a state **parameter** as well as a successor field. That
+is a bidirectional widening, it is not behaviour-preserving, and it is named nowhere: not in C9's
+loss-channel scoping, not in item 1, not in the D1 bullet at ADR:349-353.
+
+**Grounding:** `ADR:235-244`, `ADR:305-319`, `ADR:1220-1228`; `src/core/ports.ail:18`;
+`src/core/session.ail:338-357`; `src/core/test/scripted_ports.ail:38-48`.
+
+**Action:** State the interim mechanism in D1 or item 1 explicitly — that `model_step` takes and
+returns provider state alongside `emissions`, that this is a second widening of the same field on a
+second stated ground, and that it is *not* behaviour-preserving. Then reconcile C9: either widen its
+scope sentence to cover state-threading as a named ground distinct from emission loss, or say that
+`model_step` is widened twice for two reasons. As written the three paragraphs are jointly
+unsatisfiable.
+
+### R4. C6's claim that `stub_step.ail:175-204` "now contains only comment text" is false — that range holds `dispatch_step`'s entire definition
+
+**Defect:** The re-grounded Context row (ADR:181) states the previously cited `:175-204` "predates
+`89a1d67` and now contains only comment text, part of which is itself stale." Only `175-191` is
+comment. Lines `192-199` are the complete definition of `dispatch_step` — including `:198`, the sole
+`ports.model_step` call — and `203-204` open `prose_step`.
+
+**Grounding:**
+
+```text
+$ awk 'NR>=190 && NR<=204 {printf "%d: %s\n", NR, $0}' src/core/test/stub_step.ail
+190: -- There is no `next_provider` to return: a Ports is immutable, and the old
+191: -- Ported branch returned it unchanged.
+192: export func dispatch_step(
+193:   ports: Ports,
+...
+198:   ports.model_step(model, msgs, on_chunk)
+199: }
+203: export pure func prose_step(text: string) -> ScriptedStep {
+```
+
+The old anchor was not invalidated by comment drift; it still lands on live code. That matters
+because the row's stated reason for re-grounding is wrong, and the ADR's own lesson —
+"a 're-grounded' label is a claim to re-verify, not a warrant" (ADR:40) — is what this violates.
+
+**Action:** Correct the parenthetical to "the previously cited `:175-204` predates `89a1d67`; the
+comment half (`175-191`) is partly stale (see below) and the code half is now the one-arm
+`dispatch_step` at `192-199`, cited separately above."
+
+### R5. C7's two anchors are each off by one, and one of them names a line that is not stale
+
+**Defect:** The *Known stale source comment* note (ADR:185-193) cites `stub_step.ail:170-171` as the
+stale text and `:189-190` as the self-contradiction. Both are shifted by one.
+
+**Grounding:**
+
+```text
+170: -- Dispatch one step call through the provider.                      <- accurate, not stale
+171: -- Returns both the step result and the updated provider (tail of script for Scripted).
+172: -- Loop callers thread next_provider into their recursive call.
+...
+189: --                                                                    <- bare comment marker
+190: -- There is no `next_provider` to return: a Ports is immutable, and the old
+191: -- Ported branch returned it unchanged.
+```
+
+The two stale sentences the note quotes are at `171-172`; the note's range includes `:170`, which is
+correct and must survive the source fix, and omits `:172`, which must not. The contradicting sentence
+is at `190-191`. An implementer executing the deferred source fix against the cited ranges would
+delete a good line and leave a stale one.
+
+**Action:** Change `170-171` to `171-172` and `189-190` to `190-191`.
+
+**On deferring the fix itself:** deferring is right. Moving source under an in-review ADR is the
+pattern that produced these stale anchors, and the note is explicit about why. But the deferral is
+only safe if the ranges are exact, which is what R5 fixes. Record the source fix as a work item
+somewhere durable — right now it exists only inside a prose note in a proposed ADR.
+
+### R6. `HANDOFF-review-adr-001-f1-f6-revision.md:216` still claims D6.1 was confirmed three times — the exact overstatement `5eadee7` narrowed in the ADR
+
+**Defect:** The Status line was correctly narrowed to "D6.1's zero-`RunSummary` claim by two of the
+three" (ADR:14-15). C14's handoff edits did not carry that narrowing across:
+
+```text
+$ sed -n '215,217p' .agent/projects/009_motoko_dst_execution/HANDOFF-review-adr-001-f1-f6-revision.md
+... F1, F2, F3, F5, F6,
+D6.1, the narrowed blocking clause, the upstream return-shape ruling, and M2 were each independently
+confirmed three times and are not reopened.
+```
+
+That paragraph is in the *corrected* part of the handoff — the closed output contract C14 added, not
+the preserved historical contract — so it is a live instruction, and it tells the next reader D6.1 is
+settled more firmly than it is.
+
+**The narrowing itself is correct.** Codex verifies D6.1 path-by-path at ADR:2825-2829; Kimi at
+ADR:3201-3209. Claude's section touches D6.1 only at ADR:2398, and there only to cite its *count* in
+support of a different finding — not a ruling on the zero-`RunSummary` claim. "Two of the three" is
+the accurate reading.
+
+**Action:** Narrow HANDOFF:216 to match ADR:14-15.
+
+### R7. C6's `88-99` range for `play_chunks` overshoots into the next function
+
+**Defect:** The Context row (ADR:181) cites `src/core/test/stub_step.ail:88-99` for `play_chunks`.
+`play_chunks` is `88-96`; `97` is blank and `98-99` open `assistant_count`.
+
+**Grounding:**
+
+```text
+ 96: }
+ 97:
+ 98: pure func assistant_count(msgs: [Message]) -> int {
+ 99:   match msgs {
+```
+
+Harmless to a reader, but this row was re-grounded in the pass whose stated purpose was anchor
+precision, and `assistant_count` is the function F6 is *about* — an anchor that silently spans both
+is the kind of thing that reads as intentional later.
+
+**Action:** Change `88-99` to `88-96`.
+
+## What is accurate
+
+**C11's count and routing state are right this time — ruled explicitly.** Re-derived from scratch at
+HEAD on pinned v0.26.0, not inherited:
+
+```text
+$ grep -rn "\bnow\s*(" --include=*.ail src packages
+src/core/session.ail:791, 842, 1991, 2089                                   (4)
+src/core/ext/runtime.ail:190                                                (1)
+packages/motoko-ext-compose/compose.ail:362,503,597,651,681,767             (6)
+packages/motoko-ext-compose/author_tools.ail:101                            (1)
+packages/motoko-ext-compose/authoring/dispatcher.ail:217                    (1)
+                                                                        total 13
+```
+
+Thirteen, with the table's per-file split (4 / 1 / 8) exact and the compose sub-split (`compose` 6,
+`author_tools` 1, `authoring/dispatcher` 1) exact. The wider sweep the handoff asked for finds
+nothing further: `import std/clock` appears in exactly six files repo-wide, no import is aliased
+(`grep -rn "std/clock (.*as"` → empty), so no alias hides a site; `src/core/session.ail:30` is the
+single `now` binding in the driver, confirming "no fifth"; and there are **zero** `sleep(` call sites
+in `src`, `packages`, or `scripts`. The only clock read outside the tabulated set is
+`scripts/smoke_ports_record.ail:65`, a standalone smoke module with its own `main`, correctly out of
+the session profile.
+
+Attributions verified: `:791` is inside `derive_session_id` (`session.ail:788-792`), which is called
+at `1990`, `2088`, and `2293`; `2293`'s enclosing function is `run_v2_with_conversation`
+(`:2277`), exactly as the correction says. `conversation_loop_v2` (`:2251-2269`) takes `session_id`
+as a parameter and performs no clock read — the phantom row is correctly retired. `:842` is inside
+`emit_run_summary`; `1991` and `2089` are `started_at_ms` in the two `run_v2_from_messages_*`
+entry points.
+
+"Nothing is routed at HEAD" holds, and is in fact stronger than stated: `clock_now` has **zero
+invocations repo-wide** for *both* `Ports` and `ExtPorts`. Every hit is a field construction or a
+`noop_clock_now` definition; `src/core/session.ail:675` passes `p.clock_now` through to `ExtPorts`
+without calling it.
+
+The default-profile reachability argument for the eight compose reads also holds:
+`handle_compose_tool` is reached from `on_tool_handle` (`compose.ail:758`), registered as the hook at
+`:839`, and dispatched by the core runtime at `src/core/ext/runtime.ail:338`.
+
+**C12's replacement is buildable but incorrectly biased — ruled at R1.** The *distinction* obligation
+2 draws (hermeticity inventory ≠ architecture discovery) is sound and is the most valuable sentence
+in the correction; the tool it recommends does not have the property the argument needs, though for a
+different reason than the OPEN DEFECT states, and the honest primary detector today is the
+conservative textual inventory D5 currently disparages. D5 *can* name a buildable primary detector —
+it is just not the one it names. Obligations 1 and 3 are unaffected and correct.
+
+**The enumeration is complete, with one omission.** `git show --stat d3bd9cd` touches only three
+documents (this ADR, the review handoff, `REPLY-546-park-unbounded-drain.md`) and `5eadee7` only two;
+the working tree is clean, and `git diff --stat 7b9b4a4c..HEAD -- src packages scripts Makefile
+.github` still returns only the four files the handoff lists. No source moved under this review. I
+found no corrected text outside C1–C14 plus the two `5eadee7` ADR edits — except that the handoff
+discloses only the D6.1 narrowing as post-dating `d3bd9cd`, while `5eadee7` also added the
+Status-block paragraph at ADR:18-22 announcing the open defect. Its content is disclosed elsewhere
+in the handoff, so this is an enumeration gap rather than an undisclosed edit. The caveat that
+remains unclosable: with no pre-correction blob I can certify that each cited location *contains what
+the table describes*, not that the table describes everything that *changed* there.
+
+**Confirmed sound, re-executed:**
+
+- **C5.** Five `emit_run_summary` call sites at `1325`, `1554`, `1704`, `1711`, `1762` (`:833` is the
+  definition). `1554` is the success path (`result: Ok(st.msgs)`); `1325` is inside `c2_fail`
+  (`:1301`), so call sites genuinely do not equal terminal paths. Both direct returns check out:
+  invalid history at `1528-1531` and the approval-state invariant at `1614-1616`, each returning with
+  no summary emitted.
+- **C6, the parts that hold.** `148-154` is `live_ports` with the `stepWithStream` call at `:152`;
+  `157-168` is `scripted_ports_from_steps` exactly; `192-199` is the one-arm `dispatch_step` exactly.
+  Three of five ranges exact — see R4 and R7 for the other two.
+- **C9.** The narrowing is defensible, not an over-correction. `env_get` is
+  `(string, string) -> string ! {Env}` and `approval_read` is
+  `(ApprovalRequest) -> ApprovalResolution ! {IO}` (`src/core/ports.ail:19-21`) — neither has an
+  intermediate multi-fire channel through which a value can be silently discarded, which is the loss
+  the rule is about. `env_get`'s missing-versus-empty conflation is real but is a *modeling* gap in
+  the world's synthetic environment, not a discarded-emission loss, and belongs to D1's `world_state`
+  contract rather than to this rule. No contradiction with D1's own bullets: `ADR:351-353` preserves
+  `ApprovalResolution` and the point clock read unchanged, and `ADR:349-350` names `tool_exec`'s
+  widening on the separate `ToolCallEnvelope`/deadline ground exactly as C9 says.
+- **C3, verified per finding (A6).** Every one of F1–F6 has a locatable response where C3 claims:
+  F1 at ADR:227-234, F2 at ADR:296-322, F3 at ADR:607-620, F4 at ADR:621-641, F5 at ADR:905-914,
+  F6 at ADR:236-244/245-254 and Implementation Handoff item 2 at ADR:1223-1228. No
+  `## Spike-findings disposition` heading exists. C3 is a correct ruling, not a rationalization.
+- **C14's handoff edits are additive (A7).** Each is marked as a correction over preserved history —
+  "**Corrected 2026-08-01:**" at HANDOFF:22, "The review text is intentionally left as written — it
+  is a historical record" at :200, "The contract below is retained as the historical record of what
+  the three executed rounds were asked for" at :220. The original contract is legible as history and
+  the executed rounds are not made to look like they were asked for something else. R6 is the single
+  exception, and it is a factual overstatement rather than a rewrite.
+- **C1/C2, apart from R6.** The D6.1 narrowing is correct (grounded at R6). I checked the remaining
+  "all three" claims for the same overstatement and found none: Claude rules on the narrowed
+  blocking clause at ADR:2531, on the upstream return shape at ADR:2557-2562, and on M2 at
+  ADR:2564-2570, matching Codex and Kimi.
+- **C4.** The retraction is accurate and the falsified completeness claim is stated in the ADR's own
+  voice rather than paraphrased.
+- **C10.** Softened as described — but see R2 for what it now propagates.
+- **Five prior `## Review Comments` sections counted directly before appending this one.**
+
+**Process finding, not an ADR defect.** The handoff is right that the unretrievable blob is a
+mechanical consequence of Kimi's R8. The cost is concrete and lands on this review: three of my seven
+findings (R4, R5, R7) are anchor errors that a two-line diff would have surfaced in seconds, and I
+had to re-derive every one of the fourteen corrections from prose to find them. Commit acceptance
+records before they are reviewed, one commit per pass.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. **R1 — repair D5 obligation 2.** Everything else in D5 and D4's clock gate depends on which
+   detector is named. Replace the call-graph recommendation with the site-level textual inventory,
+   state `src` + `packages` as profile roots, state the soundness boundary, name effect-row
+   reconciliation as successor.
+2. **R2 — then delete or propagate the non-citability markers.** Cannot be done before (1), because
+   what the markers say depends on whether obligation 2 is repaired.
+3. **R3 — reconcile C8, C9, and item 1** on the interim cursor mechanism. Independent of (1) and (2)
+   and can proceed in parallel, but must land before the implementation plan is written, because item
+   2 is sequenced first in that plan and is currently unbuildable as specified.
+4. **R4, R5, R7 — correct the three anchor ranges.** Mechanical; all three verified above.
+5. **R6 — narrow HANDOFF:216.** Mechanical.
+
+**Belongs to the implementation plan, not this ADR:**
+
+- Constructing the ambient-effect inventory itself, and pinning its output format so it can be
+  diffed gate-to-gate. This ADR names the detector; the plan builds it.
+- The deferred `stub_step.ail:171-172` / `190-191` comment fix, with this ADR's anchors into that
+  file re-grounded in the same change. Track it as a work item — it currently exists only as prose
+  inside a proposed ADR.
+- The declared-versus-performed effect-row reconciliation gate, and closing the
+  `agents_md.walk_agents` under-declaration (`src/core/agents_md.ail:106-110`) that demonstrates why
+  it is needed.
+- `ExtPorts.clock_now`'s first use. Zero invocations repo-wide means the seam that must route nine of
+  the thirteen reads has never executed; budget for it changing shape on first contact, as D4 says.
+
+## Accept / revise recommendation
+
+**Revise** — R1 and R3 are substantive and change what the ADR requires, R2 leaves a retracted claim
+reachable from two unmarked places, and R4/R5/R7 are three more anchor errors in a re-grounding pass
+whose stated purpose was anchor precision; none is architectural, and the architecture, the F1–F6
+dispositions, and C11's now-correct clock measurement all survive this pass intact. The upstream
+recorded-stream API blocker is untouched by this review and is not clearable here: it remains open,
+parked, unmerged, and external, D1 still requires it to land in a *release* with the toolchain
+repinned before acceptance, the `arniwesth/ailang` fork's `stepWithStream` on `v0.31.0` does not
+satisfy that, and it therefore continues to block acceptance independently of every finding above.
+
+---
+
+## Review Comments
+
+_Reviewer: Codex (model: `GPT-5`), 2026-08-01. Independent delta verification of the F1-F6
+correction pass. This is the seventh section in the working tree: five historical sections exist at
+HEAD, and an uncommitted sixth section authored by Claude Code was already present when this review
+started._
+
+_ADR body reviewed at commit `5eadee76dc66d687d697e277784e82a991d79bfb`; correction commit
+`d3bd9cd2`. Toolchain: AILANG v0.26.0, commit
+`3b52a24d24431c372ed5605289ef039592209514`._
+
+### R1. D5 still names no conservatively over-approximate routing detector, and D4 continues to rely on that unsupported bias
+
+**Defect:** D5 obligation 2 and D4's clock gate require an over-approximate source/ABI inventory,
+but the available graph is a regex approximation with incomplete call resolution and profiles that
+do not cover the required source roots; the marked defect's dropped `ports.model_step` edge is real,
+but that routed seam call is not itself an ambient-effect site and does not identify the detector the
+gate can soundly use.
+
+**Grounding:** `tools/code-graph/extractor/source_parser.py:176-199` drops a dotted call when the
+prefix is not an import binding; `tools/code-graph/extractor/config.py:12-17` defines `core` as only
+`src/core` and `all` as `src`, `scripts`, `examples`, and `packages`. Executed against the parser:
+
+```text
+$ python3 - <<'PY'
+... parse default core and all profiles; count std/clock.now rows; parse stub_step invokes ...
+PY
+core_now_rows= 5
+all_src_packages_now_rows= 13
+stub_model_step_edges= []
+```
+
+The same parser finds all thirteen direct `now()` sites when supplied the broad file set, showing
+why the dropped port edge and the ambient-site inventory are different questions. It nevertheless
+does not promise conservative coverage: it recognizes calls only through the import-resolution
+cases at `source_parser.py:181-199`, and its shipped `core` scope omits the eight package sites D4
+requires. Effect rows cannot be the primary detector at HEAD either:
+`src/core/agents_md.ail:106-117` calls `fileExists` while declaring no `{FS}` row.
+
+**Action:** Replace obligation 2's unspecified function-level/call-graph preference with a
+conservative textual inventory of ambient-effect imports and call names over explicit profile roots,
+including production code in `src/core/test/**` and every selected extension package. Treat an
+ambient import or unresolved effectful call as a fail-closed candidate for manual triage, state the
+soundness boundary, and name declared-versus-performed effect-row reconciliation as the successor
+detector. Repair D4:601-604 at the same time so it no longer asserts an unavailable bias.
+
+### R2. C8 and C13 name a cursor home but not an executable state-transition shape
+
+**Defect:** Returning a successor cursor from a widened `model_step` cannot thread it through the
+next provider call because the current port accepts no cursor input, while storing the cursor inside
+a successor `Ports` closure is exactly the second home C8 prohibits.
+
+**Grounding:** `src/core/ports.ail:17-24` defines
+`model_step: (string, [Message], callback) -> Result[...]` with no state parameter;
+`src/core/session.ail:338-357` gives `C2LoopState` only `provider: Ports` and no scripted-state field;
+and `src/core/test/scripted_ports.ail:38-48` demonstrates the required shape as
+`scripted_model_next(state) -> {result, next}`. D1 says the cursor must be an explicit
+`C2LoopState` field and not closure-captured (ADR:235-243), while Handoff item 2 says merely that a
+record return can carry next-state (ADR:1223-1228).
+
+**Action:** Specify that the interim provider operation takes the current scripted/provider state
+and returns its successor alongside `emissions` and the outcome, with the sole persistent value in
+the named `C2LoopState` field. Update Handoff item 1 to distinguish the behaviour-preserving emission
+widening from this additional bidirectional state-threading change, and reconcile C9's separately
+named widening grounds.
+
+### R3. C11's count is repo-wide, not a demonstrated default-profile-reachable set
+
+**Defect:** The thirteen-site number is exact across `src` and `packages`, but D4 incorrectly calls
+all thirteen reachable under the default profile even though the checked-in default installs neither
+`compose` nor `test_dummy`, and no checked-in profile installs both.
+
+**Grounding:** The wider sweep returned thirteen direct call sites: four in `session.ail`, one in
+`ext/runtime.ail`, and eight in `motoko-ext-compose`; the only `std/clock` import outside that set is
+the out-of-profile `scripts/smoke_ports_record.ail`. Configuration and registry execution show the
+scope mismatch:
+
+```text
+$ sed -n '36,39p' .motoko/config/default/config.json
+  "extensions": {
+    "order": ["empty_stop_guard", "progress_contract_guard", "compaction_ai", "context_mode", "exa_search", "scratchpad", "compaction_structural"],
+    "strict": false
+
+$ rg -n 'test_dummy|"compose"' .motoko/config -g 'config.json'
+.motoko/config/ailang/config.json:45:      "compose"
+```
+
+`src/core/ext/registry_generated.ail:51-69` instantiates only names present in that order.
+`src/core/ext/runtime.ail:187-198,206,222,245,287,374` performs the fifth read only for a hook whose
+id is `test_dummy`; `packages/motoko-ext-compose/compose.ail:756-758,816-840` makes the other eight
+reachable only when `compose` is installed.
+
+**Action:** Relabel thirteen as the repo-wide `src` + `packages` inventory, or name and version the
+specific D5 simulation profile whose extension set makes those sites reachable. Record per-profile
+counts separately; do not use “default profile” for a set no current default configuration realizes.
+
+### R4. C1 contradicts the live acceptance state recorded immediately below it
+
+**Defect:** The Status block says the convergent defects are corrected and that only the upstream
+release event blocks acceptance, while the same block requires a fresh delta review and marks D5's
+routing audit as a non-citable open defect.
+
+**Grounding:** ADR:4-10 says “those defects are corrected” and “One acceptance blocker remains”;
+ADR:12-22 says the corrections have not been independently reviewed and that D5 remains defective
+and cannot be cited as gate evidence.
+
+**Action:** Say one *external substrate* blocker remains, while separately listing the correction
+defects and their delta verification as internal pre-acceptance work. Do not claim the correction set
+is complete until the resulting delta passes.
+
+### R5. The handoff's supposedly exhaustive edit account omits two post-`d3bd9cd` ADR additions
+
+**Defect:** The handoff discloses only the D6.1 narrowing as post-dating `d3bd9cd`, but `5eadee76`
+also added a six-line Status paragraph and the fifteen-line D5 open-defect block.
+
+**Grounding:** Executed diff:
+
+```text
+$ git diff --unified=0 d3bd9cd..HEAD -- .agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md
+@@ -14,3 +14,9 @@
+ [D6.1 narrowing plus six-line “One correction carries a known open defect” paragraph]
+@@ -784,0 +791,15 @@
+ [fifteen-line “OPEN DEFECT in obligation 2” block]
+```
+
+The pre-correction blob remains unavailable, so C1-C14's exhaustiveness at `d3bd9cd` cannot be
+mechanically certified; every enumerated location contains the described text, but there is no
+object against which to prove that no other correction was made.
+
+**Action:** Correct the post-commit edit account to enumerate all three ADR changes in `5eadee76`
+and retain the explicit limitation that C1-C14 cannot be proven exhaustive without the missing blob.
+
+### R6. C6's second-pass re-grounding still misstates two source ranges
+
+**Defect:** The Context row overextends `play_chunks` into `assistant_count` and falsely says
+`stub_step.ail:175-204` now contains only comments even though it includes the complete live
+`dispatch_step` definition and the start of `prose_step`.
+
+**Grounding:** Executed source excerpt:
+
+```text
+$ awk 'NR>=88 && NR<=99 || NR>=190 && NR<=204 {printf "%d:%s\n", NR, $0}' src/core/test/stub_step.ail
+88:func play_chunks(...
+96:}
+98:pure func assistant_count(...
+190:-- There is no `next_provider` to return: ...
+192:export func dispatch_step(
+198:  ports.model_step(model, msgs, on_chunk)
+199:}
+203:export pure func prose_step(text: string) -> ScriptedStep {
+```
+
+The other C6 ranges hold: `148-154` is `live_ports`, `157-168` is
+`scripted_ports_from_steps`, and `192-199` is the one-arm pass-through. The serial core and blocking
+MCP anchors also hold at `tool_phase.ail:302-357` and `motoko-ext-mcp/exec.ail:63-70,165-176`.
+
+**Action:** Change `88-99` to `88-96`, and replace the “only comment text” claim with an accurate
+description: `175-191` is the partly stale comment block, `192-199` is live `dispatch_step`, and
+`203-204` begins `prose_step`.
+
+### R7. C7's stale-comment and contradiction anchors are both off by one
+
+**Defect:** The note cites `170-171` for two stale sentences and `189-190` for their contradiction,
+but the stale sentences are `171-172` and the contradiction is `190-191`.
+
+**Grounding:** `src/core/test/stub_step.ail:170` accurately says “Dispatch one step call through the
+provider”; `:171-172` incorrectly promise an updated provider and threaded `next_provider`; `:189`
+is only `--`; and `:190-191` state there is no `next_provider` to return.
+
+**Action:** Change the ranges to `171-172` and `190-191`. Deferring the source edit remains sound,
+but track it as an implementation work item and re-ground this ADR in the same source change.
+
+### R8. C14's live handoff correction still overstates D6.1 verification
+
+**Defect:** The corrected, live part of `HANDOFF-review-adr-001-f1-f6-revision.md` says D6.1 was
+confirmed three times even though the ADR correctly narrowed that claim to two.
+
+**Grounding:** HANDOFF:213-217 includes D6.1 among claims “independently confirmed three times.”
+Codex verifies the zero-`RunSummary` claim at ADR:2825-2830 and Kimi at ADR:3201-3210; Claude's
+section cites only D6.1's five-call-site count at ADR:2397-2401 and does not rule on zero returned
+summaries.
+
+**Action:** Narrow HANDOFF:215-217 to say D6.1 was confirmed by two of the three, matching ADR:13-16.
+
+## What is accurate
+
+**C11's numeric count and routing state are correct this time.** On pinned AILANG v0.26.0, the
+wider `src` + `packages` sweep finds exactly thirteen direct `now()` call sites: four in
+`src/core/session.ail` (`791`, `842`, `1991`, `2089`), one in `src/core/ext/runtime.ail` (`190`),
+and eight in `motoko-ext-compose` (`compose.ail` six, `author_tools.ail` one,
+`authoring/dispatcher.ail` one). There are no aliased `std/clock` imports. The only additional site
+is `scripts/smoke_ports_record.ail:65`, outside the claimed source/package set. The replacement
+attribution holds: `session.ail:791` is inside `derive_session_id`; `run_v2_with_conversation` calls
+it at `:2293`; `conversation_loop_v2` performs no clock read.
+
+“Nothing is routed at HEAD” also holds. This command exited 1 with no output:
+
+```text
+$ rg -n --glob '*.ail' '\.clock_now\s*\(' src packages scripts
+[no output]
+```
+
+All `clock_now` hits are definitions, record fields, or the `p.clock_now` pass-through at
+`session.ail:675`, not invocations. R3 concerns the set's profile label, not its count or routing
+column.
+
+**C12's replacement is not correctly biased as written, but a buildable primary detector exists.**
+The distinction between architecture discovery and hermeticity inventory is sound. A conservative
+textual import/call inventory over explicit semantic-profile roots can be built today and can
+genuinely over-approximate by treating unresolved imports/calls as candidates. Effect rows are the
+right eventual detector only after declared-versus-performed reconciliation closes accepted latent
+under-declarations. Obligations 1 and 3 remain sound.
+
+**The enumeration is not complete.** R5 identifies the definite post-`d3bd9cd` omissions. Because
+the pre-correction blob was never written, no reviewer can prove C1-C14 exhaustive at the correction
+commit; this is a process limitation, not an additional architecture defect.
+
+The following corrections were also re-run and confirmed:
+
+- **C3:** every F1-F6 response is locatable where claimed: F1 at ADR:224-243, F2 at :300-324, F3 at
+  :607-619, F4 at :621-645, F5 at :893-917, and F6 at :235-254 plus Handoff item 2. The missing
+  disposition heading was a bad reference, not a missing normative record.
+- **C4:** the retraction accurately records that source moved under the ADR and that the blanket
+  “rest verified unchanged” claim was false.
+- **C5:** `emit_run_summary` has five call sites at `1325`, `1554`, `1704`, `1711`, and `1762`;
+  `1325` is the shared `c2_fail` helper; `1554` is the success branch; and the direct returns at
+  `1528-1531` and `1614-1616` emit no summary. Call sites do not equal terminal paths.
+- **C7, disposition only:** deferring the contradictory source-comment edit is appropriate during a
+  findings-only review; only its anchors are wrong (R7).
+- **C9:** the loss-channel narrowing is defensible. `model_step` alone has the demonstrated
+  multi-fire callback whose emissions are discarded. `env_get`'s fallback semantics are a modeling
+  contract rather than a discarded intermediate channel, and `tool_exec` is widened on its separate
+  typed-envelope/deadline ground. R2 requires an additional state-threading ground for
+  `model_step`; it does not revive the rejected all-fields generalization.
+- **C14, historical treatment:** the corrections are explicitly labeled and preserve the spent
+  original contract as history. R8 is a remaining factual overstatement, not a rewrite of what the
+  three executed rounds were asked to do.
+- **C1/C2 ruling counts:** the D6.1 narrowing to two verifications is correct. The remaining listed
+  F1/F2/F3/F5/F6, narrowed-blocker, upstream-return-shape, and M2 rulings are present in all three
+  2026-08-01 sections. R4 concerns the current blocker count, not those historical ruling counts.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. **R3:** define or name the semantic profile whose routing gate is being counted, then state its
+   exact source/package roots; alternatively relabel thirteen as a repo-wide inventory.
+2. **R1:** name the conservative textual detector and soundness boundary over those roots, then
+   repair D4's dependent over-approximation claim and remove the non-citability marker only after the
+   replacement is independently verified.
+3. **R2:** specify the interim cursor operation's state-in/state-out shape and reconcile D1 with
+   Handoff items 1-2 and C9's widening grounds.
+4. **R4, R5, and R8:** correct the acceptance status, post-commit edit enumeration, and D6.1 count in
+   the live handoff.
+5. **R6 and R7:** correct the mechanical source anchors.
+
+**Belongs to the implementation plan, not this ADR:**
+
+- Build and pin the textual ambient-effect inventory for each versioned profile, with diffable
+  output and fail-closed triage.
+- Add declared-versus-performed effect-row reconciliation and close known under-declarations such as
+  `agents_md.walk_agents`.
+- Implement the bidirectional scripted-provider cursor transition and turn the existing F6 probe
+  green without placing state in a closure.
+- Delete the stale `stub_step.ail:171-172` comments, retain the accurate `:170`, and re-ground the ADR
+  in that source change.
+- Route the clock sites belonging to each named profile through the world seam and add first-contact
+  conformance coverage for `ExtPorts.clock_now`.
+
+## Accept / revise recommendation
+
+**Revise.** C11's raw count and routing state now hold, but R1-R3 leave the hermeticity gate and
+interim cursor mechanism underspecified or incorrectly scoped, and R4-R8 leave contradictory status,
+provenance, and anchors. The upstream recorded-stream API blocker is unchanged and independently
+continues to block acceptance: it remains open, parked, unmerged, and external; a fork prototype does
+not clear the gate, which still requires the API to land in a release, the toolchain to be repinned,
+and the positive integration probe to pass.
