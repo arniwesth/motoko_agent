@@ -5048,3 +5048,804 @@ upstream release or repins this repo; `ailang.toml:6` and `ailang.lock:2-4` rema
 the upstream API blocker remains fully in force, is not cleared by the fork prototype or this review,
 and will still block acceptance after these ADR fixes until the recorded-stream API ships in a
 release, this repository repins to that release, and the positive integration probe passes.**
+
+## Review Comments
+
+_Reviewer: Claude Code (model: `claude-opus-5`), 2026-08-01. **Delta review of the fourth correction
+pass**, per `HANDOFF-delta-review-fourth-correction-pass.md`. **Tenth section**: two reviews
+2026-07-26, three verifications of the F1–F6 revision 2026-08-01, two delta reviews of the second
+correction pass, two of the third, this delta._
+
+_Reviewed at `81b0a899c9338a63a6abfe08172ee6cb15d313ec` (branch
+`arniwesth/mot-44-motoko_dst_execution_primer`), working tree clean but for an untracked `mmd/`.
+Target range `git diff abb059d..HEAD -- .agent/projects/009_motoko_dst_execution/` — the fourth
+correction pass `f3a6a63` plus the `ai_step` scope correction `81b0a89`. Toolchain: `AILANG v0.26.0`
+(commit `3b52a24`), matching `ailang.toml:6` and `scripts/install-prerequisites.sh:39`. All three
+probes below were built and run in scratch directories outside the repository, so no `.ailang` cache
+in this tree could contribute a phantom result._
+
+### R1. D1's new exclusion has no detector — nothing in the ADR derives which hooks to exclude, and obligation 2's one enumerated classifier is blind to `ExtPorts` field calls by construction
+
+**Defect:** D1 excludes extension-issued model calls from every conformant profile, but D5's exclusion
+machinery is per-*hook* while `ai_step` is a *port field*, and the only classifier the ADR enumerates
+cannot see a call to it — so no gate step forces a profile author to exclude anything.
+
+**Grounding:**
+
+- D5's machinery is per-hook and definitional (ADR:894-896): "An explicitly excluded hook is not
+  covered, must be named in the result, and causes a fail-closed `HarnessFailure` if dispatch reaches
+  it."
+- `ai_step` is a field on `ExtCtx.ports`, not a hook (`packages/motoko-ext-abi/types.ail:62-67`).
+- Obligation 2's classifier is "the pinned toolchain's effect-bearing stdlib/builtin surface …
+  derived from `ailang builtins list --by-effect`" (ADR:979-982). `ai_step` is not in that surface:
+
+```text
+$ ailang builtins list -json | python3 -c "import sys,json; d=json.load(sys.stdin)['builtins']; \
+  print('rows:',len(d)); print('named ai_step:',[b for b in d if b['name']=='ai_step'])"
+rows: 324
+named ai_step: []
+```
+
+- ADR:1010 then declares closure-reached effects **covered**, attributing them to the defining site in
+  core rather than the extension's call site — so a site-granularity scan of `packages/` sees nothing
+  at `packages/motoko-ext-compaction-ai/compaction_ai.ail:106`.
+
+Enforcement is *available* but unnamed. `compaction_ai` reaches the port through exactly one hook —
+`register.ail:98,103-104` binds `on_pre_step` to `compact_with_ai`, which reaches
+`summarize_with_ai_result` (`compaction_ai.ail:119-120`) → `summarize_attempt` (`:104-106`) — so D5's
+per-hook exclusion can express it once someone knows to. And the detector is one grep:
+
+```text
+$ grep -rn "ports\.ai_step" packages src --include=*.ail
+packages/motoko-ext-compaction-ai/compaction_ai.ail:106:  match ctx.ports.ai_step(model, prompt_msgs) {
+packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:90:  let summary = match ctx.ports.ai_step(ctx.model, msgs) {
+```
+
+**Failure scenario:** a plan author writes a profile definition installing `compaction_ai`, runs
+obligation 2's inventory over `src` + `packages`, gets no candidate at `:106` (it is not a stdlib
+call), consults the profile-validation bullet at ADR:929-930 which fails closed only on *unclassified*
+extensions, classifies `compaction_ai` as covered, and ships a profile D1 says cannot exist. This is
+the "checklist wearing a gate's clothes" defect the earlier round named, reproduced one layer down.
+
+**Action:** Add a second, ABI-derived classifier alongside the stdlib one in obligation 2 — the
+`ExtPorts` field set read from `packages/motoko-ext-abi/types.ail:62-67`, re-derived on the same repin
+trigger — and require profile-definition validation to **fail closed when any installed package
+textually references an `ExtPorts` field that does not yet carry the world token** (today: `ai_step`).
+It is exactly parallel to the target-module rule at ADR:990-994, costs one grep, and turns D1's
+sentence into a gate.
+
+### R2. "Not conformance-eligible" contradicts D5's own machinery and the acceptance table, both of which permit a conformant profile to contain named, fail-closed excluded hooks
+
+**Defect:** D1, *Consequences*, and Handoff item 2 all say a profile installing an `ai_step`-calling
+extension is **not conformance-eligible**; D5 and the acceptance table say exclusion costs *coverage*,
+not conformance — and the pass's whole sequencing conclusion rests on the stronger reading.
+
+**Grounding:** the strong claim appears three times, all added by this pass — ADR:344-345 ("a profile
+installing any extension that calls `ExtPorts.ai_step` is not conformance-eligible in the interim"),
+ADR:1430, ADR:1477. Against it:
+
+- ADR:887-888: "An extension may appear **as covered** in a conformant profile only when every hook
+  reachable within that profile is either…" — the predicate governed is coverage, and the profile is
+  already stipulated conformant.
+- ADR:1316, the *Is the tested boundary honest?* acceptance row: "every profile-reachable hook is
+  effect-free or world-mediated, **excluded hooks** and adapter/parser boundaries are listed, and
+  dispatch to an exclusion fails closed." Listing excluded hooks is presented as evidence a profile
+  *passes*, not as a disqualification.
+
+**Failure scenario:** a plan author reads D5 and ADR:1316, installs `compaction_ai` with `on_pre_step`
+named as an excluded hook and fail-closed dispatch, and declares a conformant `default` profile —
+precisely the outcome ADR:350-351 and ADR:1432-1433 assume is impossible when they conclude "the first
+conformant profile is a purpose-built narrow one rather than a shipped configuration."
+
+**Action:** Pick one and state it once. Either (a) an installed `ai_step`-calling hook is *excluded and
+named* — conformant but not covered — in which case "the first conformant profile is a purpose-built
+narrow one" is false as written and must be restated as a *coverage* claim; or (b) an `ai_step`-reaching
+hook is a **profile-definition rejection**, not a hook exclusion, in which case say so at ADR:894-896
+and add the carve-out to ADR:1316. (b) is the reading D1 needs; it is not the reading D5 currently
+supports.
+
+### R3. Obligation 2's classifier is derivable at module granularity but not as "module plus exported symbol" — the command emits internal builtin names that appear nowhere in Motoko source, so a `(module, symbol)` classifier matches nothing
+
+**Defect:** ADR:981 specifies the detection set "as **module plus exported symbol**, derived from
+`ailang builtins list --by-effect`". That command emits the *internal* builtin symbol, never the
+exported one, so the symbol half of the specified classifier is both underivable and, if built
+literally, a silent fail-open on the obligation whose two prior revisions both failed open.
+
+**Grounding:**
+
+```text
+$ ailang builtins list -json | python3 -c "import sys,json; d=json.load(sys.stdin)['builtins']; \
+  eff=[b for b in d if not b['is_pure']]; print('effect-bearing rows:',len(eff)); \
+  print('named now:',[b for b in d if b['name']=='now']); \
+  print('non-underscore effect-bearing names:',sorted({b['name'] for b in eff}-{n for n in {b['name'] for b in eff} if n.startswith('_')}))"
+effect-bearing rows: 115
+named now: []
+non-underscore effect-bearing names: []
+```
+
+Every effect-bearing builtin is `_`-prefixed (`_clock_now`, `_fs_readFile`, `_ai_step`). Motoko source
+writes `now()` under `import std/clock (now)` (`src/core/session.ail:30,791`) — a name no row carries.
+
+Two further precision points the same run settles:
+
+- The eighteen labels include `Pure` (209 builtins). A gate treating all eighteen as effect-bearing
+  flags every `std/list` import. The effect-bearing label count is seventeen.
+- The module-less rows (`$builtin`, `core`) are **all** `Pure`; filtering on `is_pure == false` leaves
+  21 modules, every one a real `std/*`. The handoff's worry that the surface is partly module-less does
+  not survive — but only after `Pure` is dropped, and the ADR does not say to drop it.
+
+**Failure scenario:** an implementer builds the classifier as `(module, exported symbol)` pairs from the
+command, scans `src` + `packages` for `_clock_now`, gets zero hits, and certifies a clean routing
+inventory over thirteen unrouted clock reads.
+
+**Action:** Replace "as **module plus exported symbol**" with "as the set of effect-bearing target
+modules, obtained by filtering `ailang builtins list -json` on `is_pure == false` and projecting
+`module`", and note that the `name` field is the internal builtin symbol, not the exported wrapper —
+which is *why* the matching rule two paragraphs later is target-module matching rather than name
+matching. Also record that nothing re-derives it today:
+
+```text
+$ grep -rn "builtins list\|builtins --" Makefile .github scripts
+(no output)
+```
+
+### R4. "Both checked-in configurations" is false — there are fourteen, all fourteen install `compaction_ai`, and D4 in this same document treats the set as larger
+
+**Defect:** the follow-up commit `81b0a89` grounds a universal conclusion ("No checked-in configuration
+is conformance-eligible") on a premise about two configurations, and mis-states the size of the
+checked-in configuration set.
+
+**Grounding:** three sites, all introduced by `81b0a89` — ADR:39 ("Both checked-in configurations
+install `compaction_ai`"), ADR:349-350 ("appears in the extension order of **both** checked-in
+configurations, `default` and `ailang`"), ADR:1431.
+
+```text
+$ python3 -c "
+import json,glob
+ps=sorted(glob.glob('.motoko/config/*/config.json'))
+print('configs:',len(ps))
+print('with compaction_ai:',sum('compaction_ai' in json.load(open(p)).get('extensions',{}).get('order',[]) for p in ps))"
+configs: 14
+with compaction_ai: 14
+```
+
+D4 knows better in the same file: ADR:763 ("`compose` appears only in
+`.motoko/config/ailang/config.json`") and ADR:773 ("every checked-in configuration except
+`.motoko/config/ailang`") both presuppose a set larger than two. Independently confirmed: `compose`
+appears in exactly one config, `test_dummy` in none —
+
+```text
+$ grep -rl '"compose"' .motoko/config/*/config.json
+.motoko/config/ailang/config.json
+$ grep -rl "test_dummy" .motoko/config/
+(no output)
+```
+
+The conclusion at ADR:350-351 is true and **stronger** than the ground given: fourteen of fourteen, not
+two of two.
+
+**Action:** At ADR:39, ADR:349-350, and ADR:1431 replace "both checked-in configurations" with "all
+fourteen checked-in configurations", and drop the enumeration `default` and `ailang` — naming two of
+fourteen is what made the premise look narrower than the conclusion.
+
+### R5. The Status block claims the third-pass round spent zero findings on anchor questions; both third-pass reviews spent their R6 on one, and the ADR's own stale-comment note records it
+
+**Defect:** ADR:57-60 offers a measured justification for dropping the edit table — "the round reviewing
+the second pass spent six of its fifteen findings on provenance and anchor questions a diff answers
+directly; the round reviewing the third pass, with a real two-commit diff, spent **none**." The second
+half is false under the same categorization that produces the first.
+
+**Grounding:** the second-pass count checks out — 7 + 8 = 15 findings, of which ADR:3693 (R4, the
+`175-204` range), ADR:3722 (R5, "C7's two anchors are each off by one"), ADR:3774 (R7, the `88-99`
+range), ADR:4048 (R5, the omitted edit account), ADR:4070 (R6, "still misstates two source ranges"), and
+ADR:4098 (R7, "off by one") are provenance/anchor = six. But the third-pass round carries the same
+category:
+
+- ADR:4491 — `### R6. The re-corrected stale-comment note fixes two lines and leaves a third that is
+  stale by the same test`
+- ADR:4907 — `### R6. The re-corrected deferred source-comment range still leaves one stale line`
+
+Two of twelve. The ADR itself records exactly this at ADR:103-106: "**This note has now been wrong
+twice** … the second cited `171-172`, which would have left `:173`. Both were caught by review, neither
+by the authoring side."
+
+**Failure scenario:** the metric is load-bearing for a process decision (no edit table from here on).
+Overstating it by rounding two down to zero is the same unearned-claim pattern the prior rounds
+punished, and this section files three anchor findings against the fourth pass (R4, R7, R8).
+
+**Action:** Either state "spent two of twelve, both on the same `stub_step.ail` comment range", or
+narrow the category to *provenance* alone — under which the second round spent one of fifteen
+(ADR:4048) and the third spent none — and say which is meant. Do not keep the current pairing.
+
+### R6. The Status header still says "two independent delta reviews", twenty lines above a paragraph the fourth pass rewrote to distinguish four
+
+**Defect:** ADR:5-6 reads "**three independent verifications of the F1–F6 revision** and **two
+independent delta reviews of the correction pass** (all 2026-08-01, recorded below) complete". Four
+delta reviews are recorded.
+
+**Grounding:** ADR:3535 (Claude Code, second pass), ADR:3940 (Codex, second pass), ADR:4218 (Claude
+Code, "**Eighth section**", third pass), ADR:4668 (Codex, "**Ninth** independent delta review of the
+third correction pass"). The fourth pass rewrote ADR:28-30 to say "The two delta reviews of the
+*second* pass … The two delta reviews of the *third* pass …" and left ADR:5-6 unchanged.
+
+**Action:** "four independent delta reviews (two of the second correction pass, two of the third)".
+
+### R7. The clause-3 paragraph says "six call sites"; there are five
+
+**Defect:** ADR:844-845 grounds clause 3 on "six call sites all of the form
+`if is_test_dummy(h.id) then emit_dummy_hook(...)`". Five exist.
+
+**Grounding:**
+
+```text
+$ grep -rn "is_test_dummy" src packages scripts --include=*.ail
+src/core/ext/runtime.ail:197:func is_test_dummy(hook_id: string) -> bool {
+src/core/ext/runtime.ail:206:      let _ = if is_test_dummy(h.id) then emit_dummy_hook(...) else ();
+src/core/ext/runtime.ail:222:      let _ = if is_test_dummy(h.id) then emit_dummy_hook(...) else ();
+src/core/ext/runtime.ail:239:      let _ = if is_test_dummy(h.id) then {
+src/core/ext/runtime.ail:280:  let _ = if is_test_dummy(h.id) then {
+src/core/ext/runtime.ail:368:  let _ = if is_test_dummy(h.id) then {
+```
+
+Five guards; five `emit_dummy_hook` calls (`206`, `222`, `245`, `287`, `374`). The miscount is inherited
+verbatim from the third-pass review at ADR:4426, which listed the same five entries
+(`206, 222, 239/245, 280/287, 368/374`) and called them six — the correction pass copied the number
+without recounting the list beside it.
+
+**Action:** "five call sites". The substantive claim is unaffected and is confirmed below.
+
+### R8. The compose response-intercept citation opens inside `on_tool_handle` — the very path the sentence says is not required
+
+**Defect:** ADR:755-756 justifies dropping "and the model calls `Compose`" by noting "the
+response-intercept path reads the clock without any `Compose` tool call
+(`packages/motoko-ext-compose/compose.ail:756-771`)". Line 756 is the *tool-handle* hook.
+
+**Grounding:** `packages/motoko-ext-compose/compose.ail:756` is
+`export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, ...)`, closing at `:759`;
+`on_response_intercept` opens at `:761`; the clock read is `let name = "inline_${show(now())}"` at
+`:767`.
+
+**Failure scenario:** a reader checking the claim lands on `on_tool_handle` and concludes the citation
+proves the opposite of what the sentence asserts. Given that this ADR has already burned three review
+rounds on off-by-N ranges, the standard here is exact.
+
+**Action:** cite `:761-771`, or just `:767`.
+
+## What is accurate
+
+Everything below was re-run at `81b0a89` on `AILANG v0.26.0`, not inherited.
+
+**Anchors introduced or changed by this pass — all confirmed.** `src/core/session.ail:662`
+(`p.model_step(provider_api_model(model, base_url), …)` inside `ext_ai_step`); `:654-666`
+(`ext_ai_step`, signature to closing brace); `:668-677` (`ext_ports_of`, which wraps `ext_ai_step` as
+`ExtPorts.ai_step` — the closing brace is `:678`, a one-line undershoot, not worth an action);
+`:695-701` (`ported_provider`, returning bare `Ports` today); `packages/motoko-ext-abi/types.ail:63`
+(`ai_step: (string, [Msg]) -> Result[string, string] ! {…}`);
+`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`; `packages/motoko-ext-compose/compose.ail:767`;
+`src/core/test/scripted_ports.ail:20-24` and `:20-48`; `src/core/test/stub_step.ail:34` and `:192-199`
+(with `:198` the sole `model_step` call *in `dispatch_step`*); `src/core/ext/runtime.ail:190`
+(`kv("ts", jnum(intToFloat(now())))` inside `emit_dummy_hook`, `187-195`). "Four hook contexts" is
+exact — `ext_ports_of` has call sites at `session.ail:1622, 1649, 1696, 1778`.
+
+**The stale-comment note is correct on its third revision.** `171-173` is the right range and the new
+`rt` justification holds:
+
+```text
+$ git show 89a1d67^:src/core/test/stub_step.ail | sed -n '180,186p'
+export func dispatch_step(
+  provider: StepProvider,
+  model: string,
+  msgs: [Message],
+  rt: ExtRuntime,
+  on_chunk: (StreamChunk) -> () ! {IO, Trace}
+) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO, Trace} {
+```
+
+`rt` was a real parameter and `next_provider` a real return before `89a1d67`; neither is now
+(`:192-199`). `:170` is accurate and must survive, `:189` is a bare `--`, `:190-191` are correct.
+Deleting `171-173` leaves a well-formed block. Third time is right.
+
+**Configuration facts (other than the count in R4).** `compose` in `.motoko/config/ailang` only;
+`test_dummy` in no config; `compaction_ai` in all fourteen. D4's clock arithmetic survives clause 3
+unchanged — driver 4 (`session.ail:791, 842, 1991, 2089`; `:785` is a comment), compose 8
+(`compose.ail:362, 503, 597, 651, 681, 767`; `author_tools.ail:101`; `authoring/dispatcher.ail:217`),
+`emit_dummy_hook` 1, total 13; 4 / 12 / 13 for the three installation cases, and no checked-in
+configuration reaches 13.
+
+**Clause 3 is decidable, and "solely" does not smuggle back path analysis.** All five guards are
+literally `if is_test_dummy(h.id) then … else ()` with no second conjunct — no config flag, no
+execution-path condition — so the predicate is answered by reading one `if` head. `is_test_dummy` and
+`emit_dummy_hook` have zero uses outside `src/core/ext/runtime.ail`, so the clause captures no other
+core site and misses none. A hypothetical path guarded by hook identity *and* a config flag would fail
+"solely" and fall through unclassified; that is the conservative direction and no such site exists
+today, but the ADR could say so in a clause. The acceptance-table row at ADR:1316 reads correctly under
+the new hook sense: ADR:840 defines a profile-reachable hook as every hook the profile installs, which
+is exactly the quantifier that row needs. Note the interaction with R2 — under D1's exclusion,
+`compaction_ai.on_pre_step` becomes a profile-reachable hook that is neither effect-free nor
+world-mediated, which is precisely why ADR:1316's "excluded hooks … are listed" clause must be
+reconciled with D1's stronger claim.
+
+**Non-anchor claims in D5 obligation 2's new text.** `ailang.toml:9` does declare
+`"sunholo/logging" = "0.4.0"` from the registry, and its sole importer is
+`src/examples/test_logging/test_logging.ail` — an out-of-profile example, so exposure today is nil, as
+stated. The aliased-import claim is confirmed by execution: `import std/clock as c` followed by
+`c.now()` typechecks and effect-checks clean, as does the bare form, so target-module matching is
+required rather than optional.
+
+### Ruling 1 — is the A1 exclusion the right disposition, and is it enforceable?
+
+**Right disposition: yes, and axis 4 checks out exactly as the ADR argues.** D5's coverage criterion 2
+(ADR:891-892) admits an effectful hook only when it is "effectful only through D1 world-mediated ports,
+with origin tagged by extension id and explicit world state returned to the host". `ExtPorts.ai_step`
+returns `Result[string, string]` (`types.ail:63`) and no world state, so an `ai_step`-calling hook
+already fails D5's own test independently of D1 — the exclusion follows from the criterion rather than
+excepting it. (The ADR's quotation at ADR:340-341 elides "with origin tagged by extension id and"
+without an ellipsis; the substance is unaffected.) The alternative — pulling the ABI widening into the
+interim milestone — is not too-conservative-to-reject: it collapses Handoff items 1, 2, and 3 into one
+change, and the widening is not a field edit but `ExtPorts.ai_step` plus the hook result types plus the
+core dispatch results, behind an ABI major that ADR:1417-1419 says forces "a coordinated re-release of
+every extension package". Sequencing that ahead of a change testable entirely against `Scripted`
+providers is strictly worse. Exclude.
+
+**Enforceable: partially, and not as the ADR specifies it.** The *unit* works — `compaction_ai` reaches
+the port through exactly one hook, so D5's per-hook machinery can name and fail-close it. What is
+missing is the step that derives *which* hook, and the ADR's one enumerated classifier cannot see the
+call (R1). And D1's "not conformance-eligible" is stronger than what D5 and ADR:1316 actually license
+(R2). As it stands the exclusion is a statement with an available but unnamed enforcement path — one
+grep and one validation clause from being a gate.
+
+**Is the interim milestone still worth sequencing first? Yes — but the ADR's justification needs one
+concrete addition.** The purpose-built narrow profile is constructible from packages already in the
+tree: neither `empty_stop_guard` nor `progress_contract_guard` calls the port (they only *construct*
+`noop_ai_step` for their own smoke fixtures — `empty_stop_guard.ail:52-53,70`,
+`progress_contract_guard.ail:136-137,154`), and `grep -rn "ports\.ai_step"` finds no call in either. So
+D5's "pure guards and deterministic fixture hooks may form the initial profile" (ADR:900-902) is not
+aspirational here. But the ADR names no candidate, and "the first conformant profile is a purpose-built
+narrow one" is currently an assertion a reader cannot check. Name one — even as an example — and the
+sequencing argument stands on its own.
+
+### Ruling 2 — is `ProviderState`'s home and shape buildable as specified? (A2)
+
+**Home: yes, verified by execution.** A three-module probe mirroring the real graph — a ports-analogue
+declaring `ScriptedStep` (relocated) and a concrete `ProviderState`, a stub-analogue above it declaring
+`StepProvider` and `ported_provider` returning a `{ports, state}` pair, and a driver-analogue holding
+one `provider_state` field in a `C2LoopState`-analogue and threading the successor — typechecks clean:
+
+```text
+$ ailang check mod/pdriver.ail
+→ Type checking mod/pdriver.ail...
+→ Effect checking...
+
+✓ No errors found!
+```
+
+Built from scratch in `/tmp/.../a2probe`, outside the repository. The relocation drags in nothing: the
+only non-primitive dependency of `ScriptedStep` is `ToolCall` from `std/ai`, and `src/core/ports.ail:9`
+already imports `std/ai`. The ADR has **not** named an impossible home.
+
+The cycle claim behind the relocation is also correct. `src/core/test/scripted_ports.ail` imports
+`ports` (`:13`), `stub_step` (`:15`), **and** `session` (`:18`); `stub_step.ail:23` imports `ports`;
+`session.ail:133,139` imports both. So `ports.ail` can import neither, and a cycle probe reproduces the
+stated rejection:
+
+```text
+Error: dependency cycle: LDR002: dependency cycle detected: mod/a -> mod/b -> mod/a -> ...
+```
+
+The generic escape is closed as described — `type Ports[s] = { … }` is accepted as a declaration and its
+instantiation fails (`type unification failed … cannot unify old record type with *types.TApp`), and
+`grep -rnE "^\s*(export\s+)?type\s+\w+\[[a-z]" src packages --include=*.ail` returns nothing.
+
+**Shape: an acceptable plan-level detail, not a repeat of R2.** Both candidate shapes are constructible
+— my probe used the record form (`{ model_steps: [ScriptedStep] }`, empty state `{ model_steps: [] }`)
+and it composes with the `ported_provider` pair without a match at each construction site; a sum works
+too. The type *can* exist, which is what distinguished R2's failure. One genuine gap worth closing in
+the ADR rather than the plan: the type is named `ProviderState` but specified as the model cursor only,
+while the precedent it replaces (`ScriptedPortsState`, `scripted_ports.ail:20-24`) carries `approvals`
+and `clock_values` as well. Say whether the approval and clock cursors ride along in the interim
+widening or are separate later ones — otherwise the plan will guess, and guessing wrong reproduces the
+same bidirectional widening a second time.
+
+### Ruling 3 — is obligation 2's classifier derivable in a gate? (A4)
+
+**Yes at module granularity; no at symbol granularity (R3).** The command exists on the pin, exits 0,
+is byte-deterministic across runs (identical `md5sum` on two invocations), and carries a `-json` flag
+emitting `{name, module, signature, is_pure, effect, num_args, description}` per builtin — better gate
+infrastructure than the ADR claims. The disagreement it cites is real: eighteen labels from the builtin
+surface (one of which is `Pure`) against twelve in `ailang.toml:54`
+(`IO, Env, AI, Net, FS, Process, SharedMem, Clock, Stream, SharedIndex, Rand, Trace`), so neither alone
+is a classifier — confirmed. Every effect-bearing row carries a real `std/*` module once `Pure` is
+filtered, so the handoff's worry about a module-less surface does not survive, and target-module
+matching covers the bare, aliased, and qualified forms as claimed. What is not derivable is the
+"exported symbol" half, and building it literally yields a classifier that matches nothing. It is also
+not wired into CI, the Makefile, or `scripts/` today, so "re-derived on every repin" is a process
+obligation with no mechanism — acceptable only because the repin is itself a sequenced milestone.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. **R2** — decide whether an installed `ai_step`-calling hook is an *excluded hook* (conformant,
+   uncovered) or a *profile-definition rejection*. Everything below depends on which. R1's fix is only
+   well-formed once this is settled, and R4's conclusion is phrased in whichever vocabulary this picks.
+2. **R1** — add the `ExtPorts`-field classifier and the fail-closed validation clause, so the exclusion
+   chosen in (1) has a detector rather than a paragraph.
+3. **R3** — restate obligation 2's detection set as effect-bearing target modules derived by
+   `is_pure == false` from `ailang builtins list -json`, drop "exported symbol", and name the `Pure`
+   exclusion. Do this in the same edit as (2) so the two classifiers are specified side by side.
+4. **R4** — correct "both checked-in configurations" to "all fourteen" at ADR:39, :349-350, :1431.
+5. **R5, R6, R7, R8** — the four precision corrections. Independent of each other and of the above.
+
+**Belongs to the implementation plan, not this ADR:**
+
+- `ProviderState`'s concrete field shape (record vs sum) — either builds.
+- Whether the approval and clock cursors ride along in the interim widening; the ADR should pose the
+  question, the plan should answer it.
+- Naming the first purpose-built narrow conformant profile, and confirming its extension set against
+  the R1 detector once that detector exists.
+- Building both classifiers and the `171-173` source deletion, in the same change that re-grounds this
+  ADR's anchors into `src/core/test/stub_step.ail`.
+
+## Accept / revise recommendation
+
+**Revise — the fourth pass's substance holds (the extension-model-path exclusion is the right
+disposition and follows from D5's own criterion, and `ProviderState`'s home is buildable exactly as
+specified, both verified by execution), but R1 leaves that exclusion without a detector, R2 leaves D1
+and D5 saying different things about what it costs, and R3 leaves the routing classifier fail-open if
+built literally; the upstream API blocker is untouched by this pass and remains fully in force — it
+still requires the recorded-stream API in an actual AILANG *release*, this repository repinned to that
+release, and the positive integration probe passing, none of which the `v0.31.0` fork prototype
+satisfies.**
+
+**Residual risk if the five actions land as recommended:** the exclusion's detector is a textual grep
+over installed packages and inherits obligation 2's stated soundness boundary — it will not see an
+`ai_step` reached through an alias or a re-exported wrapper inside an extension, which nothing at HEAD
+does and nothing prevents. The classifier's repin re-derivation still has no CI mechanism. And the
+first conformant profile remains unnamed, so "purpose-built narrow one" is a claim the plan, not this
+ADR, will have to make good.
+
+## Review Comments
+
+_Reviewer: Codex (model: `GPT-5`), 2026-08-01. Independent delta verification of the fourth
+correction pass at `81b0a899c9338a63a6abfe08172ee6cb15d313ec`, covering
+`abb059d..81b0a89` under pinned AILANG v0.26.0 (`3b52a24`). **Eleventh section:** `HEAD` contained
+nine review sections, but the working tree already contained an uncommitted tenth section when this
+review began; that section was preserved verbatim and this review was appended at the user's explicit
+direction. Fresh typechecking probes ran outside the repository so its `.ailang` cache could not
+affect the result._
+
+### R1. The interim `ai_step` exclusion has no detector, so its universal profile rejection is not an enforceable gate
+
+**Defect:** D1 rejects every profile installing an extension that calls `ExtPorts.ai_step`, but D5's
+existing fail-closed mechanism acts only after a hook has already been classified as excluded, and
+the sole specified source classifier cannot discover this port-field use.
+
+**Grounding:** D5 says an explicitly excluded *hook* is named and fails closed if dispatch reaches it
+(ADR:894-896), and profile validation fails closed only for an *unclassified* extension, hook, or
+adapter (ADR:929-930). `ai_step` is instead a field of `ExtPorts`
+(`packages/motoko-ext-abi/types.ail:62-67`). The complete direct-reference inventory was:
+
+```text
+$ rg -n "ctx\.ports\.ai_step|ports\.ai_step|\.ai_step\(" src packages --glob '*.ail'
+packages/motoko-ext-compaction-ai/compaction_ai.ail:106:  match ctx.ports.ai_step(model, prompt_msgs) {
+packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:90:  let summary = match ctx.ports.ai_step(ctx.model, msgs) {
+```
+
+Obligation 2 derives only the toolchain's stdlib/builtin surface; that surface cannot classify an ABI
+record-field call. For the live extension, the call is reachable through one known hook:
+`packages/motoko-ext-compaction-ai/register.ail:103-105` installs `compact_with_ai` as
+`on_pre_step`, which reaches `summarize_with_ai_result` and then the call at `compaction_ai.ail:106`.
+Thus D5 can enforce a manually known exclusion, and omitting the entire extension is sufficient for a
+specific narrow profile, but nothing in the ADR derives that classification for this or a future
+extension.
+
+**Action:** Add a second, ABI-port classifier to D5 obligation 2: enumerate the `ExtPorts` fields that
+are not yet D1 world-mediated (today `ai_step`), inventory their field-reference sites across every
+in-profile source root, and fail profile-definition validation closed when an installed hook or
+extension reaches one. State the textual detector's alias/wrapper soundness boundary and require
+manual fail-closed triage for unresolved references.
+
+### R2. D1's “not conformance-eligible” rule contradicts D5's treatment of named excluded hooks
+
+**Defect:** D1 says installing an `ai_step`-calling extension disqualifies the whole profile, whereas
+D5 and the acceptance table permit a conformant profile to contain a named, uncovered hook whose
+dispatch fails closed.
+
+**Grounding:** the stronger rule appears at ADR:339-343, :1423-1433, and :1475-1478. D5 instead says
+“An explicitly excluded hook is not covered, must be named in the result, and causes a fail-closed
+`HarnessFailure` if dispatch reaches it” (ADR:894-896). The acceptance row at ADR:1316 likewise lists
+excluded hooks plus fail-closed dispatch as passing evidence for an honest tested boundary. Under
+that text, installing `compaction_ai` with `on_pre_step` classified as excluded costs coverage and
+makes an attempted dispatch fail; it does not by itself make the profile non-conformant.
+
+**Action:** Choose one contract and use it consistently. The sequencing argument is clearest if an
+installed hook that can call a non-world-mediated `ai_step` is a **profile-definition rejection**
+until the ABI major, rather than an ordinary D5 excluded hook; if that is the intended rule, add it to
+D5 and its acceptance row. Otherwise replace the “not conformance-eligible” and “first conformant
+profile” claims with coverage claims.
+
+### R3. Obligation 2's exported-symbol classifier cannot be derived from the command it names
+
+**Defect:** `ailang builtins list --by-effect` exposes internal builtin names, not exported AILANG
+symbols, so the specified `(module, exported symbol)` classifier silently matches no source calls if
+implemented literally.
+
+**Grounding:** the machine-readable form exists and is stable, but its names are internal:
+
+```text
+$ ailang builtins list -json | jq '{effect_bearing_count: ([.builtins[] | select(.is_pure == false)] | length), source_now_names: [.builtins[] | select(.name == "now")], internal_clock_now: [.builtins[] | select(.name == "_clock_now")], effect_names_not_internal_count: ([.builtins[] | select(.is_pure == false and (.name | startswith("_") | not))] | length)}'
+{
+  "effect_bearing_count": 115,
+  "source_now_names": [],
+  "internal_clock_now": [{"name":"_clock_now","module":"std/clock", ...}],
+  "effect_names_not_internal_count": 0
+}
+```
+
+Source uses the exported wrapper name `now`, for example `src/core/session.ail:30,791`. All 115
+effect-bearing rows do have real `std/*` modules; the only `$builtin`/`core` rows are pure. The label
+count also needs a qualifier:
+
+```text
+$ ailang builtins list -json | jq '[.builtins[] | if .is_pure then "Pure" else .effect end] | unique'
+["AI","Clock","Cog","DOM","Debug","Env","FS","IO","Msg","Net","Process","Pure","Rand","Secret","SharedIndex","SharedMem","Stream","Trace"]
+$ sed -n 's/^max = \[\(.*\)\]/\1/p' ailang.toml | awk -F',' '{print NF}'
+12
+```
+
+There are eighteen output groups **including `Pure`**, hence seventeen effect labels, versus twelve
+permitted effects. Neither enumeration alone is a source classifier. Two consecutive JSON
+invocations were byte-identical, `jq` parsed the documented fields, and no current gate consumes it:
+
+```text
+$ rg -n "builtins list|--by-effect|builtins.*-json" Makefile .github scripts --glob '*'
+(no output)
+```
+
+**Action:** Define the conservative classifier as the target-module set obtained from
+`ailang builtins list -json` by selecting `is_pure == false` and projecting `module`; scan every call
+bound from those modules at site granularity and manually triage pure exports. Drop “exported symbol”
+unless a separate stdlib-export mapping is specified, and say explicitly that `Pure` is filtered out.
+
+### R4. Profile-reachable clause 3 is not gate-decidable as written, and its motivating count is wrong
+
+**Defect:** “guarded solely by an installed hook's identity” is an unspecified control-path property,
+not something the profile list plus module inventory decides, and the paragraph miscounts five guard
+sites as six.
+
+**Grounding:** the current motivating sites are direct and all fit an identity-only lexical guard, but
+there are five:
+
+```text
+$ rg -n "is_test_dummy|emit_dummy_hook" src/core/ext/runtime.ail
+197:func is_test_dummy(hook_id: string) -> bool {
+206:      let _ = if is_test_dummy(h.id) then emit_dummy_hook(...) else ();
+222:      let _ = if is_test_dummy(h.id) then emit_dummy_hook(...) else ();
+239:      let _ = if is_test_dummy(h.id) then {
+245:        emit_dummy_hook(...)
+280:  let _ = if is_test_dummy(h.id) then {
+287:    emit_dummy_hook(...)
+368:  let _ = if is_test_dummy(h.id) then {
+374:    emit_dummy_hook(...)
+```
+
+The ambient `now()` is inside the callee at `runtime.ail:190`, so even this case requires proving that
+all callers are identity-guarded; it is not answered by a module inventory alone. A live mixed-guard
+shape already exists at `src/core/tool_phase.ail:222-223`:
+`is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt)` guards the effectful
+`exec_scratchpad_cell_ws` call. It can execute when `scratchpad` is installed but fails the word
+“solely”; a future identity guard plus a config flag has the same problem. The acceptance-table phrase
+“every profile-reachable hook” remains grammatically correct, but only after the underlying predicate
+is made mechanical.
+
+**Action:** Replace the semantic “solely” test with an explicit, versioned site-to-hook attribution
+in the profile/routing inventory; un-attributed core effect sites fail closed as unconditional core
+sites. Additional guards must not remove a site from the installed hook's scope. Correct “six” to
+“five.”
+
+### R5. The follow-up's “both checked-in configurations” premise is false
+
+**Defect:** The follow-up repeatedly says there are two checked-in configurations, but the repository
+tracks fourteen and every one installs `compaction_ai`.
+
+**Grounding:** the changed claims are at ADR:38-40, :345-352, and :1429-1433. The executed inventory
+was:
+
+```text
+$ git ls-files '.motoko/config/*/config.json' | wc -l
+14
+$ for f in $(git ls-files '.motoko/config/*/config.json'); do jq -e '.extensions.order | index("compaction_ai") != null' "$f" >/dev/null && printf '%s\n' "$f"; done | wc -l
+14
+```
+
+`compose` occurs only in `.motoko/config/ailang/config.json`, while `test_dummy` occurs in none. The
+universal conclusion “No checked-in configuration” is therefore supported more strongly than stated,
+but “both” and the enumeration of only `default` and `ailang` are false.
+
+**Action:** Replace all three “both checked-in configurations” claims with “all fourteen checked-in
+configurations” and avoid presenting `default` and `ailang` as an exhaustive list.
+
+### R6. The Status opening still records two delta reviews when the ADR contains four
+
+**Defect:** The Status header's review count and “both sets” summary were not updated for the two
+third-pass delta reviews that the fourth pass answers.
+
+**Grounding:** ADR:4-8 says “two independent delta reviews of the correction pass.” The historical
+sections begin at ADR:3533 and :3938 for the second pass, and :4216 and :4666 for the third pass — four
+delta reviews in two rounds. The newly rewritten ADR:28-31 itself distinguishes both rounds.
+
+**Action:** State “four independent delta reviews (two of the second correction pass and two of the
+third)” and revise the defect-set count so the opening agrees with the historical record and the body.
+
+### R7. The Status block's claimed zero anchor/provenance findings in the third-pass round is false
+
+**Defect:** The process justification says the two third-pass reviews spent no findings on anchors,
+but both reviews' R6 corrected the same stale source range.
+
+**Grounding:** ADR:57-60 says the third-pass round “spent **none**.” The two historical findings are:
+
+```text
+ADR:4491  ### R6. The re-corrected stale-comment note fixes two lines and leaves a third that is stale by the same test
+ADR:4907  ### R6. The re-corrected deferred source-comment range still leaves one stale line
+```
+
+The second-pass arithmetic is six of fifteen; the third-pass arithmetic is two of twelve, both about
+the `stub_step.ail` comment anchor. ADR:103-106 independently acknowledges that both were caught by
+review.
+
+**Action:** Replace “none” with “two of twelve, both on the same deferred source-comment range,” or
+narrow the comparison to provenance alone and recompute both sides consistently.
+
+### R8. The response-intercept anchor begins in the tool-handle hook
+
+**Defect:** The range cited to prove a response-intercept clock read without a `Compose` tool call
+starts at `on_tool_handle`, the path the sentence is distinguishing it from.
+
+**Grounding:** `packages/motoko-ext-compose/compose.ail:756` opens `on_tool_handle` and it closes at
+`:759`; `on_response_intercept` opens at `:761`, and its direct clock read is at `:767`. The ADR cites
+`:756-771` at ADR:756.
+
+**Action:** Change that citation to `packages/motoko-ext-compose/compose.ail:761-771` or simply `:767`.
+
+## What is accurate
+
+Everything below was re-run at commit `81b0a899c9338a63a6abfe08172ee6cb15d313ec` under AILANG
+v0.26.0 rather than inherited from an earlier review.
+
+**A1 ruling — the exclusion is the right sequencing disposition, but is not enforceable as
+specified.** `ExtPorts.ai_step` returns only `Result[string, string]` (`types.ail:63`), while
+`PreStepDecision`, `ToolHandleDecision`, `ResponseInterceptDecision`, and `FinalizeDecision` carry no
+successor token (`types.ail:118-164`). D5 criterion 2 requires explicit world state returned to the
+host (ADR:887-892), and D5 separately rejects hidden mutation behind decision-only hooks
+(ADR:905-909). Thus an `ai_step`-calling hook is not world-mediated under D5 today; the exclusion
+follows D5 rather than creating an exception. Pulling the hook/ABI widening into the interim milestone
+would join item 2 to the ABI major and the repin/re-release sequence, delaying a main-loop cursor fix
+that is independently testable now. Excluding that path is the better disposition. For a known
+profile, omitting the whole extension is sufficient; the missing universal detector and the conflict
+between profile rejection and hook exclusion are R1-R2.
+
+The interim milestone remains worth sequencing first. No shipped configuration is eligible under the
+strong D1 interpretation because all fourteen install `compaction_ai`, but a purpose-built narrow
+profile is constructible: the installed `empty_stop_guard` and `progress_contract_guard` hook
+decisions are pure functions (`empty_stop_guard.ail:8-40`,
+`progress_contract_guard.ail:8-120`), and neither calls `ctx.ports.ai_step`. Their `noop_ai_step`
+functions occur only in local test-context construction, not installed hook execution. This supports
+D5's statement that pure guards and deterministic fixture hooks may form the initial profile, though
+the implementation plan must name and validate the actual profile.
+
+**A2 ruling — `ProviderState`'s home and required shape are buildable as specified.** `ScriptedStep`
+depends only on primitive fields plus `ToolCall` from `std/ai` (`stub_step.ail:34-41`); `ports.ail`
+already imports `std/ai`, so relocating the type there does not import a consumer of `ports` or create
+the cycle it is meant to avoid. A fresh three-module probe declared `ScriptedStep` and
+`ProviderState = { model_steps: [ScriptedStep] }` in the ports analogue, returned
+`{ports, state}` from a stub analogue for `LiveAI | Scripted | Ported`, and threaded the successor
+through one driver-state field:
+
+```text
+$ cd /tmp/adr001_codex_a2_probe && ailang check mod/pdriver.ail
+→ Type checking mod/pdriver.ail...
+→ Effect checking...
+
+✓ No errors found!
+```
+
+The record makes live/`Ported` emptiness `{model_steps: []}`, scripted initialization
+`{model_steps: script}`, and the identity successor for stateless adapters explicit. A sum type could
+also express it. Choosing record versus sum is an acceptable implementation-plan detail because D1
+specifies the observable initialization and transition contracts and at least one concrete lower-layer
+shape composes; this is not another “specified where it cannot exist” defect.
+
+**A3 current-source ruling.** All five `emit_dummy_hook` calls are guarded directly by
+`is_test_dummy(h.id)`, and `is_test_dummy`/`emit_dummy_hook` have no other uses. No checked-in config
+installs `test_dummy`. The clause correctly motivates attributing `runtime.ail:190` to that hook, but
+R4 is required to turn the attribution into a stable gate rule.
+
+**A4 ruling — obligation 2 is derivable in a gate only after the R3 correction.** The command exists
+on the pin, exits zero, has a documented JSON mode, produced byte-identical JSON in two consecutive
+runs, and every non-pure row has a `std/*` module. The module-less builtin concern does not survive
+execution. The three accepted import forms all typechecked in fresh scratch modules:
+
+```text
+import std/clock (now)          → now()
+import std/clock as c           → c.now()
+import std/clock as c (now)     → c.now()
+
+$ ailang check mod/bare.ail; ailang check mod/aliased.ail; ailang check mod/qualified_selective.ail
+✓ No errors found!
+✓ No errors found!
+✓ No errors found!
+```
+
+Target-module matching therefore covers bare, aliased, and qualified forms by construction. The
+classifier is not wired into CI today, which is acceptable for an unimplemented gate only if the ADR
+specifies the derivation precisely and the implementation plan wires repin re-derivation before the
+non-citability marker is removed.
+
+**A5 anchors.** Confirmed: `src/core/session.ail:654-666` is `ext_ai_step`, with the second
+`model_step` call at `:662`; `:668-677` constructs the `ExtPorts` record and binds `ai_step`; its four
+call sites are `:1622,1649,1696,1778`; `:695-701` is the current bare-`Ports` `ported_provider`;
+`packages/motoko-ext-abi/types.ail:63` is the state-less ABI; and
+`packages/motoko-ext-compaction-ai/compaction_ai.ail:106` is the live extension call.
+`src/core/test/scripted_ports.ail:20-24` is the three-queue precedent and `:38-48` the explicit
+`result + next` model transition. `src/core/test/stub_step.ail:34-41` is `ScriptedStep`, and
+`:192-199` is the one-arm `dispatch_step` whose `:198` is the sole seam call in that function.
+`src/core/ext/runtime.ail:190` is the guarded dummy clock read. The compose clock read is exactly
+`:767`, subject only to R8's over-broad range.
+
+The known-stale-comment target is correct on its third revision. Current `stub_step.ail:171-173`
+promises a successor provider and an `rt` parameter that no longer exist at `:192-199`; before
+`89a1d67`, `dispatch_step` did take `rt` and return `next_provider`. Line `:170` remains accurate,
+`:189` is a bare comment marker, and `:190-191` correctly describe the current function. Deleting
+only `171-173` is exact.
+
+**Configuration and D4 arithmetic.** All fourteen configurations install `compaction_ai`; only
+`.motoko/config/ailang/config.json` installs `compose`; none installs `test_dummy`. The clock
+inventory re-counts as four live `session.ail` reads (`791,842,1991,2089`), eight compose-package
+reads (`compose.ail:362,503,597,651,681,767`, `author_tools.ail:101`,
+`authoring/dispatcher.ail:217`), and one dummy-hook read (`runtime.ail:190`): 4 / 12 / 13 under the
+three installation cases. Nothing is routed at HEAD, and no checked-in configuration realizes 13.
+
+**Status and collateral, excluding R5-R8.** The settled F1/F2/F3/F5/F6, narrowed D1 blocker,
+upstream return-shape, M2, D6.1, D4 count/routing, C3/C4/C5/C9/C14, and third-pass configuration,
+anchor, and collateral rulings match the nine historical sections. D1, Consequences, and Handoff
+item 2 consistently describe the main-loop cursor work as partial and place extension-world-token
+widening in the ABI major. No remaining body text describes item 2 as a complete extension-path
+cursor repair.
+
+The upstream blocker is unchanged: the reviewed range neither ships a recorded-stream API in an
+AILANG release nor repins this repository nor passes the required positive integration probe. The
+`v0.31.0` fork prototype does not clear any of those conditions.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. Resolve R2: define whether non-world-mediated `ai_step` use rejects the profile definition or is
+   an ordinary excluded/uncovered hook. The fourth pass's sequencing argument indicates
+   profile-definition rejection.
+2. Resolve R1: specify the ABI-port-use detector and fail-closed validation that enforce the choice
+   from step 1.
+3. Resolve R3: derive obligation 2 from non-pure target modules in JSON, remove the underivable
+   exported-symbol promise, and record the `Pure` filter.
+4. Resolve R4: replace “solely” with a mechanical site-to-hook attribution rule and correct the guard
+   count to five.
+5. Apply the factual and record corrections in R5-R8: fourteen configurations, four delta reviews,
+   two of twelve third-pass anchor findings, and the precise response-intercept range.
+
+**Belongs to the implementation plan, not this ADR:**
+
+- choose the concrete `ProviderState` representation and relocate/re-export `ScriptedStep`;
+- build both source classifiers, wire them into CI and repin invalidation, and validate their alias,
+  wrapper, and resolved-package-root boundaries;
+- name and implement the first purpose-built narrow conformance profile, then run it through the
+  profile validator; and
+- delete `stub_step.ail:171-173` and re-ground this ADR's affected source anchors in that source
+  change.
+
+## Accept / revise recommendation
+
+**Revise — the extension-model-path exclusion is the right sequencing choice and `ProviderState` is
+buildable at the specified layer, but R1-R4 leave two required gates ambiguous or fail-open and
+R5-R8 leave factual/history precision defects; the upstream API blocker remains fully in force and
+still requires a recorded-stream API in a released AILANG version, a repository repin to that
+release, and the positive integration probe passing.**
