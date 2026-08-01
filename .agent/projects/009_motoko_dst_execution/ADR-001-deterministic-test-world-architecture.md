@@ -4068,3 +4068,453 @@ provenance, and anchors. The upstream recorded-stream API blocker is unchanged a
 continues to block acceptance: it remains open, parked, unmerged, and external; a fork prototype does
 not clear the gate, which still requires the API to land in a release, the toolchain to be repinned,
 and the positive integration probe to pass.
+
+## Review Comments
+
+_Reviewer: Claude Code (model: `claude-opus-5`), 2026-08-01. **Delta review of the third correction
+pass**, per `HANDOFF-delta-review-third-correction-pass.md`. **Eighth section**: two reviews
+2026-07-26, three verifications of the F1–F6 revision 2026-08-01, two delta reviews of the second
+correction pass 2026-08-01, this delta._
+
+Reviewed at `139d4498d3c801cb7b969fd579c6b4a87b9b8a18` (working tree clean). Baseline
+`4ea8862` — the commit carrying the two delta reviews verbatim. Target range, exhaustive:
+
+```text
+$ git diff 4ea8862..HEAD --stat -- .agent/projects/009_motoko_dst_execution/
+ ...DR-001-deterministic-test-world-architecture.md | 259 +++++++++++++++------
+ ...NDOFF-delta-review-adr-001-f1-f6-corrections.md |  17 ++
+ .../HANDOFF-delta-review-third-correction-pass.md  | 216 +++++++++++++++++
+ .../HANDOFF-review-adr-001-f1-f6-revision.md       |  10 +-
+ 4 files changed, 427 insertions(+), 75 deletions(-)
+```
+
+Toolchain `AILANG v0.26.0` (commit `3b52a24`), matching the pin. Scope is the corrected text alone.
+F1/F2/F3/F5/F6, the narrowed D1 blocking clause, the upstream return-shape ruling, M2, D6.1's
+zero-`RunSummary` claim, D4's count of 13, "nothing is routed at HEAD", corrections C3/C4/C5/C9/C14,
+and the accepted 007 architecture are not reopened. Every claim below was executed at HEAD; nothing
+is inherited from the handoff, from the spike branch, or from the seven prior sections. The
+`.ailang` cache warning was honoured — all probe results below are from a clean scratch directory
+outside the repo.
+
+Having a real two-commit diff worked. Six of the previous round's fifteen findings were provenance
+or anchor errors; this round has none, because the diff answered those questions directly.
+
+### R1. The bidirectional widening has a second `Ports.model_step` call site the ADR does not account for, and it sits behind the extension ABI
+
+**Defect:** D1's new paragraph and Implementation Handoff item 2 specify that `model_step` "must
+take the current provider state and return its successor," with the sole persistent copy in a
+`C2LoopState` field. There are **two** calls through that field, not one. The second —
+`src/core/session.ail:662`, inside `ext_ai_step` — is reached from `ExtPorts.ai_step`, whose ABI
+signature carries no state in either direction and cannot reach `C2LoopState`. The widening
+therefore forces either an unbudgeted `ExtPorts` ABI change or a second, discarded copy of provider
+state: precisely the "second home" D1 prohibits by name, arriving through a path the ADR never
+mentions.
+
+**Grounding:**
+
+```text
+$ grep -rn "\.model_step(" src packages --include=*.ail
+src/core/session.ail:662:  match p.model_step(provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk) {
+src/core/test/stub_step.ail:198:  ports.model_step(model, msgs, on_chunk)
+```
+
+`session.ail:654-666` defines `ext_ai_step(p: Ports, ...)`; `session.ail:668-677` wraps it as
+`ExtPorts.ai_step`; that `ExtPorts` is constructed at four driver sites from loop state:
+
+```text
+$ grep -n "ext_ports_of" src/core/session.ail
+668:func ext_ports_of(p: Ports, base_url: string) -> ExtPorts ! {...}
+1622: ... ext_ports_of(st.provider, policy.step.provider_base_url), ...
+1649: ... ext_ports_of(st.provider, policy.step.provider_base_url), ...
+1696: ... ext_ports_of(st.provider, policy.step.provider_base_url), ...
+1778: ... ext_ports_of(st.provider, policy.step.provider_base_url), ...
+```
+
+The ABI signature admits no state (`packages/motoko-ext-abi/types.ail:63`):
+
+```text
+  ai_step: (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream},
+```
+
+The ADR's only contemplated change to this field is an effect-row addition — ADR:1290 lists
+"`ExtPorts.ai_step` gains `Trace`" among the repin's ABI major. A state parameter is nowhere
+budgeted. The Context row corrected in this pass compounds the problem by asserting `:198` "is the
+sole `ports.model_step` call": literally true of the identifier `ports`, false of the seam, and D1's
+whole argument turns on the seam's singularity.
+
+**Action:** In D1, state which of the two dispositions applies to `ext_ai_step`: (a) `ExtPorts.ai_step`
+widens too, in which case say so and move it into the ABI-major budget in *Consequences* alongside
+the `Trace` row; or (b) the extension AI path is explicitly declared out of the state-threaded
+provider seam — a fixed non-scripted sub-provider whose calls do not advance the cursor — in which
+case say why an extension-issued model call may skip the script without diverging replay. Silence is
+not an option here, because a discarded successor at `:662` is the exact defect F6 records. Also
+re-word the Context row: `:198` is the sole call *in `dispatch_step`*, not the sole call through the
+field.
+
+### R2. The state type the widening names cannot be seen by the two modules that must declare and thread it — the module graph forbids it and the generic escape does not typecheck
+
+**Defect:** D1 points at `scripted_model_next(state) -> {result, next}`
+(`src/core/test/scripted_ports.ail:38-48`) as "the shape the port lacks at both ends," and item 2
+says `ScriptedPortsState` "already models the threaded cursor in the required shape." Neither
+`src/core/ports.ail` (which must declare the widened field) nor `src/core/session.ail` (which must
+hold the `C2LoopState` field and construct initial state at `ported_provider`) can import that type:
+`scripted_ports.ail` imports both, and AILANG rejects the cycle. The obvious escape — parameterising
+`Ports` over the state type — does not typecheck on the pin.
+
+**Grounding:** the import edges that close the cycle:
+
+```text
+$ grep -n "^import src/core" src/core/test/scripted_ports.ail
+13:import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ports_shape_probe)
+15:import src/core/test/stub_step (...)
+18:import src/core/session as Session
+```
+
+`ScriptedStep` — the payload of `ScriptedPortsState.model_steps` — is declared at
+`src/core/test/stub_step.ail:34`, and `stub_step.ail:23` imports `src/core/ports`, so it is not
+visible in `ports.ail` either. The compiler rejects the cycle (clean scratch dir, no repo cache):
+
+```text
+$ ailang check cyc/a.ail
+Error: dependency cycle: LDR002: dependency cycle detected: cyc/a -> cyc/b -> cyc/a -> ...
+```
+
+A parameterised record declaration is accepted but its instantiation is unusable — both annotation
+and field access fail:
+
+```text
+$ cat p4.ail
+module p4
+export type PortsG[s] = { model_step: (string, s) -> { result: int, next: s } }
+export func use(p: PortsG[int], st: int) -> int { (p.model_step("m", st)).result }
+...
+$ ailang check p4.ail
+Error: type error in p4 (decl 0): type unification failed at [field access at p4.ail:8:5]:
+cannot unify type application PortsG[int] with { model_step: α1, | r }
+```
+
+(An annotated `let` fails the same way: `cannot unify old record type with *types.TApp`.) There are
+no parameterised record types anywhere in the tree —
+`grep -rnE "^(export )?type [A-Za-z_]+\[[a-z]" src packages` returns nothing — so this is unprecedented
+as well as unsupported. Compounding it, `state_from_step_provider`
+(`scripted_ports.ail:30-36`), the only existing initial-state constructor, is unreachable from the
+driver for the same cycle reason: `grep -rn "src/core/test/scripted_ports" src --include=*.ail`
+outside `src/core/test/` returns nothing, and `session.ail` imports only `stub_step` (`:133`).
+
+**What does work.** The shape composes fine with a record of closures and with recursive state
+threading, provided the state type is **concrete and declared in `src/core/ports.ail` or below**. A
+three-module probe mirroring the real layering (`ports` → `stub` → `session`, live and scripted
+adapters, a recursive driver threading the successor through one loop-state field) typechecks and
+effect-checks clean at v0.26.0:
+
+```text
+$ ailang check lay/session.ail
+→ Type checking lay/session.ail...
+→ Effect checking...
+✓ No errors found!
+```
+
+**Action:** Say in D1 (or in item 2) that the widening requires a concrete `ProviderState` type
+declared in `src/core/ports.ail`, that `ScriptedStep` must move to `ports.ail` or a module below it
+to make that possible, and that `ScriptedPortsState`/`scripted_model_next`/`state_from_step_provider`
+are a *design precedent* rather than reusable code — the current text reads as if they can be wired
+in. Both are relocations of source under this ADR, the pattern the Status block already names as the
+source of its stale anchors, so budget them in item 2 rather than discovering them during
+implementation.
+
+### R3. The live adapter's successor is unspecified, and `ported_provider` has no way to produce an initial state for two of its three arms
+
+**Defect:** `live_ports` is stateless — it wraps `stepWithStream` and holds nothing
+(`src/core/test/stub_step.ail:148-155`). The ADR never says what it returns as successor state, so
+every construction site now carries a field with no stated meaning on the live path. Separately,
+`ported_provider` returns a bare `Ports` and is the single funnel for all six construction sites; its
+`Ported(p) => p` and `LiveAI => live_ports(rt)` arms have no script from which an initial state could
+be derived, and the ADR does not say who initialises the new `C2LoopState` field for them.
+
+**Grounding:** `src/core/session.ail:695-701`:
+
+```text
+func ported_provider(rt: ExtRuntime, history: [Message], provider: StepProvider) -> Ports {
+  match provider {
+    Ported(p) => p,
+    LiveAI => live_ports(rt),
+    Scripted(script) => scripted_ports_from_steps(history, script)
+  }
+}
+```
+
+called at `2015, 2051, 2114, 2137, 2267, 2295` — all six confirmed. Only the `Scripted` arm carries
+a script. The identity answer does work — the layered probe above has `live_ports` return
+`next: st` unchanged and it typechecks — so this is a specification gap, not an impossibility.
+
+**Action:** One sentence in D1: the live and caller-supplied adapters return their input state
+unchanged, and `ported_provider` returns the initial state alongside the `Ports` (or a paired
+constructor does), with the empty state used for `LiveAI`/`Ported`. Name it explicitly rather than
+leaving six sites to infer it.
+
+### R4. The new "profile-reachable" definition does not classify the `test_dummy` read, and the D4 table's own "reachable when" column contradicts it
+
+**Defect:** ADR:751-759 defines a read as profile-reachable "when it occurs in the core driver or in
+a module the profile *installs*", and explicitly rules out "a read some execution path can actually
+perform". Two uses in the same section do not satisfy that definition.
+
+(a) `src/core/ext/runtime.ail:190` is in neither category: `runtime.ail` is a core module present in
+every profile, and what is conditionally installed is a *hook*, not a module. Read literally, the
+definition makes that read profile-reachable always — which contradicts "a profile installing no
+clock-reading extension has four sites to route" (ADR:687-688). It is five under the definition as
+written.
+
+(b) The table row for `compose` gives its reachability condition as "`compose` is installed **and**
+the model calls `Compose`" (ADR:671). The second conjunct is exactly the execution-path test the
+definition forbids, and the prose sixteen lines later drops it: "one installing `compose` has
+twelve" counts all eight on installation alone. Both cannot be right.
+
+**Grounding:** the read is gated on hook identity, not on module installation
+(`src/core/ext/runtime.ail:187-198`):
+
+```text
+187:func emit_dummy_hook(hook: string, key: string, val: string) -> () ! {IO, Clock} {
+190:    kv("ts", jnum(intToFloat(now()))),
+197:func is_test_dummy(hook_id: string) -> bool {
+198:  hook_id == "test_dummy" || startsWith(hook_id, "test_dummy#")
+```
+
+with six call sites all of the form `if is_test_dummy(h.id) then emit_dummy_hook(...)` (`:206, 222,
+239/245, 280/287, 368/374`).
+
+**Action:** Extend the definition to hooks: a read is profile-reachable when it occurs in the core
+driver, in a module the profile installs, **or in a core code path guarded solely by an installed
+hook's identity**. Then delete "and the model calls `Compose`" from the table's `compose` row so the
+column states an installation condition throughout, and confirm in the text that the four/twelve
+arithmetic assumes `test_dummy` is not installed. Choosing the other resolution — making the read
+unconditionally reachable — would change the stated four to five, so the choice must be made
+explicitly rather than left to the reader.
+
+### R5. D5 obligation 2 names a detector whose detection set is never enumerated, and its stated soundness boundary omits out-of-tree AILANG package source
+
+**Defect:** Obligation 2 requires "a conservative textual inventory of **ambient-effect imports** and
+call names". That term appears nowhere else in a defining role — the ADR never enumerates which
+imports are ambient-effect-bearing, never says whether the set is fixed or pinned to a toolchain
+version, and never addresses aliased imports or re-export chains. A detector whose detection set is
+undefined is not buildable, and the sole gate that would catch a missing entry is the same detector.
+Separately, the stated boundary ("blind outside the AILANG tree; does not decide reachability") is
+incomplete: a registry dependency's source is AILANG and is under neither scan root.
+
+**Grounding:** the only adjacent enumeration is per-profile and is a *forbidden* list, not an
+ambient-bearing one (ADR:782, inside "A versioned profile definition records"): "forbidden ambient
+effects/capabilities during execution". Obligation 2 does not reference it. An enumerable set does
+exist and the ADR does not cite it (`ailang.toml:54`):
+
+```text
+[effects]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex", "Rand", "Trace"]
+```
+
+The scan-root gap:
+
+```text
+$ grep -n "sunholo/logging" ailang.toml
+9:"sunholo/logging" = "0.4.0"
+```
+
+Every other dependency is `{ path = "packages/..." }`; `sunholo/logging` resolves from the registry,
+so its source is under neither `src` nor `packages` while being AILANG — a case the "outside the
+AILANG tree (TypeScript child processes, MCP subprocesses, shelled binaries)" clause does not
+describe. Exposure today is nil: `grep -rn "sunholo/logging" src packages --include=*.ail` returns
+only `src/examples/test_logging/test_logging.ail:3`, out of profile. The gate is the point, not the
+current tree.
+
+On aliasing: there are no aliased `std/clock` imports at HEAD — all five are the bare form
+`import std/clock (now)` (`session.ail:30`, `ext/runtime.ail:3`, `compose/author_tools.ail:3`,
+`compose/compose.ail:5`, `compose/authoring/dispatcher.ail:4`) — so nothing is missed today, but
+obligation 2 says nothing about the aliased or `as`-qualified forms it would have to handle.
+
+On the `ExtPorts`-closure question the handoff raises: that case is *covered*. An effect reached
+through a closure supplied by a scanned package is still written literally at a site inside that
+package, so a site-granularity textual inventory over `src` + `packages` sees it. This is the one
+part of the boundary that holds without amendment, and it is worth stating in the ADR since the
+previous two attempts turned on exactly this confusion.
+
+**Action:** Enumerate the ambient-effect import set in obligation 2 — cite `[effects] max` from
+`ailang.toml` as the pinned source and name the corresponding modules (`std/clock`, `std/fs`,
+`std/process`, `std/net`, `std/env`, `std/io`, `std/ai`, and whatever `SharedMem`/`Rand`/`Stream`
+surface as) — and state that repinning the toolchain requires re-deriving it, tying that to the
+ABI-major milestone the Consequences section already budgets. Specify that the inventory matches on
+the import *target module* rather than on bound symbol names, so aliased and qualified forms are
+covered by construction. Add out-of-tree AILANG package source as a third named limit alongside the
+two already stated, with the profile obliged to declare any registry dependency it installs.
+
+### R6. The re-corrected stale-comment note fixes two lines and leaves a third that is stale by the same test
+
+**Defect:** The *Known stale source comment* note now instructs "Delete `171-172` only."
+`src/core/test/stub_step.ail:173` is stale for the identical reason — it describes a parameter
+`89a1d67` removed from the same function — and the note's emphasis that "the exact ranges matter to
+whoever executes this fix" makes an incomplete range a defect rather than a nit.
+
+**Grounding:** the live signature takes no `rt` (`src/core/test/stub_step.ail:192-199`):
+
+```text
+192:export func dispatch_step(
+193:  ports: Ports,
+194:  model: string,
+195:  msgs: [Message],
+196:  on_chunk: (StreamChunk) -> () ! {IO, Trace}
+197:) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+```
+
+while `:173` still reads "rt is forwarded to tools_with_extensions so extension tools appear in the
+LLM catalog." The pre-commit signature confirms `rt` was a real parameter of *this* function:
+
+```text
+$ git show 89a1d67~1:src/core/test/stub_step.ail | grep -n "func dispatch_step" -A 6
+180:export func dispatch_step(
+181-  provider: StepProvider,
+182-  model: string,
+183-  msgs: [Message],
+184-  rt: ExtRuntime,
+185-  on_chunk: (StreamChunk) -> () ! {IO, Trace}
+186-) -> { result: Result[StepResult, AIError], next_provider: StepProvider } ! {AI, IO, Trace} {
+```
+
+**Action:** Change the note to "Delete `171-173`." `:170` remains accurate and must survive, as the
+note correctly says.
+
+## What is accurate
+
+Everything re-run below was executed at HEAD `139d449` on the clean tree.
+
+**A1 — is the bidirectional widening buildable as specified? No, but it is buildable.** Ruling in
+three parts. The *shape* composes: a record-of-closures field taking state and returning
+`{result, next, emissions}`, threaded through a recursive driver holding one state field, typechecks
+and effect-checks clean on pinned v0.26.0 across a three-module probe that mirrors the real
+`ports`→`stub_step`→`session` layering. A closure can accept state it did not capture, and the
+successor threads without a second home appearing. What fails is everything the ADR left unsaid: the
+state type is not expressible where the ADR points it (R2), the live adapter's successor and the
+initial state for four of six construction sites are unspecified (R3), and a second call through the
+seam sits behind an ABI that cannot carry state (R1). R1 is the one that could change the plan
+rather than just the prose. The sequencing decision — this before the repin, as a change distinct
+from the emission widening — is right, and D1's grounds for separating them (state threading is not
+a loss channel) are correctly stated and correctly kept out of the loss-channel rule's scope.
+
+**A2 — is D5 obligation 2 specified well enough to build? Not yet, but it is close, and the
+diagnosis it now rests on is correct.** The overturn is verified in full. `_binding_maps`
+(`source_parser.py:164-173`) populates `bare[sym]` for every non-aliased import, and `_resolve_call`
+(`:193-196`) resolves bare `std` calls, so `now()` under `import std/clock (now)` is seen — the
+second pass's fail-open claim was wrong and the correction is right to withdraw it. Both replacement
+disqualifiers hold: `PROFILES["core"] = ("src/core",)` (`config.py:13-17`, `packages` appears only
+under `"all"`), and the granularity claim is exact — the plain-call path dedups on
+`(from_slug, target, member)` via `seen` (`source_parser.py:248, 257-261`) while the interpolation
+path at `:275-281` has no `seen` check at all. What is missing is the detection set itself (R5). The
+`ExtPorts`-closure sub-question resolves in the correction's favour.
+
+**A3 — does the new "profile-reachable" definition hold everywhere the term is used? Not everywhere
+— two of five uses fail, both inside D4.** The acceptance-table rows survive it. *Is the tested
+boundary honest?* (ADR:1190, "every profile-reachable hook") reads correctly under installation
+scoping, since hooks are the thing a profile installs; the definition does not change what that row
+demands. *Does virtual time matter?* (ADR:1192) says "every time-bearing read reachable in the
+profile", which the definition governs and which is satisfied by it. D5's clock bullet (ADR:828-831)
+is explicitly installation-derived and consistent. The two failures are the `test_dummy`
+classification and the `compose` row's execution-path conjunct (R4). On the trade: **installation
+scoping is the right choice.** It is the conservative direction — it forces routing work for reads
+no run reaches, which fails closed — it is decidable from artifacts that exist today, and it is the
+only choice consistent with D5 obligation 3 declining to require a reachability analysis. It does not
+make any existing profile unachievable: the default profile installs no clock-reading extension, so
+its obligation is the four driver reads (five, once R4(a) is resolved), and no checked-in profile
+installs `compose` except `.motoko/config/ailang`.
+
+**A4 — the configuration facts, re-derived independently.** All hold.
+`.motoko/config/default/config.json:37` lists exactly `empty_stop_guard, progress_contract_guard,
+compaction_ai, context_mode, exa_search, scratchpad, compaction_structural` — no `compose`.
+`compose` appears in exactly one checked-in config, `.motoko/config/ailang/config.json:41-46`.
+`test_dummy` appears in no checked-in config: `grep -rn "test_dummy" .motoko/config/*/config.json`
+is empty. `parse_tokens` (`registry_generated.ail:51-65`) instantiates only names resolved from the
+configured order (`resolve(name, cfg)` at `:56`, `None => skip`), so an unlisted extension is never
+constructed. No checked-in configuration realizes all thirteen — confirmed. The arithmetic is right
+under installation scoping: 4 + 8 = 12, and excluding `test_dummy` is correct because no config
+installs it. The count and split were re-derived from scratch and match: fourteen `now()` hits across
+`src` + `packages`, of which `session.ail:785` is comment text, leaving 13 sites — 4 in
+`session.ail` (`791, 842, 1991, 2089`), 1 in `ext/runtime.ail` (`190`), 8 in `motoko-ext-compose`
+(`compose.ail:362, 503, 597, 651, 681, 767`; `author_tools.ail:101`;
+`authoring/dispatcher.ail:217`).
+
+**A5 — anchors.** Every anchor introduced or changed in `5db6706` was re-run. All exact except as
+noted in R6. `registry_generated.ail:51-65` is `parse_tokens`, opening and closing on those lines.
+`scripted_ports.ail:38-48` is `scripted_model_next`, and its return shape is literally
+`{ result: ..., next: ... }`. `config.py:13-17` is the `PROFILES` dict. `source_parser.py:176-199` is
+`_resolve_call`, exactly. `agents_md.ail:106` is `func walk_agents(current: string, acc: [string]) ->
+[string]` with no effect row, calling `fileExists` at `:109` — the under-declaration is real and
+v0.26.0 accepts it. `ports.ail:18` is the `model_step` field. In `stub_step.ail`: `88-96` is
+`play_chunks` exactly (the previous `88-99` overshot into `assistant_count` at `:98`; corrected);
+`148-154` is `live_ports` with `stepWithStream` at `:152`; `157-168` is
+`scripted_ports_from_steps`; `192-199` is `dispatch_step` in full — the fix for the previous pass's
+false "contains only comment text" claim is correct, and the new split (`175-191` comment,
+`192-199` function, `203-204` opens `prose_step`) is exact. The stale-comment note's corrected
+ranges are right as far as they go: `:171-172` are the two stale lines, `:190-191` the
+contradicting pair, `:170` accurate and must survive, `:189` a bare `--`. "Eighteen lines later"
+checks out (172→190). The previous ranges would indeed have deleted `:170` and left `:172`.
+
+**A6 — the Status block.** No self-contradiction, and no contradiction with the body. The two-blocker
+split is coherent and matches ADR:78 ("the upstream recorded-stream API and an independent review").
+Numbering the internal item as a blocker rather than following Codex R4's narrower phrasing is a
+defensible strengthening, not a regression. The "settled" list is accurate: D6.1 is now correctly
+attributed to "two of the three," matching the delta reviews' finding; the F1/F2/F3/F5/F6, narrowed
+blocking clause, upstream return shape, and M2 attributions to all three hold; the delta reviews'
+confirmations of D4's count and of C3/C4/C5/C9/C14 are correctly reported. The "no exhaustive-edit
+table, deliberately" paragraph discloses the previous table's omission accurately and the diff is
+now the record — which is what let this review skip six of the previous round's fifteen findings.
+`HANDOFF-review-adr-001-f1-f6-revision.md:216` no longer overstates D6.1 (Claude R6 / Codex R8
+answered), and `HANDOFF-delta-review-adr-001-f1-f6-corrections.md` is correctly marked spent with its
+A1 preserved as a recorded misdiagnosis.
+
+**A7 — collateral.** The withdrawn over-approximation claim is gone from both places it lived. D4's
+detector sentence (ADR:652-653) now says "a conservative textual site inventory over explicit `src` +
+`packages` roots, per D5 obligation 2" and defers rather than restating a bias; D5's routing-audit
+bullet (ADR:826-827) asserts no bias at all; the clock bullet (ADR:828-831) is derived from the
+profile's extension list. They agree with obligation 2 and with each other. Consolidating the
+non-citability marker into D5 alone is sound given D4 now defers to it. The 007 pillar-1 row
+("capability/routing audits", ADR:1173) is generic enough to remain true. The acceptance row at
+ADR:1192 cites "the routing audit" as gate evidence, which is exactly what the Status block and the
+D5 verification gate declare non-citable until verified — consistent, and correctly flagged rather
+than silently broken.
+
+**One thing the history vindicates.** The pre-`89a1d67` `dispatch_step` returned
+`{ result, next_provider: StepProvider }` — a successor *provider value*, the arrangement D1 now
+prohibits by name. D1's prohibition is not hypothetical; it is a retrospective judgement on code
+this repo actually shipped, and R1's `ext_ai_step` gap is the same defect trying to come back
+through the extension seam.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. **R1** — decide `ext_ai_step`'s disposition. It is first because it can move the widening from the
+   pre-repin group into the ABI-major milestone, which changes the sequencing D1 just set.
+2. **R2 and R3** — with (1) settled, state the concrete `ProviderState` type, its module home, the
+   `ScriptedStep` relocation it implies, the live/`Ported` successor, and who constructs the initial
+   state. These are two or three sentences in D1 plus a line in item 2.
+3. **R4** — extend the profile-reachable definition to hook-guarded core paths, delete the execution
+   conjunct from the `compose` row, and reconcile four-versus-five.
+4. **R5** — enumerate the ambient-effect import set from `ailang.toml`'s `[effects] max`, specify
+   target-module matching, and add out-of-tree package source as a third boundary limit.
+5. **R6** — one-character range fix.
+
+**Belongs to the implementation plan, not this ADR:**
+
+- Building and pinning the textual inventory, its output format, and its manual-triage workflow.
+- The `ScriptedStep`/`ProviderState` source relocation R2 requires, and re-grounding this ADR's
+  `stub_step.ail` anchors in the same change as the `:171-173` deletion.
+- Declared-versus-performed effect-row reconciliation and the `agents_md.ail:106` under-declaration
+  it would catch.
+- `ExtPorts.clock_now`'s first use — still zero call sites repo-wide, so the seam that must route
+  nine of thirteen reads remains unexercised.
+
+## Recommendation
+
+**Revise** — the third correction pass answers all fifteen delta-review findings and its factual
+claims hold, but R1 exposes a second seam call the widening cannot cross as designed, and R2/R3/R5
+leave the two newly specified mechanisms underdetermined; all six findings are bounded text changes
+to D1, D4, and D5, and none reopens the architecture. **The upstream API blocker is unchanged and
+untouched by this review**: it remains open, external, and not clearable here — the fork's working
+`stepWithStreamRecorded` on `v0.31.0` is a prototype, and D1 still requires the API in a *release*,
+the toolchain repinned, and the positive integration probe passing. R1 may enlarge what that repin
+must carry, but it does not clear it.
