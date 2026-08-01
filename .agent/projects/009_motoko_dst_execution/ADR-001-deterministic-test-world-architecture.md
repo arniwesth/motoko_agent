@@ -3,30 +3,30 @@
 Date: 2026-07-24
 Status: Proposed — author self-review, streaming spike, two independent reviews, a vertical spike
 through the real driver, AILANG v0.31.0 upstream recheck, and **three independent verifications of
-the F1–F6 revision** and **four independent delta reviews (two of the second correction pass, two of
-the third)** (all 2026-08-01,
+the F1–F6 revision** and **six independent delta reviews (two each of the second,
+third, and fourth correction passes)** (all 2026-08-01,
 recorded below) complete. The three verifications returned *Revise* and converged on one defect set;
-the two delta reviews returned *Revise* and converged on another, including an overturn of this
-side's own diagnosis. Both sets are now corrected.
+each delta round returned *Revise* and converged on another, twice overturning this side's own
+diagnosis. Every set is now corrected.
 
 **Two acceptance blockers remain, and they are different in kind.**
 
 1. **External substrate, not clearable here:** the upstream recorded-stream API is specified and
    agreed but not shipped in a released binary. D1 requires it to land in a *release*, the toolchain
    to be repinned, and the positive integration probe to pass. A fork prototype does not satisfy this.
-2. **Internal and open:** the fifth correction pass — restating the extension-model-path rule as a
-   coverage cost plus a profile-definition rejection, adding D5's second (ABI-port) classifier,
-   correcting classifier 1 to target modules, and replacing clause 3's semantic test with a
-   site-to-hook attribution table — post-dates the two delta reviews of the fourth pass and has not
+2. **Internal and open:** the sixth correction pass — closing classifier 1's completeness hole,
+   restating classifier 2's membership criterion, collapsing the rejection predicate to textual
+   reference at extension granularity, giving the site-to-hook attribution table the D6 treatment,
+   and adding the coverage floor — post-dates the two delta reviews of the fifth pass and has not
    been independently verified. D5's routing audit is not citable as gate evidence until it is.
 
 Neither the correction set nor the acceptance state should be described as complete until (2) passes
 a delta review and (1) is an actual release event.
 
-**What is required next is a delta review of the fifth correction pass, not another full round.**
+**What is required next is a delta review of the sixth correction pass, not another full round.**
 F1, F2, F3, F5, F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were
 each independently confirmed by all three verifications, and D6.1's zero-`RunSummary` claim by two of
-the three. The four delta reviews additionally confirmed D4's clock count (13) and routing state,
+the three. The six delta reviews additionally confirmed D4's clock count (13) and routing state,
 corrections C3/C4/C5/C9/C14, every configuration fact, and — in the fourth-pass round, by two
 independent three-module probes — that the extension-model-path **exclusion is the right
 disposition** and that `ProviderState`'s home in `src/core/ports.ail` is **buildable as specified**.
@@ -65,7 +65,9 @@ spent six of fifteen findings on provenance and anchor questions; the round revi
 with a real two-commit diff, spent **two of twelve — both on the same deferred `stub_step.ail`
 comment range**, not zero. Narrowed to *provenance* alone the improvement is real and clean, one of
 fifteen against none. Anchor precision is a separate problem that a diff does not solve, and this
-document has now shipped anchor errors in four consecutive passes.
+document has now shipped anchor errors in five consecutive passes, twice in the note whose only
+purpose is to record an exact deferred-edit range, and once in an edit whose only purpose was fixing
+an anchor.
 
 **There is no separate `## Spike-findings disposition (F1–F6)` section, and there was never meant to
 be one.** An earlier draft of this Status block and of
@@ -362,16 +364,34 @@ a cursor.
 Two things follow, and the second is the one with teeth:
 
 - **The conformance obligation is on the profile definition, not on the extension.** Installing an
-  `ai_step`-calling extension is permitted. Installing one **without** excluding every hook that can
-  reach the port is a **profile-definition rejection**, because the un-excluded path discards
-  provider state with no fail-closed signal. D5's validation is extended accordingly below, and D5's
-  second classifier (obligation 2) is what identifies the reaching hooks — without it this rule has
-  no detector and is a sentence rather than a gate.
+  `ai_step`-calling extension is permitted. Installing one **without excluding every hook it
+  registers** is a **profile-definition rejection**, because an un-excluded path discards provider
+  state with no fail-closed signal.
+
+  **The predicate is "the extension contains a classifier-2 field reference", and it is deliberately
+  coarser than the hooks that actually reach the port.** An earlier revision said "every hook that
+  *can reach* the port" — a call-graph property with no instrument. Classifier 2 inventories
+  *reference sites*, which is textual; nothing mapped a site to its reaching hooks, and establishing
+  that `compaction_ai`'s single reaching hook is `on_pre_step` took a four-edge manual walk through
+  two modules. An ADR that requires inspection where it has just built an artifact to avoid it
+  (clause 3, D4) is specifying a checklist. The coarse rule is decidable **today** from a grep plus
+  the extension's `register.ail`, it fails closed, and it costs only the ability to keep one hook of
+  a referencing extension. If per-hook granularity is wanted later, the refinement path is to extend
+  D4's site-to-hook attribution table to extension packages and have this rule read it; until that
+  exists, extension granularity is the rule.
+
+  **One predicate, used everywhere.** D5's exclusion paragraph, D5's validation bullet, obligation
+  2's classifier 2, and the acceptance row all state this rule, and an earlier revision phrased it
+  four different ways — "can reach the port", "reaches a non-world-mediated seam", "references a
+  field", "reaching a field from an un-excluded hook". The seam phrasing was the worst of these:
+  read literally at HEAD, where nothing is routed, it rejects every extension-installing profile.
+  The rule is **references**, at extension granularity, and every site now says so.
 - **The practical consequence is about utility, not eligibility.** `compaction_ai` calls
   `ctx.ports.ai_step` (`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`) and appears in the
   extension order of **all fourteen** checked-in configurations. Every one of them can be made
-  conformant by excluding `compaction_ai`'s `on_pre_step` — but that disables the extension's only
-  hook, so the profile is conformant and inert on the compaction path. The first *useful* interim
+  conformant by excluding `compaction_ai`'s hooks — it registers **eight**, of which `on_pre_step` is
+  the only non-trivial one and the only one reaching the port, the other seven being
+  constant-returning lambdas — so the profile is conformant and inert on the compaction path. The first *useful* interim
   profile is therefore a purpose-built narrow one rather than a shipped configuration, which is what
   D5 already contemplates in "pure guards and deterministic fixture hooks may form the initial
   profile." The interim milestone must not be planned as though it delivers a conformant *and
@@ -778,7 +798,7 @@ sites, not 4**:
 Every condition is an **installation** condition. An earlier revision qualified the `compose` row with
 "and the model calls `Compose`" — the execution-path test the definition below forbids, and factually
 too narrow besides, since the response-intercept path reads the clock without any `Compose` tool call
-(`packages/motoko-ext-compose/compose.ail:767`, inside `on_response_intercept` at `:761-771`).
+(`packages/motoko-ext-compose/compose.ail:767`, inside `on_response_intercept` at `:761-790`).
 
 **This is a repo-wide inventory, not a per-profile reachable set, and the two must not be conflated.**
 An earlier revision called the eight `compose` reads "reachable under the *default* profile, not an
@@ -881,9 +901,38 @@ clause 1, which over-counts rather than under-counts. Additional guards never re
 attributed hook's scope — attribution is a claim about which hook can cause the site to execute, not
 about the guard being the only condition.
 
+**The table is a constructed, validated artifact, not a name for an intention**, and it gets the same
+treatment D6 gives the event vocabulary because it carries the same kind of weight:
+
+- **Contents and binding.** One row per core effect site: the site, its effect, and the installed
+  hooks it is attributed to. The table is bound to a source revision and recorded in the versioned
+  profile definition above; a source change that adds, moves, or re-guards a core effect site
+  invalidates it.
+- **Correctness condition.** An attribution asserts that **installation of at least one attributed
+  hook is a *necessary* condition of the site executing** — not a sufficient one. Necessity is what
+  makes removal from clause 1 safe; sufficiency is what mixed guards break, and requiring it would
+  reintroduce the path analysis this clause exists to avoid.
+- **Scope.** Only effect sites **after** the simulation boundary are attributable. Host configuration
+  discovery, package hydration, and child-process setup sit outside that boundary and must not be
+  pulled into the world by an attribution.
+- **Validation.** At profile load, failing closed on a site that is neither in the table nor
+  unconditional-core, on an entry naming an uninstalled or unknown hook, on a stale source-revision
+  binding, and on a malformed row. A *wrong positive* attribution is the failure the fail-closed
+  default does not catch, which is why the correctness condition is stated as a checkable claim
+  rather than left to the author's judgement.
+- **Producer.** Construction, in the same change that builds obligation 2's classifiers — the
+  classifiers enumerate the effect sites the table must account for, so building either without the
+  other leaves a gap.
+- **Scheduling.** As with D6's vocabulary, **no D4 routing-completeness claim and no D5 conformance
+  claim may be scheduled before the table exists and validates.** Until then "four driver clock
+  reads" is not a derivable number: without an attribution for `src/core/ext/runtime.ail:190`, the
+  fail-closed default counts it as unconditional core and the driver obligation is five.
+
 Clause 3 is not a technicality. `src/core/ext/runtime.ail:190` reads the clock inside
-`emit_dummy_hook`, in a core module present in *every* profile, behind five call sites all of the
-form `if is_test_dummy(h.id) then emit_dummy_hook(...)` (`:206`, `:222`, `:245`, `:287`, `:374`).
+`emit_dummy_hook`, in a core module present in *every* profile, behind five `emit_dummy_hook` calls
+(`:206`, `:222`, `:245`, `:287`, `:374`), each guarded by `if is_test_dummy(h.id)` (`:206`, `:222`,
+`:239`, `:280`, `:368`) — two of the five guards are inline with their call, three open a block above
+it.
 Clauses 1 and 2 alone would classify it as always-reachable, making the driver's obligation five
 sites rather than four. Attributed to `test_dummy`, it is reachable exactly when that hook is
 installed, and no checked-in configuration installs it.
@@ -915,8 +964,10 @@ A versioned profile definition records:
 - included and excluded provider/tool adapter and parser boundaries;
 - logical resource models promised by the profile;
 - permitted diagnostic projections;
-- forbidden ambient effects/capabilities during execution; and
-- every required D3 fault class the profile waives, each with the condition that waives it.
+- forbidden ambient effects/capabilities during execution;
+- every required D3 fault class the profile waives, each with the condition that waives it; and
+- the **site-to-hook attribution table** (D4 clause 3) under which its profile-reachable set was
+  computed, bound to the source revision it was derived from.
 
 Changing any of those semantic scope fields requires a profile-version change. The execution
 manifest separately records source revision, toolchain, extension package versions, ABI version,
@@ -937,11 +988,34 @@ An explicitly excluded hook is not covered, must be named in the result, and cau
 seed happened not to exercise a direct-effect hook.
 
 **Exclusion is a coverage cost, not a conformance disqualification, and a profile installing an
-extension whose hooks are all excluded is conformant and inert rather than invalid.** What *is*
-invalid is installing an extension that reaches a non-world-mediated seam from a hook the profile has
-**not** excluded: that path discards world state with no fail-closed signal, so it is a
-**profile-definition rejection** rather than a runtime exclusion. The interim `ExtPorts.ai_step` case
-is exactly this (D1), and obligation 2's second classifier is what identifies the reaching hooks.
+extension whose hooks are all excluded is conformant and inert rather than invalid.**
+
+**A coverage floor keeps that from becoming a laundering path.** Because exclusion costs only
+coverage, "conformant" would otherwise be satisfiable by a profile that installs everything and
+excludes everything. So: **a conformant profile must cover at least one hook of every extension it
+installs, or must not list the extension as installed at all.** Installed-and-fully-excluded is not a
+conformant configuration; it is a profile that should have omitted the extension and said so. The
+interim `ai_step` case is the deliberate exception and must be named as such in the profile
+definition, because there the full exclusion is forced by a substrate limit rather than chosen — and
+naming it is what keeps the exception visible instead of ambient.
+
+**Per-hook classification reads *declared* effect rows in the interim, not performed ones.** The
+reconciling detector that would let a profile claim a hook performs less than it declares is
+explicitly unavailable (obligation 2's successor detector), so a hook declaring
+`{IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}` while returning a constant is **not**
+effect-free for classification purposes. This is the conservative reading and it has a real cost:
+three of `compaction_ai`'s seven trivial hooks declare exactly that row, so they classify as
+effectful and need exclusion despite performing nothing. The extension-granularity rejection rule
+above already forces all eight to be excluded, so the two rules agree; when the successor detector
+lands, this paragraph is what relaxes.
+
+What *is*
+invalid is installing an extension that **references** a classifier-2 `ExtPorts` field while any hook
+it registers is **not** excluded: such a path discards world state with no fail-closed signal, so it
+is a **profile-definition rejection** rather than a runtime exclusion. The interim `ExtPorts.ai_step`
+case is exactly this (D1), and obligation 2's classifier 2 supplies the reference inventory. The
+predicate is textual reference at **extension** granularity, not "reaches a seam" and not per-hook
+call-graph reachability; D1 states why.
 The distinction matters because the two failures happen at different times and only one of them is
 detectable at run time: an excluded hook fails closed when dispatch reaches it, while an un-excluded
 reaching hook runs successfully and silently.
@@ -1033,14 +1107,42 @@ requirement is replaced by three ordered obligations:
    other sees, and specifying only the first is what left D1's extension-model-path rule without a
    detector.
 
-   ***Classifier 1 — effect-bearing target modules.*** The detection set is the pinned toolchain's
-   effect-bearing stdlib surface, obtained by filtering `ailang builtins list -json` on
-   `is_pure == false` and **projecting the `module` field**. Deriving it from the toolchain rather
-   than hand-listing it matters: the two available enumerations disagree — the builtin surface
-   reports seventeen effect labels plus `Pure`, while `ailang.toml`'s `[effects] max` permits twelve
-   — so neither alone is a classifier, and a hand-maintained list would silently rot. **`Pure` must be
-   filtered out explicitly**; it is the largest group, and a gate treating all eighteen output groups
-   as effect-bearing would flag every `std/list` import.
+   ***Classifier 1 — effect-bearing target modules, derived from two sources and reconciled.*** The
+   detection set is the **union** of:
+
+   - **the builtin surface**, obtained by filtering `ailang builtins list -json` on
+     `is_pure == false` and projecting the `module` field (21 modules on the pin); and
+   - **the pinned stdlib's own source**, scanned for `export func … ! {…}` with a non-empty effect
+     row, over `~/.local/share/ailang/std/*.ail`.
+
+   **The builtin projection alone is insufficient, and this is the third revision of this obligation
+   to be corrected — the reason is recorded so a fourth does not rediscover it.** An effect-bearing
+   stdlib module need not have an effect-bearing *builtin row*, because its effects can be defined in
+   AILANG source rather than in the builtin registry. `std/sem` is the live case: its only builtin
+   rows are the pure `_embedding_decode`/`_embedding_encode`, so the projection omits the module
+   entirely — while `std/sem.ail:374,385` export `load_frame` and `store_frame` at `! {SharedMem}`.
+   `src/core/cache.ail:29` imports both and calls them at `:60` and `:75`, reached from
+   `src/core/rpc.ail:200` via `get_hint`. A classifier built on the projection alone certifies a clean
+   inventory over an unrouted `SharedMem` pair **in the core driver**. `std/extension` is a second
+   case (`requireWorkdirFile` at `! {FS}`, imported by `packages/motoko-ext-omnigraph/register.ail:4`).
+   The trap is subtle enough to have survived two reviews that prescribed the projection: every
+   derived row *does* carry a real `std/*` module, which is true and irrelevant — the question is
+   whether every effect-bearing module the repo **imports** has a derived row, and ten of the
+   twenty-one `std/*` modules this repo imports do not.
+
+   **A reconciliation check is therefore mandatory before the routing inventory may be cited**: compare
+   the derived set against every `std/*` module actually imported under the scan roots, and treat any
+   imported module not *proven* effect-free as a fail-closed candidate for manual triage. Proving a
+   module effect-free means all its builtin rows are pure **and** its source exports no function with
+   a non-empty effect row. This check is two commands and is what the previous two revisions both
+   skipped.
+
+   Deriving the set from the toolchain rather than hand-listing it matters: the two available
+   enumerations disagree — the builtin surface reports seventeen effect labels plus `Pure`, while
+   `ailang.toml`'s `[effects] max` permits twelve — so neither alone is a classifier, and a
+   hand-maintained list would silently rot. **`Pure` must be filtered out explicitly**; it is the
+   largest group, and a gate treating all eighteen output groups as effect-bearing would flag every
+   `std/list` import.
 
    **The classifier is target modules, not symbols, and this is a correction.** An earlier revision
    specified it "as module plus exported symbol". That is underivable from the named command and
@@ -1051,16 +1153,36 @@ requirement is replaced by three ordered obligations:
    over thirteen unrouted clock reads. That the `name` field is internal is precisely *why* the
    matching rule below is target-module matching.
 
-   ***Classifier 2 — non-world-mediated `ExtPorts` fields.*** Enumerate the fields of `ExtPorts`
-   (`packages/motoko-ext-abi/types.ail:62-67`) that do not yet return world state — today `ai_step` —
-   and inventory their field-reference sites across every in-profile source root. **Profile-definition
-   validation fails closed when an installed extension references such a field from a hook the
-   profile has not explicitly excluded** (D1). This classifier is not derivable from the toolchain;
-   its source is the ABI type, and it is re-derived on the same repin trigger and retired field by
-   field as the world-token ABI lands. Its soundness boundary is the same textual one as classifier 1
-   and is stated there; an `ai_step` reached through an alias or a re-exported wrapper inside an
-   extension would not be seen, which nothing at HEAD does and nothing currently prevents, so
-   unresolved references are fail-closed candidates for manual triage.
+   ***Classifier 2 — `ExtPorts` fields that drop a cursor D1 requires threaded.*** The membership
+   criterion is: **a field whose call is the extension-side entry to a core seam that D1 requires to
+   thread successor state, and which cannot return it.** Today that is exactly **`ai_step`**, because
+   `Ports.model_step`'s successor is the only cursor D1 currently demands and `ExtPorts.ai_step`
+   returns `Result[string, string]`. Inventory its field-reference sites across every in-profile
+   source root.
+
+   **`clock_now`, `proc_exec`, and `env_get` are explicitly *not* members**, and saying so is
+   load-bearing rather than tidy. An earlier revision defined the set as "fields that do not yet
+   return world state", which selects all four — and under that reading the clock bullet above becomes
+   self-defeating: it *requires* a `compose` profile to route its eight reads **into**
+   `ExtPorts.clock_now`, which the rejection rule would then reject six lines later. Those three
+   fields lose no cursor. They are point reads and effect crossings that the world protocol will
+   eventually mediate, but nothing in the interim depends on them returning successor state, so they
+   are routing destinations rather than rejection triggers.
+
+   The set is therefore one field today and grows only when D1 requires another cursor threaded
+   through an extension-side entry. It does not "retire field by field": it is retired **once**, by
+   the single world-token ABI major that *Consequences* budgets, and an earlier revision's
+   field-by-field phrasing implied a schedule that does not exist.
+
+   ***Classifier 2's own matcher boundary*** — it does not inherit classifier 1's wholesale, because
+   an ABI-field scan and a module-import scan fail differently. The shared limits are the fixed
+   `src` + `packages` roots and the refusal to decide reachability. Its own limits: a field reached
+   through a **local alias, a re-export, a wrapper function, or a computed field access** is not seen.
+   Nothing at HEAD does any of these — the only two `ai_step` references are
+   `packages/motoko-ext-compaction-ai/compaction_ai.ail:106` and
+   `packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:90` — and nothing prevents them, so
+   an unresolved or indirect field access is a fail-closed candidate for manual triage rather than a
+   pass.
 
    **Re-deriving both classifiers is a required step of every toolchain repin**, tied to the
    ABI-major milestone *Consequences* already budgets, and both derived sets are recorded with the
@@ -1394,7 +1516,7 @@ all answers below are supported by an automated gate:
 |---|---|
 | Does one seed generate an execution rather than only values? | At multiple real effect requests, the seeded world chooses responses/faults/latencies that influence subsequent production requests; discovery has zero unexpected harness failures and records the resolved interaction sequence. |
 | Is there a modeled logical environment? | Provider, typed tool execution, approval, synthetic environment, runtime randomness if used, clock, and profile-declared logical resource state flow through one explicit state-threaded world with checked transition semantics. |
-| Is the tested boundary honest? | The result names the execution manifest and profile; every profile-reachable hook is effect-free, world-mediated, or explicitly excluded; excluded hooks and adapter/parser boundaries are listed; dispatch to an exclusion fails closed; and profile-definition validation rejected no installed extension reaching a non-world-mediated `ExtPorts` field from an un-excluded hook (D5 classifier 2). |
+| Is the tested boundary honest? | The result names the execution manifest and profile; every profile-reachable hook is effect-free, world-mediated, or explicitly excluded; excluded hooks and adapter/parser boundaries are listed; dispatch to an exclusion fails closed; profile-definition validation found no installed extension that references a classifier-2 `ExtPorts` field while registering an un-excluded hook, and none required rejection (D5 classifier 2); and every installed extension has at least one covered hook (the coverage floor). |
 | Do injected faults reach production recovery code? | A bounded seed corpus generated by the real generator reaches and replays every required fault class the profile does not waive, together with its mapped production branch, evidenced by D11's branch-reached counters read from D3's catalogue; every waived class is named with its waiving condition. |
 | Does virtual time matter? | Every time-bearing read reachable in the profile is routed through the world clock — no residual direct `std/clock` read survives the routing audit — and two replayable programs holding non-time inputs constant but changing generated latency/clock movement produce the expected completion-versus-timeout or equivalent deadline result without invoking an OS timeout. |
 | Is production logic under test? | The runner calls the real traced session driver with threaded world state; no test transition loop computes state-machine decisions or history. |
@@ -1557,8 +1679,11 @@ be sequenced first, because two of them change what the migration costs and one 
 
    **This item does not fix the extension model path**, and that is a decision, not an oversight:
    `ext_ai_step` reaches the same seam through an ABI that cannot return a successor (D1). It fixes
-   the main loop, and profiles installing an `ai_step`-calling extension stay non-conformant until
-   the world-token ABI lands. Budget three things the ADR names and the plan must sequence: a
+   the main loop. A profile installing an `ai_step`-referencing extension is conformant only by
+   excluding **every hook that extension registers** — a coverage cost, and a profile-definition
+   rejection if it does not (D1, D5). That is also the one case exempt from the coverage floor, and
+   it must be named as such in the profile definition. Budget three things the ADR names and the
+   plan must sequence: a
    concrete `ProviderState` declared in `src/core/ports.ail`, the **relocation of `ScriptedStep`** to
    that module or below (the current type is unreachable from both consumers without a module cycle),
    and `ported_provider` returning an initial-state pair. `ScriptedPortsState`/`scripted_model_next`
