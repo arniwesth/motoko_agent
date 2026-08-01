@@ -11,9 +11,15 @@ binary.
 
 **What is required next is a fresh delta review, not a fourth full round.** The corrections listed
 below post-date all three verification sections, so no reviewer has seen them; but F1, F2, F3, F5,
-F6, D6.1, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were each
-independently confirmed by all three and are not reopened by this pass. A delta reviewer's target is
-the corrected text alone.
+F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were each
+independently confirmed by all three, and D6.1's zero-`RunSummary` claim by two of the three, so none
+of those is reopened by this pass. A delta reviewer's target is the corrected text alone.
+
+**One correction carries a known open defect**, marked in place at the end of D5: the replacement
+routing-audit rule recommends a tool that under-approximates on function-valued seams, which is the
+wrong failure direction for a hermeticity inventory. It is recorded rather than repaired so that the
+repair is adjudicated by verification rather than by a third unreviewed pass over the same
+paragraph. D5's routing audit is not gate-citable until that is resolved.
 
 **There is no separate `## Spike-findings disposition (F1–F6)` section, and there was never meant to
 be one.** An earlier draft of this Status block and of
@@ -781,6 +787,21 @@ obligations:
 3. **If constructor-level reachability is ever genuinely required**, specify the analysis, its
    soundness boundary, its profile roots, and its fail-closed behavior *before* naming it as
    name-adoption gate evidence. Nothing in this ADR currently requires it.
+
+> **OPEN DEFECT in obligation 2, recorded 2026-08-01 by the authoring side and not yet repaired.**
+> The over-approximation argument is inverted for this repo's call-graph, which
+> *under*-approximates on exactly the construct that matters. `_resolve_call`
+> (`tools/code-graph/extractor/source_parser.py:176-199`) resolves a dotted call only when its
+> prefix is an import alias; for `ports.model_step(...)` the prefix is a local binding, so the call
+> is **discarded rather than over-reported**. Since every effect in this architecture crosses a
+> function-valued seam (`Ports`, `ExtPorts`, `ExtensionHooks`), a hermeticity inventory built on
+> that graph fails **open**, which is the failure direction obligation 2 claims to avoid. The
+> distinction obligation 2 draws — hermeticity inventory is not architecture discovery — stands; the
+> tool it recommends does not. This is deliberately left as a marked defect rather than repaired in
+> place, because the correction pass that introduced it has not been independently verified and a
+> third unreviewed rewrite of the same paragraph would repeat the pattern that produced it. The
+> delta review named in `HANDOFF-delta-review-adr-001-f1-f6-corrections.md` (A1) adjudicates the
+> repair. **D5's routing audit must not be cited as name-adoption gate evidence until it does.**
 
 Test-only code may:
 
