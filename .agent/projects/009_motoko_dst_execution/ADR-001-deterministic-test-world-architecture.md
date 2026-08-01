@@ -3,23 +3,46 @@
 Date: 2026-07-24
 Status: Proposed — author self-review, streaming spike, two independent reviews, a vertical spike
 through the real driver, AILANG v0.31.0 upstream recheck, and **three independent verifications of
-the F1–F6 revision** (all 2026-08-01, recorded below) complete. All three returned *Revise* and
-converged on the same defect set; those defects are corrected in the 2026-08-01 second pass
-described under *Grounded at* below. **One acceptance blocker remains and it is now purely a release
-event**: the upstream recorded-stream API is specified and agreed but not shipped in a released
-binary.
+the F1–F6 revision** and **two independent delta reviews of the correction pass** (all 2026-08-01,
+recorded below) complete. The three verifications returned *Revise* and converged on one defect set;
+the two delta reviews returned *Revise* and converged on another, including an overturn of this
+side's own diagnosis. Both sets are now corrected.
 
-**What is required next is a fresh delta review, not a fourth full round.** The corrections listed
-below post-date all three verification sections, so no reviewer has seen them; but F1, F2, F3, F5,
-F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were each
-independently confirmed by all three, and D6.1's zero-`RunSummary` claim by two of the three, so none
-of those is reopened by this pass. A delta reviewer's target is the corrected text alone.
+**Two acceptance blockers remain, and they are different in kind.**
 
-**One correction carries a known open defect**, marked in place at the end of D5: the replacement
-routing-audit rule recommends a tool that under-approximates on function-valued seams, which is the
-wrong failure direction for a hermeticity inventory. It is recorded rather than repaired so that the
-repair is adjudicated by verification rather than by a third unreviewed pass over the same
-paragraph. D5's routing audit is not gate-citable until that is resolved.
+1. **External substrate, not clearable here:** the upstream recorded-stream API is specified and
+   agreed but not shipped in a released binary. D1 requires it to land in a *release*, the toolchain
+   to be repinned, and the positive integration probe to pass. A fork prototype does not satisfy this.
+2. **Internal and open:** the third correction pass — the repairs to D4's profile labelling, D5's
+   routing detector, and D1's interim cursor mechanism — post-dates both delta reviews and has not
+   been independently verified. D5's routing audit is not citable as gate evidence until it is.
+
+Neither the correction set nor the acceptance state should be described as complete until (2) passes
+a delta review and (1) is an actual release event.
+
+**What is required next is a delta review of the third correction pass, not another full round.**
+F1, F2, F3, F5, F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were
+each independently confirmed by all three verifications, and D6.1's zero-`RunSummary` claim by two of
+the three. The two delta reviews additionally confirmed D4's clock *count* (13) and routing state,
+and confirmed corrections C3, C4, C5, C9, and C14. None of those is reopened.
+
+**The second correction pass marked an open defect in D5 that was itself misdiagnosed, and both
+delta reviews overturned it.** That marker claimed the routing audit failed open because
+`tools/code-graph` discards calls through function-valued seams. The discarded call
+(`ports.model_step(...)`) is a *routed* seam call, which is precisely what should be absent from an
+ambient-effect inventory, and the parser does resolve direct ambient calls through its bare-import
+path. The genuine disqualifiers are scope and granularity: `PROFILES["core"]` is `("src/core",)` and
+never contained `packages/`, so the audit as scoped missed every extension-package site; and the
+emitted rows are not sites. D5 obligation 2 is repaired accordingly — a conservative textual site
+inventory over explicit `src` + `packages` roots — and the misdiagnosis is recorded there rather than
+deleted, because a wrong diagnosis that survives into a fix is the more instructive half.
+
+**The third pass also carries no exhaustive-edit table, deliberately.** The second pass shipped one
+(C1–C14) and it was incomplete: it disclosed only the D6.1 narrowing as post-dating `d3bd9cd`, while
+`5eadee7` also added a Status paragraph and the D5 open-defect block. Both delta reviews caught the
+omission. Every pass from here is committed before it is reviewed, so a delta reviewer should read
+`git log` and diff the commits rather than trust a hand-maintained enumeration — which is what the
+prior two passes could not offer and what cost the first delta review three of its seven findings.
 
 **There is no separate `## Spike-findings disposition (F1–F6)` section, and there was never meant to
 be one.** An earlier draft of this Status block and of
@@ -178,7 +201,7 @@ Load-bearing current-source anchors:
 | Approval and session clock bypass `Ports` | `src/core/session.ail:1619` (`readLine`), `1991`, `2089` (`now()`) — re-grounded 2026-08-01 |
 | Success emits `RunSummary`/`DoneEvent` without appending them to the returned trace; other errors return directly | **Five** `emit_run_summary` call sites in `src/core/session.ail` — `1325`, `1554`, `1704`, `1711`, `1762` (`1554-1555` is the success path; `1325` is the shared `c2_fail` helper, so call sites do **not** equal terminal paths). The "return directly" clause is grounded separately on the two terminal returns that emit no summary at all: invalid history at `1528-1531` and the approval-state invariant at `1614-1616` — re-grounded 2026-08-01 (second pass) |
 | Native tools execute sequentially and directly against FS/Process | `src/core/tool_runtime.ail:151-165` |
-| Core tool dispatch is serial; MCP execution is a blocking call; provider chunks are callback-ordered | `src/core/tool_phase.ail:302-357`; `packages/motoko-ext-mcp/exec.ail:63-70,165-176`; `src/core/test/stub_step.ail:88-99` (`play_chunks`), `148-154` (the live closure passing `on_chunk` to `stepWithStream`), `157-168` (the scripted closure), `192-199` (the one-arm `dispatch_step` pass-through) — re-grounded 2026-08-01 (second pass); the previously cited `:175-204` predates `89a1d67` and now contains only comment text, part of which is itself stale (see *Known stale source comment* below) |
+| Core tool dispatch is serial; MCP execution is a blocking call; provider chunks are callback-ordered | `src/core/tool_phase.ail:302-357`; `packages/motoko-ext-mcp/exec.ail:63-70,165-176`; `src/core/test/stub_step.ail:88-96` (`play_chunks`), `148-154` (the live closure passing `on_chunk` to `stepWithStream`), `157-168` (the scripted closure), `192-199` (the one-arm `dispatch_step` pass-through, whose `:198` is the sole `ports.model_step` call) — re-grounded 2026-08-01 (third pass); the previously cited `:175-204` predates `89a1d67` and straddles two things: `175-191` is the comment block, partly stale (see *Known stale source comment* below), while `192-199` is live `dispatch_step` and `203-204` opens `prose_step` |
 | The current streaming wrapper cannot return the chunks it projects live | `packages/motoko-ext-ai-compat/ai_compat.ail:31-37,60-71,197-220` |
 | Neither state-returning nor `SharedMem`-capturing callbacks fit the pinned real API | `spike/README.md`; `spike/probe_state_returning_callback_rejected.ail`; `spike/probe_sharedmem_callback_rejected.ail` |
 | Latest upstream does not close the streaming-capture gap | AILANG MCP `ailang_versions` reports v0.30.0 latest; release `std/ai.ail:330-337` at `e37b370d1d7a9c4e7136b319e38bec4d5f2bd9a0` retains `on_chunk: (StreamChunk) -> () ! {IO}` and returns only `Result[StepResult, AIError]`; both negative probes reproduce under the checksum-verified v0.30.0 compiler |
@@ -188,14 +211,17 @@ Load-bearing current-source anchors:
 | Effectful extensions can bypass `ExtCtx.ports` | `packages/motoko_scratchpad/scratchpad.ail:90-101`; `packages/motoko-ext-mcp/exec.ail:165-170` |
 | Core provider retry policy is count/budget based | `src/core/recovery.ail:12-18` |
 
-**Known stale source comment.** `src/core/test/stub_step.ail:170-171` still states that `dispatch_step`
+**Known stale source comment.** `src/core/test/stub_step.ail:171-172` still states that `dispatch_step`
 "Returns both the step result and the updated provider (tail of script for `Scripted`)" and that
 "Loop callers thread `next_provider`" — the pre-`89a1d67` signature, which that commit deleted. The
-same comment block contradicts itself twenty lines later at `:189-190` ("There is no `next_provider`
-to return"). The premise the row above grounds is unaffected — both closures fire `on_chunk` serially
-— but the stale half must be deleted as a source fix, and this ADR's anchors into that file
-re-grounded in the same change. Recorded here rather than silently repaired, because moving source
-under this ADR is the specific pattern that produced the stale anchors above.
+same comment block contradicts itself eighteen lines later at `:190-191` ("There is no `next_provider`
+to return"). **The exact ranges matter to whoever executes this fix:** `:170` ("Dispatch one step call
+through the provider") is accurate and must survive; `:189` is a bare `--` marker. Delete `171-172`
+only. The premise the row above grounds is unaffected — both closures fire `on_chunk` serially — but
+the stale half must be deleted as a source fix, and this ADR's anchors into that file re-grounded in
+the same change. Recorded here rather than silently repaired, because moving source under this ADR is
+the specific pattern that produced the stale anchors above; an earlier revision of this very note
+cited `170-171`/`189-190`, which would have deleted a correct line and left a stale one.
 
 ## Decision
 
@@ -241,6 +267,24 @@ message history. That interim field is subsumed by `world_state` when it lands a
 same change. The prohibition that matters throughout is the one this decision opens with: exactly one
 home, visibly threaded. An interim explicit field satisfies it; a second closure-captured cursor
 alongside `world_state` would not.
+
+**Naming the home is not enough, because no mechanism currently reaches it.** An earlier revision
+stopped at the field and pointed at Implementation Handoff item 1 for the mechanism, which does not
+supply one: item 1 widens `model_step`'s *result* with an emission log, and a successor cursor is not
+an emission. `Ports.model_step` takes no state parameter (`src/core/ports.ail:18`), so a returned
+cursor has no way back in on the next call, while returning a successor `Ports` puts the cursor in
+that value's closure — the arrangement this decision prohibits by name. The already-tested state
+machine has the shape the port lacks at both ends:
+`scripted_model_next(state) -> {result, next}` (`src/core/test/scripted_ports.ail:38-48`).
+
+**The interim provider operation therefore takes the current provider state and returns its
+successor, alongside `emissions` and the outcome.** The sole persistent copy is the named
+`C2LoopState` field. This is a **second widening of `Ports.model_step`, on a second and separately
+stated ground** — state threading, not discarded emissions — and unlike the first it is **not
+behaviour-preserving**, because it changes the port's input shape and every construction site's
+contract. The two must be planned and reviewed as distinct changes even though they touch one field;
+Implementation Handoff items 1 and 2 are marked accordingly. The loss-channel scoping rule below
+governs the *emission* widening and does not reach this one, which is grounded here instead.
 
 **Deriving a replay position from mutable message history is prohibited by name.** It is not merely
 one more hiding place; it is the arrangement that currently executes, and compaction mutates the
@@ -322,6 +366,12 @@ stringly `tool_exec` also needs widening, but for a separately named reason — 
 `ToolCallEnvelope` and deadline contract, below — not because of a discarded emission channel.
 Extending the rule to a further field requires identifying that field's loss channel and its richer
 producer contract first.
+
+**A widening may also be required on a ground this rule does not cover, and one is.** `model_step`
+is widened twice: once by this rule, for its discarded emission log; and once for interim provider
+state threading, on the ground stated above under cursor ownership. The second is not a loss-channel
+case and is not licensed by this paragraph. Where the two are confused, the emission widening looks
+sufficient for the F6 fix, which it is not.
 
 Doing the provider case first shrinks the upstream dependency's blast radius to a
 single closure in `live_ports`, which is the strongest de-risking available on this gate. What
@@ -599,8 +649,8 @@ incrementally.** With no runtime virtualization there is no interval in which a 
 `std/clock.now` read is merely unrecorded-but-deterministic — such a read is nondeterministic, so it
 is a hermeticity failure like any other unrouted ambient effect, and it is caught by the same D5
 mechanisms rather than by a clock-specific one. Two detectors apply, and they are different in kind:
-the **source and ABI routing audit** enumerates such reads — conservatively and with over-approximate
-bias, per D5 — and is the one a profile depends
+the **source and ABI routing audit** enumerates such reads as a conservative textual site inventory
+over explicit `src` + `packages` roots, per D5 obligation 2, and is the one a profile depends
 on; **withholding the `Clock` capability** from a deterministic run is a coarse fail-closed backstop
 that stops the run rather than returning a typed result.
 
@@ -618,14 +668,32 @@ merely declared ones. It is also **weaker**, because it says nothing about reach
 run did not exercise, so it cannot on its own discharge the all-or-nothing routing requirement
 above. The source/ABI audit remains the primary detector; this is a per-run backstop.
 
-**The profile-reachable clock set is larger than earlier revisions assumed, and most of it is not in
-the core.** The count at HEAD `99749c7d` on pinned v0.26.0 is **13 distinct call sites, not 4**:
+**The clock set is larger than earlier revisions assumed, and most of it is not in the core.** The
+**repo-wide inventory** across `src` and `packages` at HEAD on pinned v0.26.0 is **13 distinct call
+sites, not 4**:
 
-| Location | Sites | Routed at HEAD |
-|---|---|---|
-| `src/core/session.ail` driver (`791`, `842`, `1991`, `2089`) | 4 | no |
-| `src/core/ext/runtime.ail` `test_dummy` hook (`190`) | 1 | no |
-| `packages/motoko-ext-compose` (`compose` 6, `author_tools` 1, `authoring/dispatcher` 1) | 8 | no |
+| Location | Sites | Routed at HEAD | Reachable when |
+|---|---|---|---|
+| `src/core/session.ail` driver (`791`, `842`, `1991`, `2089`) | 4 | no | always — driver code |
+| `src/core/ext/runtime.ail` `test_dummy` hook (`190`) | 1 | no | the `test_dummy` hook is installed |
+| `packages/motoko-ext-compose` (`compose` 6, `author_tools` 1, `authoring/dispatcher` 1) | 8 | no | `compose` is installed **and** the model calls `Compose` |
+
+**This is a repo-wide inventory, not a per-profile reachable set, and the two must not be conflated.**
+An earlier revision called the eight `compose` reads "reachable under the *default* profile, not an
+exotic one." That is false against the checked-in configuration: `.motoko/config/default/config.json`
+lists an extension order of `empty_stop_guard`, `progress_contract_guard`, `compaction_ai`,
+`context_mode`, `exa_search`, `scratchpad`, `compaction_structural` — no `compose`. `compose` appears
+only in `.motoko/config/ailang/config.json`, `test_dummy` in no checked-in config at all, and
+`parse_tokens` (`src/core/ext/registry_generated.ail:51-65`) instantiates only hooks whose name
+appears in the configured order. Under the default configuration nine of the thirteen are
+unreachable, and **no checked-in configuration realizes all thirteen.** The dispatch chain is
+genuinely there once `compose` is installed — `handle_compose_tool` is the `on_tool_handle` hook — but
+installation is the precondition, and that is a property of the named D5 profile, not of this table.
+
+**Each D5 simulation profile must therefore state its own reachable clock set, derived from its
+extension list, and route that set completely (D4's all-or-nothing rule).** The number 13 bounds the
+work; it does not describe any profile. A profile installing no clock-reading extension has four
+sites to route; one installing `compose` has twelve.
 
 **Nothing is routed at HEAD.** An earlier revision of this table reported 14 sites, added a separate
 `conversation_loop_v2` row, and said "only the first row is routed" — all three were measured on the
@@ -637,9 +705,7 @@ fifth row was reaching for is real but is not a distinct site — `run_v2_with_c
 that the four driver sites *can* be routed on a throwaway branch; that surgery is not at HEAD and is
 not gate evidence.
 
-The eight `compose` reads are reachable under the *default* profile, not an exotic one:
-`handle_compose_tool` is the `on_tool_handle` hook, so any session in which the model calls `Compose`
-performs them. Counting the `test_dummy` hook, nine of the thirteen sit behind an extension hook
+Counting the `test_dummy` hook, nine of the thirteen sit behind an extension hook
 rather than in the driver. The seam that would route them already exists — `ExtPorts.clock_now` in
 `packages/motoko-ext-abi/types.ail` — and it has **zero call sites repo-wide**, so it has never been
 exercised and may not survive first contact unchanged. Routing the clock is therefore not a
@@ -749,8 +815,10 @@ hermeticity gate therefore combines:
 - the narrowest executable capabilities, with generation and reporting separated where practical;
 - a source/ABI routing audit for direct ambient calls in every in-profile module, subject to the
   structural-first rule below;
-- a profile-reachable clock audit that includes extension packages: a profile installing `compose`
-  cannot claim conformance until its eight clock reads route through `ExtPorts.clock_now` (D4);
+- a profile-reachable clock audit whose roots include the extension packages the profile installs,
+  derived from that profile's extension list rather than from the repo-wide inventory: a profile
+  installing `compose` cannot claim conformance until its eight clock reads route through
+  `ExtPorts.clock_now`, and a profile installing none still has the four driver reads to route (D4);
 - poison/negative probes for provider, tool, approval, environment, clock, random, and reached
   extension-effect bypasses; and
 - profile-definition validation and runtime routing that fail closed when an unclassified
@@ -762,11 +830,11 @@ named a property rather than a buildable analysis, and this repo cannot answer t
 implies: `tools/code-graph` emits function-to-function edges only
 (`INVOKE_FIELDS = ["from_slug", "to_slug", "resolution", "approximate"]`), its parser is regex-based
 and self-described as a source-parsed approximation, `ctors.csv` indexes constructor *declarations*
-rather than constructor flow, and its default `core` profile excludes `src/core/test/**` — the very
-directory holding `dispatch_step`, `live_ports`, and `scripted_ports_from_steps`, which are
-production-executed despite the path. "Can any reachable caller produce the variant this match arm
-consumes" is unanswerable from those tables. The requirement is replaced by three ordered
-obligations:
+rather than constructor flow, and its default `core` profile is scoped to `src/core` alone —
+excluding both `packages/` and `src/core/test/**`, the latter holding `dispatch_step`, `live_ports`,
+and `scripted_ports_from_steps`, which are production-executed despite the path. "Can any reachable
+caller produce the variant this match arm consumes" is unanswerable from those tables. The
+requirement is replaced by three ordered obligations:
 
 1. **Prefer making the defect unrepresentable.** Where a seam admits a dead dispatch arm, narrow the
    type instead of auditing the arm. This is the fix that actually resolved the motivating instance:
@@ -774,34 +842,63 @@ obligations:
    unreachable `LiveAI`/`Scripted` branches, converting a runtime invariant into a compile-time fact
    strictly stronger than any audit this gate could run. A profile may not cite an audit where
    narrowing was available and declined.
-2. **For the residual ambient-effect inventory, use a conservatively over-approximate function-level
-   audit** whose profile scope explicitly includes production code under `src/core/test/**`, with
-   fail-closed manual triage of its false positives. Over-approximation is the correct bias here:
-   an inventory that reports more possible ambient calls than exist forces routing work, which fails
-   closed. This is a different use than the one that failed in F2 — there a textual scan was asked
-   *which seam is live*, a question over-approximation answers wrongly, and it certified
+2. **For the residual ambient-effect inventory, use a conservative textual inventory of
+   ambient-effect imports and call names, per in-profile module, at *site* granularity.** Its profile
+   roots are stated explicitly and cover **`src` and `packages`**, including production code under
+   `src/core/test/**`. Any ambient import, or any call name it cannot resolve to a routed seam, is a
+   fail-closed candidate for manual triage. Over-approximation is the correct bias: an inventory that
+   reports more candidate ambient sites than exist forces routing work, which fails closed.
+
+   **The detector is textual by decision, not by default, and the call-graph is explicitly rejected
+   for this use.** Two earlier revisions got this wrong in opposite directions and both are recorded
+   because the reasoning matters more than the conclusion. The first required a "reachability-aware,
+   not textual" audit — a property, not a buildable analysis. The second recommended a
+   conservatively over-approximate *function-level call-graph* audit and justified it by claiming
+   `tools/code-graph` drops calls through function-valued seams. Both are wrong:
+
+   - The dropped call that claim rests on — `_resolve_call`
+     (`tools/code-graph/extractor/source_parser.py:176-199`) discarding `ports.model_step(...)`
+     because `ports` is a local binding rather than an import alias — is a **routed** seam call, which
+     is precisely the case that *should* be absent from an ambient inventory. The parser resolves
+     direct ambient calls through its bare-import path, so `now()` under `import std/clock (now)` is
+     seen. That drop never established a fail-open.
+   - The real disqualifiers are scope and granularity. `PROFILES["core"]` is `("src/core",)` and never
+     contained `packages/` (`tools/code-graph/extractor/config.py:13-17`), so a `core`-scoped audit —
+     even with `--include-tests` — misses every extension-package site, including the eight
+     `motoko-ext-compose` clock reads the bullet above makes a conformance precondition. And the
+     emitted rows are not sites: the plain-call path dedups on `(from_slug, std_module, symbol)`
+     while the interpolation path carries no `seen` check, so N ambient calls in one function may
+     collapse to one row or emit several. An audit that cannot count sites cannot certify routing
+     *completeness*, which is exactly what D4's all-or-nothing rule needs.
+
+   **Soundness boundary, stated because the gate cites it:** this inventory sees literal ambient
+   imports and call names inside the scanned AILANG tree. It does **not** see effects performed
+   outside that tree (TypeScript child processes, MCP subprocesses, shelled binaries), and it does
+   **not** decide reachability — it enumerates sites, and the profile decides which are in scope
+   (D4). Both limits are load-bearing and neither is closed by this ADR.
+
+   This is a different use than the one that failed in F2 — there a textual scan was asked *which
+   seam is live*, a question over-approximation answers wrongly, and it certified
    `std/ai.stepWithStream` as the live provider seam when the only hit was an unreachable ADT branch
    (the same was true of `tools_with_extensions(rt)` and `system_prompt_cache_breakpoint()`).
    Architecture discovery and hermeticity inventory are not the same detector and must not share a
    justification.
+
+   **The successor detector is declared-versus-performed effect-row reconciliation**, which is
+   compiler-checked and cannot silently rot as a textual scan can. It is not available today:
+   `src/core/agents_md.ail:106` declares `walk_agents` with no effect row while calling `fileExists`,
+   a live `FS` under-declaration that pinned v0.26.0 accepts. Closing that class of gap, and the
+   reconciliation gate itself, belong to the implementation plan.
 3. **If constructor-level reachability is ever genuinely required**, specify the analysis, its
    soundness boundary, its profile roots, and its fail-closed behavior *before* naming it as
    name-adoption gate evidence. Nothing in this ADR currently requires it.
 
-> **OPEN DEFECT in obligation 2, recorded 2026-08-01 by the authoring side and not yet repaired.**
-> The over-approximation argument is inverted for this repo's call-graph, which
-> *under*-approximates on exactly the construct that matters. `_resolve_call`
-> (`tools/code-graph/extractor/source_parser.py:176-199`) resolves a dotted call only when its
-> prefix is an import alias; for `ports.model_step(...)` the prefix is a local binding, so the call
-> is **discarded rather than over-reported**. Since every effect in this architecture crosses a
-> function-valued seam (`Ports`, `ExtPorts`, `ExtensionHooks`), a hermeticity inventory built on
-> that graph fails **open**, which is the failure direction obligation 2 claims to avoid. The
-> distinction obligation 2 draws — hermeticity inventory is not architecture discovery — stands; the
-> tool it recommends does not. This is deliberately left as a marked defect rather than repaired in
-> place, because the correction pass that introduced it has not been independently verified and a
-> third unreviewed rewrite of the same paragraph would repeat the pattern that produced it. The
-> delta review named in `HANDOFF-delta-review-adr-001-f1-f6-corrections.md` (A1) adjudicates the
-> repair. **D5's routing audit must not be cited as name-adoption gate evidence until it does.**
+> **Verification gate on obligation 2.** The text above is a repair written by the authoring side in
+> response to the two 2026-08-01 delta reviews, which independently converged on it. It has not
+> itself been independently verified. **D5's routing audit is not citable as name-adoption gate
+> evidence until a reviewer confirms the replacement detector**, and no separate non-citability
+> marker is carried elsewhere: D4's clock-detector sentence and this section's third bullet were
+> corrected in the same pass rather than left asserting the withdrawn over-approximation claim.
 
 Test-only code may:
 
@@ -1217,15 +1314,21 @@ the forbidden delayed-projection fallback.
 whole migration queued behind the upstream API. Three items have no upstream dependency and should
 be sequenced first, because two of them change what the migration costs and one is a live defect:
 
-1. **Widen `Ports.model_step`** (D1, F2). Behaviour-preserving with `emissions: []` at every
-   construction site, testable entirely against `Scripted` providers, and it shrinks the eventual
-   adoption to one closure in `live_ports`.
-2. **Fix the scripted cursor** (D1, F6). It rides on item 1: once `model_step` returns a record it can
-   return next-state too. `ScriptedPortsState` already models a threaded cursor and is unit-tested
-   but never wired in. `scripts/dst/spike_scripted_cursor_probe.ail` is the executable statement of
-   the defect and becomes a passing regression test when fixed. Per D1, the returned successor goes
-   in **one explicit `C2LoopState` field** until `world_state` subsumes it; do not park it in a
-   closure inside the `Ports` value.
+1. **Widen `Ports.model_step`'s result with an emission log** (D1, F2). Behaviour-preserving with
+   `emissions: []` at every construction site, testable entirely against `Scripted` providers, and it
+   shrinks the eventual adoption to one closure in `live_ports`. **This item does not enable item 2**
+   — it widens the result only, and a successor cursor is not an emission.
+2. **Fix the scripted cursor** (D1, F6). This requires a **second, bidirectional widening of the same
+   field**: `model_step` must take the current provider state and return its successor. It is *not*
+   behaviour-preserving — it changes the port's input shape and every construction site's contract —
+   and it is grounded in D1's cursor-ownership paragraph, not in the loss-channel rule that licenses
+   item 1. Plan and review it as a distinct change even though it touches one field.
+   `ScriptedPortsState` already models the threaded cursor in the required
+   `scripted_model_next(state) -> {result, next}` shape and is unit-tested but never wired in.
+   `scripts/dst/spike_scripted_cursor_probe.ail` is the executable statement of the defect and
+   becomes a passing regression test when fixed. Per D1, the successor's sole persistent copy is
+   **one explicit `C2LoopState` field** until `world_state` subsumes it; do not park it in a closure
+   inside the `Ports` value.
 3. **Sequence the repin as its own milestone**, budgeting the extension-ABI major it forces
    (Consequences). It is on the critical path because D1 requires it.
 

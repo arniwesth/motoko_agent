@@ -213,8 +213,14 @@ literally would falsify the record.
 What the corrections need is a **delta review** scoped to the corrected text alone — the Status
 block, the three re-grounded Context rows, D1's cursor-ownership and port-widening paragraphs, D4's
 clock table, and D5's structural-first routing rule — not a fourth full round. F1, F2, F3, F5, F6,
-D6.1, the narrowed blocking clause, the upstream return-shape ruling, and M2 were each independently
-confirmed three times and are not reopened. That delta review needs its own handoff.
+the narrowed blocking clause, the upstream return-shape ruling, and M2 were each independently
+confirmed three times, and D6.1's zero-`RunSummary` claim by two of the three (Codex and Kimi rule on
+it; Claude's section cites only its call-site count), so none of those is reopened. That delta review
+needs its own handoff.
+
+**Executed 2026-08-01** by Claude Code `opus-5` and Codex `GPT-5`, per
+`HANDOFF-delta-review-adr-001-f1-f6-corrections.md`. Both returned *Revise*. This handoff is fully
+spent; see the ADR's Status block for the live acceptance state.
 
 The contract below is retained as the historical record of what the three executed rounds were asked
 for. Under it: do not rewrite the body, and do not edit any existing review section — they are

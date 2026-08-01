@@ -1,5 +1,22 @@
 # Handoff: delta review of the F1–F6 correction pass in ADR-001-deterministic-test-world-architecture.md
 
+> **EXECUTED AND SPENT — 2026-08-01.** Run twice, independently: Claude Code `opus-5` (R1–R7) and
+> Codex `GPT-5` (R1–R8), both *Revise*, both recorded in the ADR as its sixth and seventh
+> `## Review Comments` sections. Do not execute this handoff again.
+>
+> **Both reviews overturned A1 below.** A1 asserts that D5 obligation 2 fails open because
+> `_resolve_call` discards `ports.model_step(...)`. That is wrong: the discarded call is a *routed*
+> seam call, which is what should be absent from an ambient-effect inventory, and the parser resolves
+> direct ambient calls through its bare-import path. The real disqualifiers are profile scope
+> (`PROFILES["core"]` is `("src/core",)` and never contained `packages/`) and row granularity (the
+> emitted rows are not sites). A1 is left as written because it is the record of a wrong diagnosis
+> that a review caught — deleting it would hide the most useful thing this round produced.
+>
+> Two further findings neither this handoff nor its A-list anticipated: D4's "default profile"
+> reachability claim is false against the checked-in configuration (Codex R3), and the Status block
+> contradicted itself on blocker count (Codex R4). A third correction pass answering all of it is
+> committed and **needs its own delta review**; this document does not cover it.
+
 Audience: a fresh agent session with no context from the correcting session. Your distance from the
 author is the point, and it is the whole point this round: the corrections you are reviewing were
 written by the same side that decided what the three verifications meant. Per
