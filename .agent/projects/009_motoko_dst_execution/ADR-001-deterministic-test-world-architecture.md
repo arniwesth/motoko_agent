@@ -13,18 +13,30 @@ side's own diagnosis. Both sets are now corrected.
 1. **External substrate, not clearable here:** the upstream recorded-stream API is specified and
    agreed but not shipped in a released binary. D1 requires it to land in a *release*, the toolchain
    to be repinned, and the positive integration probe to pass. A fork prototype does not satisfy this.
-2. **Internal and open:** the third correction pass — the repairs to D4's profile labelling, D5's
-   routing detector, and D1's interim cursor mechanism — post-dates both delta reviews and has not
-   been independently verified. D5's routing audit is not citable as gate evidence until it is.
+2. **Internal and open:** the fourth correction pass — resolving the extension-model-path exclusion,
+   the concrete `ProviderState` and its module home, the live/`Ported` identity contract, the
+   profile-reachable clause for hook-guarded core paths, and obligation 2's enumerated classifier —
+   post-dates the two delta reviews of the third pass and has not been independently verified. D5's
+   routing audit is not citable as gate evidence until it is.
 
 Neither the correction set nor the acceptance state should be described as complete until (2) passes
 a delta review and (1) is an actual release event.
 
-**What is required next is a delta review of the third correction pass, not another full round.**
+**What is required next is a delta review of the fourth correction pass, not another full round.**
 F1, F2, F3, F5, F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were
 each independently confirmed by all three verifications, and D6.1's zero-`RunSummary` claim by two of
-the three. The two delta reviews additionally confirmed D4's clock *count* (13) and routing state,
-and confirmed corrections C3, C4, C5, C9, and C14. None of those is reopened.
+the three. The two delta reviews of the *second* pass confirmed D4's clock count (13) and routing
+state, and corrections C3, C4, C5, C9, C14. The two delta reviews of the *third* pass confirmed all
+configuration facts, every anchor but one, the Status block, and all collateral consistency. None of
+that is reopened.
+
+**The fourth pass answers a finding that changes sequencing, not only wording.** Both delta reviews of
+the third pass found a second call through the `Ports.model_step` seam — `src/core/session.ail:662`,
+inside `ext_ai_step` — behind an `ExtPorts` ABI that cannot return a successor. D1 now excludes
+extension-issued model calls from the interim state-threaded seam and from every conformant profile
+until the world-token ABI lands, which makes Implementation Handoff item 2 a **partial** cursor fix
+and makes any profile installing an `ai_step`-calling extension non-conformance-eligible in the
+interim — including the checked-in default, which installs `compaction_ai`.
 
 **The second correction pass marked an open defect in D5 that was itself misdiagnosed, and both
 delta reviews overturned it.** That marker claimed the routing audit failed open because
@@ -37,12 +49,14 @@ emitted rows are not sites. D5 obligation 2 is repaired accordingly — a conser
 inventory over explicit `src` + `packages` roots — and the misdiagnosis is recorded there rather than
 deleted, because a wrong diagnosis that survives into a fix is the more instructive half.
 
-**The third pass also carries no exhaustive-edit table, deliberately.** The second pass shipped one
-(C1–C14) and it was incomplete: it disclosed only the D6.1 narrowing as post-dating `d3bd9cd`, while
-`5eadee7` also added a Status paragraph and the D5 open-defect block. Both delta reviews caught the
-omission. Every pass from here is committed before it is reviewed, so a delta reviewer should read
-`git log` and diff the commits rather than trust a hand-maintained enumeration — which is what the
-prior two passes could not offer and what cost the first delta review three of its seven findings.
+**No pass from the third onward carries an exhaustive-edit table, deliberately.** The second pass
+shipped one (C1–C14) and it was incomplete: it disclosed only the D6.1 narrowing as post-dating
+`d3bd9cd`, while `5eadee7` also added a Status paragraph and the D5 open-defect block. Both delta
+reviews caught the omission. Every pass is now committed before it is reviewed, so a delta reviewer
+should read `git log` and diff the commits rather than trust a hand-maintained enumeration. That
+change is measurable: the round reviewing the second pass spent six of its fifteen findings on
+provenance and anchor questions a diff answers directly; the round reviewing the third pass, with a
+real two-commit diff, spent **none**.
 
 **There is no separate `## Spike-findings disposition (F1–F6)` section, and there was never meant to
 be one.** An earlier draft of this Status block and of
@@ -201,7 +215,7 @@ Load-bearing current-source anchors:
 | Approval and session clock bypass `Ports` | `src/core/session.ail:1619` (`readLine`), `1991`, `2089` (`now()`) — re-grounded 2026-08-01 |
 | Success emits `RunSummary`/`DoneEvent` without appending them to the returned trace; other errors return directly | **Five** `emit_run_summary` call sites in `src/core/session.ail` — `1325`, `1554`, `1704`, `1711`, `1762` (`1554-1555` is the success path; `1325` is the shared `c2_fail` helper, so call sites do **not** equal terminal paths). The "return directly" clause is grounded separately on the two terminal returns that emit no summary at all: invalid history at `1528-1531` and the approval-state invariant at `1614-1616` — re-grounded 2026-08-01 (second pass) |
 | Native tools execute sequentially and directly against FS/Process | `src/core/tool_runtime.ail:151-165` |
-| Core tool dispatch is serial; MCP execution is a blocking call; provider chunks are callback-ordered | `src/core/tool_phase.ail:302-357`; `packages/motoko-ext-mcp/exec.ail:63-70,165-176`; `src/core/test/stub_step.ail:88-96` (`play_chunks`), `148-154` (the live closure passing `on_chunk` to `stepWithStream`), `157-168` (the scripted closure), `192-199` (the one-arm `dispatch_step` pass-through, whose `:198` is the sole `ports.model_step` call) — re-grounded 2026-08-01 (third pass); the previously cited `:175-204` predates `89a1d67` and straddles two things: `175-191` is the comment block, partly stale (see *Known stale source comment* below), while `192-199` is live `dispatch_step` and `203-204` opens `prose_step` |
+| Core tool dispatch is serial; MCP execution is a blocking call; provider chunks are callback-ordered | `src/core/tool_phase.ail:302-357`; `packages/motoko-ext-mcp/exec.ail:63-70,165-176`; `src/core/test/stub_step.ail:88-96` (`play_chunks`), `148-154` (the live closure passing `on_chunk` to `stepWithStream`), `157-168` (the scripted closure), `192-199` (the one-arm `dispatch_step` pass-through, whose `:198` is the sole `model_step` call *in `dispatch_step`* — the seam has a second call at `src/core/session.ail:662` inside `ext_ai_step`, see D1) — re-grounded 2026-08-01 (fourth pass); the previously cited `:175-204` predates `89a1d67` and straddles two things: `175-191` is the comment block, partly stale (see *Known stale source comment* below), while `192-199` is live `dispatch_step` and `203-204` opens `prose_step` |
 | The current streaming wrapper cannot return the chunks it projects live | `packages/motoko-ext-ai-compat/ai_compat.ail:31-37,60-71,197-220` |
 | Neither state-returning nor `SharedMem`-capturing callbacks fit the pinned real API | `spike/README.md`; `spike/probe_state_returning_callback_rejected.ail`; `spike/probe_sharedmem_callback_rejected.ail` |
 | Latest upstream does not close the streaming-capture gap | AILANG MCP `ailang_versions` reports v0.30.0 latest; release `std/ai.ail:330-337` at `e37b370d1d7a9c4e7136b319e38bec4d5f2bd9a0` retains `on_chunk: (StreamChunk) -> () ! {IO}` and returns only `Result[StepResult, AIError]`; both negative probes reproduce under the checksum-verified v0.30.0 compiler |
@@ -211,17 +225,25 @@ Load-bearing current-source anchors:
 | Effectful extensions can bypass `ExtCtx.ports` | `packages/motoko_scratchpad/scratchpad.ail:90-101`; `packages/motoko-ext-mcp/exec.ail:165-170` |
 | Core provider retry policy is count/budget based | `src/core/recovery.ail:12-18` |
 
-**Known stale source comment.** `src/core/test/stub_step.ail:171-172` still states that `dispatch_step`
-"Returns both the step result and the updated provider (tail of script for `Scripted`)" and that
-"Loop callers thread `next_provider`" — the pre-`89a1d67` signature, which that commit deleted. The
-same comment block contradicts itself eighteen lines later at `:190-191` ("There is no `next_provider`
-to return"). **The exact ranges matter to whoever executes this fix:** `:170` ("Dispatch one step call
-through the provider") is accurate and must survive; `:189` is a bare `--` marker. Delete `171-172`
-only. The premise the row above grounds is unaffected — both closures fire `on_chunk` serially — but
-the stale half must be deleted as a source fix, and this ADR's anchors into that file re-grounded in
-the same change. Recorded here rather than silently repaired, because moving source under this ADR is
-the specific pattern that produced the stale anchors above; an earlier revision of this very note
-cited `170-171`/`189-190`, which would have deleted a correct line and left a stale one.
+**Known stale source comment.** `src/core/test/stub_step.ail:171-173` describes a `dispatch_step`
+signature that `89a1d67` deleted: `:171-172` promise that it "Returns both the step result and the
+updated provider (tail of script for `Scripted`)" and that "Loop callers thread `next_provider`", and
+`:173` says "rt is forwarded to `tools_with_extensions`" — but `rt` was a real parameter of that
+function before `89a1d67` and is not one now (`:192-199` takes `ports`, `model`, `msgs`, `on_chunk`;
+`rt` is captured by `live_ports(rt)` instead). The same comment block contradicts itself at
+`:190-191` ("There is no `next_provider` to return").
+
+**The exact range matters to whoever executes this fix: delete `171-173`.** `:170` ("Dispatch one step
+call through the provider") is accurate and must survive; `:189` is a bare `--` marker; `:190-191` are
+correct and stay. The premise the row above grounds is unaffected — both closures fire `on_chunk`
+serially — but the stale lines must be deleted as a source fix, and this ADR's anchors into that file
+re-grounded in the same change.
+
+Recorded here rather than silently repaired, because moving source under this ADR is the specific
+pattern that produced the stale anchors above. **This note has now been wrong twice**, which is its own
+argument for the deferral discipline: the first revision cited `170-171`/`189-190`, which would have
+deleted a correct line and left a stale one; the second cited `171-172`, which would have left `:173`.
+Both were caught by review, neither by the authoring side.
 
 ## Decision
 
@@ -285,6 +307,43 @@ behaviour-preserving**, because it changes the port's input shape and every cons
 contract. The two must be planned and reviewed as distinct changes even though they touch one field;
 Implementation Handoff items 1 and 2 are marked accordingly. The loss-channel scoping rule below
 governs the *emission* widening and does not reach this one, which is grounded here instead.
+
+**Three mechanical facts constrain that widening, and each was found by review rather than by
+design.**
+
+*The state type must be concrete and declared at or below `src/core/ports.ail`.* The interim state is
+a named `ProviderState` in `ports.ail`, not the existing `ScriptedPortsState`. That type
+(`src/core/test/scripted_ports.ail:20-24`) carries `ScriptedStep`, declared in
+`src/core/test/stub_step.ail:34`, and `scripted_ports.ail` imports `ports`, `stub_step`, **and**
+`session` — so neither module that must declare the widened field nor the driver that must hold the
+`C2LoopState` field can import it without closing a cycle, which AILANG rejects (`LDR002`). The
+generic escape does not exist either: parameterising `Ports` over its state type is accepted as a
+declaration but its instantiation fails unification on the pinned compiler, and no parameterised
+record type appears anywhere in the tree. **`ScriptedPortsState`/`scripted_model_next` are therefore a
+design precedent, not reusable code**, and making the real thing requires relocating `ScriptedStep` to
+`ports.ail` or below — a source move that must be budgeted in the plan, not discovered inside it.
+
+*The live and caller-supplied adapters return their input state unchanged.* `live_ports` is stateless.
+The identity transition is the specified answer, not an implementation detail left to six construction
+sites. `ported_provider` (`src/core/session.ail:695-701`) returns the initial state alongside the
+`Ports` — a pair, or a paired constructor — with the empty `ProviderState` for the `LiveAI` and
+`Ported` arms and the script-derived one for `Scripted`. Only successors replace it thereafter.
+
+*The extension model path cannot carry the token, and is excluded rather than hand-waved.* There are
+**two** calls through `Ports.model_step`, not one: `src/core/test/stub_step.ail:198` in `dispatch_step`,
+and `src/core/session.ail:662` inside `ext_ai_step`, which `ext_ports_of` (`:668-677`) wraps as
+`ExtPorts.ai_step` and hands to four hook contexts. That ABI returns `Result[string, string]`
+(`packages/motoko-ext-abi/types.ail:63`) and the hook results above it are decision-only, so a
+successor has no way back to `C2LoopState`. Discarding it at `:662` recreates F6 exactly; capturing it
+in the closure creates the second home this decision prohibits. **The interim seam therefore covers
+the main loop only, and extension-issued model calls are excluded from every conformant profile until
+the world-token ABI D5 already requires has landed.** Two consequences follow and neither is
+cosmetic: **Implementation Handoff item 2 is a partial cursor fix and says so**, and **a profile
+installing any extension that calls `ExtPorts.ai_step` is not conformance-eligible in the interim** —
+which today includes `compaction_ai`, and `compaction_ai` is in the checked-in default extension
+order. Widening `ExtPorts.ai_step` and the hook results to carry the token is the eventual path, it
+belongs to the ABI major the repin already forces (*Consequences*), and it must not be smuggled into
+the interim step.
 
 **Deriving a replay position from mutable message history is prohibited by name.** It is not merely
 one more hiding place; it is the arrangement that currently executes, and compaction mutates the
@@ -672,11 +731,16 @@ above. The source/ABI audit remains the primary detector; this is a per-run back
 **repo-wide inventory** across `src` and `packages` at HEAD on pinned v0.26.0 is **13 distinct call
 sites, not 4**:
 
-| Location | Sites | Routed at HEAD | Reachable when |
+| Location | Sites | Routed at HEAD | Profile-reachable when |
 |---|---|---|---|
-| `src/core/session.ail` driver (`791`, `842`, `1991`, `2089`) | 4 | no | always — driver code |
-| `src/core/ext/runtime.ail` `test_dummy` hook (`190`) | 1 | no | the `test_dummy` hook is installed |
-| `packages/motoko-ext-compose` (`compose` 6, `author_tools` 1, `authoring/dispatcher` 1) | 8 | no | `compose` is installed **and** the model calls `Compose` |
+| `src/core/session.ail` driver (`791`, `842`, `1991`, `2089`) | 4 | no | always — driver code (clause 1) |
+| `src/core/ext/runtime.ail` `emit_dummy_hook` (`190`) | 1 | no | the `test_dummy` hook is installed (clause 3) |
+| `packages/motoko-ext-compose` (`compose` 6, `author_tools` 1, `authoring/dispatcher` 1) | 8 | no | `compose` is installed (clause 2) |
+
+Every condition is an **installation** condition. An earlier revision qualified the `compose` row with
+"and the model calls `Compose`" — the execution-path test the definition below forbids, and factually
+too narrow besides, since the response-intercept path reads the clock without any `Compose` tool call
+(`packages/motoko-ext-compose/compose.ail:756-771`).
 
 **This is a repo-wide inventory, not a per-profile reachable set, and the two must not be conflated.**
 An earlier revision called the eight `compose` reads "reachable under the *default* profile, not an
@@ -692,8 +756,11 @@ installation is the precondition, and that is a property of the named D5 profile
 
 **Each D5 simulation profile must therefore state its own reachable clock set, derived from its
 extension list, and route that set completely (D4's all-or-nothing rule).** The number 13 bounds the
-work; it does not describe any profile. A profile installing no clock-reading extension has four
-sites to route; one installing `compose` has twelve.
+work; it does not describe any profile. Under the installation scoping defined below: a profile
+installing neither `compose` nor `test_dummy` — which is every checked-in configuration except
+`.motoko/config/ailang` — has **four** sites to route; one installing `compose` but not `test_dummy`,
+which is `.motoko/config/ailang`, has **twelve**; one installing both would have all **thirteen**,
+and no checked-in configuration does.
 
 **Nothing is routed at HEAD.** An earlier revision of this table reported 14 sites, added a separate
 `conversation_loop_v2` row, and said "only the first row is routed" — all three were measured on the
@@ -749,14 +816,29 @@ virtualization layer under which an unrouted read would still be deterministic. 
 narrow, but within its declared scope the clock seam is all-or-nothing.
 
 **"Profile-reachable" is installation-scoped, not the result of a reachability analysis**, and the
-distinction is load-bearing because D5's inventory explicitly does not decide reachability. A read is
-profile-reachable when it occurs in the core driver or in a module the profile *installs* — a
-question answered by the profile's own extension list and the module inventory, both of which are
-enumerable today. It does **not** mean "a read some execution path can actually perform"; deciding
-that would require the reachability analysis D5 obligation 3 declines to require and nothing here
-builds. The consequence is deliberately conservative: a read in an installed extension counts and
-must be routed even if no run in the corpus reaches it. Withholding the `Clock` capability remains
-the per-run backstop for anything that slips through, and it catches executed paths only.
+distinction is load-bearing because D5's inventory explicitly does not decide reachability. An effect
+site or hook is profile-reachable when it is:
+
+1. in the core driver; or
+2. in a module the profile *installs*; or
+3. in a **core code path guarded solely by an installed hook's identity**.
+
+All three are answered by the profile's extension list plus the module inventory, both enumerable
+today. The term applies to **effect sites and hooks alike**: a profile-reachable hook is every hook
+the profile installs, whether or not any corpus run invokes it.
+
+Clause 3 is not a technicality. `src/core/ext/runtime.ail:190` reads the clock inside
+`emit_dummy_hook`, in a core module present in *every* profile, behind six call sites all of the form
+`if is_test_dummy(h.id) then emit_dummy_hook(...)`. Clauses 1 and 2 alone would either classify it as
+always-reachable — making the driver's obligation five sites rather than four — or leave it
+unclassified. It is reachable exactly when the `test_dummy` hook is installed, and no checked-in
+configuration installs it.
+
+The term does **not** mean "a site some execution path can actually perform." Deciding that would
+require the reachability analysis D5 obligation 3 declines to require and nothing here builds. The
+consequence is deliberately conservative: a site in an installed extension counts and must be routed
+even if no run in the corpus reaches it. Withholding the `Clock` capability remains the per-run
+backstop for anything that slips through, and it catches executed paths only.
 
 ### D5. Execution uses the real traced driver and a named conformant profile
 
@@ -881,11 +963,42 @@ requirement is replaced by three ordered obligations:
      collapse to one row or emit several. An audit that cannot count sites cannot certify routing
      *completeness*, which is exactly what D4's all-or-nothing rule needs.
 
-   **Soundness boundary, stated because the gate cites it:** this inventory sees literal ambient
-   imports and call names inside the scanned AILANG tree. It does **not** see effects performed
-   outside that tree (TypeScript child processes, MCP subprocesses, shelled binaries), and it does
-   **not** decide reachability — it enumerates sites, and the profile decides which are in scope
-   (D4). Both limits are load-bearing and neither is closed by this ADR.
+   **The detection set is enumerated, versioned, and derived from the toolchain — not left to the
+   phrase "ambient-effect imports".** The classifier is the pinned toolchain's effect-bearing
+   stdlib/builtin surface, as **module plus exported symbol**, derived from
+   `ailang builtins list --by-effect` and constrained by the profile's permitted capabilities.
+   Deriving it from the toolchain rather than hand-listing it matters: the two available enumerations
+   disagree — the v0.26.0 builtin surface reports eighteen effect labels while `ailang.toml`'s
+   `[effects] max` permits twelve — so neither alone is a classifier, and a hand-maintained list would
+   silently rot. **Re-deriving the classifier is a required step of every toolchain repin**, tied to
+   the ABI-major milestone *Consequences* already budgets, and the derived set is recorded with the
+   profile or its execution manifest so a later reader can tell what was scanned.
+
+   **Match on the imported target module, not on bound symbol names.** Aliased and qualified forms
+   typecheck on the pin — `import std/clock as c` followed by `c.now()` compiles clean — so a
+   name-matching inventory would miss them by construction. Target-module matching covers the bare,
+   aliased, and qualified forms together. Nothing at HEAD uses an alias for `std/clock`, which is why
+   this has cost nothing so far and is exactly why it must be specified rather than assumed.
+
+   **Soundness boundary, stated because the gate cites it.** Three limits, all load-bearing and none
+   closed by this ADR:
+
+   - It does **not** see effects performed outside the scanned AILANG tree — TypeScript child
+     processes, MCP subprocesses, shelled binaries.
+   - It does **not** decide reachability. It enumerates sites; the profile decides which are in scope
+     (D4).
+   - It does **not** reach AILANG source outside the `src` + `packages` roots. A registry dependency
+     is the live case: `ailang.toml:9` declares `sunholo/logging` resolved from the registry rather
+     than a path, so its AILANG source sits under neither root. Exposure today is nil — the only
+     importer is an out-of-profile example — but the gate is the point. **A profile must either
+     extend the roots through the resolved lock graph for every AILANG package it installs, or fail
+     validation closed when an installed package's source lies outside the scanned roots.**
+
+   Effects reached through an `ExtPorts` or `Ports` closure are **covered**, and this is worth stating
+   because the previous two attempts at this obligation both turned on confusing it: the closure is
+   written literally at a site inside its defining module, so a site-granularity scan over `src` +
+   `packages` sees it. What the scan cannot follow is the *call edge*, which an ambient inventory does
+   not need.
 
    This is a different use than the one that failed in F2 — there a textual scan was asked *which
    seam is live*, a question over-approximation answers wrongly, and it certified
@@ -1295,6 +1408,14 @@ Costs and risks:
   path and must be sequenced rather than discovered mid-migration. Two latent under-declarations
   that v0.26.0 accepted surface as hard errors at the same time: `agents_md.walk_agents` performs
   `FS` undeclared, and `motoko_ext_omnigraph.register_with_config` performs `Process` undeclared.
+- **That same ABI major must also carry the extension-model-path widening, and it is the larger
+  change of the two.** D1 excludes extension-issued model calls from the interim state-threaded seam
+  because `ExtPorts.ai_step` returns `Result[string, string]` and the hook results above it are
+  decision-only, so no successor can reach `C2LoopState`. Lifting that exclusion means widening
+  `ExtPorts.ai_step`, the hook results that carry its outcome, and the core dispatch results — the
+  world-token protocol D5 already requires — alongside the mechanical `Trace`/`Rand` row edits above.
+  Until it lands, any profile installing an `ai_step`-calling extension is not conformance-eligible,
+  and `compaction_ai` is in the checked-in default extension order.
 - The trace contract changes error handling and may expose terminal cases currently visible only in
   logs.
 - A typed program schema, request matchers, interaction log, and compatibility policy become
@@ -1328,17 +1449,25 @@ be sequenced first, because two of them change what the migration costs and one 
    `emissions: []` at every construction site, testable entirely against `Scripted` providers, and it
    shrinks the eventual adoption to one closure in `live_ports`. **This item does not enable item 2**
    — it widens the result only, and a successor cursor is not an emission.
-2. **Fix the scripted cursor** (D1, F6). This requires a **second, bidirectional widening of the same
-   field**: `model_step` must take the current provider state and return its successor. It is *not*
-   behaviour-preserving — it changes the port's input shape and every construction site's contract —
-   and it is grounded in D1's cursor-ownership paragraph, not in the loss-channel rule that licenses
-   item 1. Plan and review it as a distinct change even though it touches one field.
-   `ScriptedPortsState` already models the threaded cursor in the required
-   `scripted_model_next(state) -> {result, next}` shape and is unit-tested but never wired in.
+2. **Fix the scripted cursor, partially** (D1, F6). This requires a **second, bidirectional widening
+   of the same field**: `model_step` must take the current provider state and return its successor.
+   It is *not* behaviour-preserving — it changes the port's input shape and every construction site's
+   contract — and it is grounded in D1's cursor-ownership paragraph, not in the loss-channel rule
+   that licenses item 1. Plan and review it as a distinct change even though it touches one field.
+   Per D1, the successor's sole persistent copy is **one explicit `C2LoopState` field** until
+   `world_state` subsumes it; do not park it in a closure inside the `Ports` value.
+
+   **This item does not fix the extension model path**, and that is a decision, not an oversight:
+   `ext_ai_step` reaches the same seam through an ABI that cannot return a successor (D1). It fixes
+   the main loop, and profiles installing an `ai_step`-calling extension stay non-conformant until
+   the world-token ABI lands. Budget three things the ADR names and the plan must sequence: a
+   concrete `ProviderState` declared in `src/core/ports.ail`, the **relocation of `ScriptedStep`** to
+   that module or below (the current type is unreachable from both consumers without a module cycle),
+   and `ported_provider` returning an initial-state pair. `ScriptedPortsState`/`scripted_model_next`
+   (`src/core/test/scripted_ports.ail:20-48`) is a **design precedent, not reusable code** — an
+   earlier revision of this item implied it could be wired in, and it cannot.
    `scripts/dst/spike_scripted_cursor_probe.ail` is the executable statement of the defect and
-   becomes a passing regression test when fixed. Per D1, the successor's sole persistent copy is
-   **one explicit `C2LoopState` field** until `world_state` subsumes it; do not park it in a closure
-   inside the `Ports` value.
+   becomes a passing regression test for the main-loop path when fixed.
 3. **Sequence the repin as its own milestone**, budgeting the extension-ABI major it forces
    (Consequences). It is on the critical path because D1 requires it.
 
