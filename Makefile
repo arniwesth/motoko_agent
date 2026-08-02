@@ -73,7 +73,23 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state smoke_driver smoke_parity dst_l2 dst_seeded
+
+# WI-A12's advancement + trace-completeness gate, landed BEFORE the threading it
+# watches — the plan's binding sequencing rule. The script header carries the
+# full rationale; what belongs here is why it is a separate target and not one
+# more line in compaction_dst: every effect class A12 threads adds its
+# assertions to this one probe, so the gate is named after the thing it guards.
+#
+# Verified falsifiable rather than assumed, by reproducing cluster 1's exact
+# mutation: flipping the six dispatch carry sites to the carry-forward form
+# type-checks clean (`✓ No errors found!`) and turns SEVEN assertions here red.
+# The instructive half is what stayed GREEN under that total freeze — the
+# one-RunSummary invariant and both determinism axes. Each axis is blind to the
+# others' defect class, which is why the probe asserts all three.
+.PHONY: world_state
+world_state:
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/world_state_probe.ail < /dev/null
 
 # D6's terminal-trace contract (WI-A9). Four checks, in order:
 #
