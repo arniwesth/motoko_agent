@@ -35,7 +35,7 @@ disagree, the plan wins and this note is stale.
 |---|---|---|---|---|
 | 1 | **A1 + P6 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **DONE 2026-08-02** — `e59acaa`, `4ad2c7a`, `6dd1bbe`. Report: `NOTE-cluster-1-execution-report-and-plan-corrections.md` |
 | 2 | **A4 + A5 + A11** | `tools/`, Python; scans the tree, edits none of it | — | Safe to write now |
-| 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | Safe to write now |
+| 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | **Handoff written**: `HANDOFF-execute-a6-a7-a8-artifacts-and-validators.md`. On the critical path twice (A13 needs A7's ids; A10 needs all three). First new-artifact work — the sizing rate is *not* assumed to transfer |
 | 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
 | 5 | **A10** | profile/manifest machinery | 2 and 3 | Wait |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
