@@ -55,7 +55,8 @@ agree; zero anchor corrections were needed.
 | 10 | Exhaustive matches & configs | `match provider` at `session.ail:696` and `scripted_ports.ail:31` are the only `StepProvider` matches left. 14 checked-in configs, **all 14** installing `compaction_ai`; `compose` only in `.motoko/config/ailang`; `test_dummy` in none; `motoko_ext_conformance` absent from `registry_generated.ail`. Latent under-declarations confirmed present: `agents_md.ail:106 walk_agents` performs `FS` rowless; `a2a.ail:131` calls `uuid4()` under a row without `Rand`. |
 
 Executable checks run for this survey: `make effect_inventory` and `effect_inventory_selftest`
-(clean, above), and `scripts/dst/spike_scripted_cursor_probe.ail` against HEAD — **F6 reproduces
+(clean, above), and `scripts/dst/spike_scripted_cursor_probe.ail` against HEAD (renamed to
+`scripted_cursor_probe.ail` when WI-A2 promoted it) — **F6 reproduces
 exactly**: `folding: served=[s0,s1,s2,s2,…] advancing=false`, `FAIL`, `exit(1)`. The probe is the
 executable statement of the first defect this plan fixes.
 
@@ -195,8 +196,9 @@ The "judgement band dominates" call was right: 17% here against M1's 10%. **Two 
 where both alternatives type-check and the wrong one silently reproduces F6** — see
 `NOTE-cluster-1-execution-report-and-plan-corrections.md`, which WI-A12 must read before threading
 `world_state` through the same successor literals.
-*Acceptance evidence:* `scripts/dst/spike_scripted_cursor_probe.ail` prints PASS and exits 0, and
-is promoted from spike naming into the `make dst` aggregate as a permanent regression test;
+*Acceptance evidence:* the F6 probe prints PASS and exits 0, and is promoted out of spike naming
+into the `make dst` aggregate as a permanent regression test — landed as
+`scripts/dst/scripted_cursor_probe.ail`, wired at `Makefile:86`;
 `phase_c2_wiring_scenarios` at its full count (**19** once WI-A1 adds its emission-log scenario to that harness — an earlier revision said 18/18, which A1 necessarily moves); `check_core` green; `grep` finds no `assistant_count`-derived
 script index. The extension model path is **not** fixed here and no work item pretends otherwise:
 `ext_ai_step` (`session.ail:662`) discards state by ABI shape until Milestone B.
@@ -251,6 +253,12 @@ fail-closed validator. New construction; the required classes, per-class fields 
 applicability condition, delivery constructor, named recovery-branch id, logical transition), and
 the 007-D1.3 physical-fault tripwire are all fixed in D3 — the work is the artifact and validator,
 not the design.
+**One uncovered case cluster 1 surfaced belongs in this catalogue.** After A2, an extension-issued
+`ai_step` against a `Scripted` provider is handed a fresh empty `ProviderState` and serves
+`terminal_step()`, per D1's exclusion of the extension model path. **No test in the tree changed its
+output**, which means nothing covers "an extension calls `ai_step` against a `Scripted` provider" —
+and that is the concrete reason D1's rule (a conformant interim profile must exclude *every* hook an
+`ai_step`-calling extension registers) currently has no instrument behind it.
 *Acceptance evidence:* validator fails closed on a class row missing any field or naming an unknown
 constructor; **and on a catalogue missing any required D3 class id** — set completeness, not only
 row shape, because every downstream counter reads its ids from this artifact and therefore cannot
@@ -438,6 +446,25 @@ silently truncated, or below-minimum window (tested by forcing one); the fixed b
 reaches every required non-waived fault class in A7's catalogue; a promoted counterexample enters
 the fixed corpus with its manifest attached.
 *Size:* **estimate — 2–4 days**, dominated by CI cost measurement rather than code.
+
+**WI-A16. Wire the unrun driver coverage into `make` and CI — do this before A9 and A12.** No
+dependencies; it is Makefile and workflow work, and it is sequenced first because it *protects* the
+remaining driver items rather than following them. Cluster 1 found a live gap: **eight smoke scripts
+that exercise the driver's full loop are in no `make` target and no CI job** —
+`scripts/smoke_v2_{dp7_gate,pending_full_loop,compaction_full_loop,stream_parity,ext_fixture_parity,cost_budget_full_loop,compaction_chain}.ail`
+and `smoke_phase_a_tool_parity.ail` — and **`src/core/test/scripted_ports.ail`'s six unit tests are
+run by nothing**, since `check_core` covers `src/core/*.ail` only. Verified at HEAD: all nine have
+zero references in the Makefile.
+
+This is not hygiene. WI-A2 changed the contract every one of those eight depends on and nothing in
+the repo would have run them; cluster 1 ran all eight by hand and all eight passed, but the next
+driver change has no such guarantee. `smoke_v2_dp7_gate` is the **only** executable coverage of
+`c2_after_dp7`, whose two successor literals A2 had to thread — precisely the code path A12's
+silent-freeze hazard threatens.
+*Acceptance evidence:* all nine run in a `make` target reachable from CI; the target fails when any
+one of them fails (verified by breaking one deliberately); `scripted_ports.ail`'s unit tests are in
+a named target.
+*Size:* **estimate — under a day.** Basis: wiring, not authoring; the scripts exist and pass today.
 
 ### Milestone B — the repin (trigger: a released AILANG carrying the recorded-stream API)
 
