@@ -38,7 +38,7 @@ disagree, the plan wins and this note is stale.
 | 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | Safe to write now |
 | 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
 | 5 | **A10** | profile/manifest machinery | 2 and 3 | Wait |
-| 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1 (landed), 4 (A16's coverage) | **Groundable**, but read cluster 1's silent-freeze finding first — A12 must land an advancement assertion per cursor *before* threading it |
+| 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **Handoff written**: `HANDOFF-execute-a12-world-state-threading.md`. Critical path. Carries both clusters' silent-wrong findings; assertion must cover trace completeness, not just cursor advancement |
 | 7 | **A13** | discovery/replay | 3, 4, 5, 6 | Wait |
 | 8 | **A14 + A15** | invariants, latency pair, corpora, CI | 7 | Wait |
 
