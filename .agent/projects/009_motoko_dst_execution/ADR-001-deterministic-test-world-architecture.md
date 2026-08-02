@@ -8880,3 +8880,797 @@ pinned hook slots.
 recorded-stream API in an actual AILANG release, this repository repinned to that release, and the
 positive integration probe passing. `arniwesth/ailang`'s `stepWithStreamRecorded` on the `v0.31.0`
 tag remains a prototype and clears none of those conditions.**
+
+---
+
+## Review Comments
+
+**Delta review of the eighth correction pass** — reviewed at `39e9b8d`, model `claude-opus-5`,
+2026-08-02. Baseline `1cc1084`. This is the **eighteenth** `## Review Comments` section; there were
+seventeen at the reviewed commit (`grep -c '^## Review Comments'` → 17), and the ADR body is
+unchanged between `39e9b8d` and `ac35443`.
+
+Scope: the single commit `1cc1084..39e9b8d`. The architecture, the accepted 007 decisions, and the
+decision to request an upstream API are not reopened.
+
+**Verdict: Revise.** The pass's substantive rulings are right and most of its new text is correct and
+well-grounded. What it did not do is finish propagating them: five passages that the restored floor,
+the retracted satisfiability claim, and the retired "pure guards" formulation each contradict were
+left standing, three of them inside the very passages this pass rewrote. Separately, one load-bearing
+premise that this pass newly leaned on — that a rowless ABI row bounds what a hook can perform — is
+**false on the pinned toolchain**, which both settles the handoff's headline question and opens a
+fail-open larger than the one clause 3 was rewritten to close.
+
+---
+
+### R1. A rowless ABI row does not bound what a hook performs, so "the three rowless slots are coverable" is fail-open — and the proposed narrowing to non-rowless hooks must be rejected
+
+The pass makes `on_describe_tools`, `on_build_system_prompt` and `on_tool_policy` **coverable**
+because they "carry no row at all" (body `:1104-1110`, `:1155-1157`), and this pass makes that claim
+load-bearing in two new places: it is the sole ground on which the restored floor is satisfiable
+(`:1109-1116`), and it is the basis of the `compaction_ai`-versus-`compose` comparison that justifies
+named disclosure (`:1128-1133`). Under the declared-row rule, a covered rowless hook is asserted to be
+effect-free.
+
+The pinned effect checker does not enforce that for calls through a **function-valued record field**,
+which is exactly the shape of `ExtCtx.ports: ExtPorts` (`packages/motoko-ext-abi/types.ail:62-67`,
+`:97`):
+
+```text
+$ cat a1probe3/main.ail
+module a1probe3/main
+import std/io (println)
+type Ports = { ai_step: (string) -> string ! {IO} }
+func rowless_hook(p: Ports) -> string {            -- no effect row
+  p.ai_step("called from a rowless hook")
+}
+export func main() -> () ! {IO} {
+  let ports = { ai_step: \s. { let _ = println("EFFECT PERFORMED: ${s}"); "ok" } };
+  let r = rowless_hook(ports);
+  println("hook returned: ${r}")
+}
+
+$ ailang check a1probe3/main.ail
+→ Effect checking...
+✓ No errors found!
+
+$ ailang run --entry main --caps IO a1probe3/main.ail
+EFFECT PERFORMED: called from a rowless hook
+hook returned: ok
+```
+
+The effect is declared nowhere on `rowless_hook`, the checker accepts it, and the runtime performs it.
+The checker *is* transitive through named helpers — the same rowless function calling a
+`! {IO}` helper fails with `Missing effects: IO` — and it *is* correct for a direct builtin call,
+which is the probe the handoff cites. The gap is specific to field calls, and field calls are the only
+way an extension reaches `ExtPorts` at all.
+
+Two consequences.
+
+**(a) The handoff's proposed narrowing is rejected, and the carve-out survives with a member.** The
+narrowing rests on "a hook whose ABI row is empty *cannot* reach `ai_step` — not 'is unlikely to',
+cannot, by type." That premise is false on the pin: a rowless slot bound to a lambda that calls
+`ctx.ports.ai_step` type-checks. So the coarse every-hook rejection rule stands, `compaction_ai`
+covers zero hooks, the classifier-2 carve-out has exactly one member today, and the floor-plus-carve-out
+machinery introduced by this pass is live text rather than dead. The disposition this pass chose is
+the right one.
+
+But the ADR reaches it by the wrong argument. It justifies extension granularity **solely** on
+decidability ("nothing maps a call site to the hooks that can reach it"), and decidability alone does
+not distinguish the coarse rule from the ABI-row narrowing — the narrowing is equally decidable, read
+off the same artifact classifier 2 already reads. That is why this disposition has now moved three
+times in three passes. The argument that actually settles it is the probe above: a declared row is not
+evidence about performed effects for field-mediated calls, so a rowless row licenses no narrowing.
+Record that, or a ninth pass re-proposes the narrowing on the same decidability grounds.
+
+**(b) The coverability of the three rowless slots is an assumption, not a consequence.** The ADR
+presents it as following from the closed record. It does not. The only backstop the ADR offers is the
+hermeticity probe at `:1184-1186` — "Direct `AI`, `Process`, `Net`, `FS`, `SharedMem`, `Clock`,
+environment, or random effects from a reached hook fail the profile's hermeticity probe" — which is a
+*runtime* check that fires only if a seed exercises the path, and whose word "direct" arguably exempts
+the port-mediated case entirely. That is weaker than the declared-row rule implies.
+
+**Action:** in the `Per-hook classification reads *declared* effect rows` passage, state that on the
+pin a declared row bounds performed effects only for direct and named-helper calls, not for calls
+through function-valued record fields, with the probe above as evidence; state that rowless-slot
+coverability is therefore an assumption backed by the hermeticity probe rather than by the type
+system; and rewrite the extension-granularity justification so it rests on that fact rather than on
+decidability alone. Then either narrow "direct … effects" in the hermeticity clause so port-mediated
+effects from a *covered* hook are also caught, or say explicitly that they are not.
+
+---
+
+### R2. The heading of the floor passage still asserts the position the passage below it reverses
+
+`:1099` opens the passage with:
+
+> **The anti-laundering mechanism is disclosure, not a structural floor.**
+
+Twenty lines later the same passage says the opposite (`:1116-1128`): "**Two mechanisms are needed,
+because one rejects and the other informs** … **The floor is restored, in the form that was always
+decidable.**" A reader who takes the bolded topic sentence as the passage's claim — which is what a
+bolded topic sentence is for — gets the seventh pass's position, not this one's.
+
+```text
+$ grep -n "anti-laundering" body8.md
+1099:**The anti-laundering mechanism is disclosure, not a structural floor.** An earlier revision required
+```
+
+**Action:** rewrite `:1099` to introduce the two-mechanism result, e.g. "**Anti-laundering needs two
+mechanisms, and an earlier revision required only a structural floor.**"
+
+---
+
+### R3. Implementation Handoff item 2 still denies the carve-out this pass created, in the passage describing the carve-out's only member
+
+`:1897-1900`:
+
+> A profile installing an `ai_step`-calling extension is conformant only by excluding **every hook
+> that extension registers** … Such a profile covers none of that extension's hooks, **which the
+> per-extension hook disclosure records rather than a floor exempting it.**
+
+Under `:1124-1128` that is now exactly backwards: a zero-coverage extension is a profile-definition
+rejection *unless* the floor exempts it via a recorded classifier-2 carve-out, and the acceptance row
+at `:1734` requires that carve-out. This passage is about `compaction_ai`, which is the carve-out's
+only member today, so the sentence denies the mechanism precisely where it applies.
+
+**Action:** replace the trailing clause with the current rule — the profile records a classifier-2
+carve-out naming the extension and the field, and discloses the covered/excluded hook ids.
+
+---
+
+### R4. The pass retracts "unsatisfiable" and leaves the sentence asserting it thirteen lines above
+
+`:1100-1101` still reads "**That rule is simultaneously vacuous and unsatisfiable**", and `:1113`
+now reads "**The floor was therefore satisfiable**".
+
+```text
+$ grep -n "vacuous" body8.md
+1100:"at least one covered hook per installed extension". **That rule is simultaneously vacuous and
+$ sed -n '1113p' body8.md
+`on_tool_policy` today. **The floor was therefore satisfiable**, and a correction pass that retracted
+```
+
+The retraction paragraph diagnoses this failure mode by name — "a correction pass that retracted this
+claim elsewhere left it standing here, where it was doing the work" — and then reproduces it in the
+same edit.
+
+**Action:** change `:1100` to "vacuous" alone and drop "and unsatisfiable".
+
+---
+
+### R5. The "same words" warrant the pass removed survives at two of the four places it appears, including three lines below the text that retracts it
+
+The pass correctly dropped "in the same words" from the Status block's rule statement (`:48`) and from
+the D1 paragraph's opening (`:428`), and added "**That count is a claim to check, not a warrant**".
+Both paragraphs then re-assert it in their closing sentences:
+
+```text
+$ grep -n "same words" body8.md
+50:retired. The honest claim is the one above — six sites, same words — and a reader who finds a seventh
+429:  sites, the seventh asserted "six sites, same words" and was stale at three, one of which stated the
+439:  once" and it was stale at two sites; the claim here is checkable — six sites, same words — and a
+```
+
+`:429` is the legitimate historical citation. `:50` and `:439` are live re-assertions, and `:439` sits
+eleven lines below `:428`'s "not a warrant" inside one paragraph — which also now states the
+sixth-pass staleness twice (`:428-429` and `:439`).
+
+"Same words" is also false. The six enumerated sites use six phrasings: `:43-45` "must have **every
+hook it registers** excluded"; `:437-438` "**calls a classifier-2 field on an `ExtPorts`-typed
+value**, at extension granularity"; `:1848-1850` "conformant only by excluding every hook that
+extension registers"; `:1173-1175` "while any hook it registers is **not** excluded"; `:1734` "while
+registering an un-excluded hook"; `:1897-1899` "excluding **every hook that extension registers**".
+The substance is consistent at all six — that part is genuinely fixed, and D5's normative statement of
+the retired rule is gone. Only the "same words" claim is wrong. The count is also generous: D1 states
+the rule normatively twice more, at `:366-368` and `:381-383`, outside "this paragraph".
+
+**Action:** delete the clause "— six sites, same words —" at `:50` and `:439`, leaving the count claim
+and the "treat a site saying anything else as the defect" instruction; and either fold `:366-368` and
+`:381-383` into the enumeration or say the count covers normative statements outside D1's own
+derivation.
+
+---
+
+### R6. D1 cites approvingly the "pure guards and deterministic fixture hooks" formulation that D5 retires in this same pass
+
+D5 `:1187-1194`, new in this pass:
+
+> **The "pure guards and deterministic fixture hooks may form the initial profile" formulation of
+> earlier revisions names two classes with no available member today** … it should be described that
+> way rather than by naming candidate extensions it cannot cover.
+
+D1 `:447-449`, untouched:
+
+> …which is what D5 already contemplates in "pure guards and deterministic fixture hooks may form the
+> initial profile."
+
+`:1168-1170` carries a third, partial version ("The 'pure guards may form the initial profile' line
+must be read that narrowly"), which now describes a line D5 retires twenty lines later.
+
+**Action:** rewrite `:447-449` to point at D5's retirement and state the first interim profile as the
+real driver plus the main-loop cursor; reconcile or drop `:1168-1170`.
+
+---
+
+### R7. Two statements that a fully-excluded profile is "conformant and inert" are no longer unconditional
+
+`:1096-1097` — "**a profile installing an extension whose hooks are all excluded is conformant and
+inert rather than invalid**" — and `:445-446` — "so the profile is conformant and inert on the
+compaction path". Under `:1124-1128` both are true only when the profile records the classifier-2
+carve-out; without it the profile is rejected. Both predate the floor's restoration and neither was
+updated.
+
+**Action:** add the carve-out condition to both.
+
+---
+
+### R8. `ailang iface` is the right choice but is not gate infrastructure, and the ADR's endorsement omits three things an implementer needs
+
+The pass makes a parsed interface "**the normative scanner**" (`:1305-1310`). The two hard cases it is
+credited with are real — I re-derived both rather than inheriting them:
+
+```text
+$ ailang iface ~/.local/share/ailang/std/ai.ail | jq '.funcs[]|select(.name=="stepWithStream")'
+{ "name": "stepWithStream",
+  "type": "(string,list[Message],list[ToolSchema],list[CacheBreakpoint],(StreamChunk)->()!{IO})
+           ->Result[...]!{AI}",
+  "effects": ["AI"], "pure": true }
+
+$ ailang iface ~/.local/share/ailang/std/list.ail | jq '[.funcs[]|select(.effects|length>0)]|length'
+0        # the five ! {e} exports at std/list.ail:193,204,215,226,237 report no concrete effects
+```
+
+The result row is correctly isolated from the parameter row, and effect variables correctly yield
+nothing. A walk of all 44 files succeeds (`ok=44 fail=0`). Three gaps:
+
+1. **It is in no gate.** `grep -rn "ailang iface" .github/workflows/ Makefile scripts/` returns
+   nothing. Neither classifier, nor the attribution table, is wired in either — already known — but
+   the ADR now calls this one *normative*, which is a stronger claim than "available".
+2. **The documented invocation form does not work.** `ailang --help` says `iface <module>`, yet on the
+   pin only an absolute file path succeeds: `ailang iface std/list` fails from a scratch directory
+   (`cannot read file 'std/list.ail'`) and fails from inside the scan root with a different error
+   (`module name contains invalid characters … : list.ail`). All 44 succeed only via absolute paths.
+3. **The emitted module identity is a mangled path.** The `std/list` walk reports
+   `"module": "home/motoko/.local/share/ailang/std/list"`. A derivation that records module names —
+   which is what obligation 1 produces — cannot use that field as-is, and it varies with the scan
+   root's location, which would break the recorded-set comparison the obligation exists for.
+
+Also: `"pure": true` appears on **12** effect-bearing `std/ai` exports (`call`, `callImage`,
+`callJson`, …). `effects` is the only trustworthy field; a scanner keying on `pure` inverts the
+answer.
+
+**Action:** state that `effects` is the sole membership input and `pure` must be ignored; specify
+absolute-path invocation and derive the module id from the path relative to the scan root rather than
+from the `module` field; and move "wire the parsed-interface scan into CI" into the implementation
+plan as the step that makes "normative" true.
+
+---
+
+### R9. The content-hash reference defeats the rationale given for making it a reference
+
+`:967-973` has a profile record "**a *reference* to it — table identity, source-revision binding, and
+content hash — not a copy**", justified as: "a correction to one global table would then require a
+version bump on every profile, which is the opposite of what source-global buys."
+
+A recorded **content hash** has exactly that cost. Correcting one row changes the hash, so every
+profile's recorded reference mismatches and every profile must be re-issued — the same churn the
+copy was rejected for. The reference form is still preferable (size, single source of truth, no
+divergent copies), but not for the stated reason, and the question the handoff asks — "is that a
+primary key, or does it need a version?" — is not answered: identity is nowhere specified.
+
+**Action:** either drop the hash in favour of identity + source-revision binding and accept that
+content can change under a profile, or keep the hash and replace the rationale with the honest one
+(single source of truth, no divergent copies), stating that table corrections re-issue profiles.
+Specify what "table identity" is.
+
+---
+
+### R10. Five spliced edits were not reflowed, and the overlong lines mark the un-propagated sites
+
+The body wraps at ~100 columns. After this pass:
+
+```text
+$ awk 'length>110 && $0 !~ /^\|/ {print NR": "length}' body8.md
+422: 153      446: 122      1080: 124      1160: 112      1195: 148
+```
+
+Baseline had four. `:422` and `:1195` are new and are both mid-paragraph splices — `:1195` is where D5
+retires the "pure guards" formulation (R6), `:446` is the D1 sentence that still cites it. Cosmetic in
+itself, but it is a reliable marker for text appended without re-reading the paragraph, which is the
+defect class in R2–R7.
+
+**Action:** reflow the paragraphs containing `:422`, `:446` and `:1195` while fixing them.
+
+---
+
+## What is accurate
+
+Re-run and confirmed at `39e9b8d`:
+
+- **Every anchor introduced or changed in this pass, with no error** — a third consecutive clean pass.
+  `context_mode.ail:80`, `omnigraph.ail:69` (both `export func on_tool_policy`);
+  `microrag/register.ail:189` (`on_tool_policy: microrag_tool_policy`) resolving to a constant
+  `NoOpinion` at `:153-155`; `compose.ail:838` → `:83`; `std/ai.ail:318-324` (callback `! {IO}`,
+  result `! {AI}`); `install-prerequisites.sh:586` (`-X …/internal/version.Commit=`);
+  `reject_fixtures.ail:90`; `compaction_ai.ail:106`; `motoko-ext-abi/types.ail:151-165`.
+- **The dominance withdrawal is factually exact and the withdrawal was the right call (A4).**
+  `emit_dummy_hook` is `:187-195` with no guard; the attributed site `:190` is
+  `kv("ts", jnum(intToFloat(now())))`; guards are at `:206, 222, 239, 280, 368`; calls at
+  `:206, 222, 245, 287, 374`; the literal `"test_dummy"` is inside `is_test_dummy` at `:197-199`.
+  Every number checks. Withdrawing rather than repairing is correct: the interprocedural version both
+  seventh-pass reviews sketched is a successor-detector obligation, and specifying an unimplementable
+  check in an ADR that already has one manual-inspection escape hatch would add a second.
+- **The ABI enumeration and the eight-slot validation set (A2).** `ExtensionHooks` has ten fields, of
+  which `id` and `provided_tools` are not hooks; the eight hooks are three rowless, `on_budget_plan` at
+  `! {Env, FS}`, and four at the nine-effect row. "Disjoint and exhaust all eight ABI slots" is stated
+  over the right set. `compaction_ai` registers all eight (`register.ail:100-109`), seven of them
+  constant-returning lambdas, so the `compaction_ai`/`compose` comparison at `:1128-1133` is correct.
+- **The empty-intersection rule no longer contradicts the mechanical rule (A3).** Codex R2's finding
+  is answered: `:953-960` states one rule covering both cases, and it is consistent with the
+  source-global bullet at `:983-991`.
+- **The concentrated wrong-positive risk is disclosed plainly (A3).** With dominance gone, `:997-1000`
+  keeps the worked false attribution (`src/core/rpc.ail:200` attributed to `test_dummy`), and
+  `:1162-1164` says necessity "rests on the recorded named reviewer alone … rather than implying
+  mechanical support it does not have". This is honest. It is nonetheless the largest residual risk in
+  the ADR, and it grew in this pass: the empty-intersection correction converts that case from
+  over-counting into removal from the reachable set, so a valid-but-false row now silently shrinks
+  coverage where it previously did not. Necessary, but the ADR frames it only as a correctness fix.
+- **Classifier 1's four scan repairs.** `std/ai/streaming.ail` has six effectful exports — three
+  `['AI','Net','Stream']` and three `['Stream']` — so "rows *containing* `Stream`, not six literal
+  `! {Stream}`" is the right correction (the source has only three literal `! {Stream}`). The
+  recursive-walk note is exactly right: `shopt globstar` is `off` by default and `echo std/**/*.ail`
+  from the scan root returns only `std/ai/streaming.ail`, dropping all 43 top-level files. The
+  result-row rule is correct and `stepWithStream` is the right worked example.
+- **The scan-root/compiler comparand.** `ailang --version` reports
+  `Full: 3b52a24d24431c372ed5605289ef039592209514`, equal to `git -C ~/.local/share/ailang rev-parse
+  HEAD`, and the tag is `v0.26.0` — the pin. Naming `Full:` as the comparand is a real repair.
+- **Status block arithmetic (A8).** Seventeen sections − five = twelve; "twelve independent delta
+  reviews (two each of the second through seventh correction passes)" is 6 × 2 = 12. Consistent. The
+  count is not stale. The *content* staleness the handoff warned about is real but landed in the body
+  (R5's `:50` is inside the Status block).
+- **The D1 headline is repaired.** `:366-368` is grammatical with balanced bold markers.
+- **No retired phrasing survives outside its retraction.** "textual reference" appears only at `:394`
+  and `:435-436`, both retractions; "field-reference sites" and "`ai_step`-referencing" are gone.
+- **Settled leads re-derived:** `.ai_step(` has exactly two call sites
+  (`compaction_ai.ail:106`, `reject_fixtures.ail:90`); `std` has 44 `.ail` files, 43 top-level.
+
+**The three explicit rulings requested:**
+
+1. **Should the extension-granularity rule be narrowed to non-rowless hooks, and what happens to the
+   carve-out? — No, reject the narrowing; the carve-out stands with one member.** The narrowing's
+   premise fails on the pin: a rowless function calling an effectful function-valued record field
+   type-checks and performs the effect (R1). `ExtPorts` is exactly such a record, so an empty ABI row
+   is no barrier to reaching `ai_step`. `compaction_ai` therefore covers zero hooks, the classifier-2
+   carve-out has a member, and the floor-plus-carve-out machinery is live. The disposition is right;
+   the *justification* in the ADR is not, and must be repaired or this will move a fourth time.
+2. **Is the floor-plus-disclosure pair coherent and decidable? — Coherent in design, decidable as
+   stated, but not yet coherent as written.** The division of labour is right and the seventh pass's
+   "disclosure achieves what the floor was for" claim is genuinely gone rather than reworded (it
+   survives only at `:1120` as the thing being rejected). "Not every hook of an installed extension
+   may be excluded", plus a recorded carve-out, is decidable from the profile definition alone: it
+   reads the covered/excluded id sets and the carve-out list, all of which the profile records. But
+   four passages still state the pre-restoration position (R2, R3, R4, R7), two of them inside the
+   restoring passage. Per R1 the carve-out is reachable, so no path to zero coverage is closed off.
+3. **Is `ailang iface` usable as normative gate infrastructure? — Usable, not yet infrastructure.**
+   It resolves both hard cases correctly and succeeds on all 44 files, so the choice is sound. It is
+   in no CI job, Makefile target or script; its documented `<module>` invocation does not work; its
+   `module` field is a path-derived string; and its `pure` field contradicts its own `effects` field
+   on 12 `std/ai` exports (R8). "Normative" is a commitment the repo has not yet made.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in order:**
+
+1. **R1** — repair the extension-granularity justification and state the rowless-row limitation. It is
+   the only finding that changes what the ADR asserts about the type system, and R2/R3/R7's wording
+   depends on the carve-out surviving, which R1 settles.
+2. **R2, R3, R4, R7** — the four passages contradicting the restored floor and the retracted
+   satisfiability claim. Mechanical, and they are the same edit.
+3. **R6** — reconcile D1 `:447-449` and `:1168-1170` with D5's retirement of the "pure guards"
+   formulation.
+4. **R5** — delete the two surviving "same words" clauses.
+5. **R9** — specify "table identity" and fix the reference rationale.
+6. **R8's first half** — state that `effects` is the sole input and `pure` must be ignored, and
+   specify absolute-path invocation and scan-root-relative module ids.
+7. **R10** — reflow while doing the above.
+
+**Belongs to the implementation plan, not this ADR:**
+
+- Wiring the parsed-interface scan, both classifiers, and the attribution table into CI — the step
+  that makes "normative" true (R8).
+- The documentation check that greps the canonical predicate phrasing and fails on drift. The ADR
+  already assigns this to the plan at `:431-433`; after nine passes and three failed propagation
+  claims, it should be sequenced early rather than listed.
+- The interprocedural necessity check described at `:1160-1162`, as a successor-detector obligation.
+- Upstream: `ailang iface`'s `pure` field disagreeing with its `effects` field, and `ailang check`
+  not propagating effects through function-valued record-field calls (R1). The second is a soundness
+  gap worth filing regardless of this ADR.
+
+## Accept / revise recommendation
+
+**Revise** — the rulings are right and the anchors are clean, but ten findings remain, one of which
+(R1) invalidates a premise this pass newly made load-bearing and four of which (R2, R3, R4, R7) are
+passages contradicting the pass's own central change; none require re-deriving the architecture, and
+all are mechanical once R1 is settled. **The upstream API blocker is untouched by this review and
+remains open on its own terms:** D1 still requires the recorded-stream API in an actual AILANG
+release with this repository repinned and the positive integration probe passing;
+`arniwesth/ailang`'s `stepWithStreamRecorded` on the `v0.31.0` tag remains a prototype and clears
+none of those conditions. Clearing every finding above leaves that blocker in place.
+
+---
+
+## Review Comments
+
+**Independent delta review of the eighth correction pass** — model `GPT-5 Codex`, 2026-08-02,
+reviewed at `39e9b8d` against baseline `1cc1084`.
+
+At the reviewed commit, `git show 39e9b8d:.../ADR-001-deterministic-test-world-architecture.md |
+grep -c '^## Review Comments$'` returned **17**. Before this review began, the worktree already
+contained an uncommitted eighteenth section by a different reviewer. It has not been deleted or
+edited; this independently authored record is therefore the nineteenth section in the worktree while
+remaining a review of the requested seventeenth-section target state. The committed ADR bytes are
+identical at `39e9b8d` and worktree `HEAD` before those appended reviews (`sha256sum` for each
+committed object: `f3a8950f3af3b076b6193c817e668db561af7cb1f4d7bec1339ccf8c5db1f0c9`).
+
+**Verdict: Revise.** The pass fixes most of the nineteen triggering findings and carries no anchor
+error, but it does not clear verification. Two executed probes overturn load-bearing premises: the
+pinned effect checker accepts an effectful `ExtPorts`-shaped field call from a rowless function, and
+`ailang iface` fails on one of the 44 stdlib files. The restored floor also remains bypassable by an
+unvalidated carve-out and is contradicted by several unpropagated passages.
+
+### R1. A rowless ABI declaration does not prove that a hook cannot call `ai_step`
+
+**Defect:** The proposed narrowing to the five non-rowless hooks must be rejected, because pinned
+AILANG fails to propagate effects through function-valued record-field calls and therefore permits a
+rowless hook to call an `ExtPorts.ai_step`-shaped field.
+
+**Grounding:** I built three scratch modules outside the repository. Direct `println` and a call to a
+named `! {IO}` helper both fail as expected:
+
+```text
+$ ailang check mod/direct.ail
+Missing effects: IO
+Current signature: func rowless(...) -> T
+
+$ ailang check mod/helper.ail
+Missing effects: IO
+Current signature: func rowless_hook(...) -> T
+```
+
+The same rowless hook calling a field with the exact nine-effect `ExtPorts.ai_step` row passes and
+executes the effect:
+
+```text
+$ ailang check mod/field_full.ail
+→ Effect checking...
+✓ No errors found!
+
+$ ailang run --entry main --caps IO mod/field_full.ail
+EFFECT PERFORMED: called through the ExtPorts-shaped row
+hook returned: ok
+```
+
+The relevant probe declarations were:
+
+```ailang
+type Ports = {
+  ai_step: (string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream}
+}
+func rowless_hook(ports: Ports) -> string {
+  ports.ai_step("called through the ExtPorts-shaped row")
+}
+```
+
+That is the actual ABI shape at `packages/motoko-ext-abi/types.ail:62-67`; the rowless slots are at
+`:154-155,158`. The ADR already records another accepted under-declaration at `ADR:1441-1445`, yet
+`ADR:1140-1155` treats an empty declared row as proof of performed effect-freedom.
+
+**Action:** retain the coarse every-hook classifier-2 rejection rule, retain the carve-out, and state
+the actual reason: on the pin, an empty declared row does not bound effects reached through a
+function-valued record field. Do not classify a rowless hook as effect-free from the ABI row alone;
+require the source/typed-call inventory plus routing/hermeticity evidence, or fail it closed until the
+declared-versus-performed checker is sound. File the record-field propagation defect upstream.
+
+### R2. The disclosure example reports the coverage outcome of the rejected narrowing
+
+**Defect:** `compaction_ai` cannot report three covered and five excluded hooks under the retained
+extension-granularity rule; it reports zero covered and eight excluded with a classifier-2 carve-out.
+
+**Grounding:** `ADR:1130-1135` says `compaction_ai` and `compose` “both report three covered and five
+excluded,” while `ADR:1147-1148` says the extension-granularity rule “forces all eight to be
+excluded.” The source grounds the latter: `compaction_ai.ail:106` calls `ctx.ports.ai_step`, and
+`register.ail:100-109` registers all eight hooks. R1 rejects the only proposed reason to leave the
+three rowless hooks covered.
+
+**Action:** change the `compaction_ai` disclosure to zero covered/eight excluded plus the named
+`ai_step` carve-out, and replace the equal-count comparison with a valid example or simply state that
+hook ids reveal which slots—not merely how many—are covered.
+
+### R3. A recorded carve-out is accepted without proving that classifier 2 forced it
+
+**Defect:** The new floor is trivially bypassable because validation checks only that a zero-coverage
+extension records some classifier-2 carve-out, not that the recorded extension/field pair occurs in
+the source-bound classifier-2 call inventory.
+
+**Grounding:** The complete body search is:
+
+```text
+$ git show 39e9b8d:.../ADR-001-...md | sed -n '1,2037p' |
+    rg -n 'carve-out|zero-coverage|zero covered'
+1074:- **coverage-floor carve-outs**: every installed extension with zero covered hooks ...
+1075:  with the classifier-2 field that forced full exclusion. An extension with zero covered hooks and no
+1076:  recorded carve-out is a profile-definition rejection (D5).
+1137:The two are validated together at profile load ...
+1138:ABI slots, and a zero-coverage extension must carry a recorded classifier-2 carve-out.
+1734:... every installed extension covers at least one hook or carries a recorded classifier-2 carve-out ...
+```
+
+No reverse check appears. The classifier-derived sets may be recorded with the profile **or the
+manifest** (`ADR:1402-1404`), so the claim at `ADR:1128-1129` that the legitimate carve-out is
+decidable “from the profile definition alone” is also too strong. As written, a fully excluded
+non-classifier-2 extension can name `ai_step` and pass the only stated floor check.
+
+**Action:** require every carve-out `(extension id, classifier-2 field)` to match a row in the typed
+call inventory bound to the same source/toolchain as the profile, reject false/unknown/stale pairs,
+and require that inventory or its content-addressed reference in the profile rather than optionally
+only in the per-run manifest.
+
+### R4. `ailang iface` does not complete the recursive source scan and is not gate infrastructure
+
+**Defect:** `ailang iface` is a useful parser output but cannot be the normative source-half gate as
+stated because it fails on the pinned stdlib and is absent from every repository gate.
+
+**Grounding:** A real recursive walk of the pinned clone produced:
+
+```text
+$ while IFS= read -r f; do
+    if ailang iface "$f" >/dev/null 2>&1; then ok=$((ok+1));
+    else printf 'FAIL %s\n' "$f"; fail=$((fail+1)); fi;
+  done < <(find ~/.local/share/ailang/std -type f -name '*.ail' -print | sort)
+FAIL /home/motoko/.local/share/ailang/std/secret.ail
+ok=43 fail=1 total=44
+
+$ ailang iface ~/.local/share/ailang/std/secret.ail
+Error: Error MOD010: module 'std/secret' doesn't match file path
+'home/motoko/.local/share/ailang/std/secret'.
+  Fix: use --relax-modules flag or set AILANG_RELAX_MODULES=1
+
+$ ailang iface --help
+Usage of iface:
+  -compact
+      Compact one-line-per-export signatures ...
+
+$ rg -n --fixed-strings 'ailang iface' .github/workflows Makefile scripts
+# no output
+```
+
+The suggested relaxation is not accepted by this command (`ailang iface --relax-modules ...` returns
+`flag provided but not defined`), and `AILANG_RELAX_MODULES=1` does not change the failure. Absolute
+paths also produce location-dependent module ids (`"module":
+"home/motoko/.local/share/ailang/std/list"`). The output is schema-tagged
+`"ailang.iface/v1"`, but there is no checked scanner around it.
+
+**Action:** describe `ailang iface` as the preferred parsed input, not established normative gate
+infrastructure; specify path-relative module-id derivation, use only each function's `effects` field,
+and require a tested textual fallback or fail-closed handling for every interface failure, including
+`std/secret`. The implementation plan must wire the complete 44-file walk and reconciliation into CI
+before the routing audit is citable.
+
+### R5. Withdrawing local syntactic dominance is correct, but withdrawing all mechanical necessity evidence is not
+
+**Defect:** A valid-but-false attribution can still silently remove a live core site while the ADR
+promises an automated name-adoption gate, and the proposed interprocedural replacement is assigned to
+an unrelated detector.
+
+**Grounding:** `ADR:999-1001` states plainly that attributing `src/core/rpc.ail:200` to `test_dummy`
+would drop a live `SharedMem` read and pass every mechanical check. `ADR:1016-1020` sketches the sound
+interprocedural condition but says it “belongs to the successor detector”; `ADR:1441-1445` defines
+that detector as **declared-versus-performed effect-row reconciliation**, which neither resolves
+positive hook-id predicates nor proves dominance of all call sites. Meanwhile `ADR:1727-1728` says
+all acceptance answers are supported by an automated gate.
+
+The withdrawal’s factual premises are correct. At `src/core/ext/runtime.ail:187-195`, site `:190` is
+inside unguarded `emit_dummy_hook`; `"test_dummy"` is in `is_test_dummy` at `:197-199`; guards are at
+`:206,222,239,280,368`; and calls are at `:206,222,245,287,374`. The old local textual test did fail
+its own example. That does not make a named reviewer an automated check.
+
+**Action:** keep the local dominance rule withdrawn, but specify a distinct fail-closed attribution-
+necessity validator: resolve the predicate to a positive equality against the attributed hook id,
+prove every call to the containing helper is dominated by it, reject negation, and treat an
+unprovable row as invalid/unconditional core. Alternatively, explicitly make manual review an
+exception to the “automated gate” promise; the interprocedural version is the safer pre-acceptance
+choice.
+
+### R6. The restored floor is contradicted by four live pre-restoration statements
+
+**Defect:** The body simultaneously restores a floor plus classifier-2 carve-out and continues to say
+that disclosure—not a floor—is the anti-laundering mechanism and that full exclusion is
+unconditionally conformant.
+
+**Grounding:** The contradictions are local and direct:
+
+- `ADR:1096-1097`: every fully excluded installed extension “is conformant and inert rather than
+  invalid,” omitting the required carve-out.
+- `ADR:1099`: “The anti-laundering mechanism is disclosure, not a structural floor.”
+- `ADR:1100-1101`: the floor is “simultaneously vacuous and unsatisfiable,” while `ADR:1113` says
+  “The floor was therefore satisfiable.”
+- `ADR:1897-1900`: the `compaction_ai` case is recorded by disclosure “rather than a floor exempting
+  it,” though this is the carve-out’s current member.
+
+The live replacement is `ADR:1118-1138`: one mechanism rejects and one informs.
+
+**Action:** make `ADR:1096-1097` conditional on a validated classifier-2 carve-out, replace the
+`ADR:1099` topic sentence with the two-mechanism conclusion, remove “and unsatisfiable” at
+`ADR:1100-1101`, and make Implementation Handoff item 2 name the carve-out rather than deny it.
+
+### R7. Predicate canonicalisation still asserts “same words” where the words and site count differ
+
+**Defect:** The pass removed “in the same words” from two headings but left two live assertions of it,
+while the named normative sites use different formulations and additional normative statements sit
+outside the claimed six.
+
+**Grounding:** The body grep returns:
+
+```text
+$ git show 39e9b8d:.../ADR-001-...md | sed -n '1,2037p' | rg -n 'same words'
+50:... six sites, same words ...
+429:... the seventh asserted "six sites, same words" and was stale at three ...
+439:... the claim here is checkable — six sites, same words ...
+```
+
+Line 429 is historical retraction; lines 50 and 439 are live claims. The Status wording at
+`:42-45`, D1 at `:366-368,381-387,437-440`, D5 at `:1172-1179,1222-1224`, the acceptance row at
+`:1734`, Consequences at `:1848-1850`, and the handoff at `:1897-1899` are substantively aligned on
+today’s sole field but are neither six textual statements nor “the same words.” The future
+documentation check at `:431-433` has no exact phrase/count to enforce.
+
+**Action:** delete the two live “same words” claims and define the documentation check in terms of an
+exact canonical predicate plus explicit normative anchors, or propagate one exact sentence and make
+the claimed count match what the check actually scans.
+
+### R8. D1 still cites the “pure guards” profile after D5 retires it
+
+**Defect:** The pass retracts “pure guards and deterministic fixture hooks may form the initial
+profile” in D5 but continues to rely on that formulation in D1.
+
+**Grounding:** `ADR:447-449` says the first narrow profile is “what D5 already contemplates” in that
+exact formulation; `ADR:1164-1170` says the pure-guards line must be read narrowly; and
+`ADR:1187-1195` says the formulation has no available member and the initial profile should instead
+be described as the real driver plus the main-loop cursor.
+
+**Action:** replace the D1 citation with D5’s actual current conclusion—the real driver plus the
+main-loop cursor—and remove or reconcile the earlier “read narrowly” paragraph.
+
+### R9. The content-hash reference preserves the profile-version churn its rationale claims to remove
+
+**Defect:** Changing a source-global attribution table still forces every referring profile to change
+because its content hash is a semantic profile field, so the stated reason for replacing a copy with
+a reference is false and “table identity” remains unresolved.
+
+**Grounding:** `ADR:971-975` says a profile records table identity, source revision and content hash
+to avoid a version bump on every profile after a global correction; `ADR:1068-1070` repeats that
+tuple; and `ADR:1078` says changing any of those semantic scope fields requires a profile-version
+change. A corrected table necessarily changes its hash.
+
+**Action:** keep the content-addressed reference if immutability and reproducibility are intended, but
+replace the churn rationale with the real benefits (one source of truth and no divergent embedded
+copies), say that corrections reissue profile references/versions, and define the resolvable table
+identity or state that `(source revision, content hash)` is the versioned identity.
+
+### R10. Three new splice lines violate the body’s wrapping convention
+
+**Defect:** Three lines introduced or rewritten by this pass remain unwrapped, including two sites
+whose surrounding conclusions were not propagated.
+
+**Grounding:** Excluding Markdown tables:
+
+```text
+$ git show 39e9b8d:.../ADR-001-...md | sed -n '1,2037p' |
+    awk 'length($0)>110 && $0 !~ /^\|/ {print NR ":" length($0)}'
+422:153
+446:122
+1080:124
+1160:112
+1195:148
+
+$ # same command at 1cc1084
+baseline_overlong=2
+target_overlong=5
+```
+
+The three additions are `:422`, `:1160`, and `:1195`; `:1195` is the D5 retirement that R8 shows was
+not propagated back into D1.
+
+**Action:** reflow those three changed lines while applying the substantive corrections above.
+
+## What is accurate
+
+Re-run and confirmed at `39e9b8d`:
+
+- **A1 ruling — do not narrow; the carve-out remains live.** The rowless-field probe in R1 defeats
+  the narrowing’s type-system premise. The every-hook rule therefore remains the decidable safe
+  approximation, `compaction_ai` covers zero hooks, and its classifier-2 carve-out remains necessary.
+  The ADR must replace its decidability-only justification and its rowless-effect-freedom claim, not
+  remove the carve-out.
+- **A2 ruling — floor plus disclosure is coherent in design but not decidable/sound exactly as
+  written.** Eight is the correct hook count: `ExtensionHooks` has ten fields at
+  `packages/motoko-ext-abi/types.ail:151-165`, and `id` plus `provided_tools` are not hooks. The
+  covered/excluded id sets can be checked from the profile. A carve-out’s *legitimacy* cannot; R3
+  requires the source-bound classifier-2 inventory. The old “disclosure achieves what the floor was
+  for” claim survives only as the rejected reasoning at `ADR:1118-1122`, but R6 leaves other
+  pre-restoration claims live.
+- **A3’s empty-intersection repair is internally consistent.** `ADR:953-963` now says a valid row
+  whose hook set has empty intersection is unreachable, and only missing/invalid rows fall back to
+  unconditional core; `ADR:983-990` says the same thing. The valid-but-false-row risk is also stated
+  plainly at `ADR:991-1001`. R5 rules that disclosure alone does not satisfy the ADR’s automated-gate
+  promise.
+- **A4’s anchor diagnosis is exact.** `runtime.ail:187-195,197-199` and the five guard/call line sets
+  all match. Withdrawing the broken *local* check was right; specifying the sketched interprocedural
+  replacement as a separate fail-closed obligation is still required.
+- **A5’s two hard cases are parsed correctly even though the all-file gate fails.** `ailang iface
+  std/ai.ail | jq ...` reports `stepWithStream.effects == ["AI"]`, not callback `IO`; the five
+  `std/list` effect-polymorphic exports report `effects: []`. The result-row rule is right.
+  `std/ai/streaming.ail` reports six effectful exports (three `AI,Net,Stream`, three `Stream`), and the
+  source contains only three literal `! {Stream}` rows. With default Bash `globstar` off, literal
+  `std/**/*.ail` expands only to `std/ai/streaming.ail`; `find` reports 43 top-level files and 44
+  recursively. The corrected “rows containing `Stream`” and recursive-walk wording are accurate.
+- **The pin binding is correct.** `ailang --version` reports
+  `Full: 3b52a24d24431c372ed5605289ef039592209514`, equal to `git -C
+  ~/.local/share/ailang rev-parse HEAD`; the clone is tagged `v0.26.0`, and
+  `scripts/install-prerequisites.sh:586` stamps that commit.
+- **A6’s D1 headline is grammatical and its bold delimiters balance.** No live body text says
+  “field-reference sites” or “`ai_step`-referencing”; “textual reference” occurs only in the
+  retractions at `ADR:394,435-436`. R7 is about the surviving propagation/count claim, not a return
+  of those retired predicates.
+- **All A7 anchors are correct, for a third consecutive clean anchor pass.** Confirmed
+  `context_mode.ail:80`; `omnigraph.ail:69`; `microrag/register.ail:189` resolving to constant
+  `NoOpinion` at `:153-155`; `compose.ail:838` resolving to `:83`; stdlib `ai.ail:318-324`;
+  `install-prerequisites.sh:586`; `reject_fixtures.ail:90`; and
+  `runtime.ail:187-195,197-199,206,222,239,245,280,287,368,374`.
+- **A8’s arithmetic is right.** The reviewed commit has seventeen `## Review Comments` sections;
+  seventeen minus the two full reviews and three F1-F6 verifications is twelve delta reviews, exactly
+  two for each of correction passes two through seven. The count is not stale; the content is (R6
+  and R7).
+
+Residual risk after the corrections remains concentrated in the manually asserted attribution
+necessity and the not-yet-built typed call/interface scanners. The architecture’s source-global
+empty-intersection semantics make a wrong positive especially consequential: it removes a site from
+the reachable set rather than merely over-counting it.
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. **R1 and R2:** record the pinned record-field effect-checker limitation, retain the coarse
+   extension rule/carve-out, and correct `compaction_ai` to zero/eight.
+2. **R3, then R6:** bind each carve-out to a valid classifier-2 inventory row, then propagate the
+   restored floor and validated carve-out through every live passage.
+3. **R5:** give attribution necessity its own conservative interprocedural validation obligation (or
+   explicitly weaken the automated-gate promise).
+4. **R4:** demote `ailang iface` from established normative infrastructure to the preferred parsed
+   input, specify the `std/secret` failure path/fallback and module-id derivation, and keep the routing
+   audit non-citable until the complete scanner passes.
+5. **R7 and R8:** make the predicate check mechanically defined and propagate the retired initial-
+   profile formulation.
+6. **R9:** define the attribution-table reference and correct its versioning rationale.
+7. **R10:** reflow the changed prose with the substantive edits.
+
+**Belongs to the implementation plan rather than this ADR’s body:**
+
+- Build and wire classifier 1’s 44-file parsed/text fallback, classifier 2’s typed field-call
+  inventory, carve-out validation, and the source-global attribution producer/validator into CI.
+- Implement the separate interprocedural necessity proof described in R5; do not assign it to the
+  declared-versus-performed effect-row reconciler.
+- Add the exact predicate-drift documentation check after R7 defines its anchors and canonical text.
+- File upstream issues for effect propagation through function-valued record fields and for `ailang
+  iface` failing `std/secret` while offering an unsupported `--relax-modules` remedy.
+
+## Accept / revise recommendation
+
+**Revise.** The eighth pass is directionally correct and most factual repairs hold, but R1-R5 affect
+the soundness or buildability of gates and R6-R9 leave the new conclusions internally inconsistent;
+none requires reopening the settled architecture. **The upstream API blocker is unchanged and stays
+open:** D1 still requires the recorded-stream API in an actual AILANG release, this repository
+repinned to that release, and the positive integration probe passing. The
+`arniwesth/ailang` `stepWithStreamRecorded` prototype on tag `v0.31.0` clears none of those conditions.
