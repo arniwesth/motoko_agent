@@ -177,6 +177,14 @@ byte-identically to its baseline.
 None of the standing traps fired: no stale-cache type error, no `/tmp` probing, and the pin held at
 v0.26.0 throughout.
 
+## Status: superseded 2026-08-02
+
+**WI-A12 landed (cluster 6) and invalidated this note's code-level facts.** It deleted the
+`C2LoopState.provider_state` field WI-A2 introduced and the dead `ported_provider` `history`
+parameter C5 flagged; C6's "unrun" claim was already corrected by cluster 4's C1b. The measurements
+and the transferable finding stand — and that finding, *land the advancement assertion first*, was
+confirmed three more times in cluster 6 and is now standing rule **S1** in the plan.
+
 ## What invalidates this note
 
 WI-A12 landing, which deletes the `C2LoopState.provider_state` field this run introduced and should

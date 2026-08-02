@@ -60,6 +60,33 @@ Executable checks run for this survey: `make effect_inventory` and `effect_inven
 exactly**: `folding: served=[s0,s1,s2,s2,…] advancing=false`, `FAIL`, `exit(1)`. The probe is the
 executable statement of the first defect this plan fixes.
 
+## Standing rules, earned by execution
+
+These began as per-item clauses and are promoted here because three calibration runs confirmed each
+of them. They bind every remaining item.
+
+**S1. Land the executable assertion *before* the change it guards, and make it cover advancement
+*and* completeness — never determinism alone.** Clusters 1, 4 and 6 produced ten sites where both
+alternatives type-check and the wrong one is silent. The compiler forces the *edit*; it does not
+force the *right* edit. Determinism caught none of the ten; advancement caught the frozen cursors,
+completeness caught the dropped records, and provenance caught the un-routed read. A12's clock
+defect is the sharpest case: type-checks clean, trace-complete, **both determinism axes green**, and
+wrong — visible only as `duration_ms: -1` and only to a check that the cursor moved.
+
+**S2. Prefer the un-routed option that fails loudly over the one that fails silently.** Where a seam
+cannot be routed on this pin, bind it so a future caller trips a gate rather than serving a stale
+value. `ExtPorts.clock_now` cannot be bridged at all (zero-argument port, no zero-arg lambdas in
+expression position), and the two available options were a frozen snapshot — silently wrong, cluster
+1's pinned cursor exactly, invisible to every gate — or an ambient read that turns the `Clock` poison
+probe red the moment anyone calls it. The ambient read is chosen deliberately. Same judgement as
+WI-A16's, and stated once here rather than re-derived per seam.
+
+**S3. Route the cheap instance of a seam before the awkward one.** A12's order put the clock second;
+it overran, and every minute was `clock_now` being the only zero-argument port. `ExtPorts.env_get` is
+two-argument and routed its extension seam in one line. Identical nominal scope, opposite outcome,
+sole difference parameter count — had env run first, the limitation would have surfaced on the cheap
+class.
+
 ## Decisions this plan owns
 
 The ADR deliberately left these decisions to the plan. They are answered here, once, so no work
@@ -160,9 +187,21 @@ is in flight. Milestone C depends on B.
   terminal returns and eight reachable termination reasons**. Sizing against the helper's callers
   would have missed two terminal paths outright (C2). **For an item that rewrites a *class* of
   things, count the class, not the helper.**
-- **The judgement ratio scales with how much contract an item touches:** M1's additive band 10%,
-  port widenings **~19%** (A1 3/13, A2 6/35), items rewriting a class of returns or a result
-  contract **~27%** (A16 3/11, A9 7/26). Use 27% for A10, A13 and B2.
+- **The judgement ratio is predicted by whether the change introduces a value that did not
+  previously exist** — not by "widening versus contract rewrite", which was the earlier reading and
+  A12 falsified it from the inside. Bands: M1's additive 10%; port widenings **~19%**; contract
+  rewrites **~27%**; A12 overall **29%**. But A12's *provider* class was a rename and came in at
+  **13%**, below even the widening band, while every class that added a port shape and routed real
+  call sites sat at **28–38%**. A rename converges mechanically; a new cursor forces a decision at
+  every site that consumes it. Use ~30% for A10, A13, A14 and B2.
+- **For a return-type change, count the destructuring sites before estimating — not the conceptual
+  blast radius.** A12's typed tool contract was projected as "comparable to the five other classes
+  combined" and came in at a third of that, the only over-estimate in three runs. The error was
+  treating "return-class change" as inherently dear: `execute_allowed_tool_call` had **2** call
+  sites and `ToolDispatchOutcome` **2** variants, so the real cost was six destructuring sites in
+  two files. One `grep` for the function name answers it in ninety seconds. Cluster 4's return-class
+  rewrite cost 26 sites because *its* class was seven terminal returns spread across the driver —
+  the spread is the cost, not the return.
 - **This does not generalise to new-artifact work.** A7, A8, A10, A13, A14, A15 and B2 build things
   that do not exist; nothing here measures those and their estimates stand unrevised.
 - The 14-minute discipline held for the reason M1 gave: **tooling first.** Cluster 1 wrote a
@@ -416,11 +455,23 @@ assertion stays green. A12 now threads `world_state` through those same literals
 finalizer taking a trace argument. **The advancement assertion must therefore cover trace
 completeness, not only cursor advancement**, or a dropped record satisfies every check A9 leaves
 behind.
-*Size:* **estimate — several days**, staged as one PR per effect class. Basis: the spike threaded
-world state and routed the clock on a throwaway branch; this repeats that behaviour-preservingly
-across six effect classes plus the typed tool contract. Per the corrected model, re-size against
-sites once the per-class site counts are known — A2's 35 sites for one cursor is the anchor, and
-the advancement assertions are new work the spike never did.
+*Size:* ~~estimate — several days~~ → **MEASURED: ~92 min, 14 files, 119 sites of which 34 needed
+judgement (29%)**, all six classes plus the typed tool contract (`2b938e1`…`3c2f4ab`, 2026-08-02).
+Third confirmation of the sites-not-files model, and the first on an item the plan sized in days.
+*Status:* **COMPLETE.** A13, A14 and A15 are unblocked.
+
+**Two obligations this item could not discharge, recorded so their absence does not read as an
+oversight.** (1) **The env class has no poison pair** — the driver's own six env reads are all
+routed and `session.ail` has zero `getEnvOr` calls, but a deterministic run still dies with `Env`
+withheld because `context_usage.ail`'s `resolve_context_limit` is `! {Env, FS}` and every env read in
+it computes a path it then reads. Routing the env half alone would pass a poison probe while still
+depending on ambient state — a defect manufactured deliberately. **A12's specified order contains no
+filesystem class**, which is the gap; filed as
+`.agent/issues/context-usage-env-reads-block-the-env-poison-probe.md` with three costed options, and
+the Makefile says "DEFERRED, not skipped" out loud. (2) **`ExtPorts.clock_now` cannot be bridged on
+this pin at all** — it is the only zero-argument port, zero-argument lambdas do not exist in
+expression position, and partial application is unsupported, so no `() -> int` closure can carry the
+world. It is bound to an **ambient read on purpose**: see the pattern below.
 *Acceptance evidence per class:* existing targets green; the class's poison probe (capability
 withheld) passes for the deterministic entry point and fails for the live world — the F3-corrected
 per-run backstop; for the tool class, the typed contract carries ordinary success, typed
@@ -430,7 +481,9 @@ becomes true and is recorded in the profile — a claim that additionally depend
 scheduling prohibition.
 
 **WI-A13. Build discovery and replay** (D2, D8). Depends on A7 (class ids), A9 (result types), A10
-(manifest), A12 (world_state). `ExecutionProgram`/`DiscoveryConfig` types, the seeded generator
+(manifest), A12 (world_state — **landed**). A12 also left a seam this item wants:
+**`ScriptedWorld(WorldState)` on `StepProvider`**, added there so the approval class's assertion
+could seed a world, and the natural entry point for replay. `ExecutionProgram`/`DiscoveryConfig` types, the seeded generator
 with declared bounds, the pure structural validator, strict and regression replay modes, the
 interaction log with causal identities and encounter ordinals. Exact type names are plan-level per
 D2; semantics are fixed there and not re-litigated here. **Three D8 obligations ride here that an
@@ -441,9 +494,20 @@ and compatibility policy** — a deterministic, diffable encoding (its selection
 plan by the ADR's Non-goals) whose schema migrations either preserve old-program decoding or pin a
 runner, never silently reinterpret; D6 binds the event vocabulary to the same rule, so it is
 load-bearing twice.
+**Determinism is the weakest available check and must not be this item's primary assurance.** Three
+calibration runs have now produced ten sites where two alternatives type-check and the wrong one is
+silent, and **the determinism axis caught none of them** — not cluster 1's frozen cursor, not
+cluster 4's dropped trace record, and not one of A12's four. Every one was perfectly reproducible:
+a frozen cursor serves the same wrong value twice, and an un-routed env read is reproducible when
+the variable is unset in both runs. D7 asks for exactly "same seed twice → identical output" as the
+discovery-contract invariant, and A13 will be tempted to lean on it because it feels like a proof of
+correctness. **It is necessary and it is not sufficient. Carry an advancement or completeness
+assertion beside it**, per the standing rule below.
 *Acceptance evidence:* D7's discovery-contract invariant — same manifest/profile/seed twice →
-identical resolved program, interaction log, outcome, normalized trace; a mismatch fixture returns
-typed `HarnessFailure` with position and projection; bounds violations fail as generator errors;
+identical resolved program, interaction log, outcome, normalized trace; **plus a non-determinism
+assertion — advancement or completeness — that would fail on a frozen cursor or a dropped record**;
+a mismatch fixture returns typed `HarnessFailure` with position and projection; bounds violations
+fail as generator errors;
 D8's pinned generator canary exists per stable generator id and fails on a seed remap without a
 generator-version bump; **a secret-shaped fixture is rejected or redacted before persistence**; and
 **an old-schema program either decodes or fails closed with a pinned-runner pointer** — never
