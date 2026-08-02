@@ -103,6 +103,23 @@ The plan's acceptance ("verified by breaking one deliberately") is what surfaced
 not be satisfied without fixing it, which is a good argument for keeping demonstration clauses in
 acceptance evidence rather than assertions.
 
+**C1b. Correcting cluster 1's C6, and this note's own first draft: the eight were NOT unrun.**
+C6 says the eight scripts "are in no `make` target and no CI job", and WI-A16's justification in the
+plan repeats it. All eight are in fact invoked by `scripts/dst/phase_a_event_parity.sh:174-183`,
+which `make smoke_parity` runs and which is a CI step. The true state was narrower and worse than
+"unrun": they were **run but ungated**. The harness consumes only their JSONL projection for an
+A-versus-B parity diff, `awk '/^\{/'` strips the prose `✗` lines before the artifacts are written
+(confirmed: zero `✗` in the captured `smoke_v2_dp7_gate.jsonl`), and the four with no exit path gave
+`set -euo pipefail` nothing to catch. Measured end-to-end through the real harness with one broken
+assertion: `phase_a_event_parity.sh` exits **0** with the pre-A16 scripts and **1** with the post-A16
+scripts. The four that already had `exit(1)` were genuinely gated, via pipefail — which is why this
+stayed invisible: half the set worked. **A green check implying absent coverage is a worse failure
+mode than a missing check**, and it survived one execution report and one plan revision. C7's other
+half stands: `scripted_ports.ail`'s six unit tests were run by nothing. Filed as
+`.agent/issues/smoke-scripts-report-failure-but-exit-zero.md`, which also lists **11 more scripts**
+with the same defect, two of them (`smoke_v2_handle`, `smoke_v2_hybrid`) in that same CI-reachable
+path today.
+
 **C2. ADR-001 D6.1's enumeration of terminal paths is incomplete, and the plan inherits it.** D6.1
 says "every terminal summary routes through `emit_run_summary` … five call sites". There are
 **seven terminal returns**. Two of them — invalid history (`c2_step_state` Err) and the internal
@@ -149,10 +166,11 @@ target**; a plan item should sweep the second.
 
 A16 landed first specifically so A9's blast radius was instrumented. **It caught nothing** — all
 eight scripts stayed green through A9. That is the honest result and it is still the right
-sequencing: the cost was 9 minutes and the alternative was rewriting every terminal return in the
-driver with eight full-loop scripts unrun. The value is bounded by what it would have caught, which
-is unknowable, but the D6.6 capability probe and the finalizer-bypass guard added in A9 both live in
-a target *because* A16 established the pattern of putting them there.
+sequencing: the cost was 9 minutes, and per C1b the alternative was rewriting every terminal return
+in the driver with four of the eight full-loop scripts **unable to report a failure at all** — not
+merely unrun, which would have been the milder problem. The value is bounded by what it would have
+caught, which is unknowable, but the D6.6 capability probe and the finalizer-bypass guard added in
+A9 both live in a target *because* A16 established the pattern of putting them there.
 
 ## Behaviour changes, stated rather than left to be found
 
