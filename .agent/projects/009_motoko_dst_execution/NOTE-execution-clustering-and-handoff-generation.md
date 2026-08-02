@@ -36,7 +36,7 @@ disagree, the plan wins and this note is stale.
 | 1 | **A1 + P6 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **DONE 2026-08-02** — `e59acaa`, `4ad2c7a`, `6dd1bbe`. Report: `NOTE-cluster-1-execution-report-and-plan-corrections.md` |
 | 2 | **A4 + A5 + A11** | `tools/`, Python; scans the tree, edits none of it | — | Safe to write now |
 | 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | Safe to write now |
-| 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **Groundable now.** A16 first — it wires the unrun driver coverage that protects A9 and A12 |
+| 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **Handoff written**: `HANDOFF-execute-a16-a9-coverage-and-finalizer.md`. A16 first — it wires the unrun driver coverage that protects A9 and A12 |
 | 5 | **A10** | profile/manifest machinery | 2 and 3 | Wait |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1 (landed), 4 (A16's coverage) | **Groundable**, but read cluster 1's silent-freeze finding first — A12 must land an advancement assertion per cursor *before* threading it |
 | 7 | **A13** | discovery/replay | 3, 4, 5, 6 | Wait |
@@ -58,8 +58,14 @@ Handoffs for clusters 4, 6, 7 and 8 must not be written yet. They would cite anc
 guarantees the staleness the whole discipline exists to prevent. Clusters 2 and 3 are the exception
 and may be written at any time.
 
-The corollary is that this note is **not** a licence to batch-generate the remaining seven handoffs.
+The corollary is that this note is **not** a licence to batch-generate the remaining handoffs.
 Generate one when its cluster becomes groundable.
+
+**Cluster 4 is the evidence this rule is worth its cost.** Its handoff was written after cluster 1
+landed, and re-grounding found that *every* WI-A9 anchor had moved: `emit_run_summary` 833→858, all
+five of its call sites shifted, `finish_reason_str` 820→845. A handoff written before cluster 1
+would have shipped five wrong line numbers into the session least able to notice — one working in a
+file it had never read.
 
 ## Generating the next handoff
 
