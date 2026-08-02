@@ -1,0 +1,176 @@
+-- scripts/dst/terminal_trace_dst.ail
+--
+-- WI-A9 acceptance: D6.1's terminal-trace contract, asserted over the trace the
+-- driver actually returns rather than over the JSONL projection.
+--
+-- For every terminal path this can drive from the public entry point, it
+-- asserts:
+--
+--   1. the returned LedgerTrace contains EXACTLY ONE RunSummary record;
+--   2. that record is the FINAL record of the trace;
+--   3. its finish_reason is the expected wire string; and
+--   4. the returned outcome agrees with it — Ok if and only if "stop".
+--
+-- Before WI-A9 every one of these failed on every path for the same reason:
+-- emit_run_summary's only ledger operation was the ledger_emit PROJECTION, so
+-- the returned trace contained no RunSummary anywhere. The starting count was
+-- zero on every path, not one on some.
+--
+-- Coverage note, stated rather than left to be inferred. Four terminal paths
+-- are driven end-to-end here: success, max steps, budget exhaustion and invalid
+-- history. The remaining four — provider failure, compaction exhaustion,
+-- system-prompt-empty and the internal approval failure — cannot be provoked
+-- through this entry point with a scripted provider (the scripted provider
+-- never returns Err, and the other two need an extension or a malformed policy
+-- to fire). They are covered on two other legs instead:
+--
+--   * every terminal return in the driver goes through the ONE c2_finalize
+--     call, which is what makes the invariant structural rather than per-path;
+--     `make no_bypass_finalize` fails if a raw terminal record literal
+--     reappears in c2_loop; and
+--   * the reason-to-wire mapping is pinned by unit tests in session.ail and
+--     phase_vocab.ail.
+--
+-- D6.3's DoneEvent agreement is structural: the DoneEvent is projected only and
+-- never appended, and it is emitted in the same branch that finalizes with
+-- TermSuccess, so it cannot disagree with the RunSummary without that branch
+-- being edited.
+
+module scripts/dst/terminal_trace_dst
+
+import std/io (println, exit)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/ai (Message)
+import src/core/config (CostRates)
+import src/core/phase_vocab (
+  has_exactly_one_final_run_summary,
+  count_run_summaries,
+  run_summary_finish_reason
+)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/session (TracedSessionResult)
+import src/core/session as Session
+import src/core/test/stub_step (
+  ScriptedStep,
+  Scripted,
+  empty_rt,
+  deny_all_rt,
+  prose_step,
+  continuing_token_step
+)
+
+func glm5_rates() -> CostRates {
+  { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000 }
+}
+
+func zero_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 10, solver: 10, verifier: 0 }
+}
+
+pure func system_msg() -> Message {
+  { role: "system", content: "parity system prefix", tool_calls: [], tool_call_id: "" }
+}
+
+pure func user_msg() -> Message {
+  { role: "user", content: "hello", tool_calls: [], tool_call_id: "" }
+}
+
+func steps_at_16400(count: int) -> [ScriptedStep] {
+  let mk = func(idx: int) -> ScriptedStep {
+    continuing_token_step(100000, 50000, "tc${show(idx)}")
+  };
+  match count {
+    0 => [],
+    1 => [mk(1)],
+    2 => [mk(1), mk(2)],
+    3 => [mk(1), mk(2), mk(3)],
+    4 => [mk(1), mk(2), mk(3), mk(4)],
+    5 => [mk(1), mk(2), mk(3), mk(4), mk(5)],
+    _ => [mk(1), mk(2), mk(3), mk(4), mk(5), mk(6)]
+  }
+}
+
+-- The four assertions, applied to one run.
+func assert_terminal_trace(
+  label: string,
+  expected_reason: string,
+  expect_ok: bool,
+  run: TracedSessionResult
+) -> bool ! {IO} {
+  let exactly_one_final = has_exactly_one_final_run_summary(run.trace);
+  let n = count_run_summaries(run.trace);
+  let reason = match run_summary_finish_reason(run.trace) {
+    Some(r) => r,
+    None => "<none>"
+  };
+  let outcome_ok = match run.result {
+    Ok(_) => true,
+    Err(_) => false
+  };
+  let reason_ok = reason == expected_reason;
+  let agree_ok = outcome_ok == expect_ok && (outcome_ok == (reason == "stop"));
+  let ok = exactly_one_final && reason_ok && agree_ok;
+  let _ = if ok then println("  ✓ ${label}: run_summary final, finish_reason=${reason}")
+          else println("  ✗ ${label}: count=${show(n)} final_ok=${show(exactly_one_final)} reason=${reason} (expected ${expected_reason}) outcome_ok=${show(outcome_ok)}");
+  ok
+}
+
+-- 1. Success. A single prose step finishes with "stop", so decide() reaches
+--    Finalize and the run terminates cleanly.
+func scenario_success() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let run = Session.run_v2_session_traced(
+    empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    [system_msg()], "/tmp", 4, false, 0, zero_rates(), Scripted([prose_step("done")])
+  );
+  assert_terminal_trace("success", "stop", true, run)
+}
+
+-- 2. Max steps. Six continuing steps against a step_budget of 2: the loop can
+--    never finalize, so call_model_or_fail raises the step-budget Fail.
+func scenario_max_steps() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let run = Session.run_v2_session_traced(
+    deny_all_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    [system_msg()], "/tmp", 2, false, 0, zero_rates(), Scripted(steps_at_16400(6))
+  );
+  assert_terminal_trace("max_steps", "max_steps", false, run)
+}
+
+-- 3. Budget exhaustion. Same script, metered, cap 50000 mc: 4 steps at 16400
+--    breach the cap before the step budget is reached.
+func scenario_budget() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let run = Session.run_v2_session_traced(
+    deny_all_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    [system_msg()], "/tmp", 10, false, 50000, glm5_rates(), Scripted(steps_at_16400(6))
+  );
+  assert_terminal_trace("budget", "cost_exhausted", false, run)
+}
+
+-- 4. Invalid history. history_from_seed rejects a seed whose system messages
+--    are not a head prefix, so c2_step_state fails on the first pass. This is
+--    one of the two terminal returns that emitted no run_summary at all before
+--    WI-A9 — it now finalizes like every other path.
+func scenario_invalid_history() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let run = Session.run_v2_session_traced(
+    empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    [user_msg(), system_msg()], "/tmp", 4, false, 0, zero_rates(), Scripted([prose_step("done")])
+  );
+  assert_terminal_trace("invalid_history", "error", false, run)
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  println("=== terminal_trace_dst (D6.1) ===");
+  let r1 = scenario_success();
+  let r2 = scenario_max_steps();
+  let r3 = scenario_budget();
+  let r4 = scenario_invalid_history();
+  if r1 && r2 && r3 && r4 then println("terminal_trace_dst PASS")
+  else {
+    let _ = println("terminal_trace_dst FAIL");
+    exit(1)
+  }
+}

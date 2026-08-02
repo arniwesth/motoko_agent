@@ -517,6 +517,53 @@ export type RunSummaryInfo = {
   duration_ms: int,
   error: string
 }
+-- D6.2: the typed internal termination reason, mapped exhaustively onto the
+-- wire `finish_reason` string. It lives beside RunSummaryInfo so the wire
+-- string has one source of truth and the RunSummary goldens below hold it.
+--
+-- The list is DERIVED FROM REACHABLE TERMINAL RETURNS, as D6.2 requires,
+-- rather than inherited from the old integer helper. Two consequences:
+--
+--   * There is no ToolFailure. An unrecovered tool failure is not a terminal
+--     path at HEAD — tool results feed back into the loop as messages and the
+--     run ends through one of the reasons below. Adding the variant would mean
+--     asserting a path that cannot be produced.
+--   * There is no DpSevenRejected. The old helper mapped 2 -> "dp7_rejected",
+--     but no call site ever passed 2: a DP7 rejection re-injects a user message
+--     and the run terminates later via MaxSteps or BudgetExhausted. It was a
+--     stale label, which is exactly what D6.2 says not to preserve.
+--
+-- SystemPromptEmpty is reachable (seal failure) and the ADR's enumeration
+-- omits it; see the cluster 4 note.
+-- Variants carry a Term prefix: the unprefixed names would collide with the
+-- LedgerEvent constructors declared later in this same module (CompactionExhausted
+-- is both a termination reason and a wire event).
+export type TerminationReason =
+  | TermSuccess                 -- wire: "stop"
+  | TermBudgetExhausted         -- wire: "cost_exhausted"
+  | TermMaxSteps                -- wire: "max_steps"
+  | TermCompactionExhausted     -- wire: "compaction_exhausted"
+  | TermProviderFailure         -- wire: "error"
+  | TermSystemPromptEmpty       -- wire: "error"
+  | TermInvalidHistory          -- wire: "error"
+  | TermInternalFailure         -- wire: "error"
+
+-- Exhaustive map onto the wire strings. These strings are a compatibility
+-- surface (project 007): they must not change here. The RunSummary goldens at
+-- the foot of this module are what hold this function to that.
+export pure func finish_reason_wire(r: TerminationReason) -> string {
+  match r {
+    TermSuccess => "stop",
+    TermBudgetExhausted => "cost_exhausted",
+    TermMaxSteps => "max_steps",
+    TermCompactionExhausted => "compaction_exhausted",
+    TermProviderFailure => "error",
+    TermSystemPromptEmpty => "error",
+    TermInvalidHistory => "error",
+    TermInternalFailure => "error"
+  }
+}
+
 export type ScratchpadResultInfo = { tool_call_id: string, request_id: string, step: int, cells_json: string }
 export type ToolCallInfo = { step: int, stream_id: string, tool: string, id: string }
 export type ToolDeniedInfo = { step: int, stream_id: string, tool: string, id: string, reason: string }
@@ -576,6 +623,59 @@ export pure func ledger_record_name(record: LedgerRecord) -> string {
         TraceStagePassed => "stage_passed"
       },
     DecisionRecord(_) => "decision"
+  }
+}
+
+-- D6.1 support: the returned LedgerTrace is authoritative, so the invariant
+-- "exactly one RunSummary, and it is the final record" must be decidable over
+-- the trace ADT itself. ledger_record_name flattens every WireRecord that is
+-- not one of three special cases to "wire", so it cannot answer this.
+export pure func is_run_summary(record: LedgerRecord) -> bool {
+  match record {
+    WireRecord(event) =>
+      match event {
+        RunSummary(_) => true,
+        _ => false
+      },
+    _ => false
+  }
+}
+
+pure func count_run_summaries_rec(records: [LedgerRecord], acc: int) -> int {
+  match records {
+    [] => acc,
+    r :: rest => count_run_summaries_rec(rest, if is_run_summary(r) then acc + 1 else acc)
+  }
+}
+
+export pure func count_run_summaries(trace: LedgerTrace) -> int {
+  count_run_summaries_rec(trace.records, 0)
+}
+
+pure func last_record(records: [LedgerRecord]) -> Option[LedgerRecord] {
+  match records {
+    [] => None,
+    r :: [] => Some(r),
+    _ :: rest => last_record(rest)
+  }
+}
+
+-- The full D6.1 predicate for one established run: exactly one RunSummary in
+-- the returned trace, and it is the last record.
+export pure func has_exactly_one_final_run_summary(trace: LedgerTrace) -> bool {
+  count_run_summaries(trace) == 1
+    && match last_record(trace.records) {
+         None => false,
+         Some(r) => is_run_summary(r)
+       }
+}
+
+-- The RunSummary's own finish_reason, for the D6.3 agreement check between the
+-- returned outcome, the DoneEvent and the RunSummary.
+export pure func run_summary_finish_reason(trace: LedgerTrace) -> Option[string] {
+  match last_record(trace.records) {
+    Some(WireRecord(RunSummary(i))) => Some(i.finish_reason),
+    _ => None
   }
 }
 
