@@ -9,7 +9,7 @@ import std/result (Result, Ok, Err)
 import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading)
 import src/core/test/stub_step (StepProvider, Ported)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -163,7 +163,18 @@ func routed_step(max_tools: int, model: string, msgs: [Message], _on_chunk: (Str
   }
 }
 
-func fixed_clock() -> int ! {Clock} { 123456789 }
+-- WI-A12 made `Ports.clock_now` state-threaded. This fixture pinned a constant
+-- epoch, and the state-threaded equivalent of a constant is a world whose clock
+-- does not advance — so it returns the reading WITHOUT a successor advance,
+-- preserving this fixture's behaviour exactly. It is a fixture, not a driver
+-- adapter, and nothing here asserts on elapsed time.
+func fixed_clock(state: WorldState) -> ClockReading ! {Clock} {
+  { now_ms: 123456789, next_state: state }
+}
+
+-- The same constant for `ExtPorts.clock_now`, which is `() -> int` and is NOT
+-- widened by A12 — the extension-side clock belongs to WI-C5.
+func fixed_ext_clock() -> int ! {Clock} { 123456789 }
 func fixed_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fixed_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
@@ -745,7 +756,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
         }
       },
       proc_exec: fixed_exec,
-      clock_now: fixed_clock,
+      clock_now: fixed_ext_clock,
       env_get: fixed_env
     },
     artifacts: artifacts,

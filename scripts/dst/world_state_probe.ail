@@ -230,6 +230,21 @@ pure func kinds(records: [LedgerRecord]) -> [string] {
   }
 }
 
+-- Axis A/C for the CLOCK cursor. `duration_ms` on the RunSummary is
+-- `finalize_now - started_at`, so it is a difference of two driver clock reads
+-- and is the cheapest observable that both of them produce. Read off the
+-- RETURNED trace, so it also rides the completeness axis.
+pure func duration_from_trace(records: [LedgerRecord]) -> Option[int] {
+  match records {
+    [] => None,
+    r :: rest =>
+      match r {
+        WireRecord(RunSummary(i)) => Some(i.duration_ms),
+        _ => duration_from_trace(rest)
+      }
+  }
+}
+
 pure func count_of(target: string, xs: [string]) -> int {
   match xs {
     [] => 0,
@@ -305,7 +320,33 @@ func assert_deterministic(label: string, a: TracedSessionResult, b: TracedSessio
                  "[${join(sa)}] vs [${join(sb)}]");
   let c2 = check("${label}: record-kind sequence is reproducible", eq_list(ka, kb),
                  "[${join(ka)}] vs [${join(kb)}]");
-  c1 && c2
+  -- THE CLOCK CURSOR'S ADVANCEMENT ASSERTION (WI-A12, clock class).
+  --
+  -- `duration_ms` is the difference between two driver clock reads. Under the
+  -- routed world clock it is a function of the world alone, so two runs of the
+  -- same scripted world must agree EXACTLY. Under an ambient `now()` it is wall
+  -- time and the two runs disagree by however long the machine took.
+  --
+  -- This is the assertion that fails on an UN-ROUTED clock site, and unlike a
+  -- "the value is present" check it cannot be satisfied by carrying a stale
+  -- cursor forward. It is paired with the non-zero check below because a
+  -- world clock that never advances is also perfectly reproducible — a frozen
+  -- cursor and a routed one are indistinguishable on determinism alone, which
+  -- is cluster 1's freeze hazard restated for the clock.
+  let da = duration_from_trace(a.trace.records);
+  let db = duration_from_trace(b.trace.records);
+  let c3 = match da {
+    None => check("${label}: run_summary carries a duration", false, "no RunSummary in the returned trace"),
+    Some(x) => match db {
+      None => check("${label}: run_summary carries a duration", false, "no RunSummary in the second run"),
+      Some(y) =>
+        check("${label}: clock reads are reproducible across runs", x == y,
+              "duration_ms ${show(x)} vs ${show(y)} — an ambient clock varies between two runs of the same world")
+        && check("${label}: the world clock advances", x > 0,
+                 "duration_ms=${show(x)} — a clock that never advances is reproducible but frozen")
+    }
+  };
+  c1 && c2 && c3
 }
 
 -- ---------------------------------------------------------------------------

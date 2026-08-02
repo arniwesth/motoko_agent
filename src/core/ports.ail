@@ -59,8 +59,28 @@ export type ScriptedStep = {
 -- `scripted_ports` serves from here. Production code calls the port and
 -- branches on nothing, which is what keeps D1's prohibition on production
 -- test-mode branching true as the later effect classes land.
+-- `clock_ms` is the monotonic virtual clock, D4's "the explicit clock value in
+-- `world_state` is the only clock". It is read and advanced through the
+-- `clock_now` port, never directly, and the LIVE adapter ignores it entirely —
+-- it reads ambient wall time and returns this record unchanged. That asymmetry
+-- is the identity transition D1 specifies, and it is why the field being
+-- meaningless in a live run is correct rather than a bug.
+--
+-- D4 grants the clock no exemption: there is no runtime-clock mirror, no
+-- `--virtual-time` dependency (which does nothing observable on the pin) and no
+-- conformance assertion comparing an explicit value against a runtime one.
 export type WorldState = {
-  script: [ScriptedStep]
+  script: [ScriptedStep],
+  clock_ms: int
+}
+
+-- A clock read and its successor world. Every port that observes an effect
+-- returns its successor explicitly — D1's `next_world_state` — because a read
+-- that advances a cursor without handing the successor back is the exact
+-- arrangement that reproduced F6 on a second port in P2's reviewer probe.
+export type ClockReading = {
+  now_ms: int,
+  next_state: WorldState
 }
 
 -- `ported_provider` returns the initial world alongside the Ports — D1's "a
@@ -74,7 +94,7 @@ export type PortedProvider = {
 -- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
-  { script: [] }
+  { script: [], clock_ms: 0 }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -110,7 +130,11 @@ export type ProviderExchange = {
 export type Ports = {
   model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
   approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
-  clock_now: () -> int ! {Clock},
+  -- WI-A12's clock class. State-threaded in and out, like `model_step`. The
+  -- `{Clock}` effect stays in the row and that is expected: AILANG fails on a
+  -- capability only when a read is PERFORMED, so the deterministic adapter
+  -- never triggering it is precisely what the poison pair measures.
+  clock_now: (WorldState) -> ClockReading ! {Clock},
   env_get: (string, string) -> string ! {Env},
   tool_exec: (string, string) -> string ! {IO, Process, FS}
 }
@@ -119,19 +143,52 @@ func deny_approval(_req: ApprovalRequest) -> ApprovalResolution ! {IO} {
   ApprovalDenied("scripted approval denied")
 }
 
-func fake_clock() -> int ! {Clock} { 0 }
+-- The deterministic clock: serve the world's own value, advance it by one
+-- millisecond. Exported so every non-live adapter shares ONE implementation of
+-- the tick — three copies of "read the field, add one" is three chances for
+-- them to drift, and a clock that drifts between adapters is a determinism
+-- defect no single-adapter test can see.
+--
+-- The tick must be non-zero. A clock returning a constant is perfectly
+-- reproducible and therefore invisible to a determinism assertion — cluster 1's
+-- freeze hazard in the clock's clothing — so `world_state_probe` asserts
+-- advancement separately.
+-- It declares `! {Clock}` while performing no clock read at all. That is not a
+-- lie the type system is forced to swallow, it is the mechanism the poison pair
+-- rests on: AILANG demands a capability only when an effect is PERFORMED, so a
+-- deterministic run keeps `{Clock}` in its row and still completes with the
+-- capability withheld. The declaration is also required — a `pure` function
+-- will not unify into the effectful port slot ("incompatible closed rows"), so
+-- the row cannot simply be narrowed here.
+export func virtual_clock(state: WorldState) -> ClockReading ! {Clock} {
+  { now_ms: state.clock_ms, next_state: { state | clock_ms: state.clock_ms + 1 } }
+}
 
 func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 
 func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
+-- The sole `Ports` constructor. It keeps ONE function-typed parameter and
+-- defaults every other seam, including the deterministic `virtual_clock`;
+-- adapters that need a different seam override it by record update, as
+-- `live_ports` does for the clock.
+--
+-- That shape is forced, not preferred. Taking the clock as a second
+-- function-typed parameter is the obvious design and it does not compile on
+-- pinned v0.26.0: with two function-typed parameters carrying different effect
+-- rows, the checker unifies them against the wrong slots and reports the rows
+-- swapped ("record field 'clock_now': r1 has extra labels [AI IO Trace], r2 has
+-- extra labels [Clock]", and the mirror-image message for 'model_step'). Tested
+-- with both a top-level reference and an inline lambda for the second argument;
+-- both fail identically, so it is the arity and not the argument form. Record
+-- update over a one-parameter constructor avoids the inference path entirely.
 export func ports_shape_probe(
   model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
 ) -> Ports {
   {
     model_step: model_step,
     approval_read: deny_approval,
-    clock_now: fake_clock,
+    clock_now: virtual_clock,
     env_get: fake_env,
     tool_exec: fake_tool
   }

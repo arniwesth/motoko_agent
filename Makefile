@@ -121,6 +121,21 @@ world_state:
 		exit 1; \
 	else \
 		echo "  ✓ live world dies with AI withheld"; \
+	fi; \
+	echo "  -- clock class poison pair (Clock withheld) --"; \
+	if ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Stream,Trace --ai-stub --entry main \
+	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ deterministic world completes with Clock withheld (all 4 driver sites routed, P3)"; \
+	else \
+		echo "FAIL: the deterministic entry point still reads an ambient clock — a driver clock site is un-routed"; \
+		exit 1; \
+	fi; \
+	if ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Stream,Trace --ai-stub --entry main \
+	     scripts/dst/world_state_poison.ail < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: the LIVE world completed with Clock withheld — the capability is not load-bearing"; \
+		exit 1; \
+	else \
+		echo "  ✓ live world dies with Clock withheld"; \
 	fi
 
 # D6's terminal-trace contract (WI-A9). Four checks, in order:

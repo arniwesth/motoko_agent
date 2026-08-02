@@ -14,13 +14,14 @@ module src/core/test/stub_step
 
 import std/ai (step, stepWithCache, stepWithStream, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk, ContentDelta)
 import std/trace as Trace
+import std/clock (now)
 import std/list as List (length)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, WorldState, ScriptedStep, empty_world_state, ports_shape_probe)
+import src/core/ports (Ports, ProviderExchange, WorldState, ClockReading, ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
@@ -122,7 +123,19 @@ export func live_ports(rt: ExtRuntime) -> Ports {
       let result = stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
       { emissions: [], result: result, next_state: state }
     };
-  ports_shape_probe(model_step)
+  -- The live clock: read ambient wall time, return the world unchanged. The
+  -- world's `clock_ms` is ignored here by design — D1's identity transition —
+  -- which is what makes this the ONE place a real clock is read in the driver's
+  -- call graph, and therefore the one place `{Clock}` is genuinely needed.
+  --
+  -- Overriding by record update rather than by constructor parameter: see
+  -- `ports_shape_probe`, which cannot take a second function-typed parameter on
+  -- this pin.
+  let clock_now: (WorldState) -> ClockReading ! {Clock} =
+    func(state: WorldState) -> ClockReading ! {Clock} {
+      { now_ms: now(), next_state: state }
+    };
+  { ports_shape_probe(model_step) | clock_now: clock_now }
 }
 
 -- The scripted adapter, WI-A2's fix for F6.
@@ -150,16 +163,27 @@ export func scripted_ports() -> Ports {
         [] => { emissions: [], result: Ok(terminal_step()), next_state: state },
         s :: rest => {
           let _ = play_chunks(s.chunks, on_chunk);
-          { emissions: [], result: Ok(scripted_to_step_result(s)), next_state: { script: rest } }
+          { emissions: [], result: Ok(scripted_to_step_result(s)), next_state: { state | script: rest } }
         }
       }
     };
+  -- The deterministic clock is `virtual_clock`, shared with every other
+  -- non-live adapter rather than reimplemented here. No ambient read, which is
+  -- why a scripted run completes with `Clock` withheld while `live_ports` dies
+  -- — the poison pair `make world_state` asserts exactly that.
   ports_shape_probe(model_step)
 }
 
--- The initial world for a scripted run: the whole script, uncounted.
+-- The initial world for a scripted run: the whole script, uncounted, and every
+-- other cursor at its empty-world default.
+--
+-- Built by UPDATING `empty_world_state()` rather than by writing a fresh record
+-- literal. The difference is not stylistic: a fresh literal must name every
+-- field, so each effect class A12 adds forces an edit here, and the edit that
+-- type-checks most easily is the one that hard-codes a default and silently
+-- diverges from the empty world. Updating cannot diverge.
 export pure func scripted_world_state(script: [ScriptedStep]) -> WorldState {
-  { script: script }
+  { empty_world_state() | script: script }
 }
 
 -- Run one provider exchange through the ports seam: world state in, its
