@@ -3,8 +3,8 @@
 Date: 2026-07-24
 Status: Proposed — author self-review, streaming spike, two independent reviews, a vertical spike
 through the real driver, AILANG v0.31.0 upstream recheck, and **three independent verifications of
-the F1–F6 revision** and **twelve independent delta reviews (two each of the
-second through seventh correction passes)** (2026-08-01 and 2026-08-02,
+the F1–F6 revision** and **fourteen independent delta reviews (two each of the
+second through eighth correction passes)** (2026-08-01 and 2026-08-02,
 recorded below) complete. The three verifications returned *Revise* and converged on one defect set;
 each delta round returned *Revise* and converged on another, twice overturning this side's own
 diagnosis. Every set is now corrected.
@@ -14,20 +14,20 @@ diagnosis. Every set is now corrected.
 1. **External substrate, not clearable here:** the upstream recorded-stream API is specified and
    agreed but not shipped in a released binary. D1 requires it to land in a *release*, the toolchain
    to be repinned, and the positive integration probe to pass. A fork prototype does not satisfy this.
-2. **Internal and open:** the eighth correction pass — restoring the coverage floor alongside named
-   disclosure, canonicalising the classifier-2 predicate at every site, withdrawing syntactic
-   dominance, splitting the attribution table from a profile's reference to it, and making a parsed
-   interface the normative classifier-1 scanner — post-dates the two delta reviews of the seventh
-   pass and has not been independently verified. D5's routing audit is not citable as gate evidence
-   until it is.
+2. **Internal and open:** the ninth correction pass — recording that a declared row does not bound
+   effects through function-valued record fields, requiring carve-outs to be validated against the
+   classifier-2 inventory, specifying the attribution-necessity validator as its own obligation, and
+   demoting `ailang iface` from normative scanner to preferred input — post-dates the two delta
+   reviews of the eighth pass and has not been independently verified. D5's routing audit is not
+   citable as gate evidence until it is.
 
 Neither the correction set nor the acceptance state should be described as complete until (2) passes
 a delta review and (1) is an actual release event.
 
-**What is required next is a delta review of the eighth correction pass, not another full round.**
+**What is required next is a delta review of the ninth correction pass, not another full round.**
 F1, F2, F3, F5, F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were
 each independently confirmed by all three verifications, and D6.1's zero-`RunSummary` claim by two of
-the three. The twelve delta reviews additionally confirmed D4's clock count (13) and routing state,
+the three. The fourteen delta reviews additionally confirmed D4's clock count (13) and routing state,
 corrections C3/C4/C5/C9/C14, every configuration fact, and — in the fourth-pass round, by two
 independent three-module probes — that the extension-model-path **exclusion is the right
 disposition** and that `ProviderState`'s home in `src/core/ports.ail` is **buildable as specified**.
@@ -47,8 +47,10 @@ path discards world state with no fail-closed signal. Implementation Handoff ite
 
 **"Stated once" was the sixth pass's claim and it was false**, at this paragraph and at D5's
 validation bullet: both still carried the abandoned per-hook, call-graph phrasing while D1 declared it
-retired. The honest claim is the one above — six sites, same words — and a reader who finds a seventh
-saying something else should treat that as the defect, not as a nuance.
+retired. The honest claim is the one above — six normative sites, substantively aligned — and a
+reader who finds a seventh saying something else should treat that as the defect. **They are not
+word-identical**, and two passes asserted that they were; the documentation check named below is what
+replaces the assertion.
 
 **The second correction pass marked an open defect in D5 that was itself misdiagnosed, and both
 delta reviews overturned it.** That marker claimed the routing audit failed open because
@@ -419,8 +421,9 @@ Two things follow, and the second is the one with teeth:
   exposes parsed signatures on the pin — or a two-stage scan that inventories every occurrence of the
   field name, strips declarations, constructions, strings and comments, resolves the receiver's type,
   and **fails closed on every occurrence it cannot resolve**. The grep alone is not a gate; it is what
-  a reader can run today to see that the current answer is two call sites. If per-hook granularity is wanted later, the refinement path is to extend D4's
-  site-to-hook attribution table to extension packages — and per D5's closed-ABI note below, that is
+  a reader can run today to see that the current answer is two call sites. If per-hook granularity is
+  wanted later, the refinement path is to extend D4's site-to-hook attribution table to extension
+  packages — and per D5's closed-ABI note below, that is
   the **only** available refinement, because `register.ail` can never narrow the hook set.
 
   **One predicate, at six sites.** The Status block, this paragraph, D5's exclusion paragraph, D5's
@@ -428,26 +431,32 @@ Two things follow, and the second is the one with teeth:
   is a claim to check, not a warrant** — the sixth pass asserted "stated once" and was stale at two
   sites, the seventh asserted "six sites, same words" and was stale at three, one of which stated the
   retired rule *normatively* in D5. Both times the assertion was made in the same edit that was
-  supposed to have propagated it. The implementation plan owns a documentation check that greps the
-  canonical phrasing and fails when the count drifts; until that exists, treat a site saying anything
-  else as the defect. Earlier revisions phrased it five different ways — "can reach the port", "reaches a
+  supposed to have propagated it. The implementation plan owns a documentation check, and it needs an
+  exact target to be buildable: **a canonical predicate sentence, plus an explicit list of the
+  normative anchors that must contain it**, failing when an anchor's text drifts or a normative
+  statement appears outside the list. Grepping a phrase with no fixed wording and no fixed anchor set
+  — which is all the last two passes offered — enforces nothing. Earlier revisions phrased it five
+  different ways — "can reach the port", "reaches a
   non-world-mediated seam", "references a field", "reaching a field from an un-excluded hook", and
   bare "textual reference". Two were actively harmful: the *seam* phrasing, read literally at HEAD
   where nothing is routed, rejects every extension-installing profile; and *textual reference*
   rejects both guards of the ADR's own interim profile. The rule is **calls a classifier-2 field on
   an `ExtPorts`-typed value**, at extension granularity. The sixth pass claimed this was "stated
-  once" and it was stale at two sites; the claim here is checkable — six sites, same words — and a
-  seventh saying otherwise is a defect.
+  once" and it was stale at two sites. **The claim here is narrower and checkable: six normative sites,
+  substantively aligned, not word-identical** — the six use six formulations, and asserting otherwise
+  is the mistake this paragraph exists to stop repeating.
 - **The practical consequence is about utility, not eligibility.** `compaction_ai` calls
   `ctx.ports.ai_step` (`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`) and appears in the
   extension order of **all fourteen** checked-in configurations. Every one of them can be made
   conformant by excluding `compaction_ai`'s hooks — it registers **eight**, of which `on_pre_step` is
   the only non-trivial one and the only one reaching the port, the other seven being
-  constant-returning lambdas — so the profile is conformant and inert on the compaction path. The first *useful* interim
-  profile is therefore a purpose-built narrow one rather than a shipped configuration, which is what
-  D5 already contemplates in "pure guards and deterministic fixture hooks may form the initial
-  profile." The interim milestone must not be planned as though it delivers a conformant *and
-  covering* `default`.
+  constant-returning lambdas — so the profile is conformant and inert on the compaction path, given a
+  recorded and validated classifier-2 carve-out. The first *useful* interim
+  profile is therefore a purpose-built narrow one rather than a shipped configuration. **D5 retires
+  the "pure guards and deterministic fixture hooks may form the initial profile" formulation** as
+  naming two classes with no available member: that profile is the real driver plus the main-loop
+  cursor, covering no extension behaviour. The interim milestone must not be planned as though it
+  delivers a conformant *and covering* `default`.
 
 Widening `ExtPorts.ai_step` and the hook results to carry the token is the eventual path, it belongs
 to the ABI major the repin already forces (*Consequences*), and it must not be smuggled into the
@@ -968,11 +977,15 @@ treatment D6 gives the event vocabulary because it carries the same kind of weig
 - **Contents and binding.** One row per core effect site: the site, its effect, the **known** hook
   ids it is attributed to, and the named reviewer who accepted that attribution. The table is a
   single source-global artifact bound to a source revision; a source change that adds, moves, or
-  re-guards a core effect site invalidates it. **A profile records a *reference* to it — table
-  identity, source-revision binding, and content hash — not a copy.** An earlier revision had the
-  profile record the table itself, which is incompatible with the table being source-global: a
-  correction to one global table would then require a version bump on every profile, which is the
-  opposite of what source-global buys.
+  re-guards a core effect site invalidates it. **A profile records a *reference* to it — the table's
+  identity, where identity is the pair `(source revision, content hash)` — not a copy.** An earlier
+  revision had the profile record the table itself, and justified the change by saying a copy would
+  force a version bump on every profile after a global correction. **That rationale was wrong**: a
+  recorded content hash has exactly the same cost, since correcting one row changes the hash and every
+  referring profile must be re-issued. The reference form is still right, for the reasons that
+  actually hold — one source of truth, no divergent embedded copies, and a bounded profile artifact —
+  and the consequence is stated rather than papered over: **a table correction re-issues every profile
+  that references it.**
 - **Correctness condition.** An attribution asserts that **installation of at least one attributed
   hook is a *necessary* condition of the site executing** — not a sufficient one. Necessity is what
   makes removal from clause 1 safe; sufficiency is what mixed guards break, and requiring it would
@@ -1013,11 +1026,21 @@ treatment D6 gives the event vocabulary because it carries the same kind of weig
   check meant to catch it. A mechanical check that fails its own worked example and admits its own
   counterexample is worse than none, because it invites reliance.
 
-  A sound version would have to resolve the guard predicate to a positive equality test against the
-  attributed hook id, prove every call to the containing function is dominated by such a guard, and
-  reject negation — which is interprocedural and belongs to the successor detector, not here. Until
-  something like that exists, **necessity rests on the recorded named reviewer alone**, and this
-  decision says so rather than implying mechanical support it does not have.
+  **A sound replacement is specified as its own obligation rather than deferred to an unrelated
+  detector.** The *attribution-necessity validator* must resolve each guard predicate to a positive
+  equality test against the attributed hook id, prove that every call to the function containing the
+  site is dominated by such a guard, reject negation, and treat any row it cannot prove as **invalid**
+  — which sends the site to unconditional core rather than removing it. This is interprocedural and
+  does not exist. An earlier revision assigned it to obligation 2's successor detector; that is wrong,
+  because declared-versus-performed reconciliation resolves neither hook-id predicates nor dominance.
+
+  **Until that validator exists, necessity rests on the recorded named reviewer, and that is a stated
+  exception to the acceptance table's promise that every answer is supported by an automated gate.**
+  Naming the exception is the point: an unproven attribution now *removes* a site from the reachable
+  set under the empty-intersection rule, so a wrong positive shrinks coverage silently rather than
+  merely over-counting. No D4 routing-completeness or D5 conformance claim may cite an
+  attribution-derived reachable set until either the validator lands or the profile records the
+  reviewer for every row it relies on.
 - **Producer.** Construction, in the same change that builds obligation 2's classifiers — the
   classifiers enumerate the effect sites the table must account for, so building either without the
   other leaves a gap.
@@ -1077,7 +1100,8 @@ A versioned profile definition records:
 
 Changing any of those semantic scope fields requires a profile-version change. The execution
 manifest separately records source revision, toolchain, extension package versions, ABI version,
-profile id/version, event-vocabulary version (D6), and normalized profile configuration. Source or package updates therefore
+profile id/version, event-vocabulary version (D6), and normalized profile configuration. Source or
+package updates therefore
 remain exactly reproducible without pretending that every build creates a new semantic profile;
 if an update changes the profile's coverage or effect classification, the profile version must
 also change.
@@ -1093,13 +1117,15 @@ An explicitly excluded hook is not covered, must be named in the result, and cau
 `HarnessFailure` if dispatch reaches it. Thus a run cannot gain coverage credit merely because its
 seed happened not to exercise a direct-effect hook.
 
-**Exclusion is a coverage cost, not a conformance disqualification, and a profile installing an
-extension whose hooks are all excluded is conformant and inert rather than invalid.**
+**Exclusion is a coverage cost, not a conformance disqualification. A profile installing an extension
+whose hooks are all excluded is conformant and inert rather than invalid — provided it records a
+validated classifier-2 carve-out; without one it is a profile-definition rejection (the coverage
+floor, below).**
 
-**The anti-laundering mechanism is disclosure, not a structural floor.** An earlier revision required
-"at least one covered hook per installed extension". **That rule is simultaneously vacuous and
-unsatisfiable, because `ExtensionHooks` is a closed record whose per-field effect rows are properties
-of the ABI rather than of the extension** (`packages/motoko-ext-abi/types.ail:151-165`). Every
+**Anti-laundering needs two mechanisms, and earlier revisions each supplied only one.** One revision
+required "at least one covered hook per installed extension". **That rule is vacuous, because
+`ExtensionHooks` is a closed record whose per-field effect rows are properties of the ABI rather than
+of the extension** (`packages/motoko-ext-abi/types.ail:151-165`). Every
 extension gets `on_describe_tools`, `on_build_system_prompt`, and `on_tool_policy` with **no effect
 row at all**, so a profile that installs everything and excludes every hook carrying behaviour still
 satisfies a one-hook floor — by covering a constant-returning no-op, which is exactly the
@@ -1125,14 +1151,21 @@ previously failed. That is a real weakening and it was not the intent.
    extension may be excluded* — a profile that covers zero hooks of something it installs must not
    list it as installed. **The single carve-out is classifier 2**: where the rejection rule above
    forces full exclusion, full exclusion is permitted and the profile definition records which
-   extension and which classifier-2 field forced it. This is decidable from the profile definition
-   alone, it rejects the laundering configuration, and the carve-out is recorded rather than ambient.
+   extension and which classifier-2 field forced it. **A recorded carve-out is not self-justifying:**
+   validation must match the `(extension id, classifier-2 field)` pair against a row in the typed
+   call inventory bound to the same source revision and toolchain as the profile, and reject a pair
+   that is absent, unknown, or stale. Without that reverse check the floor is bypassable by
+   assertion — any fully-excluded extension could name `ai_step` and pass. The inventory, or a
+   content-addressed reference to it, is therefore a profile field rather than optionally a manifest
+   one, which is also what makes the carve-out decidable from the profile definition.
 2. **Disclosure carries the information the floor cannot.** The profile definition and the run result
    both record, per installed extension, the **hook ids** covered and the hook ids excluded — names,
-   not counts. Counts cannot distinguish `compaction_ai`, whose three rowless slots are constant
-   returns, from `compose`, whose `on_tool_policy` binds real dispatch; both report three covered and
-   five excluded. Named sets make covered-no-op coverage visible as such, which is the distinction
-   the floor was reaching for and could never express.
+   not counts. `compaction_ai` is not the example, because it calls `ai_step` and therefore reports
+   **zero covered and eight excluded** with a recorded carve-out. The distinction names carry is
+   between two extensions that both report three covered: one whose three rowless slots are constant
+   returns, and `compose`, whose `on_tool_policy` binds real dispatch (`compose.ail:838` → `:83`). A
+   count cannot tell those apart; the hook ids can, because they say *which* slots are covered rather
+   than how many — which is the distinction the floor was reaching for and could never express.
 
 The two are validated together at profile load: the sets must be disjoint and must exhaust all eight
 ABI slots, and a zero-coverage extension must carry a recorded classifier-2 carve-out.
@@ -1141,7 +1174,39 @@ ABI slots, and a zero-coverage extension must carry a recorded classifier-2 carv
 reconciling detector that would let a profile claim a hook performs less than it declares is
 explicitly unavailable (obligation 2's successor detector), so a hook declaring
 `{IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}` while returning a constant is **not**
-effect-free for classification purposes. Of `compaction_ai`'s seven trivial hooks, three declare that
+effect-free for classification purposes.
+
+**A declared row bounds performed effects in one direction only, and on the pin it does not bound
+them through function-valued record fields at all.** The effect checker is transitive through direct
+builtin calls and through named helpers — a rowless function calling `println`, or calling a
+`! {IO}` helper, is rejected with `Missing effects: IO`. It is **not** transitive through a call on a
+function-valued record field:
+
+```text
+type Ports = { ai_step: (string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} }
+func rowless_hook(p: Ports) -> string { p.ai_step("…") }   -- declares no row
+
+$ ailang check   → ✓ No errors found!
+$ ailang run     → EFFECT PERFORMED …
+```
+
+`ExtCtx.ports: ExtPorts` is exactly that shape, and a field call is the only way an extension reaches
+a port at all. **Two things follow and both are consequential:**
+
+- **A rowless ABI slot is not provably effect-free.** Classifying `on_describe_tools`,
+  `on_build_system_prompt`, and `on_tool_policy` as coverable is an **assumption**, resting on the
+  runtime hermeticity probe rather than on the type system. That is weaker than "reads declared rows"
+  suggests, and it is stated here rather than left implicit because two decisions now lean on it.
+- **This, not decidability, is why the classifier-2 rejection rule excludes *every* hook.** An earlier
+  revision justified extension granularity solely on "nothing maps a call site to the hooks that can
+  reach it" — and that argument does not distinguish the coarse rule from a narrowing to the five
+  non-rowless hooks, which is equally decidable and reads off the same ABI type. The narrowing was
+  proposed on exactly that ground and is **rejected**, because its premise is false on the pin: a
+  rowless hook *can* call `ai_step`. Recording the real reason is what stops the narrowing being
+  re-proposed a fourth time.
+
+The record-field propagation gap is an upstream soundness defect, not a Motoko one, and belongs in an
+AILANG issue independently of this ADR. Of `compaction_ai`'s seven trivial hooks, three declare that
 full row and `on_budget_plan` declares `! {Env, FS}` — **four of the seven classify as effectful**
 despite performing nothing, and only the three ABI-rowless slots are effect-free. The
 extension-granularity rejection rule above already forces all eight to be excluded, so the two rules
@@ -1157,7 +1222,8 @@ extension actually does in them, so all five are excludable-only. The three rema
 That is a real coverage surface, not a technicality: `on_tool_policy` returns a genuine policy
 decision and several extensions put real logic there (`compose.ail:838` → `:83`,
 `context_mode.ail:80`, `omnigraph.ail:69`; `microrag`'s binding at `register.ail:189` looks like a
-fourth but resolves to a constant `NoOpinion` at `:153-155`, and is named here so it is not re-cited). A profile
+fourth but resolves to a constant `NoOpinion` at `:153-155`, and is named here so it is not
+re-cited). A profile
 can therefore cover tool-policy, prompt-construction, and tool-description behaviour while excluding
 everything else.
 
@@ -1181,8 +1247,11 @@ The distinction matters because the two failures happen at different times and o
 detectable at run time: an excluded hook fails closed when dispatch reaches it, while an un-excluded
 reaching hook runs successfully and silently.
 
-Direct `AI`, `Process`, `Net`, `FS`, `SharedMem`, `Clock`, environment, or random effects from a
-reached hook fail the profile's hermeticity probe. Bounded `IO`/`Trace` projection may remain only
+`AI`, `Process`, `Net`, `FS`, `SharedMem`, `Clock`, environment, or random effects from a reached
+hook fail the profile's hermeticity probe **whether performed directly or through a port field**. An
+earlier revision said "direct … effects", which read as exempting the port-mediated case — the one
+case a rowless slot can actually exercise (see the record-field gap above), and therefore the one the
+probe most needs to catch. Bounded `IO`/`Trace` projection may remain only
 when it cannot feed back into the decision and is not the oracle. Current effectful extensions that
 bypass `ExtCtx.ports` are excluded until migrated. **The "pure guards and deterministic fixture
 hooks may form the initial profile" formulation of earlier revisions names two classes with no
@@ -1192,7 +1261,8 @@ fixture package, `motoko_ext_conformance`, calls `ai_step` at `fixtures/reject_f
 under the extension-granularity rule every hook it registers is excluded and it covers nothing. It is
 also absent from `src/core/ext/registry_generated.ail`, so it cannot be installed by configuration at
 all. The first interim profile is the real driver plus the main-loop cursor, and it should be
-described that way rather than by naming candidate extensions it cannot cover. Changing an effectful extension to use state-threaded world ports may
+described that way rather than by naming candidate extensions it cannot cover. Changing an
+effectful extension to use state-threaded world ports may
 require an `motoko-ext-abi` major and its existing lockstep rollout.
 
 An effectful hook cannot retain the current “callback returns only a decision” shape while hiding
@@ -1312,11 +1382,29 @@ requirement is replaced by three ordered obligations:
      this is the fourth defect class found in this obligation, so the rule is stated rather than left
      implicit.
 
-   **The normative scanner is a parsed interface, with the textual scan as a documented fallback.**
-   `ailang iface` exists on the pin and already resolves both hard cases: it reports `stepWithStream`
-   with `effects: ["AI"]`, distinguishing the result row from the parameter row, and reports no
-   concrete effects for `std/list`'s five `! {e}` exports. A textual scan must reproduce that
-   behaviour to be used at all, and the four repairs above are what it takes to do so.
+   **The preferred scanner is a parsed interface; it is not yet gate infrastructure, and calling it
+   normative would overstate what the repo has committed to.** `ailang iface` resolves both hard cases
+   on the pin — `stepWithStream` reports `effects: ["AI"]`, distinguishing the result row from the
+   callback's `! {IO}`, and `std/list`'s five `! {e}` exports report no concrete effects. A textual
+   scan must reproduce that behaviour to be used at all, and the four repairs above are what it takes.
+   Four things must be specified before either can be cited as gate evidence:
+
+   - **`effects` is the sole membership input; `pure` must be ignored.** The two fields contradict
+     each other — twelve effect-bearing `std/ai` exports (`call`, `callImage`, `callJson`, …) carry
+     `"pure": true` alongside a non-empty `effects`. A scanner keying on `pure` inverts the answer.
+   - **Invoke by absolute path and derive the module id from the path relative to the scan root.** The
+     documented `iface <module>` form does not work on the pin, and the emitted `module` field is a
+     mangled absolute path that varies with the scan root's location — unusable as the module name the
+     derived set is keyed on.
+   - **Handle the files it fails.** `std/secret.ail` fails with `MOD010` (module/path mismatch), and
+     the suggested `--relax-modules` remedy is not a flag `iface` accepts. **The failure is
+     environment-dependent in a way that will mislead**: AILANG auto-relaxes `MOD010` inside temporary
+     directories, so a probe run from `/tmp` reports 44/44 while the same walk from a normal working
+     directory reports 43/44. A gate does not run in `/tmp`. Every interface failure must fail closed
+     or fall back to the textual scan; neither may be silently skipped.
+   - **Neither scanner is wired into CI, the Makefile, or `scripts/` today.** The implementation plan
+     owns the complete 44-file walk, its reconciliation, and its wiring; until that exists the routing
+     audit remains non-citable, as the marker at the end of this section already states.
 
    **The scan root is the pinned toolchain clone, and the derivation records its resolved commit.**
    `~/.local/share/ailang` is not an arbitrary user path: `scripts/install-prerequisites.sh` and
@@ -1896,8 +1984,10 @@ be sequenced first, because two of them change what the migration costs and one 
    `ext_ai_step` reaches the same seam through an ABI that cannot return a successor (D1). It fixes
    the main loop. A profile installing an `ai_step`-calling extension is conformant only by
    excluding **every hook that extension registers** — a coverage cost, and a profile-definition
-   rejection if it does not (D1, D5). Such a profile covers none of that extension's hooks, which the
-   per-extension hook disclosure records rather than a floor exempting it. Budget three things the
+   rejection if it does not (D1, D5). Such a profile covers none of that extension's hooks, so it
+   must record a **validated classifier-2 carve-out** naming the extension and the field — the
+   coverage floor's single exception — alongside the per-extension covered/excluded hook ids.
+   Budget three things the
    ADR names and the plan must sequence: a
    concrete `ProviderState` declared in `src/core/ports.ail`, the **relocation of `ScriptedStep`** to
    that module or below (the current type is unreachable from both consumers without a module cycle),
