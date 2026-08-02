@@ -19,14 +19,13 @@ pinned toolchain before this plan was written, per `re-ground-inherited-anchors-
 One structural fact makes the whole survey strong: **`git diff --stat a0d4edb..HEAD -- src packages
 scripts Makefile .github tools` is empty.** Every source measurement the two acceptance reviewers
 verified at `a0d4edb` holds at HEAD by construction. The independent re-measurements below all
-agree; **zero anchor corrections were needed** — the first source-dense artifact in this project for
-which that is true.
+agree; zero anchor corrections were needed.
 
 | # | Survey item | Measured at HEAD |
 |---|---|---|
 | 1 | D1 streaming capture & upstream API | No released AILANG through v0.31.0 exports a recorded-stream API. `sunholo-data/ailang#546` is parked on drain semantics only; the `{chunks, outcome}` shape survived two quorum rounds and can be typed against now. Gate not cleared; the fork prototype clears nothing. |
-| 2 | `Ports`/`StepProvider` constructions and consumers | `Ports` has 6 fields (`ports.ail:17-25`). All construction funnels through `ports_shape_probe` (`ports.ail:37`); callers: `live_ports` (`stub_step.ail:148`), `scripted_ports_from_steps` (`stub_step.ail:157`), and `scripts/dst/long_qwen_compaction_dst.ail` (3 sites, plus 3 record rebuilds at `:181`, `:252`, `:750`). Post-`89a1d67`, `C2LoopState.provider` is `Ports`-typed (`session.ail:344`), `dispatch_step` takes `Ports` directly with no dead branches (`stub_step.ail:193-200`), and `ported_provider` (`session.ail:695`) returns bare `Ports` from 6 call sites (`:2015`, `:2051`, `:2114`, `:2137`, `:2267`, `:2295`). `StepProvider` survives as the entry-point argument type only. 32 `provider:` literals in `session.ail` bound the widening's edit surface. |
-| 3 | World-state threading feasibility | Spike Q1 confirmed against the real driver (`NOTE-spike-findings-real-driver-vertical.md`); `C2LoopState` (`session.ail:338`) is a 19-field record threaded by one loop. |
+| 2 | `Ports`/`StepProvider` constructions and consumers | `Ports` has 6 fields (`ports.ail:17-24`). All construction funnels through `ports_shape_probe` (`ports.ail:36`); callers: `live_ports` (`stub_step.ail:148`), `scripted_ports_from_steps` (`stub_step.ail:157`), and `scripts/dst/long_qwen_compaction_dst.ail` (3 sites, plus 3 record rebuilds at `:181`, `:252`, `:750`). Post-`89a1d67`, `C2LoopState.provider` is `Ports`-typed (`session.ail:344`), `dispatch_step` takes `Ports` directly with no dead branches (`stub_step.ail:192-200`), and `ported_provider` (`session.ail:695`) returns bare `Ports` from 6 call sites (`:2015`, `:2051`, `:2114`, `:2137`, `:2267`, `:2295`). `StepProvider` survives as the entry-point argument type only. 32 `provider:` occurrences in `session.ail` (loop-state literals plus entry-point signatures) bound the widening's edit surface. |
+| 3 | World-state threading feasibility | Spike Q1 confirmed against the real driver (`NOTE-spike-findings-real-driver-vertical.md`); `C2LoopState` (`session.ail:338-357`) is an 18-field record threaded by one loop. |
 | 4 | Direct ambient effects reachable in a session | Classifier 1 re-run at HEAD: union 25 modules, 21 imported, 13 effect-bearing, 8 proven effect-free, **0 unresolved**; `make effect_inventory_selftest` → `agree=43 disagree=0`. Clock: **13 `now()` sites** — 4 driver (`session.ail:791,842,1991,2089`), 1 `ext/runtime.ail:190`, 8 `motoko-ext-compose`. `readLine`: 2 sites (`session.ail:1619` approval, `:2196` conversation loop). `std/sem` `SharedMem` read at `rpc.ail:200`. **Nothing routed**; `ExtPorts.clock_now` has **zero call sites** (`grep -rn '\.clock_now('` is empty). |
 | 5 | Tool/timeout contracts | `tool_exec` is stringly (`ports.ail:22`). Timeouts ride in requests — `timeout_secs` in `tool_catalog.ail:53` schema and `env_client.ail:31 exec_in` — enforced outside the AILANG driver. No in-profile module observes time; D4's first time-bearing seam (typed `ToolCallEnvelope` + deadline) is a contract to build. |
 | 6 | Hooks in the baseline profile | Eight closed ABI slots (`motoko-ext-abi/types.ail:151-165`): three rowless, `on_budget_plan` at `{Env, FS}`, four at the nine-effect row; six dispatched by unconditional fold, only `on_tool_handle` gated. `.ai_step(` call sites: exactly **2** (`compaction_ai.ail:106`, `reject_fixtures.ail:90`). The baseline profile below installs no extensions, so its profile-reachable hook set is empty. |
@@ -42,8 +41,8 @@ executable statement of the first defect this plan fixes.
 
 ## Decisions this plan owns
 
-The ADR deliberately left five decisions to the plan. They are answered here, once, so no work item
-re-litigates them.
+The ADR deliberately left these decisions to the plan. They are answered here, once, so no work
+item re-litigates them.
 
 **P1. `ProviderState` is a record, not a sum.** Declared in `src/core/ports.ail` as a record whose
 first field is the scripted cursor (the remaining-script tail, the threading style
@@ -54,8 +53,9 @@ restructuring. The live/`Ported` value is the record with an empty script; live 
 their input unchanged (D1's specified identity transition).
 
 **P2. The approval and clock cursors do not ride along in the interim widening.** Neither has an
-interim consumer: scripted-run approvals resolve through policy today, and the virtual clock only
-exists once `world_state` lands — which subsumes and deletes the interim field anyway (D1). Dead
+interim consumer: the scripted adapter's `approval_read` is a constant deny (`deny_approval`,
+`ports.ail:26-28`, wired at `:42`) with no position to thread, and the virtual clock only exists
+once `world_state` lands — which subsumes and deletes the interim field anyway (D1). Dead
 rider state threaded through every construction site would be cost without a customer. The risk the
 ADR warns about — reproducing the bidirectional widening — is closed **structurally, not by
 guessing**: because of P1, adding a cursor later changes no port signature; the state parameter
@@ -64,8 +64,8 @@ stays `ProviderState` and the addition is an M1-class additive edit. `ScriptedPo
 that addition if a pre-`world_state` need materialises.
 
 **P3. Clock routing order, and the first routed-set claimant.** Order: (1) the four driver sites,
-routed to the world clock as part of WI-A13 — every profile needs them; (2) `ext/runtime.ail:190`
-is never routed — it is *attributed* to `test_dummy` in the WI-A6 table, which is what removes it
+routed to the world clock as part of WI-A12 — every profile needs them; (2) `ext/runtime.ail:190`
+is never routed — it is *attributed* to `test_dummy` in the WI-A5 table, which is what removes it
 from the baseline's reachable set; (3) the eight `motoko-ext-compose` sites are deferred to
 Milestone C, because they route through `ExtPorts.clock_now` — a seam with zero call sites that may
 not survive first contact — and belong with the ABI major. The first profile to claim a routed set
@@ -78,7 +78,10 @@ the main-loop cursor, **empty extension install list**, covering no extension be
 the interim profile the ADR describes. Its definition records: no installed extensions (so the
 coverage floor and per-hook disclosure hold vacuously), the D3 extension-effect fault class waived
 with its condition (no effectful hook installed), the attribution-table reference, and a reachable
-clock set of the four driver sites. It is the documented baseline profile for the Milestone C
+clock set of the four driver sites. The waiver list is settled at definition time against A7's full
+table — the extension-effect class is waived by construction, and the approval-deadline class is
+waived only if the profile's policy leaves its enabling condition off; either way each waived class
+is named with its condition. It is the documented baseline profile for the Milestone C
 name-adoption run. No shipped configuration can be the first profile: all fourteen install
 `compaction_ai`, which calls `ai_step` and must be **omitted**, not installed-and-excluded (D1/D5).
 A `compose`-bearing profile is the planned second claimant, in Milestone C.
@@ -108,7 +111,7 @@ loss-channel rule). Behaviour-preserving: `emissions: []` at every construction 
 the `ports.ail` type, `ports_shape_probe`, 2 `stub_step.ail` adapters, 3 `long_qwen` sites, and the
 3 result consumers (`dispatch_step`, `ext_ai_step`, `long_qwen:744`). Size: below M1 — 4 files vs
 28, same technique; half a day including the fix loop.
-*Acceptance evidence:* `make check_core` green (35/35); `make dst` targets pass unchanged; a
+*Acceptance evidence:* `make check_core` green; `make dst` targets pass unchanged; a
 `Scripted`-provider test asserts the emission log is present and empty. Note per D1: **this item
 does not enable WI-A2** — a successor cursor is not an emission.
 
@@ -122,7 +125,7 @@ initial-state pair; the sole persistent copy in **one explicit `C2LoopState` fie
 `assistant_count` — the arrangement D1 prohibits by name. Includes P5 (stale comment + anchor
 amendment). Not behaviour-preserving; `ScriptedPortsState`/`scripted_model_next` is precedent, not
 reusable code. Edit surface: `ports.ail`, `stub_step.ail`, `scripted_ports.ail`, `session.ail` (32
-`provider:` literals bound the loop-state edits), `agent_loop_v2.ail`, import sites of
+`provider:` occurrences bound the edit surface), `agent_loop_v2.ail`, import sites of
 `ScriptedStep`, DST scripts. Size: the largest pre-repin item — M1's judgement band dominates;
 1–2 days, tooling first.
 *Acceptance evidence:* `scripts/dst/spike_scripted_cursor_probe.ail` prints PASS and exits 0, and
@@ -199,13 +202,14 @@ failure, tool failure, invalid history, internal); returned outcome, `DoneEvent`
 agree; no integer code survives at a terminal call site.
 
 **WI-A10. Build the profile definition and execution-manifest machinery, and define `driver_only`
-v1** (D5; P4). Depends on A5, A6, A8 (the definition references the attribution table and records
-the vocabulary version; load validation wires in the floor/disclosure checks and both classifier
-outputs).
+v1** (D5; P4). Depends on A4, A5, A6, A7, A8: the definition references the attribution table,
+names its waived fault classes by A7's stable class ids, and records the vocabulary version; load
+validation wires in the floor/disclosure checks and both classifier outputs.
 *Acceptance evidence:* `driver_only` loads clean; a fixture profile installing `compaction_ai` is
-rejected **at definition time** with the classifier-2 reason; the manifest records the five axes
-(program schema, generator version, profile id/version, manifest, vocabulary version) plus derived
-classifier sets and scan-root commit.
+rejected **at definition time** with the classifier-2 reason; the manifest records D5's full field
+list — source revision, toolchain, extension package and ABI versions, profile id/version,
+event-vocabulary version, normalized configuration — plus both derived classifier sets and the
+scan-root commit.
 
 **WI-A11. The predicate documentation check** the ADR assigns to this plan: a canonical
 classifier-2 predicate sentence ("calls a classifier-2 field on an `ExtPorts`-typed value, at
@@ -222,12 +226,14 @@ routed to the world clock (P3), then approval, then env reads, then runtime rand
 `ToolCallEnvelope` with deadline replaces stringly `tool_exec` in the same wave — it is D4's named
 first time-bearing seam and D1 requires it anyway. Behaviour-preserving throughout: live adapters
 delegate to today's code paths; `emissions`/state plumbing verified against `Scripted` providers.
-Spike Q1/Q2 confirm feasibility; the spike's surgery is *not* imported — this is fresh work at
-HEAD. Size: the migration proper; several days, staged as one PR per effect class.
+Spike Q1 confirmed the threading and Q2 confirmed routing tractability (its count clause falsified
+and superseded by the 13-site inventory); the spike's surgery is *not* imported — this is fresh
+work at HEAD. Size: the migration proper; several days, staged as one PR per effect class.
 *Acceptance evidence per class:* existing targets green; the class's poison probe (capability
 withheld) passes for the deterministic entry point and fails for the live world — the F3-corrected
-per-run backstop; after the clock class, `driver_only`'s routed-set claim (4 sites, citing the A5
-table) becomes true and is recorded in the profile.
+per-run backstop; after the clock class, `driver_only`'s routed-set claim (4 sites) becomes true
+and is recorded in the profile — a claim that additionally depends on A5, per D4's scheduling
+prohibition.
 
 **WI-A13. Build discovery and replay** (D2). Depends on A7 (class ids), A10 (manifest), A12
 (world_state). `ExecutionProgram`/`DiscoveryConfig` types, the seeded generator with declared
@@ -236,14 +242,18 @@ causal identities and encounter ordinals. Exact type names are plan-level per D2
 fixed there and not re-litigated here.
 *Acceptance evidence:* D7's discovery-contract invariant — same manifest/profile/seed twice →
 identical resolved program, interaction log, outcome, normalized trace; a mismatch fixture returns
-typed `HarnessFailure` with position and projection; bounds violations fail as generator errors.
+typed `HarnessFailure` with position and projection; bounds violations fail as generator errors;
+D8's pinned generator canary exists per stable generator id and fails on a seed remap without a
+generator-version bump.
 
 **WI-A14. Implement the D7 invariant set and D11 corpus reporting.** Depends on A9, A13; the
 parity-classification invariants additionally depend on A8 and are not scheduled before it. Corpus
 minimum seed counts are **selected from measured CI cost at this point, not invented now** — the
 measurement is part of the work item, consistent with D11.
 *Acceptance evidence:* every D7 bullet has a runnable invariant; a run report carries the full D11
-field list; class-reached vs branch-reached are separate counters read from A7's artifact.
+field list; class-reached vs branch-reached are separate counters read from A7's artifact; a
+promoted failure travels as one artifact — exact program **with** its execution manifest — per
+D11's promotion rule.
 
 ### Milestone B — the repin (trigger: a released AILANG carrying the recorded-stream API)
 
@@ -259,7 +269,10 @@ three `motoko-ext-abi/types.ail` row corrections (`ExtPorts.ai_step` gains `Trac
 `ExtensionHooks` rows gain `Rand` and `Trace`) **and the world-token widening of `ExtPorts.ai_step`
 plus the hook results and core dispatch results — the larger of the two** (Consequences). Lockstep
 re-release of every extension package. This is what lifts D1's extension-model-path exclusion;
-until it lands, an `ai_step`-calling extension is omitted from any conformant install list.
+until it lands, an `ai_step`-calling extension is omitted from any conformant install list. Per D5,
+the same major is where coverage can widen beyond the three rowless slots — either per-hook row
+narrowing or the declared-versus-performed successor detector, both of which D5 assigns to this
+major; WI-C5 depends on that part landing.
 
 **WI-B3. The `Message` migration** (vision/images field of the new pin). Size: **M1, measured — 14
 minutes, 28 files, 69 additive sites, 7 judgement sites** — with its two riders honoured: tooling
@@ -284,16 +297,21 @@ selected silently.
 **WI-C3. The streaming-trace parity invariant** (D6.4's named exception, checked explicitly).
 Depends on C2 and A8.
 
-**WI-C4. Run the name-adoption gate for `driver_only`** — the acceptance-test table, answer by
-answer, including the D4 latency-pair demonstration through the `ToolCallEnvelope` deadline seam
-and D11's corpus minimums. Only after every row holds does any target adopt the "DST"/"simulation"
+**WI-C4. Run the name-adoption gate for `driver_only`** — depends on C2, C3, and all of
+Milestone A: the acceptance-test table, answer by answer, including the D4 latency-pair
+demonstration through the `ToolCallEnvelope` deadline seam and D11's corpus minimums. Only after every row holds does any target adopt the "DST"/"simulation"
 name (D10). Until then, all new targets keep non-simulation working names.
 
-**WI-C5. The second profile: `compose`-bearing.** Routes the eight `motoko-ext-compose` clock
-reads through `ExtPorts.clock_now` (first exercise of a seam with zero call sites today — budget
-for it not surviving contact unchanged), claims the 12-site routed set, and expands hook coverage
-within what the declared-row rule permits (the three rowless slots) until B2's successor-detector
-or row-narrowing work widens it.
+**WI-C5. The second profile: `compose`-bearing.** Depends on B2, and the dependency is not just
+the clock: `compose` puts real behaviour in an unconditionally-dispatched nine-effect hook
+(`on_response_intercept`, bound at `compose.ail:840`, body at `:761-790`), which under the
+declared-row rule cannot be covered and — being unconditionally dispatched — cannot be excluded
+either, so `compose` is un-installable in a conformant profile until B2's world-token/coverage
+widening lands. (Its `on_tool_handle` is the one *gated* hook and could be excluded; that does not
+rescue the install.) The work:
+route the eight `motoko-ext-compose` clock reads through `ExtPorts.clock_now` (first exercise of a
+seam with zero call sites today — budget for it not surviving contact unchanged), make the
+effectful hooks world-mediated, and claim the 12-site routed set.
 
 ## Deferred artifacts: build step and acceptance evidence
 
@@ -305,7 +323,7 @@ block the name:
 | Classifier 2 | WI-A4 | Gate-table criterion: fails closed on unresolved occurrences; two known call sites at HEAD; repin re-derivation wired in (WI-B4) |
 | Site-to-hook attribution table | WI-A5 | Gate-table + D4 clause 3: schema/staleness/referential validation fail closed; named reviewer per row as the stated exception; empty-intersection semantics tested |
 | Coverage-floor validation | WI-A6 | Gate-table (simplified): unconditional floor + disclosure, both enforced at load; fixture rejections demonstrated |
-| D3 fault catalogue / D6 event vocabulary | WI-A7 / WI-A8 | Their own decisions' fail-closed contracts; scheduling prohibitions honoured by A14's split dependency |
+| D3 fault catalogue / D6 event vocabulary | WI-A7 / WI-A8 | Their own decisions' fail-closed contracts; D6's scheduling prohibition honoured by A14's split dependency (D4's analogous one by A12's claim clause and P3) |
 
 ## Milestone boundaries, and what each unblocks
 
@@ -330,6 +348,9 @@ branch is not HEAD state; the `arniwesth/ailang` fork is not the upstream gate �
 
 - Building the interprocedural attribution-necessity validator (D4 names it as its own future
   obligation; the named-reviewer exception stands until then).
+- **Shrinking, explicitly deferred past the first name-adoption gate** — recorded here because D8
+  permits that deferral only if the project records it. Replay of the unshrunk failing program is
+  not optional and is in WI-A13.
 - Physical faults, durability contracts, concurrency (D9/Non-goals; the 007-D1.3 tripwire is in
   A7's artifact).
 - Any change to the accepted architecture. Corrections to the ADR discovered during execution are
