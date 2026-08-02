@@ -144,10 +144,23 @@ dependency graph, so if the two disagree, this plan wins.
 
 Milestone A is upstream-independent and starts now. Milestone B is **triggered**, not queued: it
 begins the day a released AILANG ships the recorded-stream API, and interleaves with whatever A-item
-is in flight. Milestone C depends on B. Sizing cites M1/M2 from
-`NOTE-spike-findings-real-driver-vertical.md` rather than re-estimating; "M1-class" means additive
-and mechanical with a compiler-driven fix loop written first — the 14-minute figure held *only*
-because tooling preceded editing, and that discipline is part of each estimate.
+is in flight. Milestone C depends on B.
+
+**Sizing model, corrected by measurement at cluster 1** (`NOTE-cluster-1-execution-report-and-plan-corrections.md`):
+
+- **Size widen-and-converge work by *sites touched*, not files and not days.** A1 and A2 were
+  estimated at half a day and 1–2 days and measured at ~5.5 and ~10 minutes — wrong by roughly two
+  orders of magnitude, systematically, because both scaled M1 by *file* count. Scaling M1's 14
+  minutes by *site* count predicts ~10 minutes for cluster 1's 48 sites against the ~18 actually
+  spent editing. That is the model.
+- **The judgement ratio for contract-changing work is ~19%, not M1's 10%** (A1 3/13, A2 6/35).
+  M1's additive band understates anything that changes a contract.
+- **This does not generalise to new-artifact work.** A7, A8, A10, A13, A14, A15 and B2 build things
+  that do not exist; nothing here measures those and their estimates stand unrevised.
+- The 14-minute discipline held for the reason M1 gave: **tooling first.** Cluster 1 wrote a
+  parallel `ailang check` over the affected import closure (22 modules, 12 s) that surfaces one
+  error per module instead of one per compile. Without it, convergence costs one round-trip per
+  site. Budget the tool before the edits, every time.
 
 ### Milestone A — pre-repin (pinned v0.26.0)
 
@@ -341,10 +354,26 @@ unable to carry D3's typed tool fault classes. Behaviour-preserving throughout: 
 delegate to today's code paths; `emissions`/state plumbing verified against `Scripted` providers.
 Spike Q1 confirmed the threading and Q2 confirmed routing tractability (its count clause falsified
 and superseded by the 13-site inventory); the spike's surgery is *not* imported — this is fresh
-work at HEAD.
+work at HEAD. **Also deletes `ported_provider`'s now-dead `history` parameter** (`_history` at
+`session.ail`, six call sites): it existed only to compute the `base_assistant_count` that A2
+retired, and D1 keeps the seam stable until `world_state` replaces it — which is this item (C5).
+
+**The silent-freeze hazard is this item's defining risk, and cluster 1 measured it rather than
+predicting it.** A2 threaded thirteen `C2LoopState` successor literals. The compiler forces the new
+field to be *present* at all thirteen but accepts `st.provider_state` at every one — while six are
+downstream of the dispatch call and must carry the successor. Cluster 1 verified the failure
+empirically: flipping all six to the carry-forward form type-checks clean (`✓ No errors found!`) and
+serves `[s0,s0,s0,…]` in **both** scenarios — a total freeze, worse than F6 itself. Only
+`scripted_cursor_probe` catches it. **A12 threads more cursors through the same literals, at a
+larger site count, for values with no equivalent instrument.**
+*Therefore, binding:* **land an executable advancement assertion for each cursor before threading
+it.** Not after. A cursor threaded without one is indistinguishable from a cursor frozen, in a tree
+where every type-check passes.
 *Size:* **estimate — several days**, staged as one PR per effect class. Basis: the spike threaded
 world state and routed the clock on a throwaway branch; this repeats that behaviour-preservingly
-across six effect classes plus the typed tool contract.
+across six effect classes plus the typed tool contract. Per the corrected model, re-size against
+sites once the per-class site counts are known — A2's 35 sites for one cursor is the anchor, and
+the advancement assertions are new work the spike never did.
 *Acceptance evidence per class:* existing targets green; the class's poison probe (capability
 withheld) passes for the deterministic entry point and fails for the live world — the F3-corrected
 per-run backstop; for the tool class, the typed contract carries ordinary success, typed
