@@ -9732,3 +9732,426 @@ none requires reopening the settled architecture. **The upstream API blocker is 
 open:** D1 still requires the recorded-stream API in an actual AILANG release, this repository
 repinned to that release, and the positive integration probe passing. The
 `arniwesth/ailang` `stepWithStreamRecorded` prototype on tag `v0.31.0` clears none of those conditions.
+
+## Review Comments
+
+_Reviewer: Claude Code (model: `claude-opus-5`), 2026-08-02. **Scoped architecture-acceptance
+review** — not a delta review. Commit `a0d4edbc74c1e2632b413d3f2a6f88421e8f7a2a`. This is the
+twentieth `## Review Comments` section; there were nineteen at the reviewed commit._
+
+_Scope per `HANDOFF-review-adr-001-architecture-acceptance.md`: whether D1–D11 cohere and whether the
+ADR is acceptable as a decision. The three deferred mechanisms' internal specifications, classifier
+1's implementation, wording propagation, anchors, and the upstream blocker are out of scope and were
+not reviewed as such._
+
+### Recommendation
+
+**Accept with conditions.** The architecture is sound. D1–D11 hold as a decision, the deferral of the
+three gate mechanisms is legitimate rather than goalpost-moving (argued below), and no decision in
+D1–D11 is unimplementable on the pinned substrate. Four changes are required first, all bounded and
+none reopening a decision:
+
+1. Reconcile D5's fail-closed-on-dispatch rule with the "conformant and inert" reading of a
+   fully-excluded installed extension (R1). This is a real architectural incoherence and it
+   invalidates a claim the ADR makes at four sites.
+2. Name an in-profile first time-bearing seam (R2). The one D4 recommends does not exist inside any
+   profile this ADR permits.
+3. Complete the deferred-mechanism list, or narrow its claim (R3).
+4. Delete the retired internal blocker where it still stands normatively (R4).
+
+R1 and R2 are the ones that matter; R3 and R4 are single-paragraph repairs to the acceptance
+boundary itself.
+
+### On A1: the deferral is legitimate, and the test the handoff proposes passes
+
+Applying the handoff's own test — *if all three deferred mechanisms turned out to be unbuildable,
+would D1–D11 still be the right architecture?* — the answer is yes for all three, because each one's
+absence degrades **conservatively**:
+
+- **Classifier 2 unbuildable** → the extension-granularity rejection rule degrades to a manual
+  determination over `grep -rn '\.ai_step('` plus triage, which the ADR already names as its
+  conservative approximation (`:422-434`). Over-selection costs coverage; it does not admit an
+  unsound profile.
+- **The attribution table unbuildable** → D4 clause 3 vanishes and every core effect site is
+  unconditional core. The ADR already states that fallback and its arithmetic (`5 / 13 / 13`
+  pre-table versus `4 / 12 / 13` post-table, `:889-892`, `:1054-1058`). More routing work, no weaker
+  claim.
+- **Coverage-floor validation unbuildable** → the floor degrades to disclosure. This is the one case
+  whose failure direction is fail-**open**, and the ADR says so in as many words (`:1161-1167`:
+  without the reverse check "the floor is bypassable by assertion"). R1's fix removes that exposure
+  by removing the configuration the carve-out exists to bless.
+
+So the line is drawn in the right place: the architecture stands independently of the machinery, and
+what the machinery buys is coverage and honesty, not soundness. The distinction the Status block
+draws between a finite external list and a self-regenerating internal one is correct in kind. I do
+not have a finding against the narrowing.
+
+The acceptance criteria in *Gate mechanisms: built, and deferred* are sufficient to discharge each
+mechanism **as stated**, with one caveat carried in R3: the list of mechanisms is not the list of
+deferred gate-read artifacts.
+
+---
+
+### R1. A fully-excluded installed extension cannot complete a run, so "conformant and inert" is unreachable — and it is the case one deferred mechanism exists to permit
+
+**Defect.** D5 requires that dispatch reaching an excluded hook produce a fail-closed
+`HarnessFailure` (`:382`, `:1124`, `:1254`), but six of the eight ABI hook slots are folded
+unconditionally over *every* installed extension on the ordinary execution path — so a profile that
+installs an extension and excludes all eight of its hooks fails closed on its first step, in every
+run. The ADR asserts the opposite at four sites.
+
+**Grounding.** Hook dispatch is an unconditional fold over `rt.registry.hooks`, with no per-extension
+gate:
+
+```
+$ grep -n "(h\.on_" src/core/ext/runtime.ail
+205:      let patch = (h.on_build_system_prompt)(ctx);     -- fold_prompt_hooks
+220:      let patch = (h.on_budget_plan)(ctx, plan);        -- fold_budget_hooks
+238:      let decision = (h.on_pre_step)(ctx, msgs);        -- fold_pre_step_chain_rec
+279:  let decision = (h.on_tool_policy)(ctx, call);         -- decide_one_policy
+338:        match (h.on_tool_handle)(ctx, call) {           -- first_handle (gated by contains_tool)
+355:      match (h.on_response_intercept)(ctx, response_text) {
+367:  let decision = (h.on_solver_candidate)(ctx, candidate);
+```
+
+Only `on_tool_handle` is conditional (`first_handle` tests `contains_tool(h.provided_tools, name)`,
+`:337`). `dispatch_build_system_prompt`, `dispatch_budget_plan`, and `dispatch_pre_step_chain`
+(`:212`, `:228`, `:274`) each pass `rt.registry.hooks` whole. And the extension the ADR uses as its
+worked example supplies all of them:
+`packages/motoko-ext-compaction-ai/register.ail:101-106` binds `on_build_system_prompt`,
+`on_budget_plan`, `on_pre_step`, and `on_tool_policy`.
+
+Therefore, for a profile installing `compaction_ai` with all eight hooks excluded, the first
+system-prompt build reaches an excluded hook — before any provider call — and the run terminates as
+`HarnessFailure`. The affected claims:
+
+- `:384` — "excluding every hook it registers is conformant and honest";
+- `:460` — "the profile is conformant and **inert on the compaction path**";
+- `:1128` — "A profile installing an extension whose hooks are all excluded is conformant and inert
+  rather than invalid";
+- `:1790` — the acceptance row's carve-out clause, and `:1906-1909` in *Consequences*.
+
+"Inert" means the run proceeds and the extension does nothing. What actually happens is that no run
+completes. The practical claim built on it — "**all fourteen** checked-in configurations can be made
+conformant by excluding `compaction_ai`'s hooks" (`:455-461`) — is vacuous: those profiles produce
+zero `SystemRun`s, so they cannot satisfy D11's minimum-completed-count gate or any D7 invariant.
+
+Note that the fourth correction pass's rejected conclusion ("not conformance-eligible") was closer to
+right than the fifth pass's replacement, but for a reason neither pass considered: not the classifier
+rule, the **dispatch shape**. Both passes reasoned about profile-definition validity without checking
+whether such a profile can execute.
+
+**Why this is architectural rather than editorial.** Exclusion is only a meaningful runtime
+classification for hooks whose dispatch is *conditional*. For the six unconditionally-folded slots,
+"excluded and installed" is not a weaker form of "installed" — it is equivalent to "un-runnable". The
+coverage floor's single carve-out (`:1104-1106`, `:1157-1167`) and the fourth deferred mechanism
+(`:1762`) exist precisely to bless the zero-covered installed extension, i.e. to permit a
+configuration that cannot execute.
+
+**Action.** State the rule the dispatch shape actually forces: *an extension with any
+unconditionally-dispatched hook excluded may not be installed in a conformant profile.* Concretely —
+
+- correct `:384`, `:460`, `:1128`, `:1906-1909` to say the fourteen configurations are made
+  conformant by **removing** `compaction_ai` from the profile's install list, not by excluding its
+  hooks (this also aligns them with `:1270`, which already says the first interim profile is "the
+  real driver plus the main-loop cursor");
+- either delete the coverage-floor carve-out and restore the floor unconditionally, or restrict the
+  carve-out to extensions all of whose excluded hooks are conditionally dispatched (today: only
+  `on_tool_handle`);
+- update the acceptance row at `:1790` to match.
+
+This *simplifies* the deferred set rather than growing it: with the carve-out gone, deferred
+mechanism 4 collapses to "profile load rejects a zero-coverage installed extension", classifier 2 is
+no longer in the floor's dependency chain, and the fail-open direction identified in A1 above
+disappears. That the fix reduces machinery is the strongest evidence I found that D1–D11 are right.
+
+### R2. D4's recommended first time-bearing seam does not exist inside any profile this ADR permits, so the pillar-5 acceptance row has no interim path
+
+**Defect.** D4 tells the plan to make "a typed tool or delegated-process request whose **existing**
+timeout becomes an explicit live/deterministic adapter contract" the first time-bearing seam
+(`:934-938`). No module that can be inside a conformant interim profile enforces a time-based
+deadline. Every existing timeout is either extension-resident and excluded, or enforced outside the
+simulation boundary.
+
+**Grounding.** The two adapters the ADR's own Context row cites as grounding for that seam (`:257`)
+are `packages/motoko-ext-mcp/exec.ail:45-70` and
+`packages/motoko-ext-context-mode/context_mode.ail:120-128` — both extension packages, both named at
+`:217` and `:259` as bypassing `ExtCtx.ports`, and therefore both excluded by D5 (`:1263`) until
+migrated. Even after migration they are reached through `on_tool_handle`/`on_pre_step`, which the ABI
+pins at nine effects, so under D5's declared-row rule they stay excludable-only (`:1222-1227`).
+
+Core has no time-based deadline:
+
+```
+$ grep -rn "timeout\|deadline" src/core/tool_runtime.ail src/core/tool_phase.ail
+src/core/tool_phase.ail:88:  if default_allow then ApprovalAllowed else ApprovalDenied("timeout — no approval received")
+src/core/tool_runtime.ail:824:  Timeout(ms) => "timeout after ${show(ms)}ms",
+```
+
+`tool_phase.ail:86-88` (`resolve_approval(raw, default_allow, eof)`) is EOF-driven, not clock-driven —
+the word "timeout" is a label on the EOF branch. `tool_runtime.ail:824` is a display arm of an error
+type; `grep -rn "Timeout(" src/core/*.ail` returns that consumer and no producer. The one core
+deadline *value*, `delegated_timeout_ms`, is only forwarded into the child-process settings record
+(`src/core/config.ail:346` → `src/core/rpc.ail:40,176`, no comparison anywhere in the AILANG tree),
+so it is enforced in the TypeScript child — outside the simulation boundary (`:1281-1284`) and
+outside classifier 1's stated soundness boundary (`:1372-1377`).
+
+**Consequence.** The acceptance row "Does virtual time matter?" (`:1792`) requires two programs
+differing only in latency to produce different completion-versus-timeout behaviour. On the reading
+D4 recommends, satisfying it requires the extension-ABI major — which makes pillar-5 evidence
+dependent on the same milestone as extension coverage, a sequencing fact the ADR does not state.
+
+**Action.** Correct `:934-938` to name the seam D1 already mandates: the typed `ToolCallEnvelope`
+with "timeout/deadline information" replacing the stringly `tool_exec` (`:591-593`). That seam is in
+core, in-profile, and is a widening this ADR requires anyway — so pillar-5 evidence is reachable
+without the ABI major. Drop or qualify "existing timeout", and state plainly that no in-profile
+module observes time today. (This is not "inventing a new agent retry policy", which `:938` rightly
+forbids; it is the deadline contract D1 specifies.)
+
+### R3. The deferred-mechanism list is not the list of deferred gate-read artifacts, which under-states what the Status block calls a finite list
+
+**Defect.** *Gate mechanisms: built, and deferred* claims "This ADR names four detection/validation
+mechanisms" (`:1747`) and the Status block leans on that count — "What replaces it is a finite list:
+the three deferred gate mechanisms" (`:27-30`). The ADR names at least two further unbuilt,
+gate-read, fail-closed-validated artifacts of the same kind, and neither appears in the table.
+
+**Grounding.**
+
+- **D3's fault catalogue** (`:754-760`): "a versioned, machine-readable artifact that the gate reads —
+  not prose in an implementation plan", carrying class ids, applicability conditions, delivery
+  constructors, named recovery-branch ids, and logical transitions. D11's branch-reached counters
+  read it (`:1712-1717`) and acceptance row 4 requires it (`:1791`). Nothing in the repo implements
+  it.
+- **D6's event vocabulary** (`:1564-1598`): explicitly "new construction", "validated at load and
+  **fails closed** on an unclassified variant", and load-bearing enough that D6 forbids scheduling
+  "any D7 parity invariant or acceptance row that depends on the logical/display-only classification
+  before the artifact exists" (`:1586-1588`). That gates D7's parity invariant (`:1606`) and
+  acceptance row 7 (`:1794`).
+
+Both are the same *kind* of thing as the site-to-hook attribution table, which the section does list:
+a constructed, versioned artifact with a fail-closed load validator and a manual correctness
+condition. Excluding them is not a principled boundary, and it makes the finite list read as three
+items when it is five.
+
+**Action.** Add rows for D3's catalogue and D6's vocabulary with the acceptance criteria both
+decisions already state, or narrow `:1747` to "four *hermeticity and coverage* detectors" and
+cross-reference the other two deferred artifacts explicitly so the Status block's "finite list" is
+complete.
+
+**Related, smaller.** The acceptance table's preamble promises that "all answers below are supported
+by an automated gate" (`:1783-1784`), while D4 records a stated exception to exactly that promise —
+attribution necessity rests on a named human reviewer (`:1044-1050`), as does the gate table's row 3
+(`:1761`). The exception is stated twice already; it is simply absent from the table that makes the
+promise. One clause at `:1784` closes it.
+
+### R4. The retired internal blocker still stands normatively in `Depends on`
+
+**Defect.** The Status block's central reframing is that "the latest correction pass has not been
+independently verified" was "a mistake of kind, not of fact" and is retired (`:18-30`). The
+`Depends on` block still states the opposite as a live condition.
+
+**Grounding.** `:126-127`: "This ADR's remaining acceptance blockers are its own: the upstream
+recorded-stream API **and an independent review**." Also `:2093-2094` in the author self-review
+record ("A fresh independent review must attack the revised decisions before this ADR becomes
+Accepted") — that one is a dated 2026-07-24 record and defensible as history, but `:126-127` is not
+dated or attributed and reads as current.
+
+This is not a phrasing variant; it is a second, contradictory statement of what blocks acceptance, in
+the block a reader consults to find out what blocks acceptance. Left in place it re-creates the
+self-regenerating condition by citation.
+
+**Action.** At `:126-127`, replace "and an independent review" with the current framing: the upstream
+recorded-stream API is the sole external acceptance blocker; the three (or five, per R3) deferred
+mechanisms block the name.
+
+---
+
+### What I re-ran and confirmed
+
+- **Section count.** 19 `## Review Comments` sections at `a0d4edb`; this is the twentieth. Consistent
+  with the Status block's derived count (`19 − 5 = 14` delta reviews).
+- **The loop measurements in the Status block are exact.** Counting `^### R\d+\.` headings per
+  section gives **154 findings** across 19 sections, and pairing the delta rounds gives
+  `7+8=15, 6+6=12, 8+8=16, 8+8=16, 10+7=17, 10+9=19, 10+10=20` — precisely the
+  15, 12, 16, 16, 17, 19, 20 quoted at `:22`. The divergence claim is verifiable and correct.
+- **Classifier 1 runs and meets its stated acceptance criterion.** `make effect_inventory` exits 0
+  with toolchain and scan-root commits matching (`3b52a24d`), reporting 21 builtin-projection modules,
+  25 source-scan, 25 union, 21 imported, **13 effect-bearing, 8 proven effect-free, 0 unresolved**,
+  with `std/secret`'s `MOD010` failure resolved by the textual fallback — exactly the numbers at
+  `:1364-1382`. `make effect_inventory_selftest` reports `agree=43 disagree=0`, also as stated.
+- **Hook dispatch is an unconditional fold** over `rt.registry.hooks` for six of eight slots (R1).
+- **Two `.ai_step(` call sites** repo-wide (`compaction_ai.ail:106`,
+  `reject_fixtures.ail:90`); **zero `ExtPorts.clock_now` call sites** — only declarations and
+  constructions (`src/core/ports.ail:20`, `packages/motoko-ext-abi/types.ail:65`, and four `noop_`
+  bindings). Both settled facts hold at this commit.
+- **`src/core/ports.ail` already imports `StreamChunk`** (`:9`), so D1's emission-log widening is
+  expressible in the module D1 names, with no new module-cycle exposure.
+- **No time-based deadline anywhere in `src/core`** (R2).
+
+### On A2–A5, where I found nothing
+
+- **A2 (coherence).** Beyond R1, the seams the handoff flagged hold. D2's strict/regression modes and
+  D8's reproduction artifact agree on the manifest (`:659`, `:1639`, `:1722-1727`). D6.4's stream
+  exception and D7's parity invariant agree, given the vocabulary dependency D6 already states.
+  D4's clock routing and D5's hermeticity gate agree, including the non-obvious case: classifier 2
+  excludes `clock_now` precisely so that routing *into* it is not a rejection trigger (`:1398-1405`).
+  D1's interim widening and D5's exclusion rule agree on the exclusion itself; what they disagree
+  about is what an exclusion costs at run time, which is R1.
+- **A3 (implementability).** I found no decision that assumes something the recorded substrate limits
+  forbid. The interim widening's discard at `src/core/session.ail:662` is a known-broken call site
+  managed by profile exclusion, and under R1's fix it becomes unreachable in any conformant profile
+  rather than merely excluded — strictly better.
+- **A4 (scope boundary).** Nothing in D1–D11 requires a durability or concurrency contract Motoko
+  lacks. D3's "all-or-nothing logical update" is a property of the simulator's modeled state, not a
+  claim about real atomicity, and D9's reopening triggers plus 007 D1.3's five verbatim triggers
+  still cover the cases that would invalidate the exclusion.
+- **A5 (Status honesty).** Accurate and verifiable on the numbers, with the single exception of R4.
+
+### Residual risk
+
+1. **R1's fix narrows the interim profile to "no extensions installed" for every checked-in
+   configuration.** That is the honest position and the ADR half-states it already (`:1270`), but it
+   means the interim milestone delivers no extension coverage at all, and the plan should be written
+   knowing that rather than discovering it.
+2. **Necessity remains manually reviewed**, and under the empty-intersection rule a wrong positive
+   *shrinks* the reachable set silently. The ADR names this (`:1044-1050`); it stays the largest
+   correctness hole in the deferred layer, and it is not closed by anything R1–R4 propose.
+3. **The three rowless ABI slots are coverable only by assumption**, resting on the runtime
+   hermeticity probe rather than the type system (`:1203-1206`). After R1's fix, every installed
+   extension must cover at least one of exactly those three slots — so the floor's only satisfiable
+   form depends entirely on that assumption. The ADR discloses it; it is worth the plan re-testing it
+   against the record-field propagation gap before the first covering profile ships.
+4. **I did not re-verify** the three deferred mechanisms' internal specifications, classifier 1's
+   implementation beyond running it and its selftest, anchor precision, or the upstream blocker —
+   all out of scope by the handoff.
+
+### Accept / revise recommendation
+
+**Accept with conditions**: R1, R2, R3, R4. None reopens a decision; R1 and R2 correct a claim and a
+recommendation that do not survive contact with the source, and both fixes make the architecture
+smaller. The external prerequisite is unchanged and tracked separately: the upstream recorded-stream
+API must land in a released AILANG, the toolchain must be repinned, and D1's positive integration
+probe must pass. The fork prototype does not satisfy it, and nothing in this review touches it.
+
+### Independent Codex verification addendum
+
+_Reviewer: OpenAI Codex (model: `GPT-5`), 2026-08-02. Commit
+`a0d4edbc74c1e2632b413d3f2a6f88421e8f7a2a`. The twentieth review section above was already present
+as uncommitted work when this verification began. It is preserved verbatim; this additive note records
+an independent disposition without creating a false twenty-first `## Review Comments` section._
+
+#### Recommendation
+
+**Accept with conditions.** D1–D11 are a sound, implementable architecture, and the three detector
+deferrals are legitimate rather than goalpost-moving. Three finite corrections are required before
+the ADR moves to Accepted:
+
+1. Correct the fully-excluded-extension semantics and interim-profile consequence (R1).
+2. Reconcile the automated-gate promise with D4's expressly manual attribution exception (R2).
+3. Remove the now-discharged independent-review blocker from the current dependency/status framing
+   (R3).
+
+None changes the selected architecture. The upstream recorded-stream release, repin, and positive
+integration probe remain a separate external prerequisite; the fork prototype clears none of them.
+
+#### R1. A fully excluded installed extension is fail-closed, not inert, so the stated interim profile cannot complete the name-adoption corpus
+
+**Defect.** D1 and D5 call a fully excluded installed extension “conformant and inert”
+(`:379-386`, `:455-461`, `:1123-1130`), but the same decisions require dispatch to any excluded hook
+to return `HarnessFailure`; ordinary prompt, budget, and pre-step dispatch visits every installed
+extension, so an installed `compaction_ai` with all eight hooks excluded cannot produce the completed
+`SystemRun` corpus D11 requires.
+
+**Grounding.** `src/core/ext/runtime.ail:201-229,234-275` folds build-prompt, budget, and pre-step
+dispatch over `rt.registry.hooks` without an extension-level skip;
+`packages/motoko-ext-compaction-ai/register.ail:97-109` registers all of those hooks; and
+`src/core/session.ail:1696-1699` invokes pre-step dispatch on the model path. This directly conflicts
+with the claimed inertness and with the checked-configuration consequence at `:455-461` and
+`:1904-1909`.
+
+**Action.** State that exclusion is fail-closed, not inert. A name-eligible interim profile must omit
+an extension whose always-dispatched hooks are excluded (for the present case, remove
+`compaction_ai` from the profile's installed-extension list), unless a real pre-dispatch omission
+mechanism is first designed and implemented. Align D1, D5, the acceptance row, and Consequences; do
+not delete the general exclusion mechanism, which remains useful for conditional paths and negative
+conformance probes.
+
+#### R2. The acceptance table promises complete automation while D4 and the gate table expressly permit manual attribution evidence
+
+**Defect.** The acceptance preamble says every answer is supported by an automated gate
+(`:1781-1784`), while D4 makes attribution necessity a named-reviewer exception (`:1044-1050`) and
+the deferred-mechanism criterion repeats that exception (`:1761`).
+
+**Grounding.** Those three clauses give mutually exclusive answers about whether a profile may cite a
+manually accepted site-to-hook row before the interprocedural validator exists; this bears directly
+on the clock-routing and hermeticity answers at `:1790-1792`.
+
+**Action.** Either qualify the preamble with the already-declared manual exception, or require the
+interprocedural validator before name adoption. The conservative no-table fallback—classifying every
+such site as unconditional core—also remains valid and fully automated.
+
+#### R3. The current dependency block retains the independent-review blocker that the Status block retires and this review discharges
+
+**Defect.** The Status block says the only remaining acceptance blocker is external (`:11-30`), but
+`Depends on` still lists “an independent review” as a current blocker (`:126-127`), and the D5
+verification marker still describes the built replacement detector as unverified (`:1470-1475`).
+
+**Grounding.** At the reviewed commit these are substantive blocker statements, not dated review
+history. This scoped architecture review supplies the independent review, and execution of
+`make effect_inventory` plus `make effect_inventory_selftest` met classifier 1's published criterion:
+zero unresolved imported modules and `agree=43 disagree=0`.
+
+**Action.** Remove the current independent-review blocker and retire or date the D5 marker. Keep the
+three deferred mechanisms as name-adoption blockers and the released upstream API as the separate
+external prerequisite.
+
+#### Disposition of the two other conditions proposed above
+
+- **The proposed D4 time-seam condition is not a finding.** D1 already requires typed native and
+  delegated tool requests carrying deadline information (`:573-592`), and D4 explicitly places real
+  shell/process timeout enforcement behind the live adapter while the deterministic adapter compares
+  modeled completion time to that deadline (`:915-925`). `src/core/env_client.ail:14-15,31-36`
+  demonstrates the existing production shape—a timeout-bearing request whose enforcement is outside
+  the AILANG driver—and `src/core/tool_catalog.ail:53` exposes a core `timeout_secs` request field.
+  Moving that fact into the D1 boundary is the implementation D4 calls for; its present location is
+  not an absent or unimplementable seam.
+- **The proposed expansion of the four-mechanism table is not a finding.** The table explicitly scopes
+  itself to detection/validation mechanisms (`:1745-1757`), not every unbuilt architecture artifact.
+  D3's fault catalogue and D6's event vocabulary are first-class architecture components with their
+  own fail-closed acceptance contracts, not omitted classifiers. Treating them as two more rows would
+  conflate implementation components with the detector layer the deferral section deliberately
+  isolates.
+
+#### What I re-ran and confirmed
+
+- At commit `a0d4edb`, the ADR has 9,734 lines, exactly 19 `## Review Comments` sections, and 154
+  `### Rn.` findings. The paired delta totals are `15, 12, 16, 16, 17, 19, 20`; the divergence claim
+  is correct.
+- `make effect_inventory` exited 0 with matching toolchain/scan-root commit `3b52a24d`, 25 modules in
+  the union, 21 imported, 13 effect-bearing, 8 proven effect-free, and the sole interface failure
+  (`std/secret`, `MOD010`) resolved by the textual fallback. `make effect_inventory_selftest` reported
+  `agree=43 disagree=0`.
+- `rg -n '\.ai_step\(' src packages -g '*.ail'` returned exactly the two settled call sites;
+  `rg -n 'clock_now\(' src packages -g '*.ail'` returned only four `noop_clock_now` declarations and
+  no `ExtPorts.clock_now` call.
+- D2/D8 agree on exact-program replay plus the execution manifest; D4/D5 agree on a single explicit
+  clock and fail-closed ambient-effect handling; D6/D7 agree on returned-trace authority and the
+  explicit stream-parity exception. Beyond R1, the interim provider-state widening and extension
+  exclusion rule cohere.
+- No decision assumes physical durability or concurrent ledger mutation. D3's logical commit/no-commit
+  state is simulator state, and D9 carries the accepted reopening triggers for concurrency.
+- If any deferred mechanism proves unbuildable, D1–D11 remain the right architecture: classifier 2
+  can conservatively force extension omission/full exclusion, the attribution table can fall back to
+  unconditional-core classification, and an unavailable carve-out validator can reject all
+  zero-coverage installed extensions. The stated acceptance criteria are sufficient to discharge the
+  narrower mechanisms when built.
+
+#### Residual risk
+
+- The first honest interim name-eligible profile has no `compaction_ai` and may have no extension
+  behavior at all; extension coverage waits on narrower ABI rows or the world-token ABI major.
+- Until the attribution-necessity validator exists, a false manual attribution can silently shrink a
+  profile's reachable set. The ADR discloses this; using the unconditional-core fallback avoids it at
+  the cost of more routing work.
+- Classifier 2, the attribution mechanism, and coverage-floor validation were assessed only at their
+  acceptance boundaries, not internally specified or prototyped, per the review scope.
