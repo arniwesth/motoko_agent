@@ -42,6 +42,7 @@ import src/core/tool_contract (call_to_json)
 import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (tool_call_to_envelope)
 import src/core/types (Msg)
+import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision)
@@ -1472,16 +1473,24 @@ func any_writefile_attempt(msgs: [Message]) -> bool {
 --
 -- The MaxSteps discrimination matches on the message text because that is the
 -- only thing distinguishing the two Internal failures step_machine emits: the
--- step-budget one and the approval-without-pending-call one share a code. This
--- preserves the pre-existing behaviour exactly rather than changing it — but it
--- is a real fragility, since an edit to that message string in step_machine
--- would silently reclassify max-steps runs as internal failures. Giving the
--- step-budget Fail its own code would fix it and would change the AIError code
--- callers see, which is a compatibility decision this item does not own.
+-- step-budget one and the approval-without-pending-call one share a code.
+--
+-- WI-A7 DECIDED this rather than leaving it as A9's noted fragility. The
+-- message is no longer a literal on either side: both this matcher and the
+-- `Fail` in step_machine reference `max_steps_discriminator_message()` from the
+-- D3 fault catalogue, so an edit to it is a single edit that cannot
+-- desynchronise the two. The `Internal` CODE is deliberately unchanged — A9
+-- declined the code change because it is caller-visible, and grounding it for
+-- A7 found the consequence is larger than that: the code is emitted as an
+-- `error` wire event (`ErrorEvent { code: e.code }`, :2506 and :2576) that the
+-- TUI consumes, so a new code would change a wire event on every max-steps run.
+-- What remains open, stated rather than implied: the discrimination is still by
+-- message rather than by type, so a THIRD Internal failure sharing this message
+-- would be misclassified. Closing that needs the compatibility decision above.
 pure func decision_fail_reason(code: string, message: string) -> TerminationReason {
   if code == "BudgetExceeded" then TermBudgetExhausted
   else if code == "ContextExhausted" then TermCompactionExhausted
-  else if code == "Internal" && message == "v2 loop: step budget exhausted" then TermMaxSteps
+  else if code == "Internal" && message == max_steps_discriminator_message() then TermMaxSteps
   else TermInternalFailure
 }
 

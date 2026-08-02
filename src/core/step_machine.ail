@@ -31,6 +31,7 @@ import src/core/phase_vocab (
   checkpoint_would_relieve,
   project
 )
+import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/recovery (persist_nudge_message)
 
 pure func plan_native(calls: [ToolCall]) -> [ToolPlanEntry] {
@@ -90,7 +91,15 @@ func should_checkpoint(s: StepState, pol: StepPolicy) -> bool {
 
 func call_model_or_fail(s: StepState, pol: StepPolicy) -> StepDecision {
   if pol.step_budget > 0 && s.step_idx >= pol.step_budget
-  then Fail({ code: "Internal", message: "v2 loop: step budget exhausted", retryable: false })
+  -- WI-A7 owns this string. It is the ONLY thing separating a max-steps run
+  -- from an internal driver failure downstream, because this `Fail` and the
+  -- approval-without-pending-call `Fail` above carry the same `Internal` code —
+  -- and giving this one its own code would change the `code` field of the
+  -- `error` wire event the TUI consumes on every max-steps run, which is a
+  -- compatibility decision D3 does not own. So the literal lives once, in the
+  -- catalogue, and `session.decision_fail_reason` matches against that same
+  -- constant. Editing it is now a single edit that cannot desynchronise the two.
+  then Fail({ code: "Internal", message: max_steps_discriminator_message(), retryable: false })
   else if pol.max_cost_millicents > 0 && pol.cost_metered && s.totals.cost_millicents >= pol.max_cost_millicents
   then Fail({ code: "BudgetExceeded", message: cost_cap_message(s.totals.cost_millicents, pol.max_cost_millicents), retryable: false })
   else if should_checkpoint(s, pol)

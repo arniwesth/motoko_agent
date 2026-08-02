@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -113,6 +113,47 @@ profile_coverage:
 		echo "  ✓ all_hook_slots() enumerates all $$n ABI hook slots"; \
 	fi; \
 	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
+
+# D3's fault catalogue (WI-A7). Three checks:
+#
+#   1. The acceptance script. Completeness of the SHIPPED catalogue against D3's
+#      table, and the reconciliation of the three tool `fault_class` names
+#      observed on the wire rather than read out of the source — the catalogue
+#      adopted the strings tool_phase already emitted, so the only thing worth
+#      asserting is that the two cannot drift apart again.
+#
+#   2. 007 D1.3's PHYSICAL-FAULT TRIPWIRE, made executable. D3 excludes
+#      torn/partial physical writes from scope and binds that exclusion to
+#      accepted 007 D1.3, carrying its five reopen triggers verbatim: a
+#      crash-recovery, fsync, WAL, resume-from-ledger or replicated-state
+#      correctness contract. Any one of those gives Motoko a physical durability
+#      contract it does not have today, and the moment it has one the exclusion
+#      stops being a scope decision and becomes an untested gap. The tree has
+#      zero hits at baseline, so this fires on the first one.
+#
+#   3. The validator's own unit tests, including the set-completeness cases: an
+#      empty catalogue must fail, and so must one whose every remaining row is
+#      perfect but which omits a single required class.
+.PHONY: fault_catalogue
+fault_catalogue:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/fault_catalogue_dst.ail < /dev/null; \
+	hits=$$(grep -rniE 'fsync|write-ahead log|resume-from-ledger|replicated-state' \
+	          src packages --include=*.ail | grep -v 'dst_fault_catalogue.ail' | wc -l); \
+	if [ "$$hits" -ne 0 ]; then \
+		echo "FAIL: $$hits site(s) suggest a physical durability contract. D3 excludes"; \
+		echo "      torn/partial physical writes and binds that exclusion to accepted"; \
+		echo "      007 D1.3, whose reopen triggers are crash-recovery, fsync, WAL,"; \
+		echo "      resume-from-ledger and replicated-state. Reopen the scope decision"; \
+		echo "      before adding one — the physical-fault exclusion has just become an"; \
+		echo "      untested gap rather than a scope choice."; \
+		grep -rniE 'fsync|write-ahead log|resume-from-ledger|replicated-state' \
+		  src packages --include=*.ail | grep -v 'dst_fault_catalogue.ail'; \
+		exit 1; \
+	else \
+		echo "  ✓ no physical durability contract in the tree (007 D1.3 tripwire clear)"; \
+	fi; \
+	ailang test src/core/dst_fault_catalogue.ail > /dev/null && echo "  ✓ src/core/dst_fault_catalogue.ail"
 
 # WI-A12's advancement + trace-completeness gate, landed BEFORE the threading it
 # watches — the plan's binding sequencing rule. The script header carries the

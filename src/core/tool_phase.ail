@@ -31,6 +31,11 @@ import src/core/phase_vocab (
   tool_result_message
 )
 import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, WorldState, ToolInvocation, ToolExecution, ToolOutcome, ToolCompleted, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded)
+import src/core/dst_fault_catalogue (
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded
+)
 import src/core/tool_contract (ToolResultEnvelope)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for_v2)
@@ -227,19 +232,28 @@ pure func parse_timeout_ms(raw: string) -> int {
 -- model (and a trace reader) can tell an execution failure from a misaddressed
 -- answer from a late one. That discrimination is the whole point of D1's part
 -- 3; a string return collapsed all three into "some text".
-pure func tool_outcome_message(call: ToolCall, o: ToolOutcome) -> Message {
+--
+-- WI-A7: the three `fault_class` names are no longer literals here. They are
+-- D3's stable class ids for these three classes, and the catalogue
+-- (src/core/dst_fault_catalogue.ail) is their single source of truth — the
+-- catalogue ADOPTED these exact strings precisely because they already reached
+-- the model through this function, so this is a reference change with no wire
+-- change. Two vocabularies for one concept is the drift D3's "one catalogue is
+-- the single source of truth" exists to prevent, and nothing would have caught
+-- it: both spellings type-check and neither was validated.
+export pure func tool_outcome_message(call: ToolCall, o: ToolOutcome) -> Message {
   match o {
     ToolCompleted(c) => tool_result_message(call, c.content),
     ToolFailed(f) =>
-      tool_fault_message(call, "ToolFailed", encode(jo([
+      tool_fault_message(call, fault_class_tool_failed(), encode(jo([
         kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))
       ]))),
     ToolCorrelationMismatch(m) =>
-      tool_fault_message(call, "ToolCorrelationMismatch", encode(jo([
+      tool_fault_message(call, fault_class_tool_correlation_mismatch(), encode(jo([
         kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))
       ]))),
     ToolDeadlineExceeded(d) =>
-      tool_fault_message(call, "ToolDeadlineExceeded", encode(jo([
+      tool_fault_message(call, fault_class_tool_deadline_exceeded(), encode(jo([
         kv("tool_call_id", js(d.tool_call_id)),
         kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))),
         kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))
