@@ -9,22 +9,29 @@ recorded below) complete. The three verifications returned *Revise* and converge
 each delta round returned *Revise* and converged on another, twice overturning this side's own
 diagnosis. Every set is now corrected.
 
-**Two acceptance blockers remain, and they are different in kind.**
+**One acceptance blocker remains, and it is external.** The upstream recorded-stream API is specified
+and agreed but not shipped in a released binary. D1 requires it to land in a *release*, the toolchain
+to be repinned, and the positive integration probe to pass. A fork prototype does not satisfy this.
+Nine correction passes and fourteen delta reviews moved it exactly zero, because nothing in this
+repository can.
 
-1. **External substrate, not clearable here:** the upstream recorded-stream API is specified and
-   agreed but not shipped in a released binary. D1 requires it to land in a *release*, the toolchain
-   to be repinned, and the positive integration probe to pass. A fork prototype does not satisfy this.
-2. **Internal and open:** the ninth correction pass — recording that a declared row does not bound
-   effects through function-valued record fields, requiring carve-outs to be validated against the
-   classifier-2 inventory, specifying the attribution-necessity validator as its own obligation, and
-   demoting `ailang iface` from normative scanner to preferred input — post-dates the two delta
-   reviews of the eighth pass and has not been independently verified. D5's routing audit is not
-   citable as gate evidence until it is.
+**An earlier revision listed a second blocker — "the latest correction pass has not been independently
+verified" — and that was a mistake of kind, not of fact.** It is true after every pass by
+construction, so it regenerates with each edit and can never be discharged; carrying it as a peer of
+the external prerequisite made this ADR un-acceptable in principle. Measured across the loop it
+produced: findings per delta round of 15, 12, 16, 16, 17, 19, 20 — bottoming out at round two and
+rising monotonically after, while every individual round looked like progress. The retrospective is in
+`NOTE-review-loop-retrospective.md` and the standing discipline in
+`.agent/meta-decisions/measure-review-loop-convergence-and-build-detectors-instead-of-specifying-them.md`.
 
-Neither the correction set nor the acceptance state should be described as complete until (2) passes
-a delta review and (1) is an actual release event.
+What replaces it is a finite list: the three deferred gate mechanisms in *Gate mechanisms: built, and
+deferred*, each with a stated acceptance criterion. **Those block the DST name, not this ADR.** The
+architecture they sit under — D1–D11 — has been re-derived and confirmed by every round since the
+F1–F6 verifications and reopened by none.
 
-**What is required next is a delta review of the ninth correction pass, not another full round.**
+**What is required next is not another delta review of a correction pass.** The loop those rounds
+ran has been closed deliberately; see the Status note above. What remains is a scoped architecture
+review if one is wanted, the three deferred mechanisms, and the external release event.
 F1, F2, F3, F5, F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were
 each independently confirmed by all three verifications, and D6.1's zero-`RunSummary` claim by two of
 the three. The fourteen delta reviews additionally confirmed D4's clock count (13) and routing state,
@@ -1345,116 +1352,41 @@ requirement is replaced by three ordered obligations:
    other sees, and specifying only the first is what left D1's extension-model-path rule without a
    detector.
 
-   ***Classifier 1 — effect-bearing target modules, derived from two sources and reconciled.*** The
-   detection set is the **union** of:
+   ***Classifier 1 — effect-bearing target modules. Built, not specified.***
+   `tools/effect-inventory/derive.py`, run by `make effect_inventory`. **This obligation was
+   rewritten four times in prose and found fail-open every time; it is now a program, and the
+   program is the specification.** What the ADR fixes is the *contract*, not the implementation:
 
-   - **the builtin surface**, obtained by filtering `ailang builtins list -json` on
-     `is_pure == false` and projecting the `module` field (21 modules on the pin); and
-   - **the pinned stdlib's own source**, scanned for exported declarations carrying a non-empty
-     effect row, recursively over `std/**/*.ail` in the toolchain tree.
+   - **The detection set is the union of two derivations** — the builtin projection
+     (`ailang builtins list -json`, `is_pure == false`, project `module`) and a parsed scan of the
+     pinned stdlib source. Neither alone is sufficient: on the pin the union is 25 modules, of which
+     `std/extension` and `std/sem` are **source-only**, and `std/sem` is reached from
+     `src/core/rpc.ail:200` at `! {SharedMem}`. A builtin-only classifier certifies a clean routing
+     inventory over that read.
+   - **The gate is the reconciliation, not the derivation.** Every `std/*` module imported under the
+     in-profile roots must be in the union or *proven* effect-free by both derivations. Anything else
+     fails closed. On the pin: 21 imported, 13 effect-bearing, 8 proven effect-free, 0 unresolved.
+   - **The derived set is toolchain-specific.** It is recorded with the profile or execution manifest
+     alongside the resolved scan-root commit, and the tool refuses to run when the scan root and the
+     executing compiler disagree. Re-derivation is a required step of every repin.
+   - **Soundness boundary**, unchanged and still load-bearing: it sees literal ambient imports and
+     call names inside the scanned AILANG tree; it does **not** see effects performed outside that
+     tree (TypeScript children, MCP subprocesses, shelled binaries); it does **not** decide
+     reachability — it enumerates sites and the profile decides scope (D4); and it does **not** reach
+     AILANG source outside the scan roots, so a profile installing a registry-resolved package must
+     extend the roots through the resolved lock graph or fail validation closed.
+   - **Where a parsed interface cannot be produced, a signature-scoped textual fallback runs and the
+     file is never skipped**, because a skipped file is a silent fail-open. `make
+     effect_inventory_selftest` cross-validates that fallback against `ailang iface` on every file
+     where both run — currently 43 of 44 agree, 0 disagree — and that cross-check is what licenses
+     the fallback. The remaining file, `std/secret.ail`, fails `MOD010` and is resolved textually.
 
-   **Four things about that scan are load-bearing, and an earlier revision got all four wrong:**
-
-   - **Signature-scoped, not line-scoped.** `export func` signatures wrap. A line-anchored
-     `export func … ! {…}` pattern scores **zero** matches on `std/process`, whose `exec` puts the
-     effect row on the third line; sixteen such multi-line effectful exports exist across `ai`,
-     `net`, `process`, `smoke`, and `zip`. The scan runs on a signature-normalised stream or a parsed
-     interface, not on raw lines.
-   - **`export pure func` is also an exported declaration form**, and the pin accepts it with a
-     non-empty row (`export pure func sanitizeBody(…) ! {Declassify}`). Match exported declarations,
-     not the literal token `export func`.
-   - **Effect *variables* are not effects.** `std/list`'s `mapE`, `filterE`, `foldlE`, `flatMapE`,
-     and `forEachE` are `! {e}` — effect-polymorphic. A "non-empty row" rule adds `std/list` to the
-     detection set and makes every `std/list` import a fail-closed triage candidate, which is the
-     exact symptom this decision names as a badly-built gate. Exclude rows whose every element is a
-     lower-case effect variable.
-   - **Recursive walk.** `std/*.ail` misses `std/ai/streaming.ail`, which has six effectful exports
-     — three `! {AI, Stream, Net}` and three `! {Stream}`, so *rows containing* `Stream`, not six
-     literal `! {Stream}` — and is carried by neither half of the union, since the builtin projection
-     has `std/ai` and not `std/ai/streaming`. Nothing imports it today. Use a real recursive walk:
-     literal `std/**/*.ail` under default Bash matches only the nested file and drops all 43
-     top-level ones.
-   - **The row that decides membership is the declaration's *result* row**, not a row appearing in a
-     parameter type. `std/ai.ail:318-324` declares `stepWithStream` with a callback parameter at
-     `! {IO}` and its own result at `! {AI}`; a signature-wide union would attribute `IO` to it. No
-     module's membership changes today — both it and `std/smoke` are already in the set for their own
-     rows — but a pure combinator module taking an effectful callback would be wrongly added, and
-     this is the fourth defect class found in this obligation, so the rule is stated rather than left
-     implicit.
-
-   **The preferred scanner is a parsed interface; it is not yet gate infrastructure, and calling it
-   normative would overstate what the repo has committed to.** `ailang iface` resolves both hard cases
-   on the pin — `stepWithStream` reports `effects: ["AI"]`, distinguishing the result row from the
-   callback's `! {IO}`, and `std/list`'s five `! {e}` exports report no concrete effects. A textual
-   scan must reproduce that behaviour to be used at all, and the four repairs above are what it takes.
-   Four things must be specified before either can be cited as gate evidence:
-
-   - **`effects` is the sole membership input; `pure` must be ignored.** The two fields contradict
-     each other — twelve effect-bearing `std/ai` exports (`call`, `callImage`, `callJson`, …) carry
-     `"pure": true` alongside a non-empty `effects`. A scanner keying on `pure` inverts the answer.
-   - **Invoke by absolute path and derive the module id from the path relative to the scan root.** The
-     documented `iface <module>` form does not work on the pin, and the emitted `module` field is a
-     mangled absolute path that varies with the scan root's location — unusable as the module name the
-     derived set is keyed on.
-   - **Handle the files it fails.** `std/secret.ail` fails with `MOD010` (module/path mismatch), and
-     the suggested `--relax-modules` remedy is not a flag `iface` accepts. **The failure is
-     environment-dependent in a way that will mislead**: AILANG auto-relaxes `MOD010` inside temporary
-     directories, so a probe run from `/tmp` reports 44/44 while the same walk from a normal working
-     directory reports 43/44. A gate does not run in `/tmp`. Every interface failure must fail closed
-     or fall back to the textual scan; neither may be silently skipped.
-   - **Neither scanner is wired into CI, the Makefile, or `scripts/` today.** The implementation plan
-     owns the complete 44-file walk, its reconciliation, and its wiring; until that exists the routing
-     audit remains non-citable, as the marker at the end of this section already states.
-
-   **The scan root is the pinned toolchain clone, and the derivation records its resolved commit.**
-   `~/.local/share/ailang` is not an arbitrary user path: `scripts/install-prerequisites.sh` and
-   `.github/workflows/verify-extensions.yml` create it identically at the pinned ref. But the
-   installer *returns early* when any installed AILANG satisfies `ailang.toml`'s `>=0.26.0` floor, so
-   the tree need not exist or match the executing compiler, and `AILANG_REF` is a mutable tag. The
-   derivation therefore records `git -C <scan root> rev-parse HEAD` alongside the derived set, and
-   **fails closed unless that value equals the executing compiler's stamped commit** — the `Full:`
-   field of `ailang --version`, which `scripts/install-prerequisites.sh` and
-   `.github/workflows/verify-extensions.yml` both set via `-X …/internal/version.Commit`. Naming the
-   comparand matters: an earlier revision said a mismatch "fails closed" without saying how a commit
-   is obtained from a binary.
-
-   **The builtin projection alone is insufficient, and this is the third revision of this obligation
-   to be corrected — the reason is recorded so a fourth does not rediscover it.** An effect-bearing
-   stdlib module need not have an effect-bearing *builtin row*, because its effects can be defined in
-   AILANG source rather than in the builtin registry. `std/sem` is the live case: its only builtin
-   rows are the pure `_embedding_decode`/`_embedding_encode`, so the projection omits the module
-   entirely — while `std/sem.ail:374,385` export `load_frame` and `store_frame` at `! {SharedMem}`.
-   `src/core/cache.ail:29` imports both and calls them at `:60` and `:75`, reached from
-   `src/core/rpc.ail:200` via `get_hint`. A classifier built on the projection alone certifies a clean
-   inventory over an unrouted `SharedMem` pair **in the core driver**. `std/extension` is a second
-   case (`requireWorkdirFile` at `! {FS}`, imported by `packages/motoko-ext-omnigraph/register.ail:4`).
-   The trap is subtle enough to have survived two reviews that prescribed the projection: every
-   derived row *does* carry a real `std/*` module, which is true and irrelevant — the question is
-   whether every effect-bearing module the repo **imports** has a derived row, and ten of the
-   twenty-one `std/*` modules this repo imports do not.
-
-   **A reconciliation check is therefore mandatory before the routing inventory may be cited**: compare
-   the derived set against every `std/*` module actually imported under the scan roots, and treat any
-   imported module not *proven* effect-free as a fail-closed candidate for manual triage. Proving a
-   module effect-free means all its builtin rows are pure **and** its source exports no function with
-   a non-empty effect row. This check is two commands and is what the previous two revisions both
-   skipped.
-
-   Deriving the set from the toolchain rather than hand-listing it matters: the two available
-   enumerations disagree — the builtin surface reports seventeen effect labels plus `Pure`, while
-   `ailang.toml`'s `[effects] max` permits twelve — so neither alone is a classifier, and a
-   hand-maintained list would silently rot. **`Pure` must be filtered out explicitly**; it is the
-   largest group, and a gate treating all eighteen output groups as effect-bearing would flag every
-   `std/list` import.
-
-   **The classifier is target modules, not symbols, and this is a correction.** An earlier revision
-   specified it "as module plus exported symbol". That is underivable from the named command and
-   fail-open if built literally: the emitted `name` is the *internal* builtin
-   (`_clock_now`, `_fs_readFile`), never the exported wrapper, so no row carries `now` — the name
-   Motoko source actually writes under `import std/clock (now)`. An implementer building
-   `(module, symbol)` pairs would scan for `_clock_now`, find nothing, and certify a clean inventory
-   over thirteen unrouted clock reads. That the `name` field is internal is precisely *why* the
-   matching rule below is target-module matching.
+   The traps that produced four failed specifications are encoded in the tool at the point each
+   matters, and are recorded here only so they are not re-derived: `effects` is the sole membership
+   input and `pure` contradicts it; module ids come from the path relative to the scan root, not
+   `iface`'s own `module` field; only the declaration's result row decides membership, never a
+   parameter's; effect variables are not effects; the walk is recursive; and the tool refuses to run
+   from a temporary directory, where AILANG auto-relaxes `MOD010` and hides the one real failure.
 
    ***Classifier 2 — `ExtPorts` fields that drop a cursor D1 requires threaded.*** The membership
    criterion is: **a field whose call is the extension-side entry to a core seam that D1 requires to
@@ -1809,6 +1741,42 @@ multi-actor simulation inside one run.
 | 5 Controlled time | D4 virtual latency, deadlines, and shared timeout semantics |
 | 6 Invariant oracle | D6 authoritative complete trace; D7 whole-execution invariants |
 | 7 Search and reproduction | D8 strict replay/artifacts; D11 fixed and rotating search corpora |
+
+## Gate mechanisms: built, and deferred
+
+This ADR names four detection/validation mechanisms. **One is built; three are deferred to the
+implementation plan behind the acceptance criteria below, and this section is the boundary between
+"the ADR decides it" and "the plan builds it."**
+
+The distinction matters because it was ignored for eight review rounds. A mechanism whose prose
+specification has been rewritten twice and is still found unsound is not under-specified — it is in
+the wrong artifact. Prose cannot establish that a scan is sound; only running it can. The four
+mechanisms below have collectively been rewritten thirteen times, and the one that was finally built
+was correct on its first run and immediately produced a fact four prose revisions had missed.
+
+| Mechanism | State | Acceptance criterion |
+|---|---|---|
+| **Classifier 1** — effect-bearing stdlib module set | **Built**: `tools/effect-inventory/derive.py`, `make effect_inventory` | Exits 0 on the profile's roots with zero unresolved modules; `make effect_inventory_selftest` reports zero disagreements; derived set and scan-root commit recorded in the manifest |
+| **Classifier 2** — `ExtPorts` typed-call inventory | Deferred | A type-aware field-call inventory over the in-profile roots, failing closed on every alias, wrapper, re-export, or computed access it cannot resolve. `grep -rn '\.ai_step('` is its conservative approximation, not its definition |
+| **Site-to-hook attribution table** | Deferred | Produced source-global with a per-row named reviewer; profile-load validation rejects unknown hook ids, stale bindings and malformed rows; necessity is manually reviewed and that is a **stated exception** to the automated-gate promise until the interprocedural validator exists |
+| **Coverage floor + carve-out validation** | Deferred | Profile load rejects a zero-coverage installed extension without a carve-out, and rejects a carve-out whose `(extension, field)` pair is absent from classifier 2's inventory at the same source revision |
+
+**None of the three deferred mechanisms blocks acceptance of this ADR.** They block the *name*: D5's
+routing audit is not citable as name-adoption gate evidence until each is built and passes its
+criterion above. That is a finite, checkable list, and it is deliberately not the same thing as "this
+correction pass has not been independently verified" — a condition that regenerates with every edit
+and can therefore never be discharged.
+
+**What acceptance of this ADR turns on is the architecture** — D1's world boundary and state
+threading, D2's discovery/replay split, D3's fault-as-outcome rule, D4's single virtual clock, D5's
+profile contract, D6's single terminal trace, D7–D11 — plus the one external prerequisite below. Every
+one of those has been re-derived and confirmed by every review round since the F1–F6 verifications,
+and none has been reopened in eight rounds.
+
+**The external prerequisite is unchanged and is the only thing on the critical path this project
+cannot route around:** the upstream recorded-stream API must land in a released AILANG, the toolchain
+must be repinned to it, and D1's positive integration probe must pass. A fork prototype does not
+satisfy it.
 
 ## Acceptance test for the name
 
