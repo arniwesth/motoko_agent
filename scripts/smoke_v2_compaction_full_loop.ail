@@ -20,7 +20,7 @@
 
 module scripts/smoke_v2_compaction_full_loop
 
-import std/io (println)
+import std/io (println, exit)
 import std/result (Result, Ok, Err)
 import std/string (repeat, contains, concat, substring, length)
 import std/ai (Message, AIError)
@@ -198,5 +198,9 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   report("unknown model fail-open (no compaction)",     r4);
   let r5 = test_multi_tool_tier1_elides();
   report("multi-tool tier 1 elides via structural extension", r5);
-  println("done")
+  if r1 && r2 && r3 && r4 && r5 then println("smoke_v2_compaction_full_loop PASS")
+  else {
+    let _ = println("smoke_v2_compaction_full_loop FAIL");
+    exit(1)
+  }
 }
