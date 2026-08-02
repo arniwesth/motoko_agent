@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -154,6 +154,60 @@ fault_catalogue:
 		echo "  ✓ no physical durability contract in the tree (007 D1.3 tripwire clear)"; \
 	fi; \
 	ailang test src/core/dst_fault_catalogue.ail > /dev/null && echo "  ✓ src/core/dst_fault_catalogue.ail"
+
+# D6's event vocabulary, the fifth recorded axis (WI-A8). Four checks:
+#
+#   1. The round trip. All 34 LedgerEvent variants — and BOTH StreamDelta
+#      branches, since that is the one variant whose wire name is a function of
+#      the payload — are projected through the live to_schema_v1 and compared
+#      against the artifact's declared wire name AND payload schema. Checking
+#      only the name would leave the payload schema decorative prose.
+#
+#   2. THREE STRUCTURAL GUARDS, because the artifact's completeness cannot be
+#      made a compile error on the pin. AILANG has no constructor enumeration,
+#      so a 35th LedgerEvent variant would force an arm in event_variant_id
+#      (which is a total match) but could be left out of the row list AND out of
+#      the sample list, and every check above would still pass — an artifact
+#      that validates while incomplete. The guards tie all three lists to the
+#      TYPE DECLARATION rather than to each other:
+#
+#        variants in `export type LedgerEvent`   == rows in event_vocabulary()
+#        rows in event_vocabulary()              == variants with a golden
+#
+#      The second also keeps the BYTE-level pinning total: the goldens in
+#      phase_vocab cover all 34 today, and this is what stops a new variant
+#      entering the vocabulary without one.
+#
+#   3. The vocabulary's own unit tests and phase_vocab's goldens.
+#
+# NOTE for anyone editing src/core/dst_event_vocabulary.ail: guard 2 counts
+# `variant: "` inside the body of `event_vocabulary()`. Writing that string in
+# prose inside that function turns this gate red for no reason — the same shape
+# as terminal_trace's `{ result:` counter over session.ail.
+.PHONY: event_vocabulary
+event_vocabulary:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/event_vocabulary_dst.ail < /dev/null; \
+	variants=$$(awk '/export type LedgerEvent/,/^$$/' src/core/phase_vocab.ail | grep -c '^  [|=]'); \
+	rows=$$(awk '/^export pure func event_vocabulary\(\)/,/^}/' src/core/dst_event_vocabulary.ail | grep -c 'variant: "'); \
+	goldens=$$(grep -oE 'golden\([A-Za-z0-9]+\(' src/core/phase_vocab.ail | sed 's/golden(//' | tr -d '(' | sort -u | wc -l); \
+	if [ "$$variants" -ne "$$rows" ]; then \
+		echo "FAIL: LedgerEvent declares $$variants variants but the vocabulary carries $$rows rows."; \
+		echo "      A variant with no row is an artifact that validates while incomplete —"; \
+		echo "      the wire name, payload schema and logical/display-only classification"; \
+		echo "      of that event are undeclared, and D6 fails closed on exactly that."; \
+		exit 1; \
+	fi; \
+	if [ "$$rows" -ne "$$goldens" ]; then \
+		echo "FAIL: $$rows vocabulary rows but only $$goldens variants have a byte-level"; \
+		echo "      golden in src/core/phase_vocab.ail. The wire projection is a"; \
+		echo "      compatibility surface (project 007); a variant in the vocabulary with"; \
+		echo "      no golden has its NAME pinned but not its BYTES."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ $$variants LedgerEvent variants == $$rows vocabulary rows == $$goldens golden-pinned variants"; \
+	ailang test src/core/dst_event_vocabulary.ail > /dev/null && echo "  ✓ src/core/dst_event_vocabulary.ail"; \
+	ailang test src/core/phase_vocab.ail > /dev/null && echo "  ✓ src/core/phase_vocab.ail (goldens)"
 
 # WI-A12's advancement + trace-completeness gate, landed BEFORE the threading it
 # watches — the plan's binding sequencing rule. The script header carries the
