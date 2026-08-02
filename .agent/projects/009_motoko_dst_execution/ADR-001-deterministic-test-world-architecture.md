@@ -7022,3 +7022,819 @@ attribution artifact is yet a complete enforceable gate, and R5-R8 leave normati
 contradictions. The upstream API blocker remains fully in force and unchanged: acceptance still
 requires a recorded-stream API in an actual AILANG release, this repository repinned to that release,
 and the positive integration probe passing; the fork prototype clears none of those conditions.**
+
+---
+
+## Review Comments
+
+**Reviewer:** independent delta review of the **sixth correction pass**, fresh session, no context
+from the correcting side.
+**Model:** `claude-opus-5`.
+**Date:** 2026-08-01.
+**Reviewed at:** `c45473c` (HEAD), covering `d1b5c14..c45473c` — the pass commit `6eca7fe` plus the
+delta-review-count follow-up. Baseline `d1b5c14` is the two fifth-pass delta reviews committed
+verbatim before any response. Section count verified by execution at both commits: thirteen
+`## Review Comments` sections at `6eca7fe` and at `c45473c`; **this is the fourteenth.**
+**Toolchain:** `AILANG v0.26.0` (commit `3b52a24`), matching `ailang.toml` `>=0.26.0` and
+`scripts/install-prerequisites.sh:39` `AILANG_REF="v0.26.0"`.
+**Verdict: Revise.** Four of the eight answered findings are correct and land. Three of the pass's
+own headline claims are false against the document it produced, and one fifth-pass finding was
+answered at a different site than the one it was raised against, leaving the defect verbatim.
+
+---
+
+### R1. Read as written, the extension-granularity predicate rejects the ADR's own "first *useful* interim profile" — both guards textually reference `ai_step`
+
+D1:366-388 makes the predicate "the extension **contains a classifier-2 field reference**", explicitly
+"textual", explicitly "decidable **today** from a grep", and explicitly *not* reachability. Run that
+grep. It does not select two packages; it selects five, and two of them are `empty_stop_guard` and
+`progress_contract_guard` — the exact pair D1:393-396 and ADR:1026 name as the first useful interim
+profile.
+
+```text
+$ for d in packages/*/; do n=$(grep -rl "ai_step" "$d" --include=*.ail | wc -l); \
+    [ "$n" -gt 0 ] && echo "$(basename $d): $n file(s)"; done
+motoko-ext-abi: 1 file(s)
+motoko-ext-compaction-ai: 1 file(s)
+motoko-ext-empty-stop-guard: 1 file(s)
+motoko-ext-progress-contract-guard: 1 file(s)
+motoko_ext_conformance: 2 file(s)
+
+$ grep -rn "ai_step" packages/motoko-ext-empty-stop-guard/
+packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail:52:func noop_ai_step(...)
+packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail:53:  Err("ext ai_step port unavailable")
+packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail:70:    ai_step: noop_ai_step,
+```
+
+`packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail:136,137,154` is the same
+shape: a `noop_ai_step` stub and an `ai_step:` field construction, both in the package's own unit-test
+scaffolding. Under D1's predicate as written, a profile installing either guard must exclude **all
+eight** hooks it registers or be rejected — which excludes `on_solver_candidate`, where both guards'
+entire behaviour lives (`register.ail:34-36` → `decide`). The narrow purpose-built profile is
+therefore not merely coverage-limited; it is inert or rejected.
+
+The pass avoided seeing this because it counted *call* sites, not references. **ADR:1181 states "the
+only two `ai_step` references are `packages/motoko-ext-compaction-ai/compaction_ai.ail:106` and
+`packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:90`". That claim is false as written**;
+it is true only of `ctx.ports.ai_step(` call sites:
+
+```text
+$ grep -rn "\.ai_step(" src packages --include=*.ail
+packages/motoko-ext-compaction-ai/compaction_ai.ail:106:  match ctx.ports.ai_step(model, prompt_msgs) {
+packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:90:  let summary = match ctx.ports.ai_step(ctx.model, msgs) {
+```
+
+So the rule is decidable from a grep, as claimed — and the grep decides the wrong thing. The coarse
+rule's stated virtue (decidability) and its stated cost ("it costs only the ability to keep one hook
+of a referencing extension", D1:378) are both mis-stated: the cost is every hook of five packages,
+including both guards and the ABI package itself.
+
+This also answers the scope question the pass left open. `motoko-ext-abi` is not an extension and
+`motoko_ext_conformance` is not registrable — `grep -n conformance src/core/ext/registry_generated.ail`
+returns nothing — but the ADR never defines which packages the predicate ranges over, so nothing in
+the text excludes them.
+
+**Action:** decide, in one sentence, whether the predicate ranges over *field-access sites on an
+`ExtPorts`-typed value* (`ctx.ports.ai_step`, two sites) or over *any textual occurrence of the field
+name* (five packages), and make D1:378, D1:393, D5:1013-1017, ADR:1181 and the acceptance row all say
+the chosen one. If it is the former, "textual reference" is the wrong name for it and the grep must be
+specified as `\.<field>(` on an `ExtPorts` binding — which reintroduces exactly the alias/wrapper
+blindness classifier 2's matcher-boundary paragraph (ADR:1174-1183) already concedes. Also state
+whether non-registrable packages (`motoko-ext-abi`, `motoko_ext_conformance`) are in scope.
+
+---
+
+### R2. The fifth pass's R2 Action was applied to classifier 2 but not to the D5 bullet it cited by line number; the self-defeating clock contradiction survives verbatim
+
+The fifth-pass review at ADR:6189-6213 located the contradiction precisely — "D5:980-982 then fails
+profile-definition validation closed 'when an installed extension references a non-world-mediated
+`ExtPorts` field from a hook the profile has not excluded'… The prescribed remedy triggers the
+prescribed rejection, six lines apart" — and its Action required reconciling that bullet. The pass
+adopted the reviewer's replacement criterion into classifier 2 (ADR:1155-1160, verbatim from the
+Action's wording) and **did not touch the cited bullet**:
+
+```text
+$ git show 6eca7fe -- .../ADR-001-*.md | grep -c "non-world-mediated .ExtPorts. field from a hook"
+0
+$ git show d1b5c14:.../ADR-001-*.md | grep -n "non-world-mediated \`ExtPorts\` field from a hook"
+982:  non-world-mediated `ExtPorts` field from a hook the profile has not excluded** (classifier 2).
+```
+
+At HEAD it is ADR:1055-1056, three lines below the clock bullet at ADR:1048-1051 that makes routing
+`compose`'s eight reads **into** `ExtPorts.clock_now` a conformance precondition. `clock_now` is a
+non-world-mediated field; the bullet therefore rejects the profile that does what the bullet above it
+requires. The contradiction the pass diagnosed at length in classifier 2 ("under that reading the
+clock bullet above becomes self-defeating", ADR:1163-1167) is still live at the site the reviewer
+named. The same bullet is also still **per-hook** ("from a hook the profile has not excluded"), not
+extension-granularity.
+
+**Action:** rewrite ADR:1055-1056 to the adopted predicate — installed extension, classifier-2 field,
+extension granularity — and drop "non-world-mediated" from it entirely, since that phrase is now the
+name of a rejected membership criterion.
+
+---
+
+### R3. The Status block still carries the abandoned "every hook reaching the port" predicate, in the paragraph that asserts the rule "is now stated once"
+
+ADR:41-44:
+
+> exclusion costs *coverage*, not conformance. The rule is now stated once, in D5's vocabulary — every
+> hook **reaching the port** must be an explicitly excluded hook, and installing such an extension
+> *without* excluding **those hooks** is a profile-definition rejection
+
+That is the call-graph phrasing D1:371-374 declares abandoned ("An earlier revision said 'every hook
+that *can reach* the port' — a call-graph property with no instrument"). Combined with R2, the pass's
+headline claim at D1:384-388 — "**One predicate, used everywhere** … The rule is **references**, at
+extension granularity, and **every site now says so**" — is false at two of six sites. Inventory at
+HEAD:
+
+| Site | Predicate |
+|---|---|
+| Status ADR:41-44 | "every hook **reaching the port**" — stale, call-graph |
+| D1 ADR:366-388 | references / every hook it registers — **adopted** |
+| D5 exclusion ADR:1013-1017 | references classifier-2 field / any hook it registers — **adopted** |
+| D5 validation bullet ADR:1055-1056 | "**non-world-mediated** field from **a hook** not excluded" — stale on both axes (R2) |
+| Acceptance row ADR:1519 | references classifier-2 field / registering an un-excluded hook — **adopted** |
+| Impl. Handoff ADR:1683 | every hook that extension registers — **adopted** |
+
+**Action:** restate ADR:41-44 in the adopted predicate, and change "stated once" to "stated at six
+sites, all in the same words" — which is what the pass actually attempted and is the honest claim.
+
+---
+
+### R4. `ExtensionHooks` fixes effect rows at the ABI, so the declared-not-performed rule makes the coverage floor vacuous *and* makes the pure-guard interim profile inert
+
+The sixth pass added two rules in the same edit and neither was checked against the ABI type they
+range over. `packages/motoko-ext-abi/types.ail:151-165` declares `ExtensionHooks` as a **closed record
+whose per-field effect rows are properties of the ABI, not of the extension**:
+
+```text
+$ sed -n '151,165p' packages/motoko-ext-abi/types.ail
+export type ExtensionHooks = {
+  id: string,
+  provided_tools: [string],
+  on_describe_tools: () -> [ToolSchema],                        <- pure, ABI-fixed
+  on_build_system_prompt: (ExtCtx) -> PromptPatch,              <- pure, ABI-fixed
+  on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS},
+  on_pre_step: ... ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+  on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,   <- pure, ABI-fixed
+  on_tool_handle: ... ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+  on_response_intercept: ... ! {IO, ...},
+  on_solver_candidate: ... ! {IO, ...}
+}
+```
+
+Three consequences, none of which the pass accounts for:
+
+1. **"Every hook it registers" is always all eight, for every extension** — the record is closed, so
+   the field set is not a per-extension fact and reading `register.ail` cannot narrow it. D1:377-378's
+   refinement path ("extend D4's site-to-hook attribution table to extension packages and have this
+   rule read it") is therefore the *only* possible refinement; `register.ail` will never supply one.
+2. **The coverage floor is vacuous.** D5:993-1001 requires "at least one hook of every extension it
+   installs" to be covered, where covered means effect-free or world-mediated (D5:979-984). Every
+   extension has three ABI-pure hooks by construction, and in this repo all three are constant
+   lambdas (`on_describe_tools: \_ . []` etc.). A profile that installs all fourteen configured
+   extensions and excludes every hook with behaviour satisfies the floor by covering
+   `on_describe_tools`. That is precisely the "installs everything and excludes everything"
+   configuration D5:993-995 says the floor exists to forbid.
+3. **The pure-guard interim profile is inert.** ADR:1026 says "pure guards and deterministic fixture
+   hooks may form the initial profile." Both guards' logic is `export **pure** func decide`
+   (`empty_stop_guard.ail:40`, `progress_contract_guard.ail:120`) — genuinely effect-free — but it is
+   reached only through `on_solver_candidate`, whose row the ABI fixes at the full nine effects
+   (`register.ail:34-36` in both packages). Under "classification reads *declared* effect rows"
+   (D5:1002-1012), that hook is effectful, hence not coverable, hence excludable only. There are no
+   pure guards under the pass's own rule.
+
+**Action:** state the floor over *hooks the profile classifies as covered and that carry behaviour*,
+or over a named minimum set, not "at least one hook" — otherwise delete it, because as written it
+constrains nothing. Separately, either carve the three ABI-pure slots out of the declared-effects rule
+explicitly, or withdraw ADR:1026's "pure guards … may form the initial profile", which the rule
+contradicts.
+
+---
+
+### R5. The `ai_step` exemption from the coverage floor has no slot in the profile-definition record and no clause in the acceptance row, so the acceptance gate as written fails all fourteen checked-in configurations
+
+D5:998-1000 and the Implementation Handoff at ADR:1683-1685 both require the exemption to be "named
+as such in the profile definition". The versioned profile definition at ADR:959-970 has eight
+bullets, and none of them is an exemption slot — the closest, "included extension ids and per-hook
+classifications (effect-free, world-mediated, or explicitly excluded)", records the exclusions but
+cannot distinguish a licensed floor exemption from a floor violation.
+
+The acceptance row is worse than ambient — it is contradictory. ADR:1519 ends:
+
+> and every installed extension has at least one covered hook (the coverage floor).
+
+with no exemption clause. All fourteen checked-in configurations install `compaction_ai`
+(settled, re-confirmed by every prior round), which under the extension-granularity rule must have all
+eight hooks excluded and therefore has **zero** covered hooks. The acceptance row as written fails
+every checked-in configuration, including the one D1:392-396 says is the intended interim disposition.
+
+**Action:** add a ninth bullet to ADR:959-970 — "coverage-floor exemptions, each naming the extension,
+the substrate limit that forces full exclusion, and the classifier-2 field involved" — and append
+"except extensions carrying a recorded coverage-floor exemption" to ADR:1519.
+
+---
+
+### R6. The attribution table's correctness condition is not checkable by the validator the same bullet list defines, and the text claims otherwise
+
+ADR:918-922 lists four load-time checks: site neither in table nor unconditional-core; entry naming an
+uninstalled or unknown hook; stale source-revision binding; malformed row. All four are schema,
+staleness and referential-integrity checks. None tests the correctness condition at ADR:911-914 —
+"installation of at least one attributed hook is a *necessary* condition of the site executing" —
+because necessity is a control-path property, which is what ADR:913-914 itself says the clause exists
+to avoid computing.
+
+Concrete failure: attribute `src/core/rpc.ail:200` (`get_hint`, reaching
+`src/core/cache.ail:60` → `std/sem.ail:374` at `! {SharedMem}`) to `test_dummy`. Row well-formed ✓,
+hook known ✓, binding fresh ✓, site present ✓ — validator passes. A profile not installing
+`test_dummy` now drops a live core `SharedMem` read from its profile-reachable set and certifies
+routing completeness over it. That is the exact fail-open clause 3 was rewritten to close, re-entering
+through the artifact.
+
+The sentence at ADR:920-922 — "which is why the correctness condition is stated as a checkable claim
+rather than left to the author's judgement" — is a non-sequitur. Stating a condition precisely does
+not make it machine-checkable, and the pass's own bullet list is the evidence.
+
+**Action:** say plainly that necessity is **manually reviewed and unchecked by the validator**, and
+require the profile definition to record a named reviewer per attribution row. If a mechanical check
+is wanted, the one available over-approximation is *syntactic dominance*: require every attributed
+site to be textually dominated by a guard mentioning the attributed hook id — which
+`src/core/ext/runtime.ail`'s `if is_test_dummy(h.id)` at `:206, :222, :239, :280, :368` already
+satisfies, and which is decidable by the same textual inventory D5 obligation 2 builds.
+
+---
+
+### R7. Classifier 1's stdlib source-scan pattern is both incomplete and over-broad, and the `std/*.ail` glob misses a subdirectory module
+
+The prescribed pattern is `export func … ! {…}` with a non-empty row over
+`~/.local/share/ailang/std/*.ail` (ADR:1116-1120). Three defects, all executed:
+
+**(a) Multi-line signatures are missed. `std/process` has zero matches.**
+
+```text
+$ cd ~/.local/share/ailang/std && grep -cE '^export func .*! \{[^}]+\}' process.ail
+0
+$ sed -n '59,62p' process.ail
+export func exec(
+  cmd: string, args: [string]
+) -> Result[ProcessOutput, ProcessError] ! {Process} {
+```
+
+Sixteen such multi-line effectful exports exist across `ai.ail`, `net.ail`, `process.ail`, `smoke.ail`
+and `zip.ail`. At HEAD the union rescues all of them — `std/process` is in the builtin projection — so
+this is not a live fail-open today. It is a fail-open *mechanism*, in the half of the classifier that
+was added precisely because the other half was found insufficient.
+
+**(b) Effect-*polymorphic* rows are counted as effect-bearing, and the module flagged is `std/list`.**
+
+```text
+$ grep -nE '^export func .*! \{[^}]+\}' list.ail
+193:export func mapE[a, b, e](f: (a) -> b ! {e}, xs: [a]) -> [b] ! {e} {
+204:export func filterE[a, e](p: (a) -> bool ! {e}, xs: [a]) -> [a] ! {e} {
+215:export func foldlE[a, b, e](f: (b, a) -> b ! {e}, acc: b, xs: [a]) -> b ! {e} {
+226:export func flatMapE[a, b, e](f: (a) -> [b] ! {e}, xs: [a]) -> [b] ! {e} {
+237:export func forEachE[a, e](f: (a) -> () ! {e}, xs: [a]) -> () ! {e} {
+```
+
+`e` is an effect variable, not an effect. The scan therefore adds `std/list` to the detection set, and
+the mandatory reconciliation then makes every `std/list` import a fail-closed triage candidate — the
+outcome ADR:1131-1133 names as the canonical symptom of a badly-built gate ("a gate treating all
+eighteen output groups as effect-bearing would flag every `std/list` import").
+
+**(c) The glob is `std/*.ail`; `std/ai/streaming.ail` is a subdirectory module with six `! {Stream}`
+exports (`:100,113,149,172,178,183`) and is matched by neither half of the union** — the builtin
+projection carries `std/ai`, not `std/ai/streaming`. No repo module imports it today
+(`grep -rnoE 'import +std/[a-z_]+/[a-z_]+' src packages` returns nothing), so this too is latent.
+
+**Reproducibility of the path is fine and should be said so in the ADR.** `~/.local/share/ailang` is
+not an arbitrary user-home location: it is a git clone at the pinned ref, created identically by
+`scripts/install-prerequisites.sh:569-579` and by `.github/workflows/verify-extensions.yml:70-72`.
+The residual risk is that `AILANG_REF="v0.26.0"` is a mutable tag and an existing clone is updated by
+`git checkout` rather than re-cloned.
+
+**Action:** (i) make the pattern signature-scoped rather than line-scoped, or state that the scan runs
+on a signature-normalised stream; (ii) exclude rows whose every element is a lower-case effect
+variable; (iii) glob `std/**/*.ail`; (iv) state in the ADR that the scan root is the pinned
+`install-prerequisites.sh` clone and require the derivation to record the resolved commit
+(`git -C ~/.local/share/ailang rev-parse HEAD`) alongside the derived set.
+
+---
+
+### R8. Anchors and arithmetic introduced by this pass — one range off by a line at each end, one count off by one
+
+Every anchor the pass introduced was re-derived. **These hold:** `~/.local/share/ailang/std/sem.ail:374,385`;
+`std/extension.ail:27`; `src/core/cache.ail:29,60,75`; `src/core/rpc.ail:200`;
+`packages/motoko-ext-omnigraph/register.ail:4`;
+`packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:90`;
+`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`; `packages/motoko-ext-compose/compose.ail:767`
+and the corrected `:761-790` (`on_response_intercept` closes at `:790`); and both
+`src/core/ext/runtime.ail` lists — guards at `206, 222, 239, 280, 368`, calls at `206, 222, 245, 287,
+374`, with `now()` at `:190`. The corrected `:761-790` and the guard/call separation are clean fixes.
+
+**Two defects:**
+
+- **ADR:392 / `register.ail:99-110`.** The eight-hook count is correct, but the range is not: line 99
+  is `provided_tools: []` (not a hook) and line 110 is the record's closing `}`. The eight hooks span
+  `:100-109`. The anchor was inherited verbatim from the fifth-pass review at ADR:6864 and never
+  re-derived.
+- **ADR:1007-1009 — "three of `compaction_ai`'s seven trivial hooks declare exactly that row".** True
+  of *that* row, but the conclusion drawn ("so they classify as effectful and need exclusion") applies
+  to **four**: `on_budget_plan` (`register.ail:102`) declares `! {Env, FS}`, which is also non-empty
+  and also not effect-free. Of the seven trivial hooks, three are pure and four are effectful.
+
+**Action:** `:100-109`; and "four of the seven trivial hooks declare a non-empty row — three the full
+nine-effect row, `on_budget_plan` `! {Env, FS}`".
+
+---
+
+### R9. D4 asserts the 4 / 12 / 13 split flatly and denies its derivability sixty lines later
+
+ADR:817-821 states without qualification that a profile installing neither `compose` nor `test_dummy`
+"has **four** sites to route", one installing `compose` "has **twelve**", and one installing both
+"all **thirteen**". ADR:925-930, added by this pass, says: "Until then 'four driver clock reads' is not
+a derivable number: without an attribution for `src/core/ext/runtime.ail:190`, the fail-closed default
+counts it as unconditional core and the driver obligation is five."
+
+The arithmetic itself survives — 4 + 8 = 12, +1 = 13 — and D4's count of 13 is settled. But the
+pre-table numbers are 5 / 13 / 13, which collapses the twelve-versus-thirteen distinction the table's
+third row exists to draw. One of the two passages must yield.
+
+**Action:** add "once the attribution table validates" to ADR:819, and change ADR:927 from "is not a
+derivable number" to "is not yet derived — pre-table the split is 5 / 13 / 13".
+
+---
+
+### R10. The coverage floor is asserted in the acceptance row with no producing artifact, and no reporting requirement anywhere
+
+Every other clause of ADR:1519-1521 names its evidence — the manifest, the exclusion list, D11's
+branch-reached counters read from D3's catalogue. The floor names none. D11's counters are
+fault-class and branch-reached (ADR:1480, 1527); nothing in D11 counts hooks, and no result field
+anywhere requires per-hook coverage to be reported. The floor is the only acceptance clause in the
+table that no artifact produces.
+
+**Action:** either require the run result to report covered/excluded hook counts per installed
+extension, or move the floor out of the acceptance table into D5 as a profile-definition well-formedness
+rule checked at load — which is where the rest of its family already lives.
+
+---
+
+## What is accurate
+
+Re-run and confirmed by execution at `c45473c` on pinned `v0.26.0`:
+
+- **Section count.** Thirteen `## Review Comments` sections at both `6eca7fe` and `c45473c`; the
+  follow-up commit's correction of the Status block from "six" to "**eight** independent delta reviews
+  (two each of the second, third, fourth, and fifth correction passes)" is **correct**, and
+  2 full + 3 verifications + 8 delta = 13 reconciles. The rest of the Status block is free of this
+  staleness class; its one surviving defect is R3, which is a content stale, not a count stale.
+- **Classifier 1's motivating case is real and correctly diagnosed.** `std/sem.ail:374,385` export
+  `load_frame`/`store_frame` at `! {SharedMem}`; `src/core/cache.ail:29` imports them and calls them at
+  `:60`/`:75`; `src/core/rpc.ail:200` reaches `get_hint`. `std/sem` is absent from the builtin
+  projection. The second case is real too: `std/extension.ail:27` `! {FS}`, imported at
+  `packages/motoko-ext-omnigraph/register.ail:4`.
+- **The 21 / 21 / 10 arithmetic.** The builtin projection yields exactly 21 modules; the repo imports
+  exactly 21 distinct `std/*` modules under `src` + `packages`; exactly **ten** of those have no
+  derived row (`std/bytes crypto datetime extension json list option result sem string`). The claim
+  at ADR:1128-1130 is confirmed to the number.
+- **The reconciliation recovers both live cases.** `std/sem` and `std/extension` are both in the
+  source-scan set. The seven remaining unmatched modules (`bytes crypto datetime json option result
+  string`) are provably effect-free by the ADR's own criterion — zero concrete effect rows anywhere in
+  their sources — so the check terminates rather than producing an unbounded triage list. Transitive
+  imports are handled by construction: the criterion is a property of the imported module's own
+  exported rows, and `std/sem`'s `{SharedMem}` row is what the scan reads.
+- **Anchors** — the eleven listed under R8 as holding, including the two corrections the pass made.
+- **`ExtPorts.clock_now` still has zero call sites; `ctx.ports.ai_step` still has exactly two.**
+- **Classifier 2's rewritten membership criterion is right**, and the argument for it (ADR:1163-1172)
+  is the strongest paragraph in the pass. `clock_now`, `proc_exec`, `env_get` lose no cursor;
+  `ai_step` returns `Result[string, string]` and cannot carry `Ports.model_step`'s successor. Retiring
+  "field by field" in favour of a single ABI major is also correct.
+- **Clause 3's necessity-not-sufficiency semantics** — not reopened; R6 is about the validator only.
+- **The separated guard/call line lists** and the `:761-790` correction are genuine anchor fixes.
+
+### Three explicit rulings the handoff asked for
+
+**A1 — are the extension-granularity rule and the coverage floor compatible? No, on two independent
+grounds, and the exception is not specified well enough to be one.** (i) The floor's stated purpose is
+defeated by the ABI, not by the exception: three hook slots are pure for every extension by
+`ExtensionHooks`'s type, so the floor is satisfiable by covering a constant-returning no-op (R4). (ii)
+The exception itself is ambient exactly as suspected — no slot in the profile-definition record at
+ADR:959-970, and no clause in the acceptance row at ADR:1519, which as written fails all fourteen
+checked-in configurations (R5). Separately, the coarse rule is what *creates* the collision: under
+per-hook granularity `compaction_ai`'s three ABI-pure hooks would satisfy the floor without any
+exception at all. **On the narrower question — is the coarse rule right as an interim gate? — yes in
+principle: it is decidable and it fails closed, and requiring the attribution-table refinement up
+front would have blocked the interim on an artifact that does not exist.** But its predicate must be
+disambiguated before it is a gate rather than a grep (R1), and its cost is mis-stated.
+
+**A2 — is classifier 1's source scan complete and reproducible? Reproducible yes; complete no.** The
+path is a pinned git clone used identically by the installer and by CI, so the derivation is
+reproducible on another machine — the ADR should say that rather than leave the path bare, and should
+record the resolved commit. Completeness fails on three counts, one of which (`std/list` via `! {e}`)
+produces a live false positive today and two of which (multi-line signatures, the `std/*.ail` glob) are
+latent fail-opens rescued only by the union (R7). **This is the fourth consecutive revision of this
+obligation to leave a completeness hole, and the pass's claim at ADR:1121-1123 that "the reason is
+recorded so a fourth does not rediscover it" is itself the fourth.**
+
+**A4 — is the attribution table's correctness condition checkable by its validator? No.** The four
+listed checks are schema, staleness and referential integrity; necessity is a control-path property
+the same section refuses to compute. The wrong-positive attribution is caught by nothing, and
+ADR:923-925 implies otherwise (R6). A mechanical over-approximation — syntactic dominance by a guard
+naming the hook id — is available and is what the ADR's own `is_test_dummy(h.id)` example exhibits.
+
+---
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. **R1** — disambiguate the classifier-2 reference predicate (field-access site vs. textual
+   occurrence) and scope it to registrable extension packages. Everything below depends on which
+   reading is chosen, and under the literal reading the ADR's own interim plan is unbuildable.
+2. **R3, R2** — propagate the chosen predicate to ADR:41-44 and ADR:1055-1056. R2 additionally removes
+   the surviving "non-world-mediated" criterion, without which the clock gate is unreachable.
+3. **R4** — restate or delete the coverage floor, and reconcile the declared-effects rule with
+   ADR:1026's "pure guards may form the initial profile", which it currently contradicts.
+4. **R5** — add the exemption slot to ADR:959-970 and the exemption clause to ADR:1519. Depends on 3.
+5. **R6** — say that necessity is manually reviewed, and either require a recorded reviewer or adopt
+   syntactic dominance as the mechanical check.
+6. **R7** — fix the scan pattern (signature-scoped, effect-variable exclusion, `std/**/*.ail`) and
+   record the scan root's resolved commit.
+7. **R8, R9, R10** — anchor range, the three-versus-four count, the 4/12/13 conditional, and the
+   floor's missing producer.
+
+**Belongs to the implementation plan, not this ADR:** building the attribution table and both
+classifiers in one change (already correctly scheduled at ADR:920-922); wiring either into CI, the
+Makefile or `scripts/` — neither is wired anywhere today; the successor detector that would relax the
+declared-effects rule; and extending the attribution table to extension packages, which R4(1)
+establishes is the only possible route to per-hook granularity.
+
+---
+
+## Accept / revise
+
+**Revise.** The pass's four substantive corrections — classifier 2's membership criterion, the
+declared-versus-performed ruling, the attribution table's D6 treatment, and the two anchor fixes — are
+correct and worth keeping; but R1 makes the pass's central new rule reject the profile the ADR is
+built around, R2 leaves a fifth-pass finding unfixed at the line it was raised against, R3 falsifies
+the pass's "every site now says so", and R4/R5 make the coverage floor simultaneously vacuous and
+unsatisfiable. **The upstream API blocker is untouched by any of this and remains fully in force:
+acceptance still requires the recorded-stream API in an actual AILANG release, this repository
+repinned to it, and the positive integration probe passing — `arniwesth/ailang`'s
+`stepWithStreamRecorded` on the `v0.31.0` tag is a prototype and clears none of those three.**
+
+---
+
+## Review Comments
+
+**Reviewer:** independent delta review of the **sixth correction pass**, performed from source in a
+fresh Codex session.
+**Model:** `GPT-5`.
+**Date:** 2026-08-01.
+**Reviewed at:** `c45473c95765debccae2f083e1a0b86deb1f827a`, covering
+`d1b5c14..c45473c` — correction commit `6eca7fe` plus the count-correction follow-up.
+**Section count:** thirteen committed `## Review Comments` sections at both `6eca7fe` and
+`c45473c`. A pre-existing uncommitted fourteenth section attributed to `claude-opus-5` was present
+when this review began; it was preserved verbatim, and the user explicitly authorized appending this
+independent review. **This is therefore the fifteenth section.**
+**Toolchain:** `AILANG v0.26.0`, commit
+`3b52a24d24431c372ed5605289ef039592209514`.
+**Verdict: Revise.** The classifier-2 membership correction, declared-row ruling, table scheduling,
+count follow-up, and changed anchors hold, but the new rejection rule, coverage floor, classifier-1
+scan, and attribution-table validation are not yet coherent enforceable gates.
+
+---
+
+### R1. The undefined meaning of “textual reference” makes the coarse rejection predicate select the proposed guard packages' own `ExtPorts` fixture construction
+
+**Defect:** Read literally, “an extension contains a classifier-2 field reference” includes the
+`ai_step:` record fields embedded in both proposed guard packages, forcing all eight of each guard's
+hooks to be excluded and making the ADR's first useful interim profile inert or rejected.
+
+**Grounding:** the broad textual inventory and the narrower access-call inventory are different:
+
+```text
+$ rg -n 'ai_step' packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail \
+    packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail
+packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail:52:func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail:53:  Err("ext ai_step port unavailable")
+packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail:70:    ai_step: noop_ai_step,
+packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail:136:func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail:137:  Err("ext ai_step port unavailable")
+packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail:154:    ai_step: noop_ai_step,
+
+$ rg -n '\.ai_step\(' src packages --glob '*.ail'
+packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:90:  let summary = match ctx.ports.ai_step(ctx.model, msgs) {
+packages/motoko-ext-compaction-ai/compaction_ai.ail:106:  match ctx.ports.ai_step(model, prompt_msgs) {
+```
+
+ADR:1181-1183's “only two `ai_step` references” is therefore true only of `.ai_step(` access calls,
+not of textual occurrences or record-field references. The package scope is also undefined:
+`motoko_ext_conformance` exports fixture hooks but is absent from `src/core/ext/registry_generated.ail`,
+while D5:1026 expressly contemplates deterministic fixture hooks in an initial profile.
+
+The hook set itself is decidable, but not for the reason D1 gives. All fifteen runtime
+`register_with_config` functions return the closed `ExtensionHooks` record at
+`packages/motoko-ext-abi/types.ail:151-165`, so every registration always has the same eight hook
+fields even if its values are selected conditionally. Five `register.ail` files delegate to
+`make_hooks`, so the fields are not always textually present in `register.ail`:
+
+```text
+$ rg -n '^[[:space:]]+make_hooks\(' packages/*/register.ail
+packages/motoko-ext-mcp/register.ail:10:  make_hooks(cfg)
+packages/motoko-ext-ailang-docs/register.ail:25:  make_hooks(workdir, timeout_ms, max_output_chars)
+packages/motoko-ext-exa-search/register.ail:20:  make_hooks(workdir, timeout_ms, max_output_chars)
+packages/motoko-ext-a2a/register.ail:11:  make_hooks(cfg)
+packages/motoko_scratchpad/register.ail:18:  make_hooks(timeout_secs)
+```
+
+**Action:** define classifier 2's matcher as an exact syntactic/typed operation — for example, a call
+through a classifier-2 field selected from an `ExtPorts`-typed value — and say whether field
+declarations, record construction, strings/comments, embedded unit scaffolding, ABI packages, and
+non-registry fixture packages are in scope. Cite the closed ABI, not `register.ail`, as the source of
+the eight-hook set. If arbitrary textual field occurrences are intended, withdraw the useful-guard
+profile claim because both guards match.
+
+---
+
+### R2. The pass's “one predicate, used everywhere” claim is false, and D5's surviving predicate still rejects the clock routing it requires
+
+**Defect:** Status, D1, D5 validation, and Consequences retain the abandoned reachability or
+“non-world-mediated” per-hook predicates, so the rule is neither extension-granular nor consistent
+and the D5 validation bullet still makes `ExtPorts.clock_now` self-defeating.
+
+**Grounding:** the committed body retains “hook reaching the port” at Status:42, “can reach
+`ExtPorts.ai_step`” at D1:353, “excluding its reaching hooks” at D1:360, “non-world-mediated
+`ExtPorts` field from a hook” at D5:1056, and “every hook that reaches the port” at
+Consequences:1634. Implementation Handoff:1683 instead uses the adopted “every hook that extension
+registers.”
+
+D5:1048-1051 requires a `compose` profile to route eight reads into `ExtPorts.clock_now`; the
+unchanged D5:1054-1056 bullet then rejects an un-excluded hook referencing that
+“non-world-mediated” field. D1:383-388's assertion that every site now says “references, at
+extension granularity” is contradicted inside the same normative body.
+
+**Action:** after resolving R1's matcher, replace the stale predicates at Status:41-44,
+D1:343-360, D5:1054-1056, and Consequences:1633-1634 with the same extension-granularity sentence
+already used at D5:1013-1018 and the acceptance row; remove “non-world-mediated” from classifier-2
+validation because classifier membership, not general port mediation, is the adopted criterion.
+
+---
+
+### R3. Rejecting attribution rows that name an uninstalled hook makes the table unable to prove that a hook-guarded site is absent
+
+**Defect:** The validator rejects an entry naming an uninstalled hook even though absence of that
+hook is exactly the fact clause 3 needs to remove the attributed site from a profile's reachable set.
+
+**Grounding:** D4:882-883 makes a core site reachable when it is attributed to an **installed** hook;
+D4:918-920 then fails profile load when a row names an **uninstalled** hook. The concrete consequence
+is stated by the ADR itself at D4:931-938: `src/core/ext/runtime.ail:190` is attributable to
+`test_dummy`, and no checked-in configuration installs `test_dummy`. Under the validator as written,
+the table cannot retain that attribution in those profiles; if it omits the row, D4:898-900 defaults
+the site into unconditional core. D4:926-929 therefore says the obligation is five, while the table
+at D4:817-821 states four without qualification.
+
+**Action:** make the attribution artifact source-global over **known** hook identities, permit rows
+whose known hooks are absent from a particular profile, and compute reachability by intersecting each
+row's hook set with the installed set. Reject unknown hook ids, not known-but-uninstalled ids. Then
+state the clock arithmetic conditionally: before a valid attribution table it is 5 / 13 / 13; after
+the `test_dummy` row validates it is 4 / 12 / 13.
+
+---
+
+### R4. The `ai_step` coverage-floor exception is ambient because neither the profile record nor the acceptance gate can represent it
+
+**Defect:** D5 requires the exception to be named in the profile definition, but the exhaustive
+profile record has no exemption field and the acceptance row unconditionally requires one covered
+hook per installed extension.
+
+**Grounding:** the versioned record at ADR:959-970 has eight bullets: identity, per-hook
+classification, adapter/parser boundaries, resources, projections, ambient policy, D3 waivers, and
+the attribution table. None records a coverage-floor exemption. D5:993-1000 names the `ai_step`
+exception, while ADR:1519 ends unconditionally with “every installed extension has at least one
+covered hook (the coverage floor).”
+
+An `ai_step`-referencing extension must have all eight hooks excluded under D1/D5 and therefore has
+zero covered hooks; the prose exception and automated acceptance row produce opposite results.
+D11:1477-1486 reports fault-class and recovery-branch counters, not hook coverage, and no other result
+field is named as the producer of floor evidence.
+
+**Action:** add a versioned `coverage_floor_exemptions` field, with extension id, classifier-2 field,
+and substrate reason; make profile-load validation consume it; add the same exception to ADR:1519;
+and require the result or manifest to report each installed extension's covered/excluded hook count
+and any applied exemption.
+
+---
+
+### R5. Declared-row classification makes the proposed pure-guard profile cover only ABI no-op slots, not either guard's behavior
+
+**Defect:** The closed ABI gives every extension three effect-free hook types, making the new floor
+easy to satisfy, while both guards' useful `on_solver_candidate` hook declares the full effect row
+and must be excluded under the pass's declared-not-performed rule.
+
+**Grounding:** `packages/motoko-ext-abi/types.ail:151-165` fixes
+`on_describe_tools`, `on_build_system_prompt`, and `on_tool_policy` without an effect row, but fixes
+`on_solver_candidate` at the full nine-effect row. The empty-stop guard registers the three pure
+slots at `packages/motoko-ext-empty-stop-guard/register.ail:27-28,31` and its behavioral
+`on_solver_candidate` at `:34-36` with
+`! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}`.
+
+`progress_contract_guard/register.ail:23-37` is identical in classification shape. D5:1002-1010
+forbids treating the performed-pure `decide` call as effect-free because classification reads the
+registered declaration. Thus the floor is syntactically satisfiable by a no-op pure slot while the
+only behavioral hook is excluded, contradicting D1:394-397 and D5:1026's claim that these pure guards
+can form the first useful profile.
+
+**Action:** define what useful hook coverage means rather than accepting any ABI slot: name at least
+one required covered behavioral hook per installed extension in the profile, and for the proposed
+guard profile either make `on_solver_candidate` classifiable as covered or withdraw the claim that
+the profile exercises the guards. Keep D11's fault/branch counters separate, but add a profile-load
+hook-coverage check and reported evidence for the acceptance row.
+
+---
+
+### R6. Classifier 1's source rule is neither complete over the language/toolchain tree nor reproducibly bound to the compiler being classified
+
+**Defect:** The flat `export func` scan misses accepted effectful declaration and module-path forms,
+does not define the treatment of effect variables, and reads a user-home checkout that the repository
+does not guarantee matches the executing compiler.
+
+**Grounding:** pinned v0.26.0 accepts `export pure func ... ! {Declassify}`, a declaration form outside
+the stated `export func` pattern:
+
+```text
+$ (cd /home/motoko/.local/share/ailang && env XDG_CACHE_HOME=/tmp/motoko_adr_review_cache ailang check examples/runnable/contracts/inbox_injection_v2.ail)
+→ Type checking examples/runnable/contracts/inbox_injection_v2.ail...
+→ Effect checking...
+
+✓ No errors found!
+
+$ rg -n '^export pure func.*! \{[^}]+' /home/motoko/.local/share/ailang/examples/runnable/contracts/inbox_injection_v2.ail
+39:export pure func sanitizeBody(rawBody: string<email>) -> string<sanitized> ! {Declassify}
+66:export pure func safeForward(rawEmail: string<email>, recipient: string) -> SendAction ! {Declassify}
+```
+
+The stdlib has a nested effect-bearing module excluded by `std/*.ail`:
+
+```text
+$ rg -n '^export func|^\) ->.*! \{' /home/motoko/.local/share/ailang/std/ai/streaming.ail
+100:export func openaiCompatStream(
+104:) -> Result[StreamConn, StreamErrorKind] ! {AI, Stream, Net} {
+113:export func anthropicStream(
+117:) -> Result[StreamConn, StreamErrorKind] ! {AI, Stream, Net} {
+149:export func callStream(
+153:) -> Result[string, AIError] ! {AI, Stream, Net} {
+172:export func onEvent(conn: StreamConn, handler: (StreamEvent) -> bool) -> unit ! {Stream} {
+178:export func runEventLoop(conn: StreamConn) -> unit ! {Stream} {
+183:export func disconnect(conn: StreamConn) -> unit ! {Stream} {
+```
+
+The “non-empty row” rule also selects effect variables rather than concrete ambient labels:
+
+```text
+$ rg -n '^export func.*! \{[a-z][^}]*\}' /home/motoko/.local/share/ailang/std/list.ail
+193:export func mapE[a, b, e](f: (a) -> b ! {e}, xs: [a]) -> [b] ! {e} {
+204:export func filterE[a, e](p: (a) -> bool ! {e}, xs: [a]) -> [a] ! {e} {
+215:export func foldlE[a, b, e](f: (b, a) -> b ! {e}, acc: b, xs: [a]) -> b ! {e} {
+226:export func flatMapE[a, b, e](f: (a) -> [b] ! {e}, xs: [a]) -> [b] ! {e} {
+237:export func forEachE[a, e](f: (a) -> () ! {e}, xs: [a]) -> () ! {e} {
+```
+
+On this machine the checkout is correct — `git -C ~/.local/share/ailang rev-parse HEAD` returned
+`3b52a24d24431c372ed5605289ef039592209514` — but the gate does not establish that. `ailang.toml:6`
+is `>=0.26.0`, and `scripts/install-prerequisites.sh:554-559` returns before creating/updating
+`~/.local/share/ailang` whenever any installed AILANG satisfies that floor. The later clone at
+`:569-578` is reached only when installation is needed. CI creates the expected path, but from the
+mutable version tag rather than a recorded commit.
+
+**Action:** derive exported effect rows from parsed module interfaces (or a signature-normalized AST
+scan) over the recursive stdlib tree belonging to the exact executable; include `export pure func`,
+multiline signatures, and nested modules; specify how row variables are classified; and record and
+verify the resolved stdlib commit with the classifier output. A user-home path alone must not be gate
+identity.
+
+---
+
+### R7. The attribution validator does not check the necessity condition it presents as checkable
+
+**Defect:** The four load-time checks establish schema, freshness, and referential integrity but do
+not establish that installation of an attributed hook is necessary for the site to execute.
+
+**Grounding:** ADR:911-914 defines necessity as the correctness condition. ADR:918-922 checks only a
+missing classification, unknown/uninstalled hook, stale source binding, and malformed row. No check
+relates a site's control context to its attributed hooks. After R3 permits known-but-uninstalled hook
+ids so the table can function, a fresh, well-formed but false attribution of
+`src/core/cache.ail:60` to `test_dummy` would satisfy those structural checks and remove a live core
+`SharedMem` site from profiles without that hook. Determining the attribution is false requires the
+control/path fact that the listed validator does not compute.
+
+The post-boundary scope restriction itself is correct: ADR:915-917 matches the boundary at
+ADR:1036-1039, after synthetic configuration is validated and the runtime/profile constructed, with
+host discovery, hydration, and TypeScript child-process setup outside.
+
+**Action:** state explicitly that necessity is manually reviewable and is not checked by the
+load-time validator; record reviewer/evidence per attribution row, or add a conservative mechanical
+proof obligation such as a checked guard/dominance anchor. Do not describe precision of the claim as
+mechanical validation of its truth.
+
+---
+
+## What is accurate
+
+Re-run and confirmed at `c45473c`:
+
+- **Review count and Status follow-up.** `git show 6eca7fe:.agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md
+  | rg -c '^## Review Comments$'` and the same command at `HEAD` both returned `13`. Two full reviews + three
+  F1–F6 verifications + eight delta reviews = thirteen, so HEAD's “eight independent delta reviews
+  (two each of the second, third, fourth, and fifth correction passes)” is correct. The structural
+  remedy for the two repeated count mistakes is a documentation check that derives the total from
+  standardized review metadata at the commit being written, rather than another hand-written
+  resolution. Status's “five consecutive passes” anchor count also remains correct: the A5 ranges
+  below are valid, so this review does not manufacture a sixth anchor-error pass. Status's surviving
+  content staleness is the predicate drift in R2.
+- **Classifier 1's motivating cases and reconciliation.** The builtin projection contains 21
+  modules; the repo imports 21 distinct `std/*` modules; the ten imported modules absent from that
+  projection are `std/bytes`, `std/crypto`, `std/datetime`, `std/extension`, `std/json`, `std/list`,
+  `std/option`, `std/result`, `std/sem`, and `std/string`. The source half recovers
+  `std/sem` (`! {SharedMem}` at `sem.ail:374,385`) and `std/extension` (`! {FS}` at
+  `extension.ail:27`). Transitive implementation is handled for these live cases because the
+  importing wrapper exports its own declared row: `std/sem` imports `std/sharedmem`, and
+  `std/extension` imports `std/fs`.
+- **Classifier 2 membership.** The new cursor-loss criterion correctly selects `ai_step` and excludes
+  `clock_now`, `proc_exec`, and `env_get`; those three are legal routing destinations because they do
+  not discard a successor D1 requires returned.
+- **Static hook set.** All fifteen runtime registrations return `ExtensionHooks`; the closed ABI
+  always contains eight hooks. Conditional hook *values* cannot conditionally add or remove fields.
+- **Declared versus performed effects.** The conservative declaration-based classification does not
+  contradict D5's hermeticity probe. The former decides static coverage eligibility; the latter is a
+  runtime backstop for ambient effects actually performed by reached hooks. It does, however, create
+  the utility defect in R5.
+- **Anchors.** Every A5 anchor holds: `std/sem.ail:374,385`; `std/extension.ail:27`;
+  `src/core/cache.ail:29,60,75`; `src/core/rpc.ail:200`; omnigraph `register.ail:4`; fixture `:90`;
+  compaction `:106`; the eight-hook record enclosed by `register.ail:99-110` (the eight fields are
+  exactly `:100-109`); compose `:761-790` and clock call `:767`; and runtime guards
+  `206,222,239,280,368` versus calls `206,222,245,287,374`. The enclosing `:99-110` range is not a
+  factual anchor error merely because it also contains `provided_tools` and the record's closing
+  brace. The statement that three trivial hooks declare the full nine-effect row is also true; it
+  does not claim that `on_budget_plan`'s `{Env, FS}` row is pure.
+- **Clock arithmetic.** The settled 4 / 12 / 13 split survives as the post-validation result; R3 is
+  about the current validator and the missing qualification, not the settled repo-wide count of 13.
+
+### Explicit rulings requested by the handoff
+
+**A1 — extension granularity versus the coverage floor:** **not compatible as an enforceable gate in
+the text produced.** D5 declares an exception, so the concepts can coexist, but there is no record
+slot, acceptance clause, or evidence producer for it (R4), while the general floor can be satisfied
+by ABI-pure no-op slots without covering extension behavior (R5). The coarse extension rule is an
+acceptable interim precision trade in principle: it is fail-closed, its eight-hook consequence is
+statically decidable from the ABI, and requiring extension site-to-hook attribution up front would
+delay the interim gate. It is acceptable only after R1 precisely defines the field-access matcher and
+scope; the current literal reading disables the proposed guards themselves.
+
+**A2 — classifier 1 completeness and reproducibility:** **neither is established as specified.** The
+union and reconciliation recover today's `std/sem` and `std/extension` holes, but the source pattern
+omits accepted declaration/path forms and mishandles row variables, while the named home-directory
+tree is not bound by the gate to the executable's resolved commit (R6). The local checkout happens to
+match the pin and CI has a usable clone recipe; those facts are inputs to the repair, not proof of the
+current rule.
+
+**A4 — attribution correctness:** **necessity is not checkable by the listed validator.** Moreover,
+the validator's uninstalled-hook rejection currently prevents the table from expressing the
+`test_dummy` absence it is meant to exploit (R3). Once that is corrected, necessity remains a manual
+or separately proven control-path property (R7). The post-simulation-boundary scope is correct.
+
+---
+
+## Recommended pre-acceptance actions
+
+**This ADR must fix, in dependency order:**
+
+1. **R1 and R2:** define the exact classifier-2 access matcher and package/test-fixture scope, ground
+   the eight-hook set in the ABI, and propagate one identical predicate through Status, D1, D5,
+   Consequences, the acceptance row, and the implementation handoff.
+2. **R3 and R7:** make the attribution table global over known hook identities, allow known absent
+   hooks during profile evaluation, state the pre/post-table clock arithmetic, and distinguish the
+   structural validator from manual or mechanically evidenced necessity review.
+3. **R4 and R5:** add the explicit floor-exemption record and acceptance clause, define useful
+   behavioral hook coverage, identify the gate/result evidence that enforces it, and reconcile or
+   withdraw the proposed pure-guard profile.
+4. **R6:** replace the ad-hoc home-path pattern with a recursive parsed/signature-normalized export
+   derivation bound to the resolved toolchain commit, including declaration variants and a specified
+   effect-row-variable rule.
+5. Add a documentation check that recounts standardized review metadata at the commit being written;
+   do not repair the repeated Status-count failure with another prose-only resolution.
+
+**Belongs to the implementation plan, not this ADR:** implement the two classifiers and attribution
+producer in one source-revision-bound change; wire their profile-load validation and recorded output
+into CI; implement per-extension hook coverage/exemption reporting; build the declared-versus-performed
+successor detector before relaxing conservative hook classification; and optionally extend
+site-to-hook attribution into extension packages if later profiles need per-hook precision. The
+extension attribution refinement is not required to make the deliberately coarse interim gate sound.
+
+---
+
+## Accept / revise
+
+**Revise. The upstream API blocker remains fully in force and unchanged: acceptance still requires a
+recorded-stream API in an actual AILANG release, this repository repinned to that release, and the
+positive integration probe passing; the `v0.31.0` fork prototype clears none of those conditions.**
