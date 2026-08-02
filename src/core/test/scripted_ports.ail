@@ -71,13 +71,8 @@ func fake_model(_model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> ()
   { emissions: [], result: Err(err) }
 }
 
-func fake_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
-}
-
 export func fake_ports() -> Ports {
-  ports_shape_probe(fake_model, fake_hooks)
+  ports_shape_probe(fake_model)
 }
 
 export func run_v2_with_scripted_ports(

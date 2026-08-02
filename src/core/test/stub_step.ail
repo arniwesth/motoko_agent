@@ -141,10 +141,6 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
   [{ position: "system", ttl: "ephemeral" }]
 }
 
-func default_hooks_runtime() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  empty_rt()
-}
-
 -- This is the one closure the recorded-stream adoption has to fill: chunks are
 -- handed to `on_chunk` and then discarded here, one layer above `std/ai`, so
 -- the emission log is empty until an API that returns the recorded stream
@@ -157,7 +153,7 @@ export func live_ports(rt: ExtRuntime) -> Ports {
       let result = stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
       { emissions: [], result: result }
     };
-  ports_shape_probe(model_step, default_hooks_runtime)
+  ports_shape_probe(model_step)
 }
 
 export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]) -> Ports {
@@ -170,7 +166,7 @@ export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]
       let _ = play_chunks(chunks, on_chunk);
       { emissions: [], result: Ok(scripted_step_at(script, idx)) }
     };
-  ports_shape_probe(model_step, default_hooks_runtime)
+  ports_shape_probe(model_step)
 }
 
 -- Dispatch one step call through the provider.

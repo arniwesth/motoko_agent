@@ -9,7 +9,6 @@ module src/core/ports
 import std/ai (Message, StepResult, AIError, StreamChunk)
 import std/result (Result)
 import std/trace as Trace
-import pkg/sunholo/motoko_ext_abi/types (ExtRuntime)
 import src/core/phase_vocab (ApprovalRequest)
 
 export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
@@ -42,8 +41,7 @@ export type Ports = {
   approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env},
-  tool_exec: (string, string) -> string ! {IO, Process, FS},
-  hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  tool_exec: (string, string) -> string ! {IO, Process, FS}
 }
 
 func deny_approval(_req: ApprovalRequest) -> ApprovalResolution ! {IO} {
@@ -57,15 +55,13 @@ func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 export func ports_shape_probe(
-  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
-  hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
 ) -> Ports {
   {
     model_step: model_step,
     approval_read: deny_approval,
     clock_now: fake_clock,
     env_get: fake_env,
-    tool_exec: fake_tool,
-    hooks_runtime: hooks_runtime
+    tool_exec: fake_tool
   }
 }
