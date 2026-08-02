@@ -16,6 +16,7 @@ import std/ai (step, stepWithCache, stepWithStream, StepResult, ToolCall, Messag
 import std/trace as Trace
 import std/clock (now)
 import std/io (readLine)
+import std/env (getEnvOr)
 import src/core/phase_vocab (ApprovalRequest)
 import std/list as List (length)
 import std/option (Option, None)
@@ -23,7 +24,7 @@ import std/result (Result, Ok, Err)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock)
+import src/core/ports (Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead, ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
@@ -153,7 +154,12 @@ export func live_ports(rt: ExtRuntime) -> Ports {
       let raw = readLine();
       { raw: raw, eof: raw == "", next_state: state }
     };
-  { ports_shape_probe(model_step) | clock_now: clock_now, approval_read: approval_read }
+  -- The live environment: the process environment, world returned unchanged.
+  let env_get: (WorldState, string, string) -> EnvRead ! {Env} =
+    func(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+      { value: getEnvOr(key, fallback), next_state: state }
+    };
+  { ports_shape_probe(model_step) | clock_now: clock_now, approval_read: approval_read, env_get: env_get }
 }
 
 -- The scripted adapter, WI-A2's fix for F6.

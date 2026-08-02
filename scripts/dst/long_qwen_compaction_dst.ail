@@ -9,7 +9,7 @@ import std/result (Result, Ok, Err)
 import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead)
 import src/core/test/stub_step (StepProvider, Ported)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -175,7 +175,14 @@ func fixed_clock(state: WorldState) -> ClockReading ! {Clock} {
 -- The same constant for `ExtPorts.clock_now`, which is `() -> int` and is NOT
 -- widened by A12 — the extension-side clock belongs to WI-C5.
 func fixed_ext_clock() -> int ! {Clock} { 123456789 }
-func fixed_env(_key: string, fallback: string) -> string ! {Env} { fallback }
+-- WI-A12 made `Ports.env_get` state-threaded; this fixture always served the
+-- caller's fallback, so the threaded form does the same and returns the world
+-- unchanged. `fixed_ext_env` is the un-widened `ExtPorts` shape (WI-C5's).
+func fixed_env(state: WorldState, _key: string, fallback: string) -> EnvRead ! {Env} {
+  { value: fallback, next_state: state }
+}
+
+func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fixed_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 func runtime_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
@@ -757,7 +764,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
       },
       proc_exec: fixed_exec,
       clock_now: fixed_ext_clock,
-      env_get: fixed_env
+      env_get: fixed_ext_env
     },
     artifacts: artifacts,
     telemetry: zero_token_telemetry()

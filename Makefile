@@ -103,6 +103,28 @@ dst:
 # A denied ambient effect terminates evaluation on the pin — no typed result,
 # no partial trace. That is D6.6 and it must stay a raw non-zero run rather
 # than being unified into a typed HarnessFailure.
+#
+# THE ENV CLASS HAS NO POISON PAIR, DELIBERATELY, AND THIS IS THE REASON.
+# All six of the driver's own env reads are routed (session.ail has zero
+# getEnvOr calls). But withholding Env still kills a deterministic run, because
+# `src/core/context_usage.ail` reads MOTOKO_MODELS_FILE / MOTOKO_REPO /
+# MOTOKO_PROFILE_DIR / MOTOKO_CONFIG from `resolve_context_limit`, which the
+# driver calls at six sites.
+#
+# Those reads are NOT routable on their own. `resolve_context_limit` is
+# `! {Env, FS}` and every env read in it exists to compute a FILE PATH that it
+# then reads. Threading the world through the env half would hand back a
+# world-supplied path to an ambient file — a run that passes an Env poison probe
+# while still depending on ambient state. That is a green check implying absent
+# coverage, which is exactly cluster 4's C1b defect, so it is not done here.
+# Completing it needs a filesystem class, which WI-A12's specified order does
+# not contain. Reported as a plan finding rather than worked around.
+#
+# The env class's evidence is therefore PROVENANCE, not capability: the probe
+# seeds MOTOKO_HEADLESS in the world and asserts the driver acted on the world's
+# value, with a control run proving the two branches differ. CI's process
+# environment does not set that variable, so the world cannot pass by agreeing
+# with it.
 .PHONY: world_state
 world_state:
 	@set -eu; \
@@ -136,7 +158,10 @@ world_state:
 		exit 1; \
 	else \
 		echo "  ✓ live world dies with Clock withheld"; \
-	fi
+	fi; \
+	echo "  -- env class --"; \
+	echo "  i Env-withheld pair DEFERRED, not skipped — see the note in the Makefile above"; \
+	echo "  i the env class's evidence is the provenance assertion in world_state_probe"
 
 # D6's terminal-trace contract (WI-A9). Four checks, in order:
 #

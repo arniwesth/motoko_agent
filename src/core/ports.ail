@@ -84,7 +84,25 @@ export type WorldState = {
   -- where it belongs. Routing the resolution instead would move production
   -- policy into the adapter, and let the live and deterministic worlds disagree
   -- about it.
-  approvals: [string]
+  approvals: [string],
+
+  -- The synthetic environment: the key/value map a deterministic run reads
+  -- instead of the process environment. A key that is absent falls back to the
+  -- caller-supplied default, which is exactly what `getEnvOr` does for an unset
+  -- variable, so an empty map is behaviour-preserving.
+  --
+  -- Unlike `script` and `approvals` this is a KEYED LOOKUP, not a cursor: reads
+  -- do not consume it and the successor is the same world. `EnvRead` still
+  -- carries a successor because D1 requires every request to return one, and
+  -- because A13's interaction log will want to record the read (encounter
+  -- ordinals) without changing this port's shape to do it.
+  env: [{ key: string, value: string }]
+}
+
+-- One environment read and its successor world.
+export type EnvRead = {
+  value: string,
+  next_state: WorldState
 }
 
 -- One approval read and its successor world. `eof` is carried explicitly rather
@@ -117,7 +135,7 @@ export type PortedProvider = {
 -- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
-  { script: [], clock_ms: 0, approvals: [] }
+  { script: [], clock_ms: 0, approvals: [], env: [] }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -162,7 +180,8 @@ export type Ports = {
   -- capability only when a read is PERFORMED, so the deterministic adapter
   -- never triggering it is precisely what the poison pair measures.
   clock_now: (WorldState) -> ClockReading ! {Clock},
-  env_get: (string, string) -> string ! {Env},
+  -- WI-A12's env class. State-threaded like the rest.
+  env_get: (WorldState, string, string) -> EnvRead ! {Env},
   tool_exec: (string, string) -> string ! {IO, Process, FS}
 }
 
@@ -198,7 +217,18 @@ export func virtual_clock(state: WorldState) -> ClockReading ! {Clock} {
   { now_ms: state.clock_ms, next_state: { state | clock_ms: state.clock_ms + 1 } }
 }
 
-func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
+-- The deterministic environment: serve the world's map, fall back to the
+-- caller's default when the key is absent.
+export func scripted_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  { value: lookup_env(state.env, key, fallback), next_state: state }
+}
+
+pure func lookup_env(entries: [{ key: string, value: string }], key: string, fallback: string) -> string {
+  match entries {
+    [] => fallback,
+    e :: rest => if e.key == key then e.value else lookup_env(rest, key, fallback)
+  }
+}
 
 func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
@@ -223,7 +253,7 @@ export func ports_shape_probe(
     model_step: model_step,
     approval_read: scripted_approval,
     clock_now: virtual_clock,
-    env_get: fake_env,
+    env_get: scripted_env,
     tool_exec: fake_tool
   }
 }

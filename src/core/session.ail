@@ -28,7 +28,6 @@ module src/core/session
 import std/ai (step, Message, ToolCall, ToolSchema, AIError, StepResult, StreamChunk, ContentDelta, ThinkingDelta, Usage)
 import std/io (println, readLine)
 import std/clock (now)
-import std/env (getEnvOr)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
@@ -739,15 +738,21 @@ func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Resu
 -- the progress-contract guard. This is the one residual ambient clock read
 -- reachable from the driver's call graph, it is guarded rather than hidden, and
 -- WI-C5 removes it. It is NOT one of P3's four routed driver sites.
-func ext_ports_of(p: Ports, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
   let ai_step = func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
     ext_ai_step(p, model, base_url, msgs)
+  };
+  let env_get = func(key: string, fallback: string) -> string ! {Env} {
+    p.env_get(world, key, fallback).value
   };
   {
     ai_step: ai_step,
     proc_exec: p.tool_exec,
     clock_now: ext_unrouted_clock,
-    env_get: p.env_get
+    -- Unlike the clock, this one IS routed: `env_get` is two-argument, so a
+    -- closure capturing the world can be written. The clock's `() -> int` shape
+    -- cannot be, which is the whole of the difference between them — see above.
+    env_get: env_get
   }
 }
 
@@ -884,10 +889,10 @@ func append_stream_delta(session_id: string, step_idx: int, stream_id: string, c
 -- read-shaped function that sometimes swallows its successor is how a cursor
 -- silently stops advancing.
 func derive_session_id(ports: Ports, world: WorldState) -> { id: string, next_state: WorldState } ! {Env, Clock} {
-  let env_id = getEnvOr("MOTOKO_SESSION_ID", "");
-  if env_id != "" then { id: env_id, next_state: world }
+  let env_id = ports.env_get(world, "MOTOKO_SESSION_ID", "");
+  if env_id.value != "" then { id: env_id.value, next_state: env_id.next_state }
   else {
-    let reading = ports.clock_now(world);
+    let reading = ports.clock_now(env_id.next_state);
     { id: "session_${show(reading.now_ms)}", next_state: reading.next_state }
   }
 }
@@ -1333,12 +1338,22 @@ pure func parse_persist_retries_budget(raw: string) -> int {
   }
 }
 
-func session_policy_init(model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicy ! {Env} {
+-- WI-A12's env class. Four of the driver's six env reads are here, and they are
+-- threaded rather than ambient. The successor is discarded at the end because
+-- policy init happens once, before the loop, and `scripted_env` is a keyed
+-- lookup that returns the world unchanged — but each read still takes the
+-- PREVIOUS read's successor, so that when A13 starts recording reads the order
+-- is already right and nothing has to be re-threaded.
+func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicy ! {Env} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-  let persist_retries = parse_persist_retries_budget(getEnvOr("MOTOKO_PERSIST_RETRIES", "0"));
-  let retry_stream_errors = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
-  let provider_base_url = getEnvOr("OPENAI_BASE_URL", "");
-  let headless = getEnvOr("MOTOKO_HEADLESS", "") == "1";
+  let r_persist = ports.env_get(world, "MOTOKO_PERSIST_RETRIES", "0");
+  let r_retry = ports.env_get(r_persist.next_state, "MOTOKO_RETRY_STREAM_ERROR", "1");
+  let r_base = ports.env_get(r_retry.next_state, "OPENAI_BASE_URL", "");
+  let r_headless = ports.env_get(r_base.next_state, "MOTOKO_HEADLESS", "");
+  let persist_retries = parse_persist_retries_budget(r_persist.value);
+  let retry_stream_errors = r_retry.value != "0";
+  let provider_base_url = r_base.value;
+  let headless = r_headless.value == "1";
   {
     step: {
       step_budget: budget_steps,
@@ -1786,7 +1801,7 @@ func c2_loop(
               -- catches — the queue would never advance.
               let post: C2LoopState = { st | world_state: input.next_state };
               let tool_step_idx = c2_done_step(post.step_idx);
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), resolve_context_limit(model), ext_ports_of(post.provider, policy.step.provider_base_url), post.ext_artifacts, post.telemetry);
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), resolve_context_limit(model), ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry);
               match resolution {
                 ApprovalDenied(reason) => {
                   let _ = ledger_emit(session_id, NativeToolDenied({
@@ -1813,7 +1828,7 @@ func c2_loop(
           let calls = c2_tool_plan_calls(plan.entries);
           let request_id = "step-${show(tool_step_idx)}";
           let ctx_msgs = c2_pending_context(st);
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_of(st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let _ = if emit_calls then
             ledger_emit(session_id, NativeToolCalls({
@@ -1861,7 +1876,7 @@ func c2_loop(
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
           let ext_context_limit = if context_limit - pinned_tokens < 0 then 0 else context_limit - pinned_tokens;
-          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
@@ -1909,7 +1924,8 @@ func c2_loop(
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
                   let _ = ledger_emit(session_id, end_event);
-                  let _ = if not e.retryable && getEnvOr("MOTOKO_CAPTURE_FAILED_PAYLOAD", "") != "" then capture_failing_payload(e, compacted_msgs) else ();
+                  -- WI-A12's env class: the sixth and last driver env read.
+                  let _ = if not e.retryable && st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", "").value != "" then capture_failing_payload(e, compacted_msgs) else ();
                   if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
                     let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
                     let _ = ledger_emit(session_id, retry_event);
@@ -1952,7 +1968,7 @@ func c2_loop(
                   let applied = apply_state_delta(step_state, phase.delta);
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, policy.step.provider_base_url), chain.artifacts, applied.telemetry);
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry);
                   let trace_after_model = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), phase.events);
                   match dispatch_response_intercept(rt, post_ctx, result.message.content) {
                     InterceptHandled(envelope) => {
@@ -2200,8 +2216,11 @@ export func run_v2_session_traced(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, ported_provider(rt, provider))
+  -- WI-A12: the provider is normalised FIRST so policy init can read the env
+  -- through its ports instead of ambiently.
+  let pp = ported_provider(rt, provider);
+  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 export func run_v2_session_traced_with_persist_retries(
@@ -2220,7 +2239,8 @@ export func run_v2_session_traced_with_persist_retries(
   persist_retries: int,
   provider: StepProvider
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let base = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  let pp = ported_provider(rt, provider);
+  let base = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
   let policy: SessionPolicy = {
     step: {
       step_budget: base.step.step_budget,
@@ -2237,7 +2257,7 @@ export func run_v2_session_traced_with_persist_retries(
     },
     headless: base.headless
   };
-  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, ported_provider(rt, provider))
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 func run_v2_from_messages_with_policy(
@@ -2306,8 +2326,9 @@ export func run_v2(
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let messages = msgs_to_messages(initial_msgs);
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, ported_provider(rt, provider))
+  let pp = ported_provider(rt, provider);
+  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 -- Run loop_v2 starting from an existing [Message] history (instead of the
@@ -2329,8 +2350,9 @@ export func run_v2_from_messages(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
-  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, ported_provider(rt, provider))
+  let pp = ported_provider(rt, provider);
+  let policy = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 -- Read a JSON-shaped string field from a decoded Json object, returning
@@ -2467,8 +2489,8 @@ export func conversation_loop_v2(
   provider: StepProvider,
   session_id: string
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
   let live_provider = ported_provider(rt, provider);
+  let policy = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
   conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id, zero_runtime_status_counts())
 }
 
@@ -2494,8 +2516,8 @@ export func run_v2_with_conversation(
   provider: StepProvider
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let initial_messages = msgs_to_messages(initial_msgs);
-  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
   let live_provider = ported_provider(rt, provider);
+  let policy = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
   -- Ordered after `ported_provider` because WI-A12 made `derive_session_id`
   -- read the world clock through the port instead of ambient `now()`, so it
   -- needs the normalised provider. The successor is discarded: this id labels
