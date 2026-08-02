@@ -659,7 +659,12 @@ func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Resu
   -- which for OpenRouter still carries the "openrouter/" routing prefix; sent
   -- raw the provider rejects it with 400 "not a valid model ID", surfacing as
   -- compaction_ai.summarizer_failed / provider_error. Strip it here.
-  match p.model_step(provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk) {
+  -- The emission log is dropped here, and that is an ABI limit rather than an
+  -- oversight: ExtPorts.ai_step returns Result[string, string]
+  -- (packages/motoko-ext-abi/types.ail:63) and the hook results above it are
+  -- decision-only, so there is nowhere for it to go. Widening ExtPorts belongs
+  -- to the ABI major the repin forces (ADR-001 D1, Milestone B).
+  match p.model_step(provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk).result {
     Ok(result) => Ok(result.message.content),
     Err(e) => Err("${e.code}: ${e.message}")
   }
@@ -1729,7 +1734,12 @@ func c2_loop(
                 model: model
               });
               let _ = ledger_emit(session_id, prepared_event);
-              match dispatch_step(st.provider, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk) {
+              let exchange = dispatch_step(st.provider, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
+              -- exchange.emissions rides along but has no driver consumer yet:
+              -- live_ports returns [] until the recorded-stream API lands, and
+              -- projecting the log into the ledger is WI-A12's work. WI-A1 is
+              -- behaviour-preserving by construction.
+              match exchange.result {
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
                   let _ = ledger_emit(session_id, end_event);

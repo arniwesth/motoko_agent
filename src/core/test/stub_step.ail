@@ -20,7 +20,7 @@ import std/result (Result, Ok, Err)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
-import src/core/ports (Ports, ports_shape_probe)
+import src/core/ports (Ports, ProviderExchange, ports_shape_probe)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
@@ -145,24 +145,30 @@ func default_hooks_runtime() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, Sha
   empty_rt()
 }
 
+-- This is the one closure the recorded-stream adoption has to fill: chunks are
+-- handed to `on_chunk` and then discarded here, one layer above `std/ai`, so
+-- the emission log is empty until an API that returns the recorded stream
+-- lands. Widening the port first (WI-A1) is what shrinks that adoption to this
+-- closure instead of a migration.
 export func live_ports(rt: ExtRuntime) -> Ports {
-  let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} =
+  let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
     func(model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
-    -> Result[StepResult, AIError] ! {AI, IO, Trace} {
-      stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk)
+    -> ProviderExchange ! {AI, IO, Trace} {
+      let result = stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
+      { emissions: [], result: result }
     };
   ports_shape_probe(model_step, default_hooks_runtime)
 }
 
 export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]) -> Ports {
   let base_assistant_count = assistant_count(history);
-  let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} =
+  let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
     func(_model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
-    -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+    -> ProviderExchange ! {AI, IO, Trace} {
       let idx = assistant_count(msgs) - base_assistant_count;
       let chunks = scripted_chunks_at(script, idx);
       let _ = play_chunks(chunks, on_chunk);
-      Ok(scripted_step_at(script, idx))
+      { emissions: [], result: Ok(scripted_step_at(script, idx)) }
     };
   ports_shape_probe(model_step, default_hooks_runtime)
 }
@@ -189,12 +195,16 @@ export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]
 --
 -- There is no `next_provider` to return: a Ports is immutable, and the old
 -- Ported branch returned it unchanged.
+--
+-- The whole exchange is propagated rather than unwrapped here. This function is
+-- a pass-through of the port, so unwrapping `.result` would recreate the very
+-- loss channel WI-A1 just closed, one line above the port.
 export func dispatch_step(
   ports: Ports,
   model: string,
   msgs: [Message],
   on_chunk: (StreamChunk) -> () ! {IO, Trace}
-) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+) -> ProviderExchange ! {AI, IO, Trace} {
   ports.model_step(model, msgs, on_chunk)
 }
 

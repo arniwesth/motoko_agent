@@ -10,7 +10,7 @@ import std/json (jo)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/trace as Trace
-import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ports_shape_probe)
+import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ProviderExchange, ports_shape_probe)
 import src/core/phase_vocab (ApprovalRequest, ExecNative)
 import src/core/test/stub_step (ScriptedStep, StepProvider, Scripted, LiveAI, Ported, scripted_to_step_result, scripted_ports_from_steps)
 import src/core/config (CostRates, VerificationConfig)
@@ -66,9 +66,9 @@ export pure func scripted_clock_next(state: ScriptedPortsState) -> { value: int,
   }
 }
 
-func fake_model(_model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+func fake_model(_model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
   let err: AIError = { code: "ScriptedPorts", message: "use scripted_model_next for state-threaded tests", retryable: false };
-  Err(err)
+  { emissions: [], result: Err(err) }
 }
 
 func fake_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {

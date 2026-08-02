@@ -14,8 +14,31 @@ import src/core/phase_vocab (ApprovalRequest)
 
 export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
 
+-- One provider exchange: the typed step outcome, plus the ordered log of the
+-- intermediate emissions that call produced.
+--
+-- WI-A1, under ADR-001 D1's loss-channel rule. `model_step` takes a multi-fire
+-- `(StreamChunk) -> () ! {IO}` callback whose values the returning closure
+-- discards, while returning only `Result[StepResult, AIError]` — a concrete,
+-- demonstrated loss, one layer above `std/ai`, which nothing downstream can
+-- recover from. The ordering rule is: widen the port before adopting whatever
+-- fills it, because the port is where the information is thrown away.
+--
+-- Every construction site returns `emissions: []` today, so this widening is
+-- behaviour-preserving; what it buys is that adopting a recorded-stream API
+-- later fills exactly one closure, in `live_ports`.
+--
+-- The rule is scoped to ports with a *demonstrated* loss channel, and today
+-- that is exactly this one field: `approval_read` is a synchronous resolution
+-- and `clock_now` is a point read, and neither has an intermediate channel
+-- through which a value could be silently dropped.
+export type ProviderExchange = {
+  emissions: [StreamChunk],
+  result: Result[StepResult, AIError]
+}
+
 export type Ports = {
-  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
+  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
   approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env},
@@ -34,7 +57,7 @@ func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 export func ports_shape_probe(
-  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace},
+  model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
   hooks_runtime: () -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
 ) -> Ports {
   {
