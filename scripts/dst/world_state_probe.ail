@@ -86,6 +86,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   NoIntercept,
   NoOpinion,
   Deny,
+  Allow,
   PassThrough,
   DenyAfterTimeout,
   Pending,
@@ -379,6 +380,13 @@ func approval_hooks(id: string) -> ExtensionHooks {
   { hooks(id, passthrough_pre_step) | on_tool_policy: pending_policy }
 }
 
+func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow }
+
+func allow_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [{ hooks(id, passthrough_pre_step) | on_tool_policy: allow_policy }] }, strict_mode: false, verification: v }
+}
+
 func approval_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { hooks: [approval_hooks(id)] }, strict_mode: false, verification: v }
@@ -535,12 +543,55 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
                          fin_p == "error",
                          "finish_reason=${fin_p}, expected error — if this also passes, the assertion above proves nothing");
 
+  -- tools: THE TYPED TOOL CONTRACT'S ASSERTION.
+  --
+  -- All four behaviours the plan names, through one production adapter
+  -- contract, in one run: ordinary success, a typed execution error, a
+  -- wrong-call-id correlation fault, and completion after the deadline.
+  --
+  -- Each is a DISTINCT typed outcome, and the point of the class is that a
+  -- `(string, string) -> string` port could not tell three of them apart — they
+  -- would all have arrived as some string. So the assertion checks that each
+  -- fault reaches the model as its own discriminated payload, in order, which
+  -- is simultaneously the advancement check for the tool cursor: a frozen queue
+  -- serves the first outcome four times.
+  --
+  -- MOTOKO_TOOL_TIMEOUT_MS is read through the ENV class landed earlier, so the
+  -- deadline is configured by the world too, not by a constant.
+  let tool_world: WorldState = {
+    empty_world_state() |
+    script: [step_named("t0"), step_named("t1"), step_named("t2"), step_named("t3"), prose_step("done")],
+    env: [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "50" }],
+    tools: [
+      { tool_call_id: "", duration_ms: 1,  code: "",         message: "",             content: "OK-ALPHA" },
+      { tool_call_id: "", duration_ms: 1,  code: "ExitCode", message: "boom-bravo",   content: "" },
+      { tool_call_id: "WRONG-ID", duration_ms: 1, code: "",  message: "",             content: "" },
+      { tool_call_id: "", duration_ms: 999, code: "",        message: "",             content: "OK-DELTA" }
+    ]
+  };
+  let tools_run = run_world(allow_rt("probe_tools"), 12, tool_world);
+  let tool_msgs = match tools_run.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let _ = println("tools: ${show(List.length(tool_msgs))} tool results returned");
+  let ok_tool_ok = check("tools: ordinary success carries the tool's own output",
+                         reasons_in_order(["OK-ALPHA"], tool_msgs),
+                         "first tool result did not carry OK-ALPHA");
+  let ok_tool_err = check("tools: a typed execution error is discriminated, not a string",
+                          reasons_in_order(["OK-ALPHA", "boom-bravo"], tool_msgs),
+                          "second tool result did not carry the typed ExitCode fault");
+  let ok_tool_corr = check("tools: a wrong-call-id answer is a correlation fault",
+                           reasons_in_order(["OK-ALPHA", "boom-bravo", "WRONG-ID"], tool_msgs),
+                           "third tool result did not report the correlation mismatch");
+  let ok_tool_dl = check("tools: completion after the deadline is its own outcome",
+                         reasons_in_order(["OK-ALPHA", "boom-bravo", "WRONG-ID", "ToolDeadlineExceeded"], tool_msgs),
+                         "fourth tool result did not report a deadline fault — the run took 999ms against a 50ms timeout");
+
   -- determinism: same world twice.
   let again = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
   let ok_det = assert_deterministic("repeat", advance, again);
 
   if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
-     && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_det then
+     && ok_appr && ok_appr_det && ok_env && ok_env_ctl
+     && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det then
     println("world_state_probe PASS")
   else {
     let _ = println("world_state_probe FAIL");

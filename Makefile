@@ -162,6 +162,22 @@ world_state:
 	echo "  -- env class --"; \
 	echo "  i Env-withheld pair DEFERRED, not skipped — see the note in the Makefile above"; \
 	echo "  i the env class's evidence is the provenance assertion in world_state_probe"; \
+	echo "  -- typed tool contract poison pair (Process withheld) --"; \
+	if ailang run --caps IO,Env,FS,AI,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
+	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ fully-seeded world completes with Process withheld (no real dispatch)"; \
+	else \
+		echo "FAIL: a seeded tool world still reached the real dispatcher — tool_exec is not routed"; \
+		exit 1; \
+	fi; \
+	if POISON_ARM=tools ailang run --caps IO,Env,FS,AI,Net,SharedMem,Clock,Stream,Trace --ai-stub \
+	     --entry main scripts/dst/world_state_poison.ail < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: an UNSEEDED tool world completed with Process withheld — it never reached the real"; \
+		echo "      dispatcher, so the seeded check above is vacuous"; \
+		exit 1; \
+	else \
+		echo "  ✓ unseeded tool world dies with Process withheld"; \
+	fi; \
 	echo "  -- randomness class (D1 request-surface item 5, \"runtime randomness, if any\") --"; \
 	n=$$(grep -l 'std/rand' src/core/*.ail 2>/dev/null | wc -l); \
 	if [ "$$n" -ne 0 ]; then \

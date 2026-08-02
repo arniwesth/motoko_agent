@@ -30,13 +30,42 @@
 module scripts/dst/world_state_poison
 
 import std/io (println)
+import std/env (getEnvOr)
 import std/ai (Message)
 import std/result (Result, Ok, Err)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
-import src/core/test/stub_step (LiveAI)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
+import src/core/test/stub_step (LiveAI, ScriptedWorld, tool_step, prose_step)
+import src/core/ports (WorldState, empty_world_state)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan, BudgetPatch, ExtRuntime, ExtCtx, ExtensionHooks, Allow, PassThrough,
+  PreStepDecision, PromptPatch, ToolPolicyDecision, ToolHandleDecision, ToolSchema,
+  ResponseInterceptDecision, FinalizeDecision, Delegate, NoIntercept, NoDecision
+)
+import std/option (None)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+
+-- Allows every tool, so the unseeded world reaches the real dispatcher.
+func allow_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks: ExtensionHooks = {
+    id: "poison_allow",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+    on_tool_policy: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow },
+    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate },
+    on_response_intercept: func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
+    on_solver_candidate: func(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+  };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}
 
 func msg(role: string, content: string) -> Message {
   { role: role, content: content, tool_calls: [], tool_call_id: "" }
@@ -53,7 +82,27 @@ func empty_rt() -> ExtRuntime {
   { registry: { hooks: [] }, strict_mode: false, verification: v }
 }
 
+-- The tool class's live half. A world with an EMPTY tool queue delegates to the
+-- real dispatcher, so a run that allows tools performs genuine process
+-- execution — which is what makes the seeded run's completion with `Process`
+-- withheld evidence of routing rather than evidence that no tool ran.
+--
+-- It uses the SCRIPTED provider deliberately: the point is to isolate the tool
+-- effect, so the provider must not be what kills the run.
+func unseeded_tools_run() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("world_state_poison: unseeded tool world, driving the real dispatcher");
+  let w: WorldState = { empty_world_state() | script: [tool_step("BashExec", "{\"cmd\":\"true\"}", "p0"), prose_step("done")] };
+  let traced = Session.run_v2_session_traced(
+    allow_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    4, false, 0, zero_rates(), ScriptedWorld(w)
+  );
+  let outcome = match traced.result { Ok(_) => "ok", Err(e) => "err ${e.code}" };
+  println("world_state_poison REACHED COMPLETION outcome=${outcome} — the withheld capability was not load-bearing")
+}
+
 export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  if getEnvOr("POISON_ARM", "") == "tools" then unseeded_tools_run()
+  else {
   let _ = println("world_state_poison: driving the LIVE world with a capability withheld");
   let traced = Session.run_v2_session_traced(
     empty_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
@@ -63,4 +112,5 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   -- Reaching this line at all means the withheld capability was never needed,
   -- which falsifies the deterministic half's claim to be evidence of routing.
   println("world_state_poison REACHED COMPLETION outcome=${outcome} — the withheld capability was not load-bearing")
+  }
 }

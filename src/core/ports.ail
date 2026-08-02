@@ -9,7 +9,10 @@ module src/core/ports
 import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
 import std/result (Result)
 import std/trace as Trace
+import std/json (encode)
 import src/core/phase_vocab (ApprovalRequest)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/tool_dispatch_adapter (dispatch_one)
 
 export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
 
@@ -96,7 +99,77 @@ export type WorldState = {
   -- carries a successor because D1 requires every request to return one, and
   -- because A13's interaction log will want to record the read (encounter
   -- ordinals) without changing this port's shape to do it.
-  env: [{ key: string, value: string }]
+  env: [{ key: string, value: string }],
+
+  -- The tool-execution cursor: the remaining queue of scripted tool outcomes,
+  -- consumed head-first like `script` and `approvals`.
+  --
+  -- An EMPTY queue means "the world has no opinion", and the adapter then
+  -- delegates to the real dispatcher. That fallback is not a convenience: the
+  -- gated smoke scripts `smoke_v2_pending_full_loop` and
+  -- `smoke_phase_a_tool_parity` execute tools for real through this path, so a
+  -- world-queue-only adapter would silently replace their tool results with
+  -- empty strings. Delegating when unseeded is what makes this class
+  -- behaviour-preserving, and it is also what makes the seeded case meaningful:
+  -- a fully-seeded run performs no process execution at all, which is exactly
+  -- what the Process poison pair measures.
+  tools: [ScriptedTool]
+}
+
+-- One scripted tool outcome. The fields are ordered by the fault they express,
+-- and the adapter checks them in that order:
+--
+--   tool_call_id  a value different from the request's id is a CORRELATION
+--                 fault — the world answering a question nobody asked. Empty
+--                 means "answer whatever was asked", the ordinary case.
+--   duration_ms   advances the virtual clock. Greater than the invocation's
+--                 timeout is a DEADLINE fault. This is why the deadline is
+--                 testable at all: a virtual clock makes "slow" a scripted
+--                 property rather than a race.
+--   code          non-empty is a typed EXECUTION fault (D3's tool fault class).
+--   content       the tool's own output, on the success path.
+export type ScriptedTool = {
+  tool_call_id: string,
+  duration_ms: int,
+  code: string,
+  message: string,
+  content: string
+}
+
+-- D1's typed tool request: parts 1 and 2 of the three the decision requires —
+-- a typed envelope, and the timeout/deadline information that a
+-- `(string, string)` signature had nowhere to put.
+--
+-- `timeout_ms` of 0 means no deadline, which is the default and preserves
+-- today's behaviour. `started_at_ms` is a world-clock reading taken by the
+-- driver at dispatch, so elapsed time is measured in the same clock the rest of
+-- the run uses rather than against wall time.
+export type ToolInvocation = {
+  call: ToolCallEnvelope,
+  workdir: string,
+  timeout_ms: int,
+  started_at_ms: int
+}
+
+-- D1's part 3: the typed result/error that replaces
+-- `tool_exec: (string, string) -> string`.
+--
+-- The plan is explicit that a request-only widening is not enough — it "would
+-- pass the listed probes while leaving the return an undifferentiated string,
+-- unable to carry D3's typed tool fault classes". The three fault variants are
+-- that carrying capacity. `ToolCompleted` keeps the tool's own output as a
+-- string because at this layer it genuinely is opaque: the typing that matters
+-- is the DISCRIMINATION between completed, failed, misaddressed and late, none
+-- of which a string return can express.
+export type ToolOutcome
+  = ToolCompleted({ tool_call_id: string, content: string })
+  | ToolFailed({ tool_call_id: string, code: string, message: string })
+  | ToolCorrelationMismatch({ expected_id: string, got_id: string })
+  | ToolDeadlineExceeded({ tool_call_id: string, elapsed_ms: int, timeout_ms: int })
+
+export type ToolExecution = {
+  outcome: ToolOutcome,
+  next_state: WorldState
 }
 
 -- One environment read and its successor world.
@@ -135,7 +208,7 @@ export type PortedProvider = {
 -- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
-  { script: [], clock_ms: 0, approvals: [], env: [] }
+  { script: [], clock_ms: 0, approvals: [], env: [], tools: [] }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -182,7 +255,12 @@ export type Ports = {
   clock_now: (WorldState) -> ClockReading ! {Clock},
   -- WI-A12's env class. State-threaded like the rest.
   env_get: (WorldState, string, string) -> EnvRead ! {Env},
-  tool_exec: (string, string) -> string ! {IO, Process, FS}
+  -- WI-A12's typed tool contract. State-threaded, typed request, typed result.
+  -- No `{Clock}` in the row: the adapter ADVANCES the virtual clock
+  -- arithmetically from the scripted duration, it never reads one. That keeps
+  -- this row identical to `ExtPorts.proc_exec`'s, which is what lets the
+  -- extension seam project onto it without widening the ABI.
+  tool_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS}
 }
 
 -- The deterministic approval channel: serve the queue head, advance past it.
@@ -230,7 +308,36 @@ pure func lookup_env(entries: [{ key: string, value: string }], key: string, fal
   }
 }
 
-func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
+-- The tool adapter. One implementation serves both worlds, which is why
+-- `live_ports` overrides the clock and the approval channel but NOT this: the
+-- only difference between a live and a deterministic tool call is whether the
+-- world has an answer queued, and that is data, not a code path.
+export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  match state.tools {
+    -- No world opinion: perform the real effect, exactly as before A12.
+    [] => {
+      outcome: ToolCompleted({ tool_call_id: inv.call.id, content: dispatch_one(inv.workdir, envelope_to_call(inv.call)) }),
+      next_state: state
+    },
+    t :: rest => {
+      let advanced = { state | tools: rest, clock_ms: state.clock_ms + t.duration_ms };
+      let outcome =
+        if t.tool_call_id != "" && t.tool_call_id != inv.call.id then
+          ToolCorrelationMismatch({ expected_id: inv.call.id, got_id: t.tool_call_id })
+        else if inv.timeout_ms > 0 && t.duration_ms > inv.timeout_ms then
+          ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: inv.timeout_ms })
+        else if t.code != "" then
+          ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message })
+        else
+          ToolCompleted({ tool_call_id: inv.call.id, content: t.content });
+      { outcome: outcome, next_state: advanced }
+    }
+  }
+}
+
+pure func envelope_to_call(e: ToolCallEnvelope) -> ToolCall {
+  { id: e.id, name: e.tool, arguments: encode(e.arguments) }
+}
 
 -- The sole `Ports` constructor. It keeps ONE function-typed parameter and
 -- defaults every other seam, including the deterministic `virtual_clock`;
@@ -254,6 +361,6 @@ export func ports_shape_probe(
     approval_read: scripted_approval,
     clock_now: virtual_clock,
     env_get: scripted_env,
-    tool_exec: fake_tool
+    tool_exec: world_tool
   }
 }

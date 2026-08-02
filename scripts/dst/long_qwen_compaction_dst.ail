@@ -9,7 +9,7 @@ import std/result (Result, Ok, Err)
 import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead, ToolInvocation, ToolExecution, ToolCompleted)
 import src/core/test/stub_step (StepProvider, Ported)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -183,7 +183,15 @@ func fixed_env(state: WorldState, _key: string, fallback: string) -> EnvRead ! {
 }
 
 func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback }
-func fixed_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
+-- WI-A12 widened `Ports.tool_exec` to the typed contract. This fixture served
+-- an empty string; the typed equivalent is an empty completion for the id that
+-- was actually asked about, with the world unchanged. `fixed_ext_exec` is the
+-- un-widened `ExtPorts.proc_exec` shape (WI-C5's).
+func fixed_exec(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  { outcome: ToolCompleted({ tool_call_id: inv.call.id, content: "" }), next_state: state }
+}
+
+func fixed_ext_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 func runtime_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
   long_runtime()
@@ -762,7 +770,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
           Err(e) => Err(e.message)
         }
       },
-      proc_exec: fixed_exec,
+      proc_exec: fixed_ext_exec,
       clock_now: fixed_ext_clock,
       env_get: fixed_ext_env
     },

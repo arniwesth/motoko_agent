@@ -738,6 +738,23 @@ func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Resu
 -- the progress-contract guard. This is the one residual ambient clock read
 -- reachable from the driver's call graph, it is guarded rather than hidden, and
 -- WI-C5 removes it. It is NOT one of P3's four routed driver sites.
+-- Project a typed tool outcome onto the un-widened `ExtPorts.proc_exec` string
+-- return. Faults are RENDERED rather than dropped: an extension handed "" when
+-- a tool actually failed is the silent-wrong shape this whole item exists to
+-- remove, even on a seam A12 does not own.
+pure func tool_outcome_text(o: ToolOutcome) -> string {
+  match o {
+    ToolCompleted(c) => c.content,
+    ToolFailed(f) => encode(jo([kv("error", jb(true)), kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))])),
+    ToolCorrelationMismatch(m) => encode(jo([kv("error", jb(true)), kv("code", js("ToolCorrelationMismatch")), kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))])),
+    ToolDeadlineExceeded(d) => encode(jo([kv("error", jb(true)), kv("code", js("ToolDeadlineExceeded")), kv("tool_call_id", js(d.tool_call_id)), kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))), kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))]))
+  }
+}
+
+pure func decode_or_empty(raw: string) -> Json {
+  match decode(raw) { Ok(j) => j, Err(_) => jo([]) }
+}
+
 func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
   let ai_step = func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
     ext_ai_step(p, model, base_url, msgs)
@@ -745,9 +762,25 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
   let env_get = func(key: string, fallback: string) -> string ! {Env} {
     p.env_get(world, key, fallback).value
   };
+  -- `ExtPorts.proc_exec` is two-argument, so like `env_get` it CAN capture the
+  -- world. It projects the typed outcome back down to a string because that is
+  -- the un-widened ABI shape (WI-C5 owns widening it), and the fault variants
+  -- are rendered rather than dropped so an extension is not told "" when a tool
+  -- actually failed. Note this seam previously forwarded `fake_tool`, which
+  -- returned "" unconditionally — it was a stub, so any output at all is an
+  -- improvement rather than a regression.
+  let proc_exec = func(name: string, args: string) -> string ! {IO, Process, FS} {
+    let inv: ToolInvocation = {
+      call: { id: "", tool: name, arguments: decode_or_empty(args) },
+      workdir: ".",
+      timeout_ms: 0,
+      started_at_ms: 0
+    };
+    tool_outcome_text(p.tool_exec(world, inv).outcome)
+  };
   {
     ai_step: ai_step,
-    proc_exec: p.tool_exec,
+    proc_exec: proc_exec,
     clock_now: ext_unrouted_clock,
     -- Unlike the clock, this one IS routed: `env_get` is two-argument, so a
     -- closure capturing the world can be written. The clock's `() -> int` shape
@@ -1815,8 +1848,11 @@ func c2_loop(
                   c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, trace_with_decision, req, post.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
-                  let msg = execute_allowed_tool_call(rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, trace_with_decision, req, post.accumulated_tool_msgs ++ [msg])
+                  let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
+                  -- `after` carries BOTH advanced cursors: the approval queue
+                  -- (from `post`) and the tool queue (from this execution).
+                  let after: C2LoopState = { post | world_state: executed.next_state };
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, after, trace_with_decision, req, after.accumulated_tool_msgs ++ [executed.msg])
                 }
               }
             }
@@ -1840,9 +1876,12 @@ func c2_loop(
           else ();
           let runtime_status_content = encode(runtime_status_json(st, policy, tool_step_idx));
           let runtime_builtin = \call. runtime_status_tool_message(call, runtime_status_content);
-          match dispatch_tool_entries_with_builtin(rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event), runtime_builtin) {
-            ToolDispatchDone(tool_msgs) =>
-              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, tool_step_idx, stream_id, tool_msgs),
+          match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event), runtime_builtin) {
+            -- `done.world`, not `st.world_state`. The batch may have executed
+            -- several tools and each one advanced the cursor; taking it off `st`
+            -- type-checks and rewinds the world to before the batch.
+            ToolDispatchDone(done) =>
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, { st | world_state: done.world }, trace_with_decision, tool_step_idx, stream_id, done.msgs),
             ToolDispatchPending(pending) => {
               let next_state: C2LoopState = {
                 msgs: st.msgs,
@@ -1851,7 +1890,10 @@ func c2_loop(
 	                ext_artifacts: st.ext_artifacts,
 	                telemetry: st.telemetry,
 	                provider: st.provider,
-	                world_state: st.world_state,
+	                -- `pending.world`: tools already executed in this batch
+	                -- before the approval interrupted it, and their cursor
+	                -- advances must survive the suspension.
+	                world_state: pending.world,
                 pending_tool_calls: [pending.request.call],
                 pending_tool_context: st.pending_tool_context,
                 pending_tool_prefix: st.pending_tool_prefix,
