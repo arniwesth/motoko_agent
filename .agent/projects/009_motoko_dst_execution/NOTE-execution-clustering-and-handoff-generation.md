@@ -33,7 +33,7 @@ disagree, the plan wins and this note is stale.
 
 | # | Items | Surface | Depends on | Status |
 |---|---|---|---|---|
-| 1 | **A1 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **Handoff written**: `HANDOFF-execute-a1-a2-port-widenings.md` |
+| 1 | **A1 + P6 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **DONE 2026-08-02** — `e59acaa`, `4ad2c7a`, `6dd1bbe`. Report: `NOTE-cluster-1-execution-report-and-plan-corrections.md` |
 | 2 | **A4 + A5 + A11** | `tools/`, Python; scans the tree, edits none of it | — | Safe to write now |
 | 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | Safe to write now |
 | 4 | **A9** | `session.ail`, `phase_vocab.ail` — driver surface again | after 1 (shared surface) | Wait for 1 |
@@ -103,7 +103,16 @@ is v0.26.0, Makefile-guarded.
 ## What invalidates this note
 
 - The plan changing its dependency graph — the plan is authoritative, this map is derived.
-- Cluster 1 landing, which unblocks clusters 4 and 6 and makes their handoffs writable.
+- ~~Cluster 1 landing~~ — **landed 2026-08-02. Clusters 4 and 6 are now groundable and their handoffs
+  writable.** Both must re-ground first: cluster 1 moved `ScriptedStep` to `ports.ail`, widened
+  `Ports.model_step` in both directions, removed `Ports.hooks_runtime`, and added
+  `C2LoopState.provider_state`, so every anchor into those three files has shifted.
+
+**One correction this map owed and now carries (C3).** Cluster 1's row said "A1 + A2". P6 is a plan
+*decision* rather than a work item, so it appeared in no row, yet the plan sequences it into A1's
+edit wave because both touch every construction site. A session working from this map alone would
+have skipped it and a later one would have paid a third full pass. **When generating a handoff, sweep
+the plan's decisions for ones that name an edit wave, not just its work items.**
 - Any cluster proving to be the wrong cut. That is expected for the later ones: the clustering past
   cluster 5 is reasoned rather than measured, and the first two or three executions are what turn it
   into something known.

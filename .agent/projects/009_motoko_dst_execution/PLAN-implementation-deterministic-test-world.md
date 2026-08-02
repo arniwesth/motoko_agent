@@ -129,7 +129,9 @@ provider… thread next_provider") describes the pre-`89a1d67` contract and is d
 which rewrites that region anyway. The ADR's anchors into `stub_step.ail` are re-grounded in the
 same change, filed as a normal amendment — not a review round.
 
-**P6. `Ports.hooks_runtime` is removed.** D1 requires the plan to give it a demonstrated production
+**P6. `Ports.hooks_runtime` is removed.** *(Executed 2026-08-02, `4ad2c7a`, with cluster 1. It has
+no work-item row, so the cluster map must name it — see C3 in
+`NOTE-cluster-1-execution-report-and-plan-corrections.md`.)* D1 requires the plan to give it a demonstrated production
 purpose or remove it. The survey found zero calls of the field repo-wide — only constructions. It
 is deleted in the same edit wave as WI-A1 (both touch every construction site; separate commit).
 
@@ -153,9 +155,11 @@ because tooling preceded editing, and that discipline is part of each estimate.
 loss-channel rule). Behaviour-preserving: `emissions: []` at every construction site. Edit surface:
 the `ports.ail` type, `ports_shape_probe`, 2 `stub_step.ail` adapters, 3 `long_qwen` sites, and the
 3 result consumers (`dispatch_step`, `ext_ai_step`, `long_qwen:744`).
-*Size:* **estimate by analogy — half a day** including the fix loop. Basis: 4 files against M1's
-28, same additive technique; deliberately slower per file than M1's rate, which is the safe
-direction.
+*Size:* ~~estimate by analogy — half a day~~ → **MEASURED: ~5.5 min, 6 files** (`e59acaa`,
+2026-08-02). The estimate was wrong by ~2 orders of magnitude and the edit surface named 4 files, not
+6 — it missed `fake_model`/`fake_ports` in `scripted_ports.ail`, a construction site reached through
+`ports_shape_probe`. See `NOTE-cluster-1-execution-report-and-plan-corrections.md` (C1); size
+remaining widenings by **sites touched**, not files or days.
 *Acceptance evidence:* `make check_core` green; `make dst` targets pass unchanged; a
 `Scripted`-provider test asserts the emission log is present and empty. Note per D1: **this item
 does not enable WI-A2** — a successor cursor is not an emission.
@@ -172,11 +176,15 @@ amendment). Not behaviour-preserving; `ScriptedPortsState`/`scripted_model_next`
 reusable code. Edit surface: `ports.ail`, `stub_step.ail`, `scripted_ports.ail`, `session.ail` (32
 `provider:` occurrences bound the edit surface), `agent_loop_v2.ail`, import sites of
 `ScriptedStep`, DST scripts.
-*Size:* **estimate by analogy — 1–2 days**, tooling first. Basis: M1's judgement band, not its
-additive band, dominates — this changes a contract rather than adding a field.
+*Size:* ~~estimate by analogy — 1–2 days~~ → **MEASURED: ~10 min, 9 files, 35 sites of which 6
+needed judgement** (`6dd1bbe`, 2026-08-02). Tooling first, as specified, and that is why it held.
+The "judgement band dominates" call was right: 17% here against M1's 10%. **Two of the six are sites
+where both alternatives type-check and the wrong one silently reproduces F6** — see
+`NOTE-cluster-1-execution-report-and-plan-corrections.md`, which WI-A12 must read before threading
+`world_state` through the same successor literals.
 *Acceptance evidence:* `scripts/dst/spike_scripted_cursor_probe.ail` prints PASS and exits 0, and
 is promoted from spike naming into the `make dst` aggregate as a permanent regression test;
-`phase_c2_wiring_scenarios` 18/18; `check_core` green; `grep` finds no `assistant_count`-derived
+`phase_c2_wiring_scenarios` at its full count (**19** once WI-A1 adds its emission-log scenario to that harness — an earlier revision said 18/18, which A1 necessarily moves); `check_core` green; `grep` finds no `assistant_count`-derived
 script index. The extension model path is **not** fixed here and no work item pretends otherwise:
 `ext_ai_step` (`session.ail:662`) discards state by ABI shape until Milestone B.
 
