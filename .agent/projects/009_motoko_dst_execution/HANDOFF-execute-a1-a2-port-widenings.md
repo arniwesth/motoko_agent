@@ -8,7 +8,8 @@ session.
 This is **cluster 1 of Milestone A** — the first code this project writes. Everything upstream of it
 is Accepted and reviewed: ADR-001 (Accepted 2026-08-02),
 `PLAN-implementation-deterministic-test-world.md` (two independent reviews, all findings applied at
-`043bf65`).
+`043bf65`). The session cut is `NOTE-execution-clustering-and-handoff-generation.md`; landing this
+cluster is what makes clusters 4 and 6 groundable.
 
 ## Mission
 

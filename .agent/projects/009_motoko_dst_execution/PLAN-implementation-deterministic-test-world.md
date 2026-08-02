@@ -135,6 +135,11 @@ is deleted in the same edit wave as WI-A1 (both touch every construction site; s
 
 ## Work items
 
+**How these are cut into executable sessions is recorded separately, in
+`NOTE-execution-clustering-and-handoff-generation.md`** — the cluster map, what can run in parallel,
+and how to generate the next handoff. Read it before writing one; it is derived from this plan's
+dependency graph, so if the two disagree, this plan wins.
+
 Milestone A is upstream-independent and starts now. Milestone B is **triggered**, not queued: it
 begins the day a released AILANG ships the recorded-stream API, and interleaves with whatever A-item
 is in flight. Milestone C depends on B. Sizing cites M1/M2 from
