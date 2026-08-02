@@ -1977,10 +1977,11 @@ Costs and risks:
 
 The checked spike in `spike/` is complete and negative against pinned AILANG v0.26.0, and its two
 load-bearing negative compiler results reproduce on latest-checked AILANG v0.30.0 and v0.31.0.
-Before acceptance, the upstream recorded-stream API selected by D1 must land, the toolchain must be
-repinned to a version containing it, and the direct positive integration probe must pass. This
-prerequisite may change the AILANG dependency and spike artifacts, and it must not silently select
-the forbidden delayed-projection fallback.
+**Before streaming-trace parity and the DST name** — not before acceptance, which is settled — the
+upstream recorded-stream API selected by D1 must land, the toolchain must be repinned to a version
+containing it, and the direct positive integration probe must pass. This prerequisite may change the
+AILANG dependency and spike artifacts, and it must not silently select the forbidden
+delayed-projection fallback.
 
 **Work that does not wait for that gate.** An earlier revision of this section read as though the
 whole migration queued behind the upstream API. Three items have no upstream dependency and should
@@ -2018,9 +2019,9 @@ be sequenced first, because two of them change what the migration costs and one 
 3. **Sequence the repin as its own milestone**, budgeting the extension-ABI major it forces
    (Consequences). It is on the critical path because D1 requires it.
 
-A fresh, source-grounded session writes the implementation plan once this ADR and the project-007
-taxonomy ADR are accepted; the plan does not wait on the upstream release either, since only the
-content of one closure and the parity proof depend on it. **Cite the spike's measurements rather
+**Both gating ADRs are now Accepted — 007 on 2026-07-26, this one on 2026-08-02 — so the plan is
+authorised.** It does not wait on the upstream release either, since only the content of one closure
+and the parity proof depend on it. See `HANDOFF-implementation-plan.md`. **Cite the spike's measurements rather
 than re-estimating them** — M1 (the `Message` migration: 14 minutes, 28 files, 69 additive sites,
 and 7 sites needing genuine judgement that a grep-derived estimate misses entirely) and M2 (the
 repin) are in `NOTE-spike-findings-real-driver-vertical.md`. The plan must survey every effect call
