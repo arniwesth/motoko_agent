@@ -1,13 +1,15 @@
 # Note: cluster 6 execution report — WI-A12, world-state threading, with plan corrections
 
-Date: 2026-08-02. Status: **partial and deliberately so — five of six effect classes landed green.**
+Date: 2026-08-02. Status: **closed — WI-A12 complete, all six effect classes landed green.**
 Handoff consumed: `HANDOFF-execute-a12-world-state-threading.md`.
 Commits: `2b938e1` (probe), `4401901` (provider), `05b58c0` (clock), `dfaa8e8` (approval),
-`c5347c6` (env), `ebf5788` (randomness).
+`c5347c6` (env), `ebf5788` (randomness), `3c2f4ab` (typed tool contract).
 
-**The typed tool contract is NOT done.** It is the last class in the plan's order, the handoff names
-it as a legitimate stopping point, and the sizing below is the reason it was not started rather than
-half-started. Everything else in A12 is complete, and every commit ends green.
+**Note on this note.** It was first written after five classes, recommending the typed tool contract
+be taken as its own cluster on a sizing that turned out to be **wrong by roughly 3x**. The tool class
+was then executed in the same session. The bad estimate is left visible in C7 rather than edited
+away, because it is the only over-estimate in three calibration runs and the reason for it is
+reusable.
 
 Third calibration run, and the first on an item the plan sized in *days*.
 
@@ -33,13 +35,15 @@ scripts. `probe_phase_vocab_sealed.ail` fails at baseline as documented and was 
 | **Approval class** | **~10 min** | 4 | 12 |
 | **Env class** | **~9 min** | 7 | 18 |
 | **Randomness class** | **~3 min** | 1 | 0 |
-| Total session | **~68 min** | 11 distinct | 85 |
+| **Typed tool contract** | **~22 min** | 6 | 34 |
+| Total session | **~92 min** | 14 distinct | 119 |
 | Plan estimate | **"several days"** | | |
 
-**This landed in a little over an hour, and per the handoff that is worth saying plainly: it is the
-third confirmation.** The sites-not-files model predicts it well — 85 sites at cluster 1's observed
-rate (~48 sites / 18 min of editing) predicts ~32 min against ~45 min actual editing. The residual
-is the clock class, which overran for a reason worth recording (C2).
+**All of WI-A12 landed in about an hour and a half, and per the handoff that is worth saying
+plainly: it is the third confirmation.** The sites-not-files model predicts it well — 119 sites at
+cluster 1's observed rate (~48 sites / 18 min of editing) predicts ~45 min against ~67 min actual
+editing. The two residuals are the clock class (C2) and the tool class, both of which overran for
+stated reasons.
 
 **What this licenses.** A13, A14 and B2 are the remaining schedule risk and the plan should re-size
 them against sites. But A13 is *new-artifact* work, and nothing in three calibration runs has
@@ -62,9 +66,12 @@ rewrites. **A12 is both, which is why the handoff called the band genuinely info
 | Approval | 12 | 4 | 33% |
 | Env | 18 | 5 | 28% |
 | Randomness | 0 | 1 | — |
-| **Combined** | **85** | **23** | **27%** |
+| Typed tool contract | 34 | 11 | 32% |
+| **Combined** | **119** | **34** | **29%** |
 
-**27%, landing exactly on cluster 4's contract-rewrite band rather than cluster 1's 19%.** The
+**29%, landing just above cluster 4's 27% contract-rewrite band and well clear of cluster 1's 19%.**
+The tool class is the highest single-class ratio in three runs at 32%, which fits: it is the only one
+that both introduced new values AND rewrote a return class. The
 split within the item is the useful part and it is not noise: the provider class was a *rename*
 (13%, below even the port-widening band), while every class that added a port shape and routed real
 call sites sat at 28–38%. **The predictor is not "port widening vs contract rewrite" but whether the
@@ -73,7 +80,7 @@ cursor forces a decision at every site that consumes it.
 
 ## The question that has paid twice: did a site admit two type-checking answers with a silent wrong one?
 
-**Yes — three times, and A12's assertions caught all three BEFORE they shipped.** Per the handoff
+**Yes — four times, and A12's assertions caught all four BEFORE they shipped.** Per the handoff
 this is the strongest available evidence the requirement was worth imposing, so each is recorded
 with what caught it and, more importantly, **what did not**.
 
@@ -100,10 +107,18 @@ Type-checks clean, freezes the queue, determinism axis stays green, caught by ad
 caught only by the provenance assertion — the determinism axis cannot see it, because an un-routed
 env read is *also* perfectly reproducible when the variable is unset in both runs.
 
+**4. The tool class, in the batch recursion.** `dispatch_tool_entries_with_builtin(ports, world, …)`
+versus `(ports, executed.next_state, …)`. Type-checks clean, freezes the tool queue so the first
+outcome is served for every call in the batch, and turns three of the four contract assertions red —
+while **both determinism axes stay green**. There are two further sites of the same shape in the same
+class, both flagged in comments at the site: `ToolDispatchDone`'s world (taking it off `st` rewinds
+the world to before the batch) and `ToolDispatchPending`'s (dropping the advances of tools that
+already ran before an approval interrupted the batch).
+
 **The generalisation, and it is the transferable finding of this run: DETERMINISM IS THE WEAKEST OF
 THE THREE AXES AND IT FAILED TO CATCH EVERY SINGLE DEFECT ABOVE.** It is the axis that feels most
 like a proof of correctness and it caught nothing. Cluster 1's freeze, cluster 4's dropped record,
-and all three defects here are consistent across runs. A13 will be tempted to lean on
+and all four defects here are consistent across runs. A13 will be tempted to lean on
 "same seed twice → identical output" as its discovery-contract invariant (D7 asks for exactly that).
 **That invariant is necessary and it is not sufficient**, and A13 should carry an advancement or
 completeness assertion beside it.
@@ -194,8 +209,15 @@ exactly this seam for replay**, and it exists now.
 2. **Scripted runs no longer read wall time at all.** A scripted run completes with `Clock` withheld.
 3. **`ported_provider` lost its `history` parameter**; six call sites were passing a message list
    nothing read.
-4. No wire change. No golden changed. The eight smoke scripts and `scripted_ports.ail`'s six unit
-   tests passed unchanged throughout.
+4. **Three new reachable tool outcomes.** A tool call can now come back as a typed execution
+   failure, a correlation mismatch, or a deadline overrun, each reaching the model as a
+   `fault_class`-tagged result message. None is reachable without a seeded world or a configured
+   `MOTOKO_TOOL_TIMEOUT_MS`, so no existing run changes — but the *set* of things a tool result can
+   say is larger, and a consumer matching exhaustively on tool-result shapes will see new members.
+5. **`ExtPorts.proc_exec` no longer returns `""` unconditionally.** It was bound to a stub; it now
+   projects the typed outcome. Zero call sites, so nothing observable changes.
+6. No wire change. No golden changed. The eight smoke scripts and `scripted_ports.ail`'s six unit
+   tests passed unchanged throughout, from a cold cache.
 
 ## Out of scope, honoured
 
@@ -210,29 +232,43 @@ never triggered — A12 *is* the subsumption). **No production code branches on 
 live/deterministic difference lives entirely in the port closure, and D1's prohibition held without
 strain at every class.
 
-## What remains: the typed tool contract, sized
+## C7. The typed tool contract, and the one over-estimate in three calibration runs
 
-Not started, and the sizing is why. All three of D1's parts are required and the third is the load
-in a way the plan's framing understates:
+This note originally recommended the tool class be taken as its own cluster, on the reasoning that it
+was "plausibly comparable to the five classes above combined". **It came in at ~22 minutes and 34
+sites — roughly a third of that.** The over-estimate is recorded because it is the only one in three
+runs, and its cause is reusable.
 
-- **A typed `ToolCallEnvelope`** — already exists (`src/core/tool_contract.ail:6`), as does
-  `ToolResultEnvelope`. This part is nearly free.
-- **Timeout/deadline information** — **does not exist anywhere.** `grep -n 'timeout\|deadline'` over
-  `tool_contract.ail` and `tool_envelope_dispatch.ail` returns nothing. The plan's
-  "completion-after-deadline" acceptance probe needs the tool adapter to consult the world clock and
-  the driver to interpret a late completion. That is new semantics, not threading.
-- **A typed result/error replacing `tool_exec: (string, string) -> string`** — the real work, and
-  **the driver does not currently use `Ports.tool_exec` at all.** Its only consumer is the
-  `ExtPorts.proc_exec` forward. Real tool execution goes `execute_allowed_tool_call`
-  (`tool_phase.ail:211`) → `dispatch_one` (`:274`) → `run_native_batch`, bypassing `Ports` entirely.
-  Routing it means threading ports+world through `tool_phase` **and returning the successor world
-  out of `execute_allowed_tool_call`, which today returns a bare `Message`** — a return-class change
-  propagating into `c2_continue_tool_batch` and the tool-batch continuations.
+**What was right.** Every structural claim held. The driver really did not use `Ports.tool_exec` —
+`live_ports` bound it to `fake_tool`, which returned `""` unconditionally, so the production tool
+port was a **dead stub** forwarded to `ExtPorts.proc_exec` while real execution went
+`execute_allowed_tool_call` → `dispatch_one`, bypassing `Ports` entirely. Deadline information really
+did not exist anywhere. And it really was a return-class change.
 
-**That last point is the sizing.** It is cluster 4's "rewrite a class of returns" shape, at 27%, on a
-surface shared with extension tool handling — plausibly comparable to the five classes above
-combined. Starting it with an hour gone would have risked carrying a half-threaded class across a
-stop, which the handoff prohibits by name. **A fresh session should take it as its own cluster.**
+**What was wrong: "return-class change" was treated as a cost, when the cost is the CALLER SET.**
+`execute_allowed_tool_call` has **2** call sites. `ToolDispatchOutcome` has **2** variants. The
+recursion is **4 self-calls inside one function**. Changing what a function returns is only expensive
+in proportion to how many places destructure it, and here that was six places in two files. Cluster
+4's "rewrite a class of returns" cost 26 sites because A9's class was *seven terminal returns spread
+across the driver*, not because rewriting a return is inherently dear.
+
+**The corrected heuristic, and it is the sizing rule this run adds:** for a return-type change,
+**count the destructuring sites before estimating, not the conceptual blast radius.** One `grep` for
+the function name answers it. The measurement cost about 90 seconds and would have changed the
+recommendation.
+
+**One design constraint was discovered rather than predicted, and it is the reason the class is
+behaviour-preserving.** An unseeded world must **delegate to the real dispatcher**: the gated smoke
+scripts `smoke_v2_pending_full_loop` and `smoke_phase_a_tool_parity` execute tools for real through
+this path, so a world-queue-only adapter would have silently replaced their tool results with empty
+strings — and `smoke_parity` could not have caught it, since it diffs a build against itself. The
+delegation is also what makes the poison pair non-vacuous, and that was verified in both directions:
+the unseeded arm completes **with** `Process` and dies without it.
+
+**A note for A10 and the D5 routing audit.** `ExtPorts.proc_exec` previously returned `""` for every
+call. It now projects the typed outcome, so faults are rendered rather than dropped. It has no call
+sites, so nothing changes today — but a profile claiming extension-side tool routing should know the
+seam was a stub, not an implementation.
 
 ## What this note invalidates
 
@@ -242,5 +278,6 @@ Its C6 was already corrected by cluster 4's C1b. Its transferable finding — la
 assertion first — is **confirmed three more times here** and should be carried forward as a standing
 rule rather than a per-item clause.
 
-This note is invalidated by the typed tool contract landing, which should report its own ratio
-against the 27% recorded here, and by any filesystem class that closes C4.
+This note is invalidated by any filesystem class that closes C4, and by WI-C5 routing the
+extension-side clock and `ExtPorts` shapes that C2 and C3 leave un-routed. **WI-A12 itself is
+complete**; A13, A14 and A15 are unblocked.
