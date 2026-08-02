@@ -282,3 +282,22 @@ verify_ext:
 	done; \
 	echo "verify_ext: $$ok with contracts, $$fail failed, $$none without contracts"; \
 	[ "$$fail" -eq 0 ] || exit 1
+
+# ---------------------------------------------------------------------------
+# ADR-001 D5 obligation 2, classifier 1: the effect-bearing stdlib module set.
+#
+# Two derivations (builtin projection + parsed stdlib interfaces), unioned and
+# reconciled against what src/ and packages/ actually import. Fails closed on any
+# imported std/* module it cannot resolve.
+#
+# `effect_inventory_selftest` cross-validates the textual fallback against
+# `ailang iface` on every file where both run. Run it after any toolchain repin;
+# the derived set is toolchain-specific and the tool refuses to run when the scan
+# root and the executing compiler disagree.
+# ---------------------------------------------------------------------------
+.PHONY: effect_inventory effect_inventory_selftest
+effect_inventory:
+	@python3 tools/effect-inventory/derive.py
+
+effect_inventory_selftest:
+	@python3 tools/effect-inventory/derive.py --self-test
