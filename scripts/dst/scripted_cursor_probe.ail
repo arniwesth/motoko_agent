@@ -1,22 +1,46 @@
--- scripts/dst/spike_scripted_cursor_probe.ail
+-- scripts/dst/scripted_cursor_probe.ail
 --
--- SPIKE ONLY — throwaway. Tests one hypothesis recorded in
+-- Regression test for F6: the DST's scripted provider must not lose its place
+-- when a compactor folds the payload.
+--
+-- Provenance. This began as a throwaway spike probe testing one hypothesis
+-- recorded in
 -- ../../.agent/projects/009_motoko_dst_execution/NOTE-spike-findings-real-driver-vertical.md
--- (F2): the live scripted provider derives its script index from
+-- (F2/F6): that the scripted provider derived its script index from
 --
 --   assistant_count(payload) - assistant_count(initial_history)
 --
 -- where `payload` is the POST-compaction message list actually sent to the
 -- provider. If a compactor removes assistant messages from that payload, the
--- index moves backwards and the script replays earlier steps.
+-- index stops tracking the real conversation. The hypothesis was CONFIRMED, so
+-- the probe exited 1 by design and was deliberately left unwired — the non-zero
+-- exit was the evidence:
 --
--- Structural compaction cannot demonstrate this: `elide_old_tool_results` only
--- shortens tool-result *content*, it never removes a message, so the assistant
--- count is unchanged. A compactor that folds turns into a summary — which is
--- what motoko_ext_compaction_ai does, `prefix ++ [summary_msg] ++ recent_turns`
--- — does reduce it. This probe models exactly that reduction deterministically,
--- with no provider call and no AI summarizer in the loop, so the result is
--- about the cursor and nothing else.
+--   control: served=[s0,s1,s2,s3,done]                     advancing=true
+--   folding: served=[s0,s1,s2,s2,s2,s2,s2,s2,s2,s2,s2,s2]  advancing=false
+--
+-- The index did not merely rewind, it PINNED: once the fold capped the payload
+-- at two assistant messages, `assistant_count(payload)` stopped growing while
+-- the real history kept growing, so the same scripted step was served forever
+-- and the run died of step-budget exhaustion instead of reaching its
+-- terminator. A pin is the worse of the two failures — nothing crashes and no
+-- invariant fires, so it is close to indistinguishable from a real result.
+--
+-- WI-A2 fixed the cursor rather than the compactor: the scripted provider now
+-- consumes a cursor the driver threads through `Ports.model_step`, whose sole
+-- persistent copy is one explicit `C2LoopState` field. This file was therefore
+-- promoted out of spike naming into the `make dst` aggregate, where it is a
+-- permanent regression test. If it starts failing again, a replay position has
+-- been re-derived from mutable message history somewhere — the arrangement
+-- ADR-001 D1 prohibits by name.
+--
+-- Structural compaction cannot exercise any of this: `elide_old_tool_results`
+-- only shortens tool-result *content*, it never removes a message, so the
+-- assistant count is unchanged. A compactor that folds turns into a summary —
+-- which is what motoko_ext_compaction_ai does,
+-- `prefix ++ [summary_msg] ++ recent_turns` — does reduce it. This probe models
+-- exactly that reduction deterministically, with no provider call and no AI
+-- summarizer in the loop, so the result is about the cursor and nothing else.
 --
 -- Two scenarios, same script and same driver entry point:
 --
@@ -24,21 +48,9 @@
 --              must terminate cleanly on the scripted `stop`.
 --   folding  — an on_pre_step hook that folds older turns into one assistant
 --              summary once the segment is long enough, exactly as an AI
---              compactor does. The hypothesis predicts the index stops
---              advancing and the run never reaches the terminal step.
---
--- RESULT (2026-07-31): the hypothesis is CONFIRMED, so this probe exits 1 by
--- design. That non-zero exit is the evidence, not a broken test:
---
---   control: served=[s0,s1,s2,s3,done]                     advancing=true
---   folding: served=[s0,s1,s2,s2,s2,s2,s2,s2,s2,s2,s2,s2]  advancing=false
---
--- The index does not merely rewind, it PINS: once the fold caps the payload at
--- two assistant messages, `assistant_count(payload)` stops growing while the
--- real history keeps growing, so the same scripted step is served forever and
--- the run dies of step-budget exhaustion instead of reaching its terminator.
+--              compactor does. Both must serve the same sequence.
 
-module scripts/dst/spike_scripted_cursor_probe
+module scripts/dst/scripted_cursor_probe
 
 import std/io (println, exit)
 import std/list as List (length)
@@ -265,9 +277,9 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
     Err(_) => false
   };
   if control_ok && folding_ok then
-    println("spike_scripted_cursor_probe PASS — the script index advanced under folding compaction")
+    println("scripted_cursor_probe PASS — the script index advanced under folding compaction")
   else {
-    let _ = println("spike_scripted_cursor_probe FAIL — control_ok=${show(control_ok)} folding_ok=${show(folding_ok)}");
+    let _ = println("scripted_cursor_probe FAIL — control_ok=${show(control_ok)} folding_ok=${show(folding_ok)}");
     exit(1)
   }
 }

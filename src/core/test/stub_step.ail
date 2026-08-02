@@ -20,7 +20,7 @@ import std/result (Result, Ok, Err)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, ports_shape_probe)
+import src/core/ports (Ports, ProviderExchange, ProviderState, ScriptedStep, empty_provider_state, ports_shape_probe)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
@@ -30,15 +30,11 @@ import pkg/sunholo/motoko_ext_abi/types (
 )
 import src/core/types (Msg)
 
--- A scripted LLM turn: what the "model" returns for one step() call.
-export type ScriptedStep = {
-  prose: string,
-  tool_calls: [ToolCall],
-  input_tokens: int,
-  output_tokens: int,
-  finish_reason: string,
-  chunks: [string]
-}
+-- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
+-- `ProviderState` can carry it without either the port module or the driver
+-- closing an LDR002 module cycle. It is re-exported here because this module
+-- is the fixture surface every test script imports.
+export type ScriptedStep = ScriptedStep
 
 -- Step provider: either the live AI, a scripted sequence, or a port-backed
 -- provider used by the Phase C2 driver while preserving old entrypoints.
@@ -95,36 +91,6 @@ func play_chunks(chunks: [string], on_chunk: (StreamChunk) -> () ! {IO, Trace}) 
   }
 }
 
-pure func assistant_count(msgs: [Message]) -> int {
-  match msgs {
-    [] => 0,
-    m :: rest => {
-      let here = if m.role == "assistant" then 1 else 0;
-      here + assistant_count(rest)
-    }
-  }
-}
-
-func scripted_step_at(script: [ScriptedStep], idx: int) -> StepResult {
-  match script {
-    [] => terminal_step(),
-    s :: rest => {
-      if idx <= 0 then scripted_to_step_result(s)
-      else scripted_step_at(rest, idx - 1)
-    }
-  }
-}
-
-func scripted_chunks_at(script: [ScriptedStep], idx: int) -> [string] {
-  match script {
-    [] => [],
-    s :: rest => {
-      if idx <= 0 then s.chunks
-      else scripted_chunks_at(rest, idx - 1)
-    }
-  }
-}
-
 -- M-AI-PROMPT-CACHING opt-in (AILANG v0.18.4): cache the stable system prompt
 -- across turns. Routes per provider:
 --   - anthropic/* (incl. via openrouter/anthropic/*): stamps
@@ -146,40 +112,64 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
 -- the emission log is empty until an API that returns the recorded stream
 -- lands. Widening the port first (WI-A1) is what shrinks that adoption to this
 -- closure instead of a migration.
+--
+-- It is also stateless, so it returns its input state unchanged. That identity
+-- transition is D1's specified answer, not a decision left to construction sites.
 export func live_ports(rt: ExtRuntime) -> Ports {
-  let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
-    func(model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: ProviderState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
       let result = stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
-      { emissions: [], result: result }
+      { emissions: [], result: result, next_state: state }
     };
   ports_shape_probe(model_step)
 }
 
-export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]) -> Ports {
-  let base_assistant_count = assistant_count(history);
-  let model_step: (string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
-    func(_model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+-- The scripted adapter, WI-A2's fix for F6.
+--
+-- It consumes the cursor the driver threads in and returns its successor. It
+-- takes no `history` and no `script`, because it holds neither: the remaining
+-- script is `state.script`, whose sole persistent copy is one explicit
+-- `C2LoopState` field.
+--
+-- What this replaces is the arrangement D1 prohibits by name — deriving the
+-- replay position from mutable message history, as
+-- `assistant_count(payload) - assistant_count(initial_history)`. That was not
+-- merely inelegant. `payload` is the POST-compaction message list, so a
+-- compactor that folds turns into a summary caps its assistant count; the index
+-- then PINS rather than rewinds, the same step is served forever, and the run
+-- dies of budget exhaustion instead of reaching its terminator. A pin is the
+-- worse of the two failures: nothing crashes and no invariant fires, so it is
+-- close to indistinguishable from a real result. See F6, and
+-- scripts/dst/scripted_cursor_probe.ail, which is its executable statement.
+export func scripted_ports() -> Ports {
+  let model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: ProviderState, _model: string, _msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
-      let idx = assistant_count(msgs) - base_assistant_count;
-      let chunks = scripted_chunks_at(script, idx);
-      let _ = play_chunks(chunks, on_chunk);
-      { emissions: [], result: Ok(scripted_step_at(script, idx)) }
+      match state.script {
+        [] => { emissions: [], result: Ok(terminal_step()), next_state: state },
+        s :: rest => {
+          let _ = play_chunks(s.chunks, on_chunk);
+          { emissions: [], result: Ok(scripted_to_step_result(s)), next_state: { script: rest } }
+        }
+      }
     };
   ports_shape_probe(model_step)
 }
 
--- Dispatch one step call through the provider.
--- Returns both the step result and the updated provider (tail of script for Scripted).
--- Loop callers thread next_provider into their recursive call.
--- rt is forwarded to tools_with_extensions so extension tools appear in the LLM catalog.
+-- The initial provider state for a scripted run: the whole script, uncounted.
+export pure func scripted_provider_state(script: [ScriptedStep]) -> ProviderState {
+  { script: script }
+}
+
+-- Run one provider exchange through the ports seam: provider state in, its
+-- successor out, alongside the emission log and the outcome.
 --
 -- on_chunk fires per StreamChunk during the SSE drain (M-AI-STEP-STREAMING,
 -- AILANG v0.18.7). Live providers (Anthropic / OpenAI / OpenRouter / Gemini)
 -- stream content deltas natively; Ollama and config-driven providers fire
 -- one synthetic ContentDelta(full_text) + one Usage at end-of-call. The
 -- callback is wired by agent_loop_v2 to emit thinking_delta events.
--- Run one provider exchange through the ports seam.
 --
 -- This was a three-way match on StepProvider. WI-C13c ("Wire model dispatch
 -- through ports") made `ported_provider` normalise every caller-supplied
@@ -197,11 +187,12 @@ export func scripted_ports_from_steps(history: [Message], script: [ScriptedStep]
 -- loss channel WI-A1 just closed, one line above the port.
 export func dispatch_step(
   ports: Ports,
+  state: ProviderState,
   model: string,
   msgs: [Message],
   on_chunk: (StreamChunk) -> () ! {IO, Trace}
 ) -> ProviderExchange ! {AI, IO, Trace} {
-  ports.model_step(model, msgs, on_chunk)
+  ports.model_step(state, model, msgs, on_chunk)
 }
 
 -- Constructor helpers for test scripts

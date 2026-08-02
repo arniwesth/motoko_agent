@@ -130,13 +130,13 @@ import src/core/phase_vocab (
   Finalize,
   Fail
 )
-import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, Ported, ScriptedStep, live_ports, scripted_ports_from_steps)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, Ported, ScriptedStep, live_ports, scripted_ports, scripted_provider_state)
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ApprovalAllowed, ApprovalDenied, Ports)
+import src/core/ports (ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, ProviderState, empty_provider_state)
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -342,6 +342,11 @@ type C2LoopState = {
   ext_artifacts: Json,
   telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
   provider: Ports,
+  -- D1's interim home for the provider cursor: ONE explicit field, threaded by
+  -- the driver. Not a closure captured inside the Ports value, not a provider
+  -- ADT payload, and never re-derived from message history. `world_state`
+  -- subsumes this field when it lands (WI-A12) and deletes it in the same change.
+  provider_state: ProviderState,
   pending_tool_calls: [ToolCall],
   pending_tool_context: [Message],
   pending_tool_prefix: [Message],
@@ -588,14 +593,15 @@ func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
   }
 }
 
-func c2_initial_state_with_counts(history: [Message], provider: Ports, prior_counts: RuntimeStatusCounts) -> C2LoopState {
+func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, prior_counts: RuntimeStatusCounts) -> C2LoopState {
   {
     msgs: history,
     step_idx: 0,
     totals: zero_totals(),
     ext_artifacts: jo([]),
     telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
-    provider: provider,
+    provider: provider.ports,
+    provider_state: provider.state,
     pending_tool_calls: [],
     pending_tool_context: [],
     pending_tool_prefix: [],
@@ -611,7 +617,7 @@ func c2_initial_state_with_counts(history: [Message], provider: Ports, prior_cou
   }
 }
 
-func c2_initial_state(history: [Message], provider: Ports) -> C2LoopState {
+func c2_initial_state(history: [Message], provider: PortedProvider) -> C2LoopState {
   c2_initial_state_with_counts(history, provider, zero_runtime_status_counts())
 }
 
@@ -659,12 +665,18 @@ func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Resu
   -- which for OpenRouter still carries the "openrouter/" routing prefix; sent
   -- raw the provider rejects it with 400 "not a valid model ID", surfacing as
   -- compaction_ai.summarizer_failed / provider_error. Strip it here.
-  -- The emission log is dropped here, and that is an ABI limit rather than an
-  -- oversight: ExtPorts.ai_step returns Result[string, string]
-  -- (packages/motoko-ext-abi/types.ail:63) and the hook results above it are
-  -- decision-only, so there is nowhere for it to go. Widening ExtPorts belongs
-  -- to the ABI major the repin forces (ADR-001 D1, Milestone B).
-  match p.model_step(provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk).result {
+  -- Both the emission log and the successor cursor are dropped here, and that
+  -- is an ABI limit rather than an oversight: ExtPorts.ai_step returns
+  -- Result[string, string] (packages/motoko-ext-abi/types.ail:63) and the hook
+  -- results above it are decision-only, so a successor has no way back to
+  -- C2LoopState. Threading the driver's live cursor in and discarding the
+  -- successor would recreate F6; capturing it in this closure would create the
+  -- second home D1 prohibits. So the extension model path is EXCLUDED rather
+  -- than hand-waved: it is handed a fresh empty state, and WI-A2 is a partial
+  -- cursor fix that says so. Any conformant interim profile must exclude every
+  -- hook registered by an extension that calls this. Widening ExtPorts.ai_step
+  -- belongs to the ABI major the repin forces (ADR-001 D1, Milestone B).
+  match p.model_step(empty_provider_state(), provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk).result {
     Ok(result) => Ok(result.message.content),
     Err(e) => Err("${e.code}: ${e.message}")
   }
@@ -697,11 +709,19 @@ pure func ext_token_telemetry(t: { last_input_tokens: int, last_output_tokens: i
 --
 -- StepProvider remains the *entry-point argument* type — callers still pass
 -- LiveAI or Scripted(script); it just does not survive into loop state.
-func ported_provider(rt: ExtRuntime, history: [Message], provider: StepProvider) -> Ports {
+--
+-- WI-A2: it now returns the initial provider state alongside the Ports. The
+-- script rides in that state rather than being baked into a closure, which is
+-- what lets the driver own the cursor. `history` is no longer read — the
+-- scripted adapter used to derive its position from it, and that is exactly the
+-- defect (F6) this change removes — but the parameter stays because it is part
+-- of the normaliser's signature at six call sites and D1 keeps this seam stable
+-- until `world_state` replaces it.
+func ported_provider(rt: ExtRuntime, _history: [Message], provider: StepProvider) -> PortedProvider {
   match provider {
-    Ported(p) => p,
-    LiveAI => live_ports(rt),
-    Scripted(script) => scripted_ports_from_steps(history, script)
+    Ported(p) => { ports: p, state: empty_provider_state() },
+    LiveAI => { ports: live_ports(rt), state: empty_provider_state() },
+    Scripted(script) => { ports: scripted_ports(), state: scripted_provider_state(script) }
   }
 }
 
@@ -1375,6 +1395,7 @@ func c2_finish_tool_batch(
 	    ext_artifacts: st.ext_artifacts,
 	    telemetry: st.telemetry,
 	    provider: st.provider,
+	    provider_state: st.provider_state,
     pending_tool_calls: [],
     pending_tool_context: [],
     pending_tool_prefix: [],
@@ -1420,6 +1441,7 @@ func c2_continue_tool_batch(
 	        ext_artifacts: st.ext_artifacts,
 	        telemetry: st.telemetry,
 	        provider: st.provider,
+	        provider_state: st.provider_state,
         pending_tool_calls: c2_tool_plan_calls(req.remaining),
         pending_tool_context: st.pending_tool_context,
         pending_tool_prefix: st.pending_tool_prefix,
@@ -1455,6 +1477,7 @@ func c2_after_dp7(
 	  ext_artifacts: Json,
 	  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
 	  st_provider: Ports,
+	  st_provider_state: ProviderState,
   prior_counts: RuntimeStatusCounts,
   session_id: string,
   started_at_ms: int,
@@ -1473,6 +1496,7 @@ func c2_after_dp7(
 	        ext_artifacts: ext_artifacts,
 	        telemetry: telemetry,
 	        provider: st_provider,
+	        provider_state: st_provider_state,
         pending_tool_calls: [],
         pending_tool_context: [],
         pending_tool_prefix: [],
@@ -1496,6 +1520,7 @@ func c2_after_dp7(
 	        ext_artifacts: ext_artifacts,
 	        telemetry: telemetry,
 	        provider: st_provider,
+	        provider_state: st_provider_state,
         pending_tool_calls: [],
         pending_tool_context: [],
         pending_tool_prefix: [],
@@ -1574,6 +1599,7 @@ func c2_loop(
 	            ext_artifacts: st.ext_artifacts,
 	            telemetry: st.telemetry,
 	            provider: st.provider,
+	            provider_state: st.provider_state,
             pending_tool_calls: [],
             pending_tool_context: [],
             pending_tool_prefix: [],
@@ -1599,6 +1625,7 @@ func c2_loop(
 	            ext_artifacts: cp.state.ext_artifacts,
 	            telemetry: cp.state.telemetry,
 	            provider: st.provider,
+	            provider_state: st.provider_state,
             pending_tool_calls: st.pending_tool_calls,
             pending_tool_context: st.pending_tool_context,
             pending_tool_prefix: st.pending_tool_prefix,
@@ -1674,6 +1701,7 @@ func c2_loop(
 	                ext_artifacts: st.ext_artifacts,
 	                telemetry: st.telemetry,
 	                provider: st.provider,
+	                provider_state: st.provider_state,
                 pending_tool_calls: [pending.request.call],
                 pending_tool_context: st.pending_tool_context,
                 pending_tool_prefix: st.pending_tool_prefix,
@@ -1734,7 +1762,7 @@ func c2_loop(
                 model: model
               });
               let _ = ledger_emit(session_id, prepared_event);
-              let exchange = dispatch_step(st.provider, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
+              let exchange = dispatch_step(st.provider, st.provider_state, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
               -- exchange.emissions rides along but has no driver consumer yet:
               -- live_ports returns [] until the recorded-stream API lands, and
               -- projecting the log into the ledger is WI-A12's work. WI-A1 is
@@ -1754,6 +1782,7 @@ func c2_loop(
 	                      ext_artifacts: chain.artifacts,
 	                      telemetry: st.telemetry,
 	                      provider: st.provider,
+	                      provider_state: exchange.next_state,
                       pending_tool_calls: [],
                       pending_tool_context: [],
                       pending_tool_prefix: [],
@@ -1805,6 +1834,7 @@ func c2_loop(
 	                        ext_artifacts: chain.artifacts,
 	                        telemetry: applied.telemetry,
 	                        provider: st.provider,
+	                        provider_state: exchange.next_state,
                         pending_tool_calls: [],
                         pending_tool_context: [],
                         pending_tool_prefix: [],
@@ -1837,6 +1867,7 @@ func c2_loop(
 	                          ext_artifacts: chain.artifacts,
 	                          telemetry: applied.telemetry,
 	                          provider: st.provider,
+	                          provider_state: exchange.next_state,
                           pending_tool_calls: applied.pending_tool_calls,
                           pending_tool_context: msgs_with_assistant,
                           pending_tool_prefix: msgs_with_assistant,
@@ -1871,6 +1902,7 @@ func c2_loop(
 	                              ext_artifacts: chain.artifacts,
 	                              telemetry: applied.telemetry,
 	                              provider: st.provider,
+	                              provider_state: exchange.next_state,
                               pending_tool_calls: [synth_call],
                               pending_tool_context: msgs_with_assistant,
                               pending_tool_prefix: st.msgs ++ [augmented_assistant_msg],
@@ -1889,7 +1921,7 @@ func c2_loop(
                           None => {
                             match dispatch_solver_candidate(rt, post_ctx, result.message.content) {
                               Accept(output) =>
-	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
+	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, exchange.next_state, st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
                               ContinueWithFeedback(feedback) => {
                                 let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
                                 let _ = ledger_emit(session_id, event);
@@ -1900,6 +1932,7 @@ func c2_loop(
 	                                  ext_artifacts: chain.artifacts,
 	                                  telemetry: applied.telemetry,
 	                                  provider: st.provider,
+	                                  provider_state: exchange.next_state,
                                   pending_tool_calls: [],
                                   pending_tool_context: [],
                                   pending_tool_prefix: [],
@@ -1930,6 +1963,7 @@ func c2_loop(
 	                                    ext_artifacts: chain.artifacts,
 	                                    telemetry: applied.telemetry,
 	                                    provider: st.provider,
+	                                    provider_state: exchange.next_state,
                                     pending_tool_calls: [],
                                     pending_tool_context: [],
                                     pending_tool_prefix: [],
@@ -1945,7 +1979,7 @@ func c2_loop(
                                   };
                                   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                                 } else
-	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, result.message.content, "")
+	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, exchange.next_state, st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, result.message.content, "")
                               }
                             }
                           }
@@ -1976,7 +2010,7 @@ func run_v2_from_messages_traced_with_policy(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  provider: Ports
+  provider: PortedProvider
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   run_v2_from_messages_traced_with_policy_and_counts(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, zero_runtime_status_counts())
 }
@@ -1994,7 +2028,7 @@ func run_v2_from_messages_traced_with_policy_and_counts(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  provider: Ports,
+  provider: PortedProvider,
   prior_counts: RuntimeStatusCounts
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let session_id = derive_session_id();
@@ -2074,7 +2108,7 @@ func run_v2_from_messages_with_policy(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  provider: Ports
+  provider: PortedProvider
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   run_v2_from_messages_with_policy_and_counts(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, zero_runtime_status_counts())
 }
@@ -2092,7 +2126,7 @@ func run_v2_from_messages_with_policy_and_counts(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  provider: Ports,
+  provider: PortedProvider,
   prior_counts: RuntimeStatusCounts
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let session_id = derive_session_id();
@@ -2187,7 +2221,7 @@ func conversation_loop_v2_with_policy(
   ohmy_pi: bool,
   max_cost_millicents: int,
   cost_rates: CostRates,
-  provider: Ports,
+  provider: PortedProvider,
   session_id: string,
   prior_counts: RuntimeStatusCounts
 ) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -2495,7 +2529,8 @@ pure func test_runtime_status_includes_prior_conversation_counts() -> bool
       totals: zero_totals(),
       ext_artifacts: jo([]),
       telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
-      provider: scripted_ports_from_steps([], []),
+      provider: scripted_ports(),
+      provider_state: empty_provider_state(),
       pending_tool_calls: [],
       pending_tool_context: [],
       pending_tool_prefix: [],
@@ -2545,7 +2580,8 @@ pure func test_runtime_status_reports_actual_context_window() -> bool
       totals: zero_totals(),
       ext_artifacts: jo([]),
       telemetry: { last_input_tokens: 500, last_output_tokens: 20, last_estimated_input_tokens: 0 },
-      provider: scripted_ports_from_steps([], []),
+      provider: scripted_ports(),
+      provider_state: empty_provider_state(),
       pending_tool_calls: [],
       pending_tool_context: [],
       pending_tool_prefix: [],

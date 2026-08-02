@@ -9,7 +9,7 @@ import std/result (Result, Ok, Err)
 import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, ports_shape_probe)
+import src/core/ports (Ports, ProviderExchange, ProviderState, empty_provider_state, ports_shape_probe)
 import src/core/test/stub_step (StepProvider, Ported)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -172,9 +172,9 @@ func runtime_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, 
 }
 
 func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
-  let model_step = func(model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: ProviderState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
-    { emissions: [], result: routed_step(max_tools, model, msgs, on_chunk) }
+    { emissions: [], result: routed_step(max_tools, model, msgs, on_chunk), next_state: state }
   };
   let base = ports_shape_probe(model_step);
   {
@@ -242,9 +242,9 @@ func routed_step_strict(_model: string, msgs: [Message], _on_chunk: (StreamChunk
 }
 
 func strict_ports() -> Ports ! {AI, IO, Trace} {
-  let model_step = func(model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: ProviderState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
-    { emissions: [], result: routed_step_strict(model, msgs, on_chunk) }
+    { emissions: [], result: routed_step_strict(model, msgs, on_chunk), next_state: state }
   };
   let base = ports_shape_probe(model_step);
   {
@@ -739,7 +739,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
     ports: {
       ai_step: func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
         let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
-        match ports.model_step(model, msgs, on_chunk).result {
+        match ports.model_step(empty_provider_state(), model, msgs, on_chunk).result {
           Ok(r) => Ok(r.message.content),
           Err(e) => Err(e.message)
         }
@@ -758,9 +758,9 @@ func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx {
 }
 
 func summary_ports(summary: string) -> Ports ! {AI, IO, Trace} {
-  let model_step = func(_model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: ProviderState, _model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
-    { emissions: [], result: Ok(step_result(summary, [], "stop")) }
+    { emissions: [], result: Ok(step_result(summary, [], "stop")), next_state: state }
   };
   ports_shape_probe(model_step)
 }

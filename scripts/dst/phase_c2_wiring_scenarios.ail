@@ -30,7 +30,7 @@ import src/core/phase_vocab (
 )
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
-import src/core/test/stub_step (Scripted, ScriptedStep, prose_step, chunked_prose_step, tool_step, tool_step_finish, empty_rt, deny_all_rt, scripted_ports_from_steps)
+import src/core/test/stub_step (Scripted, ScriptedStep, prose_step, chunked_prose_step, tool_step, tool_step_finish, empty_rt, deny_all_rt, scripted_ports, scripted_provider_state)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/types (Msg)
@@ -711,9 +711,10 @@ func decision_record_append_name_round_trip_scenario() -> Scenario {
 -- behaviour-preserving claim needs re-checking.
 func scenario_scripted_exchange_carries_empty_emission_log() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let base = [msg("system", "s"), msg("user", "u")];
-  let ports = scripted_ports_from_steps(base, [chunked_prose_step("done", ["chunk-a", "chunk-b"])]);
+  let ports = scripted_ports();
+  let state = scripted_provider_state([chunked_prose_step("done", ["chunk-a", "chunk-b"])]);
   let swallow = func(_c: StreamChunk) -> () ! {IO} { () };
-  let exchange = ports.model_step("phase-c-model", base, swallow);
+  let exchange = ports.model_step(state, "phase-c-model", base, swallow);
   let emission_count = length(exchange.emissions);
   let served = match exchange.result {
     Ok(r) => r.message.content,

@@ -251,14 +251,14 @@ Load-bearing current-source anchors:
 
 | Premise | Grounding |
 |---|---|
-| `Ports` is function-valued and its tool seam is stringly | `src/core/ports.ail:17-24` |
+| `Ports` is function-valued and its tool seam is stringly | `src/core/ports.ail:105-110` — re-grounded 2026-08-02 (P5, with WI-A1/WI-A2). Five fields, not six: `hooks_runtime` was removed by P6 |
 | Existing scripted state demonstrates explicit `result + next` for three separate queues, but is not threaded through the session | `src/core/test/scripted_ports.ail:20-65` |
-| `ScriptedStep` contains only successful-result fields | `src/core/test/stub_step.ail:34-41` |
+| `ScriptedStep` contains only successful-result fields | `src/core/ports.ail:28-35` — re-grounded 2026-08-02 (P5). WI-A2 **relocated** the type out of `src/core/test/stub_step.ail`, where it can no longer live: `ProviderState` carries it, and both the port module and the driver must name it without closing an `LDR002` cycle. `stub_step.ail:37` re-exports it, so every existing importer is unchanged |
 | `TracedSessionResult` currently contains only `result + trace` | `src/core/session.ail:146-149` |
 | Approval and session clock bypass `Ports` | `src/core/session.ail:1619` (`readLine`), `1991`, `2089` (`now()`) — re-grounded 2026-08-01 |
 | Success emits `RunSummary`/`DoneEvent` without appending them to the returned trace; other errors return directly | **Five** `emit_run_summary` call sites in `src/core/session.ail` — `1325`, `1554`, `1704`, `1711`, `1762` (`1554-1555` is the success path; `1325` is the shared `c2_fail` helper, so call sites do **not** equal terminal paths). The "return directly" clause is grounded separately on the two terminal returns that emit no summary at all: invalid history at `1528-1531` and the approval-state invariant at `1614-1616` — re-grounded 2026-08-01 (second pass) |
 | Native tools execute sequentially and directly against FS/Process | `src/core/tool_runtime.ail:151-165` |
-| Core tool dispatch is serial; MCP execution is a blocking call; provider chunks are callback-ordered | `src/core/tool_phase.ail:302-357`; `packages/motoko-ext-mcp/exec.ail:63-70,165-176`; `src/core/test/stub_step.ail:88-96` (`play_chunks`), `148-154` (the live closure passing `on_chunk` to `stepWithStream`), `157-168` (the scripted closure), `192-199` (the one-arm `dispatch_step` pass-through, whose `:198` is the sole `model_step` call *in `dispatch_step`* — the seam has a second call at `src/core/session.ail:662` inside `ext_ai_step`, see D1) — re-grounded 2026-08-01 (fourth pass); the previously cited `:175-204` predates `89a1d67` and straddles two things: `175-191` is the comment block, partly stale (see *Known stale source comment* below), while `192-199` is live `dispatch_step` and `203-204` opens `prose_step` |
+| Core tool dispatch is serial; MCP execution is a blocking call; provider chunks are callback-ordered | `src/core/tool_phase.ail:302-357`; `packages/motoko-ext-mcp/exec.ail:63-70,165-176`; `src/core/test/stub_step.ail:84-92` (`play_chunks`), `118-126` (the live closure passing `on_chunk` to `stepWithStream`), `145-158` (the scripted closure), `188-196` (the one-arm `dispatch_step` pass-through, whose `:195` is the sole `model_step` call *in `dispatch_step`* — the seam has a second call at `src/core/session.ail:662` inside `ext_ai_step`, see D1) — re-grounded 2026-08-02 (P5, fifth pass), after WI-A1 and WI-A2 widened `model_step` in both directions and P6 removed `hooks_runtime`. The scripted closure no longer derives an index from the payload; it consumes `state.script` and returns the tail |
 | The current streaming wrapper cannot return the chunks it projects live | `packages/motoko-ext-ai-compat/ai_compat.ail:31-37,60-71,197-220` |
 | Neither state-returning nor `SharedMem`-capturing callbacks fit the pinned real API | `spike/README.md`; `spike/probe_state_returning_callback_rejected.ail`; `spike/probe_sharedmem_callback_rejected.ail` |
 | Latest upstream does not close the streaming-capture gap | AILANG MCP `ailang_versions` reports v0.30.0 latest; release `std/ai.ail:330-337` at `e37b370d1d7a9c4e7136b319e38bec4d5f2bd9a0` retains `on_chunk: (StreamChunk) -> () ! {IO}` and returns only `Result[StepResult, AIError]`; both negative probes reproduce under the checksum-verified v0.30.0 compiler |
@@ -268,19 +268,18 @@ Load-bearing current-source anchors:
 | Effectful extensions can bypass `ExtCtx.ports` | `packages/motoko_scratchpad/scratchpad.ail:90-101`; `packages/motoko-ext-mcp/exec.ail:165-170` |
 | Core provider retry policy is count/budget based | `src/core/recovery.ail:12-18` |
 
-**Known stale source comment.** `src/core/test/stub_step.ail:171-173` describes a `dispatch_step`
-signature that `89a1d67` deleted: `:171-172` promise that it "Returns both the step result and the
-updated provider (tail of script for `Scripted`)" and that "Loop callers thread `next_provider`", and
-`:173` says "rt is forwarded to `tools_with_extensions`" — but `rt` was a real parameter of that
-function before `89a1d67` and is not one now (`:192-199` takes `ports`, `model`, `msgs`, `on_chunk`;
-`rt` is captured by `live_ports(rt)` instead). The same comment block contradicts itself at
-`:190-191` ("There is no `next_provider` to return").
+**Known stale source comment — resolved 2026-08-02 by WI-A2 (P5).** `src/core/test/stub_step.ail`
+carried a comment describing a `dispatch_step` signature that `89a1d67` had deleted: it promised that
+the function "Returns both the step result and the updated provider (tail of script for `Scripted`)",
+that "Loop callers thread `next_provider`", and that "rt is forwarded to `tools_with_extensions`" —
+`rt` having been a real parameter before `89a1d67` and not one after. The same block then contradicted
+itself a few lines down ("There is no `next_provider` to return").
 
-**The exact range matters to whoever executes this fix: delete `171-173`.** `:170` ("Dispatch one step
-call through the provider") is accurate and must survive; `:189` is a bare `--` marker; `:190-191` are
-correct and stay. The premise the row above grounds is unaffected — both closures fire `on_chunk`
-serially — but the stale lines must be deleted as a source fix, and this ADR's anchors into that file
-re-grounded in the same change.
+WI-A2 rewrote that region, so the stale lines are gone and the surviving comment describes the current
+contract: provider state in, its successor out, alongside the emission log and the outcome. Nothing
+here is outstanding; the paragraph is kept because the finding is what motivated P5's anchor
+re-grounding, and because the failure mode — a comment that outlived two signature changes and was
+still being cited by an ADR — is worth leaving on the record.
 
 Recorded here rather than silently repaired, because moving source under this ADR is the specific
 pattern that produced the stale anchors above. **This note has now been wrong twice**, which is its own
