@@ -11,6 +11,26 @@ each. Per `measure-review-loop-convergence-and-build-detectors-instead-of-specif
 work item below refines *how* a detector decides anything — where that question arises during
 execution, the answer is a spike against the artifact, not a paragraph in this document.
 
+## Review disposition
+
+Two independent reviews, 2026-08-02: `REVIEW-implementation-plan-execution-safety.md` (10 findings,
+*Accept with conditions*) and `REVIEW-implementation-plan-second-verification.md` (14 findings,
+*Revise*). Their union is **14 distinct findings; all 14 are accepted and applied here**, and none
+reopens D1–D11.
+
+Both reviewers built probes on the pin and both **broke P2's stated ground** — independently, by
+different routes — which is recorded in P2 below rather than quietly repaired. One reviewer's probe
+also produced a *positive* result that **replaces P1's weaker M1 citation** with build-backed
+evidence. Both confirmed, against source: P1's record choice, P4's vacuity, that **WI-A9 does not
+need WI-A8** (the author's judgement, upheld), the `32 provider:` figure's honest use, and the
+A1 → A2 → A12 spine with no cycles.
+
+The findings cluster in one place, and it is the place the review handoff predicted: **ADR
+obligations with no implementation home** — nine of the fourteen. Self-review had found two such
+gaps and scheduled them; independent review found nine more. That asymmetry is the argument for
+independent review of a completeness claim, and it is why this pass adds a work item (A15) rather
+than only editing prose.
+
 ## Survey: executed at HEAD, 2026-08-02
 
 The ADR's handoff requires ten re-verifications. All ten were run against HEAD `eabaac8` on the
@@ -46,22 +66,40 @@ item re-litigates them.
 
 **P1. `ProviderState` is a record, not a sum.** Declared in `src/core/ports.ail` as a record whose
 first field is the scripted cursor (the remaining-script tail, the threading style
-`scripted_model_next` already demonstrates). Ground: M1 measured additive record widening as cheap
-and mechanical (69 sites, 14 minutes) while the 7 expensive sites were the ones needing structural
-judgement — a record makes any future cursor an *additive field*, a sum would make it a variant
-restructuring. The live/`Ported` value is the record with an empty script; live adapters return
-their input unchanged (D1's specified identity transition).
+`scripted_model_next` already demonstrates). **Ground: build-backed, not analogy.** A reviewer's
+three-module probe on the pin widened a `ProviderState` already used in a cross-module port
+signature and the port module came out **byte-identical** — the compiler flagged only the
+construction site, which is the additive-edit shape this decision wants. (An earlier revision
+grounded P1 on M1 instead. That citation over-claimed: M1's 7 judgement sites were about *type
+identity*, `Msg` versus `Message`, and it never measured the sum alternative. The probe is the
+stronger evidence and replaces it.) The live/`Ported` value is the record with an empty script;
+live adapters return their input unchanged (D1's specified identity transition).
 
-**P2. The approval and clock cursors do not ride along in the interim widening.** Neither has an
-interim consumer: the scripted adapter's `approval_read` is a constant deny (`deny_approval`,
-`ports.ail:26-28`, wired at `:42`) with no position to thread, and the virtual clock only exists
-once `world_state` lands — which subsumes and deletes the interim field anyway (D1). Dead
-rider state threaded through every construction site would be cost without a customer. The risk the
-ADR warns about — reproducing the bidirectional widening — is closed **structurally, not by
-guessing**: because of P1, adding a cursor later changes no port signature; the state parameter
-stays `ProviderState` and the addition is an M1-class additive edit. `ScriptedPortsState`
-(`scripted_ports.ail:20-24`) already models all three cursors and remains the design precedent for
-that addition if a pre-`world_state` need materialises.
+**P2. The approval and clock cursors do not ride along in the interim widening.** The decision
+stands; **its ground is no-interim-consumer, not structural closure**, and an earlier revision
+claimed the latter wrongly.
+
+*Why the decision stands:* neither cursor has an interim consumer. The scripted adapter's
+`approval_read` is a constant deny (`deny_approval`, `ports.ail:26-28`, wired at `:42`) with no
+position to thread, and the virtual clock only exists once `world_state` lands — which subsumes and
+deletes the interim field anyway (D1). Dead rider state threaded through every construction site
+would be cost without a customer.
+
+*What is not true:* that P1 closes the ADR's bidirectional-widening risk. **The structural closure
+covers only cursors consumed at `model_step`**, the one port gaining a state parameter.
+`approval_read` and `clock_now` have no state parameter at all (`ports.ail:19-20`), so adding a
+field to `ProviderState` does not make either reachable. Two independent reviewer probes on the pin
+established this: assigning a state-threaded adapter to HEAD-shaped `approval_read` fails to unify
+(`function arity mismatch: 2 vs 1`), and the only shape that compiles without changing the port is
+a **closure-captured cursor — which runs, freezes, and reproduces F6's exact signature on a second
+port** (`served=[allow, allow, allow]`, advancing=false). That is the arrangement D1 prohibits by
+name.
+
+*The residual, stated rather than hidden:* a pre-`world_state` need for a non-constant approval or
+a clock value read from interim state forces a **second bidirectional port widening**, of
+`approval_read` or `clock_now`. **Trigger to reopen this decision:** any such need arising before
+WI-A12. `ScriptedPortsState` (`scripted_ports.ail:20-24`) already models all three cursors and is
+the design precedent if it does.
 
 **P3. Clock routing order, and the first routed-set claimant.** Order: (1) the four driver sites,
 routed to the world clock as part of WI-A12 — every profile needs them; (2) `ext/runtime.ail:190`
@@ -109,8 +147,10 @@ because tooling preceded editing, and that discipline is part of each estimate.
 **WI-A1. Widen `Ports.model_step`'s result with the emission log** (ADR handoff item 1; D1's
 loss-channel rule). Behaviour-preserving: `emissions: []` at every construction site. Edit surface:
 the `ports.ail` type, `ports_shape_probe`, 2 `stub_step.ail` adapters, 3 `long_qwen` sites, and the
-3 result consumers (`dispatch_step`, `ext_ai_step`, `long_qwen:744`). Size: below M1 — 4 files vs
-28, same technique; half a day including the fix loop.
+3 result consumers (`dispatch_step`, `ext_ai_step`, `long_qwen:744`).
+*Size:* **estimate by analogy — half a day** including the fix loop. Basis: 4 files against M1's
+28, same additive technique; deliberately slower per file than M1's rate, which is the safe
+direction.
 *Acceptance evidence:* `make check_core` green; `make dst` targets pass unchanged; a
 `Scripted`-provider test asserts the emission log is present and empty. Note per D1: **this item
 does not enable WI-A2** — a successor cursor is not an emission.
@@ -126,8 +166,9 @@ initial-state pair; the sole persistent copy in **one explicit `C2LoopState` fie
 amendment). Not behaviour-preserving; `ScriptedPortsState`/`scripted_model_next` is precedent, not
 reusable code. Edit surface: `ports.ail`, `stub_step.ail`, `scripted_ports.ail`, `session.ail` (32
 `provider:` occurrences bound the edit surface), `agent_loop_v2.ail`, import sites of
-`ScriptedStep`, DST scripts. Size: the largest pre-repin item — M1's judgement band dominates;
-1–2 days, tooling first.
+`ScriptedStep`, DST scripts.
+*Size:* **estimate by analogy — 1–2 days**, tooling first. Basis: M1's judgement band, not its
+additive band, dominates — this changes a contract rather than adding a field.
 *Acceptance evidence:* `scripts/dst/spike_scripted_cursor_probe.ail` prints PASS and exits 0, and
 is promoted from spike naming into the `make dst` aggregate as a permanent regression test;
 `phase_c2_wiring_scenarios` 18/18; `check_core` green; `grep` finds no `assistant_count`-derived
@@ -148,7 +189,8 @@ hard error auto-relaxing to a warning when run from a temp directory — ticket
 program, not a specification; the ADR fixes its contract (typed field-call inventory over `src` +
 `packages`, fails closed on every alias, wrapper, re-export, or computed access it cannot resolve;
 membership today exactly `ai_step`). Modeled on `tools/effect-inventory/derive.py` with a `make`
-target and selftest. Size: classifier 1 took an afternoon; budget the same.
+target and selftest.
+*Size:* **estimate by analogy — an afternoon.** Basis: classifier 1, like for like.
 *Acceptance evidence (per the gate table):* at HEAD it reports exactly the two known call sites and
 zero unresolved occurrences; a synthetic alias/wrapper fixture is reported as unresolved →
 fail-closed triage, not a pass; re-derivation wired into the repin checklist.
@@ -162,8 +204,13 @@ prose-refinement trap).
 *Acceptance evidence:* validation rejects unknown hook ids, stale source-revision bindings, and
 malformed rows; permits known-but-uninstalled hooks; the empty-intersection rule is exercised by a
 test (a row whose hook set misses the profile's installs removes the site); the table's
-`(source revision, content hash)` identity is what profiles reference. **Scheduling prohibition
-honoured:** no routing-completeness claim anywhere in this plan precedes this item.
+`(source revision, content hash)` identity is what profiles reference. **Producer-side completeness
+is evidence too, and row-shape checks do not supply it:** a fixture in which a
+classifier-discovered core effect site appears in neither the attribution rows nor the explicit
+unconditional-core set must be **rejected at profile load**. Without it a syntactically valid table
+that silently omits a discovered site passes every other check — the fail-open D4 clause 3 exists
+to close. **Scheduling prohibition honoured:** every routing-completeness claim in this plan
+(A12's, C5's) names this item as a dependency.
 
 **WI-A6. Build coverage-floor and disclosure validation** (D5; gate table, simplified — the
 carve-out was deleted at acceptance, so this no longer depends on classifier 2). Profile-load code:
@@ -179,92 +226,200 @@ applicability condition, delivery constructor, named recovery-branch id, logical
 the 007-D1.3 physical-fault tripwire are all fixed in D3 — the work is the artifact and validator,
 not the design.
 *Acceptance evidence:* validator fails closed on a class row missing any field or naming an unknown
-constructor; the two conditional classes carry their waiving conditions; D11's class-reached and
-branch-reached counters read their ids from it (exercised in WI-A14).
+constructor; **and on a catalogue missing any required D3 class id** — set completeness, not only
+row shape, because every downstream counter reads its ids from this artifact and therefore cannot
+discover a class the artifact omits. An empty catalogue must fail. The two conditional classes
+carry their waiving conditions; D11's class-reached and branch-reached counters read their ids from
+it (exercised in WI-A14).
 
 **WI-A8. Construct D6's event vocabulary** — the fifth recorded axis. New construction for all 34
 `LedgerEvent` variants: variant, wire name, payload schema, logical/display-only classification;
-fail-closed on an unclassified variant; preferred form derives the wire name from the type so
-drift is a compile error. `ledger_record_name` is not a seed and is not grown.
-*Acceptance evidence:* load validation fails closed on a synthetic unclassified variant; the
-vocabulary version lands in the execution manifest (WI-A10) and failure record. **Scheduling
-prohibition honoured:** no D7 parity invariant or acceptance row depending on the classification is
-scheduled before this item completes — WI-A14's invariant set is explicitly split on it.
+fail-closed on an unclassified variant. `ledger_record_name` is not a seed and is not grown.
 
-**WI-A9. Route every terminal path through one finalizer, and type the termination reason** (D6.1,
-D6.2). The spike proved `c2_finalize` (append **and** emit) tractable without restructuring the
-driver; the starting count is zero everywhere. Replace `finish_reason_str(r: int)` with a typed
-termination reason derived from the reachable terminal returns, mapped exhaustively to wire
-`finish_reason`.
+**The schema is `wire name = f(variant, payload)`, not `f(variant)`, and that is settled here rather
+than discovered inside the item.** One variant of the 34 is payload-dependent: `StreamDelta`
+projects to `reasoning_delta` or `thinking_delta` selected from `i.kind`
+(`phase_vocab.ail:713`), both pinned by goldens (`:1139-1140`) and both recorded in the variant's
+own trailing comment (`:631`). A one-name-per-variant artifact cannot represent it, so the
+derive-from-the-type form is available only with a total projection function or an allowed-name
+set — pick one in this item. It remains the preferred direction for the other 33, where drift stays
+a compile error.
+*Acceptance evidence:* load validation fails closed on a synthetic unclassified variant; **every one
+of the 34 variants, and both `StreamDelta` branches, round-trip to the wire name the current
+projection produces** — the existing goldens make this cheap and it is what would have caught the
+schema error; the vocabulary version lands in the execution manifest (WI-A10) and failure record.
+**Scheduling prohibition honoured:** no D7 parity invariant or acceptance row depending on the
+classification is scheduled before this item completes — WI-A14's invariant set is explicitly split
+on it.
+
+**WI-A9. Route every terminal path through one finalizer, type the termination reason, and build
+D6's two result classes** (D6.1, D6.2, D6.6, D6.7). The spike proved `c2_finalize` (append **and**
+emit) tractable without restructuring the driver; the starting count is zero everywhere. Replace
+`finish_reason_str(r: int)` with a typed termination reason derived from the reachable terminal
+returns, mapped exhaustively to wire `finish_reason`. **Also builds the result contract itself,
+which an earlier revision left homeless:** the disjoint `SystemRun` / `HarnessFailure` shapes with
+their D6-fixed fields — outcome, ledger trace, interaction log, replay metadata; and kind,
+interaction position, actual request projection, partial ledger trace, replay metadata — plus
+setup-failure-before-the-world-is-established as a typed `HarnessFailure` rather than a successful
+empty trace.
 *Acceptance evidence:* a trace-level test asserts exactly one `RunSummary` as the final record on
 every enumerated terminal path (success, budget, max-steps, compaction exhaustion, provider
 failure, tool failure, invalid history, internal); returned outcome, `DoneEvent`, and `RunSummary`
-agree; no integer code survives at a terminal call site.
+agree; no integer code survives at a terminal call site; a setup failure returns a typed
+`HarnessFailure` carrying its partial evidence, and a raw capability bypass remains a non-zero run
+rather than a typed value — D6.6 requires the two be distinguishable and they are tested as
+distinct.
 
 **WI-A10. Build the profile definition and execution-manifest machinery, and define `driver_only`
 v1** (D5; P4). Depends on A4, A5, A6, A7, A8: the definition references the attribution table,
 names its waived fault classes by A7's stable class ids, and records the vocabulary version; load
-validation wires in the floor/disclosure checks and both classifier outputs.
-*Acceptance evidence:* `driver_only` loads clean; a fixture profile installing `compaction_ai` is
-rejected **at definition time** with the classifier-2 reason; the manifest records D5's full field
-list — source revision, toolchain, extension package and ABI versions, profile id/version,
-event-vocabulary version, normalized configuration — plus both derived classifier sets and the
-scan-root commit.
+validation wires in the floor/disclosure checks and both classifier outputs. **Also installs
+runtime routing's fail-closed exclusion check** — dispatch reaching an excluded hook returns an
+in-runner `HarnessFailure` (D5, D6.6), using A9's result types. Load-time rejection and A12's
+capability probes do not implement this path; it is vacuous for `driver_only` and binding from C5
+onward, and leaving it unbuilt would surface as a missing acceptance row at the gate.
 
-**WI-A11. The predicate documentation check** the ADR assigns to this plan: a canonical
-classifier-2 predicate sentence ("calls a classifier-2 field on an `ExtPorts`-typed value, at
-extension granularity") plus the explicit list of normative anchors that must contain it, failing
-when an anchor drifts or a normative statement appears outside the list. A small script with a
-`make` target, CI-run.
-*Acceptance evidence:* mutating one anchor in a scratch copy fails the check; the anchor list is
-the six sites the ADR names.
+**The profile *definition* has its own field list, distinct from the manifest's, and an earlier
+revision enumerated only the manifest.** The definition records all ten D5 fields — id/version;
+included extensions with per-hook classifications; **included and excluded provider/tool adapter and
+parser boundaries**; **logical resource models**; **permitted diagnostic projections**; **forbidden
+ambient effects/capabilities during execution**; waived D3 classes with conditions; the attribution
+table reference; per-extension covered/excluded hook **ids**; and **omitted extensions with their
+reason**. Four of those are *not* vacuous for an empty install list: the adapter/parser boundary
+scopes D3's wire-parser exclusion, the diagnostic projections bound D1's collecting sink, the
+forbidden-capability set is what A12's poison probes test against, and `driver_only` must name the
+`compaction_ai` omission and its reason even though it installs nothing.
+*Acceptance evidence:* `driver_only` loads clean and names its omission; a fixture profile
+installing `compaction_ai` is rejected **at definition time** with the classifier-2 reason; **a
+fixture definition missing any one required field is rejected at load, naming the field** — "loads
+clean" alone cannot falsify a field the validator was never told to require; a fixture installing a
+package whose AILANG source lies outside the recorded scan roots either extends the roots through
+the resolved lock graph or **fails validation closed** (D5; the live shape is `ailang.toml:9`'s
+registry-resolved `sunholo/logging`, exposure nil today); the manifest separately records D5's full
+manifest list — source revision, toolchain, extension package and ABI versions, profile
+id/version, event-vocabulary version, normalized configuration — plus both derived classifier sets
+and the scan-root commit.
+
+**WI-A11. The predicate documentation check** the ADR assigns to this plan. **It is an anchor-set
+drift check, not a containment check, and that choice is forced rather than preferred:** the ADR
+records that its six normative sites are "substantively aligned, **not word-identical** — the six
+use six formulations" (`ADR:462-465`). A check requiring one canonical sentence to appear at all six
+is therefore **red on the unmutated ADR at HEAD**, and the alternative — canonicalising the six —
+is six ADR amendments this plan does not budget. Build instead: the six anchors named by location,
+each with a content hash and a named reviewer who accepted that its formulation states the
+predicate; the check fails when an anchor's text changes without a re-accepted hash, or when a
+normative statement of the predicate appears outside the six. A small script with a `make` target,
+CI-run.
+*Acceptance evidence:* **the check is green on the unmutated ADR at HEAD** — the falsifiable half,
+and the one a containment check would fail; *and* mutating one anchor in a scratch copy turns it
+red. Both, because the second alone passes trivially while the first is broken.
 
 **WI-A12. Thread `world_state` through the driver, one effect class at a time** (D1). Depends on
 A2; subsumes and deletes the interim `C2LoopState` cursor field in its first change, per D1.
 Order within the item: provider (subsumption of A2's field), then the four driver clock sites
 routed to the world clock (P3), then approval, then env reads, then runtime randomness; the typed
-`ToolCallEnvelope` with deadline replaces stringly `tool_exec` in the same wave — it is D4's named
-first time-bearing seam and D1 requires it anyway. Behaviour-preserving throughout: live adapters
+tool contract replaces stringly `tool_exec` in the same wave — it is D4's named first time-bearing
+seam and D1 requires it anyway. **That contract is all three of D1's parts, not one:** a typed
+`ToolCallEnvelope`, timeout/deadline information, **and a typed result/error** replacing
+`tool_exec(string, string) -> string` (`ADR:606-609`; HEAD shape at `ports.ail:22`). An earlier
+revision named only the envelope and deadline, under which a request-only widening would pass the
+listed probes while leaving the return an undifferentiated string — weaker than D1 requires and
+unable to carry D3's typed tool fault classes. Behaviour-preserving throughout: live adapters
 delegate to today's code paths; `emissions`/state plumbing verified against `Scripted` providers.
 Spike Q1 confirmed the threading and Q2 confirmed routing tractability (its count clause falsified
 and superseded by the 13-site inventory); the spike's surgery is *not* imported — this is fresh
-work at HEAD. Size: the migration proper; several days, staged as one PR per effect class.
+work at HEAD.
+*Size:* **estimate — several days**, staged as one PR per effect class. Basis: the spike threaded
+world state and routed the clock on a throwaway branch; this repeats that behaviour-preservingly
+across six effect classes plus the typed tool contract.
 *Acceptance evidence per class:* existing targets green; the class's poison probe (capability
 withheld) passes for the deterministic entry point and fails for the live world — the F3-corrected
-per-run backstop; after the clock class, `driver_only`'s routed-set claim (4 sites) becomes true
-and is recorded in the profile — a claim that additionally depends on A5, per D4's scheduling
-prohibition.
+per-run backstop; for the tool class, the typed contract carries ordinary success, typed
+execution/non-zero error, wrong-call-id correlation, and completion-after-deadline through one
+production adapter contract; after the clock class, `driver_only`'s routed-set claim (4 sites)
+becomes true and is recorded in the profile — a claim that additionally depends on A5, per D4's
+scheduling prohibition.
 
-**WI-A13. Build discovery and replay** (D2). Depends on A7 (class ids), A10 (manifest), A12
-(world_state). `ExecutionProgram`/`DiscoveryConfig` types, the seeded generator with declared
-bounds, the pure structural validator, strict and regression replay modes, the interaction log with
-causal identities and encounter ordinals. Exact type names are plan-level per D2; semantics are
-fixed there and not re-litigated here.
+**WI-A13. Build discovery and replay** (D2, D8). Depends on A7 (class ids), A9 (result types), A10
+(manifest), A12 (world_state). `ExecutionProgram`/`DiscoveryConfig` types, the seeded generator
+with declared bounds, the pure structural validator, strict and regression replay modes, the
+interaction log with causal identities and encounter ordinals. Exact type names are plan-level per
+D2; semantics are fixed there and not re-litigated here. **Three D8 obligations ride here that an
+earlier revision left homeless** — all normative, none deferrable the way shrinking is: **(1)
+persistence safety** — programs carry synthetic values only, and environment maps and interaction
+artifacts reject or redact secret-shaped/live credentials *before* persistence; **(2) the encoding
+and compatibility policy** — a deterministic, diffable encoding (its selection is delegated to this
+plan by the ADR's Non-goals) whose schema migrations either preserve old-program decoding or pin a
+runner, never silently reinterpret; D6 binds the event vocabulary to the same rule, so it is
+load-bearing twice.
 *Acceptance evidence:* D7's discovery-contract invariant — same manifest/profile/seed twice →
 identical resolved program, interaction log, outcome, normalized trace; a mismatch fixture returns
 typed `HarnessFailure` with position and projection; bounds violations fail as generator errors;
 D8's pinned generator canary exists per stable generator id and fails on a seed remap without a
-generator-version bump.
+generator-version bump; **a secret-shaped fixture is rejected or redacted before persistence**; and
+**an old-schema program either decodes or fails closed with a pinned-runner pointer** — never
+silently reinterpreted.
+*Size:* **estimate — 1–2 weeks**, the largest Milestone A item. Basis: program and config types, a
+seeded generator with bounds, a structural validator, two replay modes, the interaction log with
+causal identity and ordinals, the canary, and the encoding/compatibility policy — each small, the
+set wide, and no measurement covers any of it.
 
-**WI-A14. Implement the D7 invariant set and D11 corpus reporting.** Depends on A9, A13; the
-parity-classification invariants additionally depend on A8 and are not scheduled before it. Corpus
-minimum seed counts are **selected from measured CI cost at this point, not invented now** — the
-measurement is part of the work item, consistent with D11.
-*Acceptance evidence:* every D7 bullet has a runnable invariant; a run report carries the full D11
-field list; class-reached vs branch-reached are separate counters read from A7's artifact; a
-promoted failure travels as one artifact — exact program **with** its execution manifest — per
-D11's promotion rule.
+**WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
+A9, A13; the parity-classification invariants additionally depend on A8 and are not scheduled
+before it. **Includes D4's latency-pair demonstration**, which an earlier revision left in WI-C4:
+two replayable programs holding request and underlying completion result constant while changing
+only generated latency/clock movement, producing the expected different completion-versus-timeout
+result without an OS timeout. It is name-gate evidence but not upstream-dependent work — the
+deadline seam (A12), generator and replay (A13) are all Milestone A — so leaving it in C made
+Milestone A's boundary claim false. C4 runs the gate; it does not build the evidence.
+*Acceptance evidence:* every D7 bullet has a runnable invariant; the latency pair demonstrates the
+differing deadline outcome and both programs replay deterministically; a run report carries the
+full D11 field list; class-reached vs branch-reached are separate counters read from A7's artifact;
+a promoted failure travels as one artifact — exact program **with** its execution manifest — per
+D11's promotion rule; **and the failure report carries a copy-pasteable local replay command or a
+retained artifact reference** (D8), without which a CI failure is not reproducible by the person
+reading it.
+*Size:* **estimate — 3–5 days.** Basis: eleven D7 invariant families over an existing trace ADT,
+plus the latency pair; each invariant is small but the set is wide, and the parity family cannot
+start before A8. No measurement covers this; treat the range as coarse.
+
+**WI-A15. Build D11's two corpora and their CI jobs.** Depends on A13, A14. An earlier revision
+scheduled corpus *reporting* in A14 and left the corpora themselves unbuilt, which C4 would then
+gate against. Build: the **blocking PR corpus** of fixed seeds and exact promoted regression
+programs; the **scheduled rotating corpus** whose seed window changes deterministically; both CI
+jobs, which are new construction — survey row 9 records the only workflow at HEAD is
+`verify-extensions.yml` with no generated-trajectory axis. Select rotation, retention, and sharding
+from measured CI cost here, together with each job's operator-accepted minimum seed count, per
+D11's delegation to this plan.
+*Acceptance evidence:* both jobs run and declare their minimums; the gate **fails** on a zero,
+silently truncated, or below-minimum window (tested by forcing one); the fixed bank collectively
+reaches every required non-waived fault class in A7's catalogue; a promoted counterexample enters
+the fixed corpus with its manifest attached.
+*Size:* **estimate — 2–4 days**, dominated by CI cost measurement rather than code.
 
 ### Milestone B — the repin (trigger: a released AILANG carrying the recorded-stream API)
 
-**WI-B1. Repin the toolchain.** Update `ailang.toml`, `scripts/install-prerequisites.sh:39`, and
-the Makefile guard together; **clear every `.ailang/cache` in the tree before believing any
-diagnostic** (the phantom-type-error trap reproduced across a version change). Size: **M2, measured
-— 381 effect-row edits across 71 files**, almost all mechanical via the compiler-driven repair
-loop; the two latent under-declarations (`walk_agents` `FS`, omnigraph `register_with_config`
-`Process`) become hard errors and are fixed here.
+**The triggered graph is explicit, because milestone order is not a dependency here.** Milestone B
+starts whenever the release appears and interleaves with whatever A-item is in flight, so an item
+that needs an A-item must say so or it can be started without it. **B1–B3 are one inseparable wave,
+not three green states**: the new pin exposes the effect/ABI repairs and the `Message` migration
+simultaneously, so B1 alone leaves the tree red. B1 is therefore **preparation-only**, and **WI-B4
+is the wave's green integration gate.**
 
-**WI-B2. The extension-ABI major.** One coordinated major, containing both ADR-named parts: the
+**WI-B1. Repin the toolchain — preparation-only, not independently green.** Update `ailang.toml`,
+`scripts/install-prerequisites.sh:39`, and the Makefile guard together; **clear every
+`.ailang/cache` in the tree before believing any diagnostic** (the phantom-type-error trap
+reproduced across a version change). The two latent under-declarations (`walk_agents` `FS`,
+omnigraph `register_with_config` `Process`) become hard errors and are fixed here.
+*Size:* **measured, as one wave with B2/B3 — M2's 381 effect-row edits across 71 files**, almost
+all mechanical via the compiler-driven repair loop. M2 is *not* allocated between B1 and B2: three
+of its edits are the `motoko-ext-abi/types.ail` row corrections that belong to B2, and the rest are
+the mechanical repairs here. Treat the 381 as the wave's total, not B1's.
+
+**WI-B2. The extension-ABI major.** Depends on B1 (the pin that forces it) and **A12** — its larger
+half threads the world token, and `world_state` is built there; if the trigger fires before A12,
+the row corrections can proceed and the world-token widening cannot. One coordinated major,
+containing both ADR-named parts: the
 three `motoko-ext-abi/types.ail` row corrections (`ExtPorts.ai_step` gains `Trace`; the four
 `ExtensionHooks` rows gain `Rand` and `Trace`) **and the world-token widening of `ExtPorts.ai_step`
 plus the hook results and core dispatch results — the larger of the two** (Consequences). Lockstep
@@ -273,37 +428,58 @@ until it lands, an `ai_step`-calling extension is omitted from any conformant in
 the same major is where coverage can widen beyond the three rowless slots — either per-hook row
 narrowing or the declared-versus-performed successor detector, both of which D5 assigns to this
 major; WI-C5 depends on that part landing.
+*Size:* **estimate — 1–2 weeks**, and it is the largest single item in the plan. Basis: the ADR
+calls the world-token widening "the larger of the two" changes in this major, it touches
+`ExtPorts.ai_step`, the hook results and core dispatch results together, and it forces a lockstep
+re-release of **every** extension package. No measurement covers it; the mechanical row edits are
+inside M2's 381, the widening is not.
 
-**WI-B3. The `Message` migration** (vision/images field of the new pin). Size: **M1, measured — 14
-minutes, 28 files, 69 additive sites, 7 judgement sites** — with its two riders honoured: tooling
-first (the brace-balanced rewriter and fix loop are what made 14 minutes true), and the settled
-decision that Motoko's `Msg` and the ext-ABI `Msg` stay at four fields, vision parts dropped at the
-seam.
+**WI-B3. The `Message` migration** (vision/images field of the new pin). Depends on B1.
+*Size:* **M1, measured — 14 minutes, 28 files, 69 additive sites, 7 judgement sites** — with its
+two riders honoured: tooling first (the brace-balanced rewriter and fix loop are what made 14
+minutes true), and the settled decision that Motoko's `Msg` and the ext-ABI `Msg` stay at four
+fields, vision parts dropped at the seam.
 
-**WI-B4. Re-derive both classifiers on the new pin** and re-record their sets and scan-root commit
-in the profile/manifest — a required step of every repin, per D5. Re-run `make effect_inventory`,
-`effect_inventory_selftest`, and the classifier-2 target; re-issue `driver_only`'s manifest.
+**WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** Depends on B1, B2,
+B3 (the source and ABI set is not final until they land), **A4** (classifier 2 must exist to be
+re-derived) and **A10** (a manifest must exist to re-issue). Re-run `make effect_inventory`,
+`effect_inventory_selftest`, and the classifier-2 target; re-record both derived sets and the
+scan-root commit; re-issue `driver_only`'s manifest. If the trigger fires before A4/A10, this
+degrades to re-running classifier 1 alone and the rest waits — say so rather than letting it pass
+silently.
+*Acceptance evidence:* **this is the wave's green gate** — full compile and test suites pass on the
+new pin, both classifiers report zero unresolved, and the re-issued manifest names the new
+toolchain and ABI versions.
 
 ### Milestone C — post-upstream
 
-**WI-C1. Adopt the recorded-stream API in the one `live_ports` closure.** The blast radius A1
-bought: one closure. Depends on B1.
+**WI-C1. Adopt the recorded-stream API in the one `live_ports` closure.** Depends on **A1** (the
+widened loss channel is what makes adoption observable — adopting first would carry an empty
+emission log, D1's named trap) and **B4** (the integrated repin, not the bare B1). The blast radius
+A1 bought: one closure.
 
-**WI-C2. The direct positive integration probe** (D1's gate): immediate projection, exact
-returned-log parity, success, partial-stream-then-error, no duplicate delivery. Its passing is the
-substrate-gate evidence D1 requires; the forbidden delayed-projection fallback must not be
-selected silently.
+**WI-C2. The direct positive integration probe** (D1's gate). Depends on C1 — it is the positive
+proof of C1's adoption. Immediate projection, exact returned-log parity, success,
+partial-stream-then-error, no duplicate delivery. Its passing is the substrate-gate evidence D1
+requires; the forbidden delayed-projection fallback must not be selected silently.
 
 **WI-C3. The streaming-trace parity invariant** (D6.4's named exception, checked explicitly).
 Depends on C2 and A8.
 
 **WI-C4. Run the name-adoption gate for `driver_only`** — depends on C2, C3, and all of
-Milestone A: the acceptance-test table, answer by answer, including the D4 latency-pair
-demonstration through the `ToolCallEnvelope` deadline seam and D11's corpus minimums. Only after every row holds does any target adopt the "DST"/"simulation"
+Milestone A. The acceptance-test table, answer by answer. **This item runs the gate; it builds no
+evidence.** Every row's evidence is produced earlier — the latency pair in A14, corpus minimums in
+A15, routing audit in A4/A5, hermeticity probes in A12, trace contract in A9 — and a row with no
+earlier producer is a planning defect to fix here rather than an experiment to run at the gate. Only after every row holds does any target adopt the "DST"/"simulation"
 name (D10). Until then, all new targets keep non-simulation working names.
 
-**WI-C5. The second profile: `compose`-bearing.** Depends on B2, and the dependency is not just
-the clock: `compose` puts real behaviour in an unconditionally-dispatched nine-effect hook
+**WI-C5. The second profile: `compose`-bearing.** Depends on **B2, A5, A10 and A12** — B2 for the
+coverage widening, A5 because its routed-set claim is a routing-completeness claim gated on the
+attribution table, A10 for the profile machinery it instantiates, A12 for the world clock its
+extension reads route *into*. An earlier revision named only B2; milestone order does not supply
+the rest, because B interleaves with A and C5 carries no all-of-A guard the way C4 does. The
+dependency on B2 is not just the clock: `compose` puts real behaviour in an
+unconditionally-dispatched nine-effect hook
 (`on_response_intercept`, bound at `compose.ail:840`, body at `:761-790`), which under the
 declared-row rule cannot be covered and — being unconditionally dispatched — cannot be excluded
 either, so `compose` is un-installable in a conformant profile until B2's world-token/coverage
@@ -311,7 +487,11 @@ widening lands. (Its `on_tool_handle` is the one *gated* hook and could be exclu
 rescue the install.) The work:
 route the eight `motoko-ext-compose` clock reads through `ExtPorts.clock_now` (first exercise of a
 seam with zero call sites today — budget for it not surviving contact unchanged), make the
-effectful hooks world-mediated, and claim the 12-site routed set.
+effectful hooks world-mediated, and claim the routed set — **12 sites post-table; 13 is the
+fail-closed figure if the attribution table is absent or invalid** (D4's 4/12/13 versus 5/13/13
+split). The dispatch-time exclusion check A10 installs becomes binding here, and its in-runner
+probe — reaching an excluded hook returns a typed `HarnessFailure` with partial evidence — is part
+of this item's acceptance rather than assumed from load-time validation.
 
 ## Deferred artifacts: build step and acceptance evidence
 
@@ -321,20 +501,24 @@ block the name:
 | Artifact | Built in | Acceptance evidence |
 |---|---|---|
 | Classifier 2 | WI-A4 | Gate-table criterion: fails closed on unresolved occurrences; two known call sites at HEAD; repin re-derivation wired in (WI-B4) |
-| Site-to-hook attribution table | WI-A5 | Gate-table + D4 clause 3: schema/staleness/referential validation fail closed; named reviewer per row as the stated exception; empty-intersection semantics tested |
+| Site-to-hook attribution table | WI-A5 | Gate-table + D4 clause 3: schema/staleness/referential validation fail closed; **plus producer-side completeness — a classifier-discovered site in neither the rows nor the unconditional-core set is rejected at load**; named reviewer per row as the stated exception; empty-intersection semantics tested |
 | Coverage-floor validation | WI-A6 | Gate-table (simplified): unconditional floor + disclosure, both enforced at load; fixture rejections demonstrated |
-| D3 fault catalogue / D6 event vocabulary | WI-A7 / WI-A8 | Their own decisions' fail-closed contracts; D6's scheduling prohibition honoured by A14's split dependency (D4's analogous one by A12's claim clause and P3) |
+| D3 fault catalogue / D6 event vocabulary | WI-A7 / WI-A8 | Their own decisions' fail-closed contracts, **including set completeness** — A7 rejects a catalogue missing a required class, A8 round-trips all 34 variants and both `StreamDelta` branches; D6's scheduling prohibition honoured by A14's split dependency, D4's by A12's and C5's claim clauses |
 
 ## Milestone boundaries, and what each unblocks
 
 - **Milestone A** ends with: F6 fixed and regression-locked; the routing audit citable (both
   classifiers built and verified); `driver_only` defined, loading, and truthfully claiming a
-  4-site routed clock set; discovery/replay running against the real driver with invariants and
-  corpus reporting. Everything except streaming parity and extension model coverage.
+  4-site routed clock set; discovery/replay running against the real driver; the D7 invariants and
+  the D4 latency pair; both D11 corpora and their CI jobs. **Everything the name gate needs except
+  streaming parity and extension-model coverage** — and that claim is now true, where an earlier
+  revision's was not: it left the latency pair in C4 and the corpora unbuilt while claiming the
+  same boundary.
 - **Milestone B** (external trigger) unblocks: recorded-stream adoption, the extension model path
   (world-token ABI), and coverage growth beyond the three rowless slots. It is the only milestone
   with third-party latency, and per upstream's own advice the project does not idle against it.
-- **Milestone C** unblocks the name. Its gate is the ADR's acceptance-test table, nothing less.
+- **Milestone C** unblocks the name. Its gate is the ADR's acceptance-test table, nothing less —
+  and C4 only *runs* that table, since every row's evidence is produced in A or B.
 
 ## Traps carried forward
 
