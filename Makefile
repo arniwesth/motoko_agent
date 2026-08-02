@@ -73,7 +73,46 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage smoke_driver smoke_parity dst_l2 dst_seeded
+
+# D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
+#
+#   1. The fixture PROFILES. Every rejecting shape D5 names, asserted to be
+#      rejected BY ITS RULE rather than merely rejected — a fixture that trips
+#      an unrelated check is green while testing nothing. Plus the two shapes
+#      that must load: driver_only's empty install list (vacuous, per P4) and a
+#      profile excluding only the one GATED hook.
+#
+#   2. A STRUCTURAL GUARD that the eight-slot enumeration still matches the ABI.
+#      `all_hook_slots()` is hand-written and AILANG has no constructor
+#      enumeration on the pin, so a ninth ABI hook could be added and left out
+#      of it while every check in the module still passed — an artifact that
+#      validates while incomplete, which is the exact failure S1 names for
+#      constructed artifacts. Counting the ABI record's `on_*` fields ties the
+#      enumeration to the thing it enumerates instead of to itself.
+#
+# Note the ADR undercounts here and this target is where that shows: D5 says six
+# of eight slots are unconditionally dispatched and one is gated, leaving the
+# eighth unstated. It is `on_describe_tools`, dispatched by an unconditional
+# fold in tool_catalog.ail:114 that live_ports reaches on every model step. So
+# SEVEN are unconditional, and excluding `on_describe_tools` is a rejection.
+# The `on_describe_tools excluded (the seventh)` fixture is that correction.
+.PHONY: profile_coverage
+profile_coverage:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/profile_coverage_dst.ail < /dev/null; \
+	n=$$(awk '/export type ExtensionHooks/,/^}/' packages/motoko-ext-abi/types.ail | grep -c '^  on_'); \
+	if [ "$$n" -ne 8 ]; then \
+		echo "FAIL: the ABI declares $$n hook slots, but src/core/dst_profile_coverage.ail"; \
+		echo "      enumerates 8 in all_hook_slots(). A slot has been added or removed and"; \
+		echo "      the coverage artifact does not know about it, so every profile would"; \
+		echo "      validate while its disclosure was incomplete (D5)."; \
+		awk '/export type ExtensionHooks/,/^}/' packages/motoko-ext-abi/types.ail | grep '^  on_'; \
+		exit 1; \
+	else \
+		echo "  ✓ all_hook_slots() enumerates all $$n ABI hook slots"; \
+	fi; \
+	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
 
 # WI-A12's advancement + trace-completeness gate, landed BEFORE the threading it
 # watches — the plan's binding sequencing rule. The script header carries the

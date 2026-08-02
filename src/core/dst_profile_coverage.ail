@@ -1,0 +1,545 @@
+-- src/core/dst_profile_coverage.ail
+--
+-- WI-A6, under ADR-001 D5: the coverage floor and per-extension hook
+-- disclosure, as a versioned artifact plus a validator that fails closed.
+--
+-- This module owns the *rules*. It does not own the profile definition or the
+-- execution manifest — those are WI-A10's, and they consume this. What lands
+-- here is exactly the two mechanisms D5 says are needed, and the reason it says
+-- two are needed is that one rejects and the other informs:
+--
+--   the FLOOR       an installed extension with zero covered hooks is a
+--                   profile-definition rejection. Unconditional: the carve-out
+--                   for classifier-2-forced exclusions was deleted at
+--                   acceptance, because that configuration cannot execute a
+--                   single run and is therefore omitted from the install list
+--                   rather than blessed.
+--
+--   the DISCLOSURE  per installed extension, the hook IDS covered and the hook
+--                   ids excluded — names, not counts. A count cannot tell an
+--                   extension whose three coverable slots are constant returns
+--                   from `compose`, whose `on_tool_policy` binds real dispatch.
+--                   The ids can, because they say WHICH slots are covered.
+--
+-- ============================================================================
+-- SEVEN slots are unconditionally dispatched, not six. This is a correction.
+-- ============================================================================
+--
+-- D5 states that "six of the eight ABI hook slots are dispatched by an
+-- unconditional fold over `rt.registry.hooks` ... only `on_tool_handle` is
+-- gated". Six plus one is seven, and the eighth slot is unaccounted for in that
+-- sentence. It is `on_describe_tools`, and it is unconditionally dispatched:
+--
+--   src/core/tool_catalog.ail:114  collect_ext_schemas folds every hook
+--   src/core/tool_catalog.ail:125  tools_with_extensions calls that fold
+--   src/core/test/stub_step.ail:133  live_ports calls it on EVERY model step
+--
+-- The ADR's survey looked only in `src/core/ext/runtime.ail`, where six
+-- dispatches live; the seventh is in the tool catalog because it builds the
+-- schema list rather than driving the loop. The consequence is load-bearing for
+-- this module: a profile excluding `on_describe_tools` must be REJECTED, and
+-- under the ADR's stated six it would have been accepted. Both readings
+-- type-check and the wrong one is silent, which is the failure shape S1 exists
+-- to catch — here it is caught by `test_seven_slots_are_unconditional` and by
+-- the fixture in scripts/dst/profile_coverage_dst.ail.
+--
+-- `on_tool_handle` remains the ONE gated slot (`ext/runtime.ail:337`, via
+-- `contains_tool`), so exclusion remains a real and useful classification —
+-- for it, and for negative conformance probes where reaching an exclusion
+-- SHOULD fail closed. It is not a way to neutralise an installed extension.
+--
+-- ============================================================================
+-- What is deliberately NOT decidable here, stated rather than left implicit
+-- ============================================================================
+--
+-- `all_hook_slots()` is hand-written, and the pin gives no way to make its
+-- completeness a compile error: AILANG has no constructor enumeration, so a
+-- ninth `HookSlot` could be declared and omitted from that list and every check
+-- in this module would still pass while being blind to the new slot. That is
+-- precisely "an artifact that validates while incomplete".
+--
+-- Two backstops, because neither alone closes it:
+--
+--   1. `hook_dispatch` and `hook_slot_id` are TOTAL matches, so adding a
+--      constructor is a compile error in this module — the new slot cannot be
+--      silently unclassified, only silently un-enumerated.
+--   2. `make profile_coverage` counts the `on_*` fields of the ABI's
+--      `ExtensionHooks` record and fails if it is not equal to
+--      `length(all_hook_slots())`. That ties the enumeration to the ABI, which
+--      is the thing it is claiming to enumerate, rather than to itself.
+
+module src/core/dst_profile_coverage
+
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+
+-- The version of this artifact. D5: changing any semantic scope field requires
+-- a profile-version change; changing the RULES below changes what "covered"
+-- means for every profile, so it is versioned on its own footing and WI-A10's
+-- manifest records it.
+export pure func coverage_rules_version() -> string { "coverage-rules/1" }
+
+-- One ABI hook slot. Mirrors `ExtensionHooks` in packages/motoko-ext-abi/types.ail;
+-- `id` and `provided_tools` are data fields, not hooks, and are not slots.
+export type HookSlot
+  = OnDescribeTools
+  | OnBuildSystemPrompt
+  | OnBudgetPlan
+  | OnPreStep
+  | OnToolPolicy
+  | OnToolHandle
+  | OnResponseIntercept
+  | OnSolverCandidate
+
+-- How the runtime reaches this slot for an installed extension.
+--
+-- `Unconditional` means the dispatch folds over every registered hook with no
+-- per-extension gate, so an EXCLUDED unconditional hook is reached on the first
+-- run and the run terminates as a HarnessFailure. Such a profile emits zero
+-- SystemRuns and can satisfy no D7 invariant — which is why excluding one is a
+-- definition-time rejection rather than a coverage cost.
+--
+-- `Gated` means the fold tests a per-extension predicate before calling, so an
+-- excluded hook may legitimately never be reached. Exclusion is a coverage cost
+-- there, not an un-runnable configuration.
+export type DispatchKind = Unconditional | Gated
+
+-- Total by construction: a new HookSlot constructor makes this a compile error.
+export pure func hook_dispatch(s: HookSlot) -> DispatchKind {
+  match s {
+    -- tool_catalog.ail:114 collect_ext_schemas — the seventh, see header
+    OnDescribeTools => Unconditional,
+    OnBuildSystemPrompt => Unconditional,   -- ext/runtime.ail:213
+    OnBudgetPlan => Unconditional,          -- ext/runtime.ail:229
+    OnPreStep => Unconditional,             -- ext/runtime.ail:275
+    OnToolPolicy => Unconditional,          -- ext/runtime.ail:319
+    -- ext/runtime.ail:337, gated by contains_tool on provided_tools
+    OnToolHandle => Gated,
+    OnResponseIntercept => Unconditional,   -- ext/runtime.ail:363
+    OnSolverCandidate => Unconditional      -- ext/runtime.ail:414
+  }
+}
+
+-- The stable hook id. D5 requires ids in both the profile definition and the
+-- run result; these strings are that surface and match the ABI field names.
+-- Total by construction, as above.
+export pure func hook_slot_id(s: HookSlot) -> string {
+  match s {
+    OnDescribeTools => "on_describe_tools",
+    OnBuildSystemPrompt => "on_build_system_prompt",
+    OnBudgetPlan => "on_budget_plan",
+    OnPreStep => "on_pre_step",
+    OnToolPolicy => "on_tool_policy",
+    OnToolHandle => "on_tool_handle",
+    OnResponseIntercept => "on_response_intercept",
+    OnSolverCandidate => "on_solver_candidate"
+  }
+}
+
+-- The load-time parse. A profile definition arrives as ids, and an id that is
+-- not one of the eight is a rejection, never a skipped entry — otherwise a
+-- typo silently shrinks the disclosed set and the exhaustion check below then
+-- reports the wrong rule.
+export pure func hook_slot_from_id(id: string) -> Option[HookSlot] {
+  if id == "on_describe_tools" then Some(OnDescribeTools)
+  else if id == "on_build_system_prompt" then Some(OnBuildSystemPrompt)
+  else if id == "on_budget_plan" then Some(OnBudgetPlan)
+  else if id == "on_pre_step" then Some(OnPreStep)
+  else if id == "on_tool_policy" then Some(OnToolPolicy)
+  else if id == "on_tool_handle" then Some(OnToolHandle)
+  else if id == "on_response_intercept" then Some(OnResponseIntercept)
+  else if id == "on_solver_candidate" then Some(OnSolverCandidate)
+  else None
+}
+
+-- The eight slots. See the header for why this list's completeness is not a
+-- compile error and what guards it instead.
+export pure func all_hook_slots() -> [HookSlot] {
+  [OnDescribeTools, OnBuildSystemPrompt, OnBudgetPlan, OnPreStep,
+   OnToolPolicy, OnToolHandle, OnResponseIntercept, OnSolverCandidate]
+}
+
+-- D5's per-extension hook disclosure, for one INSTALLED extension.
+export type ExtensionDisclosure = {
+  extension_id: string,
+  covered: [HookSlot],
+  excluded: [HookSlot]
+}
+
+-- Why a profile definition was rejected. Typed rather than a string so WI-A10
+-- can render it into the definition-time rejection and the run result without
+-- re-deriving the rule, and so a fixture can assert WHICH rule fired rather
+-- than only that something did.
+export type CoverageRejection
+  = ZeroCoveredHooks(string)
+  | UnconditionalHookExcluded(string, string)
+  | HookSlotDoubleClassified(string, string)
+  | HookSlotUnaccounted(string, string)
+  | UnknownHookId(string, string)
+  | DuplicateExtensionId(string)
+
+-- The rule name. D5's acceptance evidence requires the rejection to NAME the
+-- rule, not merely to fire.
+export pure func rejection_rule(r: CoverageRejection) -> string {
+  match r {
+    ZeroCoveredHooks(_) => "coverage-floor",
+    UnconditionalHookExcluded(_, _) => "unconditional-hook-excluded",
+    HookSlotDoubleClassified(_, _) => "covered-excluded-disjoint",
+    HookSlotUnaccounted(_, _) => "covered-excluded-exhaustive",
+    UnknownHookId(_, _) => "unknown-hook-id",
+    DuplicateExtensionId(_) => "duplicate-extension-id"
+  }
+}
+
+export pure func rejection_extension(r: CoverageRejection) -> string {
+  match r {
+    ZeroCoveredHooks(e) => e,
+    UnconditionalHookExcluded(e, _) => e,
+    HookSlotDoubleClassified(e, _) => e,
+    HookSlotUnaccounted(e, _) => e,
+    UnknownHookId(e, _) => e,
+    DuplicateExtensionId(e) => e
+  }
+}
+
+export pure func rejection_message(r: CoverageRejection) -> string {
+  match r {
+    ZeroCoveredHooks(e) =>
+      "[coverage-floor] extension '${e}' is installed with zero covered hooks; omit it from the install list instead (D5)",
+    UnconditionalHookExcluded(e, h) =>
+      "[unconditional-hook-excluded] extension '${e}' excludes '${h}', which is dispatched unconditionally; the run cannot complete, so omit the extension instead (D5)",
+    HookSlotDoubleClassified(e, h) =>
+      "[covered-excluded-disjoint] extension '${e}' classifies '${h}' more than once; covered and excluded must be disjoint (D5)",
+    HookSlotUnaccounted(e, h) =>
+      "[covered-excluded-exhaustive] extension '${e}' classifies neither covered nor excluded for '${h}'; all eight ABI slots must be exhausted (D5)",
+    UnknownHookId(e, h) =>
+      "[unknown-hook-id] extension '${e}' names hook id '${h}', which is not one of the eight ABI slots (D5)",
+    DuplicateExtensionId(e) =>
+      "[duplicate-extension-id] extension '${e}' is disclosed more than once in the install list (D5)"
+  }
+}
+
+pure func count_slot(xs: [HookSlot], target: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest =>
+      (if hook_slot_id(x) == target then 1 else 0) + count_slot(rest, target)
+  }
+}
+
+-- Disjointness and exhaustion, checked together over the eight slots, because
+-- one traversal decides both and separate traversals would let a duplicate
+-- entry pad a list to eight while a slot went missing.
+--
+--   c + e == 0  the slot is classified nowhere       -> not exhaustive
+--   c + e >  1  the slot is classified more than once -> not disjoint
+--                (this catches "in both lists" AND "twice in one list")
+pure func slot_accounting(ext_id: string, d: ExtensionDisclosure, slots: [HookSlot]) -> [CoverageRejection] {
+  match slots {
+    [] => [],
+    s :: rest => {
+      let id = hook_slot_id(s);
+      let n = count_slot(d.covered, id) + count_slot(d.excluded, id);
+      let here =
+        if n == 0 then [HookSlotUnaccounted(ext_id, id)]
+        else if n > 1 then [HookSlotDoubleClassified(ext_id, id)]
+        else [];
+      here ++ slot_accounting(ext_id, d, rest)
+    }
+  }
+}
+
+pure func unconditional_exclusions(ext_id: string, excluded: [HookSlot]) -> [CoverageRejection] {
+  match excluded {
+    [] => [],
+    s :: rest => {
+      let here = match hook_dispatch(s) {
+        Unconditional => [UnconditionalHookExcluded(ext_id, hook_slot_id(s))],
+        Gated => []
+      };
+      here ++ unconditional_exclusions(ext_id, rest)
+    }
+  }
+}
+
+-- The three D5 rules for one installed extension, all of them, in one pass.
+-- Returns every violation rather than the first: a definition with two distinct
+-- defects should show both, and a fixture asserting one rule must not be able
+-- to pass because a different rule happened to fire first.
+export pure func validate_disclosure(d: ExtensionDisclosure) -> [CoverageRejection] {
+  let floor =
+    if List.length(d.covered) == 0 then [ZeroCoveredHooks(d.extension_id)] else [];
+  floor
+    ++ unconditional_exclusions(d.extension_id, d.excluded)
+    ++ slot_accounting(d.extension_id, d, all_hook_slots())
+}
+
+pure func disclosed_before(ds: [ExtensionDisclosure], id: string) -> bool {
+  match ds {
+    [] => false,
+    d :: rest => if d.extension_id == id then true else disclosed_before(rest, id)
+  }
+}
+
+pure func validate_install_list_rec(seen: [ExtensionDisclosure], ds: [ExtensionDisclosure]) -> [CoverageRejection] {
+  match ds {
+    [] => [],
+    d :: rest => {
+      let dup =
+        if disclosed_before(seen, d.extension_id) then [DuplicateExtensionId(d.extension_id)] else [];
+      dup ++ validate_disclosure(d) ++ validate_install_list_rec(seen ++ [d], rest)
+    }
+  }
+}
+
+-- The whole install list. An EMPTY list passes, and that vacuity is correct
+-- rather than a hole: `driver_only` (plan P4) installs no extensions at all, so
+-- the floor and the disclosure hold vacuously and there is nothing to disclose.
+-- Vacuous-pass is only dangerous when something WAS installed and went
+-- unchecked, which the per-extension rules above make impossible.
+export pure func validate_install_list(ds: [ExtensionDisclosure]) -> [CoverageRejection] {
+  validate_install_list_rec([], ds)
+}
+
+export pure func install_list_ok(ds: [ExtensionDisclosure]) -> bool {
+  List.length(validate_install_list(ds)) == 0
+}
+
+-- ============================================================================
+-- The id surface. D5 requires hook IDS, not counts, in both the profile
+-- definition and the run result.
+-- ============================================================================
+
+pure func slot_ids(xs: [HookSlot]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => hook_slot_id(x) :: slot_ids(rest)
+  }
+}
+
+export type DisclosureIds = { extension_id: string, covered: [string], excluded: [string] }
+
+-- What WI-A10 records in the profile definition and in the run result. Names,
+-- never counts — the whole point of the disclosure mechanism.
+export pure func disclosure_ids(d: ExtensionDisclosure) -> DisclosureIds {
+  { extension_id: d.extension_id, covered: slot_ids(d.covered), excluded: slot_ids(d.excluded) }
+}
+
+pure func slots_from_ids(ext_id: string, ids: [string]) -> Result[[HookSlot], CoverageRejection] {
+  match ids {
+    [] => Ok([]),
+    id :: rest =>
+      match hook_slot_from_id(id) {
+        None => Err(UnknownHookId(ext_id, id)),
+        Some(s) =>
+          match slots_from_ids(ext_id, rest) {
+            Err(e) => Err(e),
+            Ok(tail) => Ok(s :: tail)
+          }
+      }
+  }
+}
+
+-- Load-time parse of one disclosure from ids. Fails closed on an unrecognised
+-- hook id rather than dropping it.
+export pure func disclosure_from_ids(ext_id: string, covered: [string], excluded: [string]) -> Result[ExtensionDisclosure, CoverageRejection] {
+  match slots_from_ids(ext_id, covered) {
+    Err(e) => Err(e),
+    Ok(c) =>
+      match slots_from_ids(ext_id, excluded) {
+        Err(e) => Err(e),
+        Ok(x) => Ok({ extension_id: ext_id, covered: c, excluded: x })
+      }
+  }
+}
+
+-- ============================================================================
+-- Inline tests. `make profile_coverage` runs these; the rejecting fixture
+-- PROFILES live in scripts/dst/profile_coverage_dst.ail.
+-- ============================================================================
+
+pure func rules_fired(rs: [CoverageRejection]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest => rejection_rule(r) :: rules_fired(rest)
+  }
+}
+
+pure func has_rule(rs: [CoverageRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if rejection_rule(r) == rule then true else has_rule(rest, rule)
+  }
+}
+
+pure func full_cover(ext_id: string) -> ExtensionDisclosure {
+  { extension_id: ext_id, covered: all_hook_slots(), excluded: [] }
+}
+
+-- The only shape of exclusion a conformant profile may carry: the one gated
+-- slot excluded, the other seven covered.
+pure func gated_excluded(ext_id: string) -> ExtensionDisclosure {
+  {
+    extension_id: ext_id,
+    covered: [OnDescribeTools, OnBuildSystemPrompt, OnBudgetPlan, OnPreStep,
+              OnToolPolicy, OnResponseIntercept, OnSolverCandidate],
+    excluded: [OnToolHandle]
+  }
+}
+
+pure func test_all_slots_covered_passes() -> bool
+  tests [((), true)]
+  {
+    install_list_ok([full_cover("ext_a")]) && install_list_ok([gated_excluded("compose")])
+  }
+
+-- P4: driver_only installs nothing, so the floor and disclosure hold vacuously.
+pure func test_empty_install_list_passes_vacuously() -> bool
+  tests [((), true)]
+  {
+    install_list_ok([])
+  }
+
+pure func test_zero_covered_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: ExtensionDisclosure =
+      { extension_id: "inert", covered: [], excluded: all_hook_slots() };
+    let rs = validate_disclosure(d);
+    has_rule(rs, "coverage-floor") && has_rule(rs, "unconditional-hook-excluded")
+  }
+
+-- The correction this module carries: on_describe_tools is the seventh
+-- unconditionally-dispatched slot, so excluding it is a rejection. Under D5's
+-- stated "six", this fixture would have been accepted.
+pure func test_seven_slots_are_unconditional() -> bool
+  tests [((), true)]
+  {
+    let unconditional_count =
+      count_unconditional(all_hook_slots());
+    let describe_tools_excluded: ExtensionDisclosure = {
+      extension_id: "describes_only",
+      covered: [OnBuildSystemPrompt, OnBudgetPlan, OnPreStep, OnToolPolicy,
+                OnToolHandle, OnResponseIntercept, OnSolverCandidate],
+      excluded: [OnDescribeTools]
+    };
+    unconditional_count == 7
+      && has_rule(validate_disclosure(describe_tools_excluded), "unconditional-hook-excluded")
+  }
+
+pure func count_unconditional(xs: [HookSlot]) -> int {
+  match xs {
+    [] => 0,
+    x :: rest =>
+      (match hook_dispatch(x) { Unconditional => 1, Gated => 0 }) + count_unconditional(rest)
+  }
+}
+
+-- Set completeness, not row shape: a disclosure that omits a slot entirely is
+-- rejected. A validator checking only disjointness accepts this one.
+pure func test_missing_slot_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: ExtensionDisclosure = {
+      extension_id: "partial",
+      covered: [OnDescribeTools, OnBuildSystemPrompt, OnBudgetPlan, OnPreStep,
+                OnToolPolicy, OnResponseIntercept],
+      excluded: [OnToolHandle]
+    };
+    let rs = validate_disclosure(d);
+    has_rule(rs, "covered-excluded-exhaustive")
+      && not has_rule(rs, "covered-excluded-disjoint")
+      && List.length(rs) == 1
+  }
+
+pure func test_overlapping_sets_are_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: ExtensionDisclosure = {
+      extension_id: "overlap",
+      covered: all_hook_slots(),
+      excluded: [OnToolHandle]
+    };
+    has_rule(validate_disclosure(d), "covered-excluded-disjoint")
+  }
+
+-- A duplicate inside ONE list pads the two lists to eight ENTRIES while leaving
+-- a slot unaccounted — here `on_solver_candidate`. Both rules must fire.
+--
+-- This is the exact shape a length check accepts: seven covered plus one
+-- excluded is eight, and eight is the right number. Only counting per SLOT, as
+-- `slot_accounting` does, separates "eight entries" from "eight slots".
+pure func test_duplicate_within_covered_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d: ExtensionDisclosure = {
+      extension_id: "dup",
+      covered: [OnDescribeTools, OnDescribeTools, OnBuildSystemPrompt, OnBudgetPlan,
+                OnPreStep, OnToolPolicy, OnResponseIntercept],
+      excluded: [OnToolHandle]
+    };
+    let rs = validate_disclosure(d);
+    List.length(d.covered) + List.length(d.excluded) == 8
+      && has_rule(rs, "covered-excluded-disjoint")
+      && has_rule(rs, "covered-excluded-exhaustive")
+  }
+
+pure func test_unknown_hook_id_fails_closed() -> bool
+  tests [((), true)]
+  {
+    match disclosure_from_ids("typo", ["on_describe_tool"], []) {
+      Err(UnknownHookId(e, h)) => e == "typo" && h == "on_describe_tool",
+      _ => false
+    }
+  }
+
+pure func test_ids_round_trip() -> bool
+  tests [((), true)]
+  {
+    let ids = slot_ids(all_hook_slots());
+    match disclosure_from_ids("rt", ids, []) {
+      Err(_) => false,
+      Ok(d) => List.length(d.covered) == 8 && List.length(disclosure_ids(d).covered) == 8
+    }
+  }
+
+pure func distinct_ids(xs: [string], seen: [string]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_id(seen, x) then false else distinct_ids(rest, x :: seen)
+  }
+}
+
+pure func contains_id(xs: [string], target: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == target then true else contains_id(rest, x)
+  }
+}
+
+-- Eight DISTINCT slots. Length alone would accept a list that repeated one
+-- constructor and omitted another — the same padding defect the disclosure
+-- rules reject, one level up in the artifact itself.
+pure func test_all_hook_slots_is_eight_distinct() -> bool
+  tests [((), true)]
+  {
+    List.length(all_hook_slots()) == 8 && distinct_ids(slot_ids(all_hook_slots()), [])
+  }
+
+pure func test_duplicate_extension_id_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_install_list([full_cover("a"), full_cover("a")]), "duplicate-extension-id")
+  }
+
+pure func test_rejection_message_names_the_rule() -> bool
+  tests [((), true)]
+  {
+    let rs = validate_disclosure({ extension_id: "x", covered: [], excluded: all_hook_slots() });
+    match rs {
+      [] => false,
+      r :: _ => rejection_message(r) != "" && rejection_extension(r) == "x"
+        && List.length(rules_fired(rs)) == List.length(rs)
+    }
+  }
