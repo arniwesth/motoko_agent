@@ -59,19 +59,42 @@ export type ScriptedStep = {
 -- `scripted_ports` serves from here. Production code calls the port and
 -- branches on nothing, which is what keeps D1's prohibition on production
 -- test-mode branching true as the later effect classes land.
--- `clock_ms` is the monotonic virtual clock, D4's "the explicit clock value in
--- `world_state` is the only clock". It is read and advanced through the
--- `clock_now` port, never directly, and the LIVE adapter ignores it entirely —
--- it reads ambient wall time and returns this record unchanged. That asymmetry
--- is the identity transition D1 specifies, and it is why the field being
--- meaningless in a live run is correct rather than a bug.
---
--- D4 grants the clock no exemption: there is no runtime-clock mirror, no
--- `--virtual-time` dependency (which does nothing observable on the pin) and no
--- conformance assertion comparing an explicit value against a runtime one.
 export type WorldState = {
   script: [ScriptedStep],
-  clock_ms: int
+
+  -- The monotonic virtual clock — D4's "the explicit clock value in
+  -- `world_state` is the only clock". Read and advanced through `clock_now`,
+  -- never directly. The LIVE adapter ignores it entirely and reads ambient wall
+  -- time, which is D1's identity transition; the field being meaningless in a
+  -- live run is correct, not a bug.
+  --
+  -- D4 grants the clock no exemption: no runtime-clock mirror, no
+  -- `--virtual-time` dependency (it does nothing observable on the pin), and no
+  -- conformance assertion comparing an explicit value against a runtime one.
+  clock_ms: int,
+
+  -- The approval-input cursor: the remaining queue of raw operator responses,
+  -- consumed head-first exactly like `script`. Empty means end-of-input, which
+  -- the driver's `resolve_approval` policy turns into the configured default —
+  -- the same thing `readLine()` returning "" means today, so an empty queue is
+  -- behaviour-preserving.
+  --
+  -- It holds RAW input lines, not resolutions. What is nondeterministic is the
+  -- operator's input; `resolve_approval` is pure policy and stays in the driver
+  -- where it belongs. Routing the resolution instead would move production
+  -- policy into the adapter, and let the live and deterministic worlds disagree
+  -- about it.
+  approvals: [string]
+}
+
+-- One approval read and its successor world. `eof` is carried explicitly rather
+-- than inferred from `raw == ""`: a recorded world must be able to replay an
+-- empty line that the operator actually typed as distinct from a closed
+-- channel, and the driver's policy branches differently on the two.
+export type ApprovalInput = {
+  raw: string,
+  eof: bool,
+  next_state: WorldState
 }
 
 -- A clock read and its successor world. Every port that observes an effect
@@ -94,7 +117,7 @@ export type PortedProvider = {
 -- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
-  { script: [], clock_ms: 0 }
+  { script: [], clock_ms: 0, approvals: [] }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -129,7 +152,11 @@ export type ProviderExchange = {
 
 export type Ports = {
   model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
-  approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
+  -- WI-A12's approval class. State-threaded, and it returns the raw input
+  -- rather than a resolution — see `ApprovalInput`. The `ApprovalRequest` is
+  -- passed so a recorded world can correlate the read with the call it is
+  -- approving (D8 causal identities); the live adapter ignores it.
+  approval_read: (WorldState, ApprovalRequest) -> ApprovalInput ! {IO},
   -- WI-A12's clock class. State-threaded in and out, like `model_step`. The
   -- `{Clock}` effect stays in the row and that is expected: AILANG fails on a
   -- capability only when a read is PERFORMED, so the deterministic adapter
@@ -139,8 +166,15 @@ export type Ports = {
   tool_exec: (string, string) -> string ! {IO, Process, FS}
 }
 
-func deny_approval(_req: ApprovalRequest) -> ApprovalResolution ! {IO} {
-  ApprovalDenied("scripted approval denied")
+-- The deterministic approval channel: serve the queue head, advance past it.
+-- An empty queue reports end-of-input, which the driver resolves through its
+-- own default-allow policy. Exported for the same reason as `virtual_clock` —
+-- one implementation of the cursor shared by every non-live adapter.
+export func scripted_approval(state: WorldState, _req: ApprovalRequest) -> ApprovalInput ! {IO} {
+  match state.approvals {
+    [] => { raw: "", eof: true, next_state: state },
+    x :: rest => { raw: x, eof: false, next_state: { state | approvals: rest } }
+  }
 }
 
 -- The deterministic clock: serve the world's own value, advance it by one
@@ -187,7 +221,7 @@ export func ports_shape_probe(
 ) -> Ports {
   {
     model_step: model_step,
-    approval_read: deny_approval,
+    approval_read: scripted_approval,
     clock_now: virtual_clock,
     env_get: fake_env,
     tool_exec: fake_tool

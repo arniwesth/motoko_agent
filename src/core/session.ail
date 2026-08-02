@@ -140,7 +140,7 @@ import src/core/phase_vocab (
   Finalize,
   Fail
 )
-import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, Ported, ScriptedStep, live_ports, scripted_ports, scripted_world_state)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, Ported, ScriptedStep, live_ports, scripted_ports, scripted_world_state)
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
@@ -786,7 +786,8 @@ func ported_provider(rt: ExtRuntime, provider: StepProvider) -> PortedProvider {
   match provider {
     Ported(p) => { ports: p, world: empty_world_state() },
     LiveAI => { ports: live_ports(rt), world: empty_world_state() },
-    Scripted(script) => { ports: scripted_ports(), world: scripted_world_state(script) }
+    Scripted(script) => { ports: scripted_ports(), world: scripted_world_state(script) },
+    ScriptedWorld(world) => { ports: scripted_ports(), world: world }
   }
 }
 
@@ -1769,10 +1770,23 @@ func c2_loop(
               c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, result)
             },
             Some(req) => {
-              let raw = readLine();
-              let resolution = resolve_approval(raw, req.default_allow, raw == "");
-              let tool_step_idx = c2_done_step(st.step_idx);
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), resolve_context_limit(model), ext_ports_of(st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
+              -- WI-A12's approval class. The operator's input comes from the
+              -- world through the port; `resolve_approval` stays here because
+              -- it is pure policy, not an effect. `input.eof` replaces the old
+              -- `raw == ""` inference — behaviour-identical for the live
+              -- adapter, which reports eof exactly when readLine returns "".
+              let input = st.provider.approval_read(st.world_state, req);
+              let resolution = resolve_approval(input.raw, req.default_allow, input.eof);
+              -- `post` carries the advanced approval cursor and is what every
+              -- continuation below uses. Deliberately NOT written as a shadowing
+              -- `let st = ...`: that compiles, but it makes "which `st`" a
+              -- question of line order, and a later edit adding a use above this
+              -- point would silently read the pre-approval world. Passing `st`
+              -- here instead of `post` is the freeze this class's assertion
+              -- catches — the queue would never advance.
+              let post: C2LoopState = { st | world_state: input.next_state };
+              let tool_step_idx = c2_done_step(post.step_idx);
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), resolve_context_limit(model), ext_ports_of(post.provider, policy.step.provider_base_url), post.ext_artifacts, post.telemetry);
               match resolution {
                 ApprovalDenied(reason) => {
                   let _ = ledger_emit(session_id, NativeToolDenied({
@@ -1783,11 +1797,11 @@ func c2_loop(
                     reason: reason
                   }));
                   let denial_msg = policy_denied_message(req.call, reason);
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [denial_msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, trace_with_decision, req, post.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
                   let msg = execute_allowed_tool_call(rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, trace_with_decision, req, post.accumulated_tool_msgs ++ [msg])
                 }
               }
             }
@@ -2375,6 +2389,14 @@ func conversation_loop_v2_with_policy(
   -- on 2026-05-08 (msg_20260508_102147_4f9aa71d).
   if policy.headless then ()
   else {
+  -- NOT routed by WI-A12, deliberately. This read is the interactive
+  -- conversation REPL asking for the next USER TURN — it is not approval input,
+  -- and it sits ABOVE `run_v2_session_traced`, outside the traced driver surface
+  -- D1 scopes `world_state` to. A deterministic run drives the traced entry
+  -- point directly and never reaches this loop, which is why withholding a
+  -- capability here changes nothing the poison pair observes. Routing the
+  -- conversation turn belongs with whatever makes multi-turn sessions
+  -- replayable, not with A12.
   let raw = readLine();
   if raw == "" then ()
   else match decode(raw) {

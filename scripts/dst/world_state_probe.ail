@@ -50,6 +50,7 @@ module scripts/dst/world_state_probe
 
 import std/io (println, exit)
 import std/list as List (length)
+import std/string (contains)
 import std/ai (Message, ToolCall)
 import std/json (Json, jo)
 import std/option (Option, None, Some)
@@ -68,7 +69,8 @@ import src/core/phase_vocab (
   ErrorEvent,
   LedgerTrace
 )
-import src/core/test/stub_step (Scripted, ScriptedStep, tool_step, prose_step)
+import src/core/test/stub_step (Scripted, ScriptedWorld, ScriptedStep, tool_step, prose_step)
+import src/core/ports (WorldState, empty_world_state)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -85,6 +87,8 @@ import pkg/sunholo/motoko_ext_abi/types (
   NoOpinion,
   Deny,
   PassThrough,
+  DenyAfterTimeout,
+  Pending,
   PreStepDecision,
   PromptPatch,
   ResponseInterceptDecision,
@@ -361,6 +365,62 @@ func run_with(rt: ExtRuntime, steps: int, s: [ScriptedStep]) -> TracedSessionRes
   )
 }
 
+-- ---------------------------------------------------------------------------
+-- Approval class (WI-A12)
+-- ---------------------------------------------------------------------------
+
+-- A policy that sends every tool call to the approval channel, so the driver
+-- performs one approval read per call.
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("probe: approval required", DenyAfterTimeout)
+}
+
+func approval_hooks(id: string) -> ExtensionHooks {
+  { hooks(id, passthrough_pre_step) | on_tool_policy: pending_policy }
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [approval_hooks(id)] }, strict_mode: false, verification: v }
+}
+
+-- The denial each approval read produced, in order — the approval cursor's
+-- equivalent of `served_from_trace`.
+--
+-- Read off the RETURNED MESSAGES, not the trace, and that is not a shortcut.
+-- `NativeToolDenied` is `ledger_emit`-only: it goes to the wire and is never
+-- appended to the returned trace (cluster 4 measured the same emit/append
+-- imbalance, 37 vs 15). The tool result message IS the production-visible
+-- consequence — it is what the model sees on the next turn — so asserting on it
+-- tests the thing that matters rather than the thing that is convenient.
+pure func tool_message_contents(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" then m.content :: tool_message_contents(rest)
+      else tool_message_contents(rest)
+  }
+}
+
+-- Positional containment: reason[i] must appear in tool message[i].
+pure func reasons_in_order(expected: [string], contents: [string]) -> bool {
+  match expected {
+    [] => true,
+    e :: erest => match contents {
+      [] => false,
+      c :: crest => contains(c, e) && reasons_in_order(erest, crest)
+    }
+  }
+}
+
+func run_world(rt: ExtRuntime, steps: int, w: WorldState) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    rt, "task", "", false, budget(), "phase-c-model", history(), ".",
+    steps, false, 0, zero_rates(), ScriptedWorld(w)
+  )
+}
+
 export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let _ = println("world_state_probe: WI-A12 advancement + trace completeness");
 
@@ -391,11 +451,43 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
                             count_of("run_summary", ex_kinds) == 1 && last_of(ex_kinds) == "run_summary",
                             "kinds=[${join(ex_kinds)}]");
 
+  -- approval: THE APPROVAL CURSOR'S ADVANCEMENT ASSERTION.
+  --
+  -- Three tool calls, three seeded approval inputs carrying DISTINCT deny
+  -- reasons. The driver must serve them in order, so the recorded denial
+  -- reasons are [alpha, bravo, charlie]. A frozen approval cursor serves
+  -- [alpha, alpha, alpha]; an un-routed one reads stdin, hits EOF, and serves
+  -- the default-deny reason three times. Both are caught, and neither is
+  -- distinguishable from correct behaviour on the determinism axis alone —
+  -- every one of those failures is perfectly reproducible.
+  let approval_world: WorldState = {
+    empty_world_state() |
+    script: [step_named("a0"), step_named("a1"), step_named("a2"), prose_step("done")],
+    approvals: [
+      "{\"type\":\"deny\",\"reason\":\"alpha\"}",
+      "{\"type\":\"deny\",\"reason\":\"bravo\"}",
+      "{\"type\":\"deny\",\"reason\":\"charlie\"}"
+    ]
+  };
+  let appr = run_world(approval_rt("probe_approval"), 12, approval_world);
+  let appr_tools = match appr.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let _ = println("approval: ${show(List.length(appr_tools))} tool results returned");
+  let ok_appr = check("approval: the approval cursor advances through its queue",
+                      reasons_in_order(["alpha", "bravo", "charlie"], appr_tools),
+                      "expected alpha/bravo/charlie in the first three tool results — a repeat means the cursor froze, a 'timeout' reason means it is un-routed and reading stdin");
+
+  let appr2 = run_world(approval_rt("probe_approval"), 12, approval_world);
+  let appr2_tools = match appr2.result { Ok(ms) => tool_message_contents(ms), Err(_) => [] };
+  let ok_appr_det = check("approval: the served approvals are reproducible",
+                          eq_list(appr_tools, appr2_tools),
+                          "two runs of the same world disagreed");
+
   -- determinism: same world twice.
   let again = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
   let ok_det = assert_deterministic("repeat", advance, again);
 
-  if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary && ok_det then
+  if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
+     && ok_appr && ok_appr_det && ok_det then
     println("world_state_probe PASS")
   else {
     let _ = println("world_state_probe FAIL");
