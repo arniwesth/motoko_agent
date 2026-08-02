@@ -161,7 +161,21 @@ world_state:
 	fi; \
 	echo "  -- env class --"; \
 	echo "  i Env-withheld pair DEFERRED, not skipped — see the note in the Makefile above"; \
-	echo "  i the env class's evidence is the provenance assertion in world_state_probe"
+	echo "  i the env class's evidence is the provenance assertion in world_state_probe"; \
+	echo "  -- randomness class (D1 request-surface item 5, \"runtime randomness, if any\") --"; \
+	n=$$(grep -l 'std/rand' src/core/*.ail 2>/dev/null | wc -l); \
+	if [ "$$n" -ne 0 ]; then \
+		echo "FAIL: $$n driver module(s) reach std/rand. src/core/*.ail had none when WI-A12"; \
+		echo "      routed its effect classes, so an ambient RNG has appeared and is un-routed."; \
+		echo "      D1 names an ambient RNG as a prohibited hiding place for world state."; \
+		echo "      (src/core/test/ is deliberately excluded: dst_gen.ail is a seeded GENERATOR,"; \
+		echo "       which is explicit randomness outside the driver, not an ambient read in it.)"; \
+		grep -l 'std/rand' src/core/*.ail; \
+		exit 1; \
+	else \
+		echo "  ✓ no driver module (src/core/*.ail) reaches std/rand"; \
+	fi; \
+	echo "  ✓ every run above completed without the Rand capability ever being granted"
 
 # D6's terminal-trace contract (WI-A9). Four checks, in order:
 #
