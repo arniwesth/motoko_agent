@@ -36,7 +36,7 @@ disagree, the plan wins and this note is stale.
 | 1 | **A1 + P6 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **DONE 2026-08-02** — `e59acaa`, `4ad2c7a`, `6dd1bbe`. Report: `NOTE-cluster-1-execution-report-and-plan-corrections.md` |
 | 2 | **A4 + A5 + A11** | `tools/`, Python; scans the tree, edits none of it | — | Safe to write now |
 | 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | Safe to write now |
-| 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **Handoff written**: `HANDOFF-execute-a16-a9-coverage-and-finalizer.md`. A16 first — it wires the unrun driver coverage that protects A9 and A12 |
+| 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
 | 5 | **A10** | profile/manifest machinery | 2 and 3 | Wait |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1 (landed), 4 (A16's coverage) | **Groundable**, but read cluster 1's silent-freeze finding first — A12 must land an advancement assertion per cursor *before* threading it |
 | 7 | **A13** | discovery/replay | 3, 4, 5, 6 | Wait |
@@ -98,9 +98,24 @@ widen-and-converge work, and the judgement ratio for contract-changing work is *
 10%. Neither correction reaches new-artifact work (A13, A14, A15, B2), whose estimates remain
 unmeasured.
 
-Ask also for the *kind* of judgement, not only the count. Cluster 1's most transferable finding was
-qualitative: **two of its nine judgement sites were ones where both alternatives type-check and the
-wrong one is silent.** A count of nine would have hidden that entirely.
+Ask also for the *kind* of judgement, not only the count. This has now paid twice, and it is the
+single highest-value question in the report-back:
+
+- **Cluster 1**: two of nine judgement sites admitted two type-checking answers with a silent wrong
+  one — wrong successor literals that froze a cursor. That finding added A12's advancement-assertion
+  requirement.
+- **Cluster 4**: four of ten, and *worse in kind* — trace arguments where the wrong value yields a
+  trace that **still passes its own invariant**. That finding forced A12's assertion to cover trace
+  completeness, not just cursor advancement.
+
+A count alone would have hidden both. **Ask what could have been wrong silently, and what caught
+it** — in cluster 4's case, one of the four was caught only by reading emitted JSONL, because
+`smoke_parity` diffs a build against itself and a consistent reordering is consistent.
+
+**Write acceptance clauses that must be *demonstrated*, not asserted.** Cluster 4's C1 is the
+evidence: "verified by breaking one deliberately" could not be satisfied, because four of the eight
+scripts exited 0 on a failed assertion. An assertable clause would have shipped the illusion of
+coverage.
 
 Plan defects found while building get filed as plan corrections. Never silently reconciled: executing
 finds what reading does not, and that is the point of building cluster 1 first.
