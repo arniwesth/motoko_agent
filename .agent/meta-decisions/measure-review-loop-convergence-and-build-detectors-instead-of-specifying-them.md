@@ -1,13 +1,21 @@
-# Meta-decision: a review loop is a control system — measure whether it converges, and build the detector instead of specifying it a fourth time
+# Meta-decision: measure movement, not comfort
+
+*A review loop is a control system; a detector must be built, not specified; and the metric that feels
+like proof is rarely the one that discriminates.*
 
 Date: 2026-08-02
 Status: Standing discipline
-Scope: any session running iterative adversarial review over a durable doc (ADR, plan, spec), and any
-session writing a decision doc that names a gate, detector, classifier, or validator.
+Scope: any session running iterative adversarial review over a durable doc (ADR, plan, spec); any
+session writing a decision doc that names a gate, detector, classifier, or validator; and any session
+choosing which assertion guards a migration.
+
+Amended 2026-08-02 with rule 3, after WI-A12's execution confirmed the same shape one layer down —
+see `.agent/projects/009_motoko_dst_execution/NOTE-cluster-6-execution-report-and-plan-corrections.md`.
 
 ## The principle
 
-Two rules, both learned the expensive way on project 009.
+Three rules, all learned the expensive way on project 009. They are the same rule at three scales:
+**prefer the measurement that detects movement over the one that feels like proof.**
 
 **1. An adversarial review loop can diverge, and nobody notices unless someone counts.** Each round
 feels productive — the reviews are sharp, the findings are real, the corrections land. But if each
@@ -19,6 +27,12 @@ converging, and more rounds will not fix it.**
 validates is only sound if it runs. Prose review will correctly find each specification unsound, the
 next pass will specify harder, and the cycle repeats indefinitely. **Build the smallest working
 version instead. The specification questions dissolve on contact with the artifact.**
+
+**3. The metric that feels most like proof is rarely the one that discriminates.** Reproducibility,
+type-checking, and "the round found real defects" all feel like correctness. They are true statements
+that rule almost nothing out. **Pair every such metric with one that measures *movement* — did the
+cursor advance, did the count fall, did the value change — because that is the one that fails when
+something is wrong.**
 
 ## The instance that motivates it
 
@@ -99,6 +113,35 @@ review action said in as many words not to do that.
 **A document should avoid asserting facts about itself that an edit invalidates.** Where it must,
 state the derivation (`sections − 5`) rather than the result, and assign the check to a tool.
 
+## The second instance, one layer down: WI-A12's three assertion axes
+
+Rule 3 was added after the ADR's own migration was executed, because the same shape appeared in code.
+WI-A12 threaded world state through the driver across six effect classes — 119 sites — guarded by
+three assertion axes: **determinism** (same seed twice → identical output), **trace completeness**,
+and **advancement** (did the cursor actually move).
+
+Four defects were caught before they shipped. **Determinism caught none of them.**
+
+| Defect | Type-checks | Determinism | Caught by |
+|---|---|---|---|
+| Initial world read off `provider` instead of `started.next_state` | clean | **green** | advancement (`duration_ms: -1`) |
+| Approval state carried forward instead of `input.next_state` | clean | **green** | advancement |
+| One env read reverted to ambient `getEnvOr` | clean | **green** | provenance |
+| Batch recursion passed `world` instead of `executed.next_state` | clean | **green** | 3 of 4 contract assertions |
+
+The first is the instructive one: reading the initial world off `provider` is **the more natural thing
+to write** — the constructor already receives `provider`, so it needs no new parameter. It is
+type-clean, trace-complete, and *perfectly reproducible*. It freezes the world, and the only signal is
+that a duration came back negative.
+
+The env case shows why: **an un-routed ambient read is also perfectly reproducible** when the variable
+is unset in both runs. Determinism cannot distinguish "correctly isolated" from "identically broken."
+
+This is rule 1 at a different scale. "Same seed twice → identical output" is to a migration what "this
+round found real defects" is to a review loop: a true statement, satisfying to produce, that
+discriminates almost nothing. D7 asks for the determinism invariant explicitly, so it will keep being
+reached for — it is necessary and it is not sufficient.
+
 ## The two-blocker illusion
 
 The ADR carried two acceptance blockers throughout. They behaved completely differently and conflating
@@ -127,15 +170,27 @@ of progress, and it is invisible if you only ever look at the current round.
 4. **Cap review scope explicitly.** "Does the architecture hold" and "is every mechanism buildable" are
    different questions. The second one belongs to whoever builds it.
 
+**When choosing what guards a migration:**
+
+5. **Never let reproducibility be the only axis.** Pair it with an assertion that something *moved* —
+   a cursor advanced, a queue drained, a value differs from its predecessor. Reproducibility is the
+   axis that feels most like a proof of correctness and it is the weakest of the three measured on 009.
+6. **Land the movement assertion first, before the migration it guards.** Confirmed four times in one
+   run and three times across runs. A defect that is reproducible and trace-complete is invisible to
+   everything else.
+7. **Prefer the un-routed option that fails loudly over the one that fails silently.** Where a seam
+   cannot yet be routed, bind it to something a poison probe turns red rather than to a frozen
+   snapshot that serves a stale value forever.
+
 **When writing a decision doc that names a gate:**
 
-5. **Name the detector, its inputs, its soundness boundary, and its fail direction — then stop.** Do
+8. **Name the detector, its inputs, its soundness boundary, and its fail direction — then stop.** Do
    not iterate on its implementation in prose. If reviewers keep finding it unsound, that is the signal
    to build it, not to rewrite it.
-6. **Prefer one working 40-line script to a fourth specification.** On 009, `ailang iface` over the
+9. **Prefer one working 40-line script to a fourth specification.** On 009, `ailang iface` over the
    pinned stdlib would have settled four rounds of classifier argument in an afternoon, and the answer
    would have been checkable rather than reviewable.
-7. **When you assert a property of a category, probe the case you do *not* already believe.** The three
+10. **When you assert a property of a category, probe the case you do *not* already believe.** The three
    false generalisations above all came from probing the confirming case.
 
 ## Related
@@ -147,6 +202,10 @@ of progress, and it is invisible if you only ever look at the current round.
   author, verification never does. That split held up well on 009 and is not what failed; what failed
   was letting the author adjudicate the *same question* three times in three passes without ever
   building the thing that would settle it.
+- `.agent/projects/009_motoko_dst_execution/NOTE-cluster-6-execution-report-and-plan-corrections.md`
+  — the WI-A12 execution report, where rule 3's evidence was measured. Also the source of a sizing
+  rule worth carrying: for a return-type change, **count the destructuring sites, not the conceptual
+  blast radius**. One grep, ~90 seconds, and it was the only over-estimate in three calibration runs.
 
 ## Honest note on authorship
 
