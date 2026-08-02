@@ -1,22 +1,28 @@
 # ADR-001: Deterministic Test-World Architecture for Motoko Logical-Fault DST
 
 Date: 2026-07-24
-Status: Proposed — author self-review, streaming spike, two independent reviews, a vertical spike
-through the real driver, AILANG v0.31.0 upstream recheck, and **three independent verifications of
-the F1–F6 revision** and **fourteen independent delta reviews (two each of the
-second through eighth correction passes)** (2026-08-01 and 2026-08-02,
-recorded below) complete. The three verifications returned *Revise* and converged on one defect set;
-each delta round returned *Revise* and converged on another, twice overturning this side's own
-diagnosis. Every set is now corrected.
+Status: **Accepted 2026-08-02** as an architecture decision, on the scoped
+architecture-acceptance review recorded below: both reviewers returned *Accept with conditions*, and
+every condition is applied in the pass that carries this line. Preceded by an author self-review, a
+streaming spike, two independent reviews, a vertical spike through the real driver, an AILANG v0.31.0
+upstream recheck, three independent verifications of the F1–F6 revision, and fourteen delta reviews
+of correction passes two through eight.
 
-**One acceptance blocker remains, and it is external.** The upstream recorded-stream API is specified
-and agreed but not shipped in a released binary. D1 requires it to land in a *release*, the toolchain
-to be repinned, and the positive integration probe to pass. A fork prototype does not satisfy this.
-Nine correction passes and fourteen delta reviews moved it exactly zero, because nothing in this
-repository can.
+**What "Accepted" covers, and what it does not.** Accepted means D1–D11 are the selected architecture
+and the decision is sound, internally coherent, and implementable on the pinned substrate. It does
+**not** mean the DST name is earned, and it does not clear the external prerequisite. Two things
+remain, both finite and neither self-regenerating:
 
-**An earlier revision listed a second blocker — "the latest correction pass has not been independently
-verified" — and that was a mistake of kind, not of fact.** It is true after every pass by
+1. **An external prerequisite for D1's streaming-trace parity and for the name**: the upstream
+   recorded-stream API must land in a *released* AILANG, the toolchain must be repinned, and the
+   positive integration probe must pass. A fork prototype does not satisfy it. Nine correction passes
+   and fourteen delta reviews moved it exactly zero, because nothing in this repository can.
+2. **Three deferred gate mechanisms**, each with a stated acceptance criterion in *Gate mechanisms:
+   built, and deferred*. They block the **name**, not this decision. The fourth is built and was
+   independently run by both acceptance reviewers against its published criterion.
+
+**An earlier revision listed "the latest correction pass has not been independently verified" as a
+peer blocker, and that was a mistake of kind, not of fact.** It is true after every pass by
 construction, so it regenerates with each edit and can never be discharged; carrying it as a peer of
 the external prerequisite made this ADR un-acceptable in principle. Measured across the loop it
 produced: findings per delta round of 15, 12, 16, 16, 17, 19, 20 — bottoming out at round two and
@@ -24,10 +30,11 @@ rising monotonically after, while every individual round looked like progress. T
 `NOTE-review-loop-retrospective.md` and the standing discipline in
 `.agent/meta-decisions/measure-review-loop-convergence-and-build-detectors-instead-of-specifying-them.md`.
 
-What replaces it is a finite list: the three deferred gate mechanisms in *Gate mechanisms: built, and
-deferred*, each with a stated acceptance criterion. **Those block the DST name, not this ADR.** The
-architecture they sit under — D1–D11 — has been re-derived and confirmed by every round since the
-F1–F6 verifications and reopened by none.
+What replaced it is the two-item list above. D1–D11 were re-derived and confirmed by every round
+since the F1–F6 verifications, reopened by none, and ruled sound by both acceptance reviewers, who
+independently applied the test *"if all three deferred mechanisms turned out unbuildable, would
+D1–D11 still be the right architecture?"* and both answered yes, because each mechanism's absence
+degrades conservatively.
 
 **What is required next is not another delta review of a correction pass.** The loop those rounds
 ran has been closed deliberately; see the Status note above. What remains is a scoped architecture
@@ -123,8 +130,10 @@ Upstream rechecked at: AILANG v0.31.0 release commit `1f6f7dd28`; upstream reque
 Depends on:
 - `../007_dst_consolidation/ADR-001-motoko-dst-definition-and-taxonomy.md` after review disposition
   and acceptance. That ADR owns the definition, scope, and naming gate.
-  **Satisfied 2026-07-26** — 007 is Accepted. This ADR's remaining acceptance blockers are its own:
-  the upstream recorded-stream API and an independent review.
+  **Satisfied 2026-07-26** — 007 is Accepted. This ADR's remaining prerequisite is its own and is
+  external: the upstream recorded-stream API in a released binary. The independent review this line
+  used to name has been supplied — see the scoped architecture-acceptance review below — and the
+  self-regenerating "latest pass unverified" framing is retired (Status).
 
 Amends:
 - The implementation architecture in
@@ -381,7 +390,9 @@ paragraph got it wrong.** It said such a profile was "not conformance-eligible",
 than D5 licenses: D5's machinery already handles this case correctly — an explicitly excluded hook is
 not covered, is named in the result, and causes a fail-closed `HarnessFailure` if dispatch reaches it
 — and the acceptance table lists excluded hooks as evidence a profile *passes*. A profile installing
-an `ai_step`-calling extension and excluding every hook it registers is conformant and honest; it simply
+an `ai_step`-calling extension is permitted only if the extension is **omitted** from the install list;
+excluding its hooks does not work, because six of the eight are dispatched unconditionally and reaching
+an exclusion fails closed (D5). A profile that omits it is conformant and honest; it simply
 does not cover those hooks, and any run that reaches one fails closed rather than silently discarding
 a cursor.
 
@@ -457,8 +468,10 @@ Two things follow, and the second is the one with teeth:
   extension order of **all fourteen** checked-in configurations. Every one of them can be made
   conformant by excluding `compaction_ai`'s hooks — it registers **eight**, of which `on_pre_step` is
   the only non-trivial one and the only one reaching the port, the other seven being
-  constant-returning lambdas — so the profile is conformant and inert on the compaction path, given a
-  recorded and validated classifier-2 carve-out. The first *useful* interim
+  constant-returning lambdas — but excluding them does not yield a runnable profile, because
+  `on_build_system_prompt`, `on_budget_plan`, `on_pre_step` and `on_tool_policy` are dispatched
+  unconditionally (D5). The conformant move is to omit `compaction_ai` from the install list. The
+  first *useful* interim
   profile is therefore a purpose-built narrow one rather than a shipped configuration. **D5 retires
   the "pure guards and deterministic fixture hooks may form the initial profile" formulation** as
   naming two classes with no available member: that profile is the real driver plus the main-loop
@@ -521,10 +534,12 @@ an explicit amendment. A process-global, unscoped, or silently colliding recorde
 Delaying all chunk projection until provider completion also remains rejected because it changes
 current live UX semantics.
 
-Before this ADR is accepted, the upstream recorded-stream API must be pinned and a direct positive
-version of the spike must prove immediate projection, exact returned-log parity, success,
-partial-stream-then-error, and no duplicate delivery. Until then, complete streaming trace parity
-is blocked.
+**Before streaming trace parity can be claimed — and therefore before the DST name is earned** — the
+upstream recorded-stream API must be pinned and a direct positive version of the spike must prove
+immediate projection, exact returned-log parity, success, partial-stream-then-error, and no duplicate
+delivery. Earlier revisions made this a blocker on *accepting this ADR*; the scoped
+architecture-acceptance review ruled otherwise and the Status block records the split. The
+architecture does not depend on that API existing; the parity claim does.
 
 **That gate blocks streaming trace parity. It does not block the port widening, and an earlier
 revision of this clause wrongly implied that it did** by adding "and production migration must not
@@ -933,8 +948,14 @@ equivalent deadline/retry) behavior. Both programs must replay deterministically
 If no production behavior observes time, merely carrying unused clock interactions does not meet
 the gate. At HEAD, the core retry loop is count/budget based and session `now()` calls primarily
 derive ids and durations; several tool/process adapters enforce real external timeouts. The first
-time-bearing seam should therefore be a typed tool or delegated-process request whose existing
-timeout becomes an explicit live/deterministic adapter contract. The project must not invent a new
+time-bearing seam should therefore be **the typed `ToolCallEnvelope` with deadline information that
+D1 already mandates in place of the stringly `tool_exec`** — in core, in-profile, and a widening this
+ADR requires anyway. Name that rather than an "existing timeout": the two adapters this ADR's Context
+row cites as timeout-bearing (`motoko-ext-mcp`, `motoko-ext-context-mode`) are extension-resident and
+excluded by D5, and core carries a timeout-bearing *request* (`src/core/tool_catalog.ail:53`,
+`src/core/env_client.ail:31`) whose enforcement is deliberately outside the AILANG driver. **No
+in-profile module observes time today**, which is precisely why the seam is a contract to build rather
+than one to adapt. The project must not invent a new
 agent retry policy merely to make the clock observable.
 
 These two requirements are distinct and must not be conflated during planning. *Which* seam
@@ -1101,9 +1122,10 @@ A versioned profile definition records:
 - **per-extension hook disclosure**: for every installed extension, the **hook ids** covered and the
   hook ids excluded — names, not counts, since counts cannot distinguish a covered no-op from covered
   behaviour. The two sets must be disjoint and must exhaust all eight ABI slots; and
-- **coverage-floor carve-outs**: every installed extension with zero covered hooks, named together
-  with the classifier-2 field that forced full exclusion. An extension with zero covered hooks and no
-  recorded carve-out is a profile-definition rejection (D5).
+- **omitted extensions**: any extension excluded from the install list because a classifier-2 call or
+  an unconditionally-dispatched hook made it un-runnable in this profile, named with the reason. An
+  *installed* extension with zero covered hooks is a profile-definition rejection (D5); there is no
+  carve-out.
 
 Changing any of those semantic scope fields requires a profile-version change. The execution
 manifest separately records source revision, toolchain, extension package versions, ABI version,
@@ -1124,10 +1146,31 @@ An explicitly excluded hook is not covered, must be named in the result, and cau
 `HarnessFailure` if dispatch reaches it. Thus a run cannot gain coverage credit merely because its
 seed happened not to exercise a direct-effect hook.
 
-**Exclusion is a coverage cost, not a conformance disqualification. A profile installing an extension
-whose hooks are all excluded is conformant and inert rather than invalid — provided it records a
-validated classifier-2 carve-out; without one it is a profile-definition rejection (the coverage
-floor, below).**
+**Exclusion is a coverage cost for *conditionally dispatched* hooks, and an un-runnable configuration
+for the rest.** The distinction is forced by the dispatch shape and an earlier revision missed it
+entirely, asserting that a profile installing an extension with all hooks excluded is "conformant and
+inert rather than invalid". **It is neither: it cannot complete a single run.** Six of the eight ABI
+hook slots are dispatched by an unconditional fold over `rt.registry.hooks`
+(`src/core/ext/runtime.ail:205, 220, 238, 279, 355, 367`); only `on_tool_handle` is gated, by
+`contains_tool` at `:337-338`. So an excluded `on_build_system_prompt` is reached on the first
+system-prompt build, before any provider call, and the run terminates as `HarnessFailure`. Such a
+profile emits zero `SystemRun`s and can satisfy neither D11's minimum completed count nor any D7
+invariant.
+
+**The rule the dispatch shape actually forces: an extension with any *unconditionally dispatched* hook
+excluded may not be installed in a conformant profile — it must be omitted from the install list.**
+Exclusion remains a real and useful classification for conditionally dispatched hooks (today
+`on_tool_handle`) and for negative conformance probes, where reaching an exclusion *should* fail
+closed. It is not a way to neutralise an installed extension.
+
+Two consequences, and both simplify. First, the fourteen checked-in configurations are made conformant
+by **removing** `compaction_ai` from the profile's install list, not by excluding its hooks — which is
+what *Gate mechanisms* and the interim-profile statement already say independently: the first interim
+profile is the real driver plus the main-loop cursor. Second, **the coverage floor's classifier-2
+carve-out is deleted and the floor binds unconditionally.** The carve-out existed to bless a
+zero-coverage installed extension; that configuration cannot execute, so there is nothing to bless.
+Deleting it removes classifier 2 from the floor's dependency chain and removes the one fail-open
+direction in the deferred layer.
 
 **Anti-laundering needs two mechanisms, and earlier revisions each supplied only one.** One revision
 required "at least one covered hook per installed extension". **That rule is vacuous, because
@@ -1156,26 +1199,25 @@ previously failed. That is a real weakening and it was not the intent.
 
 1. **The floor is restored, in the form that was always decidable.** *Not every hook of an installed
    extension may be excluded* — a profile that covers zero hooks of something it installs must not
-   list it as installed. **The single carve-out is classifier 2**: where the rejection rule above
-   forces full exclusion, full exclusion is permitted and the profile definition records which
-   extension and which classifier-2 field forced it. **A recorded carve-out is not self-justifying:**
-   validation must match the `(extension id, classifier-2 field)` pair against a row in the typed
-   call inventory bound to the same source revision and toolchain as the profile, and reject a pair
-   that is absent, unknown, or stale. Without that reverse check the floor is bypassable by
-   assertion — any fully-excluded extension could name `ai_step` and pass. The inventory, or a
-   content-addressed reference to it, is therefore a profile field rather than optionally a manifest
-   one, which is also what makes the carve-out decidable from the profile definition.
+   list it as installed. **The floor binds unconditionally: there is no carve-out.** An earlier
+   revision carried
+   one, for extensions whose hooks classifier 2 forced fully excluded — but per D5 that configuration
+   cannot execute at all, so it is omitted from the install list rather than blessed. Deleting the
+   carve-out also deletes the reverse-validation obligation it needed (match the recorded
+   `(extension, field)` pair against the typed call inventory), and with it the only fail-open
+   direction in the deferred layer.
 2. **Disclosure carries the information the floor cannot.** The profile definition and the run result
    both record, per installed extension, the **hook ids** covered and the hook ids excluded — names,
-   not counts. `compaction_ai` is not the example, because it calls `ai_step` and therefore reports
-   **zero covered and eight excluded** with a recorded carve-out. The distinction names carry is
-   between two extensions that both report three covered: one whose three rowless slots are constant
+   not counts. `compaction_ai` is not the example, because it calls `ai_step` and is therefore omitted
+   from a conformant profile rather than installed at all. The distinction names carry is between two
+   *installed* extensions that both report three covered: one whose three rowless slots are constant
    returns, and `compose`, whose `on_tool_policy` binds real dispatch (`compose.ail:838` → `:83`). A
    count cannot tell those apart; the hook ids can, because they say *which* slots are covered rather
    than how many — which is the distinction the floor was reaching for and could never express.
 
 The two are validated together at profile load: the sets must be disjoint and must exhaust all eight
-ABI slots, and a zero-coverage extension must carry a recorded classifier-2 carve-out.
+ABI slots; no installed extension may have zero covered hooks; and no installed extension may have an
+unconditionally-dispatched hook excluded.
 
 **Per-hook classification reads *declared* effect rows in the interim, not performed ones.** The
 reconciling detector that would let a profile claim a hook performs less than it declares is
@@ -1467,12 +1509,12 @@ requirement is replaced by three ordered obligations:
    soundness boundary, its profile roots, and its fail-closed behavior *before* naming it as
    name-adoption gate evidence. Nothing in this ADR currently requires it.
 
-> **Verification gate on obligation 2.** The text above is a repair written by the authoring side in
-> response to the two 2026-08-01 delta reviews, which independently converged on it. It has not
-> itself been independently verified. **D5's routing audit is not citable as name-adoption gate
-> evidence until a reviewer confirms the replacement detector**, and no separate non-citability
-> marker is carried elsewhere: D4's clock-detector sentence and this section's third bullet were
-> corrected in the same pass rather than left asserting the withdrawn over-approximation claim.
+> **Verification gate on obligation 2 — classifier 1 discharged, classifier 2 outstanding.**
+> Classifier 1 is built and was independently run by both acceptance reviewers against its published
+> criterion (0 unresolved, `agree=43 disagree=0`); that half of the audit is citable. **Classifier 2
+> is not built, so D5's routing audit as a whole remains non-citable as name-adoption gate evidence**
+> until it is. No separate non-citability marker is carried elsewhere: D4's clock-detector sentence
+> and this section's third bullet state the same scope.
 
 Test-only code may:
 
@@ -1744,7 +1786,11 @@ multi-actor simulation inside one run.
 
 ## Gate mechanisms: built, and deferred
 
-This ADR names four detection/validation mechanisms. **One is built; three are deferred to the
+This ADR names four detection/validation mechanisms. It is scoped to the detector layer: D3's fault
+catalogue and D6's event vocabulary are deferred constructed artifacts too, with fail-closed
+acceptance contracts stated in their own decisions, but they are architecture components rather than
+hermeticity/coverage detectors and are tracked there rather than here. **One is built; three are
+deferred to the
 implementation plan behind the acceptance criteria below, and this section is the boundary between
 "the ADR decides it" and "the plan builds it."**
 
@@ -1756,10 +1802,10 @@ was correct on its first run and immediately produced a fact four prose revision
 
 | Mechanism | State | Acceptance criterion |
 |---|---|---|
-| **Classifier 1** — effect-bearing stdlib module set | **Built**: `tools/effect-inventory/derive.py`, `make effect_inventory` | Exits 0 on the profile's roots with zero unresolved modules; `make effect_inventory_selftest` reports zero disagreements; derived set and scan-root commit recorded in the manifest |
+| **Classifier 1** — effect-bearing stdlib module set | **Built and independently verified**: `tools/effect-inventory/derive.py`, `make effect_inventory` | Exits 0 on the profile's roots with zero unresolved modules; `make effect_inventory_selftest` reports zero disagreements; derived set and scan-root commit recorded in the manifest. **Met at `a0d4edb`**, run by both acceptance reviewers: 0 unresolved, `agree=43 disagree=0` |
 | **Classifier 2** — `ExtPorts` typed-call inventory | Deferred | A type-aware field-call inventory over the in-profile roots, failing closed on every alias, wrapper, re-export, or computed access it cannot resolve. `grep -rn '\.ai_step('` is its conservative approximation, not its definition |
 | **Site-to-hook attribution table** | Deferred | Produced source-global with a per-row named reviewer; profile-load validation rejects unknown hook ids, stale bindings and malformed rows; necessity is manually reviewed and that is a **stated exception** to the automated-gate promise until the interprocedural validator exists |
-| **Coverage floor + carve-out validation** | Deferred | Profile load rejects a zero-coverage installed extension without a carve-out, and rejects a carve-out whose `(extension, field)` pair is absent from classifier 2's inventory at the same source revision |
+| **Coverage floor validation** | Deferred | Profile load rejects any installed extension with zero covered hooks, and any installed extension with an unconditionally-dispatched hook excluded. The carve-out and its reverse check are gone — the configuration they blessed cannot execute (D5) — so this no longer depends on classifier 2 |
 
 **None of the three deferred mechanisms blocks acceptance of this ADR.** They block the *name*: D5's
 routing audit is not citable as name-adoption gate evidence until each is built and passes its
@@ -1781,13 +1827,16 @@ satisfy it.
 ## Acceptance test for the name
 
 A reviewer can approve the generated axis as **Motoko single-actor, logical-fault DST** only when
-all answers below are supported by an automated gate:
+all answers below are supported by an automated gate, **with one declared exception**: attribution
+necessity (D4 clause 3) rests on a recorded named reviewer until the interprocedural validator exists.
+A profile may instead take the fully automated route — classify every core effect site as
+unconditional core and forgo the attribution table — at the cost of more routing work.
 
 | Question | Required evidence |
 |---|---|
 | Does one seed generate an execution rather than only values? | At multiple real effect requests, the seeded world chooses responses/faults/latencies that influence subsequent production requests; discovery has zero unexpected harness failures and records the resolved interaction sequence. |
 | Is there a modeled logical environment? | Provider, typed tool execution, approval, synthetic environment, runtime randomness if used, clock, and profile-declared logical resource state flow through one explicit state-threaded world with checked transition semantics. |
-| Is the tested boundary honest? | The result names the execution manifest and profile; every profile-reachable hook is effect-free, world-mediated, or explicitly excluded; excluded hooks and adapter/parser boundaries are listed; dispatch to an exclusion fails closed; profile-definition validation found no installed extension that calls a classifier-2 `ExtPorts` field while registering an un-excluded hook (D5 classifier 2); every installed extension covers at least one hook or carries a recorded classifier-2 carve-out (the coverage floor); and the result reports per-extension covered/excluded hook **ids**, so a profile covering only ABI-pure no-op slots is visible as such. |
+| Is the tested boundary honest? | The result names the execution manifest and profile; every profile-reachable hook is effect-free, world-mediated, or explicitly excluded; excluded hooks and adapter/parser boundaries are listed; dispatch to an exclusion fails closed; profile-definition validation found no installed extension that calls a classifier-2 `ExtPorts` field while registering an un-excluded hook (D5 classifier 2); every installed extension covers at least one hook (the coverage floor, which binds unconditionally); no installed extension has an unconditionally-dispatched hook excluded; and the result reports per-extension covered/excluded hook **ids**, so a profile covering only ABI-pure no-op slots is visible as such. |
 | Do injected faults reach production recovery code? | A bounded seed corpus generated by the real generator reaches and replays every required fault class the profile does not waive, together with its mapped production branch, evidenced by D11's branch-reached counters read from D3's catalogue; every waived class is named with its waiving condition. |
 | Does virtual time matter? | Every time-bearing read reachable in the profile is routed through the world clock — no residual direct `std/clock` read survives the routing audit — and two replayable programs holding non-time inputs constant but changing generated latency/clock movement produce the expected completion-versus-timeout or equivalent deadline result without invoking an OS timeout. |
 | Is production logic under test? | The runner calls the real traced session driver with threaded world state; no test transition loop computes state-machine decisions or history. |
@@ -1901,8 +1950,9 @@ Costs and risks:
   decision-only, so no successor can reach `C2LoopState`. Lifting that exclusion means widening
   `ExtPorts.ai_step`, the hook results that carry its outcome, and the core dispatch results — the
   world-token protocol D5 already requires — alongside the mechanical `Trace`/`Rand` row edits above.
-  Until it lands, a profile installing an `ai_step`-calling extension is conformant only by excluding
-  every hook that extension registers — a coverage cost, and a profile-definition rejection if it fails
+  Until it lands, a profile must **omit** an `ai_step`-calling extension rather than install it —
+  excluding its hooks does not work, because six of the eight are dispatched unconditionally and
+  reaching an exclusion fails closed (D5). It is a profile-definition rejection if it fails
   to (D1, D5). `compaction_ai` calls it and is in the extension order of **all fourteen** checked-in
   configurations, so each can be made conformant only by disabling the hook that gives it its
   function; the first *useful* interim profile is a purpose-built narrow one rather than a shipped
@@ -1952,9 +2002,10 @@ be sequenced first, because two of them change what the migration costs and one 
    `ext_ai_step` reaches the same seam through an ABI that cannot return a successor (D1). It fixes
    the main loop. A profile installing an `ai_step`-calling extension is conformant only by
    excluding **every hook that extension registers** — a coverage cost, and a profile-definition
-   rejection if it does not (D1, D5). Such a profile covers none of that extension's hooks, so it
-   must record a **validated classifier-2 carve-out** naming the extension and the field — the
-   coverage floor's single exception — alongside the per-extension covered/excluded hook ids.
+   rejection if it does not (D1, D5). Note the shape: such an extension is **omitted** from the
+   install list, not installed-and-excluded, because six of its eight hooks are dispatched
+   unconditionally and reaching an exclusion fails closed. The profile records the omission and its
+   reason alongside the per-extension covered/excluded hook ids.
    Budget three things the
    ADR names and the plan must sequence: a
    concrete `ProviderState` declared in `src/core/ports.ail`, the **relocation of `ScriptedStep`** to
