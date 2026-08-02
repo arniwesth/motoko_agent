@@ -202,8 +202,25 @@ is in flight. Milestone C depends on B.
   two files. One `grep` for the function name answers it in ninety seconds. Cluster 4's return-class
   rewrite cost 26 sites because *its* class was seven terminal returns spread across the driver —
   the spread is the cost, not the return.
-- **This does not generalise to new-artifact work.** A7, A8, A10, A13, A14, A15 and B2 build things
-  that do not exist; nothing here measures those and their estimates stand unrevised.
+- ~~**This does not generalise to new-artifact work.** A7, A8, A10, A13, A14, A15 and B2 build
+  things that do not exist; nothing here measures those and their estimates stand unrevised.~~
+  **MEASURED 2026-08-02 by cluster 3 (A6, A7, A8). The hedge was right that it does not generalise,
+  and wrong about the direction.** New-artifact sites are markedly CHEAPER per site than converge
+  sites, not dearer — 7.6 / 5.9 / 19.8 sites per minute against cluster 1's 3.4. A converge site
+  costs a compiler round-trip; an artifact row does not. Both new modules type-checked on the first
+  `ailang check` and A8's 34-variant round-trip passed on the first run.
+
+  **So sites/min is the wrong predictor for this class. Cost tracks the number of rows whose content
+  must be DISCOVERED rather than TRANSCRIBED.** A7 and A8 are the controlled comparison: 68 sites in
+  11.5 min against 158 sites in 8, because each of A7's eleven rows needed a recovery branch located
+  and confirmed in the driver, while A8's thirty-four were transcription from one open projection
+  function plus a classification judgement each.
+
+  **Sizing rule for A13, A14 and B2:** count the rows requiring an independent source investigation
+  and price those at roughly one minute each; price transcribed rows at negligible. The judgement
+  BAND transfers unchanged — cluster 3 came in at **30% combined**, exactly the corrected
+  predictor's high band, with A6 at 16% (rules fixed verbatim by D5) and A7 at 44% (two undetermined
+  fields per row). **A7's shape is what to expect from A13 and A14.**
 - The 14-minute discipline held for the reason M1 gave: **tooling first.** Cluster 1 wrote a
   parallel `ailang check` over the affected import closure (22 modules, 12 s) that surfaces one
   error per module instead of one per compile. Without it, convergence costs one round-trip per
@@ -293,6 +310,23 @@ unconditionally-dispatched hook excluded; covered/excluded sets disjoint and exh
 slots; hook **ids**, not counts, in definition and run result.
 *Acceptance evidence:* a fixture profile installing an all-excluded extension is rejected; the
 rejection reason names the rule; `driver_only` (empty install list) passes vacuously.
+*Size:* **MEASURED: ~5 min, 4 files (2 new), 38 sites of which 6 needed judgement** (`935bd46`,
+2026-08-02). Landed as `make profile_coverage`, invoked by CI.
+
+**SEVEN slots are unconditionally dispatched, not six, and this item is where D5's undercount
+shows** (cluster 3, C1; D5 amended 2026-08-02). D5 says six unconditional plus one gated and leaves
+the eighth unnamed. It is `on_describe_tools`, dispatched by an unconditional fold at
+`tool_catalog.ail:114` which `live_ports` reaches on **every model step** — outside the
+`ext/runtime.ail` the ADR surveyed. A profile excluding it must be rejected, and under the stated
+six it would have loaded clean: both readings type-check and the wrong one is silent. **WI-A10 must
+not re-derive the six from D5.**
+
+**The acceptance line above names the weak fixture, and that is a correction worth carrying into
+A10's and A13's acceptance lines.** "An all-excluded extension is rejected" is easy and shallow. The
+fixture that separates this validator from a row-shape validator is the set-completeness one: a
+disclosure whose two lists are disjoint, whose every id is real, and whose **entry count is
+correct** — seven covered plus one excluded is eight — while one slot is classified nowhere. Only
+counting per *slot* rather than per *entry* rejects it.
 
 **WI-A7. Construct D3's fault catalogue** as a versioned, machine-readable artifact with a
 fail-closed validator. New construction; the required classes, per-class fields (stable class id,
@@ -321,6 +355,28 @@ row shape, because every downstream counter reads its ids from this artifact and
 discover a class the artifact omits. An empty catalogue must fail. The two conditional classes
 carry their waiving conditions; D11's class-reached and branch-reached counters read their ids from
 it (exercised in WI-A14).
+*Size:* **MEASURED: ~11.5 min, 7 files (2 new), 68 sites of which 30 needed judgement — 44%, the
+highest ratio measured** (`a7d70b5`, 2026-08-02). Landed as `make fault_catalogue`, invoked by CI.
+**A row here is TWO judgements, not one**: the recovery branch and the logical transition are both
+undetermined by the source, which is why this item sits above the ~30% band while A6 sits below it.
+
+**The max-steps decision, taken (cluster 3, C2).** The `Internal` code is **not** changed. A9
+declined it as caller-visible; grounding it here found the consequence is larger — the driver's
+`Fail` code is emitted as an `error` LEDGER EVENT (`ErrorEvent { code: e.code }`, `session.ail:2506`
+and `:2576`) that the TypeScript TUI consumes, so a new code changes a wire event on every max-steps
+run. That is a compatibility decision D3 does not own. The fragility is removed without it: the
+literal lives once as `max_steps_discriminator_message()` in the catalogue, referenced by both the
+`step_machine` `Fail` that emits it and the `session` matcher that reads it. Still open, stated in
+both places: the discrimination is by message, not by type.
+
+**Three findings the catalogue records rather than papers over** (cluster 3, C3/C4). D3's provider
+protocol-inconsistent class names two forms and only the malformed-`arguments` one has a reachable
+branch — nothing validates a `StepResult` for internal consistency anywhere. D3's approval-deadline
+class has no clock-driven branch in production at all; the only no-response branch is channel
+closure, which `resolve_approval` labels `"timeout"`. And `ExtPorts.ai_step` delivers no fault: it
+is handed a fresh empty world, so a `Scripted` provider serves `terminal_step()` and the extension
+is told the model answered — the one required class carrying `NoReachableBranch`, permitted because
+it is conditional and only with a reason.
 
 **WI-A8. Construct D6's event vocabulary** — the fifth recorded axis. New construction for all 34
 `LedgerEvent` variants: variant, wire name, payload schema, logical/display-only classification;
@@ -341,6 +397,32 @@ schema error; the vocabulary version lands in the execution manifest (WI-A10) an
 **Scheduling prohibition honoured:** no D7 parity invariant or acceptance row depending on the
 classification is scheduled before this item completes — WI-A14's invariant set is explicitly split
 on it.
+*Size:* **MEASURED: ~8 min, 4 files (2 new), 158 sites of which 44 needed judgement** (`c873002`,
+2026-08-02). Landed as `make event_vocabulary`, invoked by CI. 28 logical, 6 display-only.
+
+**The classification is SEMANTIC, not a survey of what is appended today, and that choice was the
+item's sharpest silent-wrong-answer site.** Only 13 of the 34 reach the returned trace at HEAD. A
+survey-based classification declares 21 events display-only, validates cleanly, and makes D6.4's
+parity obligation vacuous — blessing the exact gap it exists to close. The artifact keeps the survey
+in a separate `reaches_trace_today` field, and `logical_variants_not_in_trace()` makes the distance
+countable. **It is 15 today, and that is WI-A14's work list.**
+
+**`DoneEvent` resisted the binary and is reported rather than decided** (cluster 3, C5; the
+handoff's stop rule). D6.3 requires it to AGREE with the outcome and the `RunSummary` — an invariant
+over its content, which display-only denies. But D6.1 requires the `RunSummary` to be the FINAL
+record and the driver projects the `DoneEvent` after `c2_finalize` appends it, so D6.4's
+"reaches the trace" and D6.1's final-record invariant cannot both hold by appending it where it is
+emitted. The resolution (append before finalizing) is a change to a terminal path and therefore
+**WI-A14's call against its invariant set**. Classified `Logical`, recorded in
+`classification_findings()`, printed every run.
+
+**Completeness cannot be a compile error on the pin, and the guards that stand in for it are the
+item's real contribution.** A 35th variant forces an arm in `event_variant_id` (a total match) but
+nothing forces a row or a sample, so it could be compile-clean and absent from the artifact. Three
+`make` guards tie the lists to the TYPE DECLARATION rather than to each other:
+`variants in LedgerEvent == rows == variants with a golden`. **The goldens do cover all 34** — an
+obvious `grep '&& golden('` recount says 30 because the first golden in the block has no leading
+`&&`; the tree was not wrong, the grep was (cluster 3, C7).
 
 **WI-A9. Route every terminal path through one finalizer, type the termination reason, and build
 D6's two result classes** (D6.1, D6.2, D6.6, D6.7). The spike proved `c2_finalize` (append **and**
