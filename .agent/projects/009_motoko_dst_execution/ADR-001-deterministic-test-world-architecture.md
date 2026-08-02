@@ -1086,16 +1086,26 @@ despite performing nothing, and only the three ABI-rowless slots are effect-free
 extension-granularity rejection rule above already forces all eight to be excluded, so the two rules
 agree there.
 
-**The consequence for extension coverage generally is larger than the `ai_step` case and is stated
-here rather than discovered later: under the declared-row rule, no behaviour-carrying extension hook
-is coverable today.** The ABI pins `on_pre_step`, `on_tool_handle`, `on_response_intercept`, and
-`on_solver_candidate` at nine effects regardless of what the extension does in them. That is why the
-"pure guards may form the initial profile" line below must be read narrowly: `empty_stop_guard` and
+**The consequence for extension coverage is larger than the `ai_step` case and is stated here rather
+than discovered later: under the declared-row rule, coverable extension behaviour is confined to the
+three ABI-rowless hook slots.** The ABI pins `on_pre_step`, `on_tool_handle`, `on_response_intercept`,
+and `on_solver_candidate` at nine effects and `on_budget_plan` at `{Env, FS}`, regardless of what the
+extension actually does in them, so all five are excludable-only. The three remaining slots —
+`on_describe_tools`, `on_build_system_prompt`, `on_tool_policy` — carry no row and are coverable.
+
+That is a real coverage surface, not a technicality: `on_tool_policy` returns a genuine policy
+decision and several extensions put real logic there (`compose.ail:838`,
+`motoko-ext-microrag/register.ail:189`, `motoko-ext-context-mode`, `motoko-ext-omnigraph`). A profile
+can therefore cover tool-policy, prompt-construction, and tool-description behaviour while excluding
+everything else.
+
+**What it cannot cover is the interim profile's own candidates.** `empty_stop_guard` and
 `progress_contract_guard` compute `decide` in `export pure func` form, but they are *reached* through
-`on_solver_candidate`, so their behaviour classifies as effectful and excludable-only. **The first
-interim profile therefore covers no extension behaviour at all** — it is the real driver plus the
-main-loop cursor, with extension hooks excluded and disclosed. Extension coverage waits on either the
-successor detector or an ABI that narrows per-hook rows, and both belong to the same major.
+`on_solver_candidate`, which the ABI pins at nine effects — so the guards' behaviour classifies as
+effectful and excludable-only, and the pair named below as the first useful interim profile covers
+none of its own logic. The "pure guards may form the initial profile" line must be read that
+narrowly. Widening coverage to the five pinned slots waits on either the successor detector or an ABI
+that narrows per-hook rows, and both belong to the same major.
 
 What *is*
 invalid is installing an extension that **references** a classifier-2 `ExtPorts` field while any hook
