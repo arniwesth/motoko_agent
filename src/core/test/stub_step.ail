@@ -20,7 +20,7 @@ import std/result (Result, Ok, Err)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, ProviderState, ScriptedStep, empty_provider_state, ports_shape_probe)
+import src/core/ports (Ports, ProviderExchange, WorldState, ScriptedStep, empty_world_state, ports_shape_probe)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
@@ -31,7 +31,7 @@ import pkg/sunholo/motoko_ext_abi/types (
 import src/core/types (Msg)
 
 -- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
--- `ProviderState` can carry it without either the port module or the driver
+-- `WorldState` can carry it without either the port module or the driver
 -- closing an LDR002 module cycle. It is re-exported here because this module
 -- is the fixture surface every test script imports.
 export type ScriptedStep = ScriptedStep
@@ -116,8 +116,8 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
 -- It is also stateless, so it returns its input state unchanged. That identity
 -- transition is D1's specified answer, not a decision left to construction sites.
 export func live_ports(rt: ExtRuntime) -> Ports {
-  let model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
-    func(state: ProviderState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
       let result = stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
       { emissions: [], result: result, next_state: state }
@@ -129,8 +129,8 @@ export func live_ports(rt: ExtRuntime) -> Ports {
 --
 -- It consumes the cursor the driver threads in and returns its successor. It
 -- takes no `history` and no `script`, because it holds neither: the remaining
--- script is `state.script`, whose sole persistent copy is one explicit
--- `C2LoopState` field.
+-- script is `state.script`, whose sole persistent copy is the driver's one
+-- explicit `C2LoopState.world_state` field.
 --
 -- What this replaces is the arrangement D1 prohibits by name — deriving the
 -- replay position from mutable message history, as
@@ -143,8 +143,8 @@ export func live_ports(rt: ExtRuntime) -> Ports {
 -- close to indistinguishable from a real result. See F6, and
 -- scripts/dst/scripted_cursor_probe.ail, which is its executable statement.
 export func scripted_ports() -> Ports {
-  let model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
-    func(state: ProviderState, _model: string, _msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, _model: string, _msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
       match state.script {
         [] => { emissions: [], result: Ok(terminal_step()), next_state: state },
@@ -157,12 +157,12 @@ export func scripted_ports() -> Ports {
   ports_shape_probe(model_step)
 }
 
--- The initial provider state for a scripted run: the whole script, uncounted.
-export pure func scripted_provider_state(script: [ScriptedStep]) -> ProviderState {
+-- The initial world for a scripted run: the whole script, uncounted.
+export pure func scripted_world_state(script: [ScriptedStep]) -> WorldState {
   { script: script }
 }
 
--- Run one provider exchange through the ports seam: provider state in, its
+-- Run one provider exchange through the ports seam: world state in, its
 -- successor out, alongside the emission log and the outcome.
 --
 -- on_chunk fires per StreamChunk during the SSE drain (M-AI-STEP-STREAMING,
@@ -187,7 +187,7 @@ export pure func scripted_provider_state(script: [ScriptedStep]) -> ProviderStat
 -- loss channel WI-A1 just closed, one line above the port.
 export func dispatch_step(
   ports: Ports,
-  state: ProviderState,
+  state: WorldState,
   model: string,
   msgs: [Message],
   on_chunk: (StreamChunk) -> () ! {IO, Trace}

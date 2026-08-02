@@ -1,0 +1,66 @@
+-- scripts/dst/world_state_poison.ail
+--
+-- WI-A12's per-class poison probe: the LIVE half of the capability backstop.
+--
+-- D4, as corrected by F3, asks each effect class for a per-run demonstration
+-- that routing actually happened, and the demonstration is a pair:
+--
+--   1. with the class's capability WITHHELD, the deterministic entry point
+--      still completes — proving the scripted world performs no ambient read
+--      of that effect. `make world_state` runs `world_state_probe.ail` that way.
+--   2. with the same capability withheld, the LIVE world dies — proving the
+--      capability is genuinely load-bearing and that (1) is evidence of routing
+--      rather than evidence that nothing reads the effect at all.
+--
+-- This file is (2). Without it, (1) passes vacuously: a probe that completes
+-- with `AI` withheld proves nothing if no code path would have used `AI`
+-- anyway. That vacuity is the same defect cluster 4 filed as C1b — a green
+-- check that implies coverage it does not have.
+--
+-- IMPORTANT: this script drives the LIVE provider and is only ever invoked with
+-- the effect's capability WITHHELD, so it terminates before any network call.
+-- It must never be run with the full capability set; `make world_state` invokes
+-- it only in the withheld configuration and asserts a NON-ZERO exit.
+--
+-- On the pin, a denied ambient effect terminates evaluation: no typed result
+-- and no partial trace. That is D6.6's distinction and cluster 4 measured it
+-- directly — a raw capability bypass stays an expected non-zero run and must
+-- NOT be unified into a typed HarnessFailure.
+
+module scripts/dst/world_state_poison
+
+import std/io (println)
+import std/ai (Message)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (LiveAI)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func empty_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [] }, strict_mode: false, verification: v }
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("world_state_poison: driving the LIVE world with a capability withheld");
+  let traced = Session.run_v2_session_traced(
+    empty_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    2, false, 0, zero_rates(), LiveAI
+  );
+  let outcome = match traced.result { Ok(_) => "ok", Err(e) => "err ${e.code}" };
+  -- Reaching this line at all means the withheld capability was never needed,
+  -- which falsifies the deterministic half's claim to be evidence of routing.
+  println("world_state_poison REACHED COMPLETION outcome=${outcome} — the withheld capability was not load-bearing")
+}

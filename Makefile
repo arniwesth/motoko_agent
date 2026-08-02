@@ -87,9 +87,41 @@ dst:
 # The instructive half is what stayed GREEN under that total freeze — the
 # one-RunSummary invariant and both determinism axes. Each axis is blind to the
 # others' defect class, which is why the probe asserts all three.
+#
+# The target also carries A12's per-class POISON PAIR, D4's F3-corrected
+# per-run backstop. Each effect class contributes two runs:
+#
+#   deterministic + capability withheld  -> must EXIT 0 (nothing reads ambiently)
+#   live          + capability withheld  -> must EXIT NON-ZERO (it is load-bearing)
+#
+# Both halves are required. The first alone passes vacuously — a probe that
+# completes with AI withheld proves nothing if no path would have used AI. That
+# vacuity is cluster 4's C1b defect: a green check implying absent coverage.
+# The poison script drives the LIVE provider and is invoked ONLY in the
+# withheld configuration, so it terminates before any network call.
+#
+# A denied ambient effect terminates evaluation on the pin — no typed result,
+# no partial trace. That is D6.6 and it must stay a raw non-zero run rather
+# than being unified into a typed HarnessFailure.
 .PHONY: world_state
 world_state:
-	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/world_state_probe.ail < /dev/null
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/world_state_probe.ail < /dev/null; \
+	echo "  -- provider class poison pair (AI withheld) --"; \
+	if ailang run --caps IO,Env,FS,Process,Net,SharedMem,Clock,Stream,Trace --entry main \
+	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ deterministic world completes with AI withheld"; \
+	else \
+		echo "FAIL: the deterministic entry point needs AI — the provider class is not routed"; \
+		exit 1; \
+	fi; \
+	if ailang run --caps IO,Env,FS,Process,Net,SharedMem,Clock,Stream,Trace --entry main \
+	     scripts/dst/world_state_poison.ail < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: the LIVE world completed with AI withheld — the capability is not load-bearing, so the check above is vacuous"; \
+		exit 1; \
+	else \
+		echo "  ✓ live world dies with AI withheld"; \
+	fi
 
 # D6's terminal-trace contract (WI-A9). Four checks, in order:
 #

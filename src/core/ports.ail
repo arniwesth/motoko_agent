@@ -16,7 +16,7 @@ export type ApprovalResolution = ApprovalAllowed | ApprovalDenied(string)
 -- A scripted LLM turn: what the "model" returns for one exchange.
 --
 -- WI-A2 relocated this here from `src/core/test/stub_step.ail`. It has to be
--- declared at or below this module because `ProviderState` carries it and both
+-- declared at or below this module because `WorldState` carries it and both
 -- the module declaring the widened port and the driver holding the
 -- `C2LoopState` field must name that type. The obvious alternative,
 -- `ScriptedPortsState` (`src/core/test/scripted_ports.ail`), cannot be used:
@@ -34,41 +34,46 @@ export type ScriptedStep = {
   chunks: [string]
 }
 
--- The provider's own state, threaded through `model_step` in and out.
+-- The driver's explicit world state, threaded through the ports in and out.
 --
--- WI-A2, under ADR-001 D1's cursor-ownership paragraph. This is a record and
--- not a sum (plan decision P1): a reviewer's probe on the pin widened a
--- `ProviderState` already used in a cross-module port signature and the port
--- module came out byte-identical, the compiler flagging only the construction
--- site. That is the additive-edit shape we want when the world state grows.
+-- WI-A12, under ADR-001 D1. This is the type D1 calls `world_state`: the one
+-- home for every replay and generator cursor, owned and threaded by the real
+-- session driver. WI-A2 introduced it as `ProviderState` carrying the scripted
+-- cursor alone, under an explicitly interim name; A12 renames it to what D1
+-- always called it and subsumes the interim `C2LoopState.provider_state` field,
+-- which is deleted in this same change exactly as D1 requires.
 --
--- The first field is the scripted cursor: the remaining script tail, the
--- threading style `scripted_model_next` already demonstrates. Live and
--- caller-supplied adapters are stateless and return their input unchanged —
--- D1's specified identity transition, not a per-construction-site decision.
+-- It is a record and not a sum (plan decision P1): a reviewer's probe on the
+-- pin widened a state already used in a cross-module port signature and the
+-- port module came out byte-identical, the compiler flagging only the
+-- construction site. That is the additive-edit shape the remaining effect
+-- classes need — each one adds a field here rather than a new seam.
 --
--- No approval or clock cursor rides along (plan decision P2), and the ground is
--- no-interim-consumer rather than structural closure: the scripted
--- `approval_read` is a constant deny with no position to thread, and the
--- virtual clock only exists once `world_state` lands — which subsumes and
--- deletes this type's interim home anyway. A pre-`world_state` need for a
--- non-constant approval would force a SECOND bidirectional port widening and
--- is P2's named trigger to reopen the decision, not something to solve here.
-export type ProviderState = {
+-- `script` is the provider cursor: the remaining script tail, the threading
+-- style `scripted_model_next` demonstrates. Live and caller-supplied adapters
+-- are stateless and return their input unchanged — D1's specified identity
+-- transition, not a per-construction-site decision.
+--
+-- The live/deterministic difference lives in the PORT CLOSURE, never in this
+-- record and never in the driver: `live_ports` performs the ambient read,
+-- `scripted_ports` serves from here. Production code calls the port and
+-- branches on nothing, which is what keeps D1's prohibition on production
+-- test-mode branching true as the later effect classes land.
+export type WorldState = {
   script: [ScriptedStep]
 }
 
--- `ported_provider` returns the initial state alongside the Ports — D1's "a
+-- `ported_provider` returns the initial world alongside the Ports — D1's "a
 -- pair, or a paired constructor". Splitting them at the loop boundary is what
 -- keeps the cursor in one explicit driver field instead of inside the Ports.
 export type PortedProvider = {
   ports: Ports,
-  state: ProviderState
+  world: WorldState
 }
 
--- The state a stateless provider carries, and the initial state for every
+-- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
-export pure func empty_provider_state() -> ProviderState {
+export pure func empty_world_state() -> WorldState {
   { script: [] }
 }
 
@@ -99,11 +104,11 @@ export pure func empty_provider_state() -> ProviderState {
 export type ProviderExchange = {
   emissions: [StreamChunk],
   result: Result[StepResult, AIError],
-  next_state: ProviderState
+  next_state: WorldState
 }
 
 export type Ports = {
-  model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
+  model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
   approval_read: (ApprovalRequest) -> ApprovalResolution ! {IO},
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env},
@@ -121,7 +126,7 @@ func fake_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 func fake_tool(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
 
 export func ports_shape_probe(
-  model_step: (ProviderState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
+  model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
 ) -> Ports {
   {
     model_step: model_step,

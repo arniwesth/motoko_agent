@@ -10,7 +10,7 @@ import std/json (jo)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/trace as Trace
-import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ProviderExchange, ProviderState, ports_shape_probe)
+import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ProviderExchange, WorldState, ports_shape_probe)
 import src/core/phase_vocab (ApprovalRequest, ExecNative)
 import src/core/test/stub_step (ScriptedStep, StepProvider, Scripted, LiveAI, Ported, scripted_to_step_result)
 import src/core/config (CostRates, VerificationConfig)
@@ -66,7 +66,7 @@ export pure func scripted_clock_next(state: ScriptedPortsState) -> { value: int,
   }
 }
 
-func fake_model(state: ProviderState, _model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
+func fake_model(state: WorldState, _model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
   let err: AIError = { code: "ScriptedPorts", message: "use scripted_model_next for state-threaded tests", retryable: false };
   { emissions: [], result: Err(err), next_state: state }
 }
@@ -90,7 +90,7 @@ export func run_v2_with_scripted_ports(
   cost_rates: CostRates,
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
-  -- WI-A2: the script rides in ProviderState now, so wrapping a Ports in
+  -- WI-A2: the script rides in WorldState now, so wrapping a Ports in
   -- Ported() here would strand it. Hand the entry point Scripted(script) and
   -- let `ported_provider` build the (ports, initial state) pair.
   Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
