@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery strict_replay seeded_generator predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -465,6 +465,58 @@ seeded_generator:
 	fi; \
 	echo "  ✓ different seeds produce different programs at EQUAL interaction count (n=$$n_a, digests $$d_a vs $$d_b)"; \
 	ailang test src/core/dst_generator.ail > /dev/null && echo "  ✓ src/core/dst_generator.ail (the seed-sensitivity rule, and the PRNG's two silent failure modes)"
+
+# D8's PERSISTENCE OBLIGATIONS (WI-A13 stage 6). Three checks.
+#
+#   1. The acceptance script. The negative control first — an honest synthetic
+#      program survives the detector and redaction of it is the identity — then
+#      the driver's own environment surface, the per-shape mutation rows, the
+#      rule-coverage row, the interaction sites, and D8's reject-or-redact
+#      tension reported rather than decided silently.
+#
+#   2. dst_secrets's own units. This is where the detectors' FALSE-POSITIVE
+#      controls live, and they are the load-bearing half: every manifest this
+#      project persists carries a git revision and every artifact carries a
+#      sha256 digest, both of which are long unbroken runs in the credential
+#      alphabet. A detector that scores them refuses every honest program while
+#      looking like it is working.
+#
+#   3. THE STD-ONLY TIER GUARD, below. `dst_secrets` may import std and
+#      `dst_interaction` and nothing else, and that is a structural property
+#      rather than a tidiness preference: WI-A14 records interaction artifacts
+#      at the port seam, and `src/core/ports.ail` cannot import a module that
+#      names `ExecutionManifest` without dragging the whole 1559-line
+#      `dst_profile` closure into the PRODUCTION driver's import graph. Stage 2
+#      moved `Interaction` down for exactly this reason; an import added here
+#      makes the redactor unreachable from the place it is needed, and nothing
+#      else in the build would notice until A14 tried.
+#
+#      The grep is anchored to the syntactic form `^import ` rather than to a
+#      module name, so it cannot be satisfied by renaming and cannot fire on
+#      prose that mentions a module (cluster 7's correction 1).
+.PHONY: program_persistence
+program_persistence:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/program_persistence_dst.ail < /dev/null; \
+	imports=$$(grep -E '^import ' src/core/dst_secrets.ail \
+	   | sed -E 's/^import +([a-zA-Z0-9_/]+).*/\1/' | sort -u); \
+	if [ -z "$$imports" ]; then \
+		echo "FAIL: no import lines found in src/core/dst_secrets.ail — the tier guard below would pass vacuously"; \
+		exit 1; \
+	fi; \
+	foreign=$$(printf '%s\n' "$$imports" | grep -v '^std/' | grep -v '^src/core/dst_interaction$$' || true); \
+	if [ -n "$$foreign" ]; then \
+		echo "FAIL: src/core/dst_secrets.ail imports outside the std-only tier:"; \
+		printf '%s\n' "$$foreign" | sed 's/^/        /'; \
+		echo "      It may import std/* and src/core/dst_interaction and nothing else."; \
+		echo "      WI-A14 redacts interaction artifacts AT THE PORT SEAM, and src/core/ports.ail"; \
+		echo "      cannot import a module naming ExecutionManifest without pulling the whole"; \
+		echo "      dst_profile closure into the production driver's import graph. Stage 2 moved"; \
+		echo "      Interaction down for this reason. Move what you need down, do not import up."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ src/core/dst_secrets.ail stays in the std-only tier ($$(printf '%s\n' "$$imports" | wc -l | tr -d ' ') imports, all std/* or dst_interaction)"; \
+	ailang test src/core/dst_secrets.ail > /dev/null && echo "  ✓ src/core/dst_secrets.ail (the detectors, and the false-positive controls that keep honest artifacts persistable)"
 
 .PHONY: driver_only
 driver_only:

@@ -1,0 +1,544 @@
+-- scripts/dst/program_persistence_dst.ail
+--
+-- WI-A13 stage 6: the acceptance suite for D8's persistence obligations.
+--
+-- Stage 6 lands in two commits and this file grows with them. This is the
+-- FIRST: D8's persistence safety — "Programs contain synthetic values only.
+-- Environment maps and interaction artifacts must reject or redact
+-- secret-shaped/live credentials before persistence."
+--
+-- THE SUITE'S CENTRAL CLAIM, and it is the one S8's complement forces.
+--
+-- A redactor tested only against shapes the redactor was written to catch
+-- certifies nothing. So the fixture's environment surface is not invented here:
+-- `synthetic_env()`'s keys are asserted EQUAL to `driver_env_keys()`, which
+-- `make discovery` re-derives from the driver's own `ports.env_get` call sites.
+-- The suite then proves two things about that real surface:
+--
+--   1. Every one of the driver's seven keys is NAME-CLEAN, so the name axis is
+--      green on all of them and reaches nothing. A redactor built only from key
+--      names is, against this driver, a no-op that looks like a control.
+--   2. A live credential placed in the VALUE under each of those clean names is
+--      caught anyway. That is the axis that does the work here.
+--
+-- Row 1 is the row that would be a comment in a weaker suite, and it is the one
+-- that goes red the day somebody adds `MOTOKO_API_TOKEN` to the driver — at
+-- which point the claim in `dst_secrets`'s header has changed and must be
+-- re-read rather than silently inherited.
+--
+-- THE NEGATIVE CONTROL is checked first and everything else is derived from it
+-- (stage 1's discipline). A suite made only of credential fixtures is passed
+-- perfectly by a detector that flags everything, and the one thing it cannot
+-- establish is that an honest synthetic program survives untouched — which is
+-- the property the whole persistence path depends on.
+
+module scripts/dst/program_persistence_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string as Str (contains, toUpper)
+
+import src/core/dst_secrets (
+  SecretFinding,
+  SecretSite,
+  EnvKeySite, InitialWorldSite, RequestProjectionSite, PayloadSite,
+  ChunkSite, IdentityComponentSite,
+  SecretReason,
+  CredentialBearingName, ProviderTokenLiteral, UrlUserinfo,
+  PrivateKeyBlock, JsonWebToken, OpaqueHighEntropy,
+  Redaction,
+  ReplayImpact, RedactionDemoted, RedactionChangesTrajectory,
+  RedactedEnvMap, RedactedInteractions,
+  credential_name_tokens,
+  name_axis,
+  scan_text,
+  scan_env_entry,
+  scan_env_map,
+  scan_interaction,
+  scan_interactions,
+  redact_env_map,
+  redact_interactions,
+  redaction_marker,
+  redaction_is_reportable,
+  reportable_redactions,
+  replay_impact_id,
+  site_impact,
+  secret_rule,
+  secret_message,
+  has_secret_rule,
+  all_secret_rules,
+  longest_opaque_run
+)
+import src/core/dst_discovery (driver_env_keys)
+import src/core/dst_interaction (
+  Interaction,
+  CausalIdentity,
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  StreamChunkRecord,
+  TimedOutcome,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  ok_outcome,
+  interaction_kind,
+  all_interaction_kinds,
+  count_kind
+)
+
+-- ---------------------------------------------------------------------------
+-- The surviving fixture
+-- ---------------------------------------------------------------------------
+
+-- The environment map, with the driver's OWN keys and plausible synthetic
+-- values. `scenario_the_surface_is_the_drivers` asserts the key list is exactly
+-- `driver_env_keys()`, so this is a copy that is checked rather than trusted —
+-- `tools/profile_definition/check_fixtures.py`'s pattern, applied to a list
+-- that is otherwise very easy to let drift.
+pure func synthetic_env() -> [{ key: string, value: string }] {
+  [{ key: "MOTOKO_SESSION_ID", value: "dst-session-0001" },
+   { key: "MOTOKO_PERSIST_RETRIES", value: "3" },
+   { key: "MOTOKO_RETRY_STREAM_ERROR", value: "0" },
+   { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
+   { key: "MOTOKO_HEADLESS", value: "1" },
+   { key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", value: "0" },
+   { key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" }]
+}
+
+pure func chunk(offset: int, text: string) -> StreamChunkRecord {
+  { offset_ms: offset, text: text }
+}
+
+pure func inter(ord: int, b: IdentityBody, rq: string, deadline: int,
+                out: TimedOutcome) -> Interaction {
+  { identity: { ordinal: ord, body: b },
+    request_projection: rq,
+    deadline_ms: deadline,
+    outcome: out }
+}
+
+pure func streamed(advance: int, payload: string, cs: [StreamChunkRecord]) -> TimedOutcome {
+  { advance_ms: advance, chunks: cs, payload: payload,
+    status: OutcomeOk, fault_class_id: "" }
+}
+
+-- Nine interactions across five of the seven classes, carrying three stream
+-- chunks between them.
+--
+-- S7's no-two-equal rule, applied to the quantities this suite reads:
+-- 9 interactions, 7 environment entries, 5 distinct kinds, 3 stream chunks.
+-- Pairwise distinct on purpose, and asserted below — a fixture whose counts
+-- coincide cannot distinguish a check that reads "how many interactions" from
+-- one that reads "how many chunks", and both type-check.
+pure func synthetic_interactions() -> [Interaction] {
+  [inter(0, ProviderIdentity("driver_only", 0, "stub/echo"),
+         "provider origin=driver_only step=0 model=stub/echo", -1,
+         streamed(12, "the stub replies", [chunk(0, "the stub "), chunk(6, "replies")])),
+   inter(1, ToolIdentity("loop_v2", "call_1", "BashExec"),
+         "tool call_1 BashExec {\"cmd\":\"echo hi\"}", 5000,
+         ok_outcome(7, "hi")),
+   inter(2, EnvironmentReadIdentity("OPENAI_BASE_URL"),
+         "env_read key=OPENAI_BASE_URL", -1,
+         ok_outcome(0, "https://api.example.com/v1")),
+   inter(3, ApprovalIdentity("loop_v2", "call_1", "BashExec"),
+         "approval call_1 BashExec", 5000,
+         ok_outcome(0, "approve")),
+   inter(4, ClockAdvanceIdentity, "advance_clock", -1, ok_outcome(4, "")),
+   inter(5, ProviderIdentity("driver_only", 1, "stub/echo"),
+         "provider origin=driver_only step=1 model=stub/echo", -1,
+         streamed(9, "done", [chunk(3, "done")])),
+   inter(6, EnvironmentReadIdentity("MOTOKO_TOOL_TIMEOUT_MS"),
+         "env_read key=MOTOKO_TOOL_TIMEOUT_MS", -1,
+         ok_outcome(0, "5000")),
+   inter(7, ToolIdentity("loop_v2", "call_2", "ReadFile"),
+         "tool call_2 ReadFile {\"path\":\"notes.md\"}", 5000,
+         ok_outcome(3, "notes")),
+   inter(8, EnvironmentReadIdentity("MOTOKO_SESSION_ID"),
+         "env_read key=MOTOKO_SESSION_ID", -1,
+         ok_outcome(0, "dst-session-0001"))]
+}
+
+pure func total_chunks(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => List.length(i.outcome.chunks) + total_chunks(rest)
+  }
+}
+
+pure func kinds_present(ks: [string], xs: [Interaction]) -> int {
+  match ks {
+    [] => 0,
+    k :: rest => (if count_kind(xs, k) > 0 then 1 else 0) + kinds_present(rest, xs)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The credential shapes, each a MUTATION of the surviving fixture
+-- ---------------------------------------------------------------------------
+
+-- One credential of each shape the specification protects. These are the values
+-- that go INTO the fixture one at a time; none of them is a key name, which is
+-- the point — every one lands under a name-clean driver key.
+pure func credential_values() -> [{ label: string, rule: string, value: string }] {
+  [{ label: "a provider token in the value",
+     rule: "secret-provider-token-literal",
+     value: "sk-live-4kQ9mZ2pR7vX1nB8" },
+   { label: "a base URL carrying userinfo",
+     rule: "secret-url-userinfo",
+     value: "https://svc:s3cr3t@api.example.com/v1" },
+   { label: "a PEM private key",
+     rule: "secret-private-key-block",
+     value: "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----" },
+   { label: "a JSON web token",
+     rule: "secret-json-web-token",
+     value: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcHMifQ.dBjftJeZ4CVPmB92K27uhbUJU1p1r1wa" },
+   { label: "an opaque high-entropy token",
+     rule: "secret-opaque-high-entropy",
+     value: "Zk3Rj9QpLm2XtVb7Nc4Hs8Wd1Fg6Ya0Ue5Ti" }]
+}
+
+pure func set_env_value(es: [{ key: string, value: string }], key: string, v: string)
+  -> [{ key: string, value: string }] {
+  match es {
+    [] => [],
+    e :: rest =>
+      (if e.key == key then [{ key: e.key, value: v }] else [e])
+        ++ set_env_value(rest, key, v)
+  }
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+pure func str_eq_list(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && str_eq_list(xs, ys) }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 1 — the negative control, checked first
+-- ---------------------------------------------------------------------------
+
+func scenario_the_synthetic_fixture_survives() -> bool ! {IO} {
+  let env_findings = scan_env_map(synthetic_env());
+  let log_findings = scan_interactions(synthetic_interactions());
+  let redacted_env = redact_env_map(synthetic_env());
+  let redacted_log = redact_interactions(synthetic_interactions());
+  let env_clean = List.length(env_findings) == 0;
+  let log_clean = List.length(log_findings) == 0;
+  -- Redaction of a clean artifact must be the IDENTITY. A redactor that
+  -- rewrote a value it did not flag would change a replay input while
+  -- reporting nothing, which is the silent half of D8's tension.
+  let env_untouched = List.length(redacted_env.redactions) == 0
+                        && str_eq_list(values_of(redacted_env.entries),
+                                       values_of(synthetic_env()));
+  let log_untouched = List.length(redacted_log.redactions) == 0
+                        && str_eq_list(payloads_of(redacted_log.interactions),
+                                       payloads_of(synthetic_interactions()));
+  let _ = if env_clean then println("  ✓ the synthetic environment map produces no finding (7 driver keys)")
+          else { let _ = println("  ✗ the synthetic environment map was flagged — the detector rejects honest artifacts"); report(env_findings) };
+  let _ = if log_clean then println("  ✓ the synthetic interaction log produces no finding (9 interactions)")
+          else { let _ = println("  ✗ the synthetic interaction log was flagged"); report(log_findings) };
+  let _ = if env_untouched then println("    ✓ redacting a clean environment map is the identity")
+          else println("    ✗ redaction rewrote a value it did not flag");
+  let _ = if log_untouched then println("    ✓ redacting a clean interaction log is the identity")
+          else println("    ✗ redaction rewrote a payload it did not flag");
+  env_clean && log_clean && env_untouched && log_untouched
+}
+
+pure func values_of(es: [{ key: string, value: string }]) -> [string] {
+  match es { [] => [], e :: rest => [e.value] ++ values_of(rest) }
+}
+
+pure func payloads_of(xs: [Interaction]) -> [string] {
+  match xs { [] => [], i :: rest => [i.outcome.payload] ++ payloads_of(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 2 — S7's pairwise-distinct quantities on the surviving fixture
+-- ---------------------------------------------------------------------------
+
+func scenario_no_two_fixture_quantities_are_equal() -> bool ! {IO} {
+  let xs = synthetic_interactions();
+  let n_inter = List.length(xs);
+  let n_env = List.length(synthetic_env());
+  let n_kinds = kinds_present(all_interaction_kinds(), xs);
+  let n_chunks = total_chunks(xs);
+  let distinct = n_inter != n_env && n_inter != n_kinds && n_inter != n_chunks
+                   && n_env != n_kinds && n_env != n_chunks && n_kinds != n_chunks;
+  let nonzero = n_inter > 0 && n_env > 0 && n_kinds > 0 && n_chunks > 0;
+  let _ = if distinct && nonzero then
+            println("  ✓ no two fixture quantities are equal (interactions=${show(n_inter)}, env entries=${show(n_env)}, kinds=${show(n_kinds)}, chunks=${show(n_chunks)})")
+          else
+            println("  ✗ two fixture quantities coincide (interactions=${show(n_inter)}, env entries=${show(n_env)}, kinds=${show(n_kinds)}, chunks=${show(n_chunks)}) — a check reading the wrong one cannot be distinguished");
+  distinct && nonzero
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 3 — the surface is the DRIVER'S, and the name axis cannot reach it
+-- ---------------------------------------------------------------------------
+
+func scenario_the_surface_is_the_drivers() -> bool ! {IO} {
+  let declared = driver_env_keys();
+  let fixture = keys_of(synthetic_env());
+  let same = str_eq_list(declared, fixture);
+  let _ = if same then println("  ✓ the fixture's environment surface IS driver_env_keys() (${show(List.length(declared))} keys, re-derived from the driver's source by make discovery)")
+          else println("  ✗ the fixture's environment keys have drifted from driver_env_keys() — this suite is no longer testing the driver's surface");
+  let clean = all_name_clean(declared);
+  let _ = if clean then
+            println("    ✓ every one of those keys is NAME-clean, so the name axis reaches none of them")
+          else
+            println("    ✗ a driver key now matches a credential name token — dst_secrets's header claim has changed and must be re-read, not inherited");
+  same && clean
+}
+
+pure func keys_of(es: [{ key: string, value: string }]) -> [string] {
+  match es { [] => [], e :: rest => [e.key] ++ keys_of(rest) }
+}
+
+pure func all_name_clean(ks: [string]) -> bool {
+  match ks {
+    [] => true,
+    k :: rest => List.length(name_axis(k)) == 0 && all_name_clean(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 4 — a credential under EVERY name-clean driver key is still caught
+-- ---------------------------------------------------------------------------
+
+-- The sweep is over the driver's keys rather than over one chosen key, because
+-- "the value axis catches it" is a claim about the whole surface. One key
+-- passing would leave six untested and reading identically to seven passing.
+func scenario_every_driver_key_is_covered_by_the_value_axis() -> bool ! {IO} {
+  let leaked = "https://svc:s3cr3t@api.example.com/v1";
+  let missed = keys_missing_a_finding(driver_env_keys(), leaked);
+  let ok = List.length(missed) == 0;
+  let _ = if ok then
+            println("  ✓ a live credential in the VALUE is caught under all ${show(List.length(driver_env_keys()))} name-clean driver keys")
+          else
+            println("  ✗ ${show(List.length(missed))} driver key(s) carried a credential past the detector: ${join_keys(missed)}");
+  ok
+}
+
+pure func keys_missing_a_finding(ks: [string], v: string) -> [string] {
+  match ks {
+    [] => [],
+    k :: rest => {
+      let fs = scan_env_map(set_env_value(synthetic_env(), k, v));
+      (if has_secret_rule(fs, "secret-url-userinfo") then [] else [k])
+        ++ keys_missing_a_finding(rest, v)
+    }
+  }
+}
+
+pure func join_keys(ks: [string]) -> string {
+  match ks {
+    [] => "",
+    k :: [] => k,
+    k :: rest => "${k}, ${join_keys(rest)}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 5 — the mutation rows, one credential shape at a time
+-- ---------------------------------------------------------------------------
+
+-- Each row takes the SURVIVING fixture, changes exactly one environment value,
+-- and requires the detector to name the specific rule that change violates.
+-- Asserting the rule and not merely a non-empty list is what makes a deleted
+-- or short-circuited detector turn its own row red (cluster 5, C5).
+func scenario_credential_shape_mutants() -> bool ! {IO} {
+  let _ = println("  mutation rows — one credential shape at a time, under OPENAI_BASE_URL");
+  row_each(credential_values())
+}
+
+func row_each(cs: [{ label: string, rule: string, value: string }]) -> bool ! {IO} {
+  match cs {
+    [] => true,
+    c :: rest => {
+      let mutated = set_env_value(synthetic_env(), "OPENAI_BASE_URL", c.value);
+      let fs = scan_env_map(mutated);
+      let named = has_secret_rule(fs, c.rule);
+      let _ = if named then println("    ✓ ${c.rule} ← ${c.label}")
+              else println("    ✗ ${c.rule} was NOT reported for ${c.label}; rules seen: ${show(List.length(fs))}");
+      let tail = row_each(rest);
+      named && tail
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 6 — every rule the detector can produce is reached by a fixture
+-- ---------------------------------------------------------------------------
+
+-- S8's complement in its cheapest form. A detector variant that no fixture
+-- reaches is not pinned by this suite; it is ABSENT from it, and absent reads
+-- identically to unchanged. The list is derived from the reason constructors
+-- (`all_secret_rules`), so adding one and forgetting a fixture turns this red.
+func scenario_every_rule_is_reached() -> bool ! {IO} {
+  let reached = reached_rules();
+  let missing = rules_not_in(all_secret_rules(), reached);
+  let ok = List.length(missing) == 0;
+  let _ = if ok then
+            println("  ✓ all ${show(List.length(all_secret_rules()))} detector rules are reached by a fixture in this suite")
+          else
+            println("  ✗ ${show(List.length(missing))} detector rule(s) are reached by no fixture: ${join_keys(missing)} — they are untested branches, not passing ones");
+  ok
+}
+
+-- Every rule this suite's fixtures actually produce. Built by running the
+-- fixtures, not by listing what they are believed to cover.
+pure func reached_rules() -> [string] {
+  let named = scan_env_map(set_env_value(synthetic_env(), "MOTOKO_SESSION_ID", "x")
+                             ++ [{ key: "EXT_SERVICE_TOKEN", value: "x" }]);
+  from_values(credential_values()) ++ secret_rules_of(named)
+}
+
+pure func from_values(cs: [{ label: string, rule: string, value: string }]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let fs = scan_env_map(set_env_value(synthetic_env(), "OPENAI_BASE_URL", c.value));
+      secret_rules_of(fs) ++ from_values(rest)
+    }
+  }
+}
+
+pure func secret_rules_of(fs: [SecretFinding]) -> [string] {
+  match fs { [] => [], f :: rest => [secret_rule(f)] ++ secret_rules_of(rest) }
+}
+
+pure func rules_not_in(want: [string], have: [string]) -> [string] {
+  match want {
+    [] => [],
+    w :: rest =>
+      (if contains_str(have, w) then [] else [w]) ++ rules_not_in(rest, have)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 7 — interaction artifacts, and every site the scan reaches
+-- ---------------------------------------------------------------------------
+
+-- D8 names environment maps AND interaction artifacts. The sites differ in what
+-- a redaction COSTS, so each is exercised at its own position rather than
+-- through one representative.
+func scenario_interaction_sites() -> bool ! {IO} {
+  let leaked = "sk-live-4kQ9mZ2pR7vX1nB8";
+  let base = synthetic_interactions();
+  let in_payload = scan_interaction(with_payload(base, 1, leaked));
+  let in_chunk = scan_interaction(with_chunk(base, 0, leaked));
+  let in_projection = scan_interaction(with_projection(base, 7, leaked));
+  let in_identity = scan_interaction(
+    inter(3, ToolIdentity("loop_v2", "call_1", leaked), "tool call_1", 5000, ok_outcome(0, "")));
+  let p = site_is(in_payload, "payload");
+  let c = site_is(in_chunk, "stream chunk");
+  let r = site_is(in_projection, "request projection");
+  let d = site_is(in_identity, "identity component");
+  let _ = if p then println("    ✓ a credential in an outcome payload is found at the payload site")
+          else println("    ✗ a credential in an outcome payload was not found at the payload site");
+  let _ = if c then println("    ✓ a credential in a stream chunk is found at the chunk site")
+          else println("    ✗ a credential in a stream chunk was not found at the chunk site");
+  let _ = if r then println("    ✓ a credential in a request projection is found at the projection site")
+          else println("    ✗ a credential in a request projection was not found at the projection site");
+  let _ = if d then println("    ✓ a credential in an identity component is found at the identity site")
+          else println("    ✗ a credential in an identity component was not found at the identity site");
+  p && c && r && d
+}
+
+pure func site_is(fs: [SecretFinding], label: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest =>
+      if Str.contains(secret_message(f), label) then true else site_is(rest, label)
+  }
+}
+
+pure func nth(xs: [Interaction], n: int) -> Interaction {
+  match xs {
+    [] => inter(-1, ClockAdvanceIdentity, "", -1, ok_outcome(0, "")),
+    i :: rest => if n <= 0 then i else nth(rest, n - 1)
+  }
+}
+
+pure func with_payload(xs: [Interaction], n: int, v: string) -> Interaction {
+  let i = nth(xs, n);
+  { i | outcome: { i.outcome | payload: v } }
+}
+
+pure func with_chunk(xs: [Interaction], n: int, v: string) -> Interaction {
+  let i = nth(xs, n);
+  { i | outcome: { i.outcome | chunks: [chunk(0, v)] } }
+}
+
+pure func with_projection(xs: [Interaction], n: int, v: string) -> Interaction {
+  let i = nth(xs, n);
+  { i | request_projection: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenario 8 — D8's unresolved tension, reported rather than decided silently
+-- ---------------------------------------------------------------------------
+
+-- "Reject or redact" reads as a free choice and is not one: the environment map
+-- is a replay input, so redacting a value the run consumed changes the
+-- trajectory of the replay. This suite does not resolve that — it asserts the
+-- persistence path can TELL THE DIFFERENCE, which is what stops the choice from
+-- being silent. See dst_secrets's header.
+func scenario_redaction_reports_its_trajectory_cost() -> bool ! {IO} {
+  let leaked = "https://svc:s3cr3t@api.example.com/v1";
+  let env = redact_env_map(set_env_value(synthetic_env(), "OPENAI_BASE_URL", leaked));
+  let log = redact_interactions([with_projection(synthetic_interactions(), 7, leaked)]);
+  let env_reportable = List.length(reportable_redactions(env.redactions)) == 1;
+  let log_reportable = List.length(log.redactions) == 1
+                         && List.length(reportable_redactions(log.redactions)) == 0;
+  let gone = List.length(scan_env_map(env.entries)) == 0;
+  let _ = if env_reportable then
+            println("    ✓ redacting an environment VALUE is reported: it is a replay input, so the replay may diverge (D8 finding, carried in ReplayImpact)")
+          else
+            println("    ✗ redacting an environment value was not reported as changing the trajectory");
+  let _ = if log_reportable then
+            println("    ✓ redacting a request PROJECTION is not reported: D2 demotes it, so regression replay records it and strict replay fails closed — neither is silent")
+          else
+            println("    ✗ a request-projection redaction was classified as changing the trajectory");
+  let _ = if gone then println("    ✓ the credential is absent from the redacted environment map")
+          else println("    ✗ the credential survived redaction");
+  env_reportable && log_reportable && gone
+}
+
+-- ---------------------------------------------------------------------------
+
+func report(fs: [SecretFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => {
+      let _ = println("      ${secret_message(f)}");
+      report(rest)
+    }
+  }
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("program_persistence_dst  (D8 persistence safety)");
+  let a = scenario_the_synthetic_fixture_survives();
+  let b = scenario_no_two_fixture_quantities_are_equal();
+  let c = scenario_the_surface_is_the_drivers();
+  let d = scenario_every_driver_key_is_covered_by_the_value_axis();
+  let e = scenario_credential_shape_mutants();
+  let f = scenario_every_rule_is_reached();
+  let _ = println("  interaction artifact sites");
+  let g = scenario_interaction_sites();
+  let _ = println("  the reject-or-redact tension");
+  let h = scenario_redaction_reports_its_trajectory_cost();
+  if a && b && c && d && e && f && g && h then println("program_persistence_dst PASS")
+  else {
+    let _ = println("program_persistence_dst FAIL");
+    exit(1)
+  }
+}
