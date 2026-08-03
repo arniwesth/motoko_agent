@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -193,6 +193,29 @@ profile_definition:
 # this goes red after a table edit, bump `driver_only_version` and re-record the
 # pair; do not make the profile call `table_identity()`, which would turn the
 # comparison into a tautology.
+# D2's execution program and its pure structural validator (WI-A13, stage 1).
+#
+# The acceptance script is MUTATION-BASED: one valid program, one change each,
+# and every row asserts the specific RULE its change violates rather than merely
+# a non-empty rejection list. A guard that is deleted or weakened in one
+# direction turns exactly its own row red — verified by deliberately removing
+# the duplicate-ordinal guard, by dropping one direction of the deadline rule,
+# and by rewriting the duplicate rule to compare identity BODIES.
+#
+# The last of those is why the base program contains a RETRY: interactions #1
+# and #8 carry a byte-identical tool identity at different ordinals. D2 requires
+# a repeated production call id to stay representable "so an invariant can
+# reject them as system behavior rather than the program decoder rejecting the
+# artifact". Rejecting duplicate bodies type-checks, passes every mutant row,
+# and silently makes the retry artifact undecodable — the NEGATIVE CONTROL is
+# the only thing that catches it. If you tighten the duplicate rule and this
+# goes red, the rule is what is wrong, not the fixture.
+.PHONY: execution_program
+execution_program:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/execution_program_dst.ail < /dev/null; \
+	ailang test src/core/dst_program.ail > /dev/null && echo "  ✓ src/core/dst_program.ail"
+
 .PHONY: driver_only
 driver_only:
 	@set -eu; \

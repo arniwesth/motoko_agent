@@ -1,0 +1,408 @@
+-- scripts/dst/execution_program_dst.ail
+--
+-- WI-A13 stage 1: the acceptance suite for D2's pure structural validator.
+--
+-- The suite is MUTATION-BASED, not assertion-based (plan cluster 5, C5). Every
+-- structural guard is exercised by taking ONE valid program, changing exactly
+-- one thing about it, and requiring the validator to name the specific rule
+-- that change violates. That is a stronger claim than "the validator rejected
+-- something": a guard that has been deleted, weakened, or short-circuited by an
+-- earlier rejection makes its own row go red, because the row asserts the RULE
+-- and not merely a non-empty rejection list.
+--
+-- The NEGATIVE CONTROL is the load-bearing half and is checked first. A suite
+-- made only of failing fixtures is passed perfectly by `validate_program(_) =
+-- [everything is wrong]`, so the one thing that suite cannot establish is that
+-- a good program survives. `valid_program()` is that check, and every mutant is
+-- derived from it — so if the base program stops validating, every row goes red
+-- at once rather than the suite quietly testing nothing.
+
+module scripts/dst/execution_program_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+
+import src/core/dst_program (
+  ExecutionProgram,
+  Interaction,
+  CausalIdentity,
+  IdentityBody,
+  ProviderIdentity,
+  ToolIdentity,
+  ApprovalIdentity,
+  ExtensionEffectIdentity,
+  EnvironmentReadIdentity,
+  RandomDrawIdentity,
+  ClockAdvanceIdentity,
+  InitialWorld,
+  GeneratorBounds,
+  StreamChunkRecord,
+  TimedOutcome,
+  OutcomeStatus,
+  OutcomeOk,
+  OutcomeFault,
+  OutcomeMissing,
+  ProgramRejection,
+  ok_outcome,
+  fault_outcome,
+  missing_outcome,
+  program_schema_version,
+  program_rule,
+  program_message,
+  validate_program,
+  program_ok,
+  validate_bounds,
+  bound_violation_message,
+  identity_kind,
+  identity_body_eq,
+  identity_projection
+)
+import src/core/dst_driver_only (driver_only, driver_only_manifest)
+import src/core/dst_profile (ExecutionManifest, validate_manifest)
+import src/core/dst_fault_catalogue (required_class_ids)
+
+-- ---------------------------------------------------------------------------
+-- The base fixture: one valid program
+-- ---------------------------------------------------------------------------
+
+-- The manifest is the REAL one, built through A10's `driver_only_manifest` and
+-- validated against the definition it realizes (scenario_base below), rather
+-- than a hand-written record. A structural validator whose fixture carries a
+-- manifest nobody checks would pass happily on a program that D11 could not
+-- state the meaning of.
+pure func fixture_manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.26.0", "4.0", "{}",
+                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+}
+
+pure func fixture_world() -> InitialWorld {
+  { messages_and_policy: "{\"messages\":[],\"policy\":\"default\"}",
+    synthetic_environment: [{ key: "MOTOKO_FIXTURE", value: "1" }],
+    clock_epoch: 0,
+    extension_profile: "driver_only/1" }
+}
+
+pure func fixture_bounds() -> GeneratorBounds {
+  { max_interactions: 64,
+    max_chunks_per_interaction: 16,
+    max_payload_bytes: 4096,
+    max_resource_size: 4096,
+    max_clock_advance_ms: 60000 }
+}
+
+pure func at(ordinal: int, body: IdentityBody) -> CausalIdentity {
+  { ordinal: ordinal, body: body }
+}
+
+-- Nine interactions covering all seven classes in D2's grammar. Covering every
+-- class matters here specifically: a per-class field rule (deadline, streaming,
+-- the 'missing' status) can only be mutation-tested against a base that already
+-- exercises the class legitimately.
+pure func fixture_interactions() -> [Interaction] {
+  [{ identity: at(0, ProviderIdentity("loop_v2", 0, "test/model")),
+     request_projection: "provider msgs=1 tools=3",
+     deadline_ms: -1,
+     outcome: { advance_ms: 12,
+                chunks: [{ offset_ms: 0, text: "he" }, { offset_ms: 4, text: "llo" }],
+                payload: "step_result finish=tool_calls",
+                status: OutcomeOk,
+                fault_class_id: "" } },
+   { identity: at(1, ToolIdentity("loop_v2", "call_1", "BashExec")),
+     request_projection: "tool BashExec args_digest=d41d8c",
+     deadline_ms: 5000,
+     outcome: fault_outcome(20, "tool failed: exit 1", "ToolFailed") },
+   { identity: at(2, ApprovalIdentity("loop_v2", "call_1", "BashExec")),
+     request_projection: "approval for BashExec",
+     deadline_ms: 3000,
+     outcome: ok_outcome(5, "allow") },
+   { identity: at(3, EnvironmentReadIdentity("MOTOKO_FIXTURE")),
+     request_projection: "env_get MOTOKO_FIXTURE fallback=",
+     deadline_ms: -1,
+     outcome: ok_outcome(0, "1") },
+   { identity: at(4, EnvironmentReadIdentity("MOTOKO_ABSENT")),
+     request_projection: "env_get MOTOKO_ABSENT fallback=default",
+     deadline_ms: -1,
+     outcome: missing_outcome() },
+   { identity: at(5, ClockAdvanceIdentity),
+     request_projection: "advance_clock between requests",
+     deadline_ms: -1,
+     outcome: ok_outcome(250, "") },
+   { identity: at(6, RandomDrawIdentity("int[0,100)")),
+     request_projection: "random_draw int[0,100)",
+     deadline_ms: -1,
+     outcome: ok_outcome(0, "37") },
+   { identity: at(7, ExtensionEffectIdentity("test_dummy", "extension_effect_fault", "call_2")),
+     request_projection: "ext effect proc_exec argv_digest=9e107d",
+     deadline_ms: 2000,
+     outcome: fault_outcome(8, "process failed", "extension_effect_fault") },
+   -- A production RETRY of call_1: the identity body is byte-identical to
+   -- interaction #1 and only the encounter ordinal differs. This is the case
+   -- D2 names when it requires repeated production call ids to stay
+   -- representable "so an invariant can reject them as system behavior rather
+   -- than the program decoder rejecting the artifact".
+   --
+   -- It is in the BASE program on purpose. Without it the negative control is
+   -- satisfied by a decoder that rejects duplicate identity BODIES — the
+   -- tempting misreading of D2's duplicate-identity rule, which type-checks,
+   -- passes every other row here, and silently makes the retry artifact
+   -- undecodable. With it, that misreading turns the negative control red.
+   { identity: at(8, ToolIdentity("loop_v2", "call_1", "BashExec")),
+     request_projection: "tool BashExec args_digest=d41d8c (retry)",
+     deadline_ms: 5000,
+     outcome: ok_outcome(15, "tool ok: exit 0") }]
+}
+
+pure func valid_program() -> ExecutionProgram {
+  { schema_version: program_schema_version(),
+    generator_id: "driver_only_walk",
+    generator_version: "1",
+    seed: 42,
+    initial_world: fixture_world(),
+    bounds: fixture_bounds(),
+    manifest: fixture_manifest(),
+    interactions: fixture_interactions() }
+}
+
+-- ---------------------------------------------------------------------------
+-- Mutants: one valid program, one change each
+-- ---------------------------------------------------------------------------
+
+type Mutant = {
+  name: string,
+  rule: string,
+  program: ExecutionProgram
+}
+
+pure func replace_at(xs: [Interaction], n: int, i: Interaction, seen: int) -> [Interaction] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      if seen == n then [i] ++ replace_at(rest, n, i, seen + 1)
+      else [x] ++ replace_at(rest, n, i, seen + 1)
+  }
+}
+
+pure func nth_interaction(xs: [Interaction], n: int, seen: int) -> Interaction {
+  match xs {
+    [] => { identity: at(0, ClockAdvanceIdentity), request_projection: "",
+            deadline_ms: -1, outcome: ok_outcome(0, "") },
+    x :: rest => if seen == n then x else nth_interaction(rest, n, seen + 1)
+  }
+}
+
+pure func base(n: int) -> Interaction { nth_interaction(fixture_interactions(), n, 0) }
+
+-- Replace interaction n of the base program. Every single-interaction mutation
+-- goes through here so that a mutant differs from the base in exactly one
+-- interaction and nothing else.
+pure func with_interaction(n: int, i: Interaction) -> ExecutionProgram {
+  { valid_program() | interactions: replace_at(fixture_interactions(), n, i, 0) }
+}
+
+pure func mutants() -> [Mutant] {
+  [-- 1. Malformed schema: a blank required envelope field.
+   { name: "generator_id blanked",
+     rule: "program-schema-field-missing",
+     program: { valid_program() | generator_id: "" } },
+
+   -- 2. D8's fail-closed decode. An older schema must NOT be reinterpreted.
+   { name: "schema_version from an older, undecodable schema",
+     rule: "program-schema-undecodable",
+     program: { valid_program() | schema_version: "execution-program/0" } },
+
+   -- 3. Absent required initial value.
+   { name: "initial world's messages_and_policy blanked",
+     rule: "program-initial-value-missing",
+     program: { valid_program() | initial_world: { fixture_world() | messages_and_policy: "" } } },
+
+   -- 4. Negative time in a recorded advance.
+   { name: "an interaction advances the clock by -1",
+     rule: "program-negative-time",
+     program: with_interaction(1, { base(1) | outcome: { base(1).outcome | advance_ms: -1 } }) },
+
+   -- 4b. Negative time in the initial world.
+   { name: "the clock epoch is negative",
+     rule: "program-negative-time",
+     program: { valid_program() | initial_world: { fixture_world() | clock_epoch: -5 } } },
+
+   -- 5. Duplicate encounter ordinal. Note this is a duplicate ORDINAL and not a
+   --    duplicate call id: interaction 2 already shares call_1 with
+   --    interaction 1 in the BASE program, legitimately, and the negative
+   --    control asserts that stays legal.
+   { name: "two interactions carry ordinal 1",
+     rule: "program-duplicate-ordinal",
+     program: with_interaction(2, { base(2) | identity: at(1, ApprovalIdentity("loop_v2", "call_1", "BashExec")) }) },
+
+   -- 6. A gap in the encounter order — an interaction dropped from the program.
+   { name: "ordinal 3 replaced by 9, leaving a gap",
+     rule: "program-ordinal-not-dense",
+     program: with_interaction(3, { base(3) | identity: at(9, EnvironmentReadIdentity("MOTOKO_FIXTURE")) }) },
+
+   -- 7. Impossible static reference: a fault class no catalogue defines.
+   { name: "outcome names a fault class the catalogue does not define",
+     rule: "program-impossible-reference",
+     program: with_interaction(1, { base(1) | outcome: fault_outcome(20, "boom", "tool_exploded") }) },
+
+   -- 7b. The same rule on the extension-effect IDENTITY, which D2 requires to
+   --     use the same stable id as D3's catalogue and D11's counters.
+   { name: "extension effect names a class id outside the catalogue",
+     rule: "program-impossible-reference",
+     program: with_interaction(7, { base(7) | identity: at(7, ExtensionEffectIdentity("test_dummy", "made_up_class", "call_2")) }) },
+
+   -- 8. A blank identity component: two different requests would compare equal.
+   { name: "tool interaction has a blank call_id",
+     rule: "program-identity-component-missing",
+     program: with_interaction(1, { base(1) | identity: at(1, ToolIdentity("loop_v2", "", "BashExec")) }) },
+
+   -- 9. Deadline on a class D2 gives none.
+   { name: "provider interaction records a deadline",
+     rule: "program-deadline-disagrees-with-class",
+     program: with_interaction(0, { base(0) | deadline_ms: 5000 }) },
+
+   -- 9b. No deadline on a class D2 requires one for.
+   { name: "tool interaction records no deadline",
+     rule: "program-deadline-disagrees-with-class",
+     program: with_interaction(1, { base(1) | deadline_ms: -1 }) },
+
+   -- 10. Stream chunks on a class that cannot stream.
+   { name: "tool interaction carries stream chunks",
+     rule: "program-stream-on-non-provider",
+     program: with_interaction(1, { base(1) | outcome: { base(1).outcome | chunks: [{ offset_ms: 0, text: "x" }] } }) },
+
+   -- 11. Chunk offsets that go backwards.
+   { name: "provider stream chunk offsets decrease",
+     rule: "program-chunk-offsets-not-monotone",
+     program: with_interaction(0, { base(0) | outcome: { base(0).outcome |
+                chunks: [{ offset_ms: 9, text: "he" }, { offset_ms: 4, text: "llo" }] } }) },
+
+   -- 12. A fault outcome with no class id: uncountable by D11's counter.
+   { name: "fault outcome with a blank fault_class_id",
+     rule: "program-outcome-status-disagrees-with-fault",
+     program: with_interaction(1, { base(1) | outcome: { base(1).outcome | fault_class_id: "" } }) },
+
+   -- 12b. An ok outcome naming a class: inflates the same counter.
+   { name: "ok outcome naming a fault class",
+     rule: "program-outcome-status-disagrees-with-fault",
+     program: with_interaction(2, { base(2) | outcome: { base(2).outcome | fault_class_id: "ToolFailed" } }) },
+
+   -- 12c. 'missing' on a class other than an environment read.
+   { name: "provider interaction with a 'missing' status",
+     rule: "program-outcome-status-disagrees-with-fault",
+     program: with_interaction(0, { base(0) | outcome: { base(0).outcome | status: OutcomeMissing, chunks: [] } }) },
+
+   -- 13. A program that recorded nothing.
+   { name: "no interactions at all",
+     rule: "program-empty",
+     program: { valid_program() | interactions: [] } }]
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenarios
+-- ---------------------------------------------------------------------------
+
+-- The negative control, and the honesty of the fixture's manifest.
+func scenario_valid_program_passes() -> bool ! {IO} {
+  let rs = validate_program(valid_program(), required_class_ids());
+  let structural_ok = List.length(rs) == 0;
+  let manifest_rs = validate_manifest(fixture_manifest(), driver_only());
+  let manifest_ok = List.length(manifest_rs) == 0;
+  let _ = if structural_ok then
+            println("  ✓ NEGATIVE CONTROL: a valid ${show(List.length(fixture_interactions()))}-interaction program over all seven D2 classes validates clean")
+          else {
+            let _ = println("  ✗ NEGATIVE CONTROL FAILED — the base program does not validate, so every mutant row below is testing nothing");
+            report(rs)
+          };
+  let _ = if manifest_ok then
+            println("  ✓ the fixture's manifest is the real one and validates against the definition it realizes")
+          else println("  ✗ the fixture's manifest does not validate against driver_only");
+  structural_ok && manifest_ok
+}
+
+-- The base program legitimately reuses call_1 across a tool and its approval.
+-- D2 requires that to stay representable — "so an invariant can reject them as
+-- system behavior rather than the program decoder rejecting the artifact" — so
+-- this asserts the decoder does NOT reject it. Without this row, tightening
+-- `duplicate_ordinals` to compare identity bodies would look like a fix.
+func scenario_repeated_call_id_is_representable() -> bool ! {IO} {
+  let ok = program_ok(valid_program(), required_class_ids());
+  -- Interaction #8 is a RETRY of #1: identical identity body, different
+  -- ordinal. Asserting the bodies are equal here — rather than trusting the
+  -- fixture comment — is what keeps this row meaningful if the fixture is
+  -- edited, since a fixture that quietly stopped repeating the call id would
+  -- otherwise leave the row green while testing nothing.
+  let identical = identity_body_eq(base(1).identity.body, base(8).identity.body);
+  let distinct_ordinals = base(1).identity.ordinal != base(8).identity.ordinal;
+  let ok_all = ok && identical && distinct_ordinals;
+  let _ = if ok_all then
+            println("  ✓ a repeated production call id is REPRESENTABLE, not a decode error (D2): #1 and #8 carry an IDENTICAL tool identity body at different ordinals and the program still validates")
+          else println("  ✗ the decoder rejected a repeated call id, which D2 requires it to preserve so an invariant can report it as system behaviour");
+  ok_all
+}
+
+func scenario_mutants() -> bool ! {IO} {
+  let _ = println("  mutation coverage — one valid program, one change each:");
+  run_mutants(mutants(), true)
+}
+
+func run_mutants(ms: [Mutant], acc: bool) -> bool ! {IO} {
+  match ms {
+    [] => acc,
+    m :: rest => {
+      let rs = validate_program(m.program, required_class_ids());
+      let fired = has_rule(rs, m.rule);
+      let _ = if fired then println("    ✓ ${m.rule} ← ${m.name}")
+              else {
+                let _ = println("    ✗ ${m.rule} DID NOT FIRE ← ${m.name}");
+                let _ = println("      the guard is missing, weakened, or unreachable. What did fire:");
+                report(rs)
+              };
+      run_mutants(rest, acc && fired)
+    }
+  }
+}
+
+pure func has_rule(rs: [ProgramRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if program_rule(r) == rule then true else has_rule(rest, rule)
+  }
+}
+
+-- D2 classifies a bounds violation as a GENERATOR failure, not a structural
+-- rejection, so it is checked through its own path. This row asserts both
+-- halves: the base program is within its declared bounds, and a program that
+-- exceeds one is caught.
+func scenario_bounds() -> bool ! {IO} {
+  let within = List.length(validate_bounds(valid_program())) == 0;
+  let tightened = { valid_program() | bounds: { fixture_bounds() | max_interactions: 3 } };
+  let vs = validate_bounds(tightened);
+  let caught = List.length(vs) == 1;
+  let _ = if within then println("  ✓ the base program is within every declared bound")
+          else println("  ✗ the base program already exceeds a declared bound");
+  let _ = if caught then println("    ✓ generator-bound-exceeded ← max_interactions lowered to 3 against ${show(List.length(fixture_interactions()))} interactions")
+          else println("    ✗ a program over its declared max_interactions was not reported as a generator failure");
+  within && caught
+}
+
+func report(rs: [ProgramRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${program_message(r)}");
+      report(rest)
+    }
+  }
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("execution_program_dst  (${program_schema_version()})");
+  let a = scenario_valid_program_passes();
+  let b = scenario_repeated_call_id_is_representable();
+  let c = scenario_mutants();
+  let d = scenario_bounds();
+  if a && b && c && d then println("execution_program_dst PASS")
+  else {
+    let _ = println("execution_program_dst FAIL");
+    exit(1)
+  }
+}
