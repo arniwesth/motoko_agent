@@ -5,36 +5,26 @@
 -- driver, and no replay loop; those are later stages and later modules, so that
 -- this one can be read and mutated without a world in scope.
 --
--- Three design decisions are load-bearing enough to state here, because each
--- one closes a class of defect rather than expressing a preference.
+-- Stage 2 moved the interaction vocabulary itself — `IdentityBody`,
+-- `CausalIdentity`, `TimedOutcome`, `Interaction` and their derivations — down
+-- into `src/core/dst_interaction`, which imports nothing but std. The reason is
+-- structural and is recorded in that module's header: the port layer has to
+-- name `Interaction` to carry the recorded log, and it cannot import this
+-- module without dragging `ExecutionManifest` and the whole `dst_profile`
+-- closure into the production driver's import graph. Stage 1's design notes 1
+-- and 2 (identity-as-a-sum, ordinal-as-the-duplicate-key) travelled with the
+-- types and are stated there.
 --
--- 1. CAUSAL IDENTITY IS A SUM, NOT A FLAT RECORD. D2 specifies different
---    identity fields per class: provider adds step and model, tool and approval
---    add call id and name, an extension effect adds the effect class id. A flat
---    record holding all of them makes "a provider identity carrying a call id"
---    representable, and then the validator has to forbid what the type should
---    never have allowed. The `kind` string is DERIVED from the body
---    (`identity_kind`), so a kind that disagrees with its own payload cannot be
---    written down.
+-- One design decision is left here, because it is about the PROGRAM and not
+-- about an interaction:
 --
--- 2. THE ORDINAL IS WHAT "DUPLICATE IDENTITY" MEANS. D2 asks the validator to
---    reject duplicate interaction identities, and in the same paragraph asks
---    that repeated production call ids stay REPRESENTABLE — "so an invariant
---    can reject them as system behavior rather than the program decoder
---    rejecting the artifact". Those two only fit together one way: the decoder
---    rejects a repeated ENCOUNTER ORDINAL, which is a malformed artifact, and
---    says nothing about a repeated call id, which is a finding about the system
---    under test. `duplicate_ordinals` is therefore deliberately blind to the
---    identity body. Reading the rule the other way would make the decoder
---    reject exactly the artifact D2 wants it to preserve.
---
--- 3. THE PROGRAM DOES NOT RESTATE THE WORLD'S CURSORS. `InitialWorld` carries
---    the synthetic environment, the clock epoch, and the normalized message and
---    policy inputs — but NOT the provider script, the approval queue, or the
---    tool queue. Those are projections of the interaction list
---    (stage 3 builds `world_state_of`). If the program carried both, a program
---    could serve a response that no interaction records, which is the exact
---    shape of the completeness defect this item exists to prevent.
+-- THE PROGRAM DOES NOT RESTATE THE WORLD'S CURSORS. `InitialWorld` carries
+-- the synthetic environment, the clock epoch, and the normalized message and
+-- policy inputs — but NOT the provider script, the approval queue, or the
+-- tool queue. Those are projections of the interaction list
+-- (stage 3 builds `world_state_of`). If the program carried both, a program
+-- could serve a response that no interaction records, which is the exact
+-- shape of the completeness defect this item exists to prevent.
 
 module src/core/dst_program
 
@@ -42,6 +32,20 @@ import std/list as List (length)
 import std/string as Str (length)
 import std/option (Option, Some, None)
 import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_interaction (
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  CausalIdentity,
+  StreamChunkRecord,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  TimedOutcome,
+  Interaction,
+  identity_kind,
+  interaction_kind,
+  class_has_deadline,
+  class_may_stream
+)
 
 -- ---------------------------------------------------------------------------
 -- Schema version and the D8 compatibility policy
@@ -57,205 +61,6 @@ export pure func program_schema_version() -> string { "execution-program/1" }
 -- fail closed. There is no third option in which the program is read anyway.
 export pure func decodable_schema_versions() -> [string] {
   [program_schema_version()]
-}
-
--- ---------------------------------------------------------------------------
--- Causal identity (D2)
--- ---------------------------------------------------------------------------
-
--- The per-class identity payload. See design note 1 in the module header for
--- why this is a sum and not a record of optional fields.
---
--- `ExtensionEffectIdentity`'s call id is "" where the effect has none, which is
--- D2's "call id where the effect has one" — the only place a blank component is
--- legitimate rather than a missing required value.
-export type IdentityBody
-  = ProviderIdentity(string, int, string)           -- origin, step, model
-  | ToolIdentity(string, string, string)            -- origin, call_id, name
-  | ApprovalIdentity(string, string, string)        -- origin, call_id, name
-  | ExtensionEffectIdentity(string, string, string) -- ext_id, class_id, call_id
-  | EnvironmentReadIdentity(string)                 -- key
-  | RandomDrawIdentity(string)                      -- bounds label
-  | ClockAdvanceIdentity
-
--- The stable kind id, DERIVED. These strings appear in the interaction log and
--- in harness-failure projections, so they are part of the artifact surface and
--- change only with a schema version.
-export pure func identity_kind(b: IdentityBody) -> string {
-  match b {
-    ProviderIdentity(_, _, _) => "expect_provider",
-    ToolIdentity(_, _, _) => "expect_tool",
-    ApprovalIdentity(_, _, _) => "expect_approval",
-    ExtensionEffectIdentity(_, _, _) => "expect_extension_effect",
-    EnvironmentReadIdentity(_) => "environment_read",
-    RandomDrawIdentity(_) => "runtime_random_draw",
-    ClockAdvanceIdentity => "advance_clock"
-  }
-}
-
--- The origin, derived the same way. Blank for the three classes D2 gives no
--- origin: an environment read, a random draw, and a clock advance are world
--- events, not requests from a named producer.
-export pure func identity_origin(b: IdentityBody) -> string {
-  match b {
-    ProviderIdentity(o, _, _) => o,
-    ToolIdentity(o, _, _) => o,
-    ApprovalIdentity(o, _, _) => o,
-    ExtensionEffectIdentity(e, _, _) => e,
-    EnvironmentReadIdentity(_) => "",
-    RandomDrawIdentity(_) => "",
-    ClockAdvanceIdentity => ""
-  }
-}
-
--- Whether two identity bodies are the same logical request. Used by strict
--- replay; defined here because it is a property of the identity, not of the
--- replay mode.
-export pure func identity_body_eq(a: IdentityBody, b: IdentityBody) -> bool {
-  match a {
-    ProviderIdentity(o, s, m) =>
-      match b { ProviderIdentity(o2, s2, m2) => o == o2 && s == s2 && m == m2, _ => false },
-    ToolIdentity(o, c, n) =>
-      match b { ToolIdentity(o2, c2, n2) => o == o2 && c == c2 && n == n2, _ => false },
-    ApprovalIdentity(o, c, n) =>
-      match b { ApprovalIdentity(o2, c2, n2) => o == o2 && c == c2 && n == n2, _ => false },
-    ExtensionEffectIdentity(e, k, c) =>
-      match b { ExtensionEffectIdentity(e2, k2, c2) => e == e2 && k == k2 && c == c2, _ => false },
-    EnvironmentReadIdentity(k) =>
-      match b { EnvironmentReadIdentity(k2) => k == k2, _ => false },
-    RandomDrawIdentity(l) =>
-      match b { RandomDrawIdentity(l2) => l == l2, _ => false },
-    ClockAdvanceIdentity =>
-      match b { ClockAdvanceIdentity => true, _ => false }
-  }
-}
-
--- A human- and diff-readable projection of the body. This is what a
--- HarnessFailure's `actual_request_projection` carries, so it must be total and
--- must not lose a component.
-export pure func identity_body_projection(b: IdentityBody) -> string {
-  match b {
-    ProviderIdentity(o, s, m) => "provider origin=${o} step=${s} model=${m}",
-    ToolIdentity(o, c, n) => "tool origin=${o} call_id=${c} name=${n}",
-    ApprovalIdentity(o, c, n) => "approval origin=${o} call_id=${c} name=${n}",
-    ExtensionEffectIdentity(e, k, c) => "extension_effect ext=${e} class=${k} call_id=${c}",
-    EnvironmentReadIdentity(k) => "env_read key=${k}",
-    RandomDrawIdentity(l) => "random_draw bounds=${l}",
-    ClockAdvanceIdentity => "advance_clock"
-  }
-}
-
--- D2: "Every interaction identity includes a global encounter ordinal."
-export type CausalIdentity = {
-  ordinal: int,
-  body: IdentityBody
-}
-
-export pure func identity_projection(i: CausalIdentity) -> string {
-  "#${i.ordinal} ${identity_body_projection(i.body)}"
-}
-
--- ---------------------------------------------------------------------------
--- Outcomes (D2, D4)
--- ---------------------------------------------------------------------------
-
--- A recorded stream chunk at its virtual offset. D2: "ordered stream chunks
--- with non-decreasing virtual offsets followed by a final StepResult or
--- AIError".
-export type StreamChunkRecord = {
-  offset_ms: int,
-  text: string
-}
-
--- `OutcomeMissing` is D2's `value_or_missing` for an environment read. It is a
--- third status rather than an error because a key that is absent is a NORMAL
--- read whose answer is "unset" — the driver's `getEnvOr` fallback path — and
--- classifying it as a fault would manufacture a fault class that the catalogue
--- does not contain.
-export type OutcomeStatus = OutcomeOk | OutcomeFault | OutcomeMissing
-
-export pure func outcome_status_id(s: OutcomeStatus) -> string {
-  match s {
-    OutcomeOk => "ok",
-    OutcomeFault => "fault",
-    OutcomeMissing => "missing"
-  }
-}
-
--- D2's `timed_outcome`: "deterministic latency or completion time. Before
--- delivery, the world advances its monotonic clock by the recorded non-negative
--- amount."
---
--- `fault_class_id` is one of A7's stable class ids, and is blank exactly when
--- the status is not `OutcomeFault`. The validator enforces that pairing in both
--- directions, because a fault with no class is uncountable by D11's
--- class-reached counter and an ok outcome naming a class inflates it.
-export type TimedOutcome = {
-  advance_ms: int,
-  chunks: [StreamChunkRecord],
-  payload: string,
-  status: OutcomeStatus,
-  fault_class_id: string
-}
-
-export pure func ok_outcome(advance_ms: int, payload: string) -> TimedOutcome {
-  { advance_ms: advance_ms, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" }
-}
-
-export pure func fault_outcome(advance_ms: int, payload: string, class_id: string) -> TimedOutcome {
-  { advance_ms: advance_ms, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: class_id }
-}
-
-export pure func missing_outcome() -> TimedOutcome {
-  { advance_ms: 0, chunks: [], payload: "", status: OutcomeMissing, fault_class_id: "" }
-}
-
--- ---------------------------------------------------------------------------
--- Interactions
--- ---------------------------------------------------------------------------
-
--- D2: the resolved interactions are "an ordered expected protocol, not
--- anonymous response queues", each recording a stable causal identity AND a
--- bounded full request projection used for strict reproduction.
---
--- `deadline_ms` is -1 for the classes D2 gives no deadline (provider,
--- environment read, random draw, clock advance) and non-negative for the three
--- that have one. -1 rather than an Option because the value is compared,
--- ordered and encoded on every path, and an Option would put a match at each of
--- those sites to recover a sentinel the encoding needs anyway.
-export type Interaction = {
-  identity: CausalIdentity,
-  request_projection: string,
-  deadline_ms: int,
-  outcome: TimedOutcome
-}
-
-export pure func interaction_kind(i: Interaction) -> string {
-  identity_kind(i.identity.body)
-}
-
--- Whether this class carries a deadline at all (D2's grammar: ExpectTool,
--- ExpectApproval and ExpectExtensionEffect do; the rest do not).
-export pure func class_has_deadline(b: IdentityBody) -> bool {
-  match b {
-    ToolIdentity(_, _, _) => true,
-    ApprovalIdentity(_, _, _) => true,
-    ExtensionEffectIdentity(_, _, _) => true,
-    ProviderIdentity(_, _, _) => false,
-    EnvironmentReadIdentity(_) => false,
-    RandomDrawIdentity(_) => false,
-    ClockAdvanceIdentity => false
-  }
-}
-
--- Only a provider outcome may carry stream chunks. D2 puts chunks on the
--- provider timed outcome specifically, and D9 keeps chunk callbacks serial
--- within the provider request rather than making them independent actors.
-export pure func class_may_stream(b: IdentityBody) -> bool {
-  match b {
-    ProviderIdentity(_, _, _) => true,
-    _ => false
-  }
 }
 
 -- ---------------------------------------------------------------------------
@@ -658,60 +463,6 @@ export pure func first_program_message(rs: [ProgramRejection]) -> Option[string]
 -- one field at a time. What is tested here is the part with no fixture: the
 -- derivations on the identity itself.
 -- ---------------------------------------------------------------------------
-
--- The kind is derived from the body, so there is no representable program in
--- which a kind disagrees with its own payload (design note 1). This asserts the
--- derivation is TOTAL and INJECTIVE across the seven classes — if two classes
--- ever derived the same kind string, the interaction log would conflate them
--- and the completeness count per class would silently merge two classes.
-pure func test_identity_kind_is_injective_across_the_seven_classes() -> bool
-  tests [((), true)]
-  {
-    let ks = [identity_kind(ProviderIdentity("o", 0, "m")),
-              identity_kind(ToolIdentity("o", "c", "n")),
-              identity_kind(ApprovalIdentity("o", "c", "n")),
-              identity_kind(ExtensionEffectIdentity("e", "k", "c")),
-              identity_kind(EnvironmentReadIdentity("k")),
-              identity_kind(RandomDrawIdentity("b")),
-              identity_kind(ClockAdvanceIdentity)];
-    List.length(ks) == 7 && all_distinct(ks, [])
-  }
-
-pure func all_distinct(xs: [string], seen: [string]) -> bool {
-  match xs {
-    [] => true,
-    x :: rest => if contains_str(seen, x) then false else all_distinct(rest, seen ++ [x])
-  }
-}
-
--- Identity equality must discriminate on EVERY component D2 names, in both
--- directions. A comparison that ignored, say, the provider's step would let
--- strict replay deliver step 2's outcome to step 1's request and still call
--- itself a reproduction.
-pure func test_identity_equality_discriminates_every_component() -> bool
-  tests [((), true)]
-  {
-    identity_body_eq(ProviderIdentity("o", 1, "m"), ProviderIdentity("o", 1, "m"))
-      && not identity_body_eq(ProviderIdentity("o", 1, "m"), ProviderIdentity("x", 1, "m"))
-      && not identity_body_eq(ProviderIdentity("o", 1, "m"), ProviderIdentity("o", 2, "m"))
-      && not identity_body_eq(ProviderIdentity("o", 1, "m"), ProviderIdentity("o", 1, "x"))
-      && not identity_body_eq(ToolIdentity("o", "c", "n"), ToolIdentity("o", "c", "x"))
-      && not identity_body_eq(ToolIdentity("o", "c", "n"), ToolIdentity("o", "x", "n"))
-      && not identity_body_eq(ExtensionEffectIdentity("e", "k", "c"), ExtensionEffectIdentity("e", "x", "c"))
-      && not identity_body_eq(EnvironmentReadIdentity("a"), EnvironmentReadIdentity("b"))
-      && not identity_body_eq(RandomDrawIdentity("a"), RandomDrawIdentity("b"))
-  }
-
--- A tool and an approval sharing origin, call id and name are DIFFERENT logical
--- requests. They are structurally distinct constructors, so this cannot regress
--- silently — but the driver genuinely issues both against one call id, so the
--- claim is worth stating where a reader of the replay code will find it.
-pure func test_tool_and_approval_on_one_call_id_are_distinct() -> bool
-  tests [((), true)]
-  {
-    not identity_body_eq(ToolIdentity("loop_v2", "call_1", "BashExec"),
-                         ApprovalIdentity("loop_v2", "call_1", "BashExec"))
-  }
 
 -- D8's fail-closed decode, asserted on the version list rather than on a
 -- fixture: an unknown schema is undecodable, and the CURRENT schema is
