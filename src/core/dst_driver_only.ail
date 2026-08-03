@@ -82,6 +82,23 @@ import src/core/dst_profile_coverage as Cov (coverage_rules_version)
 import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func driver_only_id() -> string { "driver_only" }
+-- v3, WI-A13 stage 4. RE-ISSUED for the SECOND time and for the same mechanical
+-- reason: stage 4 added one `GeneratedWorld` arm to `ported_provider`
+-- (session.ail:843), which sits above four attributed clock sites, so all four
+-- moved by five lines and A5's table was re-measured. THE CLAIM DID NOT CHANGE
+-- — same seven sites, same effects, same routed flags, same reviewers; only the
+-- coordinates moved.
+--
+-- Two clusters have now paid this, and the second is the useful data point. The
+-- stub_step.ail:161 anchor was NOT disturbed, because that cascade is
+-- documented and an author who knows about it can insert below the anchor and
+-- widen import lists in place. The session.ail anchors were disturbed anyway,
+-- because a new `StepProvider` variant forces a new match arm and a match arm
+-- cannot be moved below the sites it precedes — so this half of the cascade is
+-- NOT avoidable by care. That distinction is the case for A14/A15 building a
+-- coordinate-independent anchor: the avoidable half is already avoided, and
+-- what remains is structural.
+--
 -- v2, WI-A13 stage 2. RE-ISSUED, not edited: stage 2 inserted lines into
 -- session.ail and stub_step.ail above four attributed clock sites, so A5's
 -- table was re-measured and its content hash changed. D4 makes a table
@@ -96,14 +113,14 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- as a re-issue is the safe direction and is what the header already chose
 -- ("that cost IS the rule"), but the fragility is a finding worth A14/A15's
 -- attention rather than something to absorb silently each cluster.
-export pure func driver_only_version() -> string { "2" }
+export pure func driver_only_version() -> string { "3" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
 -- `driver_only_version` and re-recording both halves of this pair.
 export pure func driver_only_attribution_ref() -> AttributionRef {
   { source_revision: "5ad3433",
-    content_hash: "sha256:0180d3895261a387f5dca45ba8b7a04db513bd7f88b827d96bc11f75f0cd22f8" }
+    content_hash: "sha256:f22042d889e5ef7b5f3918fcd242534fc1042d0b4d5a34d83fb851342ead65b3" }
 }
 
 -- ---------------------------------------------------------------------------

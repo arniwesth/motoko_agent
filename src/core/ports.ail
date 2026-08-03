@@ -38,6 +38,20 @@ import src/core/dst_interaction (
   ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing
 )
+-- WI-A13 stage 4. The GENERATOR STATE rides in `WorldState` for exactly the
+-- reason the interaction log does: the ports are the only place that sees a
+-- request at the moment it is made, and D2 makes each discovery choice a
+-- function of the request. `src/core/dst_generator` imports nothing but std for
+-- the same reason `dst_interaction` does not — see either module's header.
+--
+-- Threaded, never captured. A generator state a closure holds is F6 with a
+-- different cursor: it serves the same choice forever, nothing crashes, and the
+-- programs are perfectly reproducible.
+import src/core/dst_generator (
+  GeneratorState, GeneratorBounds, ToolFaultChoice,
+  ToolChoiceOk, ToolChoiceFailed, ToolChoiceMismatch, ToolChoiceLate,
+  no_generator, generator_installed, choose_provider, choose_tool, choose_approval
+)
 -- A7's class ids are READ, not restated. A10 established the policy and S6
 -- measured why it matters: a read binding is free and cannot go stale, while a
 -- copied literal is where an item's risk lives. A fault recorded under a class
@@ -172,7 +186,29 @@ export type WorldState = {
   -- the RECORDING adapters append, and they are separate closures — a live or
   -- plain scripted run leaves this empty, which is why adding the field is
   -- behaviour-preserving for every existing target.
-  log: [Interaction]
+  log: [Interaction],
+
+  -- WI-A13 stage 4: D2's seeded generator, as EXPLICIT STATE.
+  --
+  -- D2 makes every discovery choice "a deterministic function of generator
+  -- id/version, seed, generator state, the bounded request projection, and
+  -- current world state. No ambient RNG participates." The first three of those
+  -- five are this field; the fourth arrives at the port as the request; the
+  -- fifth is the rest of this record.
+  --
+  -- It rides HERE and not in a closure for the reason A12 moved every other
+  -- cursor here, and the failure it avoids is the one this project has already
+  -- paid for once: a cursor a closure captures is pinned, serves the same value
+  -- for the whole run, and produces a result that nothing distinguishes from a
+  -- correct one (F6, cluster 1). A pinned GENERATOR is worse than a pinned
+  -- script, because its output is still a valid, replayable, perfectly
+  -- reproducible program — it is simply the same program for every seed.
+  --
+  -- `no_generator()` is the default and means "not installed". The four
+  -- deterministic seams and the four recording ones never read it; only the
+  -- GENERATING adapters do, which is what keeps adding this field
+  -- behaviour-preserving for every existing target.
+  gen: GeneratorState
 }
 
 -- One scripted tool outcome. The fields are ordered by the fault they express,
@@ -267,7 +303,7 @@ export type PortedProvider = {
 -- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
-  { script: [], clock_ms: 0, approvals: [], env: [], tools: [], log: [] }
+  { script: [], clock_ms: 0, approvals: [], env: [], tools: [], log: [], gen: no_generator() }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -564,6 +600,135 @@ pure func tool_outcome_record(o: ToolOutcome, advanced: int) -> TimedOutcome {
       { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: fault_class_tool_correlation_mismatch() },
     ToolDeadlineExceeded(_) =>
       { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: fault_class_tool_deadline_exceeded() }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-A13 stage 4: the GENERATING seams
+-- ---------------------------------------------------------------------------
+--
+-- Each of these SUPPLIES the world's queue entry from the seeded generator and
+-- then delegates to its recording counterpart. That composition is the whole
+-- design, and it is chosen over a generating recorder for three reasons:
+--
+--   1. ONE RECORDER. A generating adapter that also recorded would be a second
+--      copy of "serve the head, advance past it, append an interaction", and a
+--      log that disagrees with the run it claims to record is the defect stage
+--      2 exists to detect. `recording_clock` wraps `virtual_clock` for the same
+--      reason and states it in the same words.
+--
+--   2. D2's "DISCOVERY CHOOSES ONLY AT REQUESTS THE REAL DRIVER ACTUALLY
+--      MAKES. It never invents a tool, approval, or extension-effect request
+--      disconnected from production control flow." A generator that pre-filled
+--      a queue would be choosing before any request existed — and worse, it
+--      could not consult the request, which D2 names as an input to every
+--      choice. Generating exactly one entry at the moment the port is called
+--      makes that structural instead of asserted.
+--
+--   3. THE GENERATED PROGRAM REPLAYS THROUGH THE UNCHANGED STAGE-3 PATH.
+--      Because the recorded interaction is written by the same recorder as
+--      before, `dst_replay.world_state_of` reconstitutes a plain world and the
+--      replay runs on `recording_ports` — no generator in scope. That is D2's
+--      "replay receives that resolved program and never calls the generator",
+--      and it is true here by construction rather than by discipline.
+--
+-- The salt each adapter builds is D2's "bounded request projection ... and
+-- current world state": the request's own fields, plus the log length and the
+-- clock. Both halves are needed. Without the request the choice cannot depend
+-- on what was asked; without the world position two identical requests at
+-- different points in one run would receive the same answer, which is a
+-- generator with a period of one per request shape.
+
+-- The generating tool dispatch.
+--
+-- `world_tool` DELEGATES TO THE REAL DISPATCHER on an empty queue, so a
+-- generating adapter that failed to supply an entry would silently execute a
+-- process — turning a seeded run into a live one and making the Process poison
+-- pair meaningless. Supplying the entry first is what keeps a fully-seeded run
+-- free of process execution, and `world_state_probe`'s poison pair is what
+-- would notice if it stopped.
+export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  if not generator_installed(state.gen) then recording_tool(state, inv)
+  else {
+    let salt = "tool call_id=${inv.call.id} tool=${inv.call.tool} timeout_ms=${inv.timeout_ms} at=${state.clock_ms} n=${List.length(state.log)}";
+    let choice = choose_tool(state.gen, salt, inv.timeout_ms, inv.call.id);
+    let d = choice.decision;
+    let entry: ScriptedTool = {
+      tool_call_id: d.answering_call_id,
+      duration_ms: d.duration_ms,
+      -- `world_tool` checks correlation, then the deadline, then the code, in
+      -- that order. The code is therefore blanked for the two fault choices
+      -- that must be reached through an EARLIER branch, or a mismatch decision
+      -- would replay as an ordinary execution failure and D3's correlation
+      -- class would be unreachable by a generated program.
+      code: match d.fault { ToolChoiceFailed => d.code, _ => "" },
+      message: match d.fault { ToolChoiceFailed => d.message, _ => "" },
+      content: d.content
+    };
+    recording_tool({ state | gen: choice.state, tools: [entry] }, inv)
+  }
+}
+
+-- The provider entry the generating provider serves.
+--
+-- The MAPPING lives here, beside the other two, rather than in
+-- `src/core/test/stub_step` where the generating provider closure is. Two
+-- reasons, and the second is the load-bearing one:
+--
+--   * all three class mappings are then one screen apart, so "which fields of
+--     a decision reach the world" is answerable in one place;
+--   * `stub_step.ail:161` is an A5 attribution anchor. Putting this here means
+--     `stub_step` widens ONE existing import line and adds no import
+--     statement, so the anchor does not move. Cluster 8 paid a five-artifact
+--     cascade including a mandatory `driver_only` re-issue for a line that
+--     shifted; cluster 9 avoided it with one `sed -n '161p'` check, and so does
+--     this.
+--
+-- `terminate` is not returned separately: a terminating decision IS a step with
+-- no tool calls and a "stop" finish reason, which is the only thing the driver
+-- reads. Returning the flag as well would be a second representation of one
+-- fact, and the driver would still ignore it.
+export pure func generated_provider_entry(state: WorldState, salt: string) -> { step: ScriptedStep, gen: GeneratorState } {
+  let choice = choose_provider(state.gen, salt, List.length(state.log));
+  let d = choice.decision;
+  let calls: [ToolCall] =
+    if d.terminate then []
+    else [{ id: d.tool_call_id, name: d.tool_name, arguments: d.tool_args }];
+  {
+    step: { prose: d.prose,
+            tool_calls: calls,
+            input_tokens: d.input_tokens,
+            output_tokens: d.output_tokens,
+            finish_reason: d.finish_reason,
+            chunks: repeat_chunk(d.chunk_text, d.chunk_count) },
+    gen: choice.state
+  }
+}
+
+pure func repeat_chunk(text: string, n: int) -> [string] {
+  if n <= 0 then [] else "${text}.${n}" :: repeat_chunk(text, n - 1)
+}
+
+-- The generating approval channel. `serve: false` supplies NOTHING, which is
+-- how `scripted_approval` reports end-of-input and how stage 2's
+-- `OutcomeMissing` on the approval class becomes reachable by a generated
+-- program at all.
+--
+-- The raw line is the operator's own wire format, built here rather than in the
+-- generator because it is the DRIVER's vocabulary: `resolve_approval` parses
+-- it, and a generator that knew the JSON shape would be encoding production
+-- policy in the choice layer.
+export func generating_approval(state: WorldState, req: ApprovalRequest) -> ApprovalInput ! {IO} {
+  if not generator_installed(state.gen) then recording_approval(state, req)
+  else {
+    let salt = "approval call_id=${req.call.id} tool=${req.call.name} default_allow=${req.default_allow} at=${state.clock_ms} n=${List.length(state.log)}";
+    let choice = choose_approval(state.gen, salt);
+    let d = choice.decision;
+    let queued =
+      if not d.serve then []
+      else if d.approve then ["{\"type\":\"approve\"}"]
+      else ["{\"type\":\"deny\",\"reason\":\"${d.reason}\"}"];
+    recording_approval({ state | gen: choice.state, approvals: queued }, req)
   }
 }
 

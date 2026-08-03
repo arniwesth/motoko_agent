@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery strict_replay predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery strict_replay seeded_generator predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -386,6 +386,73 @@ strict_replay:
 	fi; \
 	ailang test src/core/ports.ail > /dev/null && echo "  ✓ src/core/ports.ail (recorded-outcome codec round trips)"; \
 	ailang test src/core/dst_replay.ail > /dev/null && echo "  ✓ src/core/dst_replay.ail"
+
+# D2's SEEDED GENERATOR (WI-A13 stage 4). Three checks:
+#
+#   1. The acceptance script. Ten axes over five honest generated runs and three
+#      seed-ignoring mutant runs — seed sensitivity, the mutant, the generator
+#      actually being consulted, the declared bounds in both directions, stage
+#      1's validator and stage 3's strict replay over generated programs, S7's
+#      two obligations, the C5 mutations and determinism.
+#
+#   2. dst_generator's own units, which are where the seed-sensitivity RULE is
+#      asserted against hand-built row sets — including a seed-ignoring one that
+#      must go red, written and run before a line of the generator existed (S1).
+#
+#   3. THE SEEDROW COMPARISON, out of process. The one result this stage exists
+#      to produce — different seeds produce different programs — is re-derived
+#      HERE from the script's own emitted rows, by a second author that cannot
+#      share a defect with the in-process comparison. Three things are checked
+#      and each is a different way for the claim to be hollow:
+#
+#        * two rows with DIFFERENT seeds have different digests (the claim);
+#        * two rows with the SAME seed have the SAME digest (reproducibility,
+#          without which "different" is just noise);
+#        * the equal-count pair really does have equal interaction counts, so
+#          the difference above cannot be a difference in program LENGTH. A
+#          count is blind to two programs of equal length and different
+#          contents, which is how cluster 9's site 19 stayed hidden through
+#          every count-shaped gate in this suite.
+#
+#      The greps below are anchored to the emitted line's syntactic form
+#      (`^SEEDROW <label> seed=`), not to a bare token. A bare-token guard
+#      eventually fires on the artifact that documents it, which is what kept
+#      `make world_state` red for two clusters.
+.PHONY: seeded_generator
+seeded_generator:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/seeded_generator_dst.ail < /dev/null; \
+	rows=$$(ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry wire_witness scripts/dst/seeded_generator_dst.ail < /dev/null 2>/dev/null); \
+	get() { printf '%s\n' "$$rows" | sed -n "s/^SEEDROW $$1 seed=[0-9]* version=[0-9]* n=\([0-9]*\) outcomes_len=[0-9]* digest=\(-*[0-9]*\)$$/\1 \2/p"; }; \
+	rich=$$(get rich); a=$$(get pairA); b=$$(get pairB); \
+	if [ -z "$$rich" ] || [ -z "$$a" ] || [ -z "$$b" ]; then \
+		echo "FAIL: the wire_witness run emitted no SEEDROW triple — the entry point changed or a run died, and every comparison below would be vacuous"; \
+		printf '%s\n' "$$rows" | grep -E '^SEEDROW' || true; \
+		exit 1; \
+	fi; \
+	n_a=$${a% *}; d_a=$${a#* }; n_b=$${b% *}; d_b=$${b#* }; d_rich=$${rich#* }; \
+	if [ "$$d_a" = "$$d_b" ]; then \
+		echo "FAIL: seeds 9 and 13 produced the SAME outcome digest ($$d_a)."; \
+		echo "      The generator is not reading its seed. D2 makes the seed an input to every"; \
+		echo "      discovery choice; a generator that ignores it produces one program for every"; \
+		echo "      seed — deterministic, structurally valid, strictly replayable, certifying nothing."; \
+		exit 1; \
+	fi; \
+	if [ "$$n_a" -ne "$$n_b" ]; then \
+		echo "FAIL: seeds 9 and 13 no longer have equal interaction counts ($$n_a vs $$n_b)."; \
+		echo "      The difference above could then be a difference in program LENGTH, and a count"; \
+		echo "      is blind to two programs of equal length and different contents. Re-sweep for"; \
+		echo "      an equal-count pair and re-pin it; do not delete this check."; \
+		exit 1; \
+	fi; \
+	if [ "$$d_rich" = "$$d_a" ]; then \
+		echo "FAIL: the rich fixture and seed 9 produced the same outcome digest — the rows are not distinct runs"; \
+		exit 1; \
+	fi; \
+	echo "  ✓ different seeds produce different programs at EQUAL interaction count (n=$$n_a, digests $$d_a vs $$d_b)"; \
+	ailang test src/core/dst_generator.ail > /dev/null && echo "  ✓ src/core/dst_generator.ail (the seed-sensitivity rule, and the PRNG's two silent failure modes)"
 
 .PHONY: driver_only
 driver_only:
@@ -1020,7 +1087,7 @@ attribution_table:
 	check src/core/tool_phase.ail 287 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"; \
 	check src/core/session.ail 807 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"; \
 	check src/core/test/stub_step.ail 161 'now()' "live_ports' real clock (declared UNROUTED core)"; \
-	for l in 943 1048 2285 2395; do \
+	for l in 948 1053 2290 2400; do \
 	  check src/core/session.ail $$l 'clock_now' "a routed core clock site"; \
 	done; \
 	check src/core/tool_phase.ail 342 'clock_now' "the FIFTH routed core clock site (D4's table says four)"; \

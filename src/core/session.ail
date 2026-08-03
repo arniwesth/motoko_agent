@@ -140,7 +140,7 @@ import src/core/phase_vocab (
   Finalize,
   Fail
 )
-import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, Ported, ScriptedStep, live_ports, scripted_ports, recording_ports, scripted_world_state)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, ScriptedStep, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
@@ -840,7 +840,12 @@ func ported_provider(rt: ExtRuntime, provider: StepProvider) -> PortedProvider {
     ScriptedWorld(world) => { ports: scripted_ports(), world: world },
     -- WI-A13 stage 2. Same world, recording adapters. `driver_only` discovery
     -- is the only caller.
-    RecordingWorld(world) => { ports: recording_ports(rt), world: world }
+    RecordingWorld(world) => { ports: recording_ports(rt), world: world },
+    -- WI-A13 stage 4. The recording adapters with D2's seeded generator on top:
+    -- the world's script, approval and tool cursors start EMPTY and each
+    -- response is chosen at the request that asks for it. `make seeded_generator`
+    -- is the only caller.
+    GeneratedWorld(world) => { ports: generating_ports(rt), world: world }
   }
 }
 

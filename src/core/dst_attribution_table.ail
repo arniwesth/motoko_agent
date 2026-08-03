@@ -217,13 +217,13 @@ export pure func attribution_rows() -> [AttributionRow] {
 -- eight reads are reachable by installation, not by attribution.
 export pure func unconditional_core_sites() -> [CoreSite] {
   [
-    { site: { file: "src/core/session.ail", line: 943 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 948 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 1048 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1053 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2285 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2290 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2395 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2400 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
     { site: { file: "src/core/tool_phase.ail", line: 342 }, effect: "Clock", routed: true,
       note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it" },
@@ -645,7 +645,7 @@ pure func test_discovered_site_in_neither_list_is_rejected() -> bool
   tests [((), true)]
   {
     let discovered: [CoreSite] = [
-      { site: { file: "src/core/session.ail", line: 1048 }, effect: "Clock", routed: true, note: "" },
+      { site: { file: "src/core/session.ail", line: 1053 }, effect: "Clock", routed: true, note: "" },
       { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
       { site: { file: "src/core/omitted.ail", line: 42 }, effect: "Clock", routed: false, note: "" }
     ];

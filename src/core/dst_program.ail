@@ -32,6 +32,7 @@ import std/list as List (length)
 import std/string as Str (length)
 import std/option (Option, Some, None)
 import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_generator (GeneratorBounds)
 import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
@@ -85,13 +86,15 @@ export type InitialWorld = {
 -- Recorded ON the program, not only on the config, so that a replay of an
 -- archived program can state the bounds it was generated under without needing
 -- the config that produced it.
-export type GeneratorBounds = {
-  max_interactions: int,
-  max_chunks_per_interaction: int,
-  max_payload_bytes: int,
-  max_resource_size: int,
-  max_clock_advance_ms: int
-}
+--
+-- WI-A13 stage 4 MOVED the declaration down into `src/core/dst_generator`, for
+-- the same structural reason stage 2 moved `Interaction` into
+-- `src/core/dst_interaction`: the bounds are consulted at the moment of a
+-- choice, which is inside a port adapter, and `ports.ail` cannot import this
+-- module without dragging the whole `dst_profile` closure into the production
+-- driver's import graph. It is re-exported here so that a reader still finds it
+-- beside the program's other types and so that no existing importer changed.
+export type GeneratorBounds = GeneratorBounds
 
 export type DiscoveryConfig = {
   schema_version: string,

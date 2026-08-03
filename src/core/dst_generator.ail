@@ -1,0 +1,965 @@
+-- D2's seeded generator: the half of discovery that CHOOSES.
+--
+-- WI-A13, stage 4. Stage 2 built the half that RECORDS — the port adapters that
+-- write every request the real driver makes into D2's interaction log — and it
+-- ran that recorder against hand-authored worlds. D2's discovery is
+-- seed-driven, and the choosing half had no stage:
+--
+--   "During discovery, a deterministic seeded world receives each real D1
+--    request as the production driver makes it. A schema-versioned generator
+--    chooses a compatible response, fault, and latency from that request plus
+--    explicit generator state."
+--
+-- Before this module, NOTHING IN THE PROGRAM DREW FROM A SEED.
+-- `scripts/dst/discovery_dst.ail` recorded `generator_id: "driver_only_discovery"`,
+-- `generator_version: "1"` and `seed: 0` onto programs whose every response was
+-- written by hand — three required, validated, non-blank fields describing a
+-- generator that did not exist. Stage 1's validator rejects a BLANK generator
+-- axis; it cannot tell that a seed was consulted by nothing.
+--
+-- ---------------------------------------------------------------------------
+-- THE DEFECT THIS MODULE IS SHAPED TO MAKE VISIBLE
+-- ---------------------------------------------------------------------------
+--
+-- A generator that ignores its seed produces the same program for every seed.
+-- It is perfectly deterministic; every count balances; stage 1's validator,
+-- stage 2's two-sided witnesses and stage 3's strict replay are all green. It
+-- is the frozen-cursor defect (F6, cluster 1) wearing generator clothing, and
+-- determinism cannot see it — a generator that ignores its seed is MORE
+-- reproducible, not less.
+--
+-- So the executable statement comes first in this file, before the generator it
+-- guards (S1): `check_seed_sensitivity` below, with a seed-ignoring row set
+-- among its inline tests that must go RED. It is deliberately CONTENT-shaped
+-- and not count-shaped: cluster 9's site 19 established that a count is blind
+-- to two programs of equal length and different contents, so the rule that
+-- matters compares recorded OUTCOMES, and a further rule requires the evidence
+-- to include a pair whose interaction counts are EQUAL — otherwise the whole
+-- axis could be passing on length alone and nobody would know.
+--
+-- ---------------------------------------------------------------------------
+-- WHY THE PRNG IS WRITTEN OUT HERE RATHER THAN IMPORTED
+-- ---------------------------------------------------------------------------
+--
+-- D2: "Each discovery choice is a deterministic function of generator
+-- id/version, seed, generator state, the bounded request projection, and
+-- current world state. NO AMBIENT RNG PARTICIPATES."
+--
+-- `make world_state` asserts that no `src/core/*.ail` module reaches
+-- `std/rand`, because D1 names an ambient RNG as a prohibited hiding place for
+-- world state. This module is IN `src/core`, so that guard covers it, and it
+-- must: `src/core/test/dst_gen.ail` exists and is exactly the prohibited shape —
+-- `pick_int(xs) -> int ! {Rand}`, drawing from the process-global stream that
+-- `rand_seed` primes. That helper serves the older phase-C seeded gates and is
+-- NOT reusable here; an ambient draw is state that is not in `world_state`,
+-- which is the whole thing D1 forbids.
+--
+-- What replaces it is what every other cursor in this project already is: an
+-- explicit value THREADED through the world, never captured. Cluster 6's F6 is
+-- the standing lesson — a cursor a closure captures rather than threads is
+-- pinned, serves the same value forever, and nothing crashes.
+--
+-- ---------------------------------------------------------------------------
+-- THIS MODULE IMPORTS NOTHING BUT STD, AND THAT IS LOAD-BEARING
+-- ---------------------------------------------------------------------------
+--
+-- `GeneratorState` rides in `ports.WorldState`, exactly as stage 2's
+-- `Interaction` does, so this module has the same constraint `dst_interaction`
+-- has and for the same reason: `dst_program` names `ExecutionManifest` and
+-- would drag the 1559-line `dst_profile` closure into the production driver's
+-- import graph.
+--
+-- `GeneratorBounds` MOVED HERE from `dst_program` for that reason and no other.
+-- The bounds are enforced at the moment of a choice, which is inside a port
+-- adapter, which is below `dst_program`. `dst_program` re-exports the type so a
+-- reader still finds it where the program's other types live, and so no
+-- existing importer changed.
+--
+-- ---------------------------------------------------------------------------
+-- THE TWO BINDINGS THAT COULD NOT BE READ AND HAD TO BE DECIDED
+-- ---------------------------------------------------------------------------
+--
+-- 1. HOW THE REQUEST PARTICIPATES IN THE CHOICE. D2 names "the bounded request
+--    projection" as an input to every choice and does not say how it enters.
+--    Two readings type-check. The weak one: the request only determines WHICH
+--    choice function is called, and the value comes from the generator stream
+--    alone. The strong one: the request's own content perturbs the stream.
+--
+--    The strong reading is taken, and the reason is that the weak one is
+--    unfalsifiable — under it, a generator whose choices depend on nothing but
+--    a call counter satisfies D2's sentence, and that is a hair's breadth from
+--    the seed-ignoring generator this whole module is built to expose. Under
+--    the strong reading the claim is testable, and it is tested:
+--    `test_the_same_state_under_two_requests_chooses_differently`.
+--
+--    The cost is stated: the choice at position N depends on every request that
+--    preceded it, so a change to a request PROJECTION STRING changes the
+--    trajectory. That is correct — the projection is the request, as far as the
+--    generator is concerned — but it means projection strings are part of the
+--    generator's observable contract and a future edit to one is a
+--    trajectory change, not a cosmetic one.
+--
+-- 2. WHAT `max_resource_size` BOUNDS. D2 lists "logical-resource size" among
+--    the five declared bounds and this program has no obvious logical resource.
+--    Bound here to the SYNTHETIC ENVIRONMENT's entry count, which is the one
+--    modelled logical resource D2's `initial_world` actually names
+--    (`synthetic_environment`) and the only generated structure whose size is
+--    unbounded in principle. Stated rather than assumed, because a bound that
+--    measures nothing is a bound that can never fire.
+
+module src/core/dst_generator
+
+import std/list as List (length)
+import std/string as Str (length, foldChars, charCode)
+
+-- ---------------------------------------------------------------------------
+-- PART 1 — THE SEED-SENSITIVITY ASSERTION
+--
+-- Written and tested BEFORE the generator below it (S1), because the failure it
+-- guards against is silent under every gate this project already has.
+-- ---------------------------------------------------------------------------
+
+-- One generated program, reduced to the three quantities the axis compares.
+--
+-- `outcomes` is a digest of the recorded OUTCOMES ONLY — statuses, payloads,
+-- advances, chunks — and `program` is the digest of the whole interaction list.
+-- They are separate fields on purpose: the seed-sensitivity rule is stated
+-- against the outcomes, because "the generator chose differently" is a claim
+-- about what the world ANSWERED, while reproducibility is stated against the
+-- whole program, because a reproduction that differs anywhere is not one.
+export type SeedRow = {
+  label: string,
+  seed: int,
+  version: string,
+  interaction_count: int,
+  outcomes: string,
+  program: string
+}
+
+export type SeedFinding
+  = SeedIgnored(string, string)            -- the two labels whose outcomes agree
+  | SeedNotReproducible(string, string)    -- the two labels that should have agreed
+  | VersionIgnored(string, string)         -- same seed, different version, same program
+  | NoEqualCountPair                       -- the anti-count control found nothing to stand on
+  | NoSeedPairAtAll                        -- the row set cannot exercise the axis
+
+export pure func seed_rule(f: SeedFinding) -> string {
+  match f {
+    SeedIgnored(_, _) => "generator-ignores-its-seed",
+    SeedNotReproducible(_, _) => "generator-not-reproducible",
+    VersionIgnored(_, _) => "generator-ignores-its-version",
+    NoEqualCountPair => "generator-seed-evidence-is-count-shaped",
+    NoSeedPairAtAll => "generator-seed-evidence-absent"
+  }
+}
+
+export pure func seed_message(f: SeedFinding) -> string {
+  match f {
+    SeedIgnored(a, b) =>
+      "[generator-ignores-its-seed] '${a}' and '${b}' were generated under DIFFERENT seeds and recorded the same outcomes; D2 makes the seed an input to every discovery choice, and a generator that ignores it produces one program for every seed — perfectly deterministic, structurally valid, strictly replayable, and certifying nothing",
+    SeedNotReproducible(a, b) =>
+      "[generator-not-reproducible] '${a}' and '${b}' were generated under the SAME generator id, version and seed and produced different programs; D2 makes the choice a deterministic function of exactly those inputs plus the request and the world, so a difference here means something outside that list participated — an ambient read, a captured cursor, or an unthreaded state",
+    VersionIgnored(a, b) =>
+      "[generator-ignores-its-version] '${a}' and '${b}' name different generator versions at one seed and produced identical programs; D8 requires the generator version to travel with every preserved failure, and a version that changes nothing observable makes that axis decorative",
+    NoEqualCountPair =>
+      "[generator-seed-evidence-is-count-shaped] every pair of differently-seeded rows also differs in INTERACTION COUNT, so the seed-sensitivity result above could be passing on program LENGTH alone. A count is blind to two programs of equal length and different contents (cluster 9, site 19), so the axis needs at least one pair whose counts are equal and whose outcomes differ. Widen the seed set until one exists — do not relax the rule",
+    NoSeedPairAtAll =>
+      "[generator-seed-evidence-absent] the row set contains no two rows sharing a generator version and differing in seed, so the seed-sensitivity axis asserted nothing at all"
+  }
+}
+
+pure func same_version_pair_findings(a: SeedRow, rest: [SeedRow]) -> [SeedFinding] {
+  match rest {
+    [] => [],
+    b :: tail => {
+      let here =
+        if a.version == b.version && a.seed != b.seed then
+          (if a.outcomes == b.outcomes then [SeedIgnored(a.label, b.label)] else [])
+        else if a.version == b.version && a.seed == b.seed then
+          (if a.program != b.program then [SeedNotReproducible(a.label, b.label)] else [])
+        else if a.seed == b.seed && a.version != b.version then
+          (if a.program == b.program then [VersionIgnored(a.label, b.label)] else [])
+        else [];
+      here ++ same_version_pair_findings(a, tail)
+    }
+  }
+}
+
+pure func pair_findings(rows: [SeedRow]) -> [SeedFinding] {
+  match rows {
+    [] => [],
+    a :: rest => same_version_pair_findings(a, rest) ++ pair_findings(rest)
+  }
+}
+
+-- Does the row set contain a differently-seeded pair whose interaction counts
+-- are EQUAL? Without one, the seed rule above could be satisfied by nothing but
+-- a difference in program length, and a length difference is a count — the
+-- shape this project has now twice measured to be blind to content.
+pure func has_equal_count_seed_pair(rows: [SeedRow]) -> bool {
+  match rows {
+    [] => false,
+    a :: rest =>
+      if equal_count_partner(a, rest) then true else has_equal_count_seed_pair(rest)
+  }
+}
+
+pure func equal_count_partner(a: SeedRow, rest: [SeedRow]) -> bool {
+  match rest {
+    [] => false,
+    b :: tail =>
+      if a.version == b.version && a.seed != b.seed && a.interaction_count == b.interaction_count
+      then true
+      else equal_count_partner(a, tail)
+  }
+}
+
+pure func has_any_seed_pair(rows: [SeedRow]) -> bool {
+  match rows {
+    [] => false,
+    a :: rest => if seed_partner(a, rest) then true else has_any_seed_pair(rest)
+  }
+}
+
+pure func seed_partner(a: SeedRow, rest: [SeedRow]) -> bool {
+  match rest {
+    [] => false,
+    b :: tail =>
+      if a.version == b.version && a.seed != b.seed then true else seed_partner(a, tail)
+  }
+}
+
+-- The whole axis, in one call.
+--
+-- The two structural findings are NOT decoration. A row set with no
+-- differently-seeded pair makes the axis vacuous, and a vacuous check passes;
+-- a row set whose every differing pair also differs in length makes the axis
+-- count-shaped, and a count-shaped check is what cluster 9 measured going green
+-- against a content defect. Both are reported as findings so that weakening the
+-- evidence is as loud as failing the rule.
+export pure func check_seed_sensitivity(rows: [SeedRow]) -> [SeedFinding] {
+  pair_findings(rows)
+    ++ (if has_any_seed_pair(rows) then [] else [NoSeedPairAtAll])
+    ++ (if has_any_seed_pair(rows) && not has_equal_count_seed_pair(rows)
+        then [NoEqualCountPair] else [])
+}
+
+export pure func seed_sensitivity_ok(rows: [SeedRow]) -> bool {
+  List.length(check_seed_sensitivity(rows)) == 0
+}
+
+export pure func has_seed_rule(fs: [SeedFinding], rule: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest => if seed_rule(f) == rule then true else has_seed_rule(rest, rule)
+  }
+}
+
+export pure func first_seed_message(fs: [SeedFinding]) -> string {
+  match fs {
+    [] => "(no findings)",
+    f :: _ => seed_message(f)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 2 — DECLARED BOUNDS (D2)
+-- ---------------------------------------------------------------------------
+
+-- D2: "Each generator schema declares hard bounds for interactions, stream
+-- chunks, payload bytes, logical-resource size, and clock advancement.
+-- Exceeding a bound is a generator/harness failure, not an unbounded test run."
+--
+-- Declared here rather than in `dst_program` because the bounds are consulted
+-- AT THE MOMENT OF A CHOICE — inside a port adapter, below `dst_program` in the
+-- import graph. See the module header.
+export type GeneratorBounds = {
+  max_interactions: int,
+  max_chunks_per_interaction: int,
+  max_payload_bytes: int,
+  max_resource_size: int,
+  max_clock_advance_ms: int
+}
+
+-- A bound the generator was asked to exceed and did not.
+--
+-- The generator NEVER exceeds a declared bound: it takes the bounded
+-- alternative and records this. That is D2's sentence read as written — the
+-- failure is the generator's, and the run stays bounded rather than becoming an
+-- unbounded test run. The discovery gate reports these and all must be zero.
+export type BoundFailure = { bound: string, limit: int, requested: int }
+
+export pure func bound_failure_message(f: BoundFailure) -> string {
+  "[generator-bound-exceeded] the generator was about to choose ${f.requested} for '${f.bound}', whose declared limit is ${f.limit}; it took the bounded alternative instead and recorded this. D2 makes exceeding a declared bound a generator failure rather than an unbounded run, so the run below is still valid and this count must be zero for the gate to pass"
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 3 — THE PRNG
+-- ---------------------------------------------------------------------------
+
+-- A Lehmer / MINSTD generator: state in [1, m-1], x' = 48271 * x mod (2^31 - 1),
+-- which is a permutation of [1, m-1]. Chosen for one property that matters more
+-- than its statistical quality: 48271 * 2147483646 is about 1.0e14 and this
+-- pin's ints are 64-bit (verified: 1000000007 * 1000000007 evaluates exactly),
+-- so no step can silently wrap. A generator whose arithmetic overflows is a
+-- generator whose reproducibility depends on the host.
+export pure func prng_modulus() -> int { 2147483647 }
+export pure func prng_multiplier() -> int { 48271 }
+
+-- ZERO IS THE ABSORBING STATE OF A LEHMER GENERATOR, and it is not a hypothetical
+-- concern here: `discovery_dst.ail` already writes `seed: 0` onto every program
+-- it produces. A generator that froze at the seed the codebase happens to use
+-- would be a frozen cursor at exactly the value in the artifacts — F6 again, one
+-- layer down. `in_range` therefore maps EVERY int, including 0 and negatives,
+-- into [1, m-1], and `test_no_seed_is_an_absorbing_state` asserts it.
+pure func in_range(x: int) -> int {
+  let period = prng_modulus() - 1;
+  ((x % period) + period) % period + 1
+}
+
+pure func advance(x: int) -> int { (prng_multiplier() * x) % prng_modulus() }
+
+-- The request's own content, folded into an int. djb2, taken modulo the
+-- generator's period so the sum in `mix` cannot approach the 64-bit ceiling.
+--
+-- Its weak low-order mixing is deliberate and harmless: the hash is never a
+-- choice, only a perturbation of the STATE, and the Lehmer step that follows is
+-- what produces the value. Two projections differing in one character do differ
+-- in their hash, which is all this needs to make the request participate.
+export pure func salt_hash(s: string) -> int {
+  Str.foldChars(hash_step, 5381, s)
+}
+
+pure func hash_step(acc: int, c: string) -> int {
+  ((acc * 33) + Str.charCode(c)) % prng_modulus()
+}
+
+-- D2's generator identity plus its explicit state. Every field is a value the
+-- world threads; nothing here is captured by a closure. Cluster 6's F6 is the
+-- standing reason, and it has now cost this project one whole item.
+export type GeneratorState = {
+  id: string,
+  version: string,
+  seed: int,
+  -- The Lehmer state, always in [1, m-1].
+  rng: int,
+  -- How many choices have been made. Part of the state D2 names, and the one
+  -- quantity that makes "the generator was consulted" observable from outside.
+  draws: int,
+  -- Whether the approval channel has been CLOSED. Part of D2's "explicit
+  -- generator state", and it exists because of a compatibility constraint that
+  -- only a replay could reveal — see `choose_approval`.
+  approvals_closed: bool,
+  bounds: GeneratorBounds,
+  failures: [BoundFailure]
+}
+
+-- The initial Lehmer state, derived from the generator's IDENTITY as well as
+-- its seed. That is what makes a `generator_version` bump at one seed produce a
+-- different program — D2 permits the difference and D8 requires the version to
+-- travel with the artifact, so a version that changed nothing observable would
+-- make D8's axis decorative. `check_seed_sensitivity` asserts it.
+export pure func seed_state(id: string, version: string, seed: int) -> int {
+  in_range(salt_hash("${id}/${version}") + seed)
+}
+
+export pure func generator_state(
+  id: string, version: string, seed: int, bounds: GeneratorBounds
+) -> GeneratorState {
+  { id: id, version: version, seed: seed,
+    rng: seed_state(id, version, seed), draws: 0, approvals_closed: false,
+    bounds: bounds, failures: [] }
+}
+
+-- The world's default: a generator that is not installed. Every non-generating
+-- adapter carries this forward untouched, which is what makes adding the field
+-- to `WorldState` behaviour-preserving for every existing target.
+export pure func no_generator() -> GeneratorState {
+  generator_state("", "", 0,
+    { max_interactions: 0, max_chunks_per_interaction: 0, max_payload_bytes: 0,
+      max_resource_size: 0, max_clock_advance_ms: 0 })
+}
+
+export pure func generator_installed(g: GeneratorState) -> bool { g.id != "" }
+
+export type Draw = { value: int, state: GeneratorState }
+
+-- One choice. `salt` is D2's bounded request projection; the caller builds it
+-- from the request AND the current world state, which is how the remaining two
+-- of D2's five inputs enter.
+--
+-- `bound` is the size of the choice, not a declared limit — a `draw(g, s, 3)`
+-- picks one of three alternatives. Declared limits are enforced by
+-- `bounded_draw` below, which is a different thing and is kept separate so that
+-- a bound violation cannot be mistaken for an ordinary choice.
+export pure func draw(g: GeneratorState, salt: string, bound: int) -> Draw {
+  let mixed = in_range(g.rng + salt_hash(salt));
+  let r = advance(mixed);
+  { value: if bound <= 0 then 0 else r % bound,
+    state: { g | rng: r, draws: g.draws + 1 } }
+}
+
+-- A choice in [lo, hi] inclusive. `hi < lo` collapses to `lo` rather than
+-- producing a negative span, because a negative span would silently invert the
+-- range and the resulting value would still type-check.
+export pure func draw_between(g: GeneratorState, salt: string, lo: int, hi: int) -> Draw {
+  if hi <= lo then { value: lo, state: draw(g, salt, 1).state }
+  else {
+    let d = draw(g, salt, hi - lo + 1);
+    { value: lo + d.value, state: d.state }
+  }
+}
+
+-- A choice that must respect a DECLARED bound. If the drawn value exceeds the
+-- limit it is clamped to the limit and the attempt is recorded as a generator
+-- failure — D2's "exceeding a bound is a generator/harness failure, not an
+-- unbounded test run", with both halves of that sentence honoured: the failure
+-- is reported, and the run does not become unbounded.
+export pure func bounded_draw(
+  g: GeneratorState, salt: string, lo: int, hi: int, bound_name: string, limit: int
+) -> Draw {
+  let d = draw_between(g, salt, lo, hi);
+  if d.value > limit then
+    { value: limit,
+      state: { d.state | failures: d.state.failures ++ [{ bound: bound_name, limit: limit, requested: d.value }] } }
+  else d
+}
+
+-- Record a bound violation the generator declined to commit, where the bounded
+-- alternative is structural rather than numeric — the interaction budget, whose
+-- bounded alternative is "terminate the trajectory".
+export pure func note_bound(g: GeneratorState, bound_name: string, limit: int, requested: int) -> GeneratorState {
+  { g | failures: g.failures ++ [{ bound: bound_name, limit: limit, requested: requested }] }
+}
+
+export pure func generator_failed(g: GeneratorState) -> bool {
+  List.length(g.failures) > 0
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 4 — THE CHOICES
+--
+-- Every decision below is a record of PRIMITIVES. The generator does not name
+-- `ScriptedStep` or `ScriptedTool`: those live in `ports`, which imports this
+-- module, so naming them here would close a cycle. The adapters do the
+-- mechanical mapping and nothing else — every value that could have been chosen
+-- differently is chosen HERE, where it is testable without a world in scope.
+-- ---------------------------------------------------------------------------
+
+-- D2: the generator chooses "a compatible response, fault, and latency". On the
+-- provider class it chooses the RESPONSE ONLY, and both omissions are declared
+-- gaps rather than oversights. Neither is waived; both are reachable by a
+-- bounded change that belongs to a later item.
+--
+--   NO PROVIDER FAULT. D3 puts provider faults on the `AIError` path.
+--   `Ports.model_step` returns `Result[StepResult, AIError]` and can express
+--   one, but `ScriptedStep` — the world's provider input — has no error case,
+--   so a generated provider fault has nowhere to be chosen INTO.
+--
+--   NO PROVIDER LATENCY. `ScriptedTool.duration_ms` is the tool class's latency
+--   channel and `world_tool` advances the virtual clock from it; `ScriptedStep`
+--   has no counterpart, and the scripted provider advances nothing. A generated
+--   provider latency would therefore have to be advanced by the generating
+--   adapter and recorded by a recorder that cannot see it, which
+--   `check_discovery`'s clock balance turns red immediately — correctly, since
+--   the log would then account for less time than the world spent.
+--
+-- Both are ONE field on `ScriptedStep` away (`advance_ms`, restored on replay
+-- from `TimedOutcome.advance_ms` exactly as the tool class's duration already
+-- is, with no codec change). That is a widening of a world-input type used at
+-- roughly thirty literal sites across the smoke scripts, and it is WI-A14's D4
+-- latency pair by name — which this stage's handoff puts out of scope and which
+-- will consume this generator. `dst_program`'s design note 3 does not stand in
+-- the way: `ScriptedStep` is a world INPUT, not a field on the program.
+--
+-- What is NOT deferred is the clock bound. `max_clock_advance_ms` is declared,
+-- enforced and mutation-tested on the tool class, where a latency channel
+-- exists, so D2's fifth bound is live rather than notional.
+export type ProviderDecision = {
+  -- Whether this step terminates the trajectory. The bounded alternative for
+  -- `max_interactions` is exactly this being forced true.
+  terminate: bool,
+  prose: string,
+  tool_name: string,
+  tool_args: string,
+  tool_call_id: string,
+  -- Deliberately allowed to DISAGREE with the presence of a tool call. Real
+  -- providers do that (`stub_step.tool_step_finish` exists for it) and stage
+  -- 3's provider codec records the finish reason rather than deriving it for
+  -- exactly this reason. A generator that only ever produced agreeing pairs
+  -- would leave that codec branch unexercised by any generated program.
+  finish_reason: string,
+  chunk_count: int,
+  chunk_text: string,
+  input_tokens: int,
+  output_tokens: int
+}
+
+export type ToolFaultChoice
+  = ToolChoiceOk
+  | ToolChoiceFailed
+  | ToolChoiceMismatch
+  | ToolChoiceLate
+
+export pure func tool_choice_id(c: ToolFaultChoice) -> string {
+  match c {
+    ToolChoiceOk => "ok",
+    ToolChoiceFailed => "failed",
+    ToolChoiceMismatch => "correlation_mismatch",
+    ToolChoiceLate => "deadline_exceeded"
+  }
+}
+
+export type ToolDecision = {
+  fault: ToolFaultChoice,
+  duration_ms: int,
+  code: string,
+  message: string,
+  content: string,
+  -- The id the world answers with. Non-blank only for the correlation-mismatch
+  -- choice; `world_tool` takes that branch on `t.tool_call_id != inv.call.id`.
+  answering_call_id: string
+}
+
+export type ApprovalDecision = {
+  -- False means the world serves NOTHING — an end-of-input read, D2's
+  -- `value_or_missing` on the approval class. It is a choice and not an
+  -- accident of an empty queue, which is what makes `OutcomeMissing` reachable
+  -- by a generated program at all.
+  serve: bool,
+  approve: bool,
+  reason: string
+}
+
+export type ProviderChoice = { decision: ProviderDecision, state: GeneratorState }
+export type ToolChoice = { decision: ToolDecision, state: GeneratorState }
+export type ApprovalChoice = { decision: ApprovalDecision, state: GeneratorState }
+
+pure func clamp_text(s: string, limit: int) -> string {
+  if Str.length(s) <= limit then s else "over"
+}
+
+-- The provider choice.
+--
+-- `interactions_so_far` is the world's own log length: D2's "current world
+-- state", entering the choice as the caller's fact rather than as something the
+-- generator remembers. It is also what enforces `max_interactions` — the ONE
+-- bound whose bounded alternative is structural, because clamping a number
+-- would not stop the trajectory.
+export pure func choose_provider(
+  g: GeneratorState, salt: string, interactions_so_far: int
+) -> ProviderChoice {
+  let budget_spent = interactions_so_far >= g.bounds.max_interactions;
+  let g0 = if budget_spent
+           then note_bound(g, "max_interactions", g.bounds.max_interactions, interactions_so_far + 1)
+           else g;
+  -- Terminate one time in four, so a trajectory has a geometric length rather
+  -- than a fixed one — a generator whose every run is the same length gives the
+  -- seed nothing to move.
+  let d_term = draw(g0, "${salt}|terminate", 4);
+  let terminate = budget_spent || d_term.value == 0;
+  let d_tool = draw(d_term.state, "${salt}|tool", 3);
+  let tool_name = match d_tool.value { 0 => "T", 1 => "BashExec", _ => "Read" };
+  let d_arg = draw_between(d_tool.state, "${salt}|arg", 0, 999);
+  let d_chunks = bounded_draw(d_arg.state, "${salt}|chunks", 0, 3,
+                              "max_chunks_per_interaction", g.bounds.max_chunks_per_interaction);
+  let d_in = draw_between(d_chunks.state, "${salt}|in", 10, 400);
+  let d_out = draw_between(d_in.state, "${salt}|out", 5, 300);
+  -- The finish reason disagrees with the tool call one time in four.
+  let d_finish = draw(d_out.state, "${salt}|finish", 4);
+  let finish =
+    if terminate then "stop"
+    else if d_finish.value == 0 then "stop"
+    else "tool_calls";
+  {
+    decision: {
+      terminate: terminate,
+      -- NOT `"g${g.seed}-..."`, and this was a real defect caught by mutating
+      -- the generator rather than by any check reading it. Embedding the SEED
+      -- in a payload makes seed sensitivity trivially satisfiable without a
+      -- single CHOICE depending on the seed: patch `seed_state` to ignore its
+      -- seed, and three seeds still produce three different programs — same
+      -- interaction count, same draw count, same clock, differing only in a
+      -- decorative label. Axis A passed on that. Everything the generator
+      -- writes is therefore derived from a DRAW, so a seed that reaches no
+      -- choice reaches no byte of the program.
+      prose: clamp_text("gp${g.draws}-${d_arg.value}", g.bounds.max_payload_bytes),
+      tool_name: tool_name,
+      tool_args: "{\"n\":${d_arg.value}}",
+      tool_call_id: "gcall_${interactions_so_far}_${d_arg.value}",
+      finish_reason: finish,
+      chunk_count: d_chunks.value,
+      chunk_text: "c${d_arg.value}",
+      input_tokens: d_in.value,
+      output_tokens: d_out.value
+    },
+    state: d_finish.state
+  }
+}
+
+-- The tool choice: D2's response, FAULT and latency, all three present on this
+-- class. The fault distribution is deliberately not uniform-over-four — an
+-- ok-heavy world is the one a trajectory can actually get through, and the
+-- three fault branches still occur often enough that a modest seed sweep
+-- reaches each. A generator that faulted half the time would terminate every
+-- run on its second dispatch and never exercise a longer trajectory.
+--
+-- `timeout_ms` is the invocation's own declared deadline, read from the request:
+-- the LATE choice must produce a duration that exceeds it, and only the request
+-- knows what it is. That is D2's request projection participating in the choice
+-- as a value and not only as a salt.
+export pure func choose_tool(
+  g: GeneratorState, salt: string, timeout_ms: int, requested_call_id: string
+) -> ToolChoice {
+  let d_class = draw(g, "${salt}|class", 8);
+  let fault =
+    if d_class.value <= 4 then ToolChoiceOk
+    else if d_class.value == 5 then ToolChoiceFailed
+    else if d_class.value == 6 then ToolChoiceMismatch
+    else ToolChoiceLate;
+  let d_code = draw(d_class.state, "${salt}|code", 3);
+  let code = match d_code.value { 0 => "E_BOOM", 1 => "E_NOENT", _ => "E_PERM" };
+  -- The ordinary duration stays well under any plausible timeout; the LATE
+  -- choice deliberately clears it. Both are still subject to the declared clock
+  -- bound, which is why they go through `bounded_draw`.
+  let d_dur =
+    match fault {
+      ToolChoiceLate =>
+        bounded_draw(d_code.state, "${salt}|late", timeout_ms + 1, timeout_ms + 60,
+                     "max_clock_advance_ms", g.bounds.max_clock_advance_ms),
+      _ =>
+        bounded_draw(d_code.state, "${salt}|dur", 1, 30,
+                     "max_clock_advance_ms", g.bounds.max_clock_advance_ms)
+    };
+  {
+    decision: {
+      fault: fault,
+      duration_ms: d_dur.value,
+      code: code,
+      message: clamp_text("generated ${code}", g.bounds.max_payload_bytes),
+      content: clamp_text("OUT-${d_dur.value}", g.bounds.max_payload_bytes),
+      answering_call_id: match fault {
+        ToolChoiceMismatch => "${requested_call_id}_wrong",
+        _ => ""
+      }
+    },
+    state: d_dur.state
+  }
+}
+
+-- The approval choice. Three outcomes and not two: an end-of-input read is a
+-- request the driver MADE and the world declined to answer, and stage 2 made it
+-- a distinct recorded status precisely so a replay can reproduce it. A
+-- generator that always served would leave `OutcomeMissing` on the approval
+-- class unreachable by any generated program.
+--
+-- END-OF-INPUT IS TERMINAL, AND THAT IS D2's "COMPATIBLE RESPONSE" DOING WORK.
+--
+-- This is the one constraint of this stage that no amount of reading the
+-- specification produced, and that only a replay could reveal. The first
+-- version of this function chose independently at each request, so a run could
+-- read end-of-input at approval #3 and be served at approval #5. Every gate was
+-- green on it — the program was structurally valid, the two-sided witnesses
+-- balanced, determinism held — and it FAILED STRICT REPLAY at the first
+-- interleaved end-of-input, with eight further wrong-kind mismatches cascading
+-- behind it as the replayed driver's control flow diverged.
+--
+-- The reason is that such a world is not expressible. `ports.WorldState`'s
+-- approval cursor is a QUEUE, and `scripted_approval` reports end-of-input
+-- exactly when it is empty; a queue that is empty at read #3 is empty at read
+-- #5. `dst_replay.approvals_of` reconstitutes that queue from the served
+-- interactions, so an interleaved end-of-input reconstitutes as a served answer
+-- and the replay diverges. The channel is the operator's stdin, and a closed
+-- stdin does not reopen.
+--
+-- So the incompatible response is the GENERATOR's, not the replay's, and the
+-- fix belongs here. Stage 3's refusal path was built to fail closed and it did
+-- exactly that; relaxing it would have hidden a generator producing worlds that
+-- cannot exist.
+export pure func choose_approval(g: GeneratorState, salt: string) -> ApprovalChoice {
+  let d = draw(g, "${salt}|approval", 6);
+  let d_reason = draw(d.state, "${salt}|reason", 2);
+  let serve = not g.approvals_closed && d.value != 0;
+  {
+    decision: {
+      serve: serve,
+      approve: d.value >= 3,
+      reason: match d_reason.value { 0 => "generated-policy", _ => "generated-risk" }
+    },
+    state: { d_reason.state | approvals_closed: g.approvals_closed || not serve }
+  }
+}
+
+-- The synthetic environment: D2's `initial_world.synthetic_environment`, and
+-- the one thing this generator chooses UP FRONT rather than at a request.
+--
+-- That asymmetry is deliberate and is the second reading of D2 this stage had
+-- to settle. An env read is a KEYED LOOKUP, not a cursor (`ports.WorldState.env`
+-- says so), so choosing at the request would let the same key read differently
+-- on two reads within one run — an incoherent world, and one that no replay
+-- could reproduce, since `world_state_of` restores a map. D2 covers this
+-- explicitly: "Generation may also choose ordinary configuration and message
+-- inputs", and the environment is configuration.
+--
+-- Only keys whose absence is safe are varied, and the varied set is small on
+-- purpose: `MOTOKO_TOOL_TIMEOUT_MS` because its value is what makes D3's tool
+-- deadline class reachable, and `MOTOKO_HEADLESS` because it must be possible
+-- for the env class to record an `ok` read at all. The remaining driver keys
+-- are left absent, which is what makes `OutcomeMissing` reachable on the env
+-- class in every generated run.
+export type EnvironmentChoice = {
+  entries: [{ key: string, value: string }],
+  state: GeneratorState
+}
+
+export pure func choose_environment(g: GeneratorState, salt: string) -> EnvironmentChoice {
+  let d_timeout = draw_between(g, "${salt}|timeout", 20, 90);
+  let d_headless = draw(d_timeout.state, "${salt}|headless", 2);
+  let entries =
+    [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "${d_timeout.value}" }]
+      ++ (if d_headless.value == 0 then [] else [{ key: "MOTOKO_HEADLESS", value: "1" }]);
+  let n = List.length(entries);
+  if n > g.bounds.max_resource_size then
+    { entries: [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "${d_timeout.value}" }],
+      state: note_bound(d_headless.state, "max_resource_size", g.bounds.max_resource_size, n) }
+  else { entries: entries, state: d_headless.state }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests.
+--
+-- Part 1's tests come first and are the ones that matter: they are the
+-- executable statement of this stage's whole risk, and they were written and
+-- run RED before a line of the generator below them existed.
+-- ---------------------------------------------------------------------------
+
+pure func row(label: string, seed: int, version: string, n: int, outcomes: string, program: string) -> SeedRow {
+  { label: label, seed: seed, version: version,
+    interaction_count: n, outcomes: outcomes, program: program }
+}
+
+-- An HONEST row set: different seeds chose different outcomes, one pair has
+-- equal counts so the evidence is content-shaped, the repeat of seed 1 is
+-- identical, and the version bump moved the program.
+pure func honest_rows() -> [SeedRow] {
+  [row("s1", 1, "1", 12, "ok:a fault:b", "P-1"),
+   row("s2", 2, "1", 12, "ok:c fault:d", "P-2"),
+   row("s3", 3, "1", 17, "ok:e fault:f", "P-3"),
+   row("s1-again", 1, "1", 12, "ok:a fault:b", "P-1"),
+   row("s1-v2", 1, "2", 14, "ok:g fault:h", "P-1-v2")]
+}
+
+pure func test_an_honest_row_set_passes_every_rule() -> bool
+  tests [((), true)]
+  {
+    seed_sensitivity_ok(honest_rows())
+  }
+
+-- THE ROW SET THIS MODULE EXISTS FOR. A generator that ignores its seed
+-- produces the same outcomes under every seed; every row is internally
+-- consistent, perfectly reproducible, and the program is a valid one. Nothing
+-- else in this project's gate set goes red on it.
+pure func seed_ignoring_rows() -> [SeedRow] {
+  [row("s1", 1, "1", 12, "ok:a fault:b", "P"),
+   row("s2", 2, "1", 12, "ok:a fault:b", "P"),
+   row("s3", 3, "1", 12, "ok:a fault:b", "P")]
+}
+
+pure func test_a_seed_ignoring_generator_is_caught() -> bool
+  tests [((), true)]
+  {
+    has_seed_rule(check_seed_sensitivity(seed_ignoring_rows()), "generator-ignores-its-seed")
+  }
+
+-- The anti-count control, and it is the sharpest rule here. This generator DOES
+-- respond to its seed — every program differs — but the evidence offered is a
+-- set in which no two differently-seeded programs have the same length, so the
+-- seed rule above could be reading nothing but a length difference.
+pure func count_shaped_rows() -> [SeedRow] {
+  [row("s1", 1, "1", 11, "ok:a", "P-1"),
+   row("s2", 2, "1", 12, "ok:b", "P-2"),
+   row("s3", 3, "1", 13, "ok:c", "P-3")]
+}
+
+pure func test_evidence_that_could_be_a_length_difference_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_seed_rule(check_seed_sensitivity(count_shaped_rows()), "generator-seed-evidence-is-count-shaped")
+      && not has_seed_rule(check_seed_sensitivity(count_shaped_rows()), "generator-ignores-its-seed")
+  }
+
+pure func test_an_unreproducible_generator_is_caught() -> bool
+  tests [((), true)]
+  {
+    let rows = [row("a", 7, "1", 9, "ok:x", "P-a"),
+                row("b", 7, "1", 9, "ok:x", "P-b"),
+                row("c", 8, "1", 9, "ok:y", "P-c")];
+    has_seed_rule(check_seed_sensitivity(rows), "generator-not-reproducible")
+  }
+
+pure func test_a_version_that_changes_nothing_is_caught() -> bool
+  tests [((), true)]
+  {
+    let rows = [row("v1", 5, "1", 9, "ok:x", "P"),
+                row("v2", 5, "2", 9, "ok:x", "P"),
+                row("v1b", 6, "1", 9, "ok:z", "Q")];
+    has_seed_rule(check_seed_sensitivity(rows), "generator-ignores-its-version")
+  }
+
+pure func test_a_single_row_asserts_nothing_and_says_so() -> bool
+  tests [((), true)]
+  {
+    has_seed_rule(check_seed_sensitivity([row("only", 1, "1", 4, "ok:a", "P")]),
+                  "generator-seed-evidence-absent")
+  }
+
+-- ---------------------------------------------------------------------------
+-- Part 3's tests: the PRNG's two failure modes, both of which are silent.
+-- ---------------------------------------------------------------------------
+
+pure func test_bounds() -> GeneratorBounds {
+  { max_interactions: 64, max_chunks_per_interaction: 4, max_payload_bytes: 256,
+    max_resource_size: 8, max_clock_advance_ms: 1000 }
+}
+
+-- A Lehmer generator absorbs at 0, and `seed: 0` is the literal every program
+-- this project has produced so far carries. A seed that froze the stream would
+-- be a frozen cursor at the value already in the artifacts.
+pure func test_no_seed_is_an_absorbing_state() -> bool
+  tests [((), true)]
+  {
+    let g0 = generator_state("gen", "1", 0, test_bounds());
+    let g_neg = generator_state("gen", "1", 0 - 99, test_bounds());
+    let g_big = generator_state("gen", "1", prng_modulus(), test_bounds());
+    g0.rng >= 1 && g0.rng < prng_modulus()
+      && g_neg.rng >= 1 && g_neg.rng < prng_modulus()
+      && g_big.rng >= 1 && g_big.rng < prng_modulus()
+      && draw(g0, "s", 1000000).state.rng != g0.rng
+      && draw(g_neg, "s", 1000000).state.rng != g_neg.rng
+      && draw(g_big, "s", 1000000).state.rng != g_big.rng
+  }
+
+-- The state must MOVE and must not cycle immediately. A generator whose state
+-- returns to its start after one step is a constant with extra arithmetic.
+pure func test_the_stream_advances_and_does_not_return_to_its_start() -> bool
+  tests [((), true)]
+  {
+    let g = generator_state("gen", "1", 42, test_bounds());
+    let a = draw(g, "req", 1000000);
+    let b = draw(a.state, "req", 1000000);
+    let c = draw(b.state, "req", 1000000);
+    a.state.rng != g.rng && b.state.rng != a.state.rng && c.state.rng != b.state.rng
+      && a.value != b.value && b.value != c.value
+      && c.state.draws == 3
+  }
+
+-- D2's "bounded request projection" participating in the choice. THE SAME STATE
+-- under two different requests must choose differently — the property that
+-- separates the strong reading of D2's sentence from the weak one, which is
+-- recorded binding 1 in the module header.
+pure func test_the_same_state_under_two_requests_chooses_differently() -> bool
+  tests [((), true)]
+  {
+    let g = generator_state("gen", "1", 7, test_bounds());
+    draw(g, "model_step model=alpha", 1000000).value
+      != draw(g, "model_step model=bravo", 1000000).value
+  }
+
+-- Two seeds must diverge at the FIRST choice, not eventually. A generator whose
+-- seeds converge for the first several draws produces identical short programs
+-- and only differs on long ones, which is a seed sensitivity that a short
+-- trajectory cannot see.
+pure func test_two_seeds_diverge_at_the_first_choice() -> bool
+  tests [((), true)]
+  {
+    let a = generator_state("gen", "1", 1, test_bounds());
+    let b = generator_state("gen", "1", 2, test_bounds());
+    a.rng != b.rng
+      && draw(a, "req", 1000000).value != draw(b, "req", 1000000).value
+  }
+
+-- The version is part of the initial state, so a bump moves the whole stream.
+pure func test_a_version_bump_moves_the_stream_at_one_seed() -> bool
+  tests [((), true)]
+  {
+    generator_state("gen", "1", 3, test_bounds()).rng
+      != generator_state("gen", "2", 3, test_bounds()).rng
+  }
+
+-- ---------------------------------------------------------------------------
+-- Part 2 and 4's tests: the declared bounds, which must fire AND stay quiet.
+-- ---------------------------------------------------------------------------
+
+-- A bound that never fires is a bound that certifies nothing (C5), and a bound
+-- that fires on a legitimate choice is the over-rejection S7 exists to catch.
+-- Both directions, on one bound, in one test.
+pure func test_a_declared_bound_clamps_and_records_rather_than_exceeding() -> bool
+  tests [((), true)]
+  {
+    let tight = { test_bounds() | max_clock_advance_ms: 3 };
+    let g = generator_state("gen", "1", 11, tight);
+    let d = bounded_draw(g, "req", 10, 40, "max_clock_advance_ms", 3);
+    let loose = generator_state("gen", "1", 11, test_bounds());
+    let e = bounded_draw(loose, "req", 10, 40, "max_clock_advance_ms", 1000);
+    d.value == 3 && generator_failed(d.state)
+      && e.value >= 10 && e.value <= 40 && not generator_failed(e.state)
+  }
+
+-- The interaction budget's bounded alternative is STRUCTURAL: it forces
+-- termination, because clamping a number would not stop a trajectory. Asserted
+-- in both directions on the same generator state, so a `choose_provider` that
+-- stopped consulting the budget is visible.
+pure func test_the_interaction_budget_forces_termination_and_only_then() -> bool
+  tests [((), true)]
+  {
+    let g = generator_state("gen", "1", 5, { test_bounds() | max_interactions: 10 });
+    let spent = choose_provider(g, "model_step model=m", 10);
+    let unspent = choose_provider(g, "model_step model=m", 0);
+    spent.decision.terminate && generator_failed(spent.state)
+      && not generator_failed(unspent.state)
+  }
+
+-- END-OF-INPUT IS TERMINAL. Once the approval channel is closed it stays
+-- closed, because `ports.WorldState`'s approval cursor is a queue and a queue
+-- that is empty at one read is empty at the next. Asserted in both directions:
+-- a generator that never closed would leave `OutcomeMissing` unreachable, and
+-- one that reopened would produce a world no replay can reconstitute — which is
+-- what strict replay caught, and what this test now holds in place.
+pure func test_a_closed_approval_channel_never_reopens() -> bool
+  tests [((), true)]
+  {
+    let g = generator_state("gen", "1", 4, test_bounds());
+    let closed = { g | approvals_closed: true };
+    let a = choose_approval(closed, "r1");
+    let b = choose_approval(a.state, "r2");
+    let c = choose_approval(b.state, "r3");
+    -- An OPEN channel closes exactly when it declines to serve, rather than
+    -- declining once and reopening at the next request.
+    let open_choice = choose_approval(g, "r0");
+    -- Closed stays closed, whatever the draw lands on.
+    not a.decision.serve && not b.decision.serve && not c.decision.serve
+      && a.state.approvals_closed && b.state.approvals_closed && c.state.approvals_closed
+      && open_choice.state.approvals_closed == not open_choice.decision.serve
+  }
+
+-- The LATE tool choice must actually exceed the deadline it was given, and the
+-- ok choice must not. Both are read off the REQUEST's timeout, which is what
+-- makes this a test of the request participating as a value rather than as a
+-- salt.
+pure func test_the_late_choice_exceeds_the_requests_own_deadline() -> bool
+  tests [((), true)]
+  {
+    let g = generator_state("gen", "1", 3, test_bounds());
+    let late = choose_tool({ g | rng: 1 }, "t", 50, "c1");
+    let ok = choose_tool({ g | rng: 1 }, "t", 50, "c1");
+    -- Whatever class the draw lands on, the invariant is the same: a LATE
+    -- decision exceeds the timeout and no other decision does.
+    (match late.decision.fault {
+       ToolChoiceLate => late.decision.duration_ms > 50,
+       _ => late.decision.duration_ms <= 50
+     })
+      && (match ok.decision.fault {
+            ToolChoiceMismatch => ok.decision.answering_call_id != "c1" && ok.decision.answering_call_id != "",
+            _ => ok.decision.answering_call_id == ""
+          })
+  }

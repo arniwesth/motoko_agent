@@ -27,7 +27,7 @@ import src/core/config (VerificationConfig)
 import src/core/ports (
   Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
   ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
-  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, encode_provider_outcome, encode_exhausted_provider_outcome
+  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval
 )
 import src/core/dst_interaction (
   Interaction, StreamChunkRecord, TimedOutcome,
@@ -65,7 +65,7 @@ export type ScriptedStep = ScriptedStep
 -- world so that every existing target keeps the exact adapters it had. Nothing
 -- that runs today changes behaviour; the interaction log is empty in every
 -- world but this one.
-export type StepProvider = LiveAI | Scripted([ScriptedStep]) | ScriptedWorld(WorldState) | RecordingWorld(WorldState) | Ported(Ports)
+export type StepProvider = LiveAI | Scripted([ScriptedStep]) | ScriptedWorld(WorldState) | RecordingWorld(WorldState) | GeneratedWorld(WorldState) | Ported(Ports) -- GeneratedWorld: WI-A13 stage 4, explained at `generating_ports` below
 
 -- Convert a ScriptedStep to the StepResult shape loop_v2 expects.
 export pure func scripted_to_step_result(s: ScriptedStep) -> StepResult {
@@ -334,6 +334,76 @@ export func recording_ports(rt: ExtRuntime) -> Ports {
     approval_read: recording_approval,
     env_get: recording_env,
     tool_exec: recording_tool }
+}
+
+-- WI-A13 stage 4: the generating provider, and the generating adapter set.
+--
+-- `GeneratedWorld` is `RecordingWorld` with these installed on top. Its initial
+-- world carries an installed `WorldState.gen` and EMPTY script, approval and
+-- tool cursors: nothing is authored in advance, and every response is chosen at
+-- the moment the driver asks for it. That is D2's "discovery chooses only at
+-- requests the real driver actually makes. It never invents a tool, approval,
+-- or extension-effect request disconnected from production control flow" — made
+-- structural, because a generator consulted only from inside a port has no way
+-- to invent a request that the port was not called for.
+--
+-- A separate `StepProvider` variant and not a flag on the world, for the reason
+-- `RecordingWorld` was one: every existing target keeps the exact adapters it
+-- had, and a generating run is something a caller ASKS for rather than
+-- something a world falls into.
+--
+-- `generating_model_step` SUPPLIES a script entry and then calls
+-- `recording_model_step`, which is the same wrap-do-not-reimplement discipline
+-- `recording_model_step` itself follows against the scripted provider and
+-- `recording_clock` follows against `virtual_clock`. The recorded interaction
+-- is therefore written by the stage-2 recorder, unchanged — which is what lets
+-- a GENERATED program reconstitute and replay through stage 3's path with no
+-- generator in scope at all (D2: "replay receives that resolved program and
+-- never calls the generator").
+--
+-- THE SCRIPT IS REPLACED, NOT APPENDED TO. `{ state | script: [entry] }` rather
+-- than `script: state.script ++ [entry]`: the generating provider is reached
+-- only when the cursor is empty, and appending would leave a tail behind if
+-- that ever stopped being true. A leftover tail is a response the world can
+-- serve that the generator did not choose for this request, which is the
+-- anonymous-response-queue shape D2's ordered protocol exists to replace.
+func generating_model_step(rt: ExtRuntime) -> (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
+  func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  -> ProviderExchange ! {AI, IO, Trace} {
+    let seeded =
+      match state.script {
+        [] => {
+          let salt = "model_step model=${model} msg_count=${show(List.length(msgs))} at=${state.clock_ms} n=${show(List.length(state.log))}";
+          let entry = generated_provider_entry(state, salt);
+          { state | script: [entry.step], gen: entry.gen }
+        },
+        _ :: _ => state
+      };
+    recording_model_step(rt)(seeded, model, msgs, on_chunk)
+  }
+}
+
+-- The generating adapter set. The clock and the environment are the RECORDING
+-- adapters unchanged, and that is a decision rather than an omission:
+--
+--   clock  D4 gives the world one monotonic clock whose tick is `virtual_clock`
+--          and whose LATENCY is the recorded advance on each outcome. The
+--          generator chooses those advances at the provider and tool seams, so
+--          a generating clock would be a second place time is decided and the
+--          two could disagree.
+--   env    an env read is a KEYED LOOKUP and not a cursor (`WorldState.env`),
+--          so choosing at the request would let one key read differently on two
+--          reads in one run — a world no replay could reproduce, since
+--          `world_state_of` restores a map. The environment is chosen UP FRONT
+--          by `dst_generator.choose_environment`, which D2 permits explicitly:
+--          "Generation may also choose ordinary configuration and message
+--          inputs."
+export func generating_ports(rt: ExtRuntime) -> Ports {
+  { ports_shape_probe(generating_model_step(rt)) |
+    clock_now: recording_clock,
+    approval_read: generating_approval,
+    env_get: recording_env,
+    tool_exec: generating_tool }
 }
 
 -- The initial world for a scripted run: the whole script, uncounted, and every

@@ -549,7 +549,15 @@ pure func discovered_manifest() -> ExecutionManifest {
 pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgram {
   {
     schema_version: program_schema_version(),
-    generator_id: "driver_only_discovery",
+    -- WI-A13 stage 4 renamed this from "driver_only_discovery". The world this
+    -- program was discovered against is HAND-AUTHORED, and D2's three generator
+    -- axes are required and validated non-blank, so before a generator existed
+    -- these fields necessarily named one that did not. `seed: 0` in particular
+    -- was consulted by nothing. The seeded generator is
+    -- `src/core/dst_generator`, and its programs are produced by
+    -- `scripts/dst/seeded_generator_dst.ail`, which reads these three axes off
+    -- the world's own generator state instead of writing literals.
+    generator_id: "hand_authored_discovery",
     generator_version: "1",
     seed: 0,
     initial_world: {
