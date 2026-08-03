@@ -87,6 +87,16 @@ two-argument and routed its extension seam in one line. Identical nominal scope,
 sole difference parameter count — had env run first, the limitation would have surfaced on the cheap
 class.
 
+**S4. Size a constructed artifact by the rows whose content must be *discovered*, not by its row
+count.** Cluster 3 measured the controlled comparison: A7 has 68 sites and took 11.5 minutes; A8 has
+158 and took 8. Every A7 row needed a recovery branch located and confirmed in the driver — eleven
+separate investigations — while A8's thirty-four rows were transcribed from a projection function
+already open, one classification judgement each. **Price discovered rows at roughly a minute each
+and transcribed rows at negligible.** New-artifact sites are markedly *cheaper* per site than
+widen-and-converge sites (7.6–19.8/min against 3.4), because an artifact row costs no compiler
+round-trip — so the site model does not transfer, and the surprise runs opposite to the direction
+the plan hedged against.
+
 ## Decisions this plan owns
 
 The ADR deliberately left these decisions to the plan. They are answered here, once, so no work
@@ -455,9 +465,29 @@ failure" among the paths to assert. Eight reachable reasons, all mapping onto th
 strings, so no wire change was required.
 
 **WI-A10. Build the profile definition and execution-manifest machinery, and define `driver_only`
-v1** (D5; P4). Depends on A4, A5, A6, A7, A8: the definition references the attribution table,
-names its waived fault classes by A7's stable class ids, and records the vocabulary version; load
-validation wires in the floor/disclosure checks and both classifier outputs. **Also installs
+v1** (D5; P4). Depends on A4, A5, A6, A7, A8 — **all of A6/A7/A8 landed 2026-08-02**; consume their
+exports rather than re-deriving: `dst_profile_coverage.disclosure_from_ids` is the load-time parse
+that fails closed on an unknown hook id, `dst_fault_catalogue.conditional_class_ids` and
+`waiving_condition` supply P4's waiver list, and `dst_event_vocabulary.event_vocabulary_version()`
+is the manifest's fifth axis. The definition references the attribution table, names its waived
+fault classes by A7's stable class ids, and records the vocabulary version; load validation wires in
+the floor/disclosure checks and both classifier outputs.
+
+**Do not re-derive the unconditional-dispatch set from D5's prose: it is SEVEN slots, not six**
+(cluster 3, C1; ADR D5 amended 2026-08-02). The eighth slot D5 originally left unaccounted is
+`on_describe_tools`, dispatched by an unconditional fold in `tool_catalog.ail:114`
+(`collect_ext_schemas`) reached from `live_ports` on **every model step** — outside the
+`ext/runtime.ail` the ADR surveyed. **Under D5 as written, a profile excluding `on_describe_tools`
+would have loaded clean and then failed closed on the first step.** A6 closed this with
+`test_seven_slots_are_unconditional` and a `describe_tools_excluded` fixture; take the set from
+A6's code, not from prose.
+
+**Take A6's *set-completeness* fixture shape, not its easy one** (cluster 3, C8). This plan's A6
+acceptance named "a fixture profile installing an all-excluded extension is rejected" — satisfiable
+but weak. The fixture that separates a real validator from a row-shape validator is
+`partial_disclosure`: both lists disjoint, every id a real slot, and **the correct total entry
+count**, while one slot is classified nowhere. Only counting per *slot* rather than per *entry*
+catches it. A10's and A13's acceptance lines should name that shape. **Also installs
 runtime routing's fail-closed exclusion check** — dispatch reaching an excluded hook returns an
 in-runner `HarnessFailure` (D5, D6.6), using A9's result types. Load-time rejection and A12's
 capability probes do not implement this path; it is vacuous for `driver_only` and binding from C5
@@ -600,8 +630,25 @@ causal identity and ordinals, the canary, and the encoding/compatibility policy 
 set wide, and no measurement covers any of it.
 
 **WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
-A9, A13; the parity-classification invariants additionally depend on A8 and are not scheduled
-before it. **Includes D4's latency-pair demonstration**, which an earlier revision left in WI-C4:
+A9, A13; the parity-classification invariants additionally depend on A8, **which landed 2026-08-02
+— so this dependency is now satisfied and the prohibition is discharged.**
+
+**A8 hands this item two things it must act on rather than inherit quietly** (cluster 3, C5 and the
+classification split):
+
+- **The D6.4 parity work list is `dst_event_vocabulary.logical_variants_not_in_trace()` — 15
+  variants today.** A8 deliberately kept the survey fact (`reaches_trace_today`) in a field separate
+  from the classification, because classifying by survey rather than by semantics would have declared
+  21 events display-only and made D6.4's parity obligation **vacuous — blessing the exact gap it
+  exists to close.** Only 13 of 34 reach the returned trace today. That number is the work, not the
+  answer.
+- **`DoneEvent`'s classification is A14's call to resolve, and A8 says so rather than deciding it.**
+  D6.3 requires the returned outcome, `DoneEvent` and `RunSummary` to *agree* — an invariant over
+  content, which display-only denies — while D6.1 requires `RunSummary` to be the **final** record,
+  and the driver projects `DoneEvent` after `c2_finalize` appends it. Both cannot hold by appending
+  it where it is emitted. The resolution (append before finalizing) is a change to a terminal path,
+  which is this item's decision against its invariant set. A8 classified it `Logical` and recorded
+  the tension in `classification_findings()`, printed every run. **Includes D4's latency-pair demonstration**, which an earlier revision left in WI-C4:
 two replayable programs holding request and underlying completion result constant while changing
 only generated latency/clock movement, producing the expected different completion-versus-timeout
 result without an OS timeout. It is name-gate evidence but not upstream-dependent work — the

@@ -35,7 +35,7 @@ disagree, the plan wins and this note is stale.
 |---|---|---|---|---|
 | 1 | **A1 + P6 + A2** | `ports.ail`, `stub_step.ail`, `session.ail`, `scripted_ports.ail` | — | **DONE 2026-08-02** — `e59acaa`, `4ad2c7a`, `6dd1bbe`. Report: `NOTE-cluster-1-execution-report-and-plan-corrections.md` |
 | 2 | **A4 + A5 + A11** | `tools/`, Python; scans the tree, edits none of it | — | Safe to write now |
-| 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | **Handoff written**: `HANDOFF-execute-a6-a7-a8-artifacts-and-validators.md`. On the critical path twice (A13 needs A7's ids; A10 needs all three). First new-artifact work — the sizing rate is *not* assumed to transfer |
+| 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | **DONE 2026-08-02** — `935bd46`, `a7d70b5`, `c873002`; 264 sites, 30% judgement, 108 checks green. Report: `NOTE-cluster-3-execution-report-and-plan-corrections.md`. Found the ADR's seven-not-six dispatch undercount (C1) |
 | 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
 | 5 | **A10** | profile/manifest machinery | 2 and 3 | Wait |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
@@ -75,6 +75,15 @@ four things it cannot:
 1. **Current grounding** — a table of the anchors the cluster will touch, re-verified at HEAD, gated
    behind `git diff --stat <last-known-good>..HEAD -- src packages scripts` with the instruction to
    re-measure everything if it is non-empty.
+
+   **A count in an upstream doc is a claim, not a warrant — and cluster 3 found the ADR wrong by
+   one.** D5 said six of eight hook slots are unconditionally dispatched and named one as gated;
+   six plus one is seven, and the eighth went unnamed. The missing slot was unconditional and lived
+   in a file the ADR's survey never opened. **When a handoff carries a count from an upstream
+   document, check it sums** — and note where the source looked, because a survey scoped to one file
+   will miss a dispatch in another. The same session's C7 is the mirror image: an "obvious" recount
+   of goldens by `grep` returned the wrong number because the first entry lacked a leading `&&`. Both
+   directions are cheap to check and expensive to inherit.
 
    **The anchor table is itself a source of defects, and cluster 6 proved it.** The A12 handoff's
    table named *three* dispatch carry sites; there are **six**, and **cluster 1's report had said six
