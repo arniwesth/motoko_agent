@@ -466,13 +466,18 @@ seeded_generator:
 	echo "  ✓ different seeds produce different programs at EQUAL interaction count (n=$$n_a, digests $$d_a vs $$d_b)"; \
 	ailang test src/core/dst_generator.ail > /dev/null && echo "  ✓ src/core/dst_generator.ail (the seed-sensitivity rule, and the PRNG's two silent failure modes)"
 
-# D8's PERSISTENCE OBLIGATIONS (WI-A13 stage 6). Three checks.
+# D8's PERSISTENCE OBLIGATIONS (WI-A13 stage 6). Six checks.
 #
 #   1. The acceptance script. The negative control first — an honest synthetic
 #      program survives the detector and redaction of it is the identity — then
 #      the driver's own environment surface, the per-shape mutation rows, the
 #      rule-coverage row, the interaction sites, and D8's reject-or-redact
-#      tension reported rather than decided silently.
+#      tension reported rather than decided silently. Then the encoding: the
+#      specimen's shape coverage, the field-by-field round trip, determinism and
+#      diffability as NUMBERS, the frozen v1 artifact, the fail-closed unknown
+#      schema, thirteen decode mutation rows, the ordering obligation read off
+#      the file system, the store's collision refusal, and regression replay
+#      over the program decoded from the frozen bytes.
 #
 #   2. dst_secrets's own units. This is where the detectors' FALSE-POSITIVE
 #      controls live, and they are the load-bearing half: every manifest this
@@ -494,10 +499,81 @@ seeded_generator:
 #      The grep is anchored to the syntactic form `^import ` rather than to a
 #      module name, so it cannot be satisfied by renaming and cannot fire on
 #      prose that mentions a module (cluster 7's correction 1).
+#   4. THE MANIFEST ARITY GUARD. `ExecutionManifest` has sixteen fields and the
+#      codec must write and read all sixteen. A field added in `dst_profile` and
+#      forgotten in `required_header_tags()`/`repeatable_header_tags()` would be
+#      silently absent from every artifact: the encoder would not write it, the
+#      decoder would not miss it, and both halves type-check. That is S7's
+#      record-level form, and it is the defect this whole stage exists to
+#      prevent — so it is counted from `dst_profile`'s own declaration rather
+#      than trusted to a literal, exactly as the ProfileDefinition guard above
+#      counts A10's.
+#
+#   5. THE FROZEN SPECIMEN GUARD. `scripts/dst/fixtures/execution-program-v1.artifact`
+#      is the compatibility policy. There is deliberately NO target that
+#      regenerates it — no --update, no ACCEPT=1 — because the encoder and the
+#      decoder were written in the same commit and agree by construction, so
+#      every round-trip row would pass against a policy that exists only as
+#      prose. This guard checks the file is present and non-trivial, so that
+#      deleting it turns the gate red instead of turning the frozen row vacuous.
+#      If the acceptance row goes red, the two permitted responses are to keep a
+#      v1 decode path or to bump the schema version and pin a runner. Rewriting
+#      the file is the one response that is not available.
+#
+#   6. THE NO-REGENERATION GUARD. Nothing in the tree may write to the fixtures
+#      directory. This is the guard that keeps check 5 honest: a convenience
+#      entry point that refreshes the specimen becomes a habit, and the first
+#      person to hit a red compatibility row will use it. The one that produced
+#      these bytes was deleted after use, which is stage 5's discipline for its
+#      canary pins applied to an artifact instead of a table.
 .PHONY: program_persistence
 program_persistence:
 	@set -eu; \
-	ailang run --caps IO --entry main scripts/dst/program_persistence_dst.ail < /dev/null; \
+	ailang run --caps IO,FS --entry main scripts/dst/program_persistence_dst.ail < /dev/null; \
+	declared=$$(awk '/^export type ExecutionManifest/,/^}/' src/core/dst_profile.ail \
+	   | grep -c '^  [a-z_0-9]*:'); \
+	coded=$$(sed -n '/^export pure func required_header_tags/,/^}/p;/^export pure func repeatable_header_tags/,/^}/p' \
+	     src/core/dst_persistence.ail | grep -c 'tag: "manifest\.'); \
+	if [ "$$declared" -eq 0 ] || [ "$$coded" -eq 0 ]; then \
+		echo "FAIL: counted $$declared manifest fields and $$coded codec tags — one of the two derivations is broken, so the comparison below would pass vacuously"; \
+		exit 1; \
+	fi; \
+	if [ "$$declared" -ne "$$coded" ]; then \
+		echo "FAIL: ExecutionManifest declares $$declared fields but the program codec names $$coded of them."; \
+		echo "      declared in src/core/dst_profile.ail:"; \
+		awk '/^export type ExecutionManifest/,/^}/' src/core/dst_profile.ail | grep '^  [a-z_0-9]*:' | sed 's/^/        /'; \
+		echo "      A manifest field the codec does not name is silently absent from every persisted"; \
+		echo "      artifact: the encoder never writes it, the decoder never misses it, and both halves"; \
+		echo "      type-check. D8 conditions its whole reproducibility promise on the recorded manifest,"; \
+		echo "      and D11 says a program promoted without one is not a reproduction unit. Add the field"; \
+		echo "      to encode_body, to required_header_tags (or repeatable_header_tags), and to project."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ the program codec names all $$declared ExecutionManifest fields (re-counted from dst_profile's own declaration)"; \
+	for f in scripts/dst/fixtures/execution-program-v1.artifact \
+	         scripts/dst/fixtures/execution-program-v0.artifact; do \
+		if [ ! -s "$$f" ]; then \
+			echo "FAIL: the frozen specimen $$f is missing or empty."; \
+			echo "      It is THE compatibility policy: encoder and decoder are written together and agree"; \
+			echo "      by construction, so without a frozen artifact from before the current encoder the"; \
+			echo "      policy is prose and the gate is green. It is not regenerable by design."; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "  ✓ both frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes, predating no encoder change yet)"; \
+	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
+	     src scripts --include=*.ail || true); \
+	if [ -n "$$writers" ]; then \
+		echo "FAIL: something in the tree writes to the frozen fixtures:"; \
+		printf '%s\n' "$$writers" | sed 's/^/        /'; \
+		echo "      There must be no regeneration target. A convenience that refreshes the specimen"; \
+		echo "      becomes the first thing anyone reaches for when the compatibility row goes red,"; \
+		echo "      and using it destroys the only artifact in this project that predates the current"; \
+		echo "      encoder. Add a v1 decode path, or bump the schema version and pin a runner."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ nothing in the tree writes to scripts/dst/fixtures — the specimen has no regeneration target"; \
+	ailang test src/core/dst_persistence.ail > /dev/null && echo "  ✓ src/core/dst_persistence.ail (the escape, the tag tables, and the path-vs-identity split site 22 forces)"; \
 	imports=$$(grep -E '^import ' src/core/dst_secrets.ail \
 	   | sed -E 's/^import +([a-zA-Z0-9_/]+).*/\1/' | sort -u); \
 	if [ -z "$$imports" ]; then \

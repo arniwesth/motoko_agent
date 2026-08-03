@@ -1489,6 +1489,18 @@ pure func test_the_canary_digest_is_reachable_only_through_the_stream() -> bool
 -- repairs `seed_state` sees this row go red, reads this comment, and DELETES
 -- it deliberately. Pinning the behaviour is what stops the finding from being
 -- lost in a note.
+--
+-- WI-A13 STAGE 6 DECIDED WHAT THE ARTIFACT STORE DOES ABOUT IT, and the
+-- decision does NOT discharge this row. `src/core/dst_persistence`'s choice 3
+-- records the reasoning in full; the short form is that fixing `seed_state`
+-- would not make (id, version, seed) a key, because D8 conditions reproduction
+-- on the recorded EXECUTION MANIFEST as well and the triple omits it — two runs
+-- at one triple under two manifests are two different programs today, with or
+-- without this defect. So the store derives its PATH from the triple and its
+-- IDENTITY from a digest of the exact bytes, and refuses to overwrite a path
+-- whose existing artifact differs. That makes the store safe; it does not make
+-- the version axis mean anything, which is what this row is about and what
+-- repairing `seed_state` would fix.
 pure func test_a_version_bump_is_currently_only_a_seed_offset() -> bool
   tests [((), true)]
   {
