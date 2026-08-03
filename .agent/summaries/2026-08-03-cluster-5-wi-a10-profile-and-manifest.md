@@ -4,7 +4,9 @@
 
 Branch: `arniwesth/mot-50-execute-wi-a10`
 
-Session span: `d57ca4c` → `7654b29`, **3 commits**, two of them production source. Input was
+Session span: `d57ca4c` → `7654b29`, **3 commits**, two of them production source. (The branch
+continued past this session's work with `777edbe` and `8cef7a6` — A13's plan row updated to inherit
+A10's exports, and the cluster 7 handoff written. Both build on what is recorded here.) Input was
 `HANDOFF-execute-a10-profile-and-manifest.md`, executed cold against HEAD. Sixth code session of
 project 009, following clusters 1, 4, 6, 3 and 2.
 
@@ -255,6 +257,9 @@ is outside the roots but is a library, not an extension. The fixture is built an
 additionally fails if an installable extension ever loses its path dependency.
 
 ## For the next session (A13)
+
+Now written up as `HANDOFF-execute-a13-discovery-and-replay.md` (`8cef7a6`). The exports below are
+what A13 inherits.
 
 - `driver_only()` is the definition; `validate_driver_only(loading_against, discovered, calls,
   catalogue)` is the whole load gate in one call.
