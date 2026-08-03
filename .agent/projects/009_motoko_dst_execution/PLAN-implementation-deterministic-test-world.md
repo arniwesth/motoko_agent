@@ -87,16 +87,6 @@ two-argument and routed its extension seam in one line. Identical nominal scope,
 sole difference parameter count — had env run first, the limitation would have surfaced on the cheap
 class.
 
-**S5. Size a detector by its defect-discovery round trips, weighted by how loudly each defect
-fails — and accept that it cannot be sized before it runs.** This is the property that distinguishes
-detector work from the other two kinds: a widen-and-converge site and an artifact row are both
-countable from the source in advance; **a detector's cost is dominated by defects in the detector
-itself, which are invisible until it runs against real source.** Cluster 2 measured 4 / 4 / 1 round
-trips against 11 / 8.5 / 5.5 minutes — a better predictor than lines or files. The weighting matters
-more than the count: A5's four round trips were compiler errors with line numbers; A4's four each
-produced a **plausible report** that had to be read and disbelieved. Budget loud defects at
-near-zero and silent ones at the cost of noticing them.
-
 **S4. Size a constructed artifact by the rows whose content must be *discovered*, not by its row
 count.** Cluster 3 measured the controlled comparison: A7 has 68 sites and took 11.5 minutes; A8 has
 158 and took 8. Every A7 row needed a recovery branch located and confirmed in the driver — eleven
@@ -106,6 +96,16 @@ and transcribed rows at negligible.** New-artifact sites are markedly *cheaper* 
 widen-and-converge sites (7.6–19.8/min against 3.4), because an artifact row costs no compiler
 round-trip — so the site model does not transfer, and the surprise runs opposite to the direction
 the plan hedged against.
+
+**S5. Size a detector by its defect-discovery round trips, weighted by how loudly each defect
+fails — and accept that it cannot be sized before it runs.** This is the property that distinguishes
+detector work from the other two kinds: a widen-and-converge site and an artifact row are both
+countable from the source in advance; **a detector's cost is dominated by defects in the detector
+itself, which are invisible until it runs against real source.** Cluster 2 measured 4 / 4 / 1 round
+trips against 11 / 8.5 / 5.5 minutes — a better predictor than lines or files. The weighting matters
+more than the count: A5's four round trips were compiler errors with line numbers; A4's four each
+produced a **plausible report** that had to be read and disbelieved. Budget loud defects at
+near-zero and silent ones at the cost of noticing them.
 
 **S6. Size a COMPOSITION by the number of INPUT ARTIFACTS whose exports must be read before a line
 can be written — roughly 2-3 minutes each — plus its RECORDED bindings, which are the only ones that
@@ -804,7 +804,26 @@ the variable is unset in both runs. D7 asks for exactly "same seed twice → ide
 discovery-contract invariant, and A13 will be tempted to lean on it because it feels like a proof of
 correctness. **It is necessary and it is not sufficient. Carry an advancement or completeness
 assertion beside it**, per the standing rule below.
-*Acceptance evidence:* D7's discovery-contract invariant — same manifest/profile/seed twice →
+**Consume A10 through its exports; this item is the second composition and inherits S6.** `driver_only()`
+is the definition and `validate_driver_only(loading_against, discovered, calls, catalogue)` is the
+whole load gate in one call; `driver_only_manifest(...)` builds the per-run manifest, with the
+derived classifier sets passed as **arguments** because the tool derives them per run; and
+`replay_metadata_of(manifest)` projects A9's `ReplayMetadata` *from* the manifest rather than
+restating it — **use it, so a result cannot carry a profile id that disagrees with its manifest.**
+The measured inventory and the classifier-2 call set are arguments everywhere: do not hardcode them,
+and where a value must necessarily be copied, `tools/profile_definition/check_fixtures.py` is the
+pattern for keeping the copy honest.
+
+**This item is where the runtime exclusion check's call site lands** (cluster 5's recorded scope
+judgement). `dst_profile.routing_violation_at(...)` is built, tested for the violating,
+non-violating and vacuous cases, and returns `Option[DstResult]` where `None` means proceed. A13
+establishes the profile, which is what makes threading it something other than a dead rider; C5 is
+the first profile that makes it non-vacuous.
+
+*Acceptance evidence:* **every structural guard is mutation-tested, not asserted** (cluster 5, C5) —
+a structural guard that never fires is precisely the defect these items exist to prevent, and A10
+demonstrated all three of its guards going red under a deliberate mutation. Plus D7's
+discovery-contract invariant — same manifest/profile/seed twice →
 identical resolved program, interaction log, outcome, normalized trace; **plus a non-determinism
 assertion — advancement or completeness — that would fail on a frozen cursor or a dropped record**;
 a mismatch fixture returns typed `HarnessFailure` with position and projection; bounds violations

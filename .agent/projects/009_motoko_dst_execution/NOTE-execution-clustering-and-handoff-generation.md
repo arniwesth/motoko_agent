@@ -37,7 +37,7 @@ disagree, the plan wins and this note is stale.
 | 2 | **A4 + A5 + A11** | `tools/`, Python; scans the tree, edits none of it | — | **DONE 2026-08-03** — `5ad3433`, `24ed3ea`, `08b7a75`; five ADR amendments. Report: `NOTE-cluster-2-execution-report-and-plan-corrections.md`. The classifier derived the corrected three-member set on its own |
 | 3 | **A6 + A7 + A8** | new artifacts + fail-closed validators | — | **DONE 2026-08-02** — `935bd46`, `a7d70b5`, `c873002`; 264 sites, 30% judgement, 108 checks green. Report: `NOTE-cluster-3-execution-report-and-plan-corrections.md`. Found the ADR's seven-not-six dispatch undercount (C1) |
 | 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
-| 5 | **A10** | profile/manifest machinery | 2, 3 (both landed) | **Handoff written**: `HANDOFF-execute-a10-profile-and-manifest.md`. First composition work — consumes all six landed artifacts and owns two decisions clusters 2 and 6 declined |
+| 5 | **A10** | profile/manifest machinery | 2, 3 (both landed) | **DONE 2026-08-03** — `fd4f4bd`, `dafe898`. `driver_only` v1 loads and is conformant at HEAD. Report: `NOTE-cluster-5-execution-report-and-plan-corrections.md`. Both decisions resolved; added standing rule S6 |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
 | 7 | **A13** | discovery/replay | 3, 4, 5, 6 | Wait |
 | 8 | **A14 + A15** | invariants, latency pair, corpora, CI | 7 | Wait |
@@ -115,6 +115,14 @@ model: file-count sizing was wrong by two orders of magnitude, **sites** is the 
 widen-and-converge work, and the judgement ratio for contract-changing work is **~19%**, not M1's
 10%. Neither correction reaches new-artifact work (A13, A14, A15, B2), whose estimates remain
 unmeasured.
+
+**Ask for the judgement ratio split when an item ships both machinery and an instance** (cluster 5).
+A10 came in at 34% combined against a predicted ~16%, and the split explains it entirely: the
+machinery half was **14%** — below A6's 16%, exactly as predicted — while the `driver_only` half was
+**95%**, because *which* adapter boundaries and resource models a profile has is a fact about the
+driver, not about D5. No amendment could have reduced it. A combined number reads as "the
+specification was vague" when the truth is "half of this item was content, and content is never in
+the specification."
 
 Ask also for the *kind* of judgement, not only the count. This has now paid twice, and it is the
 single highest-value question in the report-back:
