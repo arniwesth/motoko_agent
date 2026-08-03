@@ -199,6 +199,24 @@ of the input that happened to be chosen — and it is why stage 5's pinned seeds
 **The decorative path requires an author to write something decorative; the unwalked branch requires
 only that they not think of it.** A14's latency pair and A15's corpora have both exposures.
 
+**The complement's cheapest instance, from A13 stage 6, and it lives inside a TEST rather than a
+digest: a NEGATIVE CONTROL must fail the rule for the reason under test, not for an earlier
+reason.** Site 23's `has_jwt` requires a `eyJ` prefix *and* three plausible segments; reducing it to
+`contains(s, "eyJ")` left every row in the module and the acceptance suite green, because all four
+negative controls were strings that **do not contain `eyJ`**. They exercise the prefix clause and
+cannot reach the segment clause, so the row claimed a mechanism whose branches its own trajectory
+never entered. **A control rejected by clause 1 certifies nothing about clause 2 and reads
+identically to one that exercises both.** Site 24 is the same shape one level up: "a one-field change
+moves exactly two lines" is the right quantity for diffability and is green on a single-line encoding
+too, because a one-line body also differs in two lines — repaired with a floor **derived from the
+artifact** (four lines per interaction) rather than a chosen constant.
+
+**Both of A13 stage 6's sites are assertion weaknesses rather than implementation defects, which is
+now the majority shape in this project.** The implementation was right both times; the evidence that
+it was right was not. And both were found by mutating the implementation and reading **why** a row
+went red — never by running a gate. **Budget mutation loops as the cost of a detector, not as
+verification after one.**
+
 **A14's D4 latency pair and A15's corpora both assert "this input influences that artifact" and both
 have this exposure.** So does stage 5's generator canary, whose failure mode the handoff already
 named — pinning `generator_id`, `generator_version` and `seed` as literals passes and certifies
@@ -260,6 +278,25 @@ of the session despite carrying two bindings' worth of care, because stage 3 had
 fitted a parameter; the canary was ~70% of it, all of that in the discovered bindings and the
 sweep/re-pin loops they forced. **Summing bindings across independent pieces and comparing the total
 to a previous stage's total predicts the average of two things that never touch.**
+
+**Sixth data point, and it refines the second term rather than adding a model: weight by DISCOVERED
+bindings, not by the total.** A13 stage 6's two pieces carried 4 bindings (3 decided, 1 discovered)
+and 6 bindings (5 decided, 1 discovered); the count predicts 1.5× and the measured cost was 0.95×.
+The reason is legible and matches stage 5's: **a decided binding whose deciding artifact is already
+open is close to free** — stage 6's five decided bindings were each read off D8 and the standing
+rules with the ADR open, and cost a paragraph of comment each — **while a discovered one costs a
+round trip through running the thing.** Discovered counts of 1 and 1 against costs of 21 and 20
+minutes predict better than totals of 4 and 6, and the same holds retrospectively for stage 5 (2 and
+0 discovered against ~70% and <30% of the session). The first term is unchanged: grounding is still
+paid per input artifact whose exports must be read.
+
+**And a measurement correction that applies to every ratio in this plan.** A13's six stages have now
+been read off git as **wall-clock windows** (handoff commit → last `feat` commit): 34, 43, 35, 60, 36
+and 41 minutes, giving ratios 1.26×, 0.81×, 1.71×, 0.60×, 1.14×. **The contemporaneous reports gave
+~3×, ~1×, ~1.5×, ~0.9× — and they over-report by two to three times wherever a stage's cost was
+DELIBERATION rather than running things.** Stage 4, the one stage dominated by sweeps and re-pins, is
+the only one where the two agree. Future reports should give the git window, which is checkable, and
+may give a felt ratio beside it, which is not.
 
 **Fourth data point, and the second term needs one distinction: a *decided* binding differs from a
 *discovered* one.** Stage 4 had four bindings against stages 1–3's one, three, three, and cost ~1.5×
@@ -1022,6 +1059,35 @@ an asserted reason — requiring a 260-seed census re-sweep through the real dri
 either pay that or record the collision as a known property of the artifact store; it must not file
 preserved artifacts under a key it believes to be unique.**
 
+**Stage 6 landed 2026-08-03 (`6c4894e`, `e01a978`) and WI-A13 IS COMPLETE.** `make dst` exit 0 at
+**466 checks** (403 at stage 5). Two commits: D8's secret handling, and the encoding with its
+compatibility policy and store. Details in
+`NOTE-cluster-12-execution-report-and-plan-corrections.md`; the four things that bind what remains:
+
+- **Site 22 is decided and NOT resolved, and the reason is not cost.** Stage 6 recorded the collision
+  and keyed on a content digest, leaving `seed_state` and stage 4's seeds 9/13/94 untouched, because
+  **fixing `seed_state` would not make the triple a key**: D8 conditions reproduction on the recorded
+  execution manifest as well, and (id, version, seed) omits it, so two runs at one triple under two
+  manifests are two different programs today with or without site 22. The store therefore derives its
+  PATH from the triple (a stable path is what makes a diffable encoding worth having) and its
+  IDENTITY from `sha256Hex` of the exact bytes, and refuses by name to overwrite a path whose
+  existing artifact differs. **The characterization row stays red-on-fix.** The residue is A15's: a
+  corpus can now dedupe on `artifact_identity`, but the version axis stays decorative until
+  `seed_state` changes.
+- **A specimen must be CONSTRUCTED where the producer cannot reach the whole space.** Stage 4's
+  sweep-and-filter cannot supply a compatibility specimen, because the generator provably cannot
+  reach every shape the *schema* admits. **Sweep-and-filter selects among things that exist; it
+  cannot cover a space the producer does not reach.** A15's corpora need both halves — a derived
+  filter for selection, and a derived coverage requirement for construction.
+- **A frozen compatibility artifact must assert DECODABILITY, not encoder stability.** Asserting
+  `encode(specimen) == frozen_bytes` acquires exactly the regeneration target correction 1 of cluster
+  11 warned about: a backward-compatible encoding change reddens it and the natural response destroys
+  the specimen. The row asserts the frozen bytes still decode field by field, and reports an encoder
+  difference as informational.
+- **The triple is not the artifact's key and the manifest is the second, independent reason.** D8
+  names a preserved failure by (id, version, seed) *and* conditions reproduction on the manifest;
+  those two sentences are inconsistent as a naming scheme. A15's corpus keys on `artifact_identity`.
+
 **Two scope items are explicitly NOT in stage 4 and are named here so they are not lost.** The
 generator chooses no provider FAULT and no provider LATENCY, because `ScriptedStep` has neither an
 error case nor an `advance_ms` — both are one field on that type away, restored on replay from
@@ -1089,10 +1155,37 @@ D8's pinned generator canary exists per stable generator id and fails on a seed 
 generator-version bump; **a secret-shaped fixture is rejected or redacted before persistence**; and
 **an old-schema program either decodes or fails closed with a pinned-runner pointer** — never
 silently reinterpreted.
-*Size:* **estimate — 1–2 weeks**, the largest Milestone A item. Basis: program and config types, a
-seeded generator with bounds, a structural validator, two replay modes, the interaction log with
-causal identity and ordinals, the canary, and the encoding/compatibility policy — each small, the
-set wide, and no measurement covers any of it.
+*Size:* ~~estimate — 1–2 weeks~~ → **MEASURED: six stages, 249 minutes of implementation windows
+(34/43/35/60/36/41), 0 → 466 `make dst` checks** (`9c4d724`, `8b0d605`, `2d752da`, `f77adf1`,
+`177d0cb`+`be8393c`, `6c4894e`+`e01a978`, 2026-08-03). **The largest Milestone A item, estimated in
+weeks, took just over four hours.** The estimate's basis was right about the shape — "each small, the
+set wide" — and wrong by two orders of magnitude about the scale, for the same reason every estimate
+in this plan has been: it priced *artifacts* rather than *decisions*, and S6's binding count is what
+tracks the cost.
+*Status:* **COMPLETE (2026-08-03).** A14 and A15 are unblocked.
+
+**What the staging got right, and it is the transferable part.** Every stage after the first landed
+against a seam the previous one had left, and the *"stage N left the exact seam"* claim held four
+clusters running. That is a consequence of each stage moving types **down** into the std-only tier
+rather than importing up — `dst_interaction` in stage 2, `GeneratorBounds` in stage 4, `dst_secrets`
+in stage 6 — because `src/core/ports.ail` cannot name `ExecutionManifest` without dragging the whole
+`dst_profile` closure into the production driver's import graph. **The tier discipline is what made
+the staging work.**
+
+**What it got wrong, twice, and the two are the same mistake.** The item was cut as five stages and
+re-cut to six mid-flight when the seeded generator was found to have fallen between stages 3 and 4
+(cheap, because it was found before stage 4 started). Uncorrected: **stages 5 and 6 were each sized
+as one stage and are each two independent pieces** — neither piece needed the other, and either could
+have been a stage. **Sizing by obligations rather than by seams produced two stages out of six that
+are really four.**
+
+**And the ordering fact no single stage report states: the six were ordered by what each stage could
+ASSERT, not by what it could build.** Discovery had to precede replay because replay grades itself
+against a recorded log; the generator had to precede the canary because the canary pins the
+generator's stream; persistence had to be last because a frozen specimen must contain every shape and
+the shapes were not all defined until stage 5. **An item staged by dependency alone would have put
+persistence second, where its specimen would have certified a third of the schema and nobody would
+have known.**
 
 **Obligations A13's stages 1–3 hand this item, each a finding rather than a preference:**
 
@@ -1154,8 +1247,34 @@ set wide, and no measurement covers any of it.
    at the point of failure.
 
 **WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
-A9, A13; the parity-classification invariants additionally depend on A8, **which landed 2026-08-02
-— so this dependency is now satisfied and the prohibition is discharged.**
+A9, A13 (**COMPLETE 2026-08-03 — this item is unblocked**); the parity-classification invariants
+additionally depend on A8, **which landed 2026-08-02 — so this dependency is now satisfied and the
+prohibition is discharged.**
+
+**Four things A13 hands this item, from cluster 12's close.**
+
+1. **The CI replay affordance is this item's and it is now cheap.** D8 requires CI output to carry a
+   copy-pasteable local replay command or artifact reference; A13 stage 6 built the store but assigned
+   the reporting here, where the failure report is produced. `dst_persistence.artifact_path` gives the
+   reference, `load_program` the other half of the command, and `persist_message` already prints the
+   path and the identity. **What this item must NOT do is emit the digest alone.** D8's *"a digest
+   without retained bytes is not sufficient for replay"* is enforced in the encoding — there is no
+   representation of a program that is a reference to bytes elsewhere — and a report naming only a
+   hash would reintroduce at the reporting layer exactly what the artifact refuses to represent.
+2. **The three unreached fault classes are unreached in three DIFFERENT ways and D11's counters must
+   not merge them.** `approval_deadline_exceeded` is *structurally* unreachable — D2 gives
+   `ExpectApproval` a deadline and the driver's approval channel carries no duration, so this is a
+   declared gap and not a solved problem. The provider fault class is *one `ScriptedStep` field away*
+   (cluster 10's correction 2, and this item's D4 latency pair is the same field). `ToolCorrelationMismatch`
+   and `ToolDeadlineExceeded` are *codec-covered, scenario-unreached*. Three counters, three meanings.
+3. **`max_resource_size` is now encoded and round-tripped**, so deleting it is a schema change — which
+   is the point of having a schema version. Either give it a resource that can grow or delete it, and
+   if deleting, follow D8's migration rule rather than editing the frozen specimen.
+4. **Check whether the latency/fault widening adds a `StepProvider` VARIANT before assuming it is
+   free.** A13 stages 3–6 all paid nothing on A5's anchors by writing below them and running
+   `sed -n '161p'` after each edit; stage 2 and cluster 10 both paid a `driver_only` re-issue, and both
+   because **a new variant forces a match arm that cannot sit below the sites it precedes.** Adding a
+   *field* to `ScriptedStep` is free; adding a *case* is a profile version.
 
 **A8 hands this item two things it must act on rather than inherit quietly** (cluster 3, C5 and the
 classification split):
@@ -1189,7 +1308,8 @@ reading it.
 plus the latency pair; each invariant is small but the set is wide, and the parity family cannot
 start before A8. No measurement covers this; treat the range as coarse.
 
-**WI-A15. Build D11's two corpora and their CI jobs.** Depends on A13, A14. An earlier revision
+**WI-A15. Build D11's two corpora and their CI jobs.** Depends on A13 (**COMPLETE 2026-08-03**),
+A14. An earlier revision
 scheduled corpus *reporting* in A14 and left the corpora themselves unbuilt, which C4 would then
 gate against. Build: the **blocking PR corpus** of fixed seeds and exact promoted regression
 programs; the **scheduled rotating corpus** whose seed window changes deterministically; both CI
@@ -1218,6 +1338,28 @@ on that change alone. **When the filter is derived and the sweep is wide, the re
 lives in one visible place instead of being spread across every pinned value** — which is exactly
 what a rotating corpus needs, because the residual is the part a reviewer has to re-check when the
 window moves.
+
+**And stage 6 found the LIMIT of that technique, which this item needs before it starts.
+Sweep-and-filter selects among things that exist; it cannot cover a space the producer does not
+reach.** Stage 6's compatibility specimen had to carry every shape the *schema* admits, and the
+generator provably cannot produce them all — the provider fault class and `approval_deadline_exceeded`
+are both unreachable by a generated program. A swept specimen would have frozen exactly today's
+reachable set and left the rest **absent**, which reads identically to unchanged (S8's complement).
+The specimen is therefore **constructed against a DERIVED COVERAGE REQUIREMENT** — asserted over
+`all_interaction_kinds()` and the status set rather than a list written at the assertion site — while
+selection stays a derived filter. **A15 needs both halves: a derived filter for the seeds it can
+sweep, and a derived coverage requirement for the classes no sweep will reach.** The fixed bank's
+obligation is precisely of the second kind: D11 requires it to reach every required non-waived fault
+class, and three of them are not reachable by search at all.
+
+**Two more from stage 6, both about the artifact rather than the search.** (1) **Key the corpus on
+`dst_persistence.artifact_identity`, not on (generator_id, generator_version, seed).** That triple is
+not unique for two independent reasons — site 22, and the fact that D8 conditions reproduction on the
+execution manifest, which the triple omits. A corpus holding (v1, seed 4) and (v2, seed 3) has one
+program's worth of coverage while reporting two. (2) **A promoted counterexample is bytes, never a
+digest reference.** D8 permits digest addressing and forbids a digest without retained bytes; the
+encoding enforces it, and a corpus that stored references would reintroduce the gap at the corpus
+layer.
 *Acceptance evidence:* both jobs run and declare their minimums; the gate **fails** on a zero,
 silently truncated, or below-minimum window (tested by forcing one); the fixed bank collectively
 reaches every required non-waived fault class in A7's catalogue; a promoted counterexample enters

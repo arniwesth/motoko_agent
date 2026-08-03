@@ -979,8 +979,8 @@ pure func encode_of(p: ExecutionProgram) -> string {
 }
 
 pure func with_env_value(p: ExecutionProgram, key: string, v: string) -> ExecutionProgram {
-  { p | initial_world: { p.initial_world |
-          synthetic_environment: set_env_value(p.initial_world.synthetic_environment, key, v) } }
+  let es = set_env_value(p.initial_world.synthetic_environment, key, v);
+  { p | initial_world: { p.initial_world | synthetic_environment: es } }
 }
 
 pure func payload_at_ordinal(xs: [Interaction], ord: int, v: string) -> [Interaction] {
@@ -992,8 +992,16 @@ pure func payload_at_ordinal(xs: [Interaction], ord: int, v: string) -> [Interac
   }
 }
 
+-- The `let` is not a style choice. A call in the FIELD-VALUE position of a
+-- record update is not registered as a dependency by AILANG v0.26.0's
+-- declaration sorter, so `{ p | interactions: payload_at_ordinal(...) }` reports
+-- "undefined variable: payload_at_ordinal" whenever anything else in the module
+-- forward-references this function — an ordering the author cannot see. Binding
+-- the call first is the workaround. Written up in
+-- .agent/issues/ailang-record-update-field-call-is-not-a-dependency.md.
 pure func with_payload_at(p: ExecutionProgram, ord: int, v: string) -> ExecutionProgram {
-  { p | interactions: payload_at_ordinal(p.interactions, ord, v) }
+  let xs = payload_at_ordinal(p.interactions, ord, v);
+  { p | interactions: xs }
 }
 
 func scenario_deterministic_and_diffable() -> bool ! {IO} {
