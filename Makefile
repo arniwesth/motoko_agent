@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -166,6 +166,39 @@ profile_definition:
 	fi; \
 	python3 tools/profile_definition/check_fixtures.py; \
 	ailang test src/core/dst_profile.ail > /dev/null && echo "  ✓ src/core/dst_profile.ail"
+
+# `driver_only` v1 — the first conformant simulation profile (WI-A10, plan P4).
+# Separate from `profile_definition` because the machinery is reusable and this
+# is one instance of it: the validator must be seen to REJECT before the
+# definition that passes it is seen at all.
+#
+#   1. The load-time acceptance. The same `validate_definition_at_load` a runner
+#      calls, at the table's bound revision, against the measured inventory and
+#      the derived classifier-2 call set — asserting it loads CLEAN, names its
+#      `compaction_ai` omission, takes its waivers from A7's stable ids with
+#      each condition read back from the catalogue, and computes its routed-set
+#      claim rather than recording one.
+#
+#   2. THE ANTI-TRANSCRIPTION GUARD, again, and here it does its real work: it
+#      checks that every installable extension the call inventory finds calling
+#      a classifier-2 field is OMITTED BY NAME in the profile. The day a second
+#      extension calls a state-threading seam, this goes red instead of the
+#      profile quietly claiming coverage it does not have.
+#
+# NOTE the intended failure mode: the attribution reference is recorded as
+# LITERALS, so correcting the attribution table turns this target RED until
+# `driver_only` is re-issued with a version bump. That is D4's rule — a table
+# correction re-issues every referring profile — and it is only mechanically
+# true if the profile records the content hash and something compares it. If
+# this goes red after a table edit, bump `driver_only_version` and re-record the
+# pair; do not make the profile call `table_identity()`, which would turn the
+# comparison into a tautology.
+.PHONY: driver_only
+driver_only:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/driver_only_dst.ail < /dev/null; \
+	python3 tools/profile_definition/check_fixtures.py; \
+	ailang test src/core/dst_driver_only.ail > /dev/null && echo "  ✓ src/core/dst_driver_only.ail"
 
 # D3's fault catalogue (WI-A7). Three checks:
 #
