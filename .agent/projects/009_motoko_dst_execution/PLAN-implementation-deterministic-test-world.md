@@ -120,7 +120,9 @@ is cheap to test.** Stage 2's `deny` scenario documented a purpose it did not se
 did the same. Introducing the mutation showed the real one, both times.
 
 **The record-level form: a codec's guard is a round trip asserted field by field, with every field
-holding a distinct value.** A codec's failure mode is a field the encoder writes and the decoder
+holding a distinct value.** (The defect that earned this rule is written up in
+`.agent/issues/ailang-no-warning-for-unreachable-match-arm.md`, with its reproduction and the
+guidance that applies until a diagnostic exists upstream.) A codec's failure mode is a field the encoder writes and the decoder
 ignores — both halves type-check and the loss is silent until a replay serves a different response
 while every count still balances. This is S7's no-two-equal rule applied to a record instead of a
 fixture, and it is what caught stage 3's `None`-binds-as-a-variable defect (three of four round-trip
