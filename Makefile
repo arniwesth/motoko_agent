@@ -399,14 +399,23 @@ world_state:
 		echo "  ✓ unseeded tool world dies with Process withheld"; \
 	fi; \
 	echo "  -- randomness class (D1 request-surface item 5, \"runtime randomness, if any\") --"; \
-	n=$$(grep -l 'std/rand' src/core/*.ail 2>/dev/null | wc -l); \
+	: "The pattern is anchored to the IMPORT FORM, not the bare string 'std/rand'."; \
+	: "WI-A13 found this red at baseline: A12 (cluster 6) wrote the bare-string"; \
+	: "grep, then A10 (cluster 5) landed on top of it with a ForbiddenCapability"; \
+	: "whose instrument PROSE names std/rand while describing this very check, so"; \
+	: "the artifact documenting the guard tripped the guard. --keep-going hid it."; \
+	: "An import is the only way an AILANG module can reach std/rand, so anchoring"; \
+	: "to '^import std/rand' loses no coverage and stops the guard firing on text"; \
+	: "that merely mentions it. This is the same precision the fault_catalogue"; \
+	: "target already needed for its own tripwire."; \
+	n=$$(grep -l '^import std/rand' src/core/*.ail 2>/dev/null | wc -l); \
 	if [ "$$n" -ne 0 ]; then \
 		echo "FAIL: $$n driver module(s) reach std/rand. src/core/*.ail had none when WI-A12"; \
 		echo "      routed its effect classes, so an ambient RNG has appeared and is un-routed."; \
 		echo "      D1 names an ambient RNG as a prohibited hiding place for world state."; \
 		echo "      (src/core/test/ is deliberately excluded: dst_gen.ail is a seeded GENERATOR,"; \
 		echo "       which is explicit randomness outside the driver, not an ambient read in it.)"; \
-		grep -l 'std/rand' src/core/*.ail; \
+		grep -l '^import std/rand' src/core/*.ail; \
 		exit 1; \
 	else \
 		echo "  ✓ no driver module (src/core/*.ail) reaches std/rand"; \
