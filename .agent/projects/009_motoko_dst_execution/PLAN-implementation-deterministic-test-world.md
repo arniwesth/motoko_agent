@@ -107,9 +107,25 @@ still produces its own rule. Only a fixture that must pass can. Three demonstrat
   whole mechanism. **A fixture whose quantities are all equal cannot distinguish which quantity a
   check is reading.**
 
-Corollary, cheap and twice useful: **a fixture's stated justification is itself a claim, and it is
-cheap to test.** Stage 2's `deny` scenario documented a purpose it did not serve; introducing the
-mutation showed the real one.
+**Assert both obligations executably; do not merely satisfy them.** Stage 3 promoted this after its
+first `rich` fixture documented a tool-fault case it never reached — the queue held two entries
+against one approved dispatch, so the header claimed a shape the run did not contain. The fix is not
+a better comment: the suite now carries `the surviving fixture carries every shape the specification
+protects` and `no two of the surviving fixture's quantities are equal` as **checks that go red**.
+Prose cannot do this, because **a fixture's coverage drifts silently as the driver changes and the
+author is the last person who will notice.**
+
+Corollary, cheap and three times useful: **a fixture's stated justification is itself a claim, and it
+is cheap to test.** Stage 2's `deny` scenario documented a purpose it did not serve; stage 3's `rich`
+did the same. Introducing the mutation showed the real one, both times.
+
+**The record-level form: a codec's guard is a round trip asserted field by field, with every field
+holding a distinct value.** A codec's failure mode is a field the encoder writes and the decoder
+ignores — both halves type-check and the loss is silent until a replay serves a different response
+while every count still balances. This is S7's no-two-equal rule applied to a record instead of a
+fixture, and it is what caught stage 3's `None`-binds-as-a-variable defect (three of four round-trip
+rows red on first run) when `ailang check` and every count in the suite saw nothing. **A14/A15 will
+encode programs for D8's persistence and inherit this directly.**
 
 **Sharpened by A13 stage 3: ASSERT the fixture's coverage, do not describe it.** The corollary
 above recurred within one cluster of being written. Stage 3's surviving fixture documented a tool
@@ -161,6 +177,18 @@ specification clause admitting two readings; stage 1 had exactly one (D2's dupli
 and it consumed effectively all the item's risk while twenty-odd read bindings cost nothing. Stage 2
 had **three** and cost roughly **3×** stage 1 — the count of recorded bindings tracked the cost ratio
 better than any measure of size. **No sixth model is needed; count the decisions, not the lines.**
+
+**Third data point: the predictor survives, its explanation does not.** Stage 3 had three recorded
+bindings — parity with stage 2 — and cost about the same, so the count held. But cluster 8 attributed
+its 3× to "the driver wiring is where the time went", and stage 3 is *also* driver wiring while doing
+strictly more (a new module, two codecs, a second acceptance script, a Makefile target). **What
+actually made it cheap is not in any model: stage 2 left the seams in the shape stage 3 needed.**
+`RecordingWorld`, `TracedSessionResult.world`, `class_balance` and a `check_discovery` that was
+already two-sided were reused verbatim — the reconstitution balance *is* `class_balance` with
+different nouns. So: **the binding count predicts cost within a stage; what it cannot see is that a
+well-shaped predecessor moves bindings out of the successor entirely.** Stage 2's decision to make
+its checker two-sided — which its own report notes "no artifact asked for" — is the single largest
+reason stage 3 was cheap, and it was taken a cluster before the saving appeared.
 
 *The third data point, and the limit of the predictor.* A13 stage 3 also had **three** recorded
 bindings and cost roughly **1×** stage 2, which is the parity the count predicts — while delivering
@@ -235,8 +263,9 @@ a clock value read from interim state forces a **second bidirectional port widen
 WI-A12. `ScriptedPortsState` (`scripted_ports.ail:20-24`) already models all three cursors and is
 the design precedent if it does.
 
-**P3. Clock routing order, and the first routed-set claimant.** Order: (1) the four driver sites,
-routed to the world clock as part of WI-A12 — every profile needs them; (2) `ext/runtime.ail:190`
+**P3. Clock routing order, and the first routed-set claimant.** Order: (1) **the core driver sites**,
+routed to the world clock as part of WI-A12 — every profile needs them, and the count is deliberately
+not stated here; see the correction below; (2) `ext/runtime.ail:190`
 is never routed — it is *attributed* to `test_dummy` in the WI-A5 table, which is what removes it
 from the baseline's reachable set; (3) the eight `motoko-ext-compose` sites are deferred to
 Milestone C, because they route through `ExtPorts.clock_now` — a seam with zero call sites that may
@@ -750,8 +779,10 @@ not is *called* from `fold_prompt_hooks` and friends: threading a profile there 
 on `ExtRuntime` — which lives in the ABI package, so a Milestone B change — or a new parameter
 through every fold, and at HEAD there is no consumer, since the load-time rules mean the only slot a
 conformant profile may exclude is the one gated slot and no profile excludes it. A parameter with no
-consumer is the dead-rider cost P2 rejects. **A13 establishes the profile and is where the call
-lands; C5 is the first profile that makes it non-vacuous.**
+consumer is the dead-rider cost P2 rejects. **Its call site is WI-C5's** — A13 stages 2 and 3 both
+established the profile and neither could give the check a consumer, for the structural reason
+recorded at A13: replay sees interactions, and no interaction carries the hook id the check
+discriminates on.
 
 **WI-A11. The predicate documentation check** the ADR assigns to this plan. **It is an anchor-set
 drift check, not a containment check, and that choice is forced rather than preferred:** the ADR
@@ -838,9 +869,10 @@ world. It is bound to an **ambient read on purpose**: see the pattern below.
 withheld) passes for the deterministic entry point and fails for the live world — the F3-corrected
 per-run backstop; for the tool class, the typed contract carries ordinary success, typed
 execution/non-zero error, wrong-call-id correlation, and completion-after-deadline through one
-production adapter contract; after the clock class, `driver_only`'s routed-set claim (4 sites)
-becomes true and is recorded in the profile — a claim that additionally depends on A5, per D4's
-scheduling prohibition.
+production adapter contract; after the clock class, `driver_only`'s routed-set claim becomes true and
+is recorded — **computed, never written down** (P3), and depending additionally on A5 per D4's
+scheduling prohibition. A10 measured it at 7 reachable = 5 routed + 2 declared-unrouted; an earlier
+revision of this line said "4 sites", which is the stale-count defect P3 exists to stop.
 
 **WI-A13. Build discovery and replay** (D2, D8). Depends on A7 (class ids), A9 (result types), A10
 (manifest), A12 (world_state — **landed**). A12 also left a seam this item wants:
@@ -1141,7 +1173,11 @@ widening lands. (Its `on_tool_handle` is the one *gated* hook and could be exclu
 rescue the install.) The work:
 route the eight `motoko-ext-compose` clock reads through `ExtPorts.clock_now` (first exercise of a
 seam with zero call sites today — budget for it not surviving contact unchanged), make the
-effectful hooks world-mediated, and claim the routed set — **12 sites post-table; 13 is the
+effectful hooks world-mediated, **land `routing_violation_at`'s call site** — reassigned here from
+A13 by cluster 9, because the check discriminates on a hook id that no interaction carries, its real
+consumer is the production hook dispatch site (`ext/runtime.ail:279`), and C5 is the first profile
+that can legitimately exclude a hook and so the first where it is non-vacuous — and claim the routed
+set — **12 sites post-table; 13 is the
 fail-closed figure if the attribution table is absent or invalid** (D4's 4/12/13 versus 5/13/13
 split). The dispatch-time exclusion check A10 installs becomes binding here, and its in-runner
 probe — reaching an excluded hook returns a typed `HarnessFailure` with partial evidence — is part
