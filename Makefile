@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -642,3 +642,26 @@ effect_inventory:
 
 effect_inventory_selftest:
 	@python3 tools/effect-inventory/derive.py --self-test
+
+# ---------------------------------------------------------------------------
+# ADR-001 D5 obligation 2, classifier 2: ExtPorts fields that drop a cursor D1
+# requires threaded, and their call sites.
+#
+# Membership is DERIVED from D5's criterion on every run -- from the ExtPorts
+# record, the core Ports record, and the extension-side bridge -- and never read
+# from a list. D5's own enumeration named `ai_step` alone; WI-A12 falsified that
+# by state-threading `Ports.tool_exec` and `Ports.env_get`, and a classifier
+# built to the list would have reported a clean routing audit over two dropped
+# cursors. Re-derive after any change to either port record or to the bridge.
+#
+# `ext_call_inventory_selftest` runs the fixture suite: one fixture per
+# indirection form the ADR places outside the matcher boundary, each of which
+# must be reported unresolved, plus a control that must resolve. All five
+# type-check, so the forms are real rather than illustrative.
+# ---------------------------------------------------------------------------
+.PHONY: ext_call_inventory ext_call_inventory_selftest
+ext_call_inventory:
+	@python3 tools/ext_call_inventory/derive.py
+
+ext_call_inventory_selftest:
+	@python3 tools/ext_call_inventory/derive.py --self-test

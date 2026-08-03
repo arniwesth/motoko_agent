@@ -771,8 +771,12 @@ fields, vision parts dropped at the seam.
 **WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** Depends on B1, B2,
 B3 (the source and ABI set is not final until they land), **A4** (classifier 2 must exist to be
 re-derived) and **A10** (a manifest must exist to re-issue). Re-run `make effect_inventory`,
-`effect_inventory_selftest`, and the classifier-2 target; re-record both derived sets and the
-scan-root commit; re-issue `driver_only`'s manifest. If the trigger fires before A4/A10, this
+`effect_inventory_selftest`, `ext_call_inventory` and `ext_call_inventory_selftest` (A4's targets,
+landed 2026-08-03); re-record both derived sets and the scan-root commit; re-issue `driver_only`'s
+manifest. **Classifier 2 re-derives its own membership set from source on every run**, so the repin
+step is to read the printed set and reconcile it against the recorded one, not to re-specify it —
+and `ext_call_inventory_selftest`'s pinned membership block is what goes red if the ABI major (B2)
+changes the answer. If the trigger fires before A4/A10, this
 degrades to re-running classifier 1 alone and the rest waits — say so rather than letting it pass
 silently.
 *Acceptance evidence:* **this is the wave's green gate** — full compile and test suites pass on the

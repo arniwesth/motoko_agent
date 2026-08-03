@@ -1498,6 +1498,64 @@ requirement is replaced by three ordered obligations:
    the single world-token ABI major that *Consequences* budgets, and an earlier revision's
    field-by-field phrasing implied a schedule that does not exist.
 
+   **Amendment, 2026-08-03 (WI-A4 implemented). The set is THREE fields, not one, and the two
+   paragraphs above name the wrong non-members.** The criterion is correct and unchanged. What
+   changed is the world it selects over: WI-A12 state-threaded `Ports.tool_exec` and `Ports.env_get`,
+   and the escape clause directly above — "grows only when D1 requires another cursor threaded
+   through an extension-side entry" — is exactly the event that fired.
+
+   Applying the criterion at HEAD, mechanically, per field:
+
+   | `ExtPorts` field | core seam it fronts | seam threads a successor | ext field can return it | verdict |
+   |---|---|---|---|---|
+   | `ai_step` | `Ports.model_step` | yes, `ProviderExchange.next_state` | no — `Result[string, string]` | **member** |
+   | `proc_exec` | `Ports.tool_exec` | yes, `ToolExecution.next_state` | no — `string` | **member** |
+   | `env_get` | `Ports.env_get` | yes, `EnvRead.next_state` | no — `string` | **member** |
+   | `clock_now` | none | n/a | n/a | **unrouted, not a member** |
+
+   The bridge is `session.ext_ports_of`, and the two new members drop their successors in one line
+   each: `session.ail:764` takes `.value` off an `EnvRead`, `session.ail:780` takes `.outcome` off a
+   `ToolExecution`. **A discarded `ToolExecution.next_state` is not different in kind from a
+   discarded `ProviderExchange.next_state`** — same cursor, same ABI edge, same loss — and no reading
+   of the criterion distinguishes them.
+
+   **`clock_now` remains a non-member, and the paragraph above reaches that answer by the wrong
+   route.** It is not that the field "loses no cursor" — `Ports.clock_now` returns a
+   `ClockReading` carrying `next_state`, so there is a cursor there to lose. It is that the
+   extension-side seam **never reaches that port at all**: `ext_unrouted_clock` performs an ambient
+   `now()` (`session.ail:796`), so the field is not the entry to a core seam and the criterion's
+   first conjunct is unsatisfied. That is a worse condition than membership, not a better one, and it
+   is deliberate — plan rule S2 chose a loud ambient read over a silently frozen snapshot because
+   `ExtPorts.clock_now`'s zero-argument shape admits no world capture. **The instrument that covers
+   it is the `Clock` poison probe, not this classifier**, and the two must not be confused.
+
+   **The self-defeat argument the original paragraph was protecting still holds, and this amendment
+   does not disturb it.** The rejected earlier definition — "fields that do not yet return world
+   state" — selects all four including `clock_now`, which would make the clock bullet require a
+   `compose` profile to route its eight reads into a field the rejection rule then rejects. The
+   criterion selects three and excludes `clock_now`, so `clock_now` stays a routing destination.
+   The correction is to the enumeration, not to the rule that produced it.
+
+   **Exposure is nil and no conformant profile changes.** Membership only bites through the
+   extension-granularity rule, and that rule fires on *calls*. At this revision the only classifier-2
+   call sites in `src` + `packages` are the two known `ai_step` sites; there are zero calls to
+   `proc_exec`, `env_get` or `clock_now` outside the ABI package itself. All fourteen checked-in
+   configurations install `compaction_ai`, which already calls `ai_step`, so every one of them was
+   already subject to the rule and none moves. **This is a wording correction, not a scope change** —
+   checked deliberately before amending, because if it had moved a configuration it would have been
+   the plan's decision to make, not this ADR's.
+
+   **What made the stale enumeration dangerous was not that it was wrong — it is that a classifier
+   built to it would have been structurally unable to notice.** A detector carrying a hardcoded
+   member list reports a clean routing audit over a dropped world cursor the moment an extension
+   touches `proc_exec` or `env_get`: it fails *open*, which is the exact defect classifier 1 was
+   respecified four times to avoid. So the correction is carried by the tool rather than by this
+   paragraph: `tools/ext_call_inventory/derive.py` **re-derives membership from the criterion on
+   every run** — reading the `ExtPorts` record, the `Ports` record and the bridge — and never
+   consults a list, including this table. The table above is this amendment reporting the tool's
+   output, not the tool's input. `make ext_call_inventory_selftest` pins the current answer as a
+   regression guard, so the ABI major (WI-B2) changing it goes red rather than passing silently.
+
    ***Classifier 2's own matcher boundary*** — it does not inherit classifier 1's wholesale, because
    an ABI-field scan and a module-import scan fail differently. The shared limits are the fixed
    `src` + `packages` roots and the refusal to decide reachability. Its own limits: a field reached

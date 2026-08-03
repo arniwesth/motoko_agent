@@ -1,0 +1,26 @@
+module tools/ext_call_inventory/fixtures/form_computed
+
+-- FORM 4: COMPUTED ACCESS.
+--
+-- Stated honestly: AILANG has no computed FIELD access -- no `r[name]` on a
+-- record -- so the ADR's fourth form is not literally expressible on this pin.
+-- The realizable equivalent is a computed RECEIVER: the port record itself is
+-- selected by an expression evaluated at run time, so which `ExtPorts` value is
+-- called is not decidable from the text.
+--
+-- It shares a detector with form 2 (the receiver is a call result rather than a
+-- typed path) and that is recorded rather than hidden: two of the ADR's four
+-- named forms collapse onto one rule on this pin. The fixture is kept separate
+-- anyway, so that if computed field access ever lands the case already has a
+-- home and an expectation.
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtPorts, Msg)
+
+export func pick(a: ExtPorts, b: ExtPorts, use_a: bool) -> ExtPorts {
+  if use_a then a else b
+}
+
+export func summarize(a: ExtPorts, b: ExtPorts, use_a: bool, model: string, msgs: [Msg])
+  -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  pick(a, b, use_a).ai_step(model, msgs)
+}

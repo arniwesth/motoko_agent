@@ -1,0 +1,18 @@
+module tools/ext_call_inventory/fixtures/form_reexport
+
+-- FORM 2: a RE-EXPORT. The port record is handed back by an exported accessor
+-- and the call site's receiver is that accessor's RESULT, not a binding. There
+-- is no identifier whose type could be read, and the accessor may live in
+-- another module entirely -- which is the case this tool cannot follow and must
+-- therefore not pass.
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtPorts, Msg)
+
+export func ports_of(ctx: ExtCtx) -> ExtPorts {
+  ctx.ports
+}
+
+export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
+  -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  ports_of(ctx).ai_step(model, msgs)
+}

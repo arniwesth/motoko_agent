@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Expectations for `make ext_call_inventory_selftest`.",
+    "",
+    "Each `form_*.ail` uses one of the four indirection forms ADR-001 D5 names as",
+    "outside classifier 2's matcher boundary. Every one MUST be reported unresolved.",
+    "A fixture that comes back clean is not a pass -- it is the fail-open defect the",
+    "classifier exists to prevent, and the suite treats silence as failure.",
+    "",
+    "`control_resolved.ail` must come back with one RESOLVED site and nothing",
+    "unresolved. Without it a classifier that flagged everything would pass.",
+    "",
+    "`membership` records the set derived from D5's criterion at this revision. It",
+    "is a regression guard, NOT the classifier's input: the tool re-derives",
+    "membership from ExtPorts, Ports and the bridge on every run and never reads",
+    "this file. Widening the ABI in Milestone B is expected to change these values,",
+    "and the self-test going red is how that change gets noticed rather than",
+    "absorbed."
+  ],
+  "fixtures": {
+    "control_resolved.ail": {
+      "form": "control: typed path, must resolve",
+      "unresolved": 0,
+      "resolved": 1
+    },
+    "form_alias.ail": {
+      "form": "local alias (unannotated binding)",
+      "unresolved": 1,
+      "resolved": 0
+    },
+    "form_reexport.ail": {
+      "form": "re-export (receiver is an accessor result)",
+      "unresolved": 1,
+      "resolved": 0
+    },
+    "form_wrapper.ail": {
+      "form": "wrapper (field escapes as a value, call site elsewhere)",
+      "unresolved": 1,
+      "resolved": 0
+    },
+    "form_computed.ail": {
+      "form": "computed receiver (shares form 2's detector on this pin)",
+      "unresolved": 1,
+      "resolved": 0
+    }
+  },
+  "membership": {
+    "ai_step": "member",
+    "proc_exec": "member",
+    "env_get": "member",
+    "clock_now": "unrouted"
+  }
+}
