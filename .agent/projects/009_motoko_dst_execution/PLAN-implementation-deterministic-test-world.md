@@ -144,6 +144,32 @@ field the encoder writes and the decoder ignores; both halves type-check and the
 until a replay serves a different response while every count still balances. A14 and A15 encode
 programs for D8's persistence and inherit this directly.
 
+**S8. When a guard asserts that X influences Y, check that X cannot reach Y except through the
+mechanism under test.** Earned by A13 stage 4, and it is the first rule this project has that
+mutation testing (C5) structurally could not produce. The generator's whole risk is a seed that
+reaches no choice, so the stage's central assertion is "changing the seed changes the program". It
+was written first (S1), it was proven red against the intended mutant — a real driver run whose
+generator state is identical across three requested seeds — and it **still passed** on a weaker
+mutant, because `choose_provider` printed `g.seed` into the generated prose. Patch the PRNG's
+seeding to ignore its seed entirely and three seeds produced *the same interaction count, the same
+draw count and the same clock* — identical trajectories — with three different outcome digests. A
+generator that reads its seed only to print it satisfies every statement of seed sensitivity that
+compares programs.
+
+The rule is distinct from S1 (write the assertion first) and from C5 (prove the guard can fire): the
+guard here **could** fire and **did** fire on the mutant it was designed against. What exposed the
+gap was mutating the implementation a *second, weaker* way — breaking only the mechanism, and
+leaving the decorative path intact.
+
+**The remedy is structural rather than a better assertion:** everything the generator writes is now
+derived from a **draw**, so a seed that reaches no choice reaches no byte of the program. Where that
+cannot be arranged, the assertion must name the leak and exclude it.
+
+**A14's D4 latency pair and A15's corpora both assert "this input influences that artifact" and both
+have this exposure.** So does stage 5's generator canary, whose failure mode the handoff already
+named — pinning `generator_id`, `generator_version` and `seed` as literals passes and certifies
+nothing. S8 says the canary must pin something the version cannot reach except by changing a choice.
+
 **S4. Size a constructed artifact by the rows whose content must be *discovered*, not by its row
 count.** Cluster 3 measured the controlled comparison: A7 has 68 sites and took 11.5 minutes; A8 has
 158 and took 8. Every A7 row needed a recovery branch located and confirmed in the driver — eleven
@@ -179,6 +205,18 @@ specification clause admitting two readings; stage 1 had exactly one (D2's dupli
 and it consumed effectively all the item's risk while twenty-odd read bindings cost nothing. Stage 2
 had **three** and cost roughly **3×** stage 1 — the count of recorded bindings tracked the cost ratio
 better than any measure of size. **No sixth model is needed; count the decisions, not the lines.**
+
+**Fourth data point, and the second term needs one distinction.** A13 stage 4 had **four** recorded
+bindings against stages 1–3's three, and cost roughly **1.5×** stage 3 — the count predicted 1.33×
+and the direction is right, so the predictor survives a fourth time. What it did not predict is that
+**two of the four were DISCOVERED by running rather than decided by reading.** Bindings 1 and 2 (how
+the request enters a choice; what `max_resource_size` bounds) were identifiable from D2 before a line
+was written, exactly like every binding in stages 1–3. Bindings 3 and 4 (end-of-input is terminal;
+where the generator's choice surface stops) both arrived as **red gates** — one from strict replay,
+one from a chosen field that nothing consumed. **No sixth model: S6's second term inherits S5's
+uncertainty whenever the composition is over something that RUNS rather than something that
+validates.** A validator's bindings are all decided; a generator's are not, and cannot be counted in
+advance.
 
 **Third data point: the predictor survives, its explanation does not.** Stage 3 had three recorded
 bindings — parity with stage 2 — and cost about the same, so the count held. But cluster 8 attributed
@@ -883,6 +921,30 @@ half was never any stage's. It surfaced when stage 4's canary needed a generator
 draws from a seed, and `discovery_dst.ail:543-545` writes `seed: 0` on hand-authored scenarios.
 Remaining stages are therefore **4 — the seeded generator; 5 — regression replay and D8's canary;
 6 — D8's persistence obligations.**
+
+**Stage 4 landed 2026-08-03 (`f77adf1`), and the correction above is confirmed rather than merely
+asserted.** `src/core/dst_generator.ail` holds an explicit, seeded, state-threaded Lehmer PRNG — no
+`std/rand`, and the module is in `src/core` so `make world_state`'s guard already covers it — with
+`GeneratorState` riding in `WorldState` and `GeneratorBounds` moved down beside it. `make
+seeded_generator` is wired into `dst`; `make dst` is exit 0 at 387 checks.
+
+Two findings from it bind the remaining stages. **S8 above** is the first, and stage 5's canary is
+its next customer. The second is a D2 reading no artifact contained: **an interleaved end-of-input
+approval is an incompatible response**, because the world's approval cursor is a queue and a closed
+stdin does not reopen. It was invisible to the structural validator, to `validate_bounds`, to the
+reconstitution balance *in both directions*, to determinism and to seed sensitivity — and strict
+replay refused it. Stage 3's fail-closed refusal path is what produced it, which is the second time
+a stage's own guard has caught the *next* stage's defect.
+
+**Two scope items are explicitly NOT in stage 4 and are named here so they are not lost.** The
+generator chooses no provider FAULT and no provider LATENCY, because `ScriptedStep` has neither an
+error case nor an `advance_ms` — both are one field on that type away, restored on replay from
+`TimedOutcome.advance_ms` exactly as the tool class's duration already is, with no codec change.
+That widening is **WI-A14's D4 latency pair**, and A14 should expect it. `max_clock_advance_ms` is
+nonetheless live, enforced and mutation-tested on the tool class. Separately,
+**`max_resource_size` is the one declared bound with no mutation row** — it is bound to the
+synthetic environment's entry count, which nothing this generator produces approaches; A14 should
+either give it a resource that can grow or delete the bound.
 
 **WI-A13. Build discovery and replay** (D2, D8). Depends on A7 (class ids), A9 (result types), A10
 (manifest), A12 (world_state — **landed**). A12 also left a seam this item wants:
