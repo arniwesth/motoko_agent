@@ -10,7 +10,19 @@ import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
 import std/list as List (length)
 import std/result (Result)
 import std/trace as Trace
-import std/json (encode)
+-- WI-A13 stage 3 needs `decode` and the accessors as well: the recorded
+-- provider and tool outcomes are structured projections, and the same module
+-- that writes them reads them back. See "the recorded outcome must be
+-- sufficient to re-serve the response" below.
+import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray)
+-- NOT decoration, and NOT optional. `std/json`'s accessors return `Option`, and
+-- without this import `None` and `Some(j)` in a match arm are not constructor
+-- patterns — they are FRESH VARIABLE BINDINGS. The first arm then matches
+-- everything, the second is unreachable, every field silently reads back as its
+-- fallback, and the module type-checks clean with no warning. That is what
+-- happened while these codecs were being written, and the round-trip tests
+-- below are what caught it; nothing else could have.
+import std/option (Option, Some, None)
 import src/core/phase_vocab (ApprovalRequest)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/tool_dispatch_adapter (dispatch_one)
@@ -534,18 +546,334 @@ export func recording_tool(state: WorldState, inv: ToolInvocation) -> ToolExecut
 -- discriminated results maps to its own recorded status, and the three faults
 -- carry A7 class ids: a fault recorded without one is uncountable by D11's
 -- class-reached counter, which stage 1's validator rejects outright.
+--
+-- WI-A13 stage 3 changed the PAYLOAD from a prose summary to the structured
+-- projection `encode_tool_outcome` writes. The status and the class id are
+-- unchanged, so nothing that grades the fault class moves; what changes is that
+-- the payload is now sufficient to re-serve the outcome. Stage 2's version was
+-- not: `ToolFailed`'s payload was its message alone, and a failure code that
+-- reaches no replay is a D3 fault class that no replayed program can exercise.
 pure func tool_outcome_record(o: ToolOutcome, advanced: int) -> TimedOutcome {
+  let payload = encode_tool_outcome(o);
   match o {
-    ToolCompleted(c) =>
-      { advance_ms: advanced, chunks: [], payload: c.content, status: OutcomeOk, fault_class_id: "" },
-    ToolFailed(f) =>
-      { advance_ms: advanced, chunks: [], payload: f.message, status: OutcomeFault, fault_class_id: fault_class_tool_failed() },
-    ToolCorrelationMismatch(m) =>
-      { advance_ms: advanced, chunks: [], payload: "expected ${m.expected_id} got ${m.got_id}", status: OutcomeFault, fault_class_id: fault_class_tool_correlation_mismatch() },
-    ToolDeadlineExceeded(d) =>
-      { advance_ms: advanced, chunks: [], payload: "elapsed ${d.elapsed_ms}ms against timeout ${d.timeout_ms}ms", status: OutcomeFault, fault_class_id: fault_class_tool_deadline_exceeded() }
+    ToolCompleted(_) =>
+      { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" },
+    ToolFailed(_) =>
+      { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: fault_class_tool_failed() },
+    ToolCorrelationMismatch(_) =>
+      { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: fault_class_tool_correlation_mismatch() },
+    ToolDeadlineExceeded(_) =>
+      { advance_ms: advanced, chunks: [], payload: payload, status: OutcomeFault, fault_class_id: fault_class_tool_deadline_exceeded() }
   }
 }
+
+-- ---------------------------------------------------------------------------
+-- WI-A13 stage 3: the recorded outcome must be SUFFICIENT TO RE-SERVE THE
+-- RESPONSE
+-- ---------------------------------------------------------------------------
+--
+-- `dst_program`'s design note 3 refuses to put the provider script, the
+-- approval queue and the tool queue on the execution program, because "a
+-- program could serve a response that no interaction records, which is the
+-- exact shape of the completeness defect this item exists to prevent". They are
+-- PROJECTIONS of the interaction list, and `dst_replay.world_state_of` computes
+-- them.
+--
+-- That constraint has a consequence stage 2 did not have to face and stage 3
+-- does: a projection can only be lossless if the thing it projects from carries
+-- everything. Stage 2 recorded the provider outcome's payload as `s.prose`
+-- alone. That is a legible summary and an insufficient record: the step's TOOL
+-- CALLS are what cause the next production tool request, so a program
+-- discovered from a run with tool calls reconstituted a script that made none,
+-- and the replay terminated at step 0 while agreeing with the program at every
+-- position it reached.
+--
+-- The fix belongs HERE and not on the program. D2 says a provider timed outcome
+-- carries "a final StepResult or AIError", so recording only the prose was an
+-- under-recording of the outcome against D2's own text; widening
+-- `ExecutionProgram` with a script field would instead be the defect design
+-- note 3 exists to prevent. The payload becomes a structured projection, which
+-- is what D2 already calls it ("arguments and message/payload digests are
+-- recorded projections, not silently discarded").
+--
+-- ENCODER AND DECODER SIT TOGETHER, ON PURPOSE. This module's header argues
+-- that "two representations of one fact with a hand-written projection between
+-- them is the exact shape of the fifteen silent defects this project has now
+-- found". A codec is that hazard in miniature, so the two halves are adjacent
+-- and a round-trip test below is what holds them together.
+--
+-- The stream chunks are deliberately NOT in the payload: they are already in
+-- `TimedOutcome.chunks`, and duplicating them would create exactly the second
+-- representation the paragraph above rejects. `world_state_of` reads them from
+-- there, which is what makes that field load-bearing rather than decorative.
+
+pure func str_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(v) => v }
+  }
+}
+
+pure func int_field(obj: Json, key: string, fallback: int) -> int {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asNumber(j) { None => fallback, Some(v) => _float_to_int(v) }
+  }
+}
+
+pure func bool_field(obj: Json, key: string, fallback: bool) -> bool {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asBool(j) { None => fallback, Some(v) => v }
+  }
+}
+
+pure func json_array(obj: Json, key: string) -> [Json] {
+  match get(obj, key) {
+    None => [],
+    Some(j) => match asArray(j) { None => [], Some(xs) => xs }
+  }
+}
+
+pure func has_key(obj: Json, key: string) -> bool {
+  match get(obj, key) { None => false, Some(_) => true }
+}
+
+-- What a recorded provider outcome reads back as.
+--
+-- Three cases and not two: an exhausted script is a request the driver MADE and
+-- the world declined to serve from the script, so it is a recorded interaction
+-- with no script entry behind it — the same distinction an end-of-input
+-- approval read draws with `OutcomeMissing`. Collapsing it into "undecodable"
+-- would make a legitimate run unreplayable; collapsing it into "served" would
+-- manufacture a script entry the discovery run never had.
+export type ProviderOutcome
+  = ProviderServed(ScriptedStep)
+  | ProviderScriptExhausted
+  | ProviderUndecodable(string)
+
+pure func tool_call_json(c: ToolCall) -> Json {
+  jo([kv("id", js(c.id)), kv("name", js(c.name)), kv("arguments", js(c.arguments))])
+}
+
+pure func tool_calls_json(cs: [ToolCall]) -> [Json] {
+  match cs { [] => [], c :: rest => tool_call_json(c) :: tool_calls_json(rest) }
+}
+
+pure func tool_calls_of(xs: [Json]) -> [ToolCall] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ id: str_field(x, "id", ""),
+         name: str_field(x, "name", ""),
+         arguments: str_field(x, "arguments", "") }) :: tool_calls_of(rest)
+  }
+}
+
+-- `finish_reason` is recorded rather than derived. `scripted_to_step_result`
+-- WOULD derive it ("tool_calls if there are any, else stop"), and for every
+-- step `tool_step` builds that derivation is correct — which is precisely why
+-- it must not be relied on: `tool_step_finish` exists to produce a step whose
+-- finish reason disagrees with its tool calls, because real providers do that,
+-- and a derived value would replay that step as a different one while every
+-- count still balanced.
+export pure func encode_provider_outcome(s: ScriptedStep) -> string {
+  encode(jo([
+    kv("served", jb(true)),
+    kv("prose", js(s.prose)),
+    kv("finish_reason", js(s.finish_reason)),
+    kv("input_tokens", jnum(_int_to_float(s.input_tokens))),
+    kv("output_tokens", jnum(_int_to_float(s.output_tokens))),
+    kv("tool_calls", ja(tool_calls_json(s.tool_calls)))
+  ]))
+}
+
+export pure func encode_exhausted_provider_outcome() -> string {
+  encode(jo([kv("served", jb(false))]))
+}
+
+export pure func decode_provider_outcome(payload: string) -> ProviderOutcome {
+  match decode(payload) {
+    Err(_) => ProviderUndecodable("the payload is not JSON"),
+    Ok(root) =>
+      if not has_key(root, "served") then
+        ProviderUndecodable("the payload carries no 'served' discriminator; a provider outcome recorded before WI-A13 stage 3 held the prose alone and cannot reconstitute the step's tool calls")
+      else if not bool_field(root, "served", false) then ProviderScriptExhausted
+      else ProviderServed({
+        prose: str_field(root, "prose", ""),
+        tool_calls: tool_calls_of(json_array(root, "tool_calls")),
+        input_tokens: int_field(root, "input_tokens", 0),
+        output_tokens: int_field(root, "output_tokens", 0),
+        finish_reason: str_field(root, "finish_reason", ""),
+        -- Read back from `TimedOutcome.chunks` by the caller; see above.
+        chunks: []
+      })
+  }
+}
+
+-- What a recorded tool outcome reads back as: the `ScriptedTool` that reproduces
+-- it. One case per fault A12's typed contract discriminates, because the flat
+-- string payload stage 2 recorded lost the failure CODE entirely — a
+-- `ToolFailed` recorded as its message alone replays as a success, and D3
+-- requires the tool fault classes to be reachable.
+export type ToolOutcomeRecord
+  = ToolRecordDecoded(ScriptedTool)
+  | ToolRecordUndecodable(string)
+
+export pure func encode_tool_outcome(o: ToolOutcome) -> string {
+  match o {
+    ToolCompleted(c) =>
+      encode(jo([kv("result", js("completed")), kv("content", js(c.content))])),
+    ToolFailed(f) =>
+      encode(jo([kv("result", js("failed")), kv("code", js(f.code)), kv("message", js(f.message))])),
+    -- `got_id` is the SCRIPT's id, which is what the world must be re-seeded
+    -- with for `world_tool` to take the correlation branch again. Recording the
+    -- expected id instead would replay as an ordinary success.
+    ToolCorrelationMismatch(m) =>
+      encode(jo([kv("result", js("correlation_mismatch")),
+                 kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))])),
+    -- No duration here: the elapsed time IS `TimedOutcome.advance_ms`, and
+    -- `world_tool` re-derives the deadline branch from that against the
+    -- invocation's own timeout. Recording it twice is a second representation.
+    ToolDeadlineExceeded(d) =>
+      encode(jo([kv("result", js("deadline_exceeded")), kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))]))
+  }
+}
+
+-- `advance_ms` comes from the recorded outcome rather than the payload, for the
+-- reason `recording_tool` reads it back from the world rather than from the
+-- script: it is what actually happened to the clock, and it is the single
+-- quantity that re-derives the deadline branch on replay.
+export pure func decode_tool_outcome(payload: string, advance_ms: int) -> ToolOutcomeRecord {
+  match decode(payload) {
+    Err(_) => ToolRecordUndecodable("the payload is not JSON"),
+    Ok(root) => {
+      let result = str_field(root, "result", "");
+      if result == "completed" then
+        ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
+                            message: "", content: str_field(root, "content", "") })
+      else if result == "failed" then
+        ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms,
+                            code: str_field(root, "code", ""),
+                            message: str_field(root, "message", ""), content: "" })
+      else if result == "correlation_mismatch" then
+        ToolRecordDecoded({ tool_call_id: str_field(root, "got_id", ""), duration_ms: advance_ms,
+                            code: "", message: "", content: "" })
+      else if result == "deadline_exceeded" then
+        ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
+                            message: "", content: "" })
+      else
+        ToolRecordUndecodable("the payload carries no recognised 'result' discriminator (saw '${result}'); a tool outcome recorded before WI-A13 stage 3 held the content or the message alone and cannot reconstitute the failure code")
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Codec round trips. A codec's failure mode is a field that the encoder writes
+-- and the decoder ignores, or the reverse; both halves type-check and the loss
+-- is silent until a replay serves a different response and every count still
+-- balances. These assert the round trip is the IDENTITY on every field, which
+-- is the only statement that can see that.
+-- ---------------------------------------------------------------------------
+
+pure func eq_tool_calls(a: [ToolCall], b: [ToolCall]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b {
+      [] => false,
+      y :: ys => x.id == y.id && x.name == y.name && x.arguments == y.arguments && eq_tool_calls(xs, ys)
+    }
+  }
+}
+
+-- Every field of `ScriptedStep` given a DISTINCT value, so that a decoder which
+-- reads the right key into the wrong field is visible. Two fields holding the
+-- same value cannot distinguish which one a check is reading (S7).
+pure func codec_fixture_step() -> ScriptedStep {
+  { prose: "the prose",
+    tool_calls: [{ id: "call-1", name: "BashExec", arguments: "{\"cmd\":\"true\"}" },
+                 { id: "call-2", name: "Read", arguments: "{\"path\":\"x\"}" }],
+    input_tokens: 211,
+    output_tokens: 307,
+    -- Deliberately DISAGREES with the tool calls: a derived finish reason would
+    -- produce "tool_calls" here, so this row is what proves it is recorded.
+    finish_reason: "stop",
+    chunks: [] }
+}
+
+pure func test_the_provider_outcome_round_trips_every_field() -> bool
+  tests [((), true)]
+  {
+    let s = codec_fixture_step();
+    match decode_provider_outcome(encode_provider_outcome(s)) {
+      ProviderServed(back) =>
+        back.prose == s.prose
+          && back.finish_reason == s.finish_reason
+          && back.input_tokens == s.input_tokens
+          && back.output_tokens == s.output_tokens
+          && eq_tool_calls(back.tool_calls, s.tool_calls),
+      ProviderScriptExhausted => false,
+      ProviderUndecodable(_) => false
+    }
+  }
+
+-- The three cases are DISTINGUISHED, not merely decodable. An exhausted script
+-- read back as a served empty step would silently lengthen the replay's script
+-- by one; a stage-2 payload (bare prose, not JSON) read back as anything other
+-- than undecodable would replay a step with no tool calls and terminate early.
+pure func test_the_three_provider_cases_are_distinguished() -> bool
+  tests [((), true)]
+  {
+    let exhausted = match decode_provider_outcome(encode_exhausted_provider_outcome()) {
+      ProviderScriptExhausted => true, _ => false
+    };
+    let not_json = match decode_provider_outcome("stub: script exhausted") {
+      ProviderUndecodable(_) => true, _ => false
+    };
+    let json_without_discriminator = match decode_provider_outcome("{\"prose\":\"s0\"}") {
+      ProviderUndecodable(_) => true, _ => false
+    };
+    exhausted && not_json && json_without_discriminator
+  }
+
+-- Each of A12's four typed tool outcomes must round-trip to a `ScriptedTool`
+-- that `world_tool` maps back to the SAME outcome. The assertion is on the
+-- reconstituted world input, because that is what replay actually feeds back.
+pure func test_each_tool_outcome_round_trips_to_a_world_input_that_reproduces_it() -> bool
+  tests [((), true)]
+  {
+    let completed = decode_tool_outcome(encode_tool_outcome(ToolCompleted({ tool_call_id: "c1", content: "OUT" })), 7);
+    let failed = decode_tool_outcome(encode_tool_outcome(ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom" })), 11);
+    let mismatch = decode_tool_outcome(encode_tool_outcome(ToolCorrelationMismatch({ expected_id: "c1", got_id: "c9" })), 13);
+    let late = decode_tool_outcome(encode_tool_outcome(ToolDeadlineExceeded({ tool_call_id: "c1", elapsed_ms: 900, timeout_ms: 50 })), 900);
+    (match completed {
+       ToolRecordDecoded(t) => t.content == "OUT" && t.code == "" && t.tool_call_id == "" && t.duration_ms == 7,
+       ToolRecordUndecodable(_) => false
+     })
+      && (match failed {
+            -- The CODE is the field stage 2's flat payload lost.
+            ToolRecordDecoded(t) => t.code == "E42" && t.message == "boom" && t.duration_ms == 11,
+            ToolRecordUndecodable(_) => false
+          })
+      && (match mismatch {
+            -- `got_id`, not `expected_id`: re-seeding the world with the id the
+            -- driver asked for replays as an ordinary success.
+            ToolRecordDecoded(t) => t.tool_call_id == "c9" && t.duration_ms == 13,
+            ToolRecordUndecodable(_) => false
+          })
+      && (match late {
+            -- Nothing but the duration, which is what re-derives the branch.
+            ToolRecordDecoded(t) => t.duration_ms == 900 && t.code == "" && t.tool_call_id == "",
+            ToolRecordUndecodable(_) => false
+          })
+  }
+
+pure func test_a_stage_two_tool_payload_is_undecodable_rather_than_a_silent_success() -> bool
+  tests [((), true)]
+  {
+    match decode_tool_outcome("boom", 3) { ToolRecordUndecodable(_) => true, _ => false }
+      && match decode_tool_outcome("{\"content\":\"OUT\"}", 3) { ToolRecordUndecodable(_) => true, _ => false }
+  }
 
 -- The sole `Ports` constructor. It keeps ONE function-typed parameter and
 -- defaults every other seam, including the deterministic `virtual_clock`;

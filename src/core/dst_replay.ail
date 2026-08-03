@@ -1,0 +1,902 @@
+-- D2's STRICT REPLAY: consume an exact execution program, reconstitute the
+-- world from it, and require causal identity and recorded projections to match.
+--
+-- WI-A13, stage 3. This module holds the ASSERTION and the RECONSTITUTION.
+-- Written before the replay loop that consumes it (standing rule S1), and the
+-- loop lives in `scripts/dst/strict_replay_dst.ail` where a real driver run is
+-- in scope.
+--
+-- ---------------------------------------------------------------------------
+-- THE WEAKNESS THIS MODULE IS BUILT AGAINST, STATED BEFORE THE CODE
+-- ---------------------------------------------------------------------------
+--
+-- D2's strict-replay contract is *"the exact program reproduces the same
+-- interaction log, terminal outcome and trace"*. That is a DETERMINISM
+-- contract, and determinism is 0-for-18 across eight clusters in this project:
+-- it caught neither cluster 1's frozen cursor, nor cluster 4's dropped record,
+-- nor A12's four, nor stage 1's over-strict validator, nor stage 2's three.
+--
+-- The specific way it fails HERE is worth naming precisely, because everything
+-- below is shaped by it:
+--
+--   STRICT REPLAY COMPARES RECORDED AGAINST ACTUAL, AND IF BOTH SIDES DERIVE
+--   FROM THE SAME DEFECTIVE PROJECTION THEY AGREE.
+--
+-- Three concrete instances:
+--
+--   * A `world_state_of` that drops a class reconstitutes a world that never
+--     serves it, the replay makes no requests of that class, and the comparison
+--     passes.
+--   * A replayed run whose recorder has the same gap as the discovery recorder
+--     produces a log that matches the program BECAUSE BOTH ARE WRONG IN THE
+--     SAME WAY — and this one is structural, not hypothetical: strict replay
+--     re-uses `recording_ports`, the very recorder that produced the program.
+--   * A world missing a queue serves defaults CONSISTENTLY, and consistently is
+--     all this contract asks.
+--
+-- Program-versus-log agreement is therefore the recorder grading itself, one
+-- level up. Two things answer that, and both are executable:
+--
+--   1. `reconstitution_balance` below. `world_state_of` is the one projection
+--      strict replay adds, so it gets its own two-sided count check against the
+--      program it was built from — the same shape `dst_discovery.class_balance`
+--      uses, for the same reason.
+--   2. THE REPLAYED RUN IS GRADED BY STAGE 2'S INDEPENDENT WITNESSES, not only
+--      by this comparison. A replayed run is a run: it has a ledger trace
+--      written by production code, world cursors moved by the response-producing
+--      adapters, and a clock. `dst_discovery.check_discovery` grades it exactly
+--      as it grades discovery, and a replay that drops a class then fails the
+--      WITNESS balance even when it matches the program perfectly. That call is
+--      in the acceptance script, and the script carries a fixture which matches
+--      the program and fails the witness, so the distinction is asserted rather
+--      than claimed.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT THE PROGRAM CARRIES, AND WHAT IT DELIBERATELY DOES NOT
+-- ---------------------------------------------------------------------------
+--
+-- `dst_program`'s design note 3: the program does NOT carry the provider
+-- script, the approval queue or the tool queue, because "if the program carried
+-- both, a program could serve a response that no interaction records, which is
+-- the exact shape of the completeness defect this item exists to prevent."
+--
+-- `world_state_of` therefore DERIVES those three queues from the interaction
+-- list. That constraint is what makes the invariant structural rather than
+-- asserted: a served response necessarily has a recorded interaction behind it,
+-- because the response IS the recorded interaction, read back.
+--
+-- The constraint has a cost, and stage 3 paid it rather than routing around it:
+-- a recorded outcome must be SUFFICIENT TO RE-SERVE THE RESPONSE. Stage 2's
+-- provider recorder wrote only the prose, so a program discovered from a run
+-- with tool calls reconstituted a script that made none, and the replay
+-- terminated at step 0. That is not a replay defect; it is an under-recording
+-- of the provider outcome relative to D2, which says a provider timed outcome
+-- ends in "a final StepResult or AIError". The fix is in the RECORDED OUTCOME
+-- (`ports.encode_provider_outcome`), not in the program's shape — adding a
+-- script field to `ExecutionProgram` is the defect design note 3 exists to
+-- prevent, and it is not done here.
+
+module src/core/dst_replay
+
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/dst_interaction (
+  Interaction,
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  ClockAdvanceIdentity,
+  StreamChunkRecord,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  TimedOutcome,
+  identity_kind,
+  identity_origin,
+  identity_body_eq,
+  identity_projection,
+  interaction_kind,
+  outcome_status_id,
+  count_kind,
+  approvals_served
+)
+import src/core/dst_program (ExecutionProgram, validate_program, program_rule)
+import src/core/dst_result (
+  DstResult, RunFailed,
+  HarnessFailure,
+  HarnessFailureKind, ProgramMismatch, InvalidProgram, InteractionsExhausted,
+  ReplayMetadata
+)
+import src/core/phase_vocab (LedgerTrace)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/ports (
+  WorldState, ScriptedStep, ScriptedTool, empty_world_state,
+  ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable,
+  ToolOutcome, ToolCompleted,
+  ToolOutcomeRecord, ToolRecordDecoded, ToolRecordUndecodable,
+  decode_provider_outcome, decode_tool_outcome,
+  encode_provider_outcome, encode_exhausted_provider_outcome, encode_tool_outcome
+)
+
+-- ---------------------------------------------------------------------------
+-- Divergence between the program and the run that replayed it
+-- ---------------------------------------------------------------------------
+
+-- D2 names four things that are a `HarnessFailure` "and not a simulated system
+-- fault": a wrong kind/origin, an unsafe identity mismatch, an exhausted
+-- program, and an unused interaction. All four are here, plus the two
+-- projection comparisons the same sentence requires ("recorded projections to
+-- match").
+--
+-- `UnusedInteraction` is the one most easily forgotten, because NOTHING FAILS
+-- WITHOUT IT: a replay that stops early produces a log that agrees with every
+-- position it did reach. It is the mirror of `ProgramExhausted` and the two are
+-- the two arms of one walk, so neither can be deleted without the other staring
+-- back — the discipline `dst_discovery.class_balance` established.
+export type ReplayMismatch
+  = WrongKind(int, string, string)          -- position, expected kind, actual kind
+  | WrongOrigin(int, string, string)        -- position, expected origin, actual origin
+  | UnsafeIdentity(int, string, string)     -- position, expected identity, actual identity
+  | ProjectionDiffers(int, string, string)  -- position, expected projection, actual
+  | OutcomeDiffers(int, string, string)     -- position, expected outcome, actual
+  | ProgramExhausted(int, string)           -- position, the actual request that had no interaction
+  | UnusedInteraction(int, string)          -- position, the interaction nothing requested
+
+export pure func replay_rule(m: ReplayMismatch) -> string {
+  match m {
+    WrongKind(_, _, _) => "replay-wrong-kind",
+    WrongOrigin(_, _, _) => "replay-wrong-origin",
+    UnsafeIdentity(_, _, _) => "replay-unsafe-identity-mismatch",
+    ProjectionDiffers(_, _, _) => "replay-projection-differs",
+    OutcomeDiffers(_, _, _) => "replay-outcome-differs",
+    ProgramExhausted(_, _) => "replay-program-exhausted",
+    UnusedInteraction(_, _) => "replay-unused-interaction"
+  }
+}
+
+export pure func replay_message(m: ReplayMismatch) -> string {
+  match m {
+    WrongKind(p, e, a) =>
+      "[replay-wrong-kind] at interaction position ${p} the program records a '${e}' and the driver requested a '${a}'; D2 makes a wrong kind a HarnessFailure and not a simulated system fault, because delivering one class's recorded outcome to another class's request is not a reproduction of anything",
+    WrongOrigin(p, e, a) =>
+      "[replay-wrong-origin] at interaction position ${p} the program records origin '${e}' and the driver requested from '${a}'; the origin names the producer, so a match on kind alone would deliver an extension's recorded outcome to the driver's own request",
+    UnsafeIdentity(p, e, a) =>
+      "[replay-unsafe-identity-mismatch] at interaction position ${p} the program records ${e} and the driver requested ${a}; strict replay requires causal identity to MATCH, and D2 forbids delivering an outcome to a different logical request even when the kind and origin agree — a repeated call id at a different ordinal is exactly the shape stage 1's validator keeps representable so this check, and not the decoder, reports it",
+    ProjectionDiffers(p, e, a) =>
+      "[replay-projection-differs] at interaction position ${p} the program records request projection '${e}' and the driver produced '${a}'; strict replay requires the recorded projections to match, and the projection is what carries the arguments and message digests D2 says are recorded rather than silently discarded",
+    OutcomeDiffers(p, e, a) =>
+      "[replay-outcome-differs] at interaction position ${p} the program records outcome ${e} and the replay served ${a}; the world is reconstituted FROM the program, so a differing outcome means the reconstitution lost something the recording carried — which is the one projection strict replay adds and therefore the one it must check",
+    ProgramExhausted(p, a) =>
+      "[replay-program-exhausted] the driver made request ${a} at position ${p} and the program holds no interaction there; D2 makes an exhausted program a HarnessFailure, because a replay that runs past the end of its program is reproducing something the program never described",
+    UnusedInteraction(p, e) =>
+      "[replay-unused-interaction] the program records ${e} at position ${p} and the driver never requested it; D2 makes an unused interaction a HarnessFailure, and it is the mismatch that fails SILENTLY without this rule — a replay which stops early agrees with the program at every position it did reach"
+  }
+}
+
+-- Which of A9's failure kinds each divergence is.
+--
+-- A DECIDED BINDING, recorded because S6's second term says that is where an
+-- item's risk lives. A9's `HarnessFailureKind` has no `UnusedInteraction`
+-- variant, and adding one is an A9-owned change that would ripple into the
+-- event vocabulary and its goldens. `ProgramMismatch` is taken — "the driver
+-- asked for something the program did not anticipate" reads awkwardly for a
+-- surplus, so the DISTINCTION is carried by `replay_rule` and by the projection
+-- text, both of which name it exactly. The alternative, folding it into
+-- `InteractionsExhausted`, would conflate the two directions of the walk into
+-- one kind, which is the one thing this module refuses to do anywhere else.
+export pure func harness_failure_kind_of(m: ReplayMismatch) -> HarnessFailureKind {
+  match m {
+    ProgramExhausted(_, _) => InteractionsExhausted,
+    WrongKind(_, _, _) => ProgramMismatch,
+    WrongOrigin(_, _, _) => ProgramMismatch,
+    UnsafeIdentity(_, _, _) => ProgramMismatch,
+    ProjectionDiffers(_, _, _) => ProgramMismatch,
+    OutcomeDiffers(_, _, _) => ProgramMismatch,
+    UnusedInteraction(_, _) => ProgramMismatch
+  }
+}
+
+export pure func mismatch_position(m: ReplayMismatch) -> int {
+  match m {
+    WrongKind(p, _, _) => p,
+    WrongOrigin(p, _, _) => p,
+    UnsafeIdentity(p, _, _) => p,
+    ProjectionDiffers(p, _, _) => p,
+    OutcomeDiffers(p, _, _) => p,
+    ProgramExhausted(p, _) => p,
+    UnusedInteraction(p, _) => p
+  }
+}
+
+-- The typed failure D2 requires: "a HarnessFailure, not a simulated system
+-- fault". The partial ledger trace and the replay metadata are ARGUMENTS: the
+-- trace belongs to the run and the metadata is projected from the program's own
+-- manifest by `dst_profile.replay_metadata_of`, so a result cannot carry a
+-- profile id that disagrees with the manifest it replayed under.
+export pure func replay_failure(m: ReplayMismatch, partial: LedgerTrace, meta: ReplayMetadata) -> DstResult {
+  RunFailed({
+    kind: harness_failure_kind_of(m),
+    interaction_position: mismatch_position(m),
+    actual_request_projection: replay_message(m),
+    partial_ledger_trace: partial,
+    replay_metadata: meta
+  })
+}
+
+-- ---------------------------------------------------------------------------
+-- The outcome projection
+-- ---------------------------------------------------------------------------
+
+pure func chunk_projection(cs: [StreamChunkRecord]) -> string {
+  match cs {
+    [] => "",
+    c :: [] => "${c.offset_ms}:${c.text}",
+    c :: rest => "${c.offset_ms}:${c.text};${chunk_projection(rest)}"
+  }
+}
+
+-- Every field of `TimedOutcome`, plus the interaction's deadline. TOTAL BY
+-- CONSTRUCTION is the property that matters and it is asserted below
+-- (`test_the_outcome_projection_reads_every_field`): a projection that silently
+-- ignored a field would make `OutcomeDiffers` blind to exactly the
+-- reconstitution loss it exists to catch, and would do so while every count in
+-- the suite still balanced.
+export pure func outcome_projection(i: Interaction) -> string {
+  "advance=${i.outcome.advance_ms} deadline=${i.deadline_ms} status=${outcome_status_id(i.outcome.status)} fault=${i.outcome.fault_class_id} payload=${i.outcome.payload} chunks=[${chunk_projection(i.outcome.chunks)}]"
+}
+
+-- ---------------------------------------------------------------------------
+-- The walk
+-- ---------------------------------------------------------------------------
+
+-- Exactly ONE finding per position, coarsest difference first.
+--
+-- The ordering is not cosmetic. A wrong kind also differs in origin, identity,
+-- projection and outcome; emitting all five would make every mutation row trip
+-- five rules at once, and a mutant that trips five rules proves none of them —
+-- the same care `discovery_dst.renumber` takes when it re-densifies after a
+-- drop.
+pure func compare_at(pos: int, e: Interaction, a: Interaction) -> [ReplayMismatch] {
+  let ek = interaction_kind(e);
+  let ak = interaction_kind(a);
+  if ek != ak then [WrongKind(pos, ek, ak)]
+  else {
+    let eo = identity_origin(e.identity.body);
+    let ao = identity_origin(a.identity.body);
+    if eo != ao then [WrongOrigin(pos, eo, ao)]
+    else if not identity_body_eq(e.identity.body, a.identity.body)
+            || e.identity.ordinal != a.identity.ordinal then
+      [UnsafeIdentity(pos, identity_projection(e.identity), identity_projection(a.identity))]
+    else if e.request_projection != a.request_projection then
+      [ProjectionDiffers(pos, e.request_projection, a.request_projection)]
+    else if outcome_projection(e) != outcome_projection(a) then
+      [OutcomeDiffers(pos, outcome_projection(e), outcome_projection(a))]
+    else []
+  }
+}
+
+pure func walk(pos: int, expected: [Interaction], actual: [Interaction]) -> [ReplayMismatch] {
+  match expected {
+    [] => match actual {
+      [] => [],
+      -- The driver asked for more than the program holds.
+      a :: _ => [ProgramExhausted(pos, "${identity_projection(a.identity)} | ${a.request_projection}")]
+    },
+    e :: e_rest => match actual {
+      -- The program holds more than the driver asked for. Same walk, other arm.
+      [] => [UnusedInteraction(pos, "${identity_projection(e.identity)} | ${e.request_projection}")],
+      -- NOT `a :: as`: `as` is the import-alias keyword on this pin and a
+      -- binder of that name is a parse error at the `=>`, not at the pattern.
+      a :: a_rest => compare_at(pos, e, a) ++ walk(pos + 1, e_rest, a_rest)
+    }
+  }
+}
+
+-- The whole strict-replay comparison, in one call.
+export pure func strict_replay_findings(program: [Interaction], actual: [Interaction]) -> [ReplayMismatch] {
+  walk(0, program, actual)
+}
+
+export pure func strict_replay_ok(program: [Interaction], actual: [Interaction]) -> bool {
+  List.length(strict_replay_findings(program, actual)) == 0
+}
+
+export pure func has_replay_rule(ms: [ReplayMismatch], rule: string) -> bool {
+  match ms {
+    [] => false,
+    m :: rest => if replay_rule(m) == rule then true else has_replay_rule(rest, rule)
+  }
+}
+
+export pure func first_replay_message(ms: [ReplayMismatch]) -> string {
+  match ms {
+    [] => "(no mismatches)",
+    m :: _ => replay_message(m)
+  }
+}
+
+export pure func first_replay_failure(
+  ms: [ReplayMismatch], partial: LedgerTrace, meta: ReplayMetadata
+) -> Option[DstResult] {
+  match ms {
+    [] => None,
+    m :: _ => Some(replay_failure(m, partial, meta))
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Reconstitution: the balance FIRST, the projection second (S1)
+-- ---------------------------------------------------------------------------
+
+-- `world_state_of` is the one projection strict replay adds, and it has the
+-- exact exposure `dst_discovery`'s header describes for a recorder, in both
+-- directions:
+--
+--   UNDERFILLED  a queue shorter than the class it was derived from. The world
+--                runs dry early and serves defaults — CONSISTENTLY, which is
+--                all the determinism contract asks.
+--   OVERFILLED   a queue longer than the class. The world serves a response no
+--                interaction records, which is precisely what `dst_program`'s
+--                design note 3 exists to make unrepresentable.
+export type ReconstitutionFinding
+  = QueueUnderfilled(string, int, int)   -- queue, from the program, in the world
+  | QueueOverfilled(string, int, int)
+  | EpochNotCarried(int, int)            -- program's clock epoch, world's clock
+  | EnvironmentNotCarried(int, int)      -- program's env size, world's env size
+
+export pure func reconstitution_rule(f: ReconstitutionFinding) -> string {
+  match f {
+    QueueUnderfilled(_, _, _) => "reconstitution-queue-underfilled",
+    QueueOverfilled(_, _, _) => "reconstitution-queue-overfilled",
+    EpochNotCarried(_, _) => "reconstitution-epoch-not-carried",
+    EnvironmentNotCarried(_, _) => "reconstitution-environment-not-carried"
+  }
+}
+
+export pure func reconstitution_message(f: ReconstitutionFinding) -> string {
+  match f {
+    QueueUnderfilled(q, from_program, in_world) =>
+      "[reconstitution-queue-underfilled] the program records ${from_program} interaction(s) the '${q}' queue must serve and the reconstituted world holds ${in_world}; the world will run dry mid-replay and serve a default, which is perfectly reproducible and therefore invisible to the determinism half of D2's strict-replay contract",
+    QueueOverfilled(q, from_program, in_world) =>
+      "[reconstitution-queue-overfilled] the reconstituted world's '${q}' queue holds ${in_world} entries and the program records ${from_program}; a world that can serve a response no interaction records is the exact defect dst_program's design note 3 keeps unrepresentable by refusing to carry the queues at all",
+    EpochNotCarried(epoch, clock) =>
+      "[reconstitution-epoch-not-carried] the program's initial world declares clock epoch ${epoch} and the reconstituted world starts at ${clock}; D4 makes the explicit clock the only clock, so a replay starting at a different epoch stamps every recorded offset against a different origin",
+    EnvironmentNotCarried(from_program, in_world) =>
+      "[reconstitution-environment-not-carried] the program's initial world declares ${from_program} synthetic environment entr(ies) and the reconstituted world holds ${in_world}; the environment is the ONE queue the program carries directly (design note 3), so losing it is a copy that failed rather than a projection that was lossy"
+  }
+}
+
+-- One comparison, two findings — `dst_discovery.class_balance`'s shape, for the
+-- reason stated there: two separate predicates is the arrangement in which one
+-- of them is deleted, forgotten, or never written.
+pure func queue_balance(queue: string, from_program: int, in_world: int) -> [ReconstitutionFinding] {
+  if in_world < from_program then [QueueUnderfilled(queue, from_program, in_world)]
+  else if in_world > from_program then [QueueOverfilled(queue, from_program, in_world)]
+  else []
+}
+
+-- How many provider interactions actually SERVED a scripted step. A provider
+-- call that found the script exhausted is a recorded interaction with no script
+-- entry behind it, so it must not be counted into the script queue's expected
+-- length — the same distinction `approvals_served` draws for an end-of-input
+-- approval read, and for the same reason.
+export pure func provider_steps_served(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (match i.identity.body {
+         ProviderIdentity(_, _, _) =>
+           match decode_provider_outcome(i.outcome.payload) {
+             ProviderServed(_) => 1,
+             ProviderScriptExhausted => 0,
+             ProviderUndecodable(_) => 0
+           },
+         _ => 0
+       }) + provider_steps_served(rest)
+  }
+}
+
+-- The two-sided check on `world_state_of`'s own projection.
+export pure func reconstitution_balance(p: ExecutionProgram, w: WorldState) -> [ReconstitutionFinding] {
+  queue_balance("script", provider_steps_served(p.interactions), List.length(w.script))
+    ++ queue_balance("approvals", approvals_served(p.interactions), List.length(w.approvals))
+    ++ queue_balance("tools", count_kind(p.interactions, identity_kind(ToolIdentity("", "", ""))),
+                     List.length(w.tools))
+    ++ (if w.clock_ms == p.initial_world.clock_epoch then []
+        else [EpochNotCarried(p.initial_world.clock_epoch, w.clock_ms)])
+    ++ (if List.length(w.env) == List.length(p.initial_world.synthetic_environment) then []
+        else [EnvironmentNotCarried(List.length(p.initial_world.synthetic_environment), List.length(w.env))])
+}
+
+export pure func reconstitution_ok(p: ExecutionProgram, w: WorldState) -> bool {
+  List.length(reconstitution_balance(p, w)) == 0
+}
+
+export pure func has_reconstitution_rule(fs: [ReconstitutionFinding], rule: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest => if reconstitution_rule(f) == rule then true else has_reconstitution_rule(rest, rule)
+  }
+}
+
+export pure func first_reconstitution_message(fs: [ReconstitutionFinding]) -> string {
+  match fs {
+    [] => "(no findings)",
+    f :: _ => reconstitution_message(f)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Reconstituting the world FROM the program
+-- ---------------------------------------------------------------------------
+
+-- Why replay could not START at all. Distinct from `ReplayMismatch`, which is a
+-- divergence DURING replay: a program that cannot be decoded has produced no
+-- position to name, so D6.7's `-1` applies and A9's `InvalidProgram` is the
+-- kind. The two are kept apart because merging them would let a decode failure
+-- be reported as a system mismatch at position 0.
+export type ReplayRefusal
+  = ProgramStructurallyInvalid(string)   -- the first structural rule that fired
+  | ProviderOutcomeUndecodable(int, string)  -- ordinal, why
+  | ToolOutcomeUndecodable(int, string)      -- ordinal, why
+
+export pure func refusal_rule(r: ReplayRefusal) -> string {
+  match r {
+    ProgramStructurallyInvalid(_) => "replay-refused-invalid-program",
+    ProviderOutcomeUndecodable(_, _) => "replay-refused-provider-outcome-undecodable",
+    ToolOutcomeUndecodable(_, _) => "replay-refused-tool-outcome-undecodable"
+  }
+}
+
+export pure func refusal_message(r: ReplayRefusal) -> string {
+  match r {
+    ProgramStructurallyInvalid(rule) =>
+      "[replay-refused-invalid-program] the program fails the structural validator with '${rule}'; D2 requires decoding and the pure structural validator to run BEFORE replay, so this is a refusal to start and not a mismatch at a position",
+    ProviderOutcomeUndecodable(ord, why) =>
+      "[replay-refused-provider-outcome-undecodable] interaction #${ord} records a provider outcome this build cannot read back (${why}); the provider script is a PROJECTION of the interaction list (dst_program design note 3), so an outcome that cannot be re-served is a program that cannot be replayed — failing closed here is what stops it becoming a silently shorter run",
+    ToolOutcomeUndecodable(ord, why) =>
+      "[replay-refused-tool-outcome-undecodable] interaction #${ord} records a tool outcome this build cannot read back (${why}); the tool queue is a projection of the interaction list, so the same rule applies as for the provider outcome"
+  }
+}
+
+export pure func refusal_failure(r: ReplayRefusal, meta: ReplayMetadata, trace: LedgerTrace) -> DstResult {
+  RunFailed({
+    kind: InvalidProgram,
+    interaction_position: -1,
+    actual_request_projection: refusal_message(r),
+    partial_ledger_trace: trace,
+    replay_metadata: meta
+  })
+}
+
+-- Declared BEFORE `script_of` rather than after it: a forward reference from
+-- inside a recursive function is `undefined variable` on this pin, even though
+-- a forward reference from a non-recursive one resolves fine.
+pure func chunk_texts(cs: [StreamChunkRecord]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest => c.text :: chunk_texts(rest)
+  }
+}
+
+-- The provider script, derived from the provider interactions in encounter
+-- order. `ProviderScriptExhausted` contributes NO entry: it records a request
+-- the driver made after the script ran out, and re-queueing something for it
+-- would manufacture a response the discovery run never served.
+pure func script_of(xs: [Interaction]) -> Result[[ScriptedStep], ReplayRefusal] {
+  match xs {
+    [] => Ok([]),
+    i :: rest =>
+      match i.identity.body {
+        ProviderIdentity(_, _, _) =>
+          match decode_provider_outcome(i.outcome.payload) {
+            ProviderUndecodable(why) => Err(ProviderOutcomeUndecodable(i.identity.ordinal, why)),
+            ProviderScriptExhausted => script_of(rest),
+            ProviderServed(s) =>
+              match script_of(rest) {
+                Err(e) => Err(e),
+                -- The recorded stream chunks are the step's chunks, read back
+                -- from the outcome rather than duplicated into the payload.
+                -- That keeps ONE representation of the chunk list and makes
+                -- `TimedOutcome.chunks` load-bearing instead of decorative.
+                Ok(tail) => Ok(({ s | chunks: chunk_texts(i.outcome.chunks) }) :: tail)
+              }
+          },
+        _ => script_of(rest)
+      }
+  }
+}
+
+-- The approval queue: the raw lines the world served, in order. An end-of-input
+-- read (`OutcomeMissing`) queues NOTHING, so a replay drains at the same
+-- position the discovery run did — which is what makes the `eof` shape
+-- replayable at all rather than silently becoming a served empty line.
+pure func approvals_of(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ApprovalIdentity(_, _, _) =>
+          match i.outcome.status {
+            OutcomeMissing => approvals_of(rest),
+            _ => i.outcome.payload :: approvals_of(rest)
+          },
+        _ => approvals_of(rest)
+      }
+  }
+}
+
+pure func tools_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefusal] {
+  match xs {
+    [] => Ok([]),
+    i :: rest =>
+      match i.identity.body {
+        ToolIdentity(_, _, _) =>
+          match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
+            ToolRecordUndecodable(why) => Err(ToolOutcomeUndecodable(i.identity.ordinal, why)),
+            ToolRecordDecoded(t) =>
+              match tools_of(rest) {
+                Err(e) => Err(e),
+                Ok(tail) => Ok(t :: tail)
+              }
+          },
+        _ => tools_of(rest)
+      }
+  }
+}
+
+pure func first_structural_rule(p: ExecutionProgram, known_class_ids: [string]) -> Option[string] {
+  match validate_program(p, known_class_ids) {
+    [] => None,
+    r :: _ => Some(program_rule(r))
+  }
+}
+
+-- D2's `initial_world` reconstitution.
+--
+-- The environment comes from the program DIRECTLY — it is the one initial value
+-- design note 3 keeps on the program, because a synthetic environment is an
+-- INPUT to the run and not a projection of what the run requested. The env
+-- INTERACTIONS are the record of the reads, and they are what the two-sided
+-- env balance in `dst_discovery` grades; they are not the source of the map.
+--
+-- `log: []` — the reconstituted world starts with an EMPTY log. It has to: the
+-- replay's log is what the comparison reads, and seeding it with the program's
+-- own interactions would make `strict_replay_findings` compare the program
+-- against itself. That is the tautology this module's header names, in its most
+-- literal form, and it is one field away at all times.
+export pure func world_state_of(
+  p: ExecutionProgram, known_class_ids: [string]
+) -> Result[WorldState, ReplayRefusal] {
+  match first_structural_rule(p, known_class_ids) {
+    Some(rule) => Err(ProgramStructurallyInvalid(rule)),
+    None =>
+      match script_of(p.interactions) {
+        Err(e) => Err(e),
+        Ok(script) =>
+          match tools_of(p.interactions) {
+            Err(e) => Err(e),
+            Ok(tools) =>
+              Ok({ empty_world_state() |
+                   script: script,
+                   clock_ms: p.initial_world.clock_epoch,
+                   approvals: approvals_of(p.interactions),
+                   env: p.initial_world.synthetic_environment,
+                   tools: tools })
+          }
+      }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. The PROGRAM-scale fixtures live in
+-- scripts/dst/strict_replay_dst.ail, where a real driver run is in scope. What
+-- is tested here is the part with no run: the walk, the projection, and the
+-- balance — each of which must be shown to fire AND to stay quiet.
+-- ---------------------------------------------------------------------------
+
+pure func mk(b: IdentityBody, ord: int, out: TimedOutcome) -> Interaction {
+  { identity: { ordinal: ord, body: b },
+    request_projection: "p${ord}",
+    deadline_ms: match b {
+      ToolIdentity(_, _, _) => 0,
+      ApprovalIdentity(_, _, _) => 0,
+      ExtensionEffectIdentity(_, _, _) => 0,
+      _ => -1
+    },
+    outcome: out }
+}
+
+pure func ok_out(advance: int, payload: string) -> TimedOutcome {
+  { advance_ms: advance, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" }
+}
+
+-- A three-interaction reference run: provider, tool, approval. Small enough to
+-- mutate one field at a time and wide enough that a rule which fires on the
+-- wrong class shows up.
+pure func reference() -> [Interaction] {
+  [mk(ProviderIdentity("loop_v2", 0, "m"), 0, ok_out(0, "{}")),
+   mk(ToolIdentity("loop_v2", "c1", "T"), 1, ok_out(7, "OK")),
+   mk(ApprovalIdentity("loop_v2", "c1", "T"), 2, ok_out(0, "yes"))]
+}
+
+-- THE NEGATIVE CONTROL, and for a comparison it is the load-bearing assertion:
+-- a checker that reports a mismatch unconditionally passes every mutation row
+-- below. Cluster 7 measured that being the difference between a correct and a
+-- silently wrong reading of D2, and S7 promotes it.
+pure func test_an_exact_replay_produces_no_mismatch() -> bool
+  tests [((), true)]
+  {
+    strict_replay_ok(reference(), reference())
+  }
+
+-- A replay one interaction short. NOTHING ELSE SEES THIS: every position the
+-- replay did reach agrees exactly, so the walk's other arm is the only rule
+-- that can fire.
+pure func test_a_short_replay_leaves_an_unused_interaction() -> bool
+  tests [((), true)]
+  {
+    let short = [mk(ProviderIdentity("loop_v2", 0, "m"), 0, ok_out(0, "{}")),
+                 mk(ToolIdentity("loop_v2", "c1", "T"), 1, ok_out(7, "OK"))];
+    let ms = strict_replay_findings(reference(), short);
+    has_replay_rule(ms, "replay-unused-interaction")
+      && List.length(ms) == 1
+  }
+
+-- The mirror arm: the driver ran past the end of the program.
+pure func test_a_long_replay_exhausts_the_program() -> bool
+  tests [((), true)]
+  {
+    let long = reference() ++ [mk(ClockAdvanceIdentity, 3, ok_out(1, "1"))];
+    let ms = strict_replay_findings(reference(), long);
+    has_replay_rule(ms, "replay-program-exhausted") && List.length(ms) == 1
+  }
+
+-- Kind, origin and identity are three separate rules and the coarsest wins, so
+-- each mutant trips exactly one. A mutant that trips several proves none.
+pure func test_each_identity_divergence_trips_exactly_its_own_rule() -> bool
+  tests [((), true)]
+  {
+    let wrong_kind = [mk(ToolIdentity("loop_v2", "c1", "T"), 0, ok_out(0, "{}")),
+                      mk(ToolIdentity("loop_v2", "c1", "T"), 1, ok_out(7, "OK")),
+                      mk(ApprovalIdentity("loop_v2", "c1", "T"), 2, ok_out(0, "yes"))];
+    let wrong_origin = [mk(ProviderIdentity("other", 0, "m"), 0, ok_out(0, "{}")),
+                        mk(ToolIdentity("loop_v2", "c1", "T"), 1, ok_out(7, "OK")),
+                        mk(ApprovalIdentity("loop_v2", "c1", "T"), 2, ok_out(0, "yes"))];
+    let wrong_call_id = [mk(ProviderIdentity("loop_v2", 0, "m"), 0, ok_out(0, "{}")),
+                         mk(ToolIdentity("loop_v2", "c2", "T"), 1, ok_out(7, "OK")),
+                         mk(ApprovalIdentity("loop_v2", "c1", "T"), 2, ok_out(0, "yes"))];
+    let a = strict_replay_findings(reference(), wrong_kind);
+    let b = strict_replay_findings(reference(), wrong_origin);
+    let c = strict_replay_findings(reference(), wrong_call_id);
+    has_replay_rule(a, "replay-wrong-kind") && List.length(a) == 1
+      && has_replay_rule(b, "replay-wrong-origin") && List.length(b) == 1
+      && has_replay_rule(c, "replay-unsafe-identity-mismatch") && List.length(c) == 1
+  }
+
+-- D2 keeps a repeated production call id REPRESENTABLE so an invariant reports
+-- it rather than the decoder rejecting the artifact (stage 1, design note 2).
+-- This is that invariant: two interactions with a byte-identical identity body
+-- at different ordinals are DIFFERENT logical requests, and delivering one's
+-- outcome to the other is the mismatch D2 forbids by name.
+pure func test_a_repeated_call_id_at_a_different_ordinal_is_a_mismatch() -> bool
+  tests [((), true)]
+  {
+    let retry = [mk(ToolIdentity("loop_v2", "c1", "T"), 0, ok_out(7, "OK")),
+                 mk(ToolIdentity("loop_v2", "c1", "T"), 1, ok_out(9, "OK2"))];
+    let swapped = [mk(ToolIdentity("loop_v2", "c1", "T"), 1, ok_out(9, "OK2")),
+                   mk(ToolIdentity("loop_v2", "c1", "T"), 0, ok_out(7, "OK"))];
+    strict_replay_ok(retry, retry)
+      && has_replay_rule(strict_replay_findings(retry, swapped), "replay-unsafe-identity-mismatch")
+  }
+
+-- The outcome projection must read EVERY field. A projection that dropped one
+-- would leave `OutcomeDiffers` blind to a reconstitution that lost exactly that
+-- field, while every count in the suite still balanced — which is the failure
+-- mode this whole module is shaped against, expressed in one function.
+pure func test_the_outcome_projection_reads_every_field() -> bool
+  tests [((), true)]
+  {
+    let base = mk(ToolIdentity("loop_v2", "c1", "T"), 0, ok_out(7, "OK"));
+    let p = outcome_projection(base);
+    p != outcome_projection({ base | outcome: { base.outcome | advance_ms: 8 } })
+      && p != outcome_projection({ base | deadline_ms: 1 })
+      && p != outcome_projection({ base | outcome: { base.outcome | payload: "NO" } })
+      && p != outcome_projection({ base | outcome: { base.outcome | status: OutcomeFault, fault_class_id: "x" } })
+      && p != outcome_projection({ base | outcome: { base.outcome | fault_class_id: "x" } })
+      && p != outcome_projection({ base | outcome: { base.outcome | chunks: [{ offset_ms: 0, text: "c" }] } })
+  }
+
+-- An outcome that differs only in a field the identity does not carry is still
+-- a strict-replay failure. This is the row that catches a lossy reconstitution:
+-- the world served the right request and the wrong answer.
+pure func test_a_differing_outcome_is_a_mismatch_even_when_the_identity_matches() -> bool
+  tests [((), true)]
+  {
+    let lossy = [mk(ProviderIdentity("loop_v2", 0, "m"), 0, ok_out(0, "{}")),
+                 mk(ToolIdentity("loop_v2", "c1", "T"), 1, ok_out(7, "")),
+                 mk(ApprovalIdentity("loop_v2", "c1", "T"), 2, ok_out(0, "yes"))];
+    let ms = strict_replay_findings(reference(), lossy);
+    has_replay_rule(ms, "replay-outcome-differs") && List.length(ms) == 1
+  }
+
+-- ---------------------------------------------------------------------------
+-- Reconstitution fixtures
+-- ---------------------------------------------------------------------------
+
+-- A program whose three derived queues have PAIRWISE DISTINCT lengths, per S7:
+-- two provider steps served (plus one served after exhaustion, which queues
+-- nothing), three approval reads of which ONE was served, and four tool
+-- interactions. script=2, approvals=1, tools=4 — so a balance that reads the
+-- wrong queue's count cannot come out right by coincidence, which is exactly
+-- how stage 2's sites 17 and 18 stayed hidden.
+pure func provider_i(ord: int, prose: string) -> Interaction {
+  mk(ProviderIdentity("loop_v2", ord, "m"), ord,
+     ok_out(0, encode_provider_outcome({ prose: prose, tool_calls: [], input_tokens: 1,
+                                         output_tokens: 2, finish_reason: "stop", chunks: [] })))
+}
+
+pure func exhausted_i(ord: int) -> Interaction {
+  mk(ProviderIdentity("loop_v2", ord, "m"), ord, ok_out(0, encode_exhausted_provider_outcome()))
+}
+
+pure func tool_i(ord: int, call_id: string) -> Interaction {
+  mk(ToolIdentity("loop_v2", call_id, "T"), ord,
+     ok_out(3, encode_tool_outcome(ToolCompleted({ tool_call_id: call_id, content: "OUT" }))))
+}
+
+pure func approval_i(ord: int, call_id: string, served: bool) -> Interaction {
+  mk(ApprovalIdentity("loop_v2", call_id, "T"), ord,
+     if served then ok_out(0, "yes")
+     else { advance_ms: 0, chunks: [], payload: "", status: OutcomeMissing, fault_class_id: "" })
+}
+
+pure func fixture_interactions() -> [Interaction] {
+  [provider_i(0, "s0"), tool_i(1, "c1"), approval_i(2, "c1", true),
+   provider_i(3, "s1"), tool_i(4, "c2"), approval_i(5, "c2", false),
+   tool_i(6, "c3"), approval_i(7, "c3", false), tool_i(8, "c4"),
+   exhausted_i(9)]
+}
+
+-- A manifest for the fixture PROGRAM only. It is deliberately NOT
+-- `driver_only_manifest(...)`: the machinery's own tests must not pass or fail
+-- with a profile's content, which is the discipline `dst_profile.fixture_base`
+-- states for the same reason. The real manifest is consumed in
+-- `scripts/dst/strict_replay_dst.ail`, where the profile is the subject.
+pure func fixture_manifest() -> ExecutionManifest {
+  { source_revision: "HEAD",
+    toolchain: "ailang 0.26.0",
+    extension_packages: [],
+    abi_version: "4.0",
+    profile_id: "fixture_only",
+    profile_version: "1",
+    event_vocabulary_version: "1",
+    normalized_configuration: "{}",
+    classifier_2_set: [],
+    unrouted_fields: [],
+    scan_roots: [],
+    scan_root_commit: "HEAD",
+    profile_rules_version: "1",
+    coverage_rules_version: "1",
+    attribution_rules_version: "1",
+    fault_catalogue_version: "1" }
+}
+
+pure func fixture_program() -> ExecutionProgram {
+  { schema_version: "execution-program/1",
+    generator_id: "g", generator_version: "1", seed: 0,
+    initial_world: { messages_and_policy: "{}",
+                     synthetic_environment: [{ key: "K1", value: "v" }, { key: "K2", value: "w" }],
+                     clock_epoch: 5,
+                     extension_profile: "driver_only/1" },
+    bounds: { max_interactions: 64, max_chunks_per_interaction: 4, max_payload_bytes: 4096,
+              max_resource_size: 4096, max_clock_advance_ms: 1000 },
+    manifest: fixture_manifest(),
+    interactions: fixture_interactions() }
+}
+
+-- THE SURVIVE FIXTURE (S7). The three queues, the epoch and the environment all
+-- reconstituted correctly must produce NO findings. Without this, every row
+-- below is satisfied by a balance that reports a finding unconditionally, and
+-- an over-strict reconstitution check would ship exactly as stage 1's
+-- over-strict validator nearly did.
+pure func test_a_faithful_reconstitution_produces_no_findings() -> bool
+  tests [((), true)]
+  {
+    let p = fixture_program();
+    let w = { empty_world_state() |
+              script: [{ prose: "s0", tool_calls: [], input_tokens: 1, output_tokens: 2, finish_reason: "stop", chunks: [] },
+                       { prose: "s1", tool_calls: [], input_tokens: 1, output_tokens: 2, finish_reason: "stop", chunks: [] }],
+              clock_ms: 5,
+              approvals: ["yes"],
+              env: p.initial_world.synthetic_environment,
+              tools: [{ tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" },
+                      { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" },
+                      { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" },
+                      { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" }] };
+    reconstitution_ok(p, w)
+      -- The three quantities are pairwise distinct, which is what makes the row
+      -- above able to tell WHICH queue each balance is reading.
+      && List.length(w.script) == 2 && List.length(w.approvals) == 1 && List.length(w.tools) == 4
+  }
+
+-- The exhausted provider interaction must contribute NO script entry. A
+-- reconstitution that counted it would over-fill the script by one and serve a
+-- response the discovery run never served.
+pure func test_an_exhausted_provider_interaction_queues_no_script_entry() -> bool
+  tests [((), true)]
+  {
+    provider_steps_served(fixture_interactions()) == 2
+      && count_kind(fixture_interactions(), "expect_provider") == 3
+  }
+
+-- Both directions, for each of the three derived queues, from the fixture that
+-- otherwise survives. Each mutation moves ONE queue.
+pure func test_every_queue_is_balanced_in_both_directions() -> bool
+  tests [((), true)]
+  {
+    let p = fixture_program();
+    let good: ScriptedStep = { prose: "s", tool_calls: [], input_tokens: 0, output_tokens: 0, finish_reason: "stop", chunks: [] };
+    let tool: ScriptedTool = { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" };
+    let base = { empty_world_state() |
+                 script: [good, good], clock_ms: 5, approvals: ["yes"],
+                 env: p.initial_world.synthetic_environment,
+                 tools: [tool, tool, tool, tool] };
+    has_reconstitution_rule(reconstitution_balance(p, { base | script: [good] }), "reconstitution-queue-underfilled")
+      && has_reconstitution_rule(reconstitution_balance(p, { base | script: [good, good, good] }), "reconstitution-queue-overfilled")
+      && has_reconstitution_rule(reconstitution_balance(p, { base | approvals: [] }), "reconstitution-queue-underfilled")
+      && has_reconstitution_rule(reconstitution_balance(p, { base | approvals: ["yes", "no"] }), "reconstitution-queue-overfilled")
+      && has_reconstitution_rule(reconstitution_balance(p, { base | tools: [tool, tool, tool] }), "reconstitution-queue-underfilled")
+      && has_reconstitution_rule(reconstitution_balance(p, { base | tools: [tool, tool, tool, tool, tool] }), "reconstitution-queue-overfilled")
+      && has_reconstitution_rule(reconstitution_balance(p, { base | clock_ms: 0 }), "reconstitution-epoch-not-carried")
+      && has_reconstitution_rule(reconstitution_balance(p, { base | env: [] }), "reconstitution-environment-not-carried")
+  }
+
+-- `world_state_of` against the same fixture: the projection and its own balance
+-- agree. This is the join between the two — a reconstitution that satisfies the
+-- balance it was written beside proves nothing unless the balance was written to
+-- be failable, which the row above establishes.
+pure func test_world_state_of_reconstitutes_the_fixture_program() -> bool
+  tests [((), true)]
+  {
+    let p = fixture_program();
+    match world_state_of(p, []) {
+      Err(_) => false,
+      Ok(w) =>
+        reconstitution_ok(p, w)
+          && List.length(w.script) == 2
+          && List.length(w.approvals) == 1
+          && List.length(w.tools) == 4
+          && w.clock_ms == 5
+          -- The log MUST start empty: seeding it with the program's own
+          -- interactions would make strict replay compare the program with
+          -- itself, which is the tautology this module exists to refuse.
+          && List.length(w.log) == 0
+    }
+  }
+
+-- A program carrying a stage-2 provider payload (the bare prose) is REFUSED,
+-- not silently replayed as a step with no tool calls. Failing closed here is
+-- what turns an unreplayable program into a named refusal instead of a run that
+-- terminates early and agrees with the program at every position it reached.
+pure func test_an_unreadable_provider_outcome_refuses_replay() -> bool
+  tests [((), true)]
+  {
+    let p = { fixture_program() |
+              interactions: [mk(ProviderIdentity("loop_v2", 0, "m"), 0, ok_out(0, "s0"))] };
+    match world_state_of(p, []) {
+      Ok(_) => false,
+      Err(r) => refusal_rule(r) == "replay-refused-provider-outcome-undecodable"
+    }
+  }
+
+-- The structural validator runs BEFORE reconstitution (D2: "program decoding
+-- and a pure structural validator run before replay"). A malformed program is
+-- an `InvalidProgram` refusal at position -1, never a mismatch at position 0.
+pure func test_an_invalid_program_refuses_replay_before_reconstitution() -> bool
+  tests [((), true)]
+  {
+    let p = { fixture_program() | schema_version: "" };
+    match world_state_of(p, []) {
+      Ok(_) => false,
+      Err(r) => refusal_rule(r) == "replay-refused-invalid-program"
+    }
+  }

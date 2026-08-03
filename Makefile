@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery strict_replay predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -311,6 +311,81 @@ discovery:
 	fi; \
 	ailang test src/core/dst_discovery.ail > /dev/null && echo "  ✓ src/core/dst_discovery.ail"; \
 	ailang test src/core/dst_interaction.ail > /dev/null && echo "  ✓ src/core/dst_interaction.ail"
+
+# WI-A13 stage 3: strict replay against `driver_only`. Four checks, in order.
+#
+#   1. The acceptance script. Two scenarios — `rich`, which is the fixture that
+#      must SURVIVE and carries every shape D2 protects with no two of its
+#      quantities equal (S7), and `maxsteps`, which ends in `Err` so the
+#      Err-surviving witnesses are exercised on the path where the returned
+#      message list is empty. Each carries the refusal rules, the manifest
+#      check, the two-sided reconstitution balance, the replay comparison, seven
+#      single-position mutation rows, the typed HarnessFailure, determinism, and
+#      — the axis that makes this stage more than a restatement of itself — the
+#      replayed run graded against witnesses the recorder did not write, plus
+#      the tautology control that proves the grading is load-bearing.
+#
+#   2. THE WIRE WITNESS. `v2_tool_dispatch_start` (tool_phase.ail) is emitted
+#      BEFORE the port calls and `provider_call_prepared` (session.ail) is
+#      emitted separately from the dispatch call. Neither is appended to the
+#      returned trace — session.ail hands tool_phase a bare
+#      `\event. ledger_emit(...)` — so no AILANG assertion can read them.
+#      `--entry wire_witness` performs exactly ONE discovery run and ONE replay
+#      of its program, and this step compares the wire's totals against the sum
+#      of the two censuses. NO MULTIPLIER: a sum over the runs that actually
+#      happened cannot go stale when a scenario is added elsewhere.
+#
+#      It also asserts the two censuses are EQUAL, which is strict replay's own
+#      claim restated on the wire's terms — by production code that knows
+#      nothing about the interaction log.
+#
+#   3. THE CODEC TESTS. `world_state_of` reconstitutes the provider script and
+#      the tool queue from recorded payloads, so a codec whose encoder and
+#      decoder disagree about a field produces a replay that serves a different
+#      response while every count still balances. The round trips are in
+#      ports.ail because that is where both halves live.
+#
+#   4. dst_replay's own units: the walk, the outcome projection and the
+#      reconstitution balance, each shown to fire AND to stay quiet.
+.PHONY: strict_replay
+strict_replay:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/strict_replay_dst.ail < /dev/null; \
+	wire=$$(ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry wire_witness scripts/dst/strict_replay_dst.ail < /dev/null 2>/dev/null); \
+	w_prov=$$(printf '%s\n' "$$wire" | grep -c '"type":"provider_call_prepared"' || true); \
+	w_tool=$$(printf '%s\n' "$$wire" | grep -c '"type":"v2_tool_dispatch_start"' || true); \
+	d_prov=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS discovery .*expect_provider=\([0-9]*\).*/\1/p'); \
+	d_tool=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS discovery .*expect_tool=\([0-9]*\).*/\1/p'); \
+	r_prov=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS replay .*expect_provider=\([0-9]*\).*/\1/p'); \
+	r_tool=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS replay .*expect_tool=\([0-9]*\).*/\1/p'); \
+	if [ -z "$$d_prov" ] || [ -z "$$r_prov" ] || [ -z "$$d_tool" ] || [ -z "$$r_tool" ]; then \
+		echo "FAIL: the wire_witness run printed no discovery/replay census pair — the program was refused, or the entry point changed, and every comparison below would be vacuous"; \
+		printf '%s\n' "$$wire" | grep -E 'CENSUS|REFUSED' || true; \
+		exit 1; \
+	fi; \
+	if [ "$$w_prov" -eq 0 ] || [ "$$w_tool" -eq 0 ]; then \
+		echo "FAIL: the driver emitted no provider_call_prepared/v2_tool_dispatch_start to the wire (prov=$$w_prov tool=$$w_tool) — the witness is absent, so a match would prove nothing"; \
+		exit 1; \
+	fi; \
+	if [ "$$d_prov" -ne "$$r_prov" ] || [ "$$d_tool" -ne "$$r_tool" ]; then \
+		echo "FAIL: the replay did not reproduce the discovered run's per-class counts."; \
+		echo "      provider: discovery=$$d_prov replay=$$r_prov"; \
+		echo "      tool:     discovery=$$d_tool replay=$$r_tool"; \
+		exit 1; \
+	fi; \
+	if [ "$$w_prov" -ne "$$((d_prov + r_prov))" ] || [ "$$w_tool" -ne "$$((d_tool + r_tool))" ]; then \
+		echo "FAIL: the interaction logs disagree with the driver's own wire emissions across the discovery/replay pair."; \
+		echo "      provider: wire=$$w_prov logs=$$((d_prov + r_prov))"; \
+		echo "      tool:     wire=$$w_tool logs=$$((d_tool + r_tool))"; \
+		echo "      These are written by different components. The wire is emitted by production driver code BEFORE the port is called; the logs are written by the port. A disagreement is a recorder or replay defect, not a flaky count."; \
+		exit 1; \
+	else \
+		echo "  ✓ discovery and replay agree with the driver's own wire emissions (provider=$$w_prov, tool=$$w_tool over the pair)"; \
+	fi; \
+	ailang test src/core/ports.ail > /dev/null && echo "  ✓ src/core/ports.ail (recorded-outcome codec round trips)"; \
+	ailang test src/core/dst_replay.ail > /dev/null && echo "  ✓ src/core/dst_replay.ail"
 
 .PHONY: driver_only
 driver_only:

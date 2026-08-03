@@ -27,7 +27,7 @@ import src/core/config (VerificationConfig)
 import src/core/ports (
   Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
   ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
-  record_interaction, recording_clock, recording_approval, recording_env, recording_tool
+  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, encode_provider_outcome, encode_exhausted_provider_outcome
 )
 import src/core/dst_interaction (
   Interaction, StreamChunkRecord, TimedOutcome,
@@ -261,7 +261,14 @@ func recording_model_step(rt: ExtRuntime) -> (WorldState, string, [Message], (St
           ProviderIdentity("loop_v2", provider_step, model),
           "model_step model=${model} msg_count=${show(List.length(msgs))} script=exhausted",
           -1,
-          { advance_ms: 0, chunks: [], payload: "stub: script exhausted",
+          -- WI-A13 stage 3. The payload is a structured projection rather than
+          -- the prose, so that `dst_replay.world_state_of` can reconstitute the
+          -- script from the interaction list — which is what `dst_program`'s
+          -- design note 3 requires of it, since the program deliberately does
+          -- not carry the script. This arm records that the world served
+          -- NOTHING from the script, which is a different fact from serving an
+          -- empty step and must stay distinguishable from it.
+          { advance_ms: 0, chunks: [], payload: encode_exhausted_provider_outcome(),
             status: OutcomeOk, fault_class_id: "" })
       },
       s :: rest => {
@@ -274,9 +281,17 @@ func recording_model_step(rt: ExtRuntime) -> (WorldState, string, [Message], (St
             ProviderIdentity("loop_v2", provider_step, model),
             "model_step model=${model} msg_count=${show(List.length(msgs))}",
             -1,
+            -- The whole step, not `s.prose`. D2 says a provider timed outcome
+            -- carries "a final StepResult or AIError", and the prose alone
+            -- dropped the TOOL CALLS — which are what cause the next production
+            -- tool request, so a program discovered from a run with tool calls
+            -- reconstituted a script that made none and the replay terminated
+            -- at step 0 while agreeing with the program at every position it
+            -- reached. The chunks stay in `chunks` and are NOT duplicated into
+            -- the payload; `world_state_of` reads them from there.
             { advance_ms: 0,
               chunks: chunk_records(s.chunks, state.clock_ms),
-              payload: s.prose,
+              payload: encode_provider_outcome(s),
               status: OutcomeOk,
               fault_class_id: "" })
         }
