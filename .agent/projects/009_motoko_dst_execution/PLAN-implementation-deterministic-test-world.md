@@ -87,6 +87,30 @@ two-argument and routed its extension seam in one line. Identical nominal scope,
 sole difference parameter count — had env run first, the limitation would have surfaced on the cheap
 class.
 
+**S7. A rejecting artifact needs a fixture that must SURVIVE, and that fixture must contain every
+shape the specification explicitly protects — with no two of its quantities equal.** Mutation testing
+(C5) proves a guard *can* fire; it cannot see a guard that fires **too much**, because every mutant
+still produces its own rule. Only a fixture that must pass can. Three demonstrations:
+
+- **A13 stage 1 (site 15).** D2 says reject "duplicate interaction identities" and, two paragraphs
+  later, that the ordinal keeps repeated production call ids representable. Both readings type-check;
+  rejecting the identity *body* makes a production retry undecodable. It passed all 18 mutant rows,
+  was perfectly deterministic and trace-complete, and showed up **only** as a valid program being
+  rejected — visible because the base fixture deliberately carries interactions #1 and #8 with a
+  byte-identical tool identity at different ordinals.
+- **A13 stage 2 (site 18).** The assertion built to catch over-recording was itself **over-rejecting**:
+  the approval witness counted answers *consumed* where it needed reads *performed*.
+- **The sharpening, and it is the mechanism.** Both were invisible to the `approve` and `deny`
+  scenarios for the same structural reason — each queues exactly as many approvals as it consumes, so
+  the two quantities are equal and any confusion between them is hidden. The `eof` scenario makes
+  `tool_dispatches=1`, `approval_reads=3`, `approvals_consumed=1` pairwise distinct, and that is the
+  whole mechanism. **A fixture whose quantities are all equal cannot distinguish which quantity a
+  check is reading.**
+
+Corollary, cheap and twice useful: **a fixture's stated justification is itself a claim, and it is
+cheap to test.** Stage 2's `deny` scenario documented a purpose it did not serve; introducing the
+mutation showed the real one.
+
 **S4. Size a constructed artifact by the rows whose content must be *discovered*, not by its row
 count.** Cluster 3 measured the controlled comparison: A7 has 68 sites and took 11.5 minutes; A8 has
 158 and took 8. Every A7 row needed a recovery branch located and confirmed in the driver — eleven
@@ -114,6 +138,14 @@ and detectors, and A10 measured it: **four round trips, all loud, zero silent de
 minutes**, roughly half of it grounding. S5 would have priced that at minutes and S4 at nothing,
 because **both assume you already know the source you are working in, and composition's whole job is
 to be correct about somebody else's artifact.**
+
+**Generalised by A13 stages 1 and 2, and it is what makes S6 transfer beyond A10:** a *recorded
+binding* is not only a value that must be copied — it is **any fact that cannot be read and must be
+decided.** For A10 those were an attribution identity and two derived sets. For a validator it is a
+specification clause admitting two readings; stage 1 had exactly one (D2's duplicate-identity rule)
+and it consumed effectively all the item's risk while twenty-odd read bindings cost nothing. Stage 2
+had **three** and cost roughly **3×** stage 1 — the count of recorded bindings tracked the cost ratio
+better than any measure of size. **No sixth model is needed; count the decisions, not the lines.**
 
 *The load-bearing half is the second term.* A10 had twenty-three facts crossing an artifact boundary
 and twenty of them are READ at runtime, so they cannot go stale and cost nothing measurable once the
@@ -836,6 +868,32 @@ silently reinterpreted.
 seeded generator with bounds, a structural validator, two replay modes, the interaction log with
 causal identity and ordinals, the canary, and the encoding/compatibility policy — each small, the
 set wide, and no measurement covers any of it.
+
+**Three obligations A13's stages 1–2 hand this item, each a finding rather than a preference:**
+
+1. **D11's coverage counters must distinguish two kinds of evidence, not report one number.** The
+   completeness assertion has an independent runtime witness for six of D2's seven request classes —
+   the ledger trace for provider and tool (written by production code, owned by D6, so two authors
+   record the same execution), the clock delta as the general one, message-derived counts for
+   approval. **Environment reads have none**: `ports.env_get` is a keyed lookup, not a cursor, and no
+   ledger event is emitted, so the recorder's own log would be the only record — the
+   recorder-as-its-own-oracle shape. The mitigation is a **source-derived** expected key set (6 sites,
+   7 keys), which is independent because it comes from the driver's source, and it must assert
+   **multiplicity, not presence**: the driver reads `MOTOKO_TOOL_TIMEOUT_MS` once per native tool
+   dispatch, so a recorder logging the first read of each key and dropping the rest looks complete.
+   Report six classes with runtime evidence and one with provenance evidence.
+2. **D3's `approval_deadline_exceeded` class is currently *unreachable* by a discovered program, and
+   the counters must show it unreached rather than waived.** D2 gives `ExpectApproval` a deadline; the
+   driver's approval channel carries none — `DenyAfterTimeout` is a decision, not a duration. This is
+   a declared gap, not a solved problem.
+3. **Decide whether a coordinate-independent anchor for A5's table is worth building before the name
+   gate.** A5 anchors attributed sites by line number. Stage 2 inserted lines above four of them,
+   which re-measured the table, changed its content hash, and cascaded to five artifacts including a
+   mandatory `driver_only` **v2 re-issue** — for a change in which *the claim did not move*: same
+   sites, effects, routed flags and reviewers, only coordinates. Every guard fired loudly with an
+   exact expectation-versus-actual, so the machinery worked; the cost is that a hash cannot tell a
+   re-measurement from a correction, and a profile version is spent on a no-op. A symbol name plus a
+   content digest of the enclosing function is the candidate.
 
 **WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
 A9, A13; the parity-classification invariants additionally depend on A8, **which landed 2026-08-02

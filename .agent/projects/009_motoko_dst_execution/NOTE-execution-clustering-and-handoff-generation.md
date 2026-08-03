@@ -39,7 +39,7 @@ disagree, the plan wins and this note is stale.
 | 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
 | 5 | **A10** | profile/manifest machinery | 2, 3 (both landed) | **DONE 2026-08-03** — `fd4f4bd`, `dafe898`. `driver_only` v1 loads and is conformant at HEAD. Report: `NOTE-cluster-5-execution-report-and-plan-corrections.md`. Both decisions resolved; added standing rule S6 |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
-| 7 | **A13** | discovery/replay | 3, 4, 5, 6 (all landed) | **Handoff written**: `HANDOFF-execute-a13-discovery-and-replay.md`. Largest remaining item; internally staged with partial completion a legitimate stop. The item most exposed to the determinism-insufficiency finding |
+| 7 | **A13** | discovery/replay | 3, 4, 5, 6 (all landed) | **IN PROGRESS — stages 1 and 2 of 5 landed.** Stage 1: `9c4d724` (types + validator), report `NOTE-cluster-7-…`. Stage 2: `8b0d605` (discovery, graded both directions), report `NOTE-cluster-8-…`. Stage 3 (strict replay) is next and unblocked. Staging worked: two clean stops, nothing half-built carried across |
 | 8 | **A14 + A15** | invariants, latency pair, corpora, CI | 7 | Wait |
 
 **Clusters 1, 2 and 3 are mutually independent and can run in parallel** across sessions or agents.
@@ -106,6 +106,27 @@ four things it cannot:
 Also carry, every time: **stop-and-report triggers** rather than inline judgement calls. Cluster 1's
 is P2's reopening condition. Anything the plan names as a decision belongs to the plan, not to the
 building session.
+
+## Verify the aggregate gate by its EXIT STATUS, not by a selection of targets
+
+**`make dst` was red for two clusters and nobody noticed, including the sessions that verified each
+cluster's work.** A12 (cluster 6) added a randomness guard that greps for `std/rand`; A10 (cluster 5)
+landed on top of it with a profile field whose *prose named the thing the guard forbids*. The artifact
+documenting the guard tripped the guard. `make world_state` exited 1, `make dst` exited 2, and under
+`--keep-going` that was one red line among 233 green ones.
+
+Two habits follow, and both are corrections to how this project has been verifying:
+
+1. **Run the aggregate and read `$?`.** Not a scan of its output, not a selection of the targets a
+   cluster happened to touch. Every cluster verification up to this point ran individual targets —
+   which is exactly why a break introduced by one cluster and invisible to the next survived two.
+2. **Anchor every grep-based guard to a syntactic form.** A guard matching a bare token will
+   eventually fire on the artifact documenting it, because these items are *required* to write prose
+   naming what they forbid. Cluster 8 audited all nine: seven were already anchored, one was fixed
+   (`terminal_trace`'s `{ result:` counted comment lines, so `session.ail` carried a standing
+   obligation to circumlocute around its own guard), one — `fault_catalogue`'s physical-fault
+   tripwire — is *correctly* prose-based because it watches intent rather than syntax, at the cost of
+   an exclusion list that grows with every artifact documenting the exclusion.
 
 ## What to ask back, every cluster
 
