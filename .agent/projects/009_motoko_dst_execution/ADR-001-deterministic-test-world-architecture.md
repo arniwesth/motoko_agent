@@ -462,6 +462,45 @@ Two things follow, and the second is the one with teeth:
   once" and it was stale at two sites. **The claim here is narrower and checkable: six normative sites,
   substantively aligned, not word-identical** — the six use six formulations, and asserting otherwise
   is the mistake this paragraph exists to stop repeating.
+
+  **Amendment, 2026-08-03 (WI-A11 implemented). "Six normative sites" was a count without an
+  enumeration, and the check this clause asks for cannot be built against one.** A11's brief is an
+  anchor-set drift check that fails when an anchor's text changes without a re-accepted hash **or
+  when a normative statement of the predicate appears outside the six**. That second half is
+  unenforceable while "the six" names no locations: two different readings of this ADR each produce a
+  defensible six — one taking Status plus the four D1/D5 rule statements plus the predicate
+  definition, another taking Status, D1, the acceptance row and the implementation handoff — and a
+  check built on either would have been asserting a curation, not verifying one. Twelve passages in
+  the normative region mentioned the rule when A11 measured it — thirteen once this amendment's own
+  table row below is counted — so the gap between "a dozen mentions" and "six sites" was doing real
+  work that nobody had written down.
+
+  **The six are hereby enumerated, and the enumeration is the normative artifact — not the count.**
+  They are the passages that state the obligation as a rule binding on a profile definition:
+
+  | # | Section | States |
+  |---|---|---|
+  | 1 | Status | the rule and its profile-definition rejection |
+  | 2 | D1, handoff-item-2 correction | *every* hook it registers, not only those reaching the call |
+  | 3 | D1, conformance obligation | installing without excluding is a profile-definition rejection |
+  | 4 | D1, predicate definition | "calls a classifier-2 field on an `ExtPorts`-typed value" |
+  | 5 | D5, profile validity | installing while any hook is un-excluded is invalid |
+  | 6 | D5, routing audit | the classifier-2 condition the audit checks |
+
+  The remaining mentions **apply or discuss** the rule rather than stating it — this paragraph and
+  its table, the omission-versus-exclusion consequence, D3's no-instrument note, the acceptance
+  table's evidence row, and the Consequences and handoff discussions. That split is a judgement, so
+  it is recorded the way clause 3's attributions are: **per passage, with a named reviewer**, in
+  `tools/predicate-anchors/anchors.json`, and `make predicate_anchors` fails closed on any mention it
+  cannot match to a recorded classification. A thirteenth-plus mention appearing later is a triage
+  event, not a silent pass.
+
+  **Why the check is drift and not containment**, restated because it is easy to get backwards: this
+  paragraph says the six are deliberately *not* word-identical, so a check requiring one canonical
+  sentence at all six is red on the unmutated ADR **by construction**. Canonicalising them is six
+  amendments this project does not budget, and would destroy the information each formulation
+  carries. The check therefore hashes each passage as it stands and fails when one changes without a
+  re-accepted hash.
 - **The practical consequence is about utility, not eligibility.** `compaction_ai` calls
   `ctx.ports.ai_step` (`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`) and appears in the
   extension order of **all fourteen** checked-in configurations. Every one of them can be made

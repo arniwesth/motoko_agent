@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary attribution_table ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -677,6 +677,29 @@ effect_inventory_selftest:
 # Comparing to HEAD would make the artifact stale on every unrelated commit,
 # which trains people to bump the field without re-measuring.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ADR-001 D1, WI-A11: the classifier-2 predicate documentation check.
+#
+# An anchor-set DRIFT check, not a containment check, and the choice is forced.
+# The ADR records that its normative statements of the rule are "substantively
+# aligned, not word-identical -- the six use six formulations", so a check
+# requiring one canonical sentence at all six is RED ON THE UNMUTATED ADR by
+# construction. Canonicalising them is six amendments this project does not
+# budget and would destroy what each formulation carries.
+#
+# Every mention in the ADR's normative region is recorded with a paragraph hash,
+# a classification (anchor = states the rule, reference = applies it) and a named
+# reviewer. It fails when a recorded passage's text changes without a re-accepted
+# hash, or when a mention appears that no record accounts for.
+#
+# Passages are matched BY HASH; the recorded line is a hint and a stale hint is
+# reported, never failed on. A line-keyed check would go red on every unrelated
+# ADR edit, which trains people to re-baseline it without reading.
+# ---------------------------------------------------------------------------
+.PHONY: predicate_anchors
+predicate_anchors:
+	@python3 tools/predicate-anchors/check.py
+
 .PHONY: attribution_table
 attribution_table:
 	@ailang run --caps IO --entry main scripts/dst/attribution_table_dst.ail < /dev/null

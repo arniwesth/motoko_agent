@@ -528,6 +528,17 @@ CI-run.
 *Acceptance evidence:* **the check is green on the unmutated ADR at HEAD** — the falsifiable half,
 and the one a containment check would fail; *and* mutating one anchor in a scratch copy turns it
 red. Both, because the second alone passes trivially while the first is broken.
+*Size:* **MEASURED: ~35 min, 3 files (3 new), 13 passages of which 13 needed judgement**
+(2026-08-03). Landed as `make predicate_anchors`, invoked by CI.
+**The ADR asserted the count without the enumeration, and A11 could not be built against that.**
+"the six" named no locations, and two defensible sixes existed — Status plus the four D1/D5 rule
+statements plus the predicate definition, or Status, D1, the acceptance row and the handoff. A check
+on either would have asserted a curation rather than verified one. D1 is amended (2026-08-03) to
+enumerate the six by section, and `tools/predicate-anchors/anchors.json` records all **thirteen**
+normative-region mentions — 6 anchors, 7 references — each with a named reviewer. Passages are
+matched by **paragraph hash, not by line**: the ADR is amended often and a line-keyed check goes red
+on every unrelated edit, which trains people to re-baseline without reading. Whitespace is collapsed
+before hashing, so a reflow is not drift and any changed word is.
 
 **WI-A12. Thread `world_state` through the driver, one effect class at a time** (D1). Depends on
 A2; subsumes and deletes the interim `C2LoopState` cursor field in its first change, per D1.
