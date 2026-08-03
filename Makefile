@@ -325,6 +325,12 @@ discovery:
 #      replayed run graded against witnesses the recorder did not write, plus
 #      the tautology control that proves the grading is load-bearing.
 #
+#      Stage 5 adds axis J: D2's REGRESSION mode over those same five mutated
+#      logs, which must record two of them and stay fatal on the other five.
+#      Both modes read one set of inputs on purpose — a regression mode given
+#      its own quietly different fixtures could disagree with strict mode for
+#      reasons that have nothing to do with the demotion set.
+#
 #   2. THE WIRE WITNESS. `v2_tool_dispatch_start` (tool_phase.ail) is emitted
 #      BEFORE the port calls and `provider_call_prepared` (session.ail) is
 #      emitted separately from the dispatch call. Neither is appended to the

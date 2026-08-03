@@ -70,6 +70,19 @@
 --
 --   I. DETERMINISM, last and least. Two replays of one program agree.
 --
+--   J. REGRESSION REPLAY (stage 5), D2's SECOND MODE, over the same five real
+--      mutated logs axis E just rejected. D2 permits it to "require compatible
+--      causal identity, record projection differences, and continue" and binds
+--      it with "never weakens tool-call/result correlation or delivers an
+--      outcome to a different logical request". So the two modes must disagree
+--      on EXACTLY TWO of seven rules and agree on the other five, and grading
+--      both over one set of inputs is what makes that legible rather than
+--      claimed. The demotion set itself is asserted in `dst_replay`, where
+--      demoting a third rule goes red on its own — here the risk is different
+--      and worth naming: `replay-unused-interaction` fails SILENTLY without its
+--      rule, so a regression mode that dropped it would report a clean, short
+--      and entirely fictitious "no differences" on every row of this script.
+--
 -- ---------------------------------------------------------------------------
 -- WITNESSES ON THE Err PATH
 -- ---------------------------------------------------------------------------
@@ -157,8 +170,13 @@ import src/core/dst_program (
 import src/core/dst_replay (
   ReplayMismatch,
   ReconstitutionFinding,
+  RegressionReplay,
   strict_replay_findings,
   strict_replay_ok,
+  regression_replay_findings,
+  regression_replay_ok,
+  regression_difference_count,
+  regression_report,
   replay_message,
   has_replay_rule,
   first_replay_message,
@@ -754,41 +772,115 @@ func run_scenario(
       let m_exhausted = mutant("the replay makes one request more than the program holds",
                                "replay-program-exhausted",
                                drop_last(program.interactions), actual);
-      let m_kind = mutant("one provider request arrives as a clock advance", "replay-wrong-kind",
-                          program.interactions,
-                          replace_at(actual, prov_at,
-                            func(i: Interaction) -> Interaction {
-                              { i | identity: { i.identity | body: ClockAdvanceIdentity }, deadline_ms: -1 } }));
-      let m_origin = mutant("one provider request comes from a different producer", "replay-wrong-origin",
-                            program.interactions,
-                            replace_at(actual, prov_at,
-                              func(i: Interaction) -> Interaction {
-                                match i.identity.body {
-                                  ProviderIdentity(_, s, m) =>
-                                    { i | identity: { i.identity | body: ProviderIdentity("other_producer", s, m) } },
-                                  _ => i
-                                } }));
-      let m_identity = mutant("one tool request carries a different call id", "replay-unsafe-identity-mismatch",
-                              program.interactions,
-                              replace_at(actual, tool_at,
-                                func(i: Interaction) -> Interaction {
-                                  match i.identity.body {
-                                    ToolIdentity(o, _, n) =>
-                                      { i | identity: { i.identity | body: ToolIdentity(o, "some_other_call", n) } },
-                                    _ => i
-                                  } }));
-      let m_projection = mutant("one request projection differs", "replay-projection-differs",
-                                program.interactions,
-                                replace_at(actual, prov_at,
-                                  func(i: Interaction) -> Interaction { { i | request_projection: "${i.request_projection} (drifted)" } }));
+      -- The five single-position mutants are BOUND rather than inlined, because
+      -- stage 5's regression axis grades the same real logs. Two gates reading
+      -- one mutant is the arrangement in which the two modes cannot be given
+      -- quietly different inputs and then compared.
+      let wrong_kind_log = replace_at(actual, prov_at,
+                             func(i: Interaction) -> Interaction {
+                               { i | identity: { i.identity | body: ClockAdvanceIdentity }, deadline_ms: -1 } });
+      let wrong_origin_log = replace_at(actual, prov_at,
+                               func(i: Interaction) -> Interaction {
+                                 match i.identity.body {
+                                   ProviderIdentity(_, s, m) =>
+                                     { i | identity: { i.identity | body: ProviderIdentity("other_producer", s, m) } },
+                                   _ => i
+                                 } });
+      let wrong_identity_log = replace_at(actual, tool_at,
+                                 func(i: Interaction) -> Interaction {
+                                   match i.identity.body {
+                                     ToolIdentity(o, _, n) =>
+                                       { i | identity: { i.identity | body: ToolIdentity(o, "some_other_call", n) } },
+                                     _ => i
+                                   } });
+      let drifted_projection_log = replace_at(actual, prov_at,
+                                     func(i: Interaction) -> Interaction { { i | request_projection: "${i.request_projection} (drifted)" } });
       -- The outcome mutation is the one that matters most for `world_state_of`:
       -- the identity and the projection still match at every position, so only
       -- the outcome comparison can see it.
+      let drifted_outcome_log = replace_at(actual, prov_at,
+                                  func(i: Interaction) -> Interaction { { i | outcome: { i.outcome | payload: "" } } });
+
+      let m_kind = mutant("one provider request arrives as a clock advance", "replay-wrong-kind",
+                          program.interactions, wrong_kind_log);
+      let m_origin = mutant("one provider request comes from a different producer", "replay-wrong-origin",
+                            program.interactions, wrong_origin_log);
+      let m_identity = mutant("one tool request carries a different call id", "replay-unsafe-identity-mismatch",
+                              program.interactions, wrong_identity_log);
+      let m_projection = mutant("one request projection differs", "replay-projection-differs",
+                                program.interactions, drifted_projection_log);
       let m_outcome = mutant("the world served the right request and a different answer",
                              "replay-outcome-differs",
-                             program.interactions,
-                             replace_at(actual, prov_at,
-                               func(i: Interaction) -> Interaction { { i | outcome: { i.outcome | payload: "" } } }));
+                             program.interactions, drifted_outcome_log);
+
+      -- ---- Axis J: REGRESSION REPLAY (stage 5), on those same real logs -----
+      --
+      -- D2's second mode: "require compatible causal identity, record projection
+      -- differences, and continue" — bound by "never weakens tool-call/result
+      -- correlation or delivers an outcome to a different logical request".
+      --
+      -- Every row below is the SAME mutated log the strict row above just
+      -- rejected. That is the whole point: the two modes must disagree on
+      -- exactly two of these seven and agree on the other five, and running them
+      -- over one set of inputs is what makes the disagreement legible instead of
+      -- asserted. The demotion set itself is asserted in `dst_replay`, where a
+      -- third demotion goes red on its own.
+      let _ = println("  regression replay (D2's second mode), on the same real logs:");
+      let r_clean = regression_replay_findings(program.interactions, actual);
+      let ok_r_clean = check("${label}: an exact replay is regression-clean AND records nothing",
+                             regression_replay_ok(program.interactions, actual)
+                               && regression_difference_count(r_clean) == 0,
+                             "${regression_report(r_clean)} — a mode that recorded a difference unconditionally would pass every row below, so this negative control is the load-bearing one");
+
+      let r_proj = regression_replay_findings(program.interactions, drifted_projection_log);
+      let _ = println("      ${regression_report(r_proj)}");
+      let ok_r_proj = check("${label}: a differing request projection is RECORDED and the replay continues",
+                            regression_replay_ok(program.interactions, drifted_projection_log)
+                              && has_replay_rule(r_proj.differences, "replay-projection-differs")
+                              && regression_difference_count(r_proj) == 1,
+                            "${regression_report(r_proj)} — strict mode rejected this same log one row above, which is the difference the mode exists to make");
+
+      let r_out = regression_replay_findings(program.interactions, drifted_outcome_log);
+      let ok_r_out = check("${label}: a differing outcome is RECORDED and the replay continues",
+                           regression_replay_ok(program.interactions, drifted_outcome_log)
+                             && has_replay_rule(r_out.differences, "replay-outcome-differs")
+                             && regression_difference_count(r_out) == 1,
+                           "${regression_report(r_out)}");
+
+      -- The five that stay fatal. `replay-unsafe-identity-mismatch` is the
+      -- correlation guarantee itself; the two walk arms are the pair that fail
+      -- SILENTLY without their rules, and `replay-unused-interaction` is the one
+      -- most easily forgotten because a regression replay that stops early
+      -- otherwise reports a clean, short and entirely fictitious "no
+      -- differences".
+      let r_ident = regression_replay_findings(program.interactions, wrong_identity_log);
+      let r_kind = regression_replay_findings(program.interactions, wrong_kind_log);
+      let r_origin = regression_replay_findings(program.interactions, wrong_origin_log);
+      let r_short = regression_replay_findings(program.interactions, drop_last(actual));
+      let r_long = regression_replay_findings(drop_last(program.interactions), actual);
+      let ok_r_fatal = check("${label}: causal identity and both walk arms stay FATAL in regression mode",
+                             not regression_replay_ok(program.interactions, wrong_identity_log)
+                               && has_replay_rule(r_ident.fatal, "replay-unsafe-identity-mismatch")
+                               && not regression_replay_ok(program.interactions, wrong_kind_log)
+                               && has_replay_rule(r_kind.fatal, "replay-wrong-kind")
+                               && not regression_replay_ok(program.interactions, wrong_origin_log)
+                               && has_replay_rule(r_origin.fatal, "replay-wrong-origin")
+                               && not regression_replay_ok(program.interactions, drop_last(actual))
+                               && has_replay_rule(r_short.fatal, "replay-unused-interaction")
+                               && not regression_replay_ok(drop_last(program.interactions), actual)
+                               && has_replay_rule(r_long.fatal, "replay-program-exhausted"),
+                             "identity=${show(List.length(r_ident.fatal))} kind=${show(List.length(r_kind.fatal))} origin=${show(List.length(r_origin.fatal))} short=${show(List.length(r_short.fatal))} long=${show(List.length(r_long.fatal))} — a zero here is a regression mode that has given up the one thing D2 says it may never give up, and it type-checks");
+
+      -- ...and none of the five was quietly filed as a recorded difference,
+      -- which is the shape a demotion actually takes: the fatal list empties
+      -- while the report grows longer and looks more useful.
+      let ok_r_not_demoted = check("${label}: no fatal rule was quietly recorded as a difference instead",
+                                   regression_difference_count(r_ident) == 0
+                                     && regression_difference_count(r_kind) == 0
+                                     && regression_difference_count(r_origin) == 0
+                                     && regression_difference_count(r_short) == 0
+                                     && regression_difference_count(r_long) == 0,
+                                   "identity=${show(regression_difference_count(r_ident))} kind=${show(regression_difference_count(r_kind))} origin=${show(regression_difference_count(r_origin))} short=${show(regression_difference_count(r_short))} long=${show(regression_difference_count(r_long))}");
 
       -- ---- Axis A: refusals, on real programs ------------------------------
       let bad_schema = { program | schema_version: "execution-program/0" };
@@ -842,6 +934,7 @@ func run_scenario(
         && ok_witness && ok_nonvacuous && ok_shapes && ok_distinct && ok_steps
         && ok_tautology_matches && ok_tautology_caught
         && m_unused && m_exhausted && m_kind && m_origin && m_identity && m_projection && m_outcome
+        && ok_r_clean && ok_r_proj && ok_r_out && ok_r_fatal && ok_r_not_demoted
         && ok_refuse_schema && ok_refuse_payload && ok_typed && ok_det && ok_valid
     }
   }
