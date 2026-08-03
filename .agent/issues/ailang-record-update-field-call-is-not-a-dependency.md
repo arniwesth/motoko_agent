@@ -2,8 +2,27 @@
 
 ## Status
 
-Found 2026-08-03 during WI-A13 stage 6 (`.agent/projects/009_motoko_dst_execution`). **Not yet filed
-upstream.** Reproduced minimally against the pin, **AILANG v0.26.0** (commit `3b52a24`).
+Found 2026-08-03 during WI-A13 stage 6 (`.agent/projects/009_motoko_dst_execution`). **Filed upstream
+2026-08-03 — public feedback ticket `fb_e44ba922db1c42be`, category `bug`.** Reproduced minimally
+against the pin, **AILANG v0.26.0** (commit `3b52a24`).
+
+**Re-reduced to a self-contained repro before filing**, since this note's version imports project
+modules. Three files differing by one line, over a two-field `Box` record and a `doubled` helper —
+no project imports:
+
+| Form | Result |
+|---|---|
+| `{ b \| items: doubled(b.items) }` — record **update** | **fails**, `undefined variable: doubled` |
+| `let ys = doubled(b.items); { b \| items: ys }` | passes |
+| `{ items: doubled(b.items), tag: b.tag }` — record **literal** | passes |
+
+`doubled` is a top-level `pure func` in all three, defined immediately below its caller. That
+isolates the trigger to the **update** form specifically — not to ordering, not to the types, not to
+the call.
+
+Filed via the `ailang-feedback` skill's Channel 3 (public MCP `submit_feedback`), the same channel
+and with the same trackability caveat as the other five tickets — see
+`ailang-no-warning-for-unreachable-match-arm.md`'s *How it was filed* section, which applies verbatim.
 
 A Motoko-side workaround is in the tree and is one line per site — see *Workaround* below — so this
 is not blocking. It is worth filing because the failure mode is a **bogus error message on correct

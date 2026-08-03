@@ -39,7 +39,7 @@ disagree, the plan wins and this note is stale.
 | 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
 | 5 | **A10** | profile/manifest machinery | 2, 3 (both landed) | **DONE 2026-08-03** — `fd4f4bd`, `dafe898`. `driver_only` v1 loads and is conformant at HEAD. Report: `NOTE-cluster-5-execution-report-and-plan-corrections.md`. Both decisions resolved; added standing rule S6 |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
-| 7 | **A13** | discovery/replay | 3, 4, 5, 6 (all landed) | **IN PROGRESS — stages 1 and 2 of 5 landed.** Stage 1: `9c4d724` (types + validator), report `NOTE-cluster-7-…`. Stage 2: `8b0d605` (discovery, graded both directions), report `NOTE-cluster-8-…`. Stages 1–5 landed (`9c4d724`, `8b0d605`, `2d752da`, `f77adf1`, `177d0cb`+`be8393c`). **Stage 6 handoff written** — the last: `HANDOFF-execute-a13-stage-6-persistence.md`. Staging re-cut to six at stage 4, when the seeded generator was found to have fallen between stages 2 and 4. **A13 completes with stage 6, unblocking A14 and A15** |
+| 7 | **A13** | discovery/replay | 3, 4, 5, 6 (all landed) | **IN PROGRESS — stages 1 and 2 of 5 landed.** Stage 1: `9c4d724` (types + validator), report `NOTE-cluster-7-…`. Stage 2: `8b0d605` (discovery, graded both directions), report `NOTE-cluster-8-…`. **DONE 2026-08-03 — all six stages.** `9c4d724`, `8b0d605`, `2d752da`, `f77adf1`, `177d0cb`+`be8393c`, `6c4894e`+`e01a978`. Reports: `NOTE-cluster-7-…` through `NOTE-cluster-12-…`. `make dst` exit 0 at **466 checks**, from 0 at the item's start. **A14 and A15 unblocked** |
 | 8 | **A14 + A15** | invariants, latency pair, corpora, CI | 7 | Wait |
 
 **Clusters 1, 2 and 3 are mutually independent and can run in parallel** across sessions or agents.
@@ -154,7 +154,16 @@ Two habits follow, and both are corrections to how this project has been verifyi
 
 ## What to ask back, every cluster
 
-Each handoff should request actual time, **sites touched** and the
+**Ask for the git wall-clock window, not a felt ratio — cluster 12 measured both for all six A13
+stages and they disagree by two to three times.** Reading handoff-commit → last `feat`-commit off git
+gave 34/43/35/60/36/41 minutes, against contemporaneous reports of ~3×, ~1×, ~1.5×, ~0.9×. Stage 2's
+"~3×" is **1.26×** on the clock. The two agree closely only for stage 4, whose cost was dominated by
+*running* things — sweeps and re-pins — rather than deciding them. **Where a stage's cost is
+deliberation, the felt ratio over-reports it**, because forty minutes on three hard decisions feels
+like three times thirty-four minutes on one. Request the window, which is checkable; a felt ratio may
+sit beside it, labelled as such.
+
+Each handoff should also request actual time, **sites touched** and the
 **judgement-versus-mechanical ratio**. Cluster 1 established why all three matter and corrected the
 model: file-count sizing was wrong by two orders of magnitude, **sites** is the right driver for
 widen-and-converge work, and the judgement ratio for contract-changing work is **~19%**, not M1's
