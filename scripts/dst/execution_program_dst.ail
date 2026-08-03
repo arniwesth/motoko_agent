@@ -151,7 +151,22 @@ pure func fixture_interactions() -> [Interaction] {
    { identity: at(8, ToolIdentity("loop_v2", "call_1", "BashExec")),
      request_projection: "tool BashExec args_digest=d41d8c (retry)",
      deadline_ms: 5000,
-     outcome: ok_outcome(15, "tool ok: exit 0") }]
+     outcome: ok_outcome(15, "tool ok: exit 0") },
+   -- An approval read that reached END OF INPUT: the operator channel closed
+   -- before answering, so the world had no value to serve.
+   --
+   -- It is in the BASE program for the same reason the retry above is, and it
+   -- was added by stage 2 after discovery produced one from a real run. Stage 1
+   -- read D2's `value_or_missing` as environment-only, which type-checks and is
+   -- silent until an approval queue actually runs dry — and neither of stage
+   -- 2's first two scenarios drained one, so both readings stayed green. Under
+   -- the env-only reading this row turns the negative control RED, which is the
+   -- only way that reading is visible at all. See the widened rule and both
+   -- readings in `validate_outcome`.
+   { identity: at(9, ApprovalIdentity("loop_v2", "call_3", "BashExec")),
+     request_projection: "approval for BashExec, operator channel closed",
+     deadline_ms: 3000,
+     outcome: missing_outcome() }]
 }
 
 pure func valid_program() -> ExecutionProgram {

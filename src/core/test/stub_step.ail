@@ -24,7 +24,15 @@ import std/result (Result, Ok, Err)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead, ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock)
+import src/core/ports (
+  Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
+  ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
+  record_interaction, recording_clock, recording_approval, recording_env, recording_tool
+)
+import src/core/dst_interaction (
+  Interaction, StreamChunkRecord, TimedOutcome,
+  ProviderIdentity, OutcomeOk
+)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
@@ -50,7 +58,14 @@ export type ScriptedStep = ScriptedStep
 -- nothing — the precise weakness the plan's advancement rule exists to prevent.
 --
 -- It is the same `scripted_ports()` adapter; only the initial world differs.
-export type StepProvider = LiveAI | Scripted([ScriptedStep]) | ScriptedWorld(WorldState) | Ported(Ports)
+-- `RecordingWorld` (WI-A13 stage 2) is `ScriptedWorld` with the RECORDING
+-- adapters installed instead of the plain deterministic ones. It exists for the
+-- same reason `ScriptedWorld` did — an assertion needs a seam that cannot be
+-- reached otherwise — and it is a separate variant rather than a flag on the
+-- world so that every existing target keeps the exact adapters it had. Nothing
+-- that runs today changes behaviour; the interaction log is empty in every
+-- world but this one.
+export type StepProvider = LiveAI | Scripted([ScriptedStep]) | ScriptedWorld(WorldState) | RecordingWorld(WorldState) | Ported(Ports)
 
 -- Convert a ScriptedStep to the StepResult shape loop_v2 expects.
 export pure func scripted_to_step_result(s: ScriptedStep) -> StepResult {
@@ -196,6 +211,114 @@ export func scripted_ports() -> Ports {
   -- why a scripted run completes with `Clock` withheld while `live_ports` dies
   -- — the poison pair `make world_state` asserts exactly that.
   ports_shape_probe(model_step)
+}
+
+-- WI-A13 stage 2: the recording provider, and the recording adapter set.
+--
+-- `recording_model_step` WRAPS the scripted provider's cursor logic rather than
+-- reimplementing it, the same discipline `recording_clock` follows against
+-- `virtual_clock`: a second copy of "serve the head, advance past it" is a
+-- second chance for the recorded log and the served script to disagree, and a
+-- log that disagrees with the run it claims to record is the whole defect class
+-- this stage exists to detect.
+--
+-- TWO BINDINGS HERE COULD NOT BE READ AND HAD TO BE DECIDED. Both are recorded
+-- because S6's second term says that is where an item's risk lives.
+--
+-- 1. THE PROVIDER IDENTITY'S `step`. D2 gives a provider identity an origin, a
+--    step and a model. The port receives the model but NOT the driver's
+--    `step_idx` — `Ports.model_step` takes `(WorldState, string, [Message],
+--    callback)` and widening it to carry the step is the one thing this stage
+--    was told not to do. The step recorded is therefore the count of provider
+--    interactions ALREADY in the log, i.e. this call's position in the provider
+--    class. On every path `driver_only` reaches, that equals `step_idx`,
+--    including the stream-error retry path, because each retry issues exactly
+--    one further provider call. It would diverge only if the driver ever made
+--    two provider calls within one step, which no path does today. The
+--    alternative — leaving the step blank — is worse: stage 1's validator has
+--    no blank-step rejection, so it would be silently accepted, and strict
+--    replay would then match step 2's outcome to step 1's request.
+--
+-- 2. THE ORIGIN STRING. D2 fixes the identity's shape and not its vocabulary.
+--    "loop_v2" is used for every driver-issued request, matching the name stage
+--    1's inline test already assumed, so that a future second producer is a
+--    NEW origin rather than a redefinition of this one.
+func recording_model_step(rt: ExtRuntime) -> (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
+  func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  -> ProviderExchange ! {AI, IO, Trace} {
+    -- NOT named `step`: this module imports `std/ai (step, ...)`, and a local
+    -- binding of that name does not shadow the import on this pin — the
+    -- reference resolves to the imported FUNCTION and fails unification against
+    -- the identity's int field. A loud failure, and worth naming here so the
+    -- next reader does not rediscover it.
+    let provider_step = provider_calls_in(state.log, 0);
+    match state.script {
+      [] => {
+        emissions: [],
+        result: Ok(terminal_step()),
+        next_state: record_interaction(
+          state,
+          ProviderIdentity("loop_v2", provider_step, model),
+          "model_step model=${model} msg_count=${show(List.length(msgs))} script=exhausted",
+          -1,
+          { advance_ms: 0, chunks: [], payload: "stub: script exhausted",
+            status: OutcomeOk, fault_class_id: "" })
+      },
+      s :: rest => {
+        let _ = play_chunks(s.chunks, on_chunk);
+        {
+          emissions: [],
+          result: Ok(scripted_to_step_result(s)),
+          next_state: record_interaction(
+            { state | script: rest },
+            ProviderIdentity("loop_v2", provider_step, model),
+            "model_step model=${model} msg_count=${show(List.length(msgs))}",
+            -1,
+            { advance_ms: 0,
+              chunks: chunk_records(s.chunks, state.clock_ms),
+              payload: s.prose,
+              status: OutcomeOk,
+              fault_class_id: "" })
+        }
+      }
+    }
+  }
+}
+
+-- Every chunk is stamped with the world clock at the moment of the exchange.
+-- The scripted provider plays its chunks without advancing the clock, so the
+-- offsets are equal rather than increasing — which satisfies D2's
+-- NON-DECREASING requirement exactly, and states truthfully that this world
+-- models no inter-chunk latency. Manufacturing spread here would record a
+-- timing the run did not have.
+pure func chunk_records(cs: [string], at_ms: int) -> [StreamChunkRecord] {
+  match cs {
+    [] => [],
+    c :: rest => ({ offset_ms: at_ms, text: c }) :: chunk_records(rest, at_ms)
+  }
+}
+
+pure func provider_calls_in(log: [Interaction], acc: int) -> int {
+  match log {
+    [] => acc,
+    i :: rest =>
+      match i.identity.body {
+        ProviderIdentity(_, _, _) => provider_calls_in(rest, acc + 1),
+        _ => provider_calls_in(rest, acc)
+      }
+  }
+}
+
+-- The recording adapter set: `scripted_ports()`'s seams, each wrapped by its
+-- recording counterpart. Built by record update over `ports_shape_probe` for
+-- the reason `live_ports` is — a second function-typed constructor parameter
+-- does not compile on this pin.
+export func recording_ports(rt: ExtRuntime) -> Ports {
+  { ports_shape_probe(recording_model_step(rt)) |
+    clock_now: recording_clock,
+    approval_read: recording_approval,
+    env_get: recording_env,
+    tool_exec: recording_tool }
 }
 
 -- The initial world for a scripted run: the whole script, uncounted, and every

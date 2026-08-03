@@ -78,13 +78,13 @@
 -- 2. **The core clock inventory is no longer "four driver sites".** D4's table
 --    says four; at HEAD there are FIVE routed core sites, because WI-A12 added
 --    `tool_phase.ail:342`, and TWO ambient core sites that did not exist when
---    that table was written (`session.ail:796`, created by A12 under plan rule
---    S2, and `stub_step.ail:146`, the live adapter). See
+--    that table was written (`session.ail:807`, created by A12 under plan rule
+--    S2, and `stub_step.ail:161`, the live adapter). See
 --    `unconditional_core_sites` for the measured set. This is why the
 --    completeness check below takes the discovered set as an ARGUMENT and does
 --    not transcribe a number from the ADR.
 --
--- 3. **`session.ail:796` is core, unattributed, and UNROUTED.** Falling it back
+-- 3. **`session.ail:807` is core, unattributed, and UNROUTED.** Falling it back
 --    to clause 1 makes it unconditional core, which is right — but a profile
 --    that then claims to route its whole unconditional set would be claiming
 --    something false. So the declaration carries `routed` per site and an
@@ -217,19 +217,19 @@ export pure func attribution_rows() -> [AttributionRow] {
 -- eight reads are reachable by installation, not by attribution.
 export pure func unconditional_core_sites() -> [CoreSite] {
   [
-    { site: { file: "src/core/session.ail", line: 929 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 943 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 1026 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1048 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2245 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2285 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2354 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2395 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
     { site: { file: "src/core/tool_phase.ail", line: 342 }, effect: "Clock", routed: true,
       note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it" },
-    { site: { file: "src/core/session.ail", line: 796 }, effect: "Clock", routed: false,
+    { site: { file: "src/core/session.ail", line: 807 }, effect: "Clock", routed: false,
       note: "ext_unrouted_clock: ambient now(), UNROUTED by plan rule S2 because ExtPorts.clock_now's zero-argument shape admits no world capture; the Clock poison probe is its instrument" },
-    { site: { file: "src/core/test/stub_step.ail", line: 146 }, effect: "Clock", routed: false,
+    { site: { file: "src/core/test/stub_step.ail", line: 161 }, effect: "Clock", routed: false,
       note: "live_ports' clock adapter — the one place the driver reads a real clock, by design; a deterministic profile uses the scripted adapter and never reaches it" }
   ]
 }
@@ -636,7 +636,7 @@ pure func test_instance_suffixed_ids_intersect() -> bool
 pure func test_unattributed_site_is_unconditional_core() -> bool
   tests [((), true)]
   {
-    classify_site("src/core/session.ail:1026", ["scratchpad#0"]) == "unconditional-core"
+    classify_site("src/core/session.ail:1048", ["scratchpad#0"]) == "unconditional-core"
   }
 
 -- THE completeness test. The discovered site is real, well-formed, and in
@@ -645,7 +645,7 @@ pure func test_discovered_site_in_neither_list_is_rejected() -> bool
   tests [((), true)]
   {
     let discovered: [CoreSite] = [
-      { site: { file: "src/core/session.ail", line: 1026 }, effect: "Clock", routed: true, note: "" },
+      { site: { file: "src/core/session.ail", line: 1048 }, effect: "Clock", routed: true, note: "" },
       { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
       { site: { file: "src/core/omitted.ail", line: 42 }, effect: "Clock", routed: false, note: "" }
     ];
@@ -677,7 +677,7 @@ pure func test_identity_is_revision_and_hash() -> bool
   }
 
 -- An unrouted unconditional-core site is DECLARED, not hidden. Header note 3:
--- `session.ail:796` is core, unattributed and ambient by plan rule S2, and a
+-- `session.ail:807` is core, unattributed and ambient by plan rule S2, and a
 -- profile claiming to route its whole unconditional set would be claiming
 -- something false. This test is what keeps that fact visible.
 pure func test_unrouted_core_sites_are_declared() -> bool

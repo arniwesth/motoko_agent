@@ -1,0 +1,754 @@
+-- scripts/dst/discovery_dst.ail
+--
+-- WI-A13 stage 2: discovery against `driver_only`. What the REAL driver
+-- requested, recorded into D2's interaction log, and graded in both directions
+-- against witnesses the recorder did not write.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT THIS ASSERTS, AND WHY EACH AXIS IS HERE
+-- ---------------------------------------------------------------------------
+--
+--   A. COMPLETENESS (under-recording). Every request the driver made is in the
+--      log. Named by the parent handoff; the failure it catches is a recorder
+--      that drops a class, which produces a consistent, reproducible,
+--      replayable log describing a shorter run than the one that happened.
+--
+--   B. FIDELITY (over-recording). Every interaction in the log corresponds to a
+--      request the driver made. NOT named by any handoff — it is the mirror
+--      image cluster 7's S1 result says must be named, because a one-sided
+--      assertion set cannot see failures in the other direction. Its failure is
+--      a log describing a LONGER run than happened, and strict replay reports
+--      the surplus as an "unused interaction" — a HarnessFailure that names the
+--      recorder's defect as if it were the system's.
+--
+--      A and B are the two arms of ONE comparison (`class_balance`), so neither
+--      can be deleted without the other staring back.
+--
+--   C. THE ASSERTION IS NOT VACUOUS. The same scenario is run through the
+--      NON-recording adapters and must come out RED. This is the executable
+--      form of "written before the recorder, proven red against a driver that
+--      records nothing", and keeping it in the suite is what stops a future
+--      refactor from turning the checker into a tautology.
+--
+--   D. MUTATION (cluster 5's C5). Every guard is demonstrated going red under a
+--      deliberate mutation of the REAL recorded log — a dropped class, an
+--      invented interaction, a shifted ordinal, an unaccounted clock advance.
+--      A guard that never fires is the defect these items exist to prevent.
+--
+--   E. NEGATIVE CONTROL (cluster 7's S1). The real, unmutated log must SURVIVE.
+--      A suite of only-failing fixtures cannot see an over-strict checker, and
+--      cluster 7 measured that being the difference between a correct and a
+--      silently wrong reading of D2. Here the negative control is axis A+B
+--      itself passing on the real run — which is why it is stated as its own
+--      named check rather than left implicit.
+--
+--   F. DETERMINISM, last and least. Two runs of the same world produce the same
+--      log. It is required by D7 and it has caught none of the fifteen silent
+--      defects this project has found, for the structural reason that a
+--      recorder which drops a class drops it identically twice.
+--
+--   G. THE LOG IS A VALID PROGRAM. The recorded interactions, wrapped in
+--      `driver_only`'s real manifest, pass stage 1's pure structural validator.
+--      This is the join between the two stages: a recorder that produces
+--      something the decoder rejects has produced an unreplayable artifact, and
+--      the two were written far enough apart to disagree.
+--
+-- ---------------------------------------------------------------------------
+-- THE WITNESSES, AND WHY THEY ARE AN ORACLE
+-- ---------------------------------------------------------------------------
+--
+-- The load-bearing property is TWO AUTHORS, TWO RECORDS, ONE EXECUTION. The
+-- interaction log is written by the world adapters in `src/core/ports.ail`. The
+-- witnesses are written by production driver code that knows nothing about the
+-- recorder:
+--
+--   provider  `ProviderCallPrepared`, appended to the RETURNED ledger trace by
+--             session.ail:1997 and emitted separately from the `dispatch_step`
+--             call at :2008. Cross-component, and it exists whether or not the
+--             port recorded anything.
+--   tool      the tool-result messages the driver returned, built by
+--             `tool_phase.ail`'s `tool_outcome_message`. The STRONGER form of
+--             this witness is the wire's `v2_tool_dispatch_start`
+--             (tool_phase.ail:332), emitted BEFORE the port calls at :342-350 —
+--             but it goes to the wire through `ledger_emit` and is never
+--             appended to the returned trace, so it cannot be read from inside
+--             this script. `make discovery` compares it against the census line
+--             printed below, which is where that witness is actually consumed.
+--   approval  the world's own `approvals` cursor delta — the response-producing
+--             mechanism, not the log-writing one.
+--   clock     the world's own `clock_ms` delta, checked EXACTLY against the sum
+--             of recorded advances. General across classes: every class may
+--             advance time, so no single class's recorder can satisfy it alone.
+--   env       source-derived, and of a different kind. See `dst_discovery`.
+--
+-- ---------------------------------------------------------------------------
+-- THE SCENARIOS
+-- ---------------------------------------------------------------------------
+--
+-- Two, and the pair matters more than either alone. Both send every tool call
+-- to the approval channel; they differ in what the operator answers.
+--
+--   approve  three approvals, all granted, so three native tool dispatches
+--            follow. approvals = 3, tools = 3.
+--   deny     three approvals, all refused, so NO tool dispatch happens at all.
+--            approvals = 3, tools = 0.
+--
+-- `deny` earns its place, and the reason was MEASURED rather than assumed. The
+-- first version of this header claimed it was needed to catch a recorder that
+-- logs the approval read as a tool interaction; that claim is false, and the
+-- mutation says so — the approval balance catches that one in BOTH scenarios.
+-- What `deny` uniquely catches is a miswiring of the CHECKER ITSELF:
+--
+--   grade the tool balance against `approvals_consumed` instead of
+--   `tool_dispatches` — a one-line confusion between two adjacent witness
+--   fields — and `approve` PASSES, because both witnesses are 3 there. `deny`
+--   fails immediately, because the tool witness is 0 and the approval witness
+--   is 3.
+--
+-- So `deny` is the negative control for the ASSERTION, not only for the
+-- recorder: it is the only scenario in which the tool class's expected count is
+-- zero, and the only one in which two witnesses that happen to agree are forced
+-- apart. Verified by deliberately introducing that miswiring and observing
+-- exactly this split.
+
+module scripts/dst/discovery_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/ai (Message, ToolCall)
+import std/json (Json, jo)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/phase_vocab (
+  LedgerRecord,
+  WireRecord,
+  DecisionRecord,
+  CompactionStageRecord,
+  ProviderCallPrepared,
+  RunSummary,
+  LedgerTrace
+)
+import src/core/test/stub_step (
+  ScriptedWorld, RecordingWorld, ScriptedStep, tool_step, prose_step
+)
+import src/core/ports (WorldState, empty_world_state)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/dst_interaction (
+  Interaction,
+  IdentityBody,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity,
+  EnvironmentReadIdentity, ClockAdvanceIdentity,
+  identity_kind,
+  identity_projection,
+  interaction_kind,
+  count_kind,
+  total_advance_ms,
+  env_keys_read
+)
+import src/core/dst_discovery (
+  DiscoveryWitness,
+  EnvExpectation,
+  DiscoveryFinding,
+  check_discovery,
+  discovery_ok,
+  discovery_rule,
+  discovery_message,
+  has_discovery_rule,
+  first_discovery_message,
+  driver_env_keys,
+  census,
+  census_line
+)
+import src/core/dst_program (
+  ExecutionProgram,
+  InitialWorld,
+  GeneratorBounds,
+  validate_program,
+  program_ok,
+  program_message,
+  program_schema_version,
+  validate_bounds
+)
+import src/core/dst_driver_only (driver_only, driver_only_manifest)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_fault_catalogue (required_class_ids)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  Delegate,
+  ExtCtx,
+  ExtRuntime,
+  ExtensionHooks,
+  FinalizeDecision,
+  NoDecision,
+  NoIntercept,
+  PassThrough,
+  Pending,
+  DenyAfterTimeout,
+  PreStepDecision,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolHandleDecision,
+  ToolPolicyDecision,
+  ToolSchema
+)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func step_named(name: string) -> ScriptedStep {
+  { tool_step("T", "{}", name) | prose: name }
+}
+
+-- Three continuers then a terminator. Three tool calls is deliberate: two would
+-- let an off-by-one in the recorder agree with an off-by-one in the witness.
+func script() -> [ScriptedStep] {
+  [step_named("s0"), step_named("s1"), step_named("s2"), prose_step("done")]
+}
+
+func approve_line() -> string { "{\"type\":\"approve\"}" }
+func deny_line(reason: string) -> string { "{\"type\":\"deny\",\"reason\":\"${reason}\"}" }
+
+-- The synthetic environment. `MOTOKO_TOOL_TIMEOUT_MS` is present so the tool
+-- deadline is configured by the world, and so the env class has at least one
+-- key whose read is PRESENT rather than missing — a recorder that only ever
+-- records `OutcomeMissing` would otherwise look correct.
+func world_env() -> [{ key: string, value: string }] {
+  [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
+   { key: "MOTOKO_HEADLESS", value: "1" }]
+}
+
+func scripted_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string }] {
+  [{ tool_call_id: "", duration_ms: 7,  code: "", message: "", content: "OK-ALPHA" },
+   { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "OK-BRAVO" },
+   { tool_call_id: "", duration_ms: 13, code: "", message: "", content: "OK-CHARLIE" }]
+}
+
+func base_world(answers: [string]) -> WorldState {
+  { empty_world_state() |
+    script: script(),
+    approvals: answers,
+    env: world_env(),
+    tools: scripted_tools() }
+}
+
+-- ---------------------------------------------------------------------------
+-- Extension plumbing: every tool call goes to the approval channel
+-- ---------------------------------------------------------------------------
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate }
+func no_intercept(_ctx: ExtCtx, _text: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
+func no_solver(_ctx: ExtCtx, _text: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("discovery: approval required", DenyAfterTimeout)
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks: ExtensionHooks = {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: passthrough_pre_step,
+    on_tool_policy: pending_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Running
+-- ---------------------------------------------------------------------------
+
+func run_recording(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+-- The same scenario with the NON-recording adapters. Axis C.
+func run_plain(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), ScriptedWorld(w)
+  )
+}
+
+-- ---------------------------------------------------------------------------
+-- The witnesses, read off records the recorder did not write
+-- ---------------------------------------------------------------------------
+
+-- Provider: `ProviderCallPrepared` in the RETURNED trace.
+pure func provider_calls_witnessed(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest =>
+      (match r {
+         WireRecord(ProviderCallPrepared(_)) => 1,
+         _ => 0
+       }) + provider_calls_witnessed(rest)
+  }
+}
+
+-- The `step` field of each `ProviderCallPrepared`, in order. This is the
+-- driver's OWN step index, and it is what the recorded provider identity's step
+-- must equal.
+--
+-- This check exists because the provider step is the one binding in the
+-- recorder that could not be read and had to be DECIDED (see
+-- `recording_model_step`): `Ports.model_step` does not receive `step_idx`, so
+-- the recorder derives the step from the provider class's own position in the
+-- log. S6 says a recorded binding is where an item's risk lives, and a count
+-- check cannot see this one — four provider interactions numbered 0,0,0,0 are
+-- four provider interactions. Only comparing the VALUES against the driver's
+-- own can.
+pure func provider_steps_witnessed(records: [LedgerRecord]) -> [int] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(ProviderCallPrepared(i)) => i.step :: provider_steps_witnessed(rest),
+        _ => provider_steps_witnessed(rest)
+      }
+  }
+}
+
+-- The recorded provider identities' steps, in log order.
+pure func provider_steps_recorded(xs: [Interaction]) -> [int] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ProviderIdentity(_, step, _) => step :: provider_steps_recorded(rest),
+        _ => provider_steps_recorded(rest)
+      }
+  }
+}
+
+-- The tool call ids the driver correlated its RESULT MESSAGES to, in order.
+-- `tool_call_id` on a tool message is set by `tool_phase.ail` from the call it
+-- answered, so this is the driver's own correlation and not the recorder's.
+pure func tool_call_ids_witnessed(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" && not contains(m.content, "denied_by_policy") then
+        m.tool_call_id :: tool_call_ids_witnessed(rest)
+      else tool_call_ids_witnessed(rest)
+  }
+}
+
+pure func tool_call_ids_recorded(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ToolIdentity(_, call_id, _) => call_id :: tool_call_ids_recorded(rest),
+        _ => tool_call_ids_recorded(rest)
+      }
+  }
+}
+
+pure func eq_ints(a: [int], b: [int]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && eq_ints(xs, ys) }
+  }
+}
+
+pure func join_ints(xs: [int]) -> string {
+  match xs { [] => "", x :: [] => "${x}", x :: rest => "${x},${join_ints(rest)}" }
+}
+
+pure func join(xs: [string]) -> string {
+  match xs { [] => "", x :: [] => x, x :: rest => "${x},${join(rest)}" }
+}
+
+-- Tool: the tool-result messages the driver returned, EXCLUDING the ones a
+-- denial produced. `denied_by_policy` is a field of the denial payload built by
+-- `tool_phase.ail`'s `denial_message` / `policy_denied_message`, so the
+-- discriminator is production code's own, not this script's.
+pure func tool_results_witnessed(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest =>
+      (if m.role == "tool" && not contains(m.content, "denied_by_policy") then 1 else 0)
+        + tool_results_witnessed(rest)
+  }
+}
+
+-- Every tool-role message the driver returned, result or denial alike. Under
+-- these scenarios' policy EVERY tool call goes to the approval channel, so this
+-- is one per approval read the driver performed — the witness that replaced the
+-- cursor delta after the cursor was measured under-counting a drained queue.
+pure func tool_role_messages(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => (if m.role == "tool" then 1 else 0) + tool_role_messages(rest)
+  }
+}
+
+func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [EnvExpectation]) -> DiscoveryWitness {
+  let final_msgs = match run.result { Ok(ms) => ms, Err(_) => [] };
+  {
+    provider_calls: provider_calls_witnessed(run.trace.records),
+    tool_dispatches: tool_results_witnessed(final_msgs),
+    approval_reads: tool_role_messages(final_msgs),
+    approvals_consumed: List.length(initial.approvals) - List.length(run.world.approvals),
+    clock_delta_ms: run.world.clock_ms - initial.clock_ms,
+    expected_env_reads: expected_env
+  }
+}
+
+-- The env keys this scenario's control flow reaches, DERIVED FROM THE DRIVER'S
+-- SOURCE and not from the run:
+--
+--   session.ail:1417  session_policy_init runs unconditionally, four keys
+--   session.ail:939   derive_session_id runs on the traced path (called at
+--                     session.ail:2283), one key
+--   tool_phase.ail:343 once per NATIVE tool dispatch — so it is reached in the
+--                     `approve` scenario and NOT in `deny`, where every call is
+--                     refused before dispatch
+--
+-- MOTOKO_CAPTURE_FAILED_PAYLOAD (session.ail:2018) is on the non-retryable
+-- provider-error path, which neither scenario takes, and is correctly absent
+-- from both lists.
+-- The COUNTS matter, not merely the keys. Each of the five below is read
+-- exactly once per traced run: `session_policy_init` runs once before the loop
+-- and `derive_session_id` once at its start. A recorder that logged the first
+-- read of a key and dropped later ones would satisfy a presence check.
+func env_reads_always() -> [EnvExpectation] {
+  [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
+   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+   { key: "OPENAI_BASE_URL",           count: 1 },
+   { key: "MOTOKO_HEADLESS",           count: 1 },
+   { key: "MOTOKO_SESSION_ID",         count: 1 }]
+}
+
+-- MOTOKO_TOOL_TIMEOUT_MS is read once per NATIVE dispatch (tool_phase.ail:343),
+-- so its expected count is expressed in terms of the independently WITNESSED
+-- dispatch count rather than written as a literal. That anchors the one
+-- repeated env read to a runtime witness, even though the read itself has none.
+func env_reads_with_dispatch(dispatches: int) -> [EnvExpectation] {
+  env_reads_always() ++ [{ key: "MOTOKO_TOOL_TIMEOUT_MS", count: dispatches }]
+}
+
+-- ---------------------------------------------------------------------------
+-- Reporting
+-- ---------------------------------------------------------------------------
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+func report_findings(fs: [DiscoveryFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => {
+      let _ = println("      ${discovery_message(f)}");
+      report_findings(rest)
+    }
+  }
+}
+
+-- A mutation row: mutate the REAL recorded log, and require the named rule to
+-- fire. `label` says what was broken; `rule` is what must catch it.
+func mutant(label: string, rule: string, log: [Interaction], w: DiscoveryWitness) -> bool ! {IO} {
+  let fs = check_discovery(log, w);
+  check("${rule} ← ${label}", has_discovery_rule(fs, rule),
+        "expected ${rule}; got ${show(List.length(fs))} finding(s): ${first_discovery_message(fs)}")
+}
+
+pure func drop_kind(xs: [Interaction], kind: string) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest => if interaction_kind(i) == kind then drop_kind(rest, kind) else i :: drop_kind(rest, kind)
+  }
+}
+
+-- Re-densify after a drop, so the mutation tests the CLASS BALANCE and not the
+-- density rule. A mutant that trips two rules proves neither.
+pure func renumber(xs: [Interaction], n: int) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest => ({ i | identity: { i.identity | ordinal: n } }) :: renumber(rest, n + 1)
+  }
+}
+
+pure func log_kinds(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest => interaction_kind(i) :: log_kinds(rest)
+  }
+}
+
+pure func eq_list(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && eq_list(xs, ys) }
+  }
+}
+
+pure func projections(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest => "${identity_projection(i.identity)}|${i.request_projection}|${i.outcome.advance_ms}" :: projections(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Axis G: the recorded log, as an ExecutionProgram
+-- ---------------------------------------------------------------------------
+
+pure func discovered_manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.26.0", "4.0", "{}",
+                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+}
+
+pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    generator_id: "driver_only_discovery",
+    generator_version: "1",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
+      synthetic_environment: initial.env,
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_only/1"
+    },
+    bounds: {
+      max_interactions: 256,
+      max_chunks_per_interaction: 16,
+      max_payload_bytes: 4096,
+      max_resource_size: 4096,
+      max_clock_advance_ms: 60000
+    },
+    manifest: discovered_manifest(),
+    interactions: w.log
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- One scenario, all axes
+-- ---------------------------------------------------------------------------
+
+func run_scenario(
+  label: string,
+  answers: [string],
+  tool_timeout_read_per_dispatch: bool
+) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let initial = base_world(answers);
+  let run = run_recording("discovery_${label}", initial);
+  let log = run.world.log;
+  -- Built in two passes: the witness's dispatch count is needed to state the
+  -- expected MOTOKO_TOOL_TIMEOUT_MS multiplicity, and that count comes from the
+  -- returned messages, never from the log.
+  let probe = witness_for(initial, run, []);
+  let expected_env =
+    if tool_timeout_read_per_dispatch then env_reads_with_dispatch(probe.tool_dispatches)
+    else env_reads_always();
+  let w = { probe | expected_env_reads: expected_env };
+
+  let _ = println("");
+  let _ = println("${label}: ${show(List.length(log))} interactions recorded");
+  let _ = println("${label}: witness provider=${show(w.provider_calls)} tool=${show(w.tool_dispatches)} approval_reads=${show(w.approval_reads)} approvals_served=${show(w.approvals_consumed)} clock_delta=${show(w.clock_delta_ms)}ms");
+  -- The machine-readable census. `make discovery` diffs this against the wire's
+  -- own `provider_call_prepared` and `v2_tool_dispatch_start` counts, which is
+  -- where the STRONGER pre-port tool witness is consumed.
+  let _ = println("CENSUS ${label} ${census_line(census(log))}");
+
+  -- The message-derived witnesses (tool dispatches, approval reads) come from
+  -- the returned message list, which is EMPTY on the Err path. A scenario that
+  -- started failing would therefore witness zero of both and silently downgrade
+  -- two of the four runtime witnesses to vacuous. Asserted rather than assumed.
+  let ok_ran = check("${label}: the scenario reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so the message-derived witnesses are empty and would pass vacuously");
+
+  -- ---- Axes A + B + E: the real log, both directions, and it must SURVIVE ---
+  let fs = check_discovery(log, w);
+  let _ = if List.length(fs) > 0 then report_findings(fs) else ();
+  let ok_real = check("${label}: the recorded log accounts for the run, in both directions",
+                      List.length(fs) == 0,
+                      "${show(List.length(fs))} finding(s) above");
+
+  -- ---- Identity CONTENT, not just counts ---------------------------------
+  --
+  -- The balance checks above compare how MANY. These compare WHICH, against the
+  -- driver's own values. A recorder can produce the right number of provider
+  -- interactions all carrying step 0, or the right number of tool interactions
+  -- all carrying the first call id — both type-check, both are perfectly
+  -- reproducible, and both make strict replay match the wrong outcome to the
+  -- right-looking request.
+  let steps_w = provider_steps_witnessed(run.trace.records);
+  let steps_r = provider_steps_recorded(log);
+  let ok_steps = check("${label}: recorded provider steps equal the driver's own",
+                       eq_ints(steps_w, steps_r),
+                       "driver=[${join_ints(steps_w)}] recorded=[${join_ints(steps_r)}] — the step is the recorder's one DECIDED binding, derived from log position because the port never receives step_idx");
+  let final_msgs2 = match run.result { Ok(ms) => ms, Err(_) => [] };
+  let ids_w = tool_call_ids_witnessed(final_msgs2);
+  let ids_r = tool_call_ids_recorded(log);
+  let ok_ids = check("${label}: recorded tool call ids equal the driver's own correlation",
+                     eq_list(ids_w, ids_r),
+                     "driver=[${join(ids_w)}] recorded=[${join(ids_r)}]");
+
+  -- ---- Axis D: every guard, red under a deliberate mutation ---------------
+  let _ = println("  mutations (each must go red):");
+  let dropped_provider = renumber(drop_kind(log, identity_kind(ProviderIdentity("", 0, ""))), 0);
+  let m1 = mutant("the recorder drops the provider class", "discovery-under-recorded",
+                  dropped_provider, { w | clock_delta_ms: total_advance_ms(dropped_provider) });
+  let dropped_env = renumber(drop_kind(log, identity_kind(EnvironmentReadIdentity(""))), 0);
+  let m2 = mutant("the recorder drops the environment class", "discovery-env-read-under-recorded",
+                  dropped_env, { w | clock_delta_ms: total_advance_ms(dropped_env) });
+  let dropped_clock = renumber(drop_kind(log, identity_kind(ClockAdvanceIdentity)), 0);
+  let m3 = mutant("the recorder drops the clock class", "discovery-clock-unaccounted",
+                  dropped_clock, w);
+  let doubled = renumber(log ++ log, 0);
+  let m4 = mutant("the recorder appends every interaction twice", "discovery-over-recorded",
+                  doubled, { w | clock_delta_ms: total_advance_ms(doubled) });
+  let shifted = renumber(log, 1);
+  let m5 = mutant("the recorder numbers from 1 instead of 0", "discovery-log-not-dense",
+                  shifted, w);
+  let m6 = mutant("the world clock moved further than the log accounts for",
+                  "discovery-clock-unaccounted", log, { w | clock_delta_ms: w.clock_delta_ms + 1 });
+  let m7 = mutant("the log records nothing at all", "discovery-empty-log",
+                  [], { w | clock_delta_ms: 0 });
+  let m8 = mutant("the approval cursor moved further than the served reads account for",
+                  "discovery-approval-cursor-disagrees", log,
+                  { w | approvals_consumed: w.approvals_consumed + 1 });
+
+  -- ---- Axis C: the same scenario, recorder absent, must be RED ------------
+  let plain = run_plain("plain_${label}", initial);
+  let plain_w = witness_for(initial, plain, expected_env);
+  let ok_vacuity = check("${label}: the check is RED when the adapters do not record",
+                         not discovery_ok(plain.world.log, plain_w),
+                         "the non-recording run passed the completeness check — the assertion is vacuous");
+
+  -- ---- Axis F: determinism ------------------------------------------------
+  let again = run_recording("discovery_${label}", initial);
+  let ok_det = check("${label}: two runs of the same world record the same log",
+                     eq_list(projections(log), projections(again.world.log)),
+                     "the recorded logs differ between two runs of one world");
+
+  -- ---- Axis G: the log is a valid ExecutionProgram ------------------------
+  let prog = program_of(run.world, initial);
+  let rejections = validate_program(prog, required_class_ids());
+  let _ = match rejections { [] => (), r :: _ => println("      ${program_message(r)}") };
+  let ok_prog = check("${label}: the recorded log is a structurally valid ExecutionProgram",
+                      List.length(rejections) == 0,
+                      "${show(List.length(rejections))} structural rejection(s)");
+  let ok_bounds = check("${label}: the discovered program is within its declared bounds",
+                        List.length(validate_bounds(prog)) == 0,
+                        "a declared generator bound was exceeded");
+
+  ok_ran && ok_real && ok_steps && ok_ids && m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8
+    && ok_vacuity && ok_det && ok_prog && ok_bounds
+}
+
+-- ---------------------------------------------------------------------------
+-- The wire witness, on its own entry point
+-- ---------------------------------------------------------------------------
+--
+-- THE STRONGEST WITNESS IN THIS STAGE, and it cannot be consumed from inside
+-- AILANG. `V2ToolDispatchStart` (tool_phase.ail:332) is emitted BEFORE the port
+-- calls at :342-343, which makes it the one tool witness that exists whether or
+-- not the port was ever reached — but it goes to the wire through `ledger_emit`
+-- and is never appended to the returned trace, so `run.trace.records` cannot
+-- see it. Cluster 4 measured the same emit/append imbalance (37 against 15).
+--
+-- `make discovery` therefore runs THIS entry, captures stdout, and compares the
+-- JSONL the driver emitted against the census this prints. Two authors, two
+-- records, one execution — the property that makes it an oracle rather than the
+-- recorder grading itself.
+--
+-- It is a SEPARATE entry point because `main` performs six driver runs across
+-- its two scenarios, and the wire accumulates over all of them while a census
+-- describes one. Comparing a wire total against a per-run census would need a
+-- multiplier, and a multiplier is a number that goes stale the moment a
+-- scenario is added. One run, one census, exact equality, nothing to maintain.
+export func wire_witness() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let initial = base_world([approve_line(), approve_line(), approve_line()]);
+  let run = run_recording("wire_witness", initial);
+  println("CENSUS wire ${census_line(census(run.world.log))}")
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("discovery_dst: WI-A13 stage 2 — completeness AND fidelity against driver_only");
+
+  -- approve: three approvals granted, three native dispatches follow.
+  let ok_approve = run_scenario("approve",
+                                [approve_line(), approve_line(), approve_line()],
+                                true);
+
+  -- deny: three approvals refused, ZERO dispatches. This is the scenario in
+  -- which a recorder that logged an approval as a tool interaction is visible,
+  -- and it is invisible in `approve` where the counts happen to agree.
+  let ok_deny = run_scenario("deny",
+                             [deny_line("alpha"), deny_line("bravo"), deny_line("charlie")],
+                             false);
+
+  -- eof: THREE tool calls and ONE queued answer, so the approval queue runs dry
+  -- and the last two reads hit end-of-input.
+  --
+  -- This scenario found two defects that `approve` and `deny` could not, and
+  -- both were invisible for the same structural reason: each of those queues
+  -- exactly as many answers as its run consumes, so "reads performed" and
+  -- "answers consumed" are equal in both and any confusion between them is
+  -- hidden. It is the drained-queue case, and it is the third distinct thing
+  -- cluster 7's rule predicted — a fixture exercising a shape the balanced ones
+  -- structurally cannot reach.
+  --
+  --   1. the cursor delta was the approval WITNESS, and it counts answers
+  --      consumed rather than reads performed, so a CORRECT recorder was
+  --      reported as over-recording — an over-rejection in the checker itself;
+  --   2. an end-of-input approval read records `OutcomeMissing`, which stage 1's
+  --      validator accepted only for an environment read, so a valid discovered
+  --      log was rejected as a malformed program.
+  --
+  -- The first dispatch is approved and the remaining two are refused by the
+  -- default-deny policy, so `tool_dispatches` is 1 while `approval_reads` is 3
+  -- and `approvals_consumed` is 1 — three quantities that are pairwise distinct
+  -- here and pairwise equal in `approve`.
+  let ok_eof = run_scenario("eof", [approve_line()], true);
+
+  let _ = println("");
+  if ok_approve && ok_deny && ok_eof then
+    println("discovery_dst PASS")
+  else {
+    let _ = println("discovery_dst FAIL");
+    exit(1)
+  }
+}

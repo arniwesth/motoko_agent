@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -215,6 +215,102 @@ execution_program:
 	@set -eu; \
 	ailang run --caps IO --entry main scripts/dst/execution_program_dst.ail < /dev/null; \
 	ailang test src/core/dst_program.ail > /dev/null && echo "  ✓ src/core/dst_program.ail"
+
+# WI-A13 stage 2: discovery against `driver_only`. Four checks, in order.
+#
+#   1. The acceptance script. Two scenarios (`approve`, `deny`), each carrying
+#      the two-sided balance, the identity-CONTENT comparisons, seven mutation
+#      rows, the vacuity control, determinism, and stage 1's structural
+#      validator run over the recorded log.
+#
+#   2. THE WIRE WITNESS, and it is the strongest evidence in this stage. The
+#      driver emits `provider_call_prepared` (session.ail, before the
+#      dispatch_step call) and `v2_tool_dispatch_start` (tool_phase.ail, before
+#      the port calls) to the wire through ledger_emit. Neither is appended to
+#      the returned ledger trace, so no AILANG assertion can read them —
+#      cluster 4 measured that same emit/append imbalance. This step captures
+#      the JSONL and compares it against the census the recorder printed. Two
+#      authors, two records, one execution: it is what makes the tool class's
+#      completeness an oracle rather than the recorder grading itself.
+#
+#      `--entry wire_witness` performs exactly ONE run so the comparison is
+#      exact equality with nothing to keep in sync.
+#
+#   3. THE ENV CLASS'S SOURCE DERIVATION. The env class has no runtime witness
+#      at all — `ports.env_get` is a keyed lookup and emits no ledger event — so
+#      its completeness is asserted against the keys the DRIVER'S SOURCE can
+#      read. This step re-derives that set from the `ports.env_get(` call sites
+#      and diffs it against `driver_env_keys()`. The literal is checked, never
+#      trusted: a source-derived set nobody re-derives is a stale literal, and
+#      then the env class's only evidence is the recorder's own word.
+#
+#      This is PROVENANCE evidence, not capability evidence. A13's report and
+#      D11's counters must not add it into one completeness number with the six
+#      classes that have runtime witnesses.
+#
+#   4. The checker's own unit tests, including its negative control and both
+#      over-recording directions.
+#
+# The env grep is anchored to the SYNTACTIC FORM `.env_get(<world>, "KEY"` and
+# not to a bare key name — cluster 7's correction 1. A guard that greps a bare
+# token eventually fires on the artifact documenting it, because these items are
+# required to write prose naming what they check.
+#
+# The receiver is deliberately unanchored. The first version of this grep
+# required `ports.env_get(`, and it silently missed session.ail's
+# MOTOKO_CAPTURE_FAILED_PAYLOAD read, which goes through `st.provider.env_get(`.
+# The derivation caught that itself on its first run — which is the argument for
+# deriving rather than declaring, made by the derivation. A key literal is
+# required, so session.ail's extension-bridge closure (whose key is a variable
+# supplied by an extension) correctly does not match.
+.PHONY: discovery
+discovery:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/discovery_dst.ail < /dev/null; \
+	wire=$$(ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry wire_witness scripts/dst/discovery_dst.ail < /dev/null 2>/dev/null); \
+	w_prov=$$(printf '%s\n' "$$wire" | grep -c '"type":"provider_call_prepared"' || true); \
+	w_tool=$$(printf '%s\n' "$$wire" | grep -c '"type":"v2_tool_dispatch_start"' || true); \
+	c_prov=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS wire .*expect_provider=\([0-9]*\).*/\1/p'); \
+	c_tool=$$(printf '%s\n' "$$wire" | sed -n 's/.*CENSUS wire .*expect_tool=\([0-9]*\).*/\1/p'); \
+	if [ -z "$$c_prov" ] || [ -z "$$c_tool" ]; then \
+		echo "FAIL: the wire_witness run printed no census line — the comparison below would be vacuous"; \
+		exit 1; \
+	fi; \
+	if [ "$$w_prov" -eq 0 ] || [ "$$w_tool" -eq 0 ]; then \
+		echo "FAIL: the driver emitted no provider_call_prepared/v2_tool_dispatch_start to the wire (prov=$$w_prov tool=$$w_tool) — the witness is absent, so a match would prove nothing"; \
+		exit 1; \
+	fi; \
+	if [ "$$w_prov" -ne "$$c_prov" ] || [ "$$w_tool" -ne "$$c_tool" ]; then \
+		echo "FAIL: the interaction log disagrees with the driver's own wire emissions."; \
+		echo "      provider: wire=$$w_prov log=$$c_prov"; \
+		echo "      tool:     wire=$$w_tool log=$$c_tool"; \
+		echo "      These are written by different components. The wire is emitted by production driver code BEFORE the port is called; the log is written by the port. A disagreement is a recorder defect, not a flaky count."; \
+		exit 1; \
+	else \
+		echo "  ✓ the interaction log matches the driver's own wire emissions (provider=$$w_prov, tool=$$w_tool)"; \
+	fi; \
+	derived=$$(grep -ohE '\.env_get\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*,\s*"[A-Z_]+"' \
+	     src/core/session.ail src/core/tool_phase.ail \
+	   | sed -E 's/.*"([A-Z_]+)"/\1/' | sort -u); \
+	declared=$$(sed -n '/^export pure func driver_env_keys/,/^}/p' src/core/dst_discovery.ail \
+	   | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u); \
+	if [ -z "$$derived" ]; then \
+		echo "FAIL: no ports.env_get call sites found in the driver — the derivation is broken, so the diff below would pass vacuously"; \
+		exit 1; \
+	fi; \
+	if [ "$$derived" != "$$declared" ]; then \
+		echo "FAIL: driver_env_keys() disagrees with the ports.env_get call sites in the driver."; \
+		echo "      derived from source:"; printf '%s\n' "$$derived" | sed 's/^/        /'; \
+		echo "      declared in src/core/dst_discovery.ail:"; printf '%s\n' "$$declared" | sed 's/^/        /'; \
+		echo "      The env class has NO runtime witness. This set is its only independent evidence, so a stale literal leaves the recorder grading itself."; \
+		exit 1; \
+	else \
+		echo "  ✓ driver_env_keys() re-derived from the driver's ports.env_get call sites ($$(printf '%s\n' "$$derived" | wc -l | tr -d ' ') keys)"; \
+	fi; \
+	ailang test src/core/dst_discovery.ail > /dev/null && echo "  ✓ src/core/dst_discovery.ail"; \
+	ailang test src/core/dst_interaction.ail > /dev/null && echo "  ✓ src/core/dst_interaction.ail"
 
 .PHONY: driver_only
 driver_only:
@@ -457,10 +553,21 @@ world_state:
 #      check fails if it ever starts succeeding, which is what would happen if
 #      someone "unified" the two outcomes behind a catch-all.
 #   3. A structural guard: every terminal return in the driver must go through
-#      c2_finalize. c2_finalize holds the sole `{ result:` record literal, so
-#      more than one means a terminal path has been added that appends no
-#      RunSummary — the exact regression D6.1 exists to prevent, and one that no
-#      per-path test can catch for a path nobody wrote a test for.
+#      c2_finalize. c2_finalize holds the sole terminal record literal, so more
+#      than one means a terminal path has been added that appends no RunSummary
+#      — the exact regression D6.1 exists to prevent, and one that no per-path
+#      test can catch for a path nobody wrote a test for.
+#
+#      WI-A13 stage 2 ANCHORED THIS GUARD, per cluster 7's correction 1. It was
+#      a bare-token `grep -c` that counted comment lines too, so session.ail
+#      carried a standing obligation to circumlocute around its own guard's
+#      pattern in prose — the same landmine that turned `make world_state` red
+#      for two clusters when A10 documented the randomness guard it tripped.
+#      The pattern is now anchored to a line whose record literal is not
+#      preceded by a dash, which no AILANG comment line can satisfy. Verified in
+#      both directions: 1 at HEAD, and 3 against a file with two deliberately
+#      added bypassing terminal returns in both plausible shapes, so the
+#      tightening costs no coverage.
 #   4. The typed reason's wire mapping and result-class unit tests. session.ail
 #      and phase_vocab.ail carry inline tests that no target ran before this
 #      one, including the RunSummary goldens that pin the wire strings.
@@ -476,10 +583,10 @@ terminal_trace:
 	else \
 		echo "  ✓ capability bypass remains a non-zero run (D6.6)"; \
 	fi; \
-	n=$$(grep -c '{ result:' src/core/session.ail); \
+	n=$$(grep -c '^[^-]*{ result:' src/core/session.ail); \
 	if [ "$$n" -ne 1 ]; then \
 		echo "FAIL: $$n terminal record literals in session.ail, expected 1 (c2_finalize). A terminal return is bypassing the finalizer — see D6.1."; \
-		grep -n '{ result:' src/core/session.ail; \
+		grep -n '^[^-]*{ result:' src/core/session.ail; \
 		exit 1; \
 	else \
 		echo "  ✓ all terminal returns route through c2_finalize"; \
@@ -836,9 +943,9 @@ attribution_table:
 	check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"; \
 	check src/core/tool_phase.ail 286 'is_scratchpad_tool_name' "the mixed guard"; \
 	check src/core/tool_phase.ail 287 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"; \
-	check src/core/session.ail 796 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"; \
-	check src/core/test/stub_step.ail 146 'now()' "live_ports' real clock (declared UNROUTED core)"; \
-	for l in 929 1026 2245 2354; do \
+	check src/core/session.ail 807 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"; \
+	check src/core/test/stub_step.ail 161 'now()' "live_ports' real clock (declared UNROUTED core)"; \
+	for l in 943 1048 2285 2395; do \
 	  check src/core/session.ail $$l 'clock_now' "a routed core clock site"; \
 	done; \
 	check src/core/tool_phase.ail 342 'clock_now' "the FIFTH routed core clock site (D4's table says four)"; \

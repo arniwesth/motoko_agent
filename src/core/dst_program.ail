@@ -310,7 +310,36 @@ pure func validate_outcome(i: Interaction, known_class_ids: [string]) -> [Progra
              else [OutcomeStatusDisagreesWithFault(o, "is a missing outcome naming fault class '${out.fault_class_id}'")])
               ++ (match i.identity.body {
                     EnvironmentReadIdentity(_) => [],
-                    _ => [OutcomeStatusDisagreesWithFault(o, "is a ${interaction_kind(i)} with a 'missing' status, which D2 defines only for an environment read")]
+                    -- WI-A13 stage 2 WIDENED this rule to the approval class.
+                    -- D2 names `value_or_missing` for the environment read, and
+                    -- stage 1 read that as "missing is env-only". Stage 2's
+                    -- discovery found the second reading, and an exhausted
+                    -- approval queue is what forced the choice:
+                    --
+                    --   A. missing is ENV-ONLY. An approval read that hits
+                    --      end-of-input must then record OutcomeOk with an
+                    --      empty payload — which makes it indistinguishable
+                    --      from an operator who typed an empty line. A12
+                    --      created `ApprovalInput.eof` precisely to keep those
+                    --      apart ("a recorded world must be able to replay an
+                    --      empty line that the operator actually typed as
+                    --      distinct from a closed channel", ports.ail), and the
+                    --      driver's policy BRANCHES differently on the two. So
+                    --      reading A makes a class of run unreplayable.
+                    --
+                    --   B. missing means THE WORLD HAD NO VALUE TO SERVE, which
+                    --      is equally true of an absent env key and a drained
+                    --      approval queue.
+                    --
+                    -- B is taken. It preserves a distinction production already
+                    -- depends on, and it keeps OutcomeOk meaning one thing.
+                    -- The rule stays CLOSED for every other class: a provider,
+                    -- tool, extension-effect, random-draw or clock interaction
+                    -- with a 'missing' status is still rejected, because none of
+                    -- those has a "the world declined to answer" state that is
+                    -- not already a fault class in A7's catalogue.
+                    ApprovalIdentity(_, _, _) => [],
+                    _ => [OutcomeStatusDisagreesWithFault(o, "is a ${interaction_kind(i)} with a 'missing' status, which D2 defines only for an environment read and (WI-A13) an approval whose queue is exhausted")]
                   })
         })
 }

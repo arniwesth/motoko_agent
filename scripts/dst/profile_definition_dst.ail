@@ -144,10 +144,10 @@ pure func clean() -> ProfileDefinition {
     attribution_ref: { source_revision: id.source_revision, content_hash: id.content_hash },
     omitted_extensions: [{ extension_id: "compaction_ai", reason: "calls the classifier-2 field ai_step" }],
     unrouted_reachable_sites: [
-      { site_key: "src/core/session.ail:796",
+      { site_key: "src/core/session.ail:807",
         instrument: "make world_state (Clock poison pair)",
         why_unroutable: "ExtPorts.clock_now is zero-argument; plan rule S2" },
-      { site_key: "src/core/test/stub_step.ail:146",
+      { site_key: "src/core/test/stub_step.ail:161",
         instrument: "make world_state (Clock poison pair)",
         why_unroutable: "live_ports' clock adapter; a deterministic run uses the scripted adapter" }
     ],
@@ -536,8 +536,8 @@ export func main() -> () ! {IO} {
                                    { clean() | unrouted_reachable_sites: [] });
   let no_instr = assert_rejected("a declared unrouted site with NO INSTRUMENT", "unrouted-site-without-instrument",
                                  { clean() | unrouted_reachable_sites: [
-                                     { site_key: "src/core/session.ail:796", instrument: "", why_unroutable: "S2" },
-                                     { site_key: "src/core/test/stub_step.ail:146",
+                                     { site_key: "src/core/session.ail:807", instrument: "", why_unroutable: "S2" },
+                                     { site_key: "src/core/test/stub_step.ail:161",
                                        instrument: "make world_state", why_unroutable: "live adapter" }] });
   let stale_decl = assert_rejected("a declaration for a site that is no longer reachable-and-unrouted", "declared-site-not-reachable",
                                    { clean() | unrouted_reachable_sites:
