@@ -876,6 +876,14 @@ is recorded — **computed, never written down** (P3), and depending additionall
 scheduling prohibition. A10 measured it at 7 reachable = 5 routed + 2 declared-unrouted; an earlier
 revision of this line said "4 sites", which is the stale-count defect P3 exists to stop.
 
+**Staging correction, 2026-08-03.** A13 was handed off as five stages and the split had a gap: stage
+2 was described as "discovery — record what the driver requests", which is only **half** of D2's
+discovery. D2 is *seed-driven* — a generator **chooses**, the world **records** — and the choosing
+half was never any stage's. It surfaced when stage 4's canary needed a generator to pin: nothing
+draws from a seed, and `discovery_dst.ail:543-545` writes `seed: 0` on hand-authored scenarios.
+Remaining stages are therefore **4 — the seeded generator; 5 — regression replay and D8's canary;
+6 — D8's persistence obligations.**
+
 **WI-A13. Build discovery and replay** (D2, D8). Depends on A7 (class ids), A9 (result types), A10
 (manifest), A12 (world_state — **landed**). A12 also left a seam this item wants:
 **`ScriptedWorld(WorldState)` on `StepProvider`**, added there so the approval class's assertion
