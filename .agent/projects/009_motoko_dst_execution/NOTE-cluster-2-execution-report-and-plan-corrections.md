@@ -187,11 +187,13 @@ now names `make ext_call_inventory` / `ext_call_inventory_selftest`, with the no
 re-derives its own membership so the repin step is to **read and reconcile** the printed set rather
 than re-specify it; A11's size row recorded as measured.
 
-**Upstream:** a fourth `ailang iface` defect for ticket `fb_d230853828108783` — `iface` fails
-`MOD010` on this repo's packages given an **absolute** path and succeeds given a **relative** one,
-the opposite of classifier 1's `std/` experience, and the error's two suggested fixes
-(`--relax-modules`, `AILANG_RELAX_MODULES=1`) are **both rejected by `iface` itself** while `check`
-honours the env var. Not filed this session; recorded here for the next batch.
+**Upstream: FILED 2026-08-03, ticket `fb_6c81854baf59b316`** (follow-up to `fb_d230853828108783`).
+Re-reproduced before filing, with one correction to this note's original claim: **the
+absolute-versus-relative distinction does not hold** — both forms fail `MOD010` identically from the
+repo root. What does reproduce, and is the sharper finding, is that **both fixes the error message
+itself suggests are unusable**: `--relax-modules` is rejected as `flag provided but not defined`,
+`AILANG_RELAX_MODULES=1` is ignored, and `ailang check` honours that same env var on the same file.
+The error is unactionable exactly as printed.
 
 ## Standing rules
 
