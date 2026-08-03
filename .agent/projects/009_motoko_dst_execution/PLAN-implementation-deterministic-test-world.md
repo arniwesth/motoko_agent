@@ -107,6 +107,31 @@ widen-and-converge sites (7.6–19.8/min against 3.4), because an artifact row c
 round-trip — so the site model does not transfer, and the surprise runs opposite to the direction
 the plan hedged against.
 
+**S6. Size a COMPOSITION by the number of INPUT ARTIFACTS whose exports must be read before a line
+can be written — roughly 2-3 minutes each — plus its RECORDED bindings, which are the only ones that
+cost anything after that.** This is the fifth kind, after widen-and-converge, constructed artifacts
+and detectors, and A10 measured it: **four round trips, all loud, zero silent defects — and thirty
+minutes**, roughly half of it grounding. S5 would have priced that at minutes and S4 at nothing,
+because **both assume you already know the source you are working in, and composition's whole job is
+to be correct about somebody else's artifact.**
+
+*The load-bearing half is the second term.* A10 had twenty-three facts crossing an artifact boundary
+and twenty of them are READ at runtime, so they cannot go stale and cost nothing measurable once the
+read-don't-restate policy is taken once. **All the risk went into the three that could not be read**
+— the attribution identity (recording it is the point; calling the live function makes the check a
+tautology) and classifier 2's two derived sets (produced by a Python tool, so they enter AILANG as
+literals). Each needed a purpose-built comparison, and those comparisons were most of the item's
+non-boilerplate work. So: **a read binding is free; a recorded binding is where the item's entire
+risk lives**, and a composition with many inputs and no recorded bindings is cheap regardless of its
+size. Site count predicts neither — A10 is 2925 lines at four round trips.
+
+*Corollary for the judgement ratio.* It tracks how much the specification leaves undetermined **about
+the RULES**, and it is a clean signal only for an item that is all rules. A10 shipped machinery *and*
+an instance and measured 14% on the machinery against 95% on the profile — because *which* adapter
+boundaries a profile has is discovered from the driver, not determined by D5. **Report the two
+separately;** a combined 34% reads as "the spec was vague" when the truth is "half of this item was
+content, and content is never in the spec".
+
 ## Decisions this plan owns
 
 The ADR deliberately left these decisions to the plan. They are answered here, once, so no work
@@ -175,14 +200,25 @@ per D10 deliberately not carrying "DST" or "simulation" in its name: the real tr
 the main-loop cursor, **empty extension install list**, covering no extension behaviour — exactly
 the interim profile the ADR describes. Its definition records: no installed extensions (so the
 coverage floor and per-hook disclosure hold vacuously), the D3 extension-effect fault class waived
-with its condition (no effectful hook installed), the attribution-table reference, and a reachable
-clock set of the four driver sites. The waiver list is settled at definition time against A7's full
-table — the extension-effect class is waived by construction, and the approval-deadline class is
-waived only if the profile's policy leaves its enabling condition off; either way each waived class
-is named with its condition. It is the documented baseline profile for the Milestone C
+with its condition (no effectful hook installed), the attribution-table reference, and **its
+reachable clock set, stated by COMPUTING it**. The waiver list is settled at definition time against
+A7's full table — the extension-effect class is waived by construction, and the approval-deadline
+class is waived only if the profile's policy leaves its enabling condition off; either way each
+waived class is named with its condition. It is the documented baseline profile for the Milestone C
 name-adoption run. No shipped configuration can be the first profile: all fourteen install
 `compaction_ai`, which calls `ai_step` and must be **omitted**, not installed-and-excluded (D1/D5).
 A `compose`-bearing profile is the planned second claimant, in Milestone C.
+
+***EXECUTED 2026-08-03, `dafe898`. An earlier revision of this paragraph said "a reachable clock set
+of the four driver sites", and four is wrong at HEAD — it is SEVEN reachable: five routed and two
+declared-unrouted.*** A12 routed a fifth site (`tool_phase.ail:342`) and A5 declared the two unrouted
+ones explicitly. **This is P3's `4 / 12 / 13` defect recurring one artifact later, which is the
+evidence that P3 names a standing hazard rather than a one-off.** `driver_only` therefore records no
+count at all: `dst_driver_only.driver_only_routed_claim()` derives the partition from the table at
+the revision the profile binds, and every assertion on it is a partition assertion rather than a
+comparison against a literal. **Do not restate a number here.** The one thing the profile does record
+is the declared-unrouted SET, because that is a claim about intent no analysis can recover, and the
+validator checks it against the computed set in both directions.
 
 **P5. The `stub_step.ail:170-173` stale comment** ("Returns both the step result and the updated
 provider… thread next_provider") describes the pre-`89a1d67` contract and is deleted in WI-A2,
@@ -513,8 +549,42 @@ would have loaded clean and then failed closed on the first step.** A6 closed th
 `test_seven_slots_are_unconditional` and a `describe_tools_excluded` fixture; take the set from
 A6's code, not from prose.
 
+***EXECUTED 2026-08-03. Machinery `fd4f4bd`, profile `dafe898`; committed separately, as the item
+required. Landed as `make profile_definition` and `make driver_only`, both in `dst` and in CI. Full
+report: `NOTE-cluster-5-execution-report-and-plan-corrections.md`.***
+
+*Size:* **MEASURED: ~30 min, 9 files (5 new), 77 sites of which 26 needed judgement — 34% combined,
+but the combined number is misleading and should be read as two: the MACHINERY half is 58 sites /
+8 judgement = 14% (below A6's 16%, so the three D5 amendments did settle what they appeared to),
+and the `driver_only` half is 19 sites / 18 judgement = 95%, because a profile's CONTENT — which
+adapter boundaries, which resource models — is discovered from the driver and is not a fact any
+specification could have determined.** For any item shipping both machinery and an instance, report
+the two ratios separately; a combined number reads as "the spec was vague" when the truth is "half of
+this item was content".
+
+**Composition is a FIFTH sizing model and S6 states it** (see the standing rules). Four round trips,
+all loud parse errors with line numbers, and zero silent defects — so S5 would have priced this at
+minutes and it took thirty. **Roughly half the time was GROUNDING: reading five artifacts' exports
+and running two tools before a line could be written.** That is a cost S4 and S5 both assume away,
+because both assume you already know the source you are working in; composition's whole job is to be
+correct about somebody else's artifact.
+
+**The three D5 definition fields this item had to ADD, because D5's ten are not decidable without
+them** — carry these to A13 and C5: `unrouted_reachable_sites` (decision 1 below; D5 has no field
+for a declared-unrouted site, so its all-or-nothing routing rule cannot distinguish a stated
+containment from a silent gap), `scan_roots` (D5 obligation 2's roots, which the scan-root rule is
+checked against), and `exercised_fault_classes` (D3 requires a non-exercised conditional class to be
+NAMED waived; the complement is not recoverable from the waiver list alone, so an unstated waiver
+would be indistinguishable from an exercised class). **Note also that D5's ten fields are TWELVE
+record fields**: id/version is one D5 field and two records, and D5 field 2 — extension ids *and*
+per-hook classifications — is two records, with field 9's disclosure a third. `make
+profile_definition` guards the count at 15.
+
+**Cluster 3's "four non-vacuous fields for an empty install list" is CONFIRMED and no fifth was
+found.** All four carry real content in `driver_only`.
+
 **Two decisions cluster 2 deliberately left to this item rather than deciding on its own authority**
-(cluster 2, C4 and its handoff notes):
+(cluster 2, C4 and its handoff notes). ***Both are now TAKEN — see below for each.***
 
 1. **Is a profile with an unrouted *reachable core* site conformant?** Two exist and both are
    declared rather than hidden: `session.ail:796` (ambient by design under S2, with the `Clock`
@@ -524,9 +594,40 @@ A6's code, not from prose.
    not the adapter a deterministic run uses — and D4's "profile-reachable" is installation-scoped,
    not execution-scoped, which is what makes the answer non-obvious. Decide it here; A5's
    declaration carries a `routed` flag per site precisely so the gap is stated rather than absent.
+
+   ***DECIDED 2026-08-03: CONFORMANT, but only when the site is DECLARED and carries a named
+   INSTRUMENT.*** Routing completeness is all-or-nothing over `{routed} ∪ {declared-and-
+   instrumented}`. Undeclared is a rejection, a blank instrument is a rejection, and — the half that
+   makes it a set check rather than a rubber stamp — **a declaration for a site that is no longer
+   reachable-and-unrouted is also a rejection**, so a site that gets routed or moves cannot leave a
+   stale declaration reading as if the gap were live.
+
+   **The strict reading was rejected on three grounds, not one.** It makes conformance unachievable
+   at HEAD *by construction* — `session.ail:796` cannot be routed on the pin at all, so no profile
+   could ever load and D5's machinery would be vacuous until Milestone B's ABI major. It **inverts
+   S2**, which deliberately chose the loud ambient read over the silent frozen cursor; a conformance
+   rule punishing the loud option and rewarding the invisible one reverses the rule that produced
+   the site. And it makes A5's `routed` flag dead — a flag no conformant profile may ever set to
+   false states nothing.
+
+   **The weaker reading is not a loophole because the instrument is real and already green.** `make
+   world_state` runs the Clock poison PAIR: the deterministic entry point completes with `Clock`
+   withheld (so it reaches neither site) and the live world dies with it withheld (so the first half
+   is evidence of containment, not of nothing reading a clock). That is *stronger* than a routing
+   claim — it demonstrates non-reach rather than asserting routing.
+
+   **The sub-question is answered the same way rather than scoped away.** `stub_step.ail:146` STAYS
+   in the reachable set. D4's profile-reachable is installation-scoped, so a site in a core module is
+   in the set whether or not any run reaches it; carving it out on execution-scope grounds would put
+   a fail-open exception into an installation-scoped rule and would have to be re-litigated for every
+   future site. **One rule, two sites, no exceptions.**
 2. **`driver_only`'s routed-set claim**, which cluster 6 routed and clusters 2 and 6 both declined to
    record. The table it needs now exists; compute the count from the classifier at the bound
    revision, per P3.
+
+   ***DECIDED 2026-08-03: COMPUTED, and no count is recorded anywhere.*** At HEAD, 7 reachable = 5
+   routed + 2 declared-unrouted. See the amendment under P4 for why the "four" this plan previously
+   carried was already wrong.
 
 **Consume A5 and A4 through their exports, not by re-deriving:**
 `dst_attribution_table.validate_at_load(loading_against, discovered)` is the whole load-time gate in
@@ -567,6 +668,29 @@ registry-resolved `sunholo/logging`, exposure nil today); the manifest separatel
 manifest list — source revision, toolchain, extension package and ABI versions, profile
 id/version, event-vocabulary version, normalized configuration — plus both derived classifier sets
 and the scan-root commit.
+
+**Three of this item's guards are STRUCTURAL, and a structural guard that never fires is the exact
+defect the item is about — so the acceptance line requires each to be MUTATION-TESTED.** All three
+were, in session, and A13's line should carry the same requirement for its manifest consumption:
+correcting a hashed field of the attribution table turns `make driver_only` red (D4's re-issue rule,
+which `validate_at_load` alone cannot catch, because it fires at the SAME source revision); dropping
+a member from the fixture's classifier-2 set turns `make profile_definition` red; and renaming
+`driver_only`'s `compaction_ai` omission turns it red. **The third is the one that will earn its
+keep** — the omission list is otherwise a guess frozen at authoring time, and with the guard the day
+a second extension calls a state-threading seam the target goes red instead of the profile quietly
+claiming coverage it does not have.
+
+**The runtime exclusion check is BUILT and TESTED but its call site is not threaded into the dispatch
+folds, and that is a scope judgement on the record rather than a missing acceptance row.**
+`dst_profile.routing_violation_at` returns A9's `RoutingViolation` with the interaction position and
+partial trace, and is tested for the violating case, the NON-violating case (a guard that failed
+closed on everything would pass the first test and break every run), and the vacuous case. What it is
+not is *called* from `fold_prompt_hooks` and friends: threading a profile there needs either a field
+on `ExtRuntime` — which lives in the ABI package, so a Milestone B change — or a new parameter
+through every fold, and at HEAD there is no consumer, since the load-time rules mean the only slot a
+conformant profile may exclude is the one gated slot and no profile excludes it. A parameter with no
+consumer is the dead-rider cost P2 rejects. **A13 establishes the profile and is where the call
+lands; C5 is the first profile that makes it non-vacuous.**
 
 **WI-A11. The predicate documentation check** the ADR assigns to this plan. **It is an anchor-set
 drift check, not a containment check, and that choice is forced rather than preferred:** the ADR

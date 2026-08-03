@@ -1233,6 +1233,32 @@ A versioned profile definition records:
   *installed* extension with zero covered hooks is a profile-definition rejection (D5); there is no
   carve-out.
 
+**Amendment, 2026-08-03 (WI-A10 implemented; `fd4f4bd`, `dafe898`). The ten fields above are not
+decidable as stated, and three more are required.** Each closes a case where a stated D5 obligation
+has no field to carry it, so a definition could satisfy every listed field and still leave the
+obligation unfalsifiable:
+
+- **`unrouted_reachable_sites`.** D5 and D4 give the routing rule as all-or-nothing but provide no
+  field for a site that is reachable, unrouted, and *declared*. Without one, a stated containment and
+  a silent gap are indistinguishable. WI-A10's decision 1 makes a profile with such a site conformant
+  **only** when the site is declared and names an instrument — with a blank instrument, an undeclared
+  site, and a declaration for a site that is no longer reachable-and-unrouted all rejections. The
+  strict reading was rejected because it makes conformance unachievable at HEAD by construction
+  (`session.ail:796` cannot be routed on the pin at all) and because it inverts the plan's rule S2,
+  which deliberately chose the loud unrouted read over the silent frozen one.
+- **`scan_roots`.** Obligation 2 scopes the routing scan to explicit roots; a profile installing a
+  package whose AILANG source lies outside them is claiming coverage over source nothing scanned.
+  The roots must be *in* the definition for that to be checkable.
+- **`exercised_fault_classes`.** D3 requires a conditional class the profile does not exercise to be
+  NAMED waived with its condition. The complement is not recoverable from the waiver list alone, so
+  an unstated waiver is indistinguishable from an exercised class.
+
+**Also: the ten fields are TWELVE record fields, and an implementer counting ten will merge two that
+D5 separates.** Id and version are one field and two records; and field 2 (extension ids *and*
+per-hook classifications) is two records, with the per-extension hook disclosure a third — D5 lists
+the disclosure separately from the classifications precisely because ids and classifications are
+different claims, and merging them loses the distinction the disclosure exists to carry.
+
 Changing any of those semantic scope fields requires a profile-version change. The execution
 manifest separately records source revision, toolchain, extension package versions, ABI version,
 profile id/version, event-vocabulary version (D6), and normalized profile configuration. Source or
