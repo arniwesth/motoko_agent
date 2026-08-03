@@ -111,6 +111,21 @@ Corollary, cheap and twice useful: **a fixture's stated justification is itself 
 cheap to test.** Stage 2's `deny` scenario documented a purpose it did not serve; introducing the
 mutation showed the real one.
 
+**Sharpened by A13 stage 3: ASSERT the fixture's coverage, do not describe it.** The corollary
+above recurred within one cluster of being written. Stage 3's surviving fixture documented a tool
+FAULT outcome it never reached — its queue held two entries against one approved dispatch, so the
+fault entry was never consumed and the header claimed a shape the run did not contain. Prose cannot
+notice that; the fixture's coverage drifts silently as the driver changes, and the author is the
+last person who will see it. Both halves of S7 are therefore executable checks in
+`strict_replay_dst`: *the surviving fixture carries every shape the specification protects*, and
+*no two of its quantities are equal*. Either fails loudly when a future edit collapses it.
+
+**And the same rule applied to a RECORD rather than a fixture: a codec's guard is a round trip
+asserted field by field, with every field holding a distinct value.** A codec's failure mode is a
+field the encoder writes and the decoder ignores; both halves type-check and the loss is silent
+until a replay serves a different response while every count still balances. A14 and A15 encode
+programs for D8's persistence and inherit this directly.
+
 **S4. Size a constructed artifact by the rows whose content must be *discovered*, not by its row
 count.** Cluster 3 measured the controlled comparison: A7 has 68 sites and took 11.5 minutes; A8 has
 158 and took 8. Every A7 row needed a recovery branch located and confirmed in the driver — eleven
@@ -146,6 +161,20 @@ specification clause admitting two readings; stage 1 had exactly one (D2's dupli
 and it consumed effectively all the item's risk while twenty-odd read bindings cost nothing. Stage 2
 had **three** and cost roughly **3×** stage 1 — the count of recorded bindings tracked the cost ratio
 better than any measure of size. **No sixth model is needed; count the decisions, not the lines.**
+
+*The third data point, and the limit of the predictor.* A13 stage 3 also had **three** recorded
+bindings and cost roughly **1×** stage 2, which is the parity the count predicts — while delivering
+strictly more (a new module, two codecs, a second acceptance script, a make target with a wire
+comparison). So the predictor holds; cluster 8's *explanation* for its own 3× — "the driver wiring
+is where the time went" — does not, because stage 3 is also driver wiring. What actually made stage
+3 cheap is not in any model: **stage 2 left an assertion that generalised.** `check_discovery`,
+`class_balance`'s one-arithmetic-site discipline and `approvals_served` were reused verbatim — the
+reconstitution balance is `class_balance` with different nouns, and grading the replayed run is a
+function call. **A composition's cost falls sharply when its predecessor left a generalisable
+assertion, and the binding count cannot see that, because the saving appears as bindings that never
+had to be made.** Stage 2's decision to make its checker two-sided — which its own report notes "no
+artifact asked for" — is the single largest reason stage 3 was cheap, a cluster before the saving
+appeared. Do not add a term; note that the predictor measures a stage in isolation.
 
 *The load-bearing half is the second term.* A10 had twenty-three facts crossing an artifact boundary
 and twenty of them are READ at runtime, so they cannot go stale and cost nothing measurable once the
@@ -846,11 +875,17 @@ The measured inventory and the classifier-2 call set are arguments everywhere: d
 and where a value must necessarily be copied, `tools/profile_definition/check_fixtures.py` is the
 pattern for keeping the copy honest.
 
-**This item is where the runtime exclusion check's call site lands** (cluster 5's recorded scope
-judgement). `dst_profile.routing_violation_at(...)` is built, tested for the violating,
-non-violating and vacuous cases, and returns `Option[DstResult]` where `None` means proceed. A13
-establishes the profile, which is what makes threading it something other than a dead rider; C5 is
-the first profile that makes it non-vacuous.
+~~**This item is where the runtime exclusion check's call site lands**~~ — **MOVED TO WI-C5 by A13
+stage 3, on a structural ground rather than a scheduling one.** `dst_profile.routing_violation_at(...)`
+is built, tested for the violating, non-violating and vacuous cases, and returns `Option[DstResult]`
+where `None` means proceed. Both A13 stages 2 and 3 established the profile and neither could give
+the check a consumer, because **replay sees interactions and no interaction carries the value the
+check discriminates on**: its parameters are `(definition, ext_id, hook_id, …)` and D2's
+`ExtensionEffectIdentity(ext_id, class_id, call_id)` carries the extension id and the *fault class*
+id, not a hook id. Its real consumer is the hook dispatch site — `src/core/ext/runtime.ail:279`,
+`(h.on_tool_policy)(ctx, call)` — which is production driver code with no profile in scope, so
+landing it is a change to the driver. Under `driver_only` it is vacuous regardless. **The call site
+belongs where the non-vacuity does, which this plan already says is C5.**
 
 *Acceptance evidence:* **every structural guard is mutation-tested, not asserted** (cluster 5, C5) —
 a structural guard that never fires is precisely the defect these items exist to prevent, and A10
@@ -869,7 +904,7 @@ seeded generator with bounds, a structural validator, two replay modes, the inte
 causal identity and ordinals, the canary, and the encoding/compatibility policy — each small, the
 set wide, and no measurement covers any of it.
 
-**Three obligations A13's stages 1–2 hand this item, each a finding rather than a preference:**
+**Obligations A13's stages 1–3 hand this item, each a finding rather than a preference:**
 
 1. **D11's coverage counters must distinguish two kinds of evidence, not report one number.** The
    completeness assertion has an independent runtime witness for six of D2's seven request classes —
@@ -886,14 +921,35 @@ set wide, and no measurement covers any of it.
    the counters must show it unreached rather than waived.** D2 gives `ExpectApproval` a deadline; the
    driver's approval channel carries none — `DenyAfterTimeout` is a decision, not a duration. This is
    a declared gap, not a solved problem.
-3. **Decide whether a coordinate-independent anchor for A5's table is worth building before the name
+3. **A13 stage 3's findings, all D2- or D8-shaped.**
+   - **A recorded outcome must be sufficient to RE-SERVE the response**, or design note 3's refusal
+     to put the queues on the program makes the program unreplayable. Stage 2 recorded the provider
+     outcome as the prose alone, dropping the step's tool calls; `make discovery` was green against
+     that recorder on all 48 checks, the wire witness, the structural validator and determinism,
+     because discovery never reads the payload back. Same defect on the tool class: `ToolFailed`'s
+     payload was its message, so the failure **code** was lost and a D3 fault class replayed as a
+     success. Fixed in the recorded outcome, not on the program.
+   - **D8's version gate and the actual compatibility boundary disagree, and this needs deciding.**
+     A program discovered before that fix is undecodable by this build and fails closed with a named
+     refusal — D8 behaving correctly. But `program_schema_version()` was **not** bumped, because no
+     schema *field* changed; what changed is what a payload string contains. A payload encoding is
+     part of the artifact's meaning even though it is not part of its shape.
+   - **`ToolCorrelationMismatch` and `ToolDeadlineExceeded` are replayable but scenario-unreached.**
+     Both travel through the same codec as `ToolFailed` and are covered by round-trip tests; reaching
+     them in a scenario costs the surviving fixture's pairwise-distinct counts. D11's counters should
+     show them *codec-covered, scenario-unreached* rather than reached or waived.
+4. **Decide whether a coordinate-independent anchor for A5's table is worth building before the name
    gate.** A5 anchors attributed sites by line number. Stage 2 inserted lines above four of them,
    which re-measured the table, changed its content hash, and cascaded to five artifacts including a
    mandatory `driver_only` **v2 re-issue** — for a change in which *the claim did not move*: same
    sites, effects, routed flags and reviewers, only coordinates. Every guard fired loudly with an
    exact expectation-versus-actual, so the machinery worked; the cost is that a hash cannot tell a
    re-measurement from a correction, and a profile version is spent on a no-op. A symbol name plus a
-   content digest of the enclosing function is the candidate.
+   content digest of the enclosing function is the candidate. **A13 stage 3 weakens this case:** it
+   edited `stub_step.ail` and paid nothing, by placing every insertion below the anchored line 161
+   and widening the import list in place rather than by adding a line. One `sed -n '161p'` check
+   costs seconds and avoids the whole cascade, so the cost is borne by authors who do not know the
+   anchor exists — which is a documentation problem before it is a tooling one.
 
 **WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
 A9, A13; the parity-classification invariants additionally depend on A8, **which landed 2026-08-02
