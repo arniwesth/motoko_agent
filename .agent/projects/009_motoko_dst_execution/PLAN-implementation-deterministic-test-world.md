@@ -62,8 +62,10 @@ executable statement of the first defect this plan fixes.
 
 ## Standing rules, earned by execution
 
-These began as per-item clauses and are promoted here because three calibration runs confirmed each
-of them. They bind every remaining item.
+These began as per-item clauses and are promoted here because repeated calibration runs confirmed
+each of them. They bind every remaining item. **Grouped behaviour-first (S1–S3, S7–S8) then sizing
+(S4–S6); the numbering is chronological, so it is not sequential in this order** — references in the
+cluster reports are by number, so they are not renumbered.
 
 **S1. Land the executable assertion *before* the change it guards, and make it cover advancement
 *and* completeness — never determinism alone.** Clusters 1, 4 and 6 produced ten sites where both
@@ -217,6 +219,17 @@ one from a chosen field that nothing consumed. **No sixth model: S6's second ter
 uncertainty whenever the composition is over something that RUNS rather than something that
 validates.** A validator's bindings are all decided; a generator's are not, and cannot be counted in
 advance.
+
+**Fourth data point, and the second term needs one distinction: a *decided* binding differs from a
+*discovered* one.** Stage 4 had four bindings against stages 1–3's one, three, three, and cost ~1.5×
+stage 3 — the count predicted 1.33× and the direction held. What it could not predict is that **two
+of the four arrived as red gates rather than from reading the specification**: that end-of-input is
+terminal (site 20, a property of the world model that only a replay revealed) and where the
+generator's choice surface stops. Stages 1–3's bindings were all identifiable from the artifacts
+before writing code. So: a decided binding costs a judgement; **a discovered binding costs a
+judgement plus the round trip that surfaced it, and cannot be counted in advance** — which is S5's
+property arriving inside a composition. **No sixth model: S6's second term inherits S5's uncertainty
+when the composition is over something that RUNS rather than something that validates.**
 
 **Third data point: the predictor survives, its explanation does not.** Stage 3 had three recorded
 bindings — parity with stage 2 — and cost about the same, so the count held. But cluster 8 attributed
@@ -1055,6 +1068,18 @@ set wide, and no measurement covers any of it.
    costs seconds and avoids the whole cascade, so the cost is borne by authors who do not know the
    anchor exists — which is a documentation problem before it is a tooling one.
 
+   **Cluster 10 separated the halves and the recommendation is now BUILD IT.** Stage 4 kept
+   `stub_step.ail:161` intact by care — writing below the anchor, widening lines and import lists in
+   place, and running `sed -n '161p'` after each edit, which caught one violation immediately. **But
+   its four `session.ail` anchors moved anyway and no care avoids it:** a new `StepProvider` variant
+   forces a new exhaustively-checked match arm in `ported_provider`, and *a match arm cannot be placed
+   below the sites it precedes*. `driver_only` was re-issued at **v3** — the second re-issue in three
+   stages, same claim, moved coordinates. So the avoidable half is now demonstrably avoided by a
+   documented one-line check, and **what remains is structural, recurs once per port-shaped change,
+   and costs a profile version bump each time.** Cluster 9 correctly weakened the case; the part care
+   cannot reach restores it. Cost when it fires: ~6 files, ~6 minutes, all loud with the remedy stated
+   at the point of failure.
+
 **WI-A14. Implement the D7 invariant set, the D4 latency pair, and D11 run reporting.** Depends on
 A9, A13; the parity-classification invariants additionally depend on A8, **which landed 2026-08-02
 — so this dependency is now satisfied and the prohibition is discharged.**
@@ -1099,6 +1124,16 @@ jobs, which are new construction — survey row 9 records the only workflow at H
 `verify-extensions.yml` with no generated-trajectory axis. Select rotation, retention, and sharding
 from measured CI cost here, together with each job's operator-accepted minimum seed count, per
 D11's delegation to this plan.
+
+**Select the corpora by SEARCH, not by authorship — stage 4 demonstrated the technique and it turned
+a design decision into a query.** S7 requires a surviving fixture carrying every shape the
+specification protects with no two of its quantities equal. Stage 4 satisfied that by sweeping 260
+seeds through the generator and filtering on S7's own two obligations: **exactly two of 260
+qualified.** Its pinned seeds (9 and 13 as an equal-census anti-count pair, 94 as an S7 survivor)
+each have an *asserted* reason rather than a described one, so a change to the generator, to a
+request-projection string, or to the driver's control flow moves them and fails loudly. **State the
+corpus obligations as a filter, sweep, and pin the survivors** — authoring a corpus and hoping it
+covers is the shape S7 exists to reject, and it does not scale to a rotating window.
 *Acceptance evidence:* both jobs run and declare their minimums; the gate **fails** on a zero,
 silently truncated, or below-minimum window (tested by forcing one); the fixed bank collectively
 reaches every required non-waived fault class in A7's catalogue; a promoted counterexample enters
