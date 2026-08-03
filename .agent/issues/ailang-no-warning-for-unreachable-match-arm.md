@@ -8,6 +8,33 @@ Open. No Motoko-side fix is needed or possible; this is a missing diagnostic in 
 Related upstream tickets from this project: `fb_74f53de3ae65854c` (effect propagation through
 function-valued record fields), `fb_d230853828108783` and `fb_6c81854baf59b316` (`ailang iface`).
 
+### How it was filed, and why that limits follow-up
+
+Via the `ailang-feedback` skill's **Channel 3** — the public MCP `submit_feedback` endpoint. A
+JSON-RPC 2.0 `tools/call` POST to `https://mcp.ailang.sunholo.com/mcp/`, with the `snippet` argument
+read from the probe file rather than retyped, so upstream sees byte-identical source to what was run.
+Acknowledged with:
+
+```json
+{ "ticket_id": "fb_b39697480a4e8bbc", "queued_at": "2026-08-03T14:25:09Z", "status": "queued" }
+```
+
+**Channel 3 was used because Channel 2 was unavailable, measured rather than assumed.** Channel 2
+(`ailang messages send --github`) is the one that opens a tracked GitHub issue; its pre-flight fails
+here — `gh` is not installed and `~/.ailang/config.yaml` is absent. Re-verified 2026-08-03.
+
+**The consequence applies to all four tickets above and should not be discovered later:** Channel 3
+lands in AILANG's `public-feedback` inbox for human triage. It does **not** open a GitHub issue, so
+there is **no URL, no status to poll, and no notification if someone replies** — replies reach the
+local inbox only when the CLI is configured *and* `gh auth` is set, and neither is true on this
+machine. These four are submitted and acknowledged, but effectively fire-and-forget from here.
+
+**What would change it:** install `gh`, authenticate, and write `~/.ailang/config.yaml` with
+`default_repo: sunholo-data/ailang`. Future filings would then return an issue URL, and
+`ailang messages list --unread` would surface replies at session start. Re-filing the existing four
+through Channel 2 would make them trackable but **risks duplicates in the upstream inbox** — decide
+that deliberately rather than as a side effect of setting the config up.
+
 ## Branch
 
 `arniwesth/mot-51-execute-wi-a13` — surfaced while executing WI-A13 stage 3 (cluster 9), in the
