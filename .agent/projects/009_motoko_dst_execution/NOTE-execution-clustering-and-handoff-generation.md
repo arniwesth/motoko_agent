@@ -76,6 +76,21 @@ four things it cannot:
    behind `git diff --stat <last-known-good>..HEAD -- src packages scripts` with the instruction to
    re-measure everything if it is non-empty.
 
+   **A recommendation inherited from a prior cluster is a claim, and stage 5 found one that
+   contradicted the same handoff's own prohibition.** Cluster 10 recommended attaching D8's canary to
+   `check_seed_sensitivity`'s `versioned` row; the stage-5 handoff repeated it verbatim without
+   testing it. It was wrong, and wrong *by the handoff's own argument two paragraphs earlier*: the
+   `versioned` row is a **real driver run**, so a canary attached to it goes red whenever the driver's
+   control flow moves or a request-projection string is edited — and a driver change is not a seed
+   remap. **A canary that cries wolf acquires a regeneration target**, which is precisely what that
+   handoff forbade in bold. The prohibition would have failed not because anyone disagreed with it but
+   because the artifact made itself unusable. The executing session attached the canary to nothing —
+   it consults no driver at all, calling the choice functions directly under constant salts.
+
+   **The general form: when a handoff carries a recommendation forward, check it against the
+   handoff's own constraints before repeating it.** A prior cluster's advice was written before the
+   constraint existed; inheriting it unexamined is how a document ends up arguing with itself.
+
    **A stage boundary is a claim too, and stage 4's grounding found one wrong.** WI-A13's five-stage
    split described stage 2 as "discovery — record what the driver requests"; D2's discovery is a
    generator that **chooses** plus a world that **records**, and the choosing half was in no stage.

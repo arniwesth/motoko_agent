@@ -158,6 +158,21 @@ draw count and the same clock* — identical trajectories — with three differe
 generator that reads its seed only to print it satisfies every statement of seed sensitivity that
 compares programs.
 
+**The complement, from stage 5, and it is the cheaper of the two to fall into.** Site 21 was a
+**decorative path** — X reaching Y *around* the mechanism. The mirror is that **the mechanism has
+branches the assertion's trajectory never enters, so X could not reach Y at all.** Stage 5's first
+canary caught five of six mutants; the escape changed what a bound failure *reports*, and it escaped
+twice for two different reasons: the trajectory's bounds were generous enough that no limit was ever
+tripped, so the branch was outside what the digest could see; and once the branch was reached, the
+digest folded `|F${length(failures)}` — a **count**, blind to a change in a **field**, which is S7's
+record-level form arriving on a digest instead of a codec. **A pinned digest certifies exactly the
+paths its trajectory walks; the paths it does not walk are not pinned, they are *absent*, and absent
+reads identically to unchanged.** So: choose bounds tight enough to bind **for every seed** rather
+than for a lucky one — a limit no draw can reach is a branch the digest cannot certify — and fold
+every field, not a count of them. The decorative path needs an author to write something decorative;
+the unwalked branch needs only that they not think of it. **A14's latency pair and A15's corpora both
+have this exposure.**
+
 The rule is distinct from S1 (write the assertion first) and from C5 (prove the guard can fire): the
 guard here **could** fire and **did** fire on the mutant it was designed against. What exposed the
 gap was mutating the implementation a *second, weaker* way — breaking only the mechanism, and
@@ -236,6 +251,15 @@ one from a chosen field that nothing consumed. **No sixth model: S6's second ter
 uncertainty whenever the composition is over something that RUNS rather than something that
 validates.** A validator's bindings are all decided; a generator's are not, and cannot be counted in
 advance.
+
+**Fifth data point: apply the second term PER PIECE, not per stage, when a stage's pieces are
+independent.** Stage 5 had five bindings (three decided, two discovered) and cost **~0.9×** stage 4
+against a predicted ~1.25× — **the count over-predicted for the first time**, and the reason is
+legible rather than noise. Its two pieces do not interact: regression replay cost well under a third
+of the session despite carrying two bindings' worth of care, because stage 3 had left a seam that
+fitted a parameter; the canary was ~70% of it, all of that in the discovered bindings and the
+sweep/re-pin loops they forced. **Summing bindings across independent pieces and comparing the total
+to a previous stage's total predicts the average of two things that never touch.**
 
 **Fourth data point, and the second term needs one distinction: a *decided* binding differs from a
 *discovered* one.** Stage 4 had four bindings against stages 1–3's one, three, three, and cost ~1.5×
