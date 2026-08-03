@@ -1,7 +1,7 @@
 # Meta-decision: measure movement, not comfort
 
-*A review loop is a control system; a detector must be built, not specified; and the metric that feels
-like proof is rarely the one that discriminates.*
+*A review loop is a control system; a detector must be built, not specified; and an assertion that
+tests only one direction is blind in the other.*
 
 Date: 2026-08-02
 Status: Standing discipline
@@ -9,13 +9,18 @@ Scope: any session running iterative adversarial review over a durable doc (ADR,
 session writing a decision doc that names a gate, detector, classifier, or validator; and any session
 choosing which assertion guards a migration.
 
-Amended 2026-08-02 with rule 3, after WI-A12's execution confirmed the same shape one layer down —
-see `.agent/projects/009_motoko_dst_execution/NOTE-cluster-6-execution-report-and-plan-corrections.md`.
+Amended 2026-08-02 with rule 3, after WI-A12's execution confirmed the same shape one layer down, and
+sharpened 2026-08-03 after WI-A13 produced its mirror image. See
+`NOTE-cluster-6-execution-report-and-plan-corrections.md` and
+`NOTE-cluster-7-execution-report-and-plan-corrections.md` under
+`.agent/projects/009_motoko_dst_execution/`.
 
 ## The principle
 
 Three rules, all learned the expensive way on project 009. They are the same rule at three scales:
-**prefer the measurement that detects movement over the one that feels like proof.**
+**a measurement that can only come out one way is not a measurement.** A findings count that only
+ever rises, a specification that only ever gets more precise, an assertion that only tests one
+direction — each feels like evidence and none of them can fail informatively.
 
 **1. An adversarial review loop can diverge, and nobody notices unless someone counts.** Each round
 feels productive — the reviews are sharp, the findings are real, the corrections land. But if each
@@ -28,11 +33,13 @@ validates is only sound if it runs. Prose review will correctly find each specif
 next pass will specify harder, and the cycle repeats indefinitely. **Build the smallest working
 version instead. The specification questions dissolve on contact with the artifact.**
 
-**3. The metric that feels most like proof is rarely the one that discriminates.** Reproducibility,
-type-checking, and "the round found real defects" all feel like correctness. They are true statements
-that rule almost nothing out. **Pair every such metric with one that measures *movement* — did the
-cursor advance, did the count fall, did the value change — because that is the one that fails when
-something is wrong.**
+**3. A one-sided assertion set cannot see failures in the other direction.** Reproducibility,
+type-checking, mutation coverage, and "the round found real defects" all feel like correctness. Each
+tests one direction and is silent in the other: determinism tests *sameness*, so it cannot see that
+nothing moved; mutation tests *rejection*, so it cannot see that something valid was also rejected.
+**For every assertion, name the direction it tests and add its opposite** — pair sameness with
+movement, pair rejection with survival. The pairing is what discriminates; either half alone is a
+true statement that rules almost nothing out.
 
 ## The instance that motivates it
 
@@ -113,9 +120,14 @@ review action said in as many words not to do that.
 **A document should avoid asserting facts about itself that an edit invalidates.** Where it must,
 state the derivation (`sections − 5`) rather than the result, and assign the check to a tool.
 
-## The second instance, one layer down: WI-A12's three assertion axes
+## Two instances one layer down, in code
 
-Rule 3 was added after the ADR's own migration was executed, because the same shape appeared in code.
+Rule 3 was added after the ADR's own migration was executed, because the same shape appeared in code —
+then confirmed again, rotated, on the next work item. The two together are what give the rule its
+final form.
+
+### WI-A12: sameness without movement
+
 WI-A12 threaded world state through the driver across six effect classes — 119 sites — guarded by
 three assertion axes: **determinism** (same seed twice → identical output), **trace completeness**,
 and **advancement** (did the cursor actually move).
@@ -141,6 +153,34 @@ This is rule 1 at a different scale. "Same seed twice → identical output" is t
 round found real defects" is to a review loop: a true statement, satisfying to produce, that
 discriminates almost nothing. D7 asks for the determinism invariant explicitly, so it will keep being
 reached for — it is necessary and it is not sufficient.
+
+### WI-A13: rejection without survival
+
+The next item built a **validator** for the execution-program artifact, with a mutation suite: one
+valid base program and 18 mutant rows, each expected to be rejected. The specification clause it
+implements admits two readings — reject a repeated *encounter ordinal*, or reject a repeated
+*identity body* — and the second is both the more obvious reading and wrong, because it makes a
+production retry (same tool, same call id, second attempt) undecodable.
+
+**The wrong reading passes all 18 mutants.** Every mutant still produces its own rejection, so the
+suite is fully green. It is deterministic and trace-complete. It shows up only as a *valid* program
+being rejected — and a suite made entirely of fixtures that must fail never presents one.
+
+What caught it was the **negative control**, and only because the base fixture deliberately contains
+two interactions carrying a byte-identical tool identity at different ordinals. Remove that one row
+and the negative control passes under both readings.
+
+The generalisation: **a validator's failure mode is not "it did nothing" but "it did too much", and
+only a fixture that must SURVIVE can see that.** Mutation testing is the rejection half; the negative
+control is the survival half. A standing rule follows, and it is the discovery-side twin of "land the
+movement assertion first":
+
+> **A rejecting artifact needs a fixture that must survive, and that fixture must contain every shape
+> the specification explicitly protects.**
+
+The two instances rotate the same defect. A12's assertion set tested sameness and was blind to
+frozenness; A13's tested rejection and was blind to over-rejection. Neither was under-tested — both
+were **one-sidedly** tested, which is why more of the same assertion would not have helped.
 
 ## The two-blocker illusion
 
@@ -170,14 +210,19 @@ of progress, and it is invisible if you only ever look at the current round.
 4. **Cap review scope explicitly.** "Does the architecture hold" and "is every mechanism buildable" are
    different questions. The second one belongs to whoever builds it.
 
-**When choosing what guards a migration:**
+**When choosing what guards a migration or a validator:**
 
-5. **Never let reproducibility be the only axis.** Pair it with an assertion that something *moved* —
-   a cursor advanced, a queue drained, a value differs from its predecessor. Reproducibility is the
-   axis that feels most like a proof of correctness and it is the weakest of the three measured on 009.
-6. **Land the movement assertion first, before the migration it guards.** Confirmed four times in one
-   run and three times across runs. A defect that is reproducible and trace-complete is invisible to
-   everything else.
+5. **Name the direction each assertion tests, and add its opposite.** Reproducibility → pair with
+   movement (a cursor advanced, a queue drained, a value differs). Mutation coverage → pair with
+   survival (a valid artifact that must not be rejected). Reproducibility and mutation coverage are
+   the two axes that feel most like proofs of correctness, and each was blind on 009.
+6. **Land the opposite-direction assertion first, before the thing it guards.** Confirmed four times
+   in one run and three across runs for movement. A defect that is reproducible and trace-complete is
+   invisible to everything else; so is a validator that rejects too much.
+
+   For a survival fixture this has a content requirement, not just a scheduling one: **it must contain
+   every shape the specification explicitly protects.** On 009 the entire finding rested on one row —
+   a retry with a repeated identity at a different ordinal — deliberately placed in the base program.
 7. **Prefer the un-routed option that fails loudly over the one that fails silently.** Where a seam
    cannot yet be routed, bind it to something a poison probe turns red rather than to a frozen
    snapshot that serves a stale value forever.
@@ -206,6 +251,12 @@ of progress, and it is invisible if you only ever look at the current round.
   — the WI-A12 execution report, where rule 3's evidence was measured. Also the source of a sizing
   rule worth carrying: for a return-type change, **count the destructuring sites, not the conceptual
   blast radius**. One grep, ~90 seconds, and it was the only over-estimate in three calibration runs.
+- `NOTE-cluster-7-execution-report-and-plan-corrections.md` — the WI-A13 execution report and rule 3's
+  mirror image. Also carries a guard-design finding of the same family: **a structural guard that
+  greps a bare token will eventually fire on the artifact documenting it**, because such items are
+  required to write prose naming what they forbid. Anchor guards to a syntactic form. It had held an
+  aggregate gate red across two clusters, hidden by `--keep-going`; report a gate's **exit status**,
+  not a scan of its output.
 
 ## Honest note on authorship
 
