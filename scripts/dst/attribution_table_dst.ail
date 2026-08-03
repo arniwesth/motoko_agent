@@ -1,0 +1,250 @@
+-- scripts/dst/attribution_table_dst.ail
+--
+-- WI-A5 acceptance, under ADR-001 D4 clause 3. Fixture TABLES of every
+-- rejecting shape, plus the shapes that must pass.
+--
+-- The inline tests in src/core/dst_attribution_table.ail check the rules one at
+-- a time. This script checks them the way a profile load will actually meet
+-- them: as a whole table plus a discovered site set, asserting that the
+-- rejection NAMES ITS RULE and that a rejecting table does not accidentally
+-- pass by a different route.
+--
+-- **The set-completeness fixture is `omitted_site` below, and it is the one
+-- that separates this validator from a row-shape validator.** Every row in that
+-- fixture is well-formed, names a known hook, and is unique; the
+-- unconditional-core set is untouched; and a real discovered core effect site
+-- appears in NEITHER list. A validator that checked schema, staleness and
+-- referential integrity accepts it, and the profile then claims routing
+-- completeness over a site nobody classified. The defect is in what is ABSENT,
+-- which is why no amount of per-row checking can see it.
+--
+-- The empty-intersection rule is exercised in both directions, because only one
+-- direction is interesting on its own: that a site DISAPPEARS when its hook is
+-- uninstalled is the whole purpose of the table, and a check that only ever saw
+-- sites appear would pass while the table did nothing.
+
+module scripts/dst/attribution_table_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import src/core/dst_attribution_table (
+  SiteRef,
+  AttributionRow,
+  CoreSite,
+  AttributionRejection,
+  attribution_rows,
+  unconditional_core_sites,
+  known_hook_ids,
+  validate_rows,
+  validate_binding,
+  validate_completeness,
+  validate_at_load,
+  rejection_rule,
+  rejection_message,
+  classify_site,
+  reachable_core_sites,
+  hook_id_matches,
+  table_source_revision,
+  table_identity,
+  attribution_rules_version
+)
+
+pure func has_rule(rs: [AttributionRejection], want: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if rejection_rule(r) == want then true else has_rule(rest, want)
+  }
+}
+
+func report(rs: [AttributionRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${rejection_message(r)}");
+      report(rest)
+    }
+  }
+}
+
+func assert_rejected(label: string, rule: string, rs: [AttributionRejection]) -> bool ! {IO} {
+  if has_rule(rs, rule) then {
+    let _ = println("  ✓ ${label}: rejected, rule '${rule}'");
+    true
+  } else {
+    let _ = println("  ✗ ${label}: expected rule '${rule}', got:");
+    let _ = report(rs);
+    false
+  }
+}
+
+func assert_ok(label: string, rs: [AttributionRejection]) -> bool ! {IO} {
+  if List.length(rs) == 0 then {
+    let _ = println("  ✓ ${label}: accepted");
+    true
+  } else {
+    let _ = println("  ✗ ${label}: expected acceptance, got:");
+    let _ = report(rs);
+    false
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+-- A well-formed table naming a hook no extension registers. Referential
+-- integrity: known-but-uninstalled is permitted, unknown is not.
+pure func unknown_hook() -> [AttributionRow] {
+  [{ site: { file: "src/core/rpc.ail", line: 200 }, effect: "SharedMem",
+     hook_ids: ["scratchpadd"], reviewer: "arni.westh", note: "typo in the hook id" }]
+}
+
+-- A row with no named reviewer. The reviewer is the ONLY thing standing behind
+-- necessity — D4's stated exception to the automated-gate promise — so a row
+-- without one carries no correctness claim at all and is malformed.
+pure func no_reviewer() -> [AttributionRow] {
+  [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+     hook_ids: ["test_dummy"], reviewer: "", note: "" }]
+}
+
+-- One site, two rows. A profile intersecting against both could get two
+-- different answers for the same site.
+pure func duplicate_site() -> [AttributionRow] {
+  [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+     hook_ids: ["test_dummy"], reviewer: "arni.westh", note: "" },
+   { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+     hook_ids: ["compose"], reviewer: "arni.westh", note: "" }]
+}
+
+-- THE completeness fixture. Three discovered core effect sites: two are
+-- accounted for, the third is in neither the rows nor the unconditional-core
+-- set. Nothing about the TABLE is wrong.
+pure func omitted_site() -> [CoreSite] {
+  [{ site: { file: "src/core/session.ail", line: 1026 }, effect: "Clock",
+     routed: true, note: "in the unconditional-core set" },
+   { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+     routed: false, note: "attributed to test_dummy" },
+   { site: { file: "src/core/session.ail", line: 4242 }, effect: "Clock",
+     routed: false, note: "discovered by inventory, classified by nobody" }]
+}
+
+-- The measured HEAD inventory: every unconditional-core site plus both
+-- attributed sites. Must be accepted, or the fixture above proves nothing.
+pure func head_inventory() -> [CoreSite] {
+  unconditional_core_sites()
+    ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+          routed: false, note: "" },
+        { site: { file: "src/core/tool_phase.ail", line: 287 }, effect: "Process",
+          routed: false, note: "" }]
+}
+
+-- ---------------------------------------------------------------------------
+
+func scenario_empty_intersection() -> bool ! {IO} {
+  -- `test_dummy` is in NO checked-in configuration. Row 1's site must vanish
+  -- from every one of them, and reappear when it is installed.
+  let absent = classify_site("src/core/ext/runtime.ail:190", ["compaction_ai#0", "scratchpad#1"]);
+  let present = classify_site("src/core/ext/runtime.ail:190", ["test_dummy#0"]);
+  -- and the mixed-guard row, the case a semantic test would have dropped
+  let sp_absent = classify_site("src/core/tool_phase.ail:287", ["compaction_ai#0"]);
+  let sp_present = classify_site("src/core/tool_phase.ail:287", ["scratchpad#5"]);
+  let ok = absent == "attributed-unreachable" && present == "attributed-reachable"
+        && sp_absent == "attributed-unreachable" && sp_present == "attributed-reachable";
+  let _ = if ok then println("  ✓ empty intersection removes the site; a matching install restores it")
+          else println("  ✗ empty intersection: got ${absent}/${present}/${sp_absent}/${sp_present}");
+  ok
+}
+
+func scenario_uninstalled_is_permitted() -> bool ! {IO} {
+  -- The rule an earlier ADR revision had backwards. Under "reject uninstalled",
+  -- row 1 could not exist in any checked-in configuration, the site defaulted
+  -- to unconditional core, and the driver obligation was five instead of four.
+  let rs = validate_rows(attribution_rows(), known_hook_ids());
+  let ok = List.length(rs) == 0
+        && classify_site("src/core/ext/runtime.ail:190", []) == "attributed-unreachable";
+  let _ = if ok then println("  ✓ a row naming a known-but-uninstalled hook is legal and removes its site")
+          else println("  ✗ known-but-uninstalled hook was not permitted");
+  ok
+}
+
+func scenario_reachable_set_grows_with_installs() -> bool ! {IO} {
+  let bare = List.length(reachable_core_sites([]));
+  let with_dummy = List.length(reachable_core_sites(["test_dummy#0"]));
+  let with_both = List.length(reachable_core_sites(["test_dummy#0", "scratchpad#1"]));
+  let ok = with_dummy == bare + 1 && with_both == bare + 2;
+  let _ = if ok then println("  ✓ reachable set: ${show(bare)} bare, ${show(with_dummy)} with test_dummy, ${show(with_both)} with both")
+          else println("  ✗ reachable set: ${show(bare)}/${show(with_dummy)}/${show(with_both)}");
+  ok
+}
+
+func scenario_instance_ids() -> bool ! {IO} {
+  -- The trap: installed hooks are stamped `name#idx` by parse_tokens. Plain
+  -- equality empties every intersection and every attributed site silently
+  -- vanishes — the exact inversion of the table's purpose.
+  let ok = hook_id_matches("test_dummy#0", "test_dummy")
+        && hook_id_matches("test_dummy", "test_dummy")
+        && not hook_id_matches("test_dummy_extra", "test_dummy")
+        && not hook_id_matches("compose#0", "test_dummy");
+  let _ = if ok then println("  ✓ instance-suffixed ids intersect; unrelated prefixes do not")
+          else println("  ✗ hook id matching is wrong — every intersection would be empty");
+  ok
+}
+
+func scenario_identity() -> bool ! {IO} {
+  let id = table_identity();
+  let ok = id.source_revision == table_source_revision() && id.content_hash != "";
+  let _ = if ok then println("  ✓ identity: (${id.source_revision}, ${id.content_hash})")
+          else println("  ✗ identity is not (source revision, content hash)");
+  ok
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("attribution_table_dst  (${attribution_rules_version()})");
+  let _ = println("  -- tables and loads that must be accepted --");
+  let p1 = assert_ok("the HEAD table", validate_rows(attribution_rows(), known_hook_ids()));
+  let p2 = assert_ok("binding against its own revision",
+                     validate_binding(table_source_revision(), table_source_revision()));
+  let p3 = assert_ok("the measured HEAD inventory is fully accounted for",
+                     validate_completeness(head_inventory(), attribution_rows(), unconditional_core_sites()));
+  let p4 = assert_ok("a full load at the bound revision", validate_at_load(table_source_revision(), head_inventory()));
+
+  let _ = println("  -- tables and loads that must be rejected --");
+  let r1 = assert_rejected("row names an unknown hook", "unknown-hook-id",
+                           validate_rows(unknown_hook(), known_hook_ids()));
+  let r2 = assert_rejected("row has no named reviewer", "malformed-row",
+                           validate_rows(no_reviewer(), known_hook_ids()));
+  let r3 = assert_rejected("one site attributed twice", "duplicate-site",
+                           validate_rows(duplicate_site(), known_hook_ids()));
+  let r4 = assert_rejected("profile loads against a different source revision", "stale-source-revision",
+                           validate_binding(table_source_revision(), "deadbeef"));
+  let r5 = assert_rejected("DISCOVERED SITE IN NEITHER LIST", "site-unaccounted",
+                           validate_completeness(omitted_site(), attribution_rows(), unconditional_core_sites()));
+
+  -- The completeness fixture must fail ONLY on completeness. If a row-level
+  -- rule also fired, the fixture would be proving the wrong thing.
+  let only = validate_completeness(omitted_site(), attribution_rows(), unconditional_core_sites());
+  let r6 = List.length(only) == 1 && List.length(validate_rows(attribution_rows(), known_hook_ids())) == 0;
+  let _ = if r6 then println("  ✓ the omitted site is the ONLY defect; every row-level check passes on it")
+          else println("  ✗ the completeness fixture fires other rules too — it proves the wrong thing");
+
+  let _ = println("  -- the intersection rule --");
+  let s1 = scenario_empty_intersection();
+  let s2 = scenario_uninstalled_is_permitted();
+  let s3 = scenario_reachable_set_grows_with_installs();
+  let s4 = scenario_instance_ids();
+  let s5 = scenario_identity();
+
+  -- A negative control on the harness itself: the validator must be capable of
+  -- both answers, or every green check above is vacuous.
+  let control = List.length(validate_at_load("deadbeef", omitted_site())) > 0
+             && List.length(validate_at_load(table_source_revision(), head_inventory())) == 0;
+  let _ = if control then println("  ✓ control: the validator both accepts and rejects")
+          else println("  ✗ control: the validator never rejects — every check above is vacuous");
+
+  if p1 && p2 && p3 && p4 && r1 && r2 && r3 && r4 && r5 && r6 && s1 && s2 && s3 && s4 && s5 && control
+  then println("attribution_table_dst PASS")
+  else {
+    let _ = println("attribution_table_dst FAIL");
+    exit(1)
+  }
+}

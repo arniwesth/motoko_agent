@@ -298,7 +298,8 @@ fail-closed triage, not a pass; re-derivation wired into the repin checklist.
 
 **WI-A5. Build the site-to-hook attribution table and its profile-load validation** (D4 clause 3) —
 **in the same change as WI-A4**, per D4's producer clause. Initial rows: `ext/runtime.ail:190` →
-`test_dummy`; `tool_phase.ail:222` → `scratchpad`; each with a named reviewer recorded, which is
+`test_dummy`; `tool_phase.ail:287` → `scratchpad` (**A12 moved it; the plan cited `:222`, which is
+now the guard's old address — corrected at implementation**); each with a named reviewer recorded, which is
 the **stated exception** to the automated-gate promise until the interprocedural necessity
 validator exists (that validator is *not* scheduled here; building it prematurely is exactly the
 prose-refinement trap).

@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary attribution_table ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -659,6 +659,51 @@ effect_inventory_selftest:
 # must be reported unresolved, plus a control that must resolve. All five
 # type-check, so the forms are real rather than illustrative.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ADR-001 D4 clause 3, WI-A5: the site-to-hook attribution table.
+#
+# Two checks, because the fixtures and the artifact fail differently:
+#
+#   1. the fixture suite (scripts/dst/attribution_table_dst.ail) — every
+#      rejecting shape, both directions of the empty-intersection rule, and the
+#      set-completeness fixture that a row-shape validator would accept;
+#   2. an ANCHOR check tying each row to the source it describes.
+#
+# (2) is not redundant with the staleness rule. Staleness compares recorded
+# revisions and can only say "something changed"; this says WHICH row no longer
+# describes its site. It deliberately does NOT compare `table_source_revision()`
+# against git HEAD — the table is bound to the revision its rows were MEASURED
+# at, and every later commit that touches nothing it cites leaves it valid.
+# Comparing to HEAD would make the artifact stale on every unrelated commit,
+# which trains people to bump the field without re-measuring.
+# ---------------------------------------------------------------------------
+.PHONY: attribution_table
+attribution_table:
+	@ailang run --caps IO --entry main scripts/dst/attribution_table_dst.ail < /dev/null
+	@fail=0; \
+	check() { \
+	  if sed -n "$$2p" "$$1" | grep -q -- "$$3"; then \
+	    echo "  ✓ $$1:$$2 still $$4"; \
+	  else \
+	    echo "  ✗ $$1:$$2 no longer $$4 — the attribution table describes a site that moved"; \
+	    echo "      expected to find: $$3"; \
+	    echo "      actual line:      $$(sed -n "$$2p" "$$1")"; \
+	    fail=1; \
+	  fi; \
+	}; \
+	echo "attribution anchors:"; \
+	check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"; \
+	check src/core/tool_phase.ail 286 'is_scratchpad_tool_name' "the mixed guard"; \
+	check src/core/tool_phase.ail 287 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"; \
+	check src/core/session.ail 796 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"; \
+	check src/core/test/stub_step.ail 146 'now()' "live_ports' real clock (declared UNROUTED core)"; \
+	for l in 929 1026 2245 2354; do \
+	  check src/core/session.ail $$l 'clock_now' "a routed core clock site"; \
+	done; \
+	check src/core/tool_phase.ail 342 'clock_now' "the FIFTH routed core clock site (D4's table says four)"; \
+	[ "$$fail" -eq 0 ] || exit 1
+	@ailang test src/core/dst_attribution_table.ail > /dev/null && echo "  ✓ src/core/dst_attribution_table.ail"
+
 .PHONY: ext_call_inventory ext_call_inventory_selftest
 ext_call_inventory:
 	@python3 tools/ext_call_inventory/derive.py

@@ -1103,6 +1103,48 @@ treatment D6 gives the event vocabulary because it carries the same kind of weig
   fail-closed default counts it as unconditional core and the driver obligation is five. Pre-table the
   split is 5 / 13 / 13; post-table it is the 4 / 12 / 13 stated in D4.
 
+**Amendment, 2026-08-03 (WI-A5 implemented). The table now exists and validates
+(`src/core/dst_attribution_table.ail`, `make attribution_table`), and building it against HEAD
+falsified two anchors in the text above and one number in D4's clock table.**
+
+**1. The mixed-guard example moved.** `src/core/tool_phase.ail:222` is cited above as the mixed guard
+`is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt)`. WI-A12 rewrote that file.
+The guard is now at `:286` and the effectful call it guards — `exec_scratchpad_cell_ws` — is at
+`:287`. **The example is intact; only its coordinates are stale.** The shipped row cites `:287`, and
+`make attribution_table` re-checks every cited line's *content* on each run, so the next move is
+caught by name rather than by a reader noticing.
+
+**2. The core clock inventory is no longer four driver sites.** D4's table says four. At HEAD there
+are **five** routed core sites — WI-A12 added `tool_phase.ail:342` — and **two** ambient core sites
+that did not exist when the table was written: `session.ail:796` (`ext_unrouted_clock`, created by
+A12 under plan rule S2) and `stub_step.ail:146` (`live_ports`' real clock). The `4 / 12 / 13` and
+`5 / 13 / 13` splits above describe a source tree that A12 has since changed, and no artifact should
+be re-derived from them.
+
+The consequence for this clause is a design one and it is already discharged: **the completeness
+check takes the discovered site set as an argument and never as a constant.** A validator holding its
+own copy of "the thirteen sites" agrees with itself by construction and goes stale exactly when the
+source moves — which is what happened here, twice, inside one milestone.
+
+**3. An unattributed core site can be UNROUTED, and clause 1's fallback does not say so.** The rule
+above sends a site with no valid row to unconditional core, which is right. But `session.ail:796` is
+core, unattributed, and deliberately **not routed** (plan S2: `ExtPorts.clock_now`'s zero-argument
+shape admits no world capture, so a loud ambient read was chosen over a silently frozen snapshot).
+A profile that folded it into "the unconditional set, all routed" would be asserting something false.
+The shipped declaration therefore carries `routed` per site, and an unrouted entry is a **declared,
+visible gap** rather than an absent one. Whether such a profile is conformant is D4's all-or-nothing
+rule to apply and WI-A10's to apply it; this clause's job is to make the fact impossible to miss.
+
+**4. A trap worth recording, because it would have inverted the empty-intersection rule silently.**
+Rows name base hook ids (`test_dummy`, `scratchpad`); installed hooks do not carry them.
+`parse_tokens` (`src/core/ext/registry_generated.ail:52-64`) stamps every instance as
+`"${name}#${idx}"`, so a live registry holds `scratchpad#5`. Under plain string equality a row's
+`scratchpad` intersects **nothing**, the intersection is empty, and the empty-intersection rule then
+declares the site genuinely unreachable and drops it from the profile — the exact inverse of what the
+attribution says, arrived at without an error message. This is D4's own fail-open shape re-entering
+through the matching function rather than through the rule, and the acceptance evidence for it is a
+test rather than this paragraph.
+
 Clause 3 is not a technicality. `src/core/ext/runtime.ail:190` reads the clock inside
 `emit_dummy_hook`, in a core module present in *every* profile, behind five `emit_dummy_hook` calls
 (`:206`, `:222`, `:245`, `:287`, `:374`), each guarded by `if is_test_dummy(h.id)` (`:206`, `:222`,
