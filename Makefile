@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -113,6 +113,59 @@ profile_coverage:
 		echo "  ✓ all_hook_slots() enumerates all $$n ABI hook slots"; \
 	fi; \
 	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
+
+# D5's profile-DEFINITION and EXECUTION-MANIFEST machinery (WI-A10). Three
+# checks, and the third exists because this is composition work:
+#
+#   1. The fixture DEFINITIONS. Every rejecting shape D5 names, asserted to be
+#      rejected BY ITS RULE, each one mutated a single field away from a
+#      definition that loads clean — so an unrelated rule firing means the
+#      mutation did something other than what the label says. Plus the NEGATIVE
+#      CONTROL, which is load-bearing rather than decorative: a validator that
+#      only ever rejects passes a suite of only-rejecting fixtures.
+#
+#   2. A STRUCTURAL GUARD that the definition still carries all ten D5 fields.
+#      The record is hand-written and dropping a field is a compile error only
+#      at construction sites — so a field could be removed together with its
+#      check and every fixture would still pass, which is an artifact that
+#      validates while incomplete.
+#
+#   3. THE ANTI-TRANSCRIPTION GUARD. Classifier 2's sets are derived from the
+#      SOURCE by a Python tool, so they enter the AILANG fixtures as literals,
+#      and a literal is what goes stale silently. check_fixtures.py re-derives
+#      them and fails if the AILANG side disagrees — including the check that
+#      every installable extension the tool found calling a classifier-2 field
+#      is named in the fixture, and (once the profile lands) omitted by name.
+#
+# Everything else this machinery needs is READ at runtime from the artifact that
+# computed it — the seven/one dispatch split from A6, the table identity from
+# A5, each waiver's condition from A7, the vocabulary version from A8 — because
+# the characteristic defect of composition is re-deriving a fact an input
+# already computed, where both answers type-check and the stale one is silent.
+# D5's own prose is the live example: it says SIX slots are unconditionally
+# dispatched and it is SEVEN.
+.PHONY: profile_definition
+profile_definition:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/profile_definition_dst.ail < /dev/null; \
+	n=$$(awk '/^export type ProfileDefinition/,/^}/' src/core/dst_profile.ail | grep -c '^  [a-z_]*:'); \
+	if [ "$$n" -ne 15 ]; then \
+		echo "FAIL: ProfileDefinition declares $$n record fields, expected 15."; \
+		echo "      D5's TEN definition fields are 12 record fields here: id and version are"; \
+		echo "      one D5 field and two records, and D5 field 2 (extension ids AND per-hook"; \
+		echo "      classifications) is installed_packages plus hook_classifications, with"; \
+		echo "      disclosures separate again as D5 field 9. A10's decisions add three more:"; \
+		echo "      unrouted_reachable_sites, scan_roots, exercised_fault_classes."; \
+		echo "      A field has been added or removed and its"; \
+		echo "      presence check in validate_required_fields may not have moved with it,"; \
+		echo "      so a definition could omit it and load clean (D5)."; \
+		awk '/^export type ProfileDefinition/,/^}/' src/core/dst_profile.ail | grep '^  [a-z_]*:'; \
+		exit 1; \
+	else \
+		echo "  ✓ ProfileDefinition declares all $$n fields (D5's ten as 12, plus A10's three)"; \
+	fi; \
+	python3 tools/profile_definition/check_fixtures.py; \
+	ailang test src/core/dst_profile.ail > /dev/null && echo "  ✓ src/core/dst_profile.ail"
 
 # D3's fault catalogue (WI-A7). Three checks:
 #
