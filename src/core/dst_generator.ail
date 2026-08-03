@@ -725,6 +725,401 @@ export pure func choose_environment(g: GeneratorState, salt: string) -> Environm
   else { entries: entries, state: d_headless.state }
 }
 
+
+-- ---------------------------------------------------------------------------
+-- PART 5 — D8's GENERATOR CANARY (WI-A13, stage 5)
+--
+-- D8 requires the generator id and version to travel with every preserved
+-- failure, and a preserved failure is only worth preserving if the version is
+-- enough to reproduce it. The failure mode this artifact exists against is
+-- therefore precise:
+--
+--   THE GENERATOR IS EDITED, THE SEED-TO-PROGRAM MAPPING MOVES, AND THE VERSION
+--   DOES NOT. Every preserved artifact recorded under the old version now names
+--   a program that no longer exists, and NOTHING IN THIS PROJECT NOTICES. The
+--   suite is green: the generator is still deterministic, still seed-sensitive,
+--   still produces valid strictly-replayable programs. It produces DIFFERENT
+--   ones, and D2 permits that difference — under a new version.
+--
+-- ---------------------------------------------------------------------------
+-- WHY THIS IS PURE, AND WHY THAT IS THE DESIGN AND NOT A CONVENIENCE
+-- ---------------------------------------------------------------------------
+--
+-- The obvious canary pins a generated PROGRAM's digest from a real driver run.
+-- It would be red every time the driver's control flow moved, and a driver
+-- change is not a seed remap. A canary that cries wolf gets a regeneration
+-- target within two clusters, and a canary that is regenerated when it fails
+-- certifies nothing while looking green forever.
+--
+-- So this canary consults NO DRIVER. It calls the four choice functions
+-- directly under a fixed, adaptive schedule, and pins what only the generator
+-- can move: the seeding, the shape of the trajectory, and the choices. The
+-- driver may be rewritten entirely without moving a single pinned number, and
+-- `seeded_generator_dst`'s axes remain where a driver-coupled claim belongs.
+--
+-- ---------------------------------------------------------------------------
+-- S8: WHAT IS PINNED IS REACHABLE ONLY THROUGH A DRAW
+-- ---------------------------------------------------------------------------
+--
+-- S8 was written from site 21, where the generator answered its seed through a
+-- DECORATIVE STRING — `"g${g.seed}-..."` printed into a payload — and the
+-- seed-sensitivity axis passed while every trajectory was byte-identical in
+-- shape. A canary pinning a digest is worth exactly as much as the digest's
+-- unreachability by any path but a choice.
+--
+-- Three things make that structural here:
+--
+--   * THE SALTS ARE CONSTANTS. `"canary|p0"`, `"canary|t0"` and so on carry no
+--     seed and no version. The only way the seed reaches the digest is through
+--     `seed_state` into `rng`, and from `rng` through `draw`.
+--   * EVERY DIGESTED FIELD IS DERIVED FROM A DRAW. That is the site-21 remedy
+--     in the choice functions themselves, and this artifact inherits it.
+--   * THE SCHEDULE IS ADAPTIVE. It follows the provider's own `terminate`
+--     decision, so the trajectory's LENGTH is a drawn quantity too — which is
+--     what lets `draws` be pinned per seed instead of being a constant that
+--     three rows share.
+--
+-- ---------------------------------------------------------------------------
+-- WHEN THIS GOES RED — AND THE ONE THING NOT TO DO
+-- ---------------------------------------------------------------------------
+--
+-- A red canary is a DECISION POINT with exactly two legitimate outcomes:
+--
+--   1. THE REMAP WAS INTENDED. Bump `generator_version`, re-sweep, and re-pin
+--      deliberately — a hand edit whose diff a reviewer reads.
+--   2. IT WAS NOT. Fix the generator.
+--
+-- There is deliberately NO third path. No regeneration target, no `--update`
+-- flag, no `ACCEPT=1`. If the pins could be refreshed by running a command,
+-- both outcomes above collapse into silence and this file becomes a very
+-- elaborate way of asserting that the generator equals itself. The failure
+-- message prints the observed values precisely so that outcome 1 is a
+-- copy-and-paste into source, and outcome 2 is visible in the same diff.
+-- ---------------------------------------------------------------------------
+
+-- The canary's own bounds, pinned WITH the artifact and deliberately not
+-- borrowed from any script's `bounds()`. A script's bounds are a scenario's
+-- choice and may be retuned; these are part of what the pinned numbers below
+-- mean, so they live beside them.
+--
+-- TWO SETS, AND THE SECOND WAS ADDED BECAUSE A MUTATION ESCAPED THE FIRST.
+-- With only the wide bounds, the canary walked a trajectory that never spends
+-- its interaction budget and never trips a declared limit, so every bound
+-- branch in the generator was outside what the digest could see: mutating
+-- `note_bound`'s reported quantity left the canary GREEN. That is not the
+-- site-21 shape — nothing decorative is being pinned — but it is the same
+-- lesson one level out: a pinned digest certifies exactly the paths its
+-- trajectory walks, and the paths it does not walk are not pinned at all.
+export pure func canary_bounds() -> GeneratorBounds {
+  { max_interactions: 96,
+    max_chunks_per_interaction: 4,
+    max_payload_bytes: 512,
+    max_resource_size: 8,
+    -- 20, not the 2000 a scenario would use. The tool's ordinary duration is
+    -- drawn from 1..30 and its LATE duration from timeout+1..timeout+60, so a
+    -- 2000ms ceiling is unreachable and the clock bound would be pinned in name
+    -- only. This is a canary, not a scenario: a limit no draw can reach is a
+    -- branch the digest cannot certify.
+    max_clock_advance_ms: 20 }
+}
+
+-- Every limit tight enough to bind: the interaction budget is spent at the
+-- first provider choice, `clamp_text` collapses the payloads, the environment
+-- exceeds `max_resource_size`, and both tool duration draws clear the clock
+-- bound. This walk exists so D2's declared bounds and the bound-failure record
+-- are inside the pinned artifact rather than beside it.
+export pure func canary_bounds_tight() -> GeneratorBounds {
+  -- ZERO, so `budget_spent` is true at the first provider choice for every
+  -- seed without exception. At 1 the branch was reached only by seeds whose
+  -- first choice did not draw `terminate`, which makes bound coverage a
+  -- property of the seed rather than of the artifact — and the pinned rows
+  -- would then certify the bound path only by luck.
+  { max_interactions: 0,
+    max_chunks_per_interaction: 1,
+    max_payload_bytes: 8,
+    max_resource_size: 1,
+    max_clock_advance_ms: 5 }
+}
+
+-- One pinned observation of the seed-to-choices mapping.
+--
+-- THREE QUANTITIES AND NOT ONE, because a single digest cannot say WHICH layer
+-- moved, and that is the first question the person reading a red canary asks:
+--
+--   initial_state  the seeding. `seed_state` mixes id and version into the
+--                  Lehmer state, so this moves when the seeding changes — the
+--                  literal form of "a seed remap".
+--   draws          the SHAPE of the trajectory. Moves when the choice surface
+--                  gains or loses a draw, even if every value is unchanged.
+--   digest         the choices themselves, every field of every decision.
+export type CanaryRow = {
+  seed: int,
+  initial_state: int,
+  draws: int,
+  digest: int
+}
+
+export type CanaryFinding
+  = SeedRemapped(int, int, int)        -- seed, pinned initial state, observed
+  | TrajectoryReshaped(int, int, int)  -- seed, pinned draw count, observed
+  | ChoicesRemapped(int, int, int)     -- seed, pinned digest, observed
+  | CanaryVacuous                      -- nothing pinned; the check asserted nothing
+  | CanaryQuantitiesCollide(string)    -- S7: two pinned quantities are equal
+  | VersionDidNotRemap(int)            -- the seed at which two versions agreed
+
+export pure func canary_rule(f: CanaryFinding) -> string {
+  match f {
+    SeedRemapped(_, _, _) => "generator-seed-remapped-without-a-version-bump",
+    TrajectoryReshaped(_, _, _) => "generator-trajectory-reshaped-without-a-version-bump",
+    ChoicesRemapped(_, _, _) => "generator-choices-remapped-without-a-version-bump",
+    CanaryVacuous => "generator-canary-is-vacuous",
+    CanaryQuantitiesCollide(_) => "generator-canary-quantities-collide",
+    VersionDidNotRemap(_) => "generator-version-bump-changed-nothing"
+  }
+}
+
+pure func remedy() -> string {
+  "Two outcomes are legitimate and there is no third: either the remap was INTENDED, in which case bump `generator_version`, re-sweep and re-pin by hand so the diff is reviewed — or it was NOT, in which case fix the generator. Do NOT add a way to refresh these numbers automatically: a canary that is regenerated when it fails certifies nothing while looking green forever"
+}
+
+export pure func canary_message(f: CanaryFinding) -> string {
+  match f {
+    SeedRemapped(seed, pinned, observed) =>
+      "[generator-seed-remapped-without-a-version-bump] at seed ${seed} the pinned initial Lehmer state is ${pinned} and this build produces ${observed}; `seed_state` mixes the generator id and VERSION into that state, so a change here moves the whole stream at every seed while the version still claims the old mapping — every artifact D8 preserved under this version now names a program that cannot be reproduced. ${remedy()}",
+    TrajectoryReshaped(seed, pinned, observed) =>
+      "[generator-trajectory-reshaped-without-a-version-bump] at seed ${seed} the pinned trajectory makes ${pinned} draw(s) and this build makes ${observed}; the choice surface gained or lost a draw, which re-phases the stream for every choice after it even where each individual value looks unchanged. ${remedy()}",
+    ChoicesRemapped(seed, pinned, observed) =>
+      "[generator-choices-remapped-without-a-version-bump] at seed ${seed} the pinned choice digest is ${pinned} and this build produces ${observed}; the seeding and the trajectory shape are unchanged, so the generator is making DIFFERENT choices from the same stream — D2 permits the difference and D8 requires the version to travel with it. ${remedy()}",
+    CanaryVacuous =>
+      "[generator-canary-is-vacuous] the pinned row set is empty, so the canary compared nothing and passed. A vacuous check is the one failure mode a pinned artifact cannot report about itself, which is why it is a finding rather than an early return",
+    CanaryQuantitiesCollide(which) =>
+      "[generator-canary-quantities-collide] two pinned rows share a ${which}, so a comparison that read the wrong row, or the wrong field, would still come out right (S7). The pinned seeds are chosen BY SWEEP precisely so this cannot happen — re-sweep for seeds whose initial states, draw counts and digests are all pairwise distinct, and do not delete this row",
+    VersionDidNotRemap(seed) =>
+      "[generator-version-bump-changed-nothing] the two pinned versions produce the same seeding or the same choices at seed ${seed}; D8 requires the generator version to travel with every preserved failure, and a version that changes nothing observable makes that axis decorative — the same defect `generator-ignores-its-version` names on the run side, caught here on the artifact side"
+  }
+}
+
+export pure func canary_ok(fs: [CanaryFinding]) -> bool { List.length(fs) == 0 }
+
+export pure func has_canary_rule(fs: [CanaryFinding], rule: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest => if canary_rule(f) == rule then true else has_canary_rule(rest, rule)
+  }
+}
+
+export pure func first_canary_message(fs: [CanaryFinding]) -> string {
+  match fs {
+    [] => "(no findings)",
+    f :: _ => canary_message(f)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The trajectory. Fixed schedule, adaptive length, constant salts.
+-- ---------------------------------------------------------------------------
+
+pure func bit(b: bool) -> string { if b then "1" else "0" }
+
+pure func provider_text(d: ProviderDecision) -> string {
+  "P|${bit(d.terminate)}|${d.prose}|${d.tool_name}|${d.tool_args}|${d.tool_call_id}|${d.finish_reason}|${d.chunk_count}|${d.chunk_text}|${d.input_tokens}|${d.output_tokens}"
+}
+
+pure func tool_text(d: ToolDecision) -> string {
+  "T|${tool_choice_id(d.fault)}|${d.duration_ms}|${d.code}|${d.message}|${d.content}|${d.answering_call_id}"
+}
+
+pure func approval_text(d: ApprovalDecision) -> string {
+  "A|${bit(d.serve)}|${bit(d.approve)}|${d.reason}"
+}
+
+pure func failures_text(fs: [BoundFailure]) -> string {
+  match fs {
+    [] => "",
+    f :: rest => "${f.bound}/${f.limit}/${f.requested};${failures_text(rest)}"
+  }
+}
+
+pure func env_text(es: [{ key: string, value: string }]) -> string {
+  match es {
+    [] => "",
+    e :: rest => "${e.key}=${e.value},${env_text(rest)}"
+  }
+}
+
+export type CanaryTrace = { state: GeneratorState, text: string }
+
+-- Six provider steps at most. The bound exists so the canary terminates on a
+-- generator that never chooses to; it is NOT a budget the trajectory is meant
+-- to reach, and a build that reaches it will differ in `draws` from a pinned
+-- row that did not — loudly, which is correct.
+pure func canary_steps(g: GeneratorState, step: int, acc: string) -> CanaryTrace {
+  if step >= 6 then { state: g, text: "${acc}|BOUND" }
+  else {
+    let p = choose_provider(g, "canary|p${step}", step);
+    let acc1 = "${acc}${provider_text(p.decision)}";
+    if p.decision.terminate then { state: p.state, text: "${acc1}|END" }
+    else {
+      let t = choose_tool(p.state, "canary|t${step}", 50, p.decision.tool_call_id);
+      let a = choose_approval(t.state, "canary|a${step}");
+      canary_steps(a.state, step + 1,
+                   "${acc1}${tool_text(t.decision)}${approval_text(a.decision)}")
+    }
+  }
+}
+
+-- The row, with the initial Lehmer state INJECTED rather than derived.
+--
+-- That injection is the C5 mechanism and it is the same one axis B uses on the
+-- run side: a deliberate seed remap is `seed_state(id, version, seed + 1)` fed
+-- in at an unchanged version. Without an injection point, "demonstrate the
+-- canary goes red on a remap" would require editing the generator and reverting
+-- it, which is a demonstration that runs once and then stops being a test.
+-- One walk under one set of bounds. `approvals_closed` and `failures` are reset
+-- so the two walks are independent in everything except the stream they share —
+-- the second RESUMES the first's `rng`, which is what makes them one trajectory
+-- for pinning purposes and keeps the digest sensitive to the first walk's
+-- length.
+pure func canary_walk(g0: GeneratorState, b: GeneratorBounds, tag: string) -> CanaryTrace {
+  let g = { g0 | bounds: b, approvals_closed: false, failures: [] };
+  let e = choose_environment(g, "canary|${tag}env");
+  let t = canary_steps(e.state, 0, "${tag}|E|${env_text(e.entries)}");
+  -- EVERY FIELD of every bound failure, not their count. The count alone let a
+  -- mutation of `note_bound`'s reported quantity through: it changes what a
+  -- failure SAYS without changing how many there are, and the canary stayed
+  -- green. This is S7's record-level form — a projection that ignores a field
+  -- is blind to exactly the change that field records.
+  { state: t.state, text: "${t.text}|F${failures_text(t.state.failures)}" }
+}
+
+export pure func canary_row_from(id: string, version: string, seed: int, rng0: int) -> CanaryRow {
+  let g0 = { generator_state(id, version, seed, canary_bounds()) | rng: rng0 };
+  let wide = canary_walk(g0, canary_bounds(), "W");
+  let tight = canary_walk(wide.state, canary_bounds_tight(), "T");
+  { seed: seed,
+    initial_state: rng0,
+    draws: tight.state.draws,
+    digest: salt_hash("${wide.text}${tight.text}") }
+}
+
+export pure func canary_row(id: string, version: string, seed: int) -> CanaryRow {
+  canary_row_from(id, version, seed, seed_state(id, version, seed))
+}
+
+-- ---------------------------------------------------------------------------
+-- The check
+-- ---------------------------------------------------------------------------
+
+pure func row_findings(id: string, version: string, remap: int, p: CanaryRow) -> [CanaryFinding] {
+  let observed = canary_row_from(id, version, p.seed, seed_state(id, version, p.seed + remap));
+  (if observed.initial_state != p.initial_state
+   then [SeedRemapped(p.seed, p.initial_state, observed.initial_state)] else [])
+    ++ (if observed.draws != p.draws
+        then [TrajectoryReshaped(p.seed, p.draws, observed.draws)] else [])
+    ++ (if observed.digest != p.digest
+        then [ChoicesRemapped(p.seed, p.digest, observed.digest)] else [])
+}
+
+pure func rows_findings(id: string, version: string, remap: int, ps: [CanaryRow]) -> [CanaryFinding] {
+  match ps {
+    [] => [],
+    p :: rest => row_findings(id, version, remap, p) ++ rows_findings(id, version, remap, rest)
+  }
+}
+
+-- S7 on the pinned table itself: no two rows may share a quantity. A table
+-- whose rows collide cannot tell a comparison reading the wrong row from one
+-- reading the right one, which is the property the seeds are SWEPT for.
+pure func collision_with(a: CanaryRow, rest: [CanaryRow]) -> [CanaryFinding] {
+  match rest {
+    [] => [],
+    b :: tail =>
+      (if a.initial_state == b.initial_state then [CanaryQuantitiesCollide("initial Lehmer state")] else [])
+        ++ (if a.draws == b.draws then [CanaryQuantitiesCollide("draw count")] else [])
+        ++ (if a.digest == b.digest then [CanaryQuantitiesCollide("choice digest")] else [])
+        ++ collision_with(a, tail)
+  }
+}
+
+pure func table_collisions(ps: [CanaryRow]) -> [CanaryFinding] {
+  match ps {
+    [] => [],
+    a :: rest => collision_with(a, rest) ++ table_collisions(rest)
+  }
+}
+
+-- The whole canary, in one call. `remap` is 0 for an honest check and non-zero
+-- only for the mutation row that proves this artifact can go red at all.
+export pure func check_canary(
+  id: string, version: string, remap: int, pinned: [CanaryRow]
+) -> [CanaryFinding] {
+  rows_findings(id, version, remap, pinned)
+    ++ (if List.length(pinned) == 0 then [CanaryVacuous] else [])
+    ++ table_collisions(pinned)
+}
+
+-- D8's version axis, on the artifact side. Two pinned tables at two versions
+-- must disagree at every shared seed, in BOTH the seeding and the choices —
+-- otherwise the version travels with the artifact and means nothing.
+pure func version_pair(a: CanaryRow, bs: [CanaryRow]) -> [CanaryFinding] {
+  match bs {
+    [] => [],
+    b :: tail =>
+      (if a.seed == b.seed && (a.initial_state == b.initial_state || a.digest == b.digest)
+       then [VersionDidNotRemap(a.seed)] else [])
+        ++ version_pair(a, tail)
+  }
+}
+
+export pure func check_canary_version_axis(as_: [CanaryRow], bs: [CanaryRow]) -> [CanaryFinding] {
+  match as_ {
+    [] => [],
+    a :: rest => version_pair(a, bs) ++ check_canary_version_axis(rest, bs)
+  }
+}
+
+
+-- ---------------------------------------------------------------------------
+-- THE PINS
+--
+-- Found by SWEEP, not authored. `scripts/dst/_canary_sweep.ail` (temporary,
+-- deleted after this landed) emitted a row per seed for 1..260 at both
+-- versions, and the triple below is one of the survivors of a filter that is
+-- exactly the obligations these rows have to meet:
+--
+--   * all three of `initial_state`, `draws` and `digest` pairwise distinct
+--     WITHIN each version's table (S7 — a table whose rows share a quantity
+--     cannot tell a comparison reading the wrong row from one reading the
+--     right one, which is what `table_collisions` reports);
+--   * the same, independently, for the version-2 table;
+--   * both layers actually remapped by the version bump, at every seed;
+--   * NO TWO PINNED SEEDS ADJACENT, for the reason in the note below.
+--
+-- Of the 260 seeds swept, 894774 triples qualify, so these are not scarce and
+-- they are not special — the sweep exists so that the rows are a QUERY's answer
+-- rather than a judgement, which is the technique stage 4 used to find seed 94.
+--
+-- Among the survivors this triple was preferred for TRAJECTORY COVERAGE, which
+-- is the one thing the filter above cannot express. Seed 4 draws 83, the
+-- maximum: six wide steps that never chose to terminate, so the schedule's cap
+-- and the `|BOUND` path are pinned. Seed 9 draws 18, the minimum: the wide walk
+-- terminated at its first provider choice. Seed 1 sits between them. A pinned
+-- digest certifies the paths its trajectory walks and no others, so the rows
+-- are chosen to walk the extremes as well as the middle.
+export pure func canary_generator_id() -> string { "motoko_driver_only" }
+
+export pure func pinned_canary_v1() -> [CanaryRow] {
+  [{ seed: 1, initial_state: 1760396834, draws: 78, digest: 1749163738 },
+   { seed: 4, initial_state: 1760396837, draws: 83, digest: 279631833 },
+   { seed: 9, initial_state: 1760396842, draws: 18, digest: 930043259 }]
+}
+
+export pure func pinned_canary_v2() -> [CanaryRow] {
+  [{ seed: 1, initial_state: 1760396835, draws: 30, digest: 2082027779 },
+   { seed: 4, initial_state: 1760396838, draws: 18, digest: 88385705 },
+   { seed: 9, initial_state: 1760396843, draws: 66, digest: 1230598725 }]
+}
+
 -- ---------------------------------------------------------------------------
 -- Inline tests.
 --
@@ -962,4 +1357,151 @@ pure func test_the_late_choice_exceeds_the_requests_own_deadline() -> bool
             ToolChoiceMismatch => ok.decision.answering_call_id != "c1" && ok.decision.answering_call_id != "",
             _ => ok.decision.answering_call_id == ""
           })
+  }
+
+-- ---------------------------------------------------------------------------
+-- PART 5's tests — D8's canary
+-- ---------------------------------------------------------------------------
+
+-- THE ARTIFACT, GREEN, at both pinned versions. This is the row that goes red
+-- when the generator is edited without a version bump, and it is the whole
+-- reason the file has a Part 5.
+pure func test_the_pinned_canary_is_green_at_both_versions() -> bool
+  tests [((), true)]
+  {
+    canary_ok(check_canary(canary_generator_id(), "1", 0, pinned_canary_v1()))
+      && canary_ok(check_canary(canary_generator_id(), "2", 0, pinned_canary_v2()))
+  }
+
+-- C5, AND HERE IT IS THE ENTIRE POINT OF THE ARTIFACT. A deliberate seed remap
+-- — every seed shifted by one, at an UNCHANGED version — must turn the canary
+-- red. A canary that cannot be made to fail is pinning something not reachable
+-- through a choice, which is site 21's defect committed inside the artifact
+-- built to prevent it.
+--
+-- All three layers are asserted to fire, because they answer different
+-- questions and a canary that reported only "something moved" would leave the
+-- reader with the work it exists to do for them.
+pure func test_a_seed_remap_without_a_version_bump_turns_the_canary_red() -> bool
+  tests [((), true)]
+  {
+    let fs = check_canary(canary_generator_id(), "1", 1, pinned_canary_v1());
+    not canary_ok(fs)
+      && has_canary_rule(fs, "generator-seed-remapped-without-a-version-bump")
+      && has_canary_rule(fs, "generator-trajectory-reshaped-without-a-version-bump")
+      && has_canary_rule(fs, "generator-choices-remapped-without-a-version-bump")
+      -- ...and the same remap against the version-2 table is red too, so the
+      -- demonstration is not an accident of one table's contents.
+      && not canary_ok(check_canary(canary_generator_id(), "2", 1, pinned_canary_v2()))
+  }
+
+-- The two structural findings. Neither is decoration: an empty table compares
+-- nothing and passes, and a table with colliding rows cannot tell which row a
+-- comparison read. Both are the ways this artifact rots into a green no-op.
+pure func test_the_canary_reports_its_own_vacuity_and_its_own_collisions() -> bool
+  tests [((), true)]
+  {
+    let empty = check_canary(canary_generator_id(), "1", 0, []);
+    let dup = [{ seed: 1, initial_state: 1760396834, draws: 78, digest: 1749163738 },
+               { seed: 1, initial_state: 1760396834, draws: 78, digest: 1749163738 }];
+    has_canary_rule(empty, "generator-canary-is-vacuous")
+      && List.length(empty) == 1
+      && has_canary_rule(check_canary(canary_generator_id(), "1", 0, dup),
+                         "generator-canary-quantities-collide")
+  }
+
+-- D8's version axis on the artifact side: the two pinned tables must disagree
+-- at every shared seed. And the mutant — a table compared against itself —
+-- must name every seed, because a version axis that passed on identical tables
+-- is asserting nothing at all.
+pure func test_the_version_axis_separates_the_two_pinned_tables() -> bool
+  tests [((), true)]
+  {
+    canary_ok(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v2()))
+      && has_canary_rule(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v1()),
+                         "generator-version-bump-changed-nothing")
+      && List.length(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v1())) == 3
+  }
+
+-- The canary must be reachable ONLY through a draw (S8). The salts in
+-- `canary_steps` are constants and carry neither the seed nor the version, so
+-- the single path from `seed` to `digest` runs through `rng`. This row asserts
+-- the consequence: injecting an initial state directly — bypassing
+-- `seed_state` entirely — moves the digest, which it could not do if any part
+-- of the pinned text were a decorative copy of an input rather than a choice.
+pure func test_the_canary_digest_is_reachable_only_through_the_stream() -> bool
+  tests [((), true)]
+  {
+    let honest = canary_row(canary_generator_id(), "1", 5);
+    let injected = canary_row_from(canary_generator_id(), "1", 5, honest.initial_state + 1);
+    -- The SEED is identical in both rows and only the stream differs, so a
+    -- digest that moves proves the seed reaches the digest through the stream
+    -- and not around it.
+    injected.seed == honest.seed
+      && injected.digest != honest.digest
+      -- ...and conversely, two different seeds landing on ONE stream produce
+      -- one digest, which is the same statement from the other side: nothing
+      -- but the stream is written into the pinned text.
+      && canary_row_from(canary_generator_id(), "1", 5, honest.initial_state).digest
+           == canary_row_from(canary_generator_id(), "1", 77, honest.initial_state).digest
+  }
+
+-- ---------------------------------------------------------------------------
+-- SITE 22 — A KNOWN DEFECT, PINNED DELIBERATELY SO THAT FIXING IT IS LOUD
+-- ---------------------------------------------------------------------------
+--
+-- `seed_state` is `in_range(salt_hash("${id}/${version}") + seed)`: the version
+-- hash and the seed are ADDED, so they are interchangeable. And djb2's last
+-- step is `acc*33 + charCode(c)`, so two version strings differing only in
+-- their final character hash to values differing by exactly that character
+-- difference — "1" and "2" differ by 1.
+--
+-- THE CONSEQUENCE, MEASURED ACROSS ALL 259 ADJACENT SEED PAIRS IN THE SWEEP
+-- AND NOT INFERRED: version "2" at seed s is byte-identical to version "1" at
+-- seed s+1 — same initial state, same draw count, same choice digest. A version
+-- bump is not a new stream; it is the SAME stream re-indexed.
+--
+-- Why nothing else in this project can see it. `check_seed_sensitivity`'s
+-- `VersionIgnored` row compares one seed across two versions and requires the
+-- programs to DIFFER — and they do differ, because v2 at seed 9 is v1 at seed
+-- 10. Determinism, seed sensitivity, structural validity and strict replay are
+-- all green on it. Only a check that compares ACROSS the (version, seed) grid
+-- can reach it, and this canary is the first thing in the project that does.
+--
+-- Why it matters for D8: a preserved artifact is named by (id, version, seed),
+-- and under this seeding that name is not unique — an artifact recorded at
+-- (v1, seed 4) and one recorded at (v2, seed 3) are the same program while
+-- claiming different generator versions. Reproduction still works; the version
+-- axis is what is weakened, in the exact way `VersionDidNotRemap`'s own message
+-- describes.
+--
+-- WHY IT IS PINNED RATHER THAN FIXED HERE. The fix belongs in `seed_state` —
+-- mix the identity in through a Lehmer step instead of adding it to the seed,
+-- so the two inputs stop being interchangeable. That is a remap of the whole
+-- stream, which moves stage 4's pinned seeds 9, 13 and 94, each of which has an
+-- ASSERTED reason (the equal-census anti-count pair, and the one S7 fixture in
+-- 260 seeds). Re-pinning those means re-running a 260-seed census sweep through
+-- the real driver, and it is a change to a landed stage's searched fixtures —
+-- so it is reported rather than taken unilaterally.
+--
+-- THIS ROW IS A CHARACTERIZATION TEST AND IT IS SUPPOSED TO FAIL WHEN THE
+-- DEFECT IS FIXED. It asserts the defective identity holds today, so whoever
+-- repairs `seed_state` sees this row go red, reads this comment, and DELETES
+-- it deliberately. Pinning the behaviour is what stops the finding from being
+-- lost in a note.
+pure func test_a_version_bump_is_currently_only_a_seed_offset() -> bool
+  tests [((), true)]
+  {
+    let v2_at_3 = canary_row(canary_generator_id(), "2", 3);
+    let v1_at_4 = canary_row(canary_generator_id(), "1", 4);
+    let v2_at_5 = canary_row(canary_generator_id(), "2", 5);
+    let v1_at_6 = canary_row(canary_generator_id(), "1", 6);
+    v2_at_3.initial_state == v1_at_4.initial_state
+      && v2_at_3.draws == v1_at_4.draws
+      && v2_at_3.digest == v1_at_4.digest
+      && v2_at_5.initial_state == v1_at_6.initial_state
+      && v2_at_5.digest == v1_at_6.digest
+      -- The mechanism, stated directly rather than only through its
+      -- consequence: the version enters ADDITIVELY, alongside the seed.
+      && seed_state(canary_generator_id(), "2", 3) == seed_state(canary_generator_id(), "1", 4)
   }

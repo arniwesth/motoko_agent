@@ -404,6 +404,12 @@ strict_replay:
 #   2. dst_generator's own units, which are where the seed-sensitivity RULE is
 #      asserted against hand-built row sets — including a seed-ignoring one that
 #      must go red, written and run before a line of the generator existed (S1).
+#      Stage 5 adds D8's GENERATOR CANARY here: pinned rows per generator id and
+#      version that go red if the seed-to-choices mapping moves without a
+#      version bump. The pins are hand-written literals and there is NO target
+#      that refreshes them — that is the point, not an omission. A red canary is
+#      a decision: bump `generator_version` and re-pin by hand so a reviewer
+#      reads the diff, or fix the generator.
 #
 #   3. THE SEEDROW COMPARISON, out of process. The one result this stage exists
 #      to produce — different seeds produce different programs — is re-derived

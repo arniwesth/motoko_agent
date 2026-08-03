@@ -80,6 +80,17 @@
 --   J. DETERMINISM, last and least, and here it is worth less than usual: it is
 --      the one property a seed-ignoring generator satisfies BEST.
 --
+--   K. D8's GENERATOR CANARY (stage 5). Pinned per stable generator id: if the
+--      seed-to-choices mapping moves and `generator_version` does not, this
+--      goes red. The pins are PURE — no driver is consulted — so a driver
+--      change cannot produce a false alarm, because a canary that cries wolf
+--      acquires a regeneration target, and a canary regenerated when it fails
+--      certifies nothing while looking green forever. There is deliberately no
+--      such target, no `--update` flag and no `ACCEPT=1`: a red canary has
+--      exactly two legitimate outcomes, bump the version and re-pin by hand, or
+--      fix the generator. The machinery and the pins live in `dst_generator`;
+--      this axis ties them to the identity the suite actually runs under.
+--
 -- ---------------------------------------------------------------------------
 -- WHY THE SEEDS ARE LITERALS, AND WHAT WOULD MAKE THEM STALE
 -- ---------------------------------------------------------------------------
@@ -155,7 +166,17 @@ import src/core/dst_generator (
   seed_rule,
   seed_message,
   has_seed_rule,
-  first_seed_message
+  first_seed_message,
+  CanaryFinding,
+  canary_generator_id,
+  pinned_canary_v1,
+  pinned_canary_v2,
+  check_canary,
+  check_canary_version_axis,
+  canary_ok,
+  canary_rule,
+  canary_message,
+  has_canary_rule
 )
 import src/core/dst_program (
   ExecutionProgram,
@@ -989,6 +1010,70 @@ func axis_determinism(a: GeneratedRun, b: GeneratedRun) -> bool ! {IO} {
 }
 
 -- ---------------------------------------------------------------------------
+-- Axis K: D8's GENERATOR CANARY (stage 5)
+-- ---------------------------------------------------------------------------
+--
+-- The canary itself is PURE and lives in `dst_generator`, where its own rows
+-- prove it can go red. It is reported here because this is where a reader is
+-- already looking at the generator, and because a red canary is a DECISION
+-- POINT — the message has to reach a person, not just an exit status.
+--
+-- What this axis adds that the inline rows cannot: it ties the pinned artifact
+-- to the identity THIS SUITE ACTUALLY RUNS. A canary pinned under one generator
+-- id while the suite generates under another is green forever and certifies
+-- nothing, and that is not a hypothetical — it is correction 1 of cluster 10,
+-- where three literals sat on every discovered program claiming a generator
+-- that did not exist.
+func report_canary(fs: [CanaryFinding]) -> () ! {IO} {
+  match fs {
+    [] => (),
+    f :: rest => { let _ = println("      ${canary_message(f)}"); report_canary(rest) }
+  }
+}
+
+func axis_canary() -> bool ! {IO} {
+  let _ = println("");
+  let _ = println("axis K — D8's generator canary (pinned by hand; there is no regeneration path):");
+
+  let ok_identity = check("the canary pins the generator id and version this suite actually runs",
+                          generator_id() == canary_generator_id() && generator_version() == "1",
+                          "the suite generates under '${generator_id()}/${generator_version()}' and the canary pins '${canary_generator_id()}/1' — a canary pinned to an identity nothing runs under is green forever, which is cluster 10's correction 1 one layer up");
+
+  let v1 = check_canary(canary_generator_id(), "1", 0, pinned_canary_v1());
+  let _ = report_canary(v1);
+  let ok_v1 = check("the seed-to-choices mapping at version 1 is the pinned one",
+                    canary_ok(v1),
+                    "${show(List.length(v1))} finding(s) above — read them before touching the pins");
+
+  let v2 = check_canary(canary_generator_id(), "2", 0, pinned_canary_v2());
+  let _ = report_canary(v2);
+  let ok_v2 = check("...and at version 2, the one a legitimate version bump remaps to",
+                    canary_ok(v2),
+                    "${show(List.length(v2))} finding(s) above");
+
+  -- C5, and here it is the entire point of the artifact rather than a
+  -- supporting row: an artifact that cannot fail certifies nothing.
+  let remapped = check_canary(canary_generator_id(), "1", 1, pinned_canary_v1());
+  let ok_red = check("a deliberate seed remap with NO version bump turns the canary RED",
+                     not canary_ok(remapped)
+                       && has_canary_rule(remapped, "generator-seed-remapped-without-a-version-bump")
+                       && has_canary_rule(remapped, "generator-choices-remapped-without-a-version-bump"),
+                     "the canary stayed green on a remapped stream, which means it is pinning something not reachable through a choice — site 21's defect, committed inside the artifact built to prevent it");
+
+  let ok_version = check("the two pinned versions disagree at every shared seed",
+                         canary_ok(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v2()))
+                           && not canary_ok(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v1())),
+                         "D8 requires the generator version to travel with every preserved failure; a version that changes nothing observable makes that axis decorative");
+
+  let ok_vacuous = check("an empty pinned table is REPORTED rather than passing quietly",
+                         has_canary_rule(check_canary(canary_generator_id(), "1", 0, []),
+                                         "generator-canary-is-vacuous"),
+                         "a canary over an empty table compares nothing and passes, and that is the one failure mode a pinned artifact cannot report about itself");
+
+  ok_identity && ok_v1 && ok_v2 && ok_red && ok_version && ok_vacuous
+}
+
+-- ---------------------------------------------------------------------------
 -- Entry points
 -- ---------------------------------------------------------------------------
 
@@ -1031,9 +1116,10 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   let ok_efg2 = axis_program(pair_a, false);
   let ok_i = axis_mutations(rich, pair_a, witness_of(rich.initial, rich.run));
   let ok_j = axis_determinism(pair_a, repeat);
+  let ok_k = axis_canary();
 
   let _ = println("");
-  if ok_a && ok_c && ok_d && ok_efg && ok_efg2 && ok_i && ok_j then {
+  if ok_a && ok_c && ok_d && ok_efg && ok_efg2 && ok_i && ok_j && ok_k then {
     let _ = println("seeded generator: all axes green");
     ()
   } else {
