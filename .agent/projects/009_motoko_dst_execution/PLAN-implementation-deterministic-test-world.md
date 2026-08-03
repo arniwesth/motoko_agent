@@ -167,6 +167,23 @@ leaving the decorative path intact.
 derived from a **draw**, so a seed that reaches no choice reaches no byte of the program. Where that
 cannot be arranged, the assertion must name the leak and exclude it.
 
+**And the COMPLEMENT, earned by A13 stage 5 and cheaper to fall into than the original: check that the
+assertion's own trajectory ENTERS the branches it claims to cover.** Site 21 is X reaching Y *around*
+the mechanism — a decorative path. Its mirror is X not reaching Y *at all*, because the mechanism has
+branches the assertion never walks. Stage 5's canary pinned a digest over a generator trajectory that
+never spent its interaction budget and never tripped a declared limit, so every bound branch was
+outside what the digest could see: mutating what `note_bound` REPORTS left the canary green, and so
+did the second attempt, because the digest folded the failure COUNT where the change was in a FIELD
+(S7's record-level form, arriving on a digest rather than a codec). **A pinned artifact certifies
+exactly the paths its trajectory walks; the paths it does not walk are not pinned but ABSENT, and
+absent reads identically to unchanged.** The remedy is again structural — a second walk under limits
+tight enough to bind *for every input*, so branch coverage is a property of the artifact rather than
+of the input that happened to be chosen — and it is why stage 5's pinned seeds were preferred among
+894774 qualifying triples on trajectory coverage, the one axis the filter could not express.
+
+**The decorative path requires an author to write something decorative; the unwalked branch requires
+only that they not think of it.** A14's latency pair and A15's corpora have both exposures.
+
 **A14's D4 latency pair and A15's corpora both assert "this input influences that artifact" and both
 have this exposure.** So does stage 5's generator canary, whose failure mode the handoff already
 named — pinning `generator_id`, `generator_version` and `seed` as literals passes and certifies
@@ -230,6 +247,17 @@ before writing code. So: a decided binding costs a judgement; **a discovered bin
 judgement plus the round trip that surfaced it, and cannot be counted in advance** — which is S5's
 property arriving inside a composition. **No sixth model: S6's second term inherits S5's uncertainty
 when the composition is over something that RUNS rather than something that validates.**
+
+**Fifth data point, and it is the first time the count OVER-predicted — apply the second term PER
+PIECE, not per stage.** A13 stage 5 had **five** bindings (three decided, two discovered) and cost
+roughly **0.9×** stage 4 against a predicted ~1.25×. The reason is legible rather than noise: the
+stage's two pieces were **independent**, and one of them was nearly free. Regression replay carried
+real care — it is where the demotion set lives — and still cost under a third of the stage, because
+stage 3 had left a seam that fitted a *parameter*; the canary consumed ~70% of the session, all of it
+in the two discovered bindings and the three sweep-and-re-pin loops they forced. **Summing bindings
+across independent pieces and comparing the total to a previous stage's total averages two things
+that do not interact.** Count and price each piece separately, then add — and note that this also
+tells you which piece is the clean stop, which is S3 applied across pieces rather than across seams.
 
 **Third data point: the predictor survives, its explanation does not.** Stage 3 had three recorded
 bindings — parity with stage 2 — and cost about the same, so the count held. But cluster 8 attributed
@@ -949,6 +977,27 @@ reconstitution balance *in both directions*, to determinism and to seed sensitiv
 replay refused it. Stage 3's fail-closed refusal path is what produced it, which is the second time
 a stage's own guard has caught the *next* stage's defect.
 
+**Stage 5 landed 2026-08-03 (`177d0cb`, `be8393c`).** Regression replay is D2's second mode with
+**exactly two** of seven `ReplayMismatch` variants demoted; the correlation chain is one function
+shared by both modes, so weakening it in regression mode reddens strict replay rather than passing
+silently. D8's canary is **pure — it consults no driver** — because a canary pinned to a driver run
+is red on every control-flow change, and a canary that cries wolf acquires the regeneration target
+that would make it certify nothing. `make dst` is exit 0 at **403 checks**.
+
+**Two findings from stage 5 bind what remains.** The first is **S8's complement** above: the canary
+passed a mutation of what `note_bound` REPORTS until its trajectory was made to enter the bound
+branches and its digest to fold every field rather than a count. The second is **site 22, and it is
+D8's**: `seed_state` ADDS the id/version hash to the seed, so the two are interchangeable and —
+measured across all 259 adjacent seed pairs, twice — **version "2" at seed *s* is byte-identical to
+version "1" at seed *s+1***. A version bump is the same stream re-indexed, so **(id, version, seed)
+is not a unique name for a program.** `check_seed_sensitivity`'s `versioned` row cannot see it: it
+compares one seed across two versions and requires them to differ, and they do. It is pinned by a
+characterization row that is *supposed to fail* when the defect is fixed. **Not repaired in stage 5**
+because the fix remaps the whole stream and moves stage 4's searched seeds 9, 13 and 94 — each with
+an asserted reason — requiring a 260-seed census re-sweep through the real driver. **Stage 6 must
+either pay that or record the collision as a known property of the artifact store; it must not file
+preserved artifacts under a key it believes to be unique.**
+
 **Two scope items are explicitly NOT in stage 4 and are named here so they are not lost.** The
 generator chooses no provider FAULT and no provider LATENCY, because `ScriptedStep` has neither an
 error case nor an `advance_ms` — both are one field on that type away, restored on replay from
@@ -1134,6 +1183,17 @@ each have an *asserted* reason rather than a described one, so a change to the g
 request-projection string, or to the driver's control flow moves them and fails loudly. **State the
 corpus obligations as a filter, sweep, and pin the survivors** — authoring a corpus and hoping it
 covers is the shape S7 exists to reject, and it does not scale to a rotating window.
+
+**Stage 5 took the technique one step further and A15 should take that step too: DERIVE THE FILTER,
+do not author it either.** The canary's pinned seeds were selected by a filter read straight off the
+standing rules and the specification — S7 supplies pairwise distinctness, D8 supplies "a version bump
+must remap both layers", and site 22 supplies the non-adjacency constraint. Of 260 seeds, **894774
+triples qualified**, and the only judgement left was preferring a triple that walks the trajectory
+extremes — the one axis a filter cannot express. Content judgement fell from stage 4's ~85% to ~25%
+on that change alone. **When the filter is derived and the sweep is wide, the residual judgement
+lives in one visible place instead of being spread across every pinned value** — which is exactly
+what a rotating corpus needs, because the residual is the part a reviewer has to re-check when the
+window moves.
 *Acceptance evidence:* both jobs run and declare their minimums; the gate **fails** on a zero,
 silently truncated, or below-minimum window (tested by forcing one); the fixed bank collectively
 reaches every required non-waived fault class in A7's catalogue; a promoted counterexample enters
