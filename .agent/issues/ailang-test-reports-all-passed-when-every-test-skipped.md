@@ -1,5 +1,13 @@
 # `ailang test` reports "All tests passed!" and exits 0 when every test was SKIPPED
 
+**Filed upstream 2026-08-04 — ticket `fb_ebebcacb3f29f3a5`, category `bug`.** Re-reproduced
+standalone before filing: a two-test file, one assertion deliberately false, reports
+`2 tests: 0 passed, 0 failed, 2 skipped` and **exits 0**. The report was filed with the inverse
+included, because the two together are what defeat a gate author: **zero tests exits 1, all-skipped
+exits 0** — the harmless case fails and the dangerous case passes. Filed via the `ailang-feedback`
+skill's Channel 3, same trackability caveat as the other tickets.
+
+
 ## Status
 
 open (upstream, AILANG v0.26.0) — **worked around, not fixed.** `make test_coverage` reads the

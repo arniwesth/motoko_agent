@@ -183,6 +183,16 @@ every field, not a count of them. The decorative path needs an author to write s
 the unwalked branch needs only that they not think of it. **A14's latency pair and A15's corpora both
 have this exposure.**
 
+**The SEQUENCED-CLAUSE form, from A17, and it is the cheapest instance to get wrong.** Where a guard
+is an ordered chain of clauses, **an input that a later clause also rejects cannot certify an earlier
+one** — delete the earlier clause and the row stays green. Site 23 recorded this for `has_jwt`'s two
+conjuncts; A17 committed it twice more in a three-clause chain, *by a session that had read site 23
+that morning*. Its dual is site 32: **a control that must SURVIVE certifies nothing if the mechanism
+never reached it** — dropping a fixture from the walk entirely left every row passing, because absent
+and correct are the same observation. Operationally, and it is cheap: **for a guard of N sequenced
+clauses, each control must be rejected by its own clause and ACCEPTED by all the others; and for a
+surviving control, assert that the mechanism SAW it, not merely that it produced no finding.**
+
 The rule is distinct from S1 (write the assertion first) and from C5 (prove the guard can fire): the
 guard here **could** fire and **did** fire on the mutant it was designed against. What exposed the
 gap was mutating the implementation a *second, weaker* way — breaking only the mechanism, and
