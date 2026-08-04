@@ -1,6 +1,10 @@
 # Draft reply to `sunholo-data/ailang#578` — cancellable provider context, and the `IncompleteStream` question
 
-**Status: DRAFT, not posted.** Posting is outward-facing and awaits the operator's decision.
+**Status: POSTED 2026-08-04T13:25:55Z** by the operator, as the first comment on
+[#578](https://github.com/sunholo-data/ailang/issues/578) — 6,335 characters, with a lead-in noting
+the overlap with #546. Awaiting a response; nothing is owed back until upstream replies.
+
+This file is retained as the record of what was sent and the checks behind it.
 
 **Supersedes `DRAFT-reply-546-incomplete-stream-error-code.md`**, which was written for #546's context
 before #546 closed. #578 differs in three ways that change the reply rather than just its address:

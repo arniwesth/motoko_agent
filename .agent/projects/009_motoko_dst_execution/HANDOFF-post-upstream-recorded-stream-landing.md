@@ -216,10 +216,16 @@ honest signal after B1 is `ailang check` failing across the tree, and its size i
 ## The `IncompleteStream` question moved
 
 Upstream's closing comment says: *"S2 continues under #578 (your `IncompleteStream` question is the
-open thread there)."* **The draft reply in
-`DRAFT-reply-546-incomplete-stream-error-code.md` should target #578, not #546.** Its content and
-permalinks are unaffected; only the destination changed. It is still unposted and still needs an
-operator decision.
+open thread there)."* **Answered: the reply was POSTED to #578 on 2026-08-04T13:25:55Z** —
+`DRAFT-reply-578-cancellable-context-and-incomplete-stream.md` is the record of what was sent. It
+carries three things: demand evidence for the cancellable context (our filed provider-hang issue,
+scoped honestly as TypeScript-side today and forward-dated as the DST migration moves the seam into
+AILANG), a scope correction (**we implement no `AIHandler`**, so upstream's out-of-repo implementer
+count is zero and v2 is cheaper than #578 estimates), and the `IncompleteStream` answer — a
+first-class code, evidenced by this codebase having taken that fork both ways.
+
+**Nothing is owed back until upstream replies.** If the answer lands as a code, B1/B2 should match on
+it rather than on the `unencodable stream chunk` message prefix.
 
 ---
 
