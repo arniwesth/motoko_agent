@@ -61,8 +61,12 @@ editing it — which is why its handoff is safe to write before cluster 1 lands.
 but do not lengthen it. A13 and B2 are the two 1–2 week items and dominate the schedule.
 
 **MILESTONE B IS OPEN.** The upstream gate cleared 2026-08-04 (v0.33.0 ships
-`stepWithStreamRecorded`, verified against the tag). **Cluster 11 = WI-B1**, handoff written:
-`HANDOFF-execute-b1-repin-toolchain.md`. B1–B3 are one inseparable wave and **B4 is its green gate**,
+`stepWithStreamRecorded`, verified against the tag). **Cluster 11 = WI-B1: DONE 2026-08-04**, 33m25s — pin at v0.33.0, zero effect-row failures
+reachable, tree 130/105. Report: `NOTE-b1-execution-report-and-plan-corrections.md`; earned standing
+rule **S9**. **Cluster 12 = WI-B3**, handoff written: `HANDOFF-execute-b3-message-migration.md` —
+**B3 before B2, because B2's scope is unmeasurable until the `images` wall clears** (B1 could see only
+one of M2's three predicted ABI changes; the rest sit behind it, and absent reads identically to
+unchanged). B1–B3 are one inseparable wave and **B4 is its green gate**,
 so the map's usual "one cluster, one green state" rule does not hold across them — that is stated in
 the handoff rather than left to be discovered.
 
