@@ -166,6 +166,56 @@ Findable, unresolved, each with enough detail to pick up cold:
 
 ---
 
+# UPSTREAM STATUS — checked 2026-08-04 against the API, not the changelog
+
+**The gate is NOT cleared, and it is closer than any prior check.** `sunholo-data/ailang#546` moved
+substantially between 2026-08-01 (this project's last recorded status) and 2026-08-03.
+
+| Fact | Evidence |
+|---|---|
+| The park is **RESOLVED** — option (c), bound the drain locally, no interface change | comment 2026-08-03T08:20Z; **this project's sealed-interface analysis was the deciding evidence**, then verified first-party at `a929ec452` |
+| The design doc absorbed five of our points | PR #562. "Lossless" is restated as exact w.r.t. **adapter-emitted** chunks, not the wire; the sibling divergence is now deliberate and stated |
+| **PR #577 is MERGED** | 2026-08-03T16:55:09Z. Our patch applied **verbatim, in its own commit, credited**, plus a shared stream core, the fail-loud latch (public prefix `unencodable stream chunk`), a bounded **inert** drain (256 chunks / 1 MiB), and a 14-row matrix with our four tests untouched |
+| **No release contains it yet** | `std/ai.ail` at **`dev`** contains `stepWithStreamRecorded`; at **`v0.32.0`** it does not. v0.32.0 was published 2026-08-03T15:22Z — **1h33m before the merge** |
+| The wall-clock residual is split out | **#578** (cancellable provider context / AIHandler v2). The drain bounds post-failure work but the call still returns only when the provider's stream ends. A sentinel-panic abort was ruled out as unsound on `js && wasm` |
+
+**So D1's trigger is one release away, not one design cycle away.** The check the trigger section
+above prescribes still applies unchanged — verify against a *released* binary, not `dev`, not a
+changelog.
+
+## AN ANSWER IS OWED TO UPSTREAM, AND IT BLOCKS THEIR S2
+
+Asked 2026-08-03T10:20Z and **repeated 16:35Z as explicitly owed before S2**:
+
+> for the unencodable-chunk failure, do you prefer a first-class `AIError` code (e.g.
+> `IncompleteStream`) over the stable message prefix on `Internal`? The prefix ships in S1 as public
+> contract; a dedicated code would widen the `AIError` code set, which we didn't want to assume on
+> your behalf.
+
+**This project has direct, filed evidence and the answer is a first-class code.** Recorded here so
+whoever picks this up does not re-derive it:
+
+1. **We are already living with the failure this choice produces.**
+   `.agent/issues/max-steps-termination-discriminated-by-error-message-string.md`: `step_machine.ail`
+   emits the same `Internal` code for two structurally different failures, so the driver
+   discriminates by **matching the message text** (`session.ail`, `decision_fail_reason`). An edit to
+   that string — a reword, a typo fix — silently reclassifies every max-steps run. It is open.
+2. **WI-A9 declined to fix it, and cluster 4's C2 is why that matters here.** The `AIError` code is
+   **wire-visible**: it is emitted as an `error` ledger event (`ErrorEvent { code: e.code }`) that the
+   TypeScript TUI consumes. So changing a code later is a compatibility event — which is an argument
+   for getting the code right *at introduction*, when it is free.
+3. **D3's fault catalogue requires a stable class id per fault class.** A message prefix is not a
+   stable id. Keying a versioned artifact on a prose string is the shape D6.2 rejected when it
+   dropped `dp7_rejected` as a stale label.
+4. **Their stated objection cuts the other way.** "It widens the public error vocabulary" — S1
+   already ships the prefix *as public contract*, so the widening has happened; it has happened in
+   the form that cannot be checked. A code is versioned and greppable; a prefix is prose that
+   behaves like an API.
+
+**Posting this is outward-facing and has not been done.** It needs a decision from the operator.
+
+---
+
 # What Milestone B inherits — current as of 2026-08-04
 
 Written at the close of Milestone A (fourteen clusters, WI-A1 through WI-A15). **Read this section,
