@@ -1797,17 +1797,17 @@ func c2_loop(
               let _ = ledger_emit(session_id, empty_event);
               ledger_append(trace_with_decision, WireRecord(empty_event))
             } else trace_with_decision;
-          -- Terminal: success. c2_finalize runs first so the run_summary
-          -- projection still precedes the done projection on the wire, exactly
-          -- as it did before; the DoneEvent is projected only and is not a
-          -- second terminal record (D6.3), so the appended RunSummary remains
-          -- the final record of the returned trace.
-          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_after_empty_floor, Ok(st.msgs));
-          let _ = ledger_emit(session_id, DoneEvent({
-            step: done_step,
-            output: info.output,
-            source: st.finalize_source
-          }));
+          -- WI-A14 (D6.4 / D7's parity family). The DoneEvent is APPENDED here,
+          -- before c2_finalize appends the RunSummary, and PROJECTED after it.
+          -- Three obligations that could not all hold while it was
+          -- projected-only now do: D6.4 (a Logical event reaches the returned
+          -- trace), D6.1 (the RunSummary is STILL the final record) and D6.3
+          -- (agreement, now decidable over the returned trace alone). The wire
+          -- order is untouched: D6.4 asks for PARITY, not one transition.
+          let done_event = DoneEvent({ step: done_step, output: info.output, source: st.finalize_source });
+          let trace_with_done = ledger_append(trace_after_empty_floor, WireRecord(done_event));
+          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, Ok(st.msgs));
+          let _ = ledger_emit(session_id, done_event);
           finalized
         },
         InjectUserMessage(msg) => {

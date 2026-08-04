@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -695,6 +695,74 @@ event_vocabulary:
 	echo "  ✓ $$variants LedgerEvent variants == $$rows vocabulary rows == $$goldens golden-pinned variants"; \
 	ailang test src/core/dst_event_vocabulary.ail > /dev/null && echo "  ✓ src/core/dst_event_vocabulary.ail"; \
 	ailang test src/core/phase_vocab.ail > /dev/null && echo "  ✓ src/core/phase_vocab.ail (goldens)"
+
+# D7's whole-execution invariant set (WI-A14 piece 1). Three checks, and the
+# structural ones exist for the reason every hand-written set in this project
+# has one: AILANG has no constructor enumeration on the pin, so a set can grow
+# a member that no list knows about and every check still passes — an artifact
+# that validates while incomplete.
+#
+#   1. THE SUITE. One fixture that must SURVIVE (S7, both halves executable),
+#      then a single-field mutation per rule, each asserting ITS OWN rule rather
+#      than a non-empty finding list. Cluster 12 measured why that matters: a
+#      row asserting "some finding" is green on the wrong evidence, and two
+#      rows here caught exactly that during construction — a stream-parity
+#      check that compared tags and not content, and a retry mutant that was
+#      tripping `record-after-terminal` instead.
+#
+#   2. TWO STRUCTURAL GUARDS, both anchored to a SYNTACTIC form (the `= X` /
+#      `| X` constructor lines of the type declaration itself) rather than to a
+#      count written down somewhere:
+#
+#        variants in `export type InvariantFamily` == all_families()      (12)
+#        variants in `export type Violation`       == sample_violations() (37)
+#
+#      The second is the load-bearing one. `violation_rule`, `violation_family`
+#      and `violation_message` are total matches, so a new rule is a compile
+#      error in all three — but a new rule left out of `sample_violations()`
+#      would never be checked for a distinct id, a family, or a message that
+#      names it, and the suite would be green while the artifact was incomplete.
+#
+#   3. The module's own unit tests, which carry the parity pins: the register
+#      equals the vocabulary's gap in both directions, and the display-only set
+#      is the pinned six. Those two are what make D6.4's one-line wrong answer
+#      — reclassify the gap as DisplayOnly — loud instead of merely discouraged.
+#
+# NOTE for anyone editing src/core/dst_invariants.ail: the guards count lines
+# matching `^  [|=]` between the type header and the following blank line. A
+# constructor wrapped onto a continuation line, or a blank line inside the
+# declaration, changes the count without changing the type — the same shape as
+# event_vocabulary's `variant: "` counter.
+.PHONY: invariants
+invariants:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/invariants_dst.ail < /dev/null; \
+	fam_t=$$(awk '/^export type InvariantFamily/,/^$$/' src/core/dst_invariants.ail | grep -c '^  [|=]'); \
+	fam_l=$$(awk '/^export pure func all_families\(\)/,/^}/' src/core/dst_invariants.ail | grep -oE '[A-Z][A-Za-z]+' | grep -v '^InvariantFamily$$' | wc -l); \
+	if [ "$$fam_t" -ne "$$fam_l" ]; then \
+		echo "FAIL: InvariantFamily declares $$fam_t variants and all_families() lists $$fam_l."; \
+		echo "      A family with no entry in all_families() is a D7 obligation that no"; \
+		echo "      coverage check iterates — the suite would report full family coverage"; \
+		echo "      while one obligation had no instrument behind it."; \
+		exit 1; \
+	fi; \
+	vio_t=$$(awk '/^export type Violation/,/^$$/' src/core/dst_invariants.ail | grep -c '^  [|=]'); \
+	vio_s=$$(awk '/^pure func sample_violations\(\)/,/^}/' src/core/dst_invariants.ail | grep -oE '[A-Z][A-Za-z]+\(' | wc -l); \
+	if [ "$$vio_t" -ne "$$vio_s" ]; then \
+		echo "FAIL: Violation declares $$vio_t constructors and sample_violations() builds $$vio_s."; \
+		echo "      violation_rule/_family/_message are total matches, so a new rule is a"; \
+		echo "      compile error there — but one missing from sample_violations() is never"; \
+		echo "      checked for a distinct rule id, a family, or a message naming it."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ $$fam_t InvariantFamily variants == $$fam_l in all_families(); $$vio_t Violation constructors == $$vio_s sampled"; \
+	if ailang test src/core/dst_invariants.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ src/core/dst_invariants.ail"; \
+	else \
+		echo "  ✗ src/core/dst_invariants.ail"; \
+		ailang test src/core/dst_invariants.ail < /dev/null 2>&1 | tail -20; \
+		exit 1; \
+	fi
 
 # WI-A12's advancement + trace-completeness gate, landed BEFORE the threading it
 # watches — the plan's binding sequencing rule. The script header carries the
