@@ -60,6 +60,12 @@ editing it — which is why its handoff is safe to write before cluster 1 lands.
 **The critical path is 1 → 6 → 7 → 8 → 9** (A1 → A2 → A12 → A13 → A14 → A15). Clusters 2–5 feed it
 but do not lengthen it. A13 and B2 are the two 1–2 week items and dominate the schedule.
 
+**MILESTONE B IS OPEN.** The upstream gate cleared 2026-08-04 (v0.33.0 ships
+`stepWithStreamRecorded`, verified against the tag). **Cluster 11 = WI-B1**, handoff written:
+`HANDOFF-execute-b1-repin-toolchain.md`. B1–B3 are one inseparable wave and **B4 is its green gate**,
+so the map's usual "one cluster, one green state" rule does not hold across them — that is stated in
+the handoff rather than left to be discovered.
+
 **MILESTONE A COMPLETED 2026-08-04 with A17 (cluster 10).** All ten rows are DONE and all seventeen
 work items are closed — sixteen through these clusters, plus **WI-A3, which has no row here and never
 needed one**: it is "file the two upstream reports", done 2026-08-02 with the plan itself, with no
