@@ -49,8 +49,8 @@ disagree, the plan wins and this note is stale.
 | 5 | **A10** | profile/manifest machinery | 2, 3 (both landed) | **DONE 2026-08-03** — `fd4f4bd`, `dafe898`. `driver_only` v1 loads and is conformant at HEAD. Report: `NOTE-cluster-5-execution-report-and-plan-corrections.md`. Both decisions resolved; added standing rule S6 |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
 | 7 | **A13** | discovery/replay | 3, 4, 5, 6 (all landed) | **DONE 2026-08-03 — all six stages.** `9c4d724`, `8b0d605`, `2d752da`, `f77adf1`, `177d0cb`+`be8393c`, `6c4894e`+`e01a978`. Reports: `NOTE-cluster-7-…` through `NOTE-cluster-12-…`. `make dst` exit 0 at **466 checks**, from 0 at the item's start. **A14 and A15 unblocked** |
-| 8 | **A14** | invariants, latency pair, D11 reporting | 7 (landed) | **Handoff written**: `HANDOFF-execute-a14-invariants-latency-and-reporting.md`. Three pieces, partial completion legitimate. Split from A15 per cluster 12's retrospective: A15 *depends* on A14, so they are sequential |
-| 9 | **A15** | the two corpora and their CI jobs | 8 | Wait |
+| 8 | **A14** | invariants, latency pair, D11 reporting | 7 (landed) | **DONE 2026-08-04** — `00dbdb4`, `ea81e66`, `3dd8a82`. Report: `NOTE-cluster-13-…`. 78 min on the clock, split 56/12/10 across three pieces. `DoneEvent` resolved; the coordinate anchor decided *not to build* |
+| 9 | **A15** | the two corpora and their CI jobs | 8 (landed) | **NEXT — groundable now.** The last item in Milestone A. Carries a generator-version bump (`max_resource_size`), so it re-pins the canary and stage 4's seeds |
 | — | **A17** | `Makefile`/CI; the `ailang test` coverage axis | — | **Groundable now, standalone, parallelisable.** Small; unassigned to a cluster since cluster 4 spawned it |
 
 **Clusters 1, 2 and 3 are mutually independent and can run in parallel** across sessions or agents.
