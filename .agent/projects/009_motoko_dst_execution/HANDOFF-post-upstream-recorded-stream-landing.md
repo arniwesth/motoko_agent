@@ -1,7 +1,27 @@
-# Handoff: resume project 009 once the upstream recorded-stream API has landed
+# Milestone B briefing (formerly: "resume project 009 once the upstream API has landed")
 
-Audience: a fresh agent session with no context from the spike session (2026-07-31). This handoff
-is **triggered, not immediate** — most of it is wasted effort until the condition below holds.
+**⚑ READ THIS FIRST. This is NO LONGER AN EXECUTABLE HANDOFF — do not work from its Mission or its
+Sequence.**
+
+It was written 2026-07-31 as a *triggered* handoff, before Milestone A existed. The trigger has since
+fired and the milestone has since completed, so its executable half is spent:
+
+| Section | Status |
+|---|---|
+| `## Trigger condition` | **Fired 2026-08-04.** v0.33.0 ships `stepWithStreamRecorded`. Historical — the check itself is still the right check, and is worth re-reading before trusting any future claim of a landed API |
+| `## Mission`, `## Sequence`, `## State you inherit`, and everything down to `## Constraints` | **DEAD.** The Mission asks for the source-grounded plan that ADR-001 mandates — that plan was written, and **all seventeen of its Milestone A items have landed**. Sequence step 1 is "widen `Ports.model_step`", which is WI-A1 and landed 2026-08-02. Retained only as a record of what the spike session knew |
+| `# ⚑ TRIGGER FIRED` and `# What Milestone B inherits` | **LIVE.** These are why the file still matters |
+
+**So: you do not execute this document. You read the two live sections, and you execute
+`PLAN-implementation-deterministic-test-world.md`'s WI-B1 → WI-B4** — which is the repin wave, and
+which did not exist when this file was written.
+
+**Its live half is a required input to that work**, because `## What Milestone B inherits` carries
+five things that are true at HEAD and stated in no B item: the `make dst` ordering hazard, the three
+artifact sets needing a re-sweep rather than a re-pin, the four places `emissions: []` is load-bearing,
+the never-run scheduled workflow, and why B2 is the free moment for the two `ScriptedStep` widenings.
+
+---
 
 ## Trigger condition — check this first, and be strict about it
 
