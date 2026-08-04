@@ -156,6 +156,20 @@ field the encoder writes and the decoder ignores; both halves type-check and the
 until a replay serves a different response while every count still balances. A14 and A15 encode
 programs for D8's persistence and inherit this directly.
 
+**S10. Drive tooling off the compiler's VERDICT, never off its prose — a diagnostic's labels are an
+interface, and this one is context-dependent.** Earned by WI-B3. `ailang check` reports
+`expected`/`actual` in an order that **flips by error context**: under a `let`/`return type
+annotation` the *literal* is `expected`, while under `function application, parameter N` or
+`list element N` the *parameter type* is. So the identical text `extra fields: images` means **add**
+in one context and **remove** in the other — and the `Hint:` is derived from whichever order was
+used, so **on every revert site the hint reads "add the field(s) to the literal" when the fix is to
+delete it.** A fix loop reading those labels re-added the field to three sites that had already been
+correctly reverted, then oscillated thirty times on a fourth. The repair was to stop reading labels
+entirely: **flip the literal and ask the compiler whether that site's error moved.** That is immune
+to label order, it converged in 60 edits, and the one site it could not satisfy turned out to be a
+genuine implicit crossing rather than a shape problem — which is information the label-reading loop
+could never have produced.
+
 **S9. Clear the compile cache before believing ANY check whose input you just mutated — not only a
 type error after a toolchain change.** Three phantoms now, and the third is a different species. The
 first two corrupted a *diagnostic*: a stale cache reported row mismatches against source that was
@@ -1667,6 +1681,20 @@ holds an effect-declaring closure makes the *constructing* function perform that
 `make_hooks` and `register_with_config` above a widened hook widens too. Probed and confirmed **not**
 a v0.33.0 regression: v0.26.0 does the same, and it is already-filed `fb_74f53de3ae65854c`.
 
+**The third frontier, measured at B3 — and it is what B2 actually faces.** Clearing the `images`
+wall did not make `check_core` green; **the wall moved.** All seven extensions still fail on one
+identical line, but it is now `motoko_ext_compose.register_with_config` missing
+`AI, Clock, IO, Process, Rand`. The 74 remaining failures split: **31** on that compose row, **21** on
+`stub_step.live_ports` (missing `AI, Clock, Env, IO`), **7 + 1** on
+`dst_replay.ail:998`'s `cannot unify record with unexpandable type constructor GeneratorBounds`,
+**4** on a `compaction_ai` test, and **9** pre-existing. **65 newly reachable, 9 baseline.**
+
+**The `GeneratorBounds` failures are a genuinely new species and nothing in this plan anticipates
+them** — neither effect rows nor `images`. Note also that this is again a **frontier, not a total**:
+three effect-row repairs and one type-constructor repair are all that is visible behind 65 files, so
+**B1's "zero effect-row failures remain reachable" was true when written and is now superseded** —
+correctly, and its own report predicted this shape.
+
 **WI-B2. The extension-ABI major.** Depends on B1 (the pin that forces it) and **A12** — its larger
 half threads the world token, and `world_state` is built there; if the trigger fires before A12,
 the row corrections can proceed and the world-token widening cannot. One coordinated major,
@@ -1692,8 +1720,10 @@ minutes true), and the settled decision that Motoko's `Msg` and the ext-ABI `Msg
 fields, vision parts dropped at the seam.
 
 **WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** **Also re-run
-B1's mutation loop, which could not complete.** Twenty files carrying cascade sites were behind the
-`images` wall and are **unverified — which must not read as verified**. Exactly one of them has a
+B1's mutation loop, which could not complete — and B3's, which also could not.** Twenty files
+carrying cascade sites were behind the `images` wall, and B3 adds **64 further `images` sites in
+files that die on the third frontier before type checking**. Both sets are **unverified, which must
+not read as verified**. Exactly one of them has a
 narrow row (`compose.ail:756`) and is the remaining over-widening candidate; the other 41 full-row
 sites are forced structurally by closed-row assignment. B1's loop also has a named structural blind
 spot: it is per-file, so it cannot see a mutation whose breakage lands in a *different* file —

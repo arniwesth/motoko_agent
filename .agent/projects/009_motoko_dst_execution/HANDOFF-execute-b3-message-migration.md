@@ -77,9 +77,11 @@ not B3's — it would be an `motoko-ext-abi` major, which is B2's territory.
 
 ## Grounding, verified at HEAD
 
-**Run `git diff --stat` against B1's tree first** — B1 left **48 files modified and uncommitted**
-(`ailang.toml`, `ailang.lock`, 46 source). You are building on an uncommitted working tree; confirm
-it is intact before starting.
+~~**Run `git diff --stat` against B1's tree first** — B1 left 48 files modified and uncommitted.~~
+**WRONG, corrected by B3.** B1's 48 files were **committed** as `c013f69` ("Finished implementation")
+and the tree was clean at B3's start. The contents were exactly as described; only the commit state
+was misreported — I took B1's report's "Nothing committed" as a live fact instead of re-checking it
+at handoff time, which is the anchor-decay rule applied to a *state* claim rather than a line number.
 
 | Anchor | Value |
 |---|---|
@@ -114,9 +116,13 @@ just mutated.** B1's mutation loop read GREEN on a warm cache and RED on a cold 
 argued for reverting a correct ABI change. This item runs a compiler-driven fix loop over ~120 sites;
 it is the same exposure at higher volume.
 
-**`make dst` is NOT required green.** Say what it does. It will still be red for B4's reason — every
-DST script carries `driver_only_manifest("HEAD", "ailang 0.26.0", …)`, and **re-issuing that manifest
-is WI-B4's**, deliberately untouched by B1.
+**`make dst` is NOT required green.** Say what it does. ~~It will still be red for B4's reason —
+every DST script carries `driver_only_manifest(…)`.~~ **WRONG on both halves, corrected by B3:**
+`make dst` exits 2 on the *third frontier* and never reaches a manifest check, and
+**`driver_only_dst` PASSES** — the manifest string is *data passed into* `driver_only_manifest`, not
+a value validated against the running toolchain, so it **gates nothing. It is stale, not red.** And
+it is **13 files**, not "every DST script". B4's re-issue is an accuracy item, not a gate failure,
+and sizing it as "what makes `dst` red" would be wrong.
 
 ## Out of scope
 
