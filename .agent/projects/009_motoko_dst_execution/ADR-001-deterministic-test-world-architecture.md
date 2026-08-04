@@ -903,6 +903,22 @@ delta varies run to run. The same holds with `--seed`, with `AILANG_SEED`, and o
 toolchain. The evidence previously cited for this row — that the flag parses and the run exits 0 —
 established only that the flag is accepted.
 
+**Amendment, 2026-08-04 (WI-A14 implemented; `3dd8a82`). The latency pair this decision requires is
+built, and it does NOT need the provider-latency widening the implementation plan had bundled with
+it.** The pair needs a class carrying three things — a latency channel, a declared deadline, and a
+comparison between them — and the **tool** class has had all three since WI-A12:
+`ScriptedTool.duration_ms`, `ToolInvocation.timeout_ms` read through the env class, and
+`ports.world_tool`'s guard. `scripts/dst/latency_pair_dst.ail` holds the request and the underlying
+completion result constant, changes only `duration_ms` (40 ms and 3000 ms against a 1000 ms
+deadline), and demonstrates the differing completion-versus-timeout behaviour with both programs
+replaying deterministically.
+
+**The branch is shown TAKEN rather than inferred from the outcome**: both operands of the comparison
+are read off the recorded interaction, and a **third world** carries the same 3000 ms latency with
+*no declared deadline* and must complete — without which the pair would be measuring duration rather
+than lateness. The **provider** class still has none of the three, so widening `ScriptedStep` closes
+D2's generator-completeness gap and not this one.
+
 The architecture does not depend on that mechanism being fixed upstream. It never needed a runtime
 clock to be *correct*; the explicit value was always authoritative, and the runtime mirror existed
 only as a migration convenience. Removing it costs the convenience and buys a simpler contract.
@@ -1876,6 +1892,35 @@ complete, cleanly validating artifact that declares 21 events display-only — a
 obligation then becomes vacuous, blessing the exact gap it exists to close. Both readings validate;
 the wrong one is silent. The implemented artifact keeps the survey in a separate field and exposes
 `logical_variants_not_in_trace()`, which is **15 today** and is D7's work list.
+
+**Amendment, 2026-08-04 (WI-A14 implemented; `00dbdb4`). The `DoneEvent` tension below is RESOLVED,
+and the resolution turns on a clause of D6.4 that had been read as a caveat.**
+
+D6.4 says the obligation is **parity, not a shared transition** — in as many words, and it names
+stream emissions as the case where a shared transition is impossible by construction. That licenses
+separating the append from the projection **at a single site** where the two obligations conflict,
+which is exactly `DoneEvent`'s situation. `session.ail`'s `Finalize` arm now appends the `DoneEvent`
+**before** `c2_finalize` appends the `RunSummary`, and projects it **after**, unchanged. Four
+obligations then hold simultaneously where three could not: D6.4 (a logical event reaches the
+returned trace), D6.1 (the summary is still the final appended record), D6.3 (agreement is decidable
+over the returned trace alone), and D8 (the wire order `run_summary` then `done` is untouched, so no
+compatibility surface moves).
+
+**The alternative is worth recording because it is the one-line wrong answer in its most tempting
+form.** Classifying `DoneEvent` as display-only would not merely make D6.4 vacuous for it — it would
+make **D6.3 unstatable**, since "display-only ... cannot change invariant results" and D6.3 is an
+invariant over precisely this event's content.
+
+**And the separation this decision required of the artifact paid a dividend it did not predict.**
+Closing the gap did **not** bump the event-vocabulary version: D8 makes a change to a variant, a wire
+name, a payload schema or a **classification** a version change, and `reaches_trace_today` is none of
+those four. Had the survey been folded into the classification, closing a parity gap would have been
+a compatibility event requiring a decoder for every old trace. `logical_variants_not_in_trace()` is
+now **14**, and each remaining entry carries its reason in
+`src/core/dst_invariants.parity_gap_reasons()` — externally blocked, unblocked one-line append,
+inside the tool-dispatch fold, or unreachable under `driver_only`. The sharpest single line in that
+register: `ThinkingStreamStart` reaches the returned trace and `ThinkingStreamEnd` does not, from the
+same code path.
 
 *Second, `DoneEvent` does not classify cleanly, and that is a finding about this decision rather than
 a judgement call.* D6.3 requires the returned outcome, the `DoneEvent` and the `RunSummary` to
