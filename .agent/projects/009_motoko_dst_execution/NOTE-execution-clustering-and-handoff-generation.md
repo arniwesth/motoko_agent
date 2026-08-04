@@ -39,8 +39,10 @@ disagree, the plan wins and this note is stale.
 | 4 | **A16 + A9** | `Makefile`/CI, then `session.ail`, `phase_vocab.ail` | 1 (landed) | **DONE 2026-08-02** — `61f38db`, `ff8d8e5`. Report: `NOTE-cluster-4-execution-report-and-plan-corrections.md`. Spawned **WI-A17** (the `ailang test` coverage axis), unassigned to a cluster |
 | 5 | **A10** | profile/manifest machinery | 2, 3 (both landed) | **DONE 2026-08-03** — `fd4f4bd`, `dafe898`. `driver_only` v1 loads and is conformant at HEAD. Report: `NOTE-cluster-5-execution-report-and-plan-corrections.md`. Both decisions resolved; added standing rule S6 |
 | 6 | **A12** | driver, all effect classes; internally staged one PR per class | 1, 4 (both landed) | **DONE 2026-08-02** — `2b938e1`…`3c2f4ab`, all six classes plus the typed tool contract, ~92 min against "several days". Report: `NOTE-cluster-6-execution-report-and-plan-corrections.md` |
-| 7 | **A13** | discovery/replay | 3, 4, 5, 6 (all landed) | **IN PROGRESS — stages 1 and 2 of 5 landed.** Stage 1: `9c4d724` (types + validator), report `NOTE-cluster-7-…`. Stage 2: `8b0d605` (discovery, graded both directions), report `NOTE-cluster-8-…`. **DONE 2026-08-03 — all six stages.** `9c4d724`, `8b0d605`, `2d752da`, `f77adf1`, `177d0cb`+`be8393c`, `6c4894e`+`e01a978`. Reports: `NOTE-cluster-7-…` through `NOTE-cluster-12-…`. `make dst` exit 0 at **466 checks**, from 0 at the item's start. **A14 and A15 unblocked** |
-| 8 | **A14 + A15** | invariants, latency pair, corpora, CI | 7 | Wait |
+| 7 | **A13** | discovery/replay | 3, 4, 5, 6 (all landed) | **DONE 2026-08-03 — all six stages.** `9c4d724`, `8b0d605`, `2d752da`, `f77adf1`, `177d0cb`+`be8393c`, `6c4894e`+`e01a978`. Reports: `NOTE-cluster-7-…` through `NOTE-cluster-12-…`. `make dst` exit 0 at **466 checks**, from 0 at the item's start. **A14 and A15 unblocked** |
+| 8 | **A14** | invariants, latency pair, D11 reporting | 7 (landed) | **NEXT — groundable now.** Split from A15 per cluster 12's retrospective: A15 *depends* on A14, so they are sequential, not one cluster |
+| 9 | **A15** | the two corpora and their CI jobs | 8 | Wait |
+| — | **A17** | `Makefile`/CI; the `ailang test` coverage axis | — | **Groundable now, standalone, parallelisable.** Small; unassigned to a cluster since cluster 4 spawned it |
 
 **Clusters 1, 2 and 3 are mutually independent and can run in parallel** across sessions or agents.
 Cluster 2 in particular is anchor-independent of the driver work — it inventories source rather than
