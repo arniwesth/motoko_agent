@@ -3,7 +3,11 @@
 Audience: a fresh session grounded against HEAD. Implementation is source-heavy work and belongs in
 a session that just read HEAD; you are that session.
 
-**Cluster 9, and the last item in Milestone A.** WI-A14 landed 2026-08-04 (`00dbdb4`, `ea81e66`,
+**Cluster 9.** ~~The last item in Milestone A~~ — **wrong, and corrected by cluster 14's correction 0
+after this handoff was consumed.** A15 is the last item on the **critical path**; **WI-A17** is off
+it, was spawned by cluster 4 rather than planned, never acquired a cluster, and is the actual last
+item in Milestone A. The sentence was inherited across three handoffs and the plan, none of which
+re-read the cluster map's own last row. WI-A14 landed 2026-08-04 (`00dbdb4`, `ea81e66`,
 `3dd8a82`); `make dst` is exit 0. Every dependency is in. **When this lands, Milestone A is complete**
 and the project is externally blocked on the upstream recorded-stream API for Milestones B and C.
 
