@@ -117,6 +117,15 @@ four things it cannot:
    behind `git diff --stat <last-known-good>..HEAD -- src packages scripts` with the instruction to
    re-measure everything if it is non-empty.
 
+   **NEVER restate commit state in a handoff — say "confirm with `git status`". Four handoffs, four
+   errors, and the file count was right every single time.** B1's handoff was wrong about B1, B3's
+   about B3, B2a's about B3, and B2b's about B2a — the last one *in a paragraph explicitly warning
+   about this mistake*, quoting the previous report as "stating it plainly". The reports were accurate
+   when written; the work was committed afterwards. **Commit state is the one anchor that changes
+   between writing a handoff and reading it, by definition**, and the next session must run
+   `git status` anyway. Describe the *contents* — file counts, which files — and let the reader
+   establish the state.
+
    **A recommendation inherited from a prior cluster is a claim, and stage 5 found one that
    contradicted the same handoff's own prohibition.** Cluster 10 recommended attaching D8's canary to
    `check_seed_sensitivity`'s `versioned` row; the stage-5 handoff repeated it verbatim without
