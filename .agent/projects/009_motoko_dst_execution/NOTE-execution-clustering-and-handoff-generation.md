@@ -66,7 +66,11 @@ reachable, tree 130/105. Report: `NOTE-b1-execution-report-and-plan-corrections.
 rule **S9**. **Cluster 12 = WI-B3: DONE 2026-08-04**, 48m40s — zero `images` failures, tree 161/74, earned
 standing rule **S10**. **Cluster 13 = WI-B2a: DONE 2026-08-04**, 2h13m — ABI answer two rows not four, `check_core`
 GREEN, tree 218/17 above the v0.26.0 baseline; rewrote **S9** and earned **S11**.
-**Cluster 14 = WI-B2b**, handoff written: `HANDOFF-execute-b2b-world-token-widening.md` — the last of
+**Cluster 14 = WI-B2b: DONE 2026-08-04**, ~2h05m — opaque `ExtWorld` token, `ai_step` left the
+classifier-2 set, `check_core` green at 52; earned **S12** and S11's second clause.
+**Cluster 15 = WI-B4**, handoff written: `HANDOFF-execute-b4-close-the-repin-wave.md` — the wave's
+green gate and the last of Milestone B. Original B2b handoff:
+`HANDOFF-execute-b2b-world-token-widening.md` — the last of
 Milestone B's content, and the change that is *supposed* to move classifier 2's pinned membership.
 Original B2a handoff: `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —

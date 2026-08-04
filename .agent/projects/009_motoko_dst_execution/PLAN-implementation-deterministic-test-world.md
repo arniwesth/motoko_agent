@@ -1814,7 +1814,18 @@ tool no longer derives. **That is the stop condition firing correctly and it is 
 repaired.**
 
 **Two questions, answered separately as required.** Did `ai_step` stop being a classifier-2 caller?
-**Yes, measured.** Is `compaction_ai` now installable? **Yes on the evidence** — it calls no other
+**Yes, measured.** Is `compaction_ai` now installable? B2b said **"yes on the evidence"** — and that
+reasoning is **correct against the classifier-2 objection and does not reach a second, independent
+barrier.** Measured at HEAD: four of its **unconditionally-dispatched** slots are excludable-only
+under D5's declared-row rule — `on_budget_plan` (constant but declares `{Env, FS}`) and
+`on_response_intercept` / `on_solver_candidate` / `on_pre_step` (nine-effect rows) — and D5 forbids
+installing an extension with *any* unconditionally-dispatched hook excluded. **So the omission
+survives the death of its original reason, and the recorded reason is now false either way.** The one
+genuinely open question is whether `on_pre_step` qualifies under D5's **criterion 2** — effectful only
+through world-mediated ports with explicit world state returned — which B2b's widening may have made
+true, and which the declared-row paragraph does not govern, since that paragraph constrains criterion
+**1**. **WI-B4 decides it and records the reasoning.** The rest of B2b's finding stands: **yes on the
+evidence** was — it calls no other
 classifier-2 field, so the recorded reason for omitting it is void and D5's
 unconditionally-dispatched objection has nothing left to bite on. **Re-issuing `driver_only` with
 `compaction_ai` installed changes what the profile COVERS — a conformance claim, not a tidy-up — so
