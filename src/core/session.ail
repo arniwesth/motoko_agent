@@ -538,7 +538,8 @@ pure func runtime_status_tool_message(call: ToolCall, content: string) -> Option
     role: "tool",
     content: content,
     tool_calls: [],
-    tool_call_id: call.id
+    tool_call_id: call.id,
+    images: []
   }) else None
 }
 
@@ -1283,7 +1284,8 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
     role: "tool",
     content: denial_payload,
     tool_calls: [],
-    tool_call_id: call.id
+    tool_call_id: call.id,
+    images: []
   }
 }
 
@@ -1360,7 +1362,8 @@ func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string
         role: "user",
         content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${errors}",
         tool_calls: [],
-        tool_call_id: ""
+        tool_call_id: "",
+        images: []
       })
     }
   }
@@ -2143,7 +2146,8 @@ func c2_loop(
                               role: "assistant",
                               content: result.message.content,
                               tool_calls: [synth_call],
-                              tool_call_id: ""
+                              tool_call_id: "",
+                              images: []
                             };
                             let next_state: C2LoopState = {
                               msgs: msgs_with_assistant,
@@ -2543,7 +2547,8 @@ func conversation_loop_v2_with_policy(
           role: "user",
           content: content,
           tool_calls: [],
-          tool_call_id: ""
+          tool_call_id: "",
+          images: []
         };
         let next_history = history ++ [user_msg];
         let _ = ledger_emit(session_id, SessionStart({
@@ -2756,7 +2761,7 @@ pure func kv_len(xs: [{key: string, value: Json}]) -> int {
 
 pure func mk_test_step_result(input: int, output: int, cr: int, cc: int) -> StepResult {
   {
-    message: { role: "assistant", content: "", tool_calls: [], tool_call_id: "" },
+    message: { role: "assistant", content: "", tool_calls: [], tool_call_id: "", images: [] },
     tool_calls: [],
     finish_reason: "stop",
     input_tokens: input,
@@ -2826,7 +2831,7 @@ pure func test_runtime_status_includes_prior_conversation_counts() -> bool
       ]
     };
     let st: C2LoopState = {
-      msgs: [{ role: "system", content: "sys", tool_calls: [], tool_call_id: "" }],
+      msgs: [{ role: "system", content: "sys", tool_calls: [], tool_call_id: "", images: [] }],
       step_idx: 1,
       totals: zero_totals(),
       ext_artifacts: jo([]),
@@ -2877,7 +2882,7 @@ pure func test_runtime_status_reports_actual_context_window() -> bool
   tests [((), true)]
   {
     let st: C2LoopState = {
-      msgs: [{ role: "system", content: "sys", tool_calls: [], tool_call_id: "" }],
+      msgs: [{ role: "system", content: "sys", tool_calls: [], tool_call_id: "", images: [] }],
       step_idx: 1,
       totals: zero_totals(),
       ext_artifacts: jo([]),

@@ -39,13 +39,13 @@ export func main() -> () ! {AI, IO} = {
   -- matching tool_call_id, and a follow-up nudging the model to reply.
   let msgs: [Message] = [
     { role: "user",      content: "Show me src/foo.ail",
-      tool_calls: [],   tool_call_id: "" },
+      tool_calls: [],   tool_call_id: "", images: [] },
     { role: "assistant", content: "",
-      tool_calls: [tc], tool_call_id: "" },
+      tool_calls: [tc], tool_call_id: "", images: [] },
     { role: "tool",      content: "module foo\nexport func main() = ()",
-      tool_calls: [],   tool_call_id: "call_abc123" },
+      tool_calls: [],   tool_call_id: "call_abc123", images: [] },
     { role: "user",      content: "Thanks. Reply with just 'ok'.",
-      tool_calls: [],   tool_call_id: "" }
+      tool_calls: [],   tool_call_id: "", images: [] }
   ];
 
   println("calling openrouter/auto with tool_call_id=call_abc123 ...");

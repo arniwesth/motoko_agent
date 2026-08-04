@@ -55,12 +55,13 @@ export pure func persist_nudge_message(nudge_num: int, budget: int) -> Message {
     role: "user",
     content: "${persist_nudge_marker()} You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs.",
     tool_calls: [],
-    tool_call_id: ""
+    tool_call_id: "",
+    images: []
   }
 }
 
 pure func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 pure func test_stream_retry_policy() -> bool
@@ -90,7 +91,7 @@ pure func test_writefile_attempt_detection() -> bool
   tests [((), true)]
   {
     let call: ToolCall = { id: "tc", name: "WriteFile", arguments: "{}" };
-    let m: Message = { role: "assistant", content: "", tool_calls: [call], tool_call_id: "" };
+    let m: Message = { role: "assistant", content: "", tool_calls: [call], tool_call_id: "", images: [] };
     any_writefile_attempt([m]) && not any_writefile_attempt([msg("assistant", "no tools")])
   }
 

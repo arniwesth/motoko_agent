@@ -110,7 +110,8 @@ export pure func denial_message(call: ToolCall, reason: string) -> Message {
     role: "tool",
     content: payload,
     tool_calls: [],
-    tool_call_id: call.id
+    tool_call_id: call.id,
+    images: []
   }
 }
 
@@ -194,7 +195,8 @@ func delegated_deferred_message(call: ToolCall) -> Message {
     role: "tool",
     content: payload,
     tool_calls: [],
-    tool_call_id: call.id
+    tool_call_id: call.id,
+    images: []
   }
 }
 

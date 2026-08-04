@@ -49,7 +49,7 @@ pure func test_phase_from_result_preserves_live_thinking_fields() -> bool
   tests [((), true)]
   {
     let result: StepResult = {
-      message: { role: "assistant", content: "hello", tool_calls: [], tool_call_id: "" },
+      message: { role: "assistant", content: "hello", tool_calls: [], tool_call_id: "", images: [] },
       tool_calls: [{ id: "tc", name: "ReadFile", arguments: "{}" }],
       finish_reason: "tool_calls",
       input_tokens: 11,

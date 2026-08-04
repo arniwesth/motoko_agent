@@ -23,7 +23,7 @@ import src/core/step_machine (decide)
 type CheckResult = { ok: bool, name: string, detail: string }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func policy(context_limit: int) -> StepPolicy {

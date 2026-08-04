@@ -193,7 +193,7 @@ export func callStreamResult(
 ) -> AIStreamResult ! {AI, IO} {
   let provider_name = "motoko-or" in
   let resolved_model = model_for_provider(model) in
-  let messages: [Message] = [{ role: "user", content: input, tool_calls: [], tool_call_id: "" }] in
+  let messages: [Message] = [{ role: "user", content: input, tool_calls: [], tool_call_id: "", images: [] }] in
   let _ = emit_thinking_start(step_num, stream_id, model) in
   let on_chunk = \chunk. handle_stream_chunk(step_num, stream_id, chunk) in
   match stepWithStream(resolved_model, messages, [], [], on_chunk) {

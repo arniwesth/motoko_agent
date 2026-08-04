@@ -60,7 +60,7 @@ export func main() -> () ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Str
     artifacts: empty_ext_artifacts(),
     telemetry: zero_token_telemetry()
   };
-  match compact_with_ai(ctx, [{ role: "user", content: "long enough to trigger compaction", tool_calls: [], tool_call_id: "" }], default_config()) {
+  match compact_with_ai(ctx, [{ role: "user", content: "long enough to trigger compaction", tool_calls: [], tool_call_id: "", images: [] }], default_config()) {
     PassThrough => println("OK: compact_with_ai can pass through"),
     PassThroughObserved(code, _) => println("OK: compact_with_ai observed ${code}"),
     Compacted(_, _, _) => println("OK: compact_with_ai returns ABI v4 Compacted")
