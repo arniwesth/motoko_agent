@@ -361,6 +361,30 @@ export pure func scheduled_job() -> CorpusJob {
 export pure func pr_target_ceiling_ms() -> int { 45000 }
 export pure func scheduled_target_ceiling_ms() -> int { 120000 }
 
+-- One shard's share of a job. The minimum and the budget are DIVIDED, so a
+-- sharded run is held to the same total as a serial one: `shard_minimums_sum`
+-- asserts they add back up, which is D11's truncation rule arriving a third
+-- time — a shard scheme that rounded each minimum down would let four shards
+-- collectively search less than the job declares while every shard passed.
+export pure func shard_job(j: CorpusJob, index: int) -> CorpusJob {
+  let n = if j.shards > 0 then j.shards else 1;
+  let base = j.minimum_seeds / n;
+  let extra = if index < (j.minimum_seeds % n) then 1 else 0;
+  { j | job_id: "${j.job_id}-shard-${index}",
+        minimum_seeds: base + extra,
+        budget_ms: j.budget_ms / n,
+        shards: 1 }
+}
+
+export pure func shard_minimums_sum(j: CorpusJob) -> int {
+  sum_shards(j, 0)
+}
+
+pure func sum_shards(j: CorpusJob, index: int) -> int {
+  if index >= j.shards then 0
+  else shard_job(j, index).minimum_seeds + sum_shards(j, index + 1)
+}
+
 export pure func job_projection(j: CorpusJob) -> string {
   "${j.job_id}: minimum ${j.minimum_seeds} seed(s), budget ${j.budget_ms} ms (${seeds_affordable_in(j.budget_ms)} affordable at ${measured_ms_per_seed()} ms/seed), ${j.shards} shard(s), retaining ${j.retention_runs} run(s)"
 }
@@ -388,6 +412,45 @@ export type SeedWindow = {
 
 export pure func scheduled_rotation() -> RotationConfig {
   { space_first: 1, space_size: 1024, window_size: 240 }
+}
+
+-- The DEMO scale, and it exists for one reason: `make dst` must actually RUN
+-- seeds off a rotating window, not merely check the arithmetic that produces
+-- one. A gate that only ever evaluates `rotating_window` purely certifies that
+-- the window moves and says nothing about the window's seeds being executable
+-- — S8's complement, on the job rather than on the rotation.
+--
+-- It is a SCALED config and not a different mechanism: the same
+-- `rotating_window`, the same `validate_rotation`, the same shard partition,
+-- and its own declared minimum. `scaled_rotation`/`scaled_job` are the only
+-- place the choice is made, so a caller cannot mix a full job with a demo
+-- window.
+--
+-- THE HAZARD THIS INTRODUCES IS NAMED AND GATED. A scheduled CI job that
+-- quietly selected this scale would report a rotating corpus while searching
+-- four seeds, which is the frozen-window failure wearing a smaller number.
+-- `make corpus_rotating` greps the workflow to prove the scheduled job does not
+-- select it.
+export pure func demo_rotation() -> RotationConfig {
+  { space_first: 1, space_size: 26, window_size: 4 }
+}
+
+export pure func demo_job() -> CorpusJob {
+  { job_id: "dst-scheduled-corpus-demo",
+    minimum_seeds: 4,
+    budget_ms: 4000,
+    shards: 2,
+    retention_runs: 1 }
+}
+
+export pure func demo_scale_id() -> string { "demo" }
+
+export pure func scaled_rotation(scale: string) -> RotationConfig {
+  if scale == demo_scale_id() then demo_rotation() else scheduled_rotation()
+}
+
+export pure func scaled_job(scale: string) -> CorpusJob {
+  if scale == demo_scale_id() then demo_job() else scheduled_job()
 }
 
 pure func wrapped(cfg: RotationConfig, offset: int) -> int {
@@ -871,7 +934,86 @@ export pure func validate_shards(w: SeedWindow, shards: int) -> [CorpusRejection
 }
 
 -- ---------------------------------------------------------------------------
--- PART 8 — the report projection
+-- PART 8 — THE SHRINK-ONLY REGISTER, and it lives here so there is ONE of it
+-- ---------------------------------------------------------------------------
+--
+-- WI-A14 shipped `run_report_dst.documented_coverage()` as an explicitly
+-- DECLARED register — "not a measurement", labelled as such in the rendered
+-- output — and assigned A15 the job of replacing it with observations. A15
+-- measured it, and two of its entries CLOSED: the fixed bank reaches
+-- `ToolCorrelationMismatch` and `ToolDeadlineExceeded`, which the register
+-- recorded as "undriven by the pinned seeds; MORE SEEDS IS THE FIX". More seeds
+-- was the fix.
+--
+-- The register lives HERE rather than in either consumer because two registers
+-- that must agree will not: `corpus_pr_dst` asserts it against a real sweep in
+-- both directions and `run_report_dst` renders it, and if each kept its own
+-- copy the closing of an entry would have to be remembered twice. This is the
+-- third use of the shrink-only pattern (`d64_gap_register`,
+-- `documented_coverage`) and the first where the register has two consumers.
+--
+-- `status_id` is a STRING and not a `ReachStatus`, because that type lives in
+-- `dst_run_report`, which is above this module: carrying the constructor here
+-- would invert the dependency to make a rendering decision. `run_report_dst`
+-- maps the id and asserts every id it sees is one `all_reach_ids()` declares,
+-- so a typo is a red row rather than a silently uncounted class.
+export type UnreachableClass = {
+  class_id: string,
+  status_id: string,
+  why: string
+}
+
+-- The required non-waived classes that NO member of the corpus reaches, each
+-- with the KIND of unreachability and its reason. Cluster 12's rule: these are
+-- unreached in different ways and a single "unreached" number states several
+-- different facts as one.
+--
+-- None of these is a waiver. D3 requires a waived class to be named with its
+-- waiving condition, and a class nobody waived that nobody reached is a
+-- coverage gap, not a permission.
+export pure func unreachable_by_search() -> [UnreachableClass] {
+  [{ class_id: "provider_error_retryable",
+     status_id: "unreachable-until-change",
+     why: "`ScriptedStep` has no error channel, so a generated AIError has nowhere to be chosen into (cluster 10 correction 2). Cluster 13 correction 2 separates this from the LATENCY field: a provider fault travels the AIError path and needs an ERROR CASE, not an advance — two fields, two changes" },
+   { class_id: "provider_error_non_retryable",
+     status_id: "unreachable-until-change",
+     why: "as provider_error_retryable: the same missing `ScriptedStep` error case" },
+   { class_id: "provider_protocol_inconsistent_result",
+     status_id: "covered-not-exercised",
+     why: "the generator's tool_args are always well-formed JSON, so the malformed-arguments branch is reachable by a scenario that writes one and is driven by no seed. Measured: 0 of 260" },
+   { class_id: "provider_partial_stream_then_error",
+     status_id: "unreachable-structurally",
+     why: "`live_ports` returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can produce a non-empty emission log to compare a projection against; the retry/finalize half is reachable, the PARITY half is not observable. EXTERNALLY BLOCKED" }]
+}
+
+export pure func unreachable_class_ids() -> [string] {
+  unreachable_ids_of(unreachable_by_search())
+}
+
+pure func unreachable_ids_of(rs: [UnreachableClass]) -> [string] {
+  match rs { [] => [], r :: rest => r.class_id :: unreachable_ids_of(rest) }
+}
+
+-- What the bank IS held to: every required non-waived class minus the register.
+-- Derived in both directions, so a class can be in neither list only if the
+-- catalogue itself changed.
+export pure func expected_bank_coverage() -> [string] {
+  drop_ids(required_non_waived(fault_catalogue()), unreachable_class_ids())
+}
+
+export pure func unreachable_reason(class_id: string) -> string {
+  reason_of(unreachable_by_search(), class_id)
+}
+
+pure func reason_of(rs: [UnreachableClass], class_id: string) -> string {
+  match rs {
+    [] => "",
+    r :: rest => if r.class_id == class_id then r.why else reason_of(rest, class_id)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- PART 9 — the report projection
 -- ---------------------------------------------------------------------------
 
 pure func member_lines(ms: [CorpusMember]) -> string {
@@ -1025,6 +1167,21 @@ export pure func eq_ints(a: [int], b: [int]) -> bool {
   }
 }
 
+-- The demo scale is a SCALED config and not a weaker one: every rotation
+-- property the full config is held to, the demo config is held to as well. A
+-- demo that satisfied a smaller contract would make `make dst`'s real-driver
+-- half certify something the scheduled job does not do.
+pure func test_the_demo_scale_satisfies_the_same_rotation_contract() -> bool
+  tests [((), true)]
+  {
+    List.length(validate_rotation(demo_rotation(), 0, 8)) == 0
+      && List.length(validate_shards(rotating_window(demo_rotation(), 3), demo_job().shards)) == 0
+      && demo_job().minimum_seeds == demo_rotation().window_size
+      && scaled_rotation(demo_scale_id()).window_size == demo_rotation().window_size
+      && scaled_rotation("full").window_size == scheduled_rotation().window_size
+      && scaled_job("full").minimum_seeds == scheduled_job().minimum_seeds
+  }
+
 pure func test_the_shards_partition_the_window() -> bool
   tests [((), true)]
   {
@@ -1032,6 +1189,22 @@ pure func test_the_shards_partition_the_window() -> bool
     List.length(validate_shards(w, scheduled_job().shards)) == 0
       && List.length(shard_of(w, 4, 0)) == 60
       && List.length(validate_shards(w, 0)) == 1
+  }
+
+-- The shard minimums ADD BACK UP to the job's. A scheme that rounded each one
+-- down would let four shards collectively search less than the job declares
+-- while every shard reported a passing window — D11's truncation failure
+-- distributed across workers, where no single worker can see it.
+pure func test_the_shard_minimums_sum_to_the_job_minimum() -> bool
+  tests [((), true)]
+  {
+    shard_minimums_sum(scheduled_job()) == scheduled_job().minimum_seeds
+      && shard_minimums_sum(demo_job()) == demo_job().minimum_seeds
+      -- and an uneven split still adds up, which is what the remainder term is
+      -- for; 7 over 4 shards is 2+2+2+1 and not 1+1+1+1.
+      && shard_minimums_sum({ scheduled_job() | minimum_seeds: 7, shards: 4 }) == 7
+      && shard_job({ scheduled_job() | minimum_seeds: 7, shards: 4 }, 0).minimum_seeds == 2
+      && shard_job({ scheduled_job() | minimum_seeds: 7, shards: 4 }, 3).minimum_seeds == 1
   }
 
 -- The minimums are ARITHMETIC over one measured constant, not literals with a
@@ -1043,6 +1216,33 @@ pure func test_the_minimums_fit_their_measured_budgets() -> bool
       && seeds_affordable_in(scheduled_job().budget_ms) >= scheduled_job().minimum_seeds
       && scheduled_job().minimum_seeds == scheduled_rotation().window_size
   }
+
+-- The register and the expectation PARTITION the obligation: a class can be in
+-- neither only if the catalogue itself changed, and that is a compile-time
+-- visible edit rather than a silent gap.
+pure func test_the_register_and_the_expectation_partition_the_obligation() -> bool
+  tests [((), true)]
+  {
+    List.length(expected_bank_coverage()) + List.length(unreachable_by_search())
+      == List.length(required_non_waived(fault_catalogue()))
+      && List.length(unreachable_by_search()) == 4
+      && all_have_reasons(unreachable_by_search())
+      && no_overlap(expected_bank_coverage(), unreachable_class_ids())
+  }
+
+pure func all_have_reasons(rs: [UnreachableClass]) -> bool {
+  match rs {
+    [] => true,
+    r :: rest => if r.why == "" || r.status_id == "" then false else all_have_reasons(rest)
+  }
+}
+
+pure func no_overlap(a: [string], b: [string]) -> bool {
+  match a {
+    [] => true,
+    x :: rest => if contains_str(b, x) then false else no_overlap(rest, b)
+  }
+}
 
 pure func test_required_non_waived_drops_exactly_the_conditional_classes() -> bool
   tests [((), true)]

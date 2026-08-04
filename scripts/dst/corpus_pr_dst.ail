@@ -149,6 +149,7 @@ import src/core/dst_corpus (
   validate_corpus, corpus_ok, corpus_rule, corpus_message,
   has_corpus_rule, first_corpus_message, corpus_rules_of,
   required_non_waived, bank_classes, bank_branches,
+  UnreachableClass, unreachable_by_search, unreachable_class_ids, expected_bank_coverage,
   render_corpus, corpus_rules_version
 )
 import pkg/sunholo/motoko_ext_abi/types (
@@ -569,34 +570,19 @@ pure func the_corpus(bs: [BuiltMember], elapsed_ms: int) -> Corpus {
 -- no member of any kind can reach today. Derived from the catalogue in both
 -- directions and then reduced by a NAMED register, so an entry can only be
 -- removed by editing a list that says why.
-pure func unreachable_register() -> [{ class_id: string, why: string }] {
-  [{ class_id: "provider_error_retryable",
-     why: "`ScriptedStep` has no error channel, so a generated AIError has nowhere to be chosen into (cluster 10 correction 2; cluster 13 correction 2 separates this from the LATENCY field, which is a different change)" },
-   { class_id: "provider_error_non_retryable",
-     why: "as provider_error_retryable: the same missing ScriptedStep error case" },
-   { class_id: "provider_protocol_inconsistent_result",
-     why: "the generator's tool_args are always well-formed JSON, so the malformed-arguments branch is reachable by a scenario that writes one and is driven by no seed" },
-   { class_id: "provider_partial_stream_then_error",
-     why: "`live_ports` returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can produce a non-empty emission log; the retry/finalize half is reachable, the PARITY half is not observable. EXTERNALLY BLOCKED" }]
-}
+-- The register is `dst_corpus.unreachable_by_search()` and NOT a copy here.
+-- Two registers that must agree will not: this suite asserts it against a real
+-- sweep in both directions and `run_report_dst` renders it, and a second copy
+-- would make the closing of an entry something to remember twice.
+pure func unreachable_register() -> [UnreachableClass] { unreachable_by_search() }
 
-pure func unreachable_ids() -> [string] {
-  ids_of(unreachable_register())
-}
-
-pure func ids_of(rs: [{ class_id: string, why: string }]) -> [string] {
-  match rs { [] => [], r :: rest => r.class_id :: ids_of(rest) }
-}
+pure func unreachable_ids() -> [string] { unreachable_class_ids() }
 
 pure func drop_ids(xs: [string], drop: [string]) -> [string] {
   match xs {
     [] => [],
     x :: rest => (if contains_str(drop, x) then [] else [x]) ++ drop_ids(rest, drop)
   }
-}
-
-pure func expected_bank_coverage() -> [string] {
-  drop_ids(required_non_waived(fault_catalogue()), unreachable_ids())
 }
 
 -- The classes a SEED SWEEP was observed to reach. Supplied to the gate so that
@@ -701,7 +687,7 @@ func scenario_the_bank_covers_what_a_seed_can_reach(bs: [BuiltMember]) -> bool !
   a && b && d && e
 }
 
-pure func all_have_reasons(rs: [{ class_id: string, why: string }]) -> bool {
+pure func all_have_reasons(rs: [UnreachableClass]) -> bool {
   match rs {
     [] => true,
     r :: rest => if r.why == "" then false else all_have_reasons(rest)

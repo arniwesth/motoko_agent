@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -1052,6 +1052,144 @@ corpus_pr:
 		exit 1; \
 	fi; \
 	echo "  ✓ measured CI cost, WHOLE TARGET: $$elapsed ms against a declared ceiling of $$ceiling ms"
+
+# D11's SCHEDULED ROTATING CORPUS (WI-A15 commit 2). Six checks.
+#
+#   1. THE SUITE. The rotation checked three non-redundant ways — position by
+#      position, the wrap branch, and the epoch's route — plus the shard
+#      partition and the demo scale's contract.
+#
+#   2. THE JOB IS RUN FOR REAL, at the demo scale, off a window derived from an
+#      epoch. Everything in check 1 is pure arithmetic and would pass over a
+#      window whose seeds no driver can execute.
+#
+#   3. AND THE FOUR FAILURES ARE FORCED, NOT ASSERTED. D11: "A zero, silently
+#      truncated, or below-minimum window fails", plus the epoch's own
+#      fail-closed. A gate asserting "no member failed" is green on a window
+#      that ran NO members — zero failures out of zero runs — so each condition
+#      is injected into the REAL JOB and the job must exit non-zero.
+#
+#      This is A16's clause earning its keep a second time: "verified by
+#      breaking one deliberately" could not be satisfied there as written,
+#      because four of eight scripts had no failing exit path at all and would
+#      have been wired in green regardless of their assertions.
+#
+#   4. THE ENTRY POINT THE WORKFLOW NAMES MUST EXIST, anchored to the syntactic
+#      form `export func <name>(` rather than the bare name, so a mention in a
+#      comment does not satisfy it. Same guard as `make run_report`'s, and for
+#      the same reason: a workflow naming an entry point nobody wrote passes
+#      every AILANG-side check while never running.
+#
+#   5. THE WORKFLOW MUST NOT SELECT THE DEMO SCALE. The demo scale is why check
+#      2 is affordable; a scheduled job that quietly selected it would report a
+#      rotating corpus while searching four seeds. That is the frozen-window
+#      failure wearing a smaller number, and nothing inside the AILANG process
+#      can see it.
+#
+#   6. THE MATRIX WIDTH MUST EQUAL THE DECLARED SHARD COUNT, both read from
+#      source. A matrix wider than `scheduled_job().shards` runs workers whose
+#      shard index selects no seeds — a zero window per worker — and a narrower
+#      one drops part of the window while every worker that did run passes.
+.PHONY: corpus_rotating
+corpus_rotating:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/corpus_rotating_dst.ail < /dev/null > /tmp/corpus_rot.out 2>&1 || \
+	  { grep -v '^{' /tmp/corpus_rot.out | tail -40; exit 1; }; \
+	grep -v '^{' /tmp/corpus_rot.out; \
+	job() { \
+		env MOTOKO_DST_SCALE=demo "$$@" ailang run \
+		  --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+		  --ai-stub --entry scheduled_run scripts/dst/corpus_rotating_dst.ail \
+		  < /dev/null > /tmp/corpus_job.out 2>&1; \
+	}; \
+	if job MOTOKO_DST_EPOCH=5; then \
+		echo "  ✓ the job runs a real window off epoch 5: $$(grep -o 'WINDOWROW.*' /tmp/corpus_job.out)"; \
+	else \
+		echo "FAIL: the scheduled job did not complete a clean window."; \
+		grep -v '^{' /tmp/corpus_job.out | tail -30; exit 1; \
+	fi; \
+	first5=$$(grep -o 'WINDOWROW epoch=5 first=[0-9]*' /tmp/corpus_job.out | head -1); \
+	if job MOTOKO_DST_EPOCH=6; then :; else \
+		echo "FAIL: the scheduled job did not complete a clean window at epoch 6."; \
+		grep -v '^{' /tmp/corpus_job.out | tail -30; exit 1; \
+	fi; \
+	first6=$$(grep -o 'WINDOWROW epoch=6 first=[0-9]*' /tmp/corpus_job.out | head -1); \
+	if [ -z "$$first5" ] || [ -z "$$first6" ]; then \
+		echo "FAIL: the job emitted no WINDOWROW to re-derive the rotation from."; \
+		exit 1; \
+	fi; \
+	if [ "$${first5##*first=}" = "$${first6##*first=}" ]; then \
+		echo "FAIL: two different epochs produced a window starting at the SAME seed."; \
+		echo "      Re-derived OUTSIDE the AILANG process, which is the point: every"; \
+		echo "      rotation check in the suite compares windows the same module"; \
+		echo "      produced, and a comparison that silently became a tautology cannot"; \
+		echo "      carry this gate on its own. D11 asks for a window that CHANGES"; \
+		echo "      deterministically, and a frozen window satisfies 'deterministically'"; \
+		echo "      perfectly — it is the property a frozen thing has in the highest"; \
+		echo "      degree."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ re-derived outside the process: epoch 5 starts at $${first5##*first=}, epoch 6 at $${first6##*first=}"; \
+	for forced in "no-epoch::" "zero:MOTOKO_DST_EPOCH=5:MOTOKO_DST_FORCE=zero" \
+	              "below-minimum:MOTOKO_DST_EPOCH=5:MOTOKO_DST_FORCE=below-minimum" \
+	              "truncated:MOTOKO_DST_EPOCH=5:MOTOKO_DST_FORCE=truncate"; do \
+		name=$$(printf '%s' "$$forced" | cut -d: -f1); \
+		a=$$(printf '%s' "$$forced" | cut -d: -f2); \
+		b=$$(printf '%s' "$$forced" | cut -d: -f3); \
+		set +e; \
+		if [ -n "$$a" ] && [ -n "$$b" ]; then job "$$a" "$$b"; \
+		elif [ -n "$$a" ]; then job "$$a"; \
+		else job; fi; \
+		rc=$$?; \
+		set -e; \
+		if [ "$$rc" -eq 0 ]; then \
+			echo "FAIL: the scheduled job EXITED 0 on a '$$name' window."; \
+			echo "      D11 fails a zero, silently truncated or below-minimum window, and"; \
+			echo "      requires the epoch to resolve rather than default. Each of the four"; \
+			echo "      is forced into the REAL JOB here rather than asserted against a"; \
+			echo "      mutated validator, because the thing that has to fail is the job."; \
+			grep -v '^{' /tmp/corpus_job.out | tail -20; \
+			exit 1; \
+		fi; \
+		rule=$$(grep -o 'REJECTED: [a-z-]*' /tmp/corpus_job.out | head -1); \
+		rule=$${rule:-$$(grep -o '\[epoch-not-resolved\]' /tmp/corpus_job.out | head -1)}; \
+		echo "  ✓ forced '$$name': the job exited $$rc — $$rule"; \
+	done; \
+	entry=$$(grep -o 'entry scheduled_run' .github/workflows/dst-corpora.yml | head -1); \
+	if [ -z "$$entry" ]; then \
+		echo "FAIL: .github/workflows/dst-corpora.yml does not name --entry scheduled_run."; \
+		exit 1; \
+	fi; \
+	if ! grep -q '^export func scheduled_run(' scripts/dst/corpus_rotating_dst.ail; then \
+		echo "FAIL: the workflow runs '--entry scheduled_run' and"; \
+		echo "      scripts/dst/corpus_rotating_dst.ail declares no 'export func"; \
+		echo "      scheduled_run('. A workflow naming an entry point nobody wrote passes"; \
+		echo "      every AILANG-side check while never running — the same shape as D8's"; \
+		echo "      forbidden digest with no retained bytes."; \
+		exit 1; \
+	fi; \
+	if grep -qE '^[[:space:]]*MOTOKO_DST_SCALE:[[:space:]]*.?demo' .github/workflows/dst-corpora.yml; then \
+		echo "FAIL: the scheduled workflow selects MOTOKO_DST_SCALE=demo."; \
+		echo "      The demo scale exists so that 'make dst' can run real seeds off a"; \
+		echo "      rotating window cheaply — 4 seeds off a 26-seed space. A scheduled job"; \
+		echo "      that selected it would report a rotating corpus while searching four"; \
+		echo "      seeds: the frozen-window failure wearing a smaller number, and nothing"; \
+		echo "      inside the AILANG process can see it."; \
+		exit 1; \
+	fi; \
+	declared=$$(awk '/^export pure func scheduled_job\(\)/,/^}/' src/core/dst_corpus.ail | sed -n 's/^[[:space:]]*shards: \([0-9]*\),$$/\1/p'); \
+	matrix=$$(sed -n 's/^        shard: \[\(.*\)\]$$/\1/p' .github/workflows/dst-corpora.yml | tr -cd ',' | wc -c); \
+	matrix=$$((matrix + 1)); \
+	if [ "$$declared" != "$$matrix" ]; then \
+		echo "FAIL: scheduled_job() declares $$declared shard(s) and the workflow matrix has $$matrix."; \
+		echo "      A matrix wider than the declared count runs workers whose shard index"; \
+		echo "      selects NO seeds — a zero window per worker — and a narrower one drops"; \
+		echo "      part of the window while every worker that did run passes. Neither is"; \
+		echo "      visible from inside the process, which is why this is checked here."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ the workflow names an entry point that exists, does not select the demo scale, and its matrix is $$matrix against $$declared declared shard(s)"
 
 # WI-A12's advancement + trace-completeness gate, landed BEFORE the threading it
 # watches — the plan's binding sequencing rule. The script header carries the

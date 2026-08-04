@@ -1,0 +1,129 @@
+# ADR-001 D11's two corpora, as the two CI jobs the decision names.
+#
+#   "The generated axis has two complementary corpora:
+#      1. a blocking PR corpus containing fixed seeds and exact promoted
+#         regression programs; and
+#      2. a scheduled rotating corpus whose seed window changes deterministically
+#         and is reported.
+#    ...
+#    PR and scheduled jobs each declare an operator-accepted minimum seed count;
+#    the gate asserts that exact count completed. A zero, silently truncated, or
+#    below-minimum window fails."
+#
+# WI-A15 built both. Before this file the only workflow in the tree was
+# verify-extensions.yml, with no generated-trajectory axis at all.
+#
+# ---------------------------------------------------------------------------
+# THE EPOCH, AND WHY IT IS COMPUTED HERE RATHER THAN DEFAULTED IN THE JOB
+# ---------------------------------------------------------------------------
+#
+# D11 asks for a window that "changes deterministically and is reported". Those
+# are TWO properties, and a window that ignores its input satisfies the first
+# perfectly — the same seeds every night, byte-identical reports, every gate
+# green, one neighbourhood searched forever.
+#
+# So the epoch is the UTC day number, which changes daily and is reproducible
+# from the report, and `dst_corpus.resolve_epoch` has NO DEFAULT: if this
+# variable fails to arrive, the job exits non-zero rather than substituting a
+# constant. `make corpus_rotating` demonstrates that by running the job with the
+# variable unset and requiring the failure.
+#
+# ---------------------------------------------------------------------------
+# WHAT MUST NOT APPEAR IN THE SCHEDULED JOB
+# ---------------------------------------------------------------------------
+#
+# `MOTOKO_DST_SCALE: demo`. The demo scale exists so `make dst` can run real
+# seeds off a rotating window cheaply (4 seeds off a 26-seed space); a scheduled
+# job that selected it would report a rotating corpus while searching four
+# seeds, which is the frozen-window failure wearing a smaller number.
+# `make corpus_rotating` greps this file to prove it does not.
+
+name: DST corpora (ADR-001 D11)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # 03:17 UTC daily. The minute is off the hour deliberately: a job on the
+    # hour competes with every other scheduled job for runners, and a scheduled
+    # corpus that is silently skipped is a window that ran zero seeds.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      epoch:
+        description: 'Rotation epoch (UTC day number). Leave blank to use today.'
+        required: false
+        default: ''
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. THE BLOCKING PR CORPUS. Fixed seeds plus the promoted regression program
+  #    and the constructed member, running on every pull request.
+  # ---------------------------------------------------------------------------
+  pr-corpus:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned AILANG toolchain
+        run: ./scripts/install-prerequisites.sh
+      - name: D11's blocking PR corpus
+        run: make corpus_pr
+
+  # ---------------------------------------------------------------------------
+  # 2. THE SCHEDULED ROTATING CORPUS, sharded. `shard_job` divides the declared
+  #    minimum across the workers and `shard_minimums_sum` asserts the shares
+  #    add back up, so four workers cannot collectively search less than the job
+  #    declares while each reports a passing window.
+  # ---------------------------------------------------------------------------
+  scheduled-corpus:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Four shards, matching `scheduled_job().shards`. `make corpus_rotating`
+        # checks the two agree: a matrix wider than the declared shard count
+        # would run workers whose shard index selects no seeds at all, and a
+        # narrower one silently drops part of the window.
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned AILANG toolchain
+        run: ./scripts/install-prerequisites.sh
+      - name: Resolve the rotation epoch
+        id: epoch
+        run: |
+          set -eu
+          if [ -n "${{ github.event.inputs.epoch }}" ]; then
+            epoch="${{ github.event.inputs.epoch }}"
+          else
+            # The UTC day number. Deterministic, changes daily, and re-derivable
+            # from the reported window — which is what makes D11's "reported"
+            # mean reported rather than displayed.
+            epoch=$(( $(date -u +%s) / 86400 ))
+          fi
+          echo "epoch=$epoch" >> "$GITHUB_OUTPUT"
+          echo "rotation epoch: $epoch"
+      - name: D11's scheduled rotating corpus (shard ${{ matrix.shard }})
+        env:
+          MOTOKO_DST_EPOCH: ${{ steps.epoch.outputs.epoch }}
+          MOTOKO_DST_SHARD: ${{ matrix.shard }}
+        run: |
+          ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+            --ai-stub --entry scheduled_run scripts/dst/corpus_rotating_dst.ail < /dev/null
+      - name: Retain the window report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # `retention_runs: 14` in `scheduled_job()` is a fortnight of scheduled
+          # runs — the window in which a rotation that stopped moving is still
+          # visible across the retained reports, which is the only way that
+          # failure is ever seen.
+          name: dst-scheduled-corpus-shard-${{ matrix.shard }}
+          path: .ailang/dst-corpus
+          retention-days: 14
+          if-no-files-found: ignore

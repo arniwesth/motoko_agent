@@ -1,0 +1,534 @@
+-- scripts/dst/corpus_rotating_dst.ail
+--
+-- WI-A15 commit 2 acceptance, under ADR-001 D11: THE SCHEDULED ROTATING CORPUS.
+--
+-- ============================================================================
+-- TWO ENTRY POINTS, AND THE SECOND ONE IS THE JOB
+-- ============================================================================
+--
+--   `main`           the acceptance suite. Runs in `make dst`.
+--   `scheduled_run`  THE JOB CI ACTUALLY RUNS. It resolves the epoch, derives
+--                    the window, runs its seeds through the real driver,
+--                    validates the corpus and exits non-zero on any rejection.
+--
+-- They are separate because the thing that has to fail on a zero, truncated or
+-- below-minimum window is the JOB, not a test of the job. `make corpus_rotating`
+-- forces each of those three conditions through `scheduled_run` and requires a
+-- non-zero exit — demonstrated rather than asserted, which is the acceptance
+-- clause A16 established pays for itself (four of eight scripts turned out to
+-- have no failing exit path at all).
+--
+-- ============================================================================
+-- D11 ASKS FOR TWO PROPERTIES AND A FROZEN WINDOW SATISFIES ONE PERFECTLY
+-- ============================================================================
+--
+-- "a scheduled rotating corpus whose seed window CHANGES DETERMINISTICALLY and
+-- is REPORTED."
+--
+-- The failure this suite exists against is not a window that is wrong; it is a
+-- window that never moves. Such a window is:
+--
+--   perfectly deterministic       the same seeds every scheduled run
+--   byte-identical when reported  which reads as stability
+--   green under every gate        because nothing else in the tree asserts
+--                                 that a window MOVES
+--
+-- and it searches one neighbourhood forever. Determinism is 0-for-27 across
+-- thirteen clusters and it is the property a frozen thing has in the highest
+-- degree.
+--
+-- So the rotation is checked three ways, and the three are not redundant:
+--
+--   POSITION BY POSITION   `rotation-position-frozen`. A whole-window
+--                          comparison is green on "a fixed prefix plus a
+--                          rotating tail" — that window changes at every epoch
+--                          and is pinned at every prefix position. Only a
+--                          per-position check sees it.
+--   THE WRAP BRANCH        `rotation-wrap-not-exercised`. S8's complement: the
+--                          rotation wraps at the end of the space, and a sample
+--                          that never crosses the boundary leaves that branch
+--                          unwalked. An unwalked branch is not pinned, it is
+--                          ABSENT, and absent reads identically to unchanged.
+--   THE INPUT'S ROUTE      `epoch-not-resolved`. The sharpest of the three,
+--                          because it defeats the other two without touching
+--                          them: if the scheduler's epoch is absent and the job
+--                          DEFAULTS it, every rotation check stays green — the
+--                          rotation is fine, the input stopped arriving — and
+--                          the window is frozen. `resolve_epoch` has no
+--                          default, and `make corpus_rotating` runs the job
+--                          with the variable UNSET and requires it to fail.
+--
+-- ============================================================================
+-- WHY THE SEEDS ARE ACTUALLY RUN AND NOT ONLY DERIVED
+-- ============================================================================
+--
+-- Everything above is pure arithmetic and would pass over a window whose seeds
+-- no driver can execute. So the job runs its window through the real driver,
+-- and `make dst` runs it at the DEMO scale (4 seeds off a 26-seed space) while
+-- the scheduled CI job runs it at the full one (240 off 1024). Same
+-- `rotating_window`, same `validate_rotation`, same shard partition, different
+-- declared minimum — and the workflow is grepped to prove the scheduled job
+-- does not quietly select the demo scale, which would report a rotating corpus
+-- while searching four seeds.
+
+module scripts/dst/corpus_rotating_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/string as Str (length)
+import std/env (getEnvOr)
+import std/ai (Message, ToolCall)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (GeneratedWorld, ScriptedStep)
+import src/core/ports (WorldState, empty_world_state)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/dst_interaction (Interaction, interaction_kind)
+import src/core/dst_generator (
+  GeneratorBounds, generator_state, choose_environment, generator_failed
+)
+import src/core/dst_program (ExecutionProgram, program_schema_version)
+import src/core/dst_persistence (
+  EncodeOutcome, Encoded, EncodeRefused, encode_artifact, artifact_identity
+)
+import src/core/dst_driver_only (driver_only_manifest, driver_only)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_fault_catalogue (
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded,
+  fault_catalogue, find_class, branch_id
+)
+import src/core/dst_corpus (
+  Corpus, CorpusMember, CorpusJob, CorpusRejection, RotationConfig, SeedWindow,
+  EpochSource, EpochResolved, EpochUnresolved,
+  MemberKind, FixedSeed,
+  member_of, resolve_epoch, epoch_source_id,
+  rotating_window, window_projection, validate_rotation, validate_shards, shard_of,
+  scheduled_rotation, demo_rotation, demo_job, demo_scale_id,
+  scaled_rotation, scaled_job, scheduled_job, shard_job, shard_minimums_sum,
+  job_projection, measured_ms_per_seed, seeds_affordable_in,
+  validate_corpus, corpus_rule, corpus_message, has_corpus_rule,
+  first_corpus_message, corpus_rules_of, render_corpus, corpus_rules_version,
+  trajectory_key, eq_ints
+)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan, BudgetPatch, Delegate, ExtCtx, ExtRuntime, ExtensionHooks,
+  FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
+  PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
+  ToolPolicyDecision, ToolSchema
+)
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}")
+          else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+pure func join_str(xs: [string]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => x,
+    x :: rest => "${x}, ${join_str(rest)}"
+  }
+}
+
+pure func join_ints(xs: [int]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => "${x}",
+    x :: rest => "${x}, ${join_ints(rest)}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Driver plumbing (identical to the PR corpus's, for the same reason)
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func generator_id() -> string { "motoko_driver_only" }
+func generator_version() -> string { "1" }
+
+func bounds() -> GeneratorBounds {
+  { max_interactions: 96,
+    max_chunks_per_interaction: 4,
+    max_payload_bytes: 512,
+    max_resource_size: 8,
+    max_clock_advance_ms: 2000 }
+}
+
+func generated_world(seed: int) -> WorldState {
+  let g = generator_state(generator_id(), generator_version(), seed, bounds());
+  let e = choose_environment(g, "initial_world");
+  { empty_world_state() | gen: e.state, env: e.entries }
+}
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate }
+func no_intercept(_ctx: ExtCtx, _text: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
+func no_solver(_ctx: ExtCtx, _text: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("generated: approval required", DenyAfterTimeout)
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks: ExtensionHooks = {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: passthrough_pre_step,
+    on_tool_policy: pending_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}
+
+func run_generated(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), GeneratedWorld(w))
+}
+
+pure func run_manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.26.0", "4.0", "{}",
+                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+}
+
+pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
+  { schema_version: program_schema_version(),
+    generator_id: initial.gen.id,
+    generator_version: initial.gen.version,
+    seed: initial.gen.seed,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
+      synthetic_environment: initial.env,
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_only/1"
+    },
+    bounds: initial.gen.bounds,
+    manifest: run_manifest(),
+    interactions: w.log }
+}
+
+pure func count_fault_class(xs: [Interaction], cls: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if i.outcome.fault_class_id == cls then 1 else 0) + count_fault_class(rest, cls)
+  }
+}
+
+pure func count_approval_denied(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if interaction_kind(i) == "expect_approval" && contains(i.outcome.payload, "\"type\":\"deny\"")
+       then 1 else 0)
+        + count_approval_denied(rest)
+  }
+}
+
+pure func observed_classes(xs: [Interaction]) -> [string] {
+  (if count_fault_class(xs, fault_class_tool_failed()) > 0 then [fault_class_tool_failed()] else [])
+    ++ (if count_fault_class(xs, fault_class_tool_correlation_mismatch()) > 0
+        then [fault_class_tool_correlation_mismatch()] else [])
+    ++ (if count_fault_class(xs, fault_class_tool_deadline_exceeded()) > 0
+        then [fault_class_tool_deadline_exceeded()] else [])
+    ++ (if count_approval_denied(xs) > 0 then ["approval_denied"] else [])
+}
+
+pure func branches_for(classes: [string]) -> [string] {
+  let rows = fault_catalogue();
+  branch_ids(classes, rows)
+}
+
+pure func branch_ids(classes: [string], rows: [FaultClass]) -> [string] {
+  match classes {
+    [] => [],
+    c :: rest =>
+      (match find_class(rows, c) {
+         None => [],
+         Some(row) => [branch_id(row.recovery_branch)]
+       }) ++ branch_ids(rest, rows)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Running one rotating window
+-- ---------------------------------------------------------------------------
+
+func run_seed(seed: int)
+  -> CorpusMember ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let initial = generated_world(seed);
+  let r = run_generated("rot_${seed}", initial);
+  let p = program_of(r.world, initial);
+  let enc = encode_artifact(p);
+  let ident = match enc { Encoded(b) => artifact_identity(b), EncodeRefused(_) => "" };
+  let nbytes = match enc { Encoded(b) => Str.length(b), EncodeRefused(_) => 0 };
+  let classes = observed_classes(r.world.log);
+  member_of("rot-seed-${seed}",
+            FixedSeed("drawn by the rotating window, not pinned"),
+            p, "(in-memory)", ident, nbytes, classes, branches_for(classes))
+}
+
+func run_window(seeds: [int])
+  -> [CorpusMember] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match seeds {
+    [] => [],
+    s :: rest => {
+      let here = run_seed(s);
+      here :: run_window(rest)
+    }
+  }
+}
+
+-- The forcings. Each is a REAL condition the job then has to fail on, injected
+-- at the one place the job builds its corpus — not a mutated validator.
+pure func forcing() -> string ! {Env} { getEnvOr("MOTOKO_DST_FORCE", "") }
+
+pure func scale() -> string ! {Env} { getEnvOr("MOTOKO_DST_SCALE", "full") }
+
+pure func forced_seeds(force: string, w: SeedWindow, j: CorpusJob) -> [int] {
+  if force == "zero" then []
+  else if force == "below-minimum" then take_n(w.seeds, 1)
+  else w.seeds
+}
+
+pure func take_n(xs: [int], n: int) -> [int] {
+  if n <= 0 then []
+  else match xs { [] => [], x :: rest => x :: take_n(rest, n - 1) }
+}
+
+-- ---------------------------------------------------------------------------
+-- THE JOB. This is what CI runs, and what `make corpus_rotating` forces to fail.
+-- ---------------------------------------------------------------------------
+
+export func scheduled_run() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let sc = scale();
+  let cfg = scaled_rotation(sc);
+  let job = scaled_job(sc);
+  let force = forcing();
+  let raw = getEnvOr("MOTOKO_DST_EPOCH", "");
+  let _ = println("scheduled corpus run ${corpus_rules_version()} — scale '${sc}'");
+  let _ = println("  ${job_projection(job)}");
+  match resolve_epoch(raw) {
+    -- FAIL CLOSED. There is no default epoch, and this is the branch that makes
+    -- every rotation check above worth running: a job that substituted 0 here
+    -- would be perfectly deterministic and perfectly frozen.
+    EpochUnresolved(why) => {
+      let _ = println("  ✗ ${corpus_message(EpochNotResolved(why))}");
+      exit(1)
+    },
+    EpochResolved(epoch) => {
+      let w = rotating_window(cfg, epoch);
+      -- SHARDING. An absent shard index means "run the whole window"; a present
+      -- one means "run this worker's share, and be held to this worker's share
+      -- of the declared minimum". The two are the same total by
+      -- `shard_minimums_sum`, so four workers cannot collectively search less
+      -- than the job declares while each reports a passing window.
+      let shard_raw = getEnvOr("MOTOKO_DST_SHARD", "");
+      let sharded = shard_raw != "";
+      let shard_index = match resolve_epoch(shard_raw) { EpochResolved(n) => n, EpochUnresolved(_) => 0 };
+      -- D11: the window is REPORTED, and reported with its epoch so a reader
+      -- can re-derive it. Seeds without the epoch would be displayed, not
+      -- reported.
+      let _ = println("  window: ${window_projection(cfg, w)}");
+      let _ = println("  seeds:  ${join_ints(w.seeds)}");
+      let rot = validate_rotation(cfg, epoch, 6);
+      let shards = validate_shards(w, job.shards);
+      let my_job = if sharded then shard_job(job, shard_index) else job;
+      let my_seeds = if sharded then shard_of(w, job.shards, shard_index) else w.seeds;
+      let _ = if sharded
+              then println("  shard:  ${shard_index} of ${job.shards} — ${List.length(my_seeds)} seed(s), minimum ${my_job.minimum_seeds} (the ${job.shards} shard minimums sum to ${shard_minimums_sum(job)}, the job's own ${job.minimum_seeds})")
+              else println("  shard:  none — the whole window");
+      let seeds = forced_seeds(force, { w | seeds: my_seeds }, my_job);
+      let members = run_window(seeds);
+      let completed = if force == "truncate" then List.length(members) - 1 else List.length(members);
+      let c: Corpus = {
+        corpus_id: "dst-scheduled-rotating",
+        job: my_job,
+        members: members,
+        seeds_attempted: seeds,
+        runs_completed: completed,
+        elapsed_ms: 0
+      };
+      let rs = validate_corpus(c, driver_only(), [], []) ++ rot ++ shards;
+      let _ = println(render_corpus(c));
+      let _ = emit_window_rows(cfg, epoch, w.seeds);
+      if List.length(rs) == 0 then
+        println("✓ scheduled corpus run: ${List.length(members)} seed(s) completed against a declared minimum of ${my_job.minimum_seeds}")
+      else {
+        let _ = println("✗ scheduled corpus run REJECTED: ${join_str(corpus_rules_of(rs))}");
+        let _ = println("  ${first_corpus_message(rs)}");
+        exit(1)
+      }
+    }
+  }
+}
+
+-- The machine-readable rows `make corpus_rotating` re-derives the rotation from,
+-- outside the AILANG process — a second author for the one property this job
+-- exists to have, so an in-process comparison that silently became a tautology
+-- cannot carry the gate alone.
+func emit_window_rows(cfg: RotationConfig, epoch: int, seeds: [int]) -> () ! {IO} {
+  println("WINDOWROW epoch=${epoch} first=${rotating_window(cfg, epoch).first} size=${List.length(seeds)} seeds=${join_ints(seeds)}")
+}
+
+-- ---------------------------------------------------------------------------
+-- The acceptance suite
+-- ---------------------------------------------------------------------------
+
+func scenario_the_window_rotates() -> bool ! {IO} {
+  let _ = println("\n-- the window moves, at every position, and its wrap branch is entered --");
+  let cfg = scheduled_rotation();
+  let rs = validate_rotation(cfg, 0, 6);
+  let a = report("the scheduled rotation validates over 6 contiguous epochs",
+                 List.length(rs) == 0,
+                 "${join_str(corpus_rules_of(rs))}\n      ${first_corpus_message(rs)}");
+  -- POSITION BY POSITION, and the prefix window is the mutant that says why.
+  -- A window built as "a fixed head plus a rotating tail" changes at every
+  -- epoch and is frozen at position 0; a whole-window comparison is green on it
+  -- and this check is not.
+  let frozen: RotationConfig = { space_first: 1, space_size: 1, window_size: 4 };
+  let b = report("mutant: a window that ignores its epoch → rotation-position-frozen",
+                 has_corpus_rule(validate_rotation(frozen, 0, 6), "rotation-position-frozen"),
+                 "a window serving the same seed at every epoch was NOT rejected, which is the one failure mode D11's 'changes deterministically' cannot state on its own");
+  -- S8's complement.
+  let wide: RotationConfig = { space_first: 1, space_size: 1000000, window_size: 4 };
+  let c = report("mutant: a sample that never crosses the end of the space → rotation-wrap-not-exercised",
+                 has_corpus_rule(validate_rotation(wide, 0, 3), "rotation-wrap-not-exercised"),
+                 "an unwalked wrap branch was accepted; absent reads identically to unchanged");
+  -- And a rotation that revisits before exhausting.
+  let overlapping: RotationConfig = { space_first: 1, space_size: 8, window_size: 6 };
+  let d = report("mutant: consecutive windows that overlap → rotation-window-not-disjoint",
+                 has_corpus_rule(validate_rotation(overlapping, 0, 4), "rotation-window-not-disjoint"),
+                 "a rotation that revisits a neighbourhood before exhausting the space was accepted");
+  a && b && c && d
+}
+
+func scenario_the_epoch_cannot_default() -> bool ! {IO} {
+  let _ = println("\n-- the input's route to the reported seeds (S8) --");
+  let a = report("a blank epoch — what an unset scheduler variable reads as — FAILS CLOSED",
+                 epoch_source_id(resolve_epoch("")) == "epoch-unresolved",
+                 "a blank epoch resolved to a number; every rotation check above stays green on that and the window is frozen");
+  let b = report("a non-numeric epoch fails closed too",
+                 epoch_source_id(resolve_epoch("nightly")) == "epoch-unresolved"
+                   && epoch_source_id(resolve_epoch("7x")) == "epoch-unresolved",
+                 "a non-numeric epoch was silently substituted");
+  let c = report("a numeric epoch resolves, including 0",
+                 epoch_source_id(resolve_epoch("0")) == "epoch-resolved"
+                   && epoch_source_id(resolve_epoch("20260804")) == "epoch-resolved",
+                 "a legitimate epoch was refused, which would make the job unrunnable rather than fail-closed");
+  -- The route itself: EVERY reported seed is a function of the epoch. Two
+  -- different epochs must share no seed at all, which is the executable form of
+  -- "the epoch cannot reach the seeds except through the rotation".
+  let cfg = scheduled_rotation();
+  let w0 = rotating_window(cfg, 11);
+  let w1 = rotating_window(cfg, 12);
+  let d = report("consecutive epochs share NO seed, so no position is reachable without the rotation",
+                 not shares_any(w0.seeds, w1.seeds),
+                 "two consecutive windows share a seed, so that position is partly pinned");
+  let e = report("the same epoch reproduces the same window (D11's 'deterministically')",
+                 eq_ints(rotating_window(cfg, 11).seeds, w0.seeds),
+                 "the window is not reproducible from its epoch, so the report cannot be re-derived");
+  a && b && c && d && e
+}
+
+pure func shares_any(a: [int], b: [int]) -> bool {
+  match a {
+    [] => false,
+    x :: rest => if contains_int(b, x) then true else shares_any(rest, b)
+  }
+}
+
+pure func contains_int(xs: [int], t: int) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_int(rest, t) }
+}
+
+func scenario_the_shards_partition() -> bool ! {IO} {
+  let _ = println("\n-- sharding, which is D11's truncation rule one level down --");
+  let cfg = scheduled_rotation();
+  let j = scheduled_job();
+  let w = rotating_window(cfg, 5);
+  let a = report("the ${j.shards} shards partition the ${List.length(w.seeds)}-seed window",
+                 List.length(validate_shards(w, j.shards)) == 0,
+                 "the shards do not cover the window exactly");
+  let b = report("each shard is the window divided, not a copy of it (${List.length(shard_of(w, j.shards, 0))} per shard)",
+                 List.length(shard_of(w, j.shards, 0)) == List.length(w.seeds) / j.shards,
+                 "a shard is not its share of the window");
+  let c = report("mutant: a shard scheme that drops seeds → shards-do-not-partition",
+                 has_corpus_rule(validate_shards(w, 0), "shards-do-not-partition"),
+                 "a scheme covering none of the window was accepted, so a parallel job could search less than the serial one in silence");
+  a && b && c
+}
+
+func scenario_the_demo_scale_is_scaled_not_weakened() -> bool ! {IO} {
+  let _ = println("\n-- the demo scale `make dst` runs the real driver at --");
+  let a = report("the demo rotation satisfies the SAME rotation contract",
+                 List.length(validate_rotation(demo_rotation(), 0, 8)) == 0,
+                 "the demo config passes a weaker contract than the scheduled one, so the local real-driver half certifies something CI does not do");
+  let b = report("the demo shards partition too",
+                 List.length(validate_shards(rotating_window(demo_rotation(), 3), demo_job().shards)) == 0,
+                 "the demo shard scheme drops seeds");
+  let c = report("'full' selects the scheduled config (${scaled_rotation("full").window_size} seeds), 'demo' the demo one (${scaled_rotation(demo_scale_id()).window_size})",
+                 scaled_rotation("full").window_size == scheduled_rotation().window_size
+                   && scaled_rotation(demo_scale_id()).window_size == demo_rotation().window_size,
+                 "the scale selector does not select what it names");
+  a && b && c
+}
+
+func scenario_the_minimum_is_selected_from_measured_cost() -> bool ! {IO} {
+  let _ = println("\n-- D11's operator-accepted minimum, selected from measured CI cost --");
+  let j = scheduled_job();
+  let a = report("declared: ${job_projection(j)}", j.minimum_seeds > 0, "no minimum declared");
+  let b = report("the declared minimum is the window size, so the job cannot declare a number the rotation does not produce",
+                 j.minimum_seeds == scheduled_rotation().window_size,
+                 "the minimum and the window size are two numbers that can drift apart");
+  let c = report("the minimum fits the budget at the measured ${measured_ms_per_seed()} ms/seed (${seeds_affordable_in(j.budget_ms)} affordable)",
+                 seeds_affordable_in(j.budget_ms) >= j.minimum_seeds,
+                 "the declared minimum cannot run inside the declared budget");
+  let d = report("...with headroom rather than exactly, because a window whose seeds all terminate long must still fit",
+                 seeds_affordable_in(j.budget_ms) >= j.minimum_seeds * 4,
+                 "the budget has under 4× headroom, so an unusually long window would exceed it and the elapsed-budget rule would fire on a healthy run");
+  a && b && c && d
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("WI-A15 commit 2 — D11's scheduled rotating corpus (${corpus_rules_version()})");
+  let a = scenario_the_window_rotates();
+  let b = scenario_the_epoch_cannot_default();
+  let c = scenario_the_shards_partition();
+  let d = scenario_the_demo_scale_is_scaled_not_weakened();
+  let e = scenario_the_minimum_is_selected_from_measured_cost();
+  if a && b && c && d && e then
+    println("\n✓ WI-A15 commit 2: the scheduled rotating corpus")
+  else {
+    let _ = println("\n✗ WI-A15 commit 2 FAILED");
+    exit(1)
+  }
+}

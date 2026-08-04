@@ -56,6 +56,10 @@ import src/core/dst_program (program_schema_version)
 import src/core/dst_event_vocabulary (event_vocabulary_version)
 import src/core/dst_driver_only (driver_only_id, driver_only_version)
 import src/core/dst_discovery (EnvExpectation, driver_env_keys)
+import src/core/dst_corpus (
+  UnreachableClass, unreachable_by_search, unreachable_reason, unreachable_class_ids,
+  expected_bank_coverage
+)
 
 import src/core/dst_invariants (
   Violation, NegativeAdvance
@@ -235,32 +239,70 @@ pure func complete_report() -> RunReport {
 -- replace it with observations; until then this is the honest statement, and it
 -- is executable rather than prose.
 
+-- WI-A15 replaced the DECLARED entries with MEASURED ones, and the register
+-- itself moved to `dst_corpus.unreachable_by_search()` so there is exactly one
+-- of it — this file renders it and `corpus_pr_dst` asserts it against a real
+-- 260-seed sweep in BOTH directions, which is what makes it shrink-only.
+--
+-- TWO ENTRIES CLOSED, and recording that is the whole point of asserting both
+-- directions. A14 wrote `ToolCorrelationMismatch` and `ToolDeadlineExceeded` as
+-- `CoveredNotExercised` — "reachable by ToolChoiceMismatch/ToolChoiceLate, so
+-- MORE SEEDS IS THE FIX". More seeds was the fix: the fixed bank reaches both,
+-- with two witnesses each, and they are `Reached` here now.
+--
+-- ONE ENTRY WAS TRUE FOR A REASON NOBODY HAD CHECKED.
+-- `provider_empty_terminal_response` was declared `Reached` and no seed reaches
+-- it: 0 of 260, and 0 `empty_stop_finalize` records on the wire across the
+-- whole sweep. It is reached by a CONSTRUCTED corpus member, which is a
+-- different fact from "a seed reaches it" and is now the fact recorded.
 pure func documented_coverage() -> [ClassCoverage] {
   let base = empty_class_coverage(fault_catalogue());
   let c1 = mark_class(base, "provider_error_retryable",
-    UnreachableUntilChange("ScriptedStep has no error channel, so a generated AIError has nowhere to be chosen into (cluster 10 correction 2); WI-A14 piece 2 adds the LATENCY field, which is a different field — the fault half needs its own"));
+    UnreachableUntilChange(unreachable_reason("provider_error_retryable")));
   let c2 = mark_class(c1, "provider_error_non_retryable",
-    UnreachableUntilChange("as provider_error_retryable: no ScriptedStep error channel"));
+    UnreachableUntilChange(unreachable_reason("provider_error_non_retryable")));
   let c3 = mark_class(c2, "provider_protocol_inconsistent_result",
-    CoveredNotExercised("the generator's tool_args are always well-formed JSON, so the malformed-arguments branch is reachable by a scenario that writes one and is not driven by any seed today"));
+    CoveredNotExercised(unreachable_reason("provider_protocol_inconsistent_result")));
   let c4 = mark_class(c3, "provider_partial_stream_then_error",
-    UnreachableStructurally("live_ports returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can produce a non-empty emission log to compare the projection against; the retry/finalize half is reachable, the PARITY half is not observable"));
+    UnreachableStructurally(unreachable_reason("provider_partial_stream_then_error")));
   let c5 = mark_class(c4, "provider_empty_terminal_response", Reached);
   let c6 = mark_class(c5, fault_class_tool_failed(), Reached);
-  let c7 = mark_class(c6, fault_class_tool_correlation_mismatch(),
-    CoveredNotExercised("codec-covered and pinned by round-trip rows; the generator's ToolChoiceMismatch can produce it, so MORE SEEDS IS THE FIX — which is what separates this status from the two above"));
-  let c8 = mark_class(c7, fault_class_tool_deadline_exceeded(),
-    CoveredNotExercised("as ToolCorrelationMismatch: same codec, reachable by ToolChoiceLate, undriven by the pinned seeds"));
+  let c7 = mark_class(c6, fault_class_tool_correlation_mismatch(), Reached);
+  let c8 = mark_class(c7, fault_class_tool_deadline_exceeded(), Reached);
   mark_class(c8, "approval_denied", Reached)
   -- The two conditional classes keep the Waived status empty_class_coverage
   -- gave them, carrying the catalogue's own condition verbatim.
 }
 
+-- The register's `status_id` is a STRING, because `ReachStatus` lives above
+-- `dst_corpus` and carrying the constructor down would invert the dependency to
+-- make a rendering decision. That makes a typo possible, so the mapping is
+-- checked: every id the register uses must be one `all_reach_ids()` declares,
+-- and a class with an unknown status id would otherwise render as a gap nobody
+-- counted.
+pure func register_status_ids() -> [string] {
+  status_ids_of(unreachable_by_search())
+}
+
+pure func status_ids_of(rs: [UnreachableClass]) -> [string] {
+  match rs { [] => [], r :: rest => r.status_id :: status_ids_of(rest) }
+}
+
 -- The three classes cluster 12 names, and the statuses that must stay distinct.
-pure func the_three_gaps() -> [string] {
+-- WI-A14 named THREE gaps in three different ways; WI-A15 measured them and
+-- one CLOSED — `ToolCorrelationMismatch` is reached by the fixed bank, with two
+-- witnesses. Recording the closure is what asserting both directions is for, so
+-- the list is not patched back to three: the surviving gaps are FOUR, in four
+-- different ways, and the row below is strictly stronger for it.
+--
+-- Two of the four come from `dst_corpus.unreachable_by_search()` and the third
+-- and fourth from the catalogue and the register respectively, so no entry here
+-- is a second copy of a fact stated elsewhere.
+pure func the_surviving_gaps() -> [string] {
   ["approval_deadline_exceeded",
    "provider_error_retryable",
-   fault_class_tool_correlation_mismatch()]
+   "provider_partial_stream_then_error",
+   "provider_protocol_inconsistent_result"]
 }
 
 pure func status_of(cs: [ClassCoverage], id: string) -> Option[ReachStatus] {
@@ -381,19 +423,32 @@ func scenario_the_two_counters_can_disagree() -> bool ! {IO} {
 }
 
 func scenario_three_gaps_three_reasons() -> bool ! {IO} {
-  let _ = println("\n-- cluster 12: three unreached classes, three DIFFERENT reasons --");
+  let _ = println("\n-- cluster 12: the surviving unreached classes, each in its OWN way --");
   let cs = documented_coverage();
-  let ids = status_ids(cs, the_three_gaps());
-  let a = report("the three named gaps carry three DISTINCT statuses (${join_str(ids)})",
-                 List.length(ids) == 3 && all_distinct(ids, []) && not contains_str(ids, "<absent>"),
-                 "the three gaps collapsed into fewer statuses: ${join_str(ids)}");
+  let ids = status_ids(cs, the_surviving_gaps());
+  let a = report("the ${List.length(the_surviving_gaps())} surviving gaps carry ${List.length(the_surviving_gaps())} DISTINCT statuses (${join_str(ids)})",
+                 List.length(ids) == List.length(the_surviving_gaps()) && all_distinct(ids, [])
+                   && not contains_str(ids, "<absent>"),
+                 "the gaps collapsed into fewer statuses: ${join_str(ids)}");
   -- A waiver is not one of the three. `approval_deadline_exceeded` IS
   -- conditional in the catalogue and therefore waived — but the OTHER two are
   -- not waived, and reporting a gap as a waiver converts it into a permission.
-  let b = report("the two gaps the catalogue does not waive are not reported as waivers",
+  let b = report("the three gaps the catalogue does not waive are not reported as waivers",
                  not_waived(cs, "provider_error_retryable")
+                   && not_waived(cs, "provider_partial_stream_then_error")
+                   && not_waived(cs, "provider_protocol_inconsistent_result"),
+                 "an unwaived gap is reported as a waiver — which converts a coverage finding into a permission");
+  -- THE CLOSURE, ASSERTED. `ToolCorrelationMismatch` was one of A14's three and
+  -- A15's bank reaches it. If it ever stops being reached, this row goes red
+  -- and the register has to gain an entry rather than quietly losing coverage.
+  let b2 = report("the entry WI-A15 closed stays closed: ${fault_class_tool_correlation_mismatch()} is reached",
+                 not contains_str(unreachable_class_ids(), fault_class_tool_correlation_mismatch())
                    && not_waived(cs, fault_class_tool_correlation_mismatch()),
-                 "an unwaived gap is reported as a waiver");
+                 "a closed register entry reopened without being recorded");
+  -- And the register's status ids must be ones the report can actually render.
+  let b3 = report("every status id the register uses is one all_reach_ids() declares",
+                 all_known_status_ids(register_status_ids()),
+                 "the register names a status id nothing declares: ${join_str(register_status_ids())} against ${join_str(all_reach_ids())}");
   let c = report("every non-reached class carries a reason", reasons_present(cs),
                  "a non-reached class has a blank reason — a gap nobody can plan against");
   let d = report("the register is complete against D3's required set",
@@ -401,7 +456,14 @@ func scenario_three_gaps_three_reasons() -> bool ! {IO} {
                  "${List.length(cs)} rows for ${List.length(required_class_ids())} required classes");
   let e = report("all five reach statuses are distinct ids", List.length(all_reach_ids()) == 5,
                  "the status set changed");
-  a && b && c && d && e
+  a && b && b2 && b3 && c && d && e
+}
+
+pure func all_known_status_ids(ids: [string]) -> bool {
+  match ids {
+    [] => true,
+    id :: rest => if contains_str(all_reach_ids(), id) then all_known_status_ids(rest) else false
+  }
 }
 
 pure func not_waived(cs: [ClassCoverage], id: string) -> bool {
