@@ -1695,6 +1695,23 @@ three effect-row repairs and one type-constructor repair are all that is visible
 **B1's "zero effect-row failures remain reachable" was true when written and is now superseded** —
 correctly, and its own report predicted this shape.
 
+**WI-B2 SPLITS IN TWO, and only the first half is forced** (recognised at B3's close). As written it
+carries the ABI row corrections **and** the world-token widening that lifts D1's extension-model
+exclusion. The second is a *design* change; the first is a *repair the compiler is demanding* and is
+what stands between the tree and a green `check_core`. **B2a — settle the four `ExtensionHooks` rows,
+then close the cascade they imply** — is handed off as
+`HANDOFF-execute-b2a-abi-rows-and-cascade.md`. **B2b — the world-token widening plus the two
+`ScriptedStep` widenings** — follows.
+
+**B2a's defining constraint, and it is why the split matters:** the cascade's size is a function of
+the ABI, so **the rows must be settled before anything below them is repaired, or the repair is done
+twice.** Rows are closed, so widening a hook field forces every implementation to widen in lockstep —
+B1's single field cost 46 sites, and the four hook result types carry **191 rowed implementation
+sites** (`ToolHandleDecision` 49, `PreStepDecision` 59, `ResponseInterceptDecision` 40,
+`FinalizeDecision` 43), counted at HEAD. B3 is what made the question answerable: M2 predicted all
+four rows would gain `Rand` and `Trace`, B1 measured one, and the other three sat in modules that
+never reached effect checking until the `images` wall fell.
+
 **WI-B2. The extension-ABI major.** Depends on B1 (the pin that forces it) and **A12** — its larger
 half threads the world token, and `world_state` is built there; if the trigger fires before A12,
 the row corrections can proceed and the world-token widening cannot. One coordinated major,
