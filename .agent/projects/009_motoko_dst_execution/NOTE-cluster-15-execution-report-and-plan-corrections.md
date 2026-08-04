@@ -1,7 +1,8 @@
 # Cluster 15 — WI-A17, the `ailang test` coverage axis
 
 **Milestone A is complete.** Ten cluster rows, seventeen work items, and the last one is this.
-`make dst` exit 0 at **762 checks**, from 700 at the item's start. The project is now externally blocked on the upstream recorded-stream API.
+`make dst` exit 0 at **762 checks**, from 700 at the item's start. The project is now externally
+blocked on the upstream recorded-stream API.
 
 Handoff: `HANDOFF-execute-a17-test-coverage-axis.md`. Pin v0.26.0.
 
@@ -289,7 +290,7 @@ each.
 | The deriver, the ten fixtures, the skip table, and the wiring | **~11 min** (10:12 → 10:24) |
 | C5 mutation, the three it caught in my own guards, and the two live demonstrations | **~25 min** (10:24 → 10:49) |
 
-**Whole item: 54 minutes** on the clock, handoff `af1db7e` (09:55:15) to `7e721f6`, against the
+**Whole item: 54 minutes** on the clock, handoff `af1db7e` (09:55:15) to `26f2a4d`, against the
 plan's estimate of **"under a day, at 27%"**. Roughly twenty of the 54 were spent waiting on
 `ailang test`: the full sweep is 3m40 and it was run four times.
 
