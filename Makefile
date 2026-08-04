@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -1735,3 +1735,51 @@ ext_call_inventory:
 
 ext_call_inventory_selftest:
 	@python3 tools/ext_call_inventory/derive.py --self-test
+
+# ---------------------------------------------------------------------------
+# WI-A17: the `ailang test` coverage axis.
+#
+# `check_core` type-checks src/core/*.ail and never RUNS their inline tests.
+# `ailang check` coverage and `ailang test` coverage are SEPARATE AXES and only
+# the first had a target -- cluster 4 found session.ail's 21 tests and
+# phase_vocab.ail's 27 executed by nothing, and at the time this target landed
+# fourteen more files carrying 74 tests were named by no make target at all.
+#
+# The enumeration is a RECURSIVE WALK, not a list of filenames. A list goes
+# stale the first time a file gains tests and nobody edits it, and it goes
+# stale silently; `check_core`'s own `src/core/*.ail` glob is the same bug one
+# level down, which is why it never saw src/core/test/scripted_ports.ail or
+# src/core/ext/runtime.ail. Every .ail file under src/core is discovered and
+# run, so a new module is covered the moment it exists.
+#
+# EVERY RULE READS A COUNT, NEVER AN EXIT STATUS, and the reason is measured:
+# `ailang test` prints "All tests passed!" and exits 0 when every test in the
+# file was SKIPPED. src/core/prompts_test.ail is in that state at HEAD with six
+# tests, and a target built on `ailang test X && echo ok` is green over it.
+#
+# Skips are tolerated by REASON -- read out of the runner's own JSON and
+# recorded in tools/test_coverage/skip_reasons.json with a justification -- and
+# never by filename, because a file list is the roster this target exists to
+# avoid. A reason no record accounts for is red. Nothing here asserts an
+# expected count for any file, so cluster 13's deliberate absence
+# (fb_2ad074d754cd2c25 moved a flaky assertion out of a `tests` block on
+# purpose) is structurally invisible to it rather than exempted by hand.
+#
+# It also wires scripts/probe_phase_vocab_sealed.ail WITH INVERTED POLARITY.
+# That probe's FAILURE is its PASS: it imports phase_vocab's sealed
+# constructors deliberately and the compiler refusing the import is the sealing
+# assertion holding, recorded as such by project 004. The check requires IMP010
+# NAMING A SEALED SYMBOL -- not merely a non-zero exit, which a syntax error
+# would also produce while certifying nothing about sealing.
+#
+# `test_coverage_selftest` runs the fixture suite: one fixture per rule, each
+# asserted BY ITS OWN RULE NAME, plus four survivors that must not be reported
+# at all -- mutation testing proves a guard can fire and cannot see a guard
+# that fires too much.
+# ---------------------------------------------------------------------------
+.PHONY: test_coverage test_coverage_selftest
+test_coverage:
+	@python3 tools/test_coverage/derive.py
+
+test_coverage_selftest:
+	@python3 tools/test_coverage/derive.py --self-test

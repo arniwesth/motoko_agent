@@ -1,0 +1,97 @@
+{
+  "_comment": [
+    "Tolerated SKIP REASONS, keyed on the string `ailang test --format json`",
+    "puts in a skipped test's `error` field. Never keyed on a filename: any",
+    "file may hit any of these, and a file list would need editing every time",
+    "one did, which is the hand-maintained roster tools/test_coverage exists to",
+    "avoid. A skip whose reason matches no record here is red (unrecorded_skip),",
+    "so a new kind of silently-unrun test cannot arrive quietly.",
+    "",
+    "`expected: always` means the reason must appear somewhere in every run --",
+    "if it stops appearing, either upstream implemented the feature and the",
+    "tests should be switched back on, or the tests were deleted, and both are",
+    "worth a red (stale_skip_record). `expected: sometimes` means the reason is",
+    "non-deterministic and a run without it is reported, never failed on: a",
+    "flaky gate gets relaxed, and a relaxed inventory is worthless.",
+    "",
+    "Matching is by PREFIX because both reasons below carry variable tails",
+    "(generated inputs, locations)."
+  ],
+  "records": [
+    {
+      "prefix": "Named test blocks not yet implemented",
+      "kind": "upstream-limitation",
+      "expected": "always",
+      "why": [
+        "AILANG v0.26.0 parses `test \"name\" { ... }` blocks and then skips",
+        "every one of them, while the runner prints `All tests passed!` and",
+        "exits 0. src/core/prompts_test.ail carries six tests in this form and",
+        "all six are dead: `6 tests: 0 passed, 0 failed, 6 skipped`.",
+        "",
+        "This is the vacuity shape the exit status cannot express, and it is",
+        "why every rule in derive.py reads a number rather than a return code."
+      ],
+      "disposition": [
+        "Not fixable in this repo on this pin. The tests are correct and will",
+        "start running when upstream implements the form; the `always` marking",
+        "means the day that happens, this record goes stale and the inventory",
+        "says so rather than leaving six tests quietly passing without running.",
+        "",
+        "Filed against the pin rather than worked around: rewriting the six as",
+        "`tests [...]` blocks would restore the coverage but would also hide",
+        "that the form is unimplemented from every other file that uses it."
+      ]
+    },
+    {
+      "prefix": "no generator for parameter",
+      "kind": "upstream-limitation",
+      "expected": "always",
+      "why": [
+        "AILANG's property generator covers primitives only. A `requires`",
+        "contract on a function taking an `Option[string]` or a user-declared",
+        "ADT generates a property it cannot then feed, so the property is",
+        "skipped. src/core/tool_runtime.ail loses two this way -- `isSome` on",
+        "`Option[string]` and `is_native_backend` on `ToolBackend`.",
+        "",
+        "This record exists because the inventory found it. It is a third skip",
+        "class, distinct from the two below and above, and neither the item's",
+        "handoff nor its measurement knew about it: the file reads `12 passed,",
+        "0 failed` and exits 0, so nothing before today could see the two",
+        "properties that never ran."
+      ],
+      "disposition": [
+        "Not fixable on this pin without deleting the contracts, which would",
+        "trade a silent gap for a real loss. Marked `always` so the day AILANG",
+        "grows ADT generators this record goes stale and the inventory says",
+        "so, rather than leaving two properties quietly not running."
+      ]
+    },
+    {
+      "prefix": "requires not satisfied by random input",
+      "kind": "project-defect",
+      "expected": "sometimes",
+      "why": [
+        "A `requires` contract makes AILANG generate a property test. When the",
+        "generator cannot produce input satisfying the precondition it gives up",
+        "and reports a skip. src/core/compress.ail loses two properties this",
+        "way -- `truncate_with_suffix` and `compress_output` both require",
+        "`max_chars >= 0` and the generator keeps drawing negative ints.",
+        "",
+        "The property is not wrong; the generator is untargeted. The coverage",
+        "is nonetheless lost, and the loss was invisible before this inventory",
+        "because the runner calls the file green."
+      ],
+      "disposition": [
+        "A real gap and a real finding, owned by whoever next touches",
+        "compress.ail's contracts: tighten the generator or narrow the input",
+        "type so the precondition is reachable.",
+        "",
+        "Marked `sometimes` rather than `always` because it depends on drawn",
+        "input: a run whose draws happen to satisfy the precondition reports no",
+        "skip at all, and failing on that absence would make this gate flaky.",
+        "Cluster 13's fb_2ad074d754cd2c25 is the precedent -- a flaky gate gets",
+        "worked around, and a worked-around gate stops being read."
+      ]
+    }
+  ]
+}

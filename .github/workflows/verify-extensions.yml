@@ -106,6 +106,13 @@ jobs:
       - name: smoke_parity
         run: make smoke_parity
 
+      # The second coverage axis (WI-A17). check_core above type-checks
+      # src/core and never runs its inline tests; this runs every one of them.
+      # It is a separate step rather than another name in the DST gates list so
+      # a coverage regression is legible as its own red check.
+      - name: test_coverage (run every inline test under src/core)
+        run: make test_coverage_selftest test_coverage
+
       - name: verify_core (advisory)
         continue-on-error: true
         run: make verify_core

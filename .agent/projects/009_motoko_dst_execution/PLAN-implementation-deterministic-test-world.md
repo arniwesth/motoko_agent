@@ -1425,6 +1425,27 @@ a cluster, and recorded as unassigned in the cluster map's own last row for ten 
 that enters the plan sideways does not acquire a cluster and nothing in the process notices.
 **Milestone A is one item short, and A17 is the item that checks whether inline tests run at all.**
 
+**A17 LANDED 2026-08-04 (cluster 15), AND MILESTONE A IS COMPLETE.** Report:
+`NOTE-cluster-15-execution-report-and-plan-corrections.md`. `make test_coverage` walks `src/core`
+recursively and runs every inline test in it — **39 files, 370 tests**, against the 38 the item's own
+handoff measured, because its `^\s+tests \[` grep cannot see `test "..."` blocks and missed
+`prompts_test.ail` entirely. Three corrections worth carrying forward:
+
+- **`ailang test` exits 0, and prints "All tests passed!", when every test in the file was SKIPPED.**
+  `prompts_test.ail` reports `6 tests: 0 passed, 0 failed, 6 skipped` and exit 0. Ten tests under
+  `src/core` are in that state at HEAD across three distinct skip classes, two of them upstream
+  limitations on this pin. **Any future gate over `ailang test` must read a count, not `$?`.**
+- **`requires` contracts auto-generate property tests**, so a file's test count can exceed anything a
+  `tests`-shaped pattern can find.
+- **Sites 32–34, all in the item's own guards and all caught by C5.** They sharpen S8's complement
+  for guards built from SEQUENCED clauses: a control rejected by a later clause certifies nothing
+  about an earlier one, and a control that must SURVIVE certifies nothing if the mechanism never
+  reached it. Determinism has now caught 0 of 34.
+
+**All seventeen work items are closed.** WI-A3 has no cluster-map row and needed none — it is the
+upstream filing, done 2026-08-02 with this plan. The project is externally blocked on the upstream
+recorded-stream API; `HANDOFF-post-upstream-recorded-stream-landing.md` holds the triggered graph.
+
 **FOUR FURTHER CORRECTIONS THIS ITEM EARNED.**
 
 1. **A CORPUS NEEDS TWO KEYS, and this plan's prescription fixes the other direction.** The plan says

@@ -1,0 +1,15 @@
+-- SURVIVOR (S7). A file with inline tests, all passing, in the form the
+-- syntactic derivation recognises. It must never be reported by any rule.
+-- If a mutant makes this file appear in the report, the guard fires too much.
+
+module tools/test_coverage/fixtures/control_has_tests
+
+export pure func triple(n: int) -> int
+  tests [
+    ((0), 0),
+    ((2), 6),
+    ((5), 15)
+  ]
+  {
+    n * 3
+  }
