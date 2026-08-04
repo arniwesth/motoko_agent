@@ -1,0 +1,1048 @@
+-- scripts/dst/corpus_pr_dst.ail
+--
+-- WI-A15 commit 1 acceptance, under ADR-001 D11: THE BLOCKING PR CORPUS.
+--
+-- ============================================================================
+-- WHAT THIS SUITE CLAIMS
+-- ============================================================================
+--
+-- That the fixed bank is REAL: every member is a program this run generated,
+-- persisted and loaded back, keyed on both of the corpus's keys, carrying the
+-- execution manifest out of its own bytes — and that the bank COLLECTIVELY
+-- reaches every required non-waived fault class a seed can reach, with the ones
+-- no seed can reach recorded as coverage findings rather than waived away.
+--
+-- ============================================================================
+-- THE SEEDS ARE A QUERY'S ANSWER, NOT AN AUTHOR'S LIST
+-- ============================================================================
+--
+-- 260 seeds were swept through the real driver and the bank is the union of
+-- five DERIVED selections. Every member therefore has an asserted reason, and a
+-- change to the generator, to a request projection string or to the driver's
+-- control flow moves it and fails loudly:
+--
+--   1, 176      the shortest and longest eligible trajectories (n = 9 and 50).
+--               S8's complement: a bank that walks only the middle certifies
+--               only the middle, and the paths it does not walk are not pinned
+--               but ABSENT.
+--   2, 3        the two smallest seeds reaching approval_denied.
+--   6, 20       the two smallest reaching ToolCorrelationMismatch.
+--   14, 15      the two smallest reaching ToolDeadlineExceeded.
+--   23, 39      the two smallest reaching ToolFailed.
+--   114         the richest Err-terminating trajectory (3 classes). It enters
+--               as a PROMOTED REGRESSION, so the bank carries D11's second kind
+--               and not only its first.
+--   195         THE ONLY SEED OF 260 that reaches all four sweep-reachable
+--               classes by itself. One in 260 is why the bank is a query.
+--
+-- Two witnesses per class rather than one, deliberately: a bank with a single
+-- witness for a class loses that class to any generator drift that moves one
+-- seed, and loses it SILENTLY, because the remaining members still pass.
+--
+-- ============================================================================
+-- THE MEASUREMENT THAT CHANGED THE OBSERVER, AND IT IS SITE 25's SHAPE
+-- ============================================================================
+--
+-- The obvious class observer is `Interaction.outcome.fault_class_id`. It is the
+-- right quantity and it is INSUFFICIENT ON ITS OWN: `ports.tool_outcome_record`
+-- is the only writer, so the field can only ever name the three TOOL classes.
+-- A sweep graded by it reports "0 of 260 seeds reach approval_denied" while 152
+-- of them do.
+--
+-- So the class observer is three observers, each named at its site:
+--
+--   the three tool classes        `outcome.fault_class_id`
+--   approval_denied               the approval interaction's PAYLOAD, which is
+--                                 the operator's raw answer — `{"type":"deny"}`
+--   provider_empty_terminal_      the provider interaction's decoded outcome:
+--   response                      empty prose, "stop", no tool calls, which is
+--                                 exactly `session.c2_loop`'s guard
+--                                 `trim(info.output) == ""`
+--
+-- AND THE BRANCH OBSERVER IS NOT IN THIS PROCESS AT ALL. `NativeToolDenied` and
+-- `NativeToolResults` are both in `dst_invariants.d64_gap_register()` — they do
+-- not reach the returned trace — so a branch-reached counter read in here would
+-- be reading the recorder that wrote the log. The branch witness is the WIRE,
+-- and `make corpus_pr` counts it from production code that knows nothing about
+-- the interaction log. That is why D11 makes them separate counters: they have
+-- different observers, and only one of them is independent.
+--
+-- ============================================================================
+-- WHAT NO SEED CAN REACH, AND WHY THAT IS A FINDING RATHER THAN A WAIVER
+-- ============================================================================
+--
+-- Nine required classes are not waived by `driver_only`. Measured over 260
+-- seeds, FOUR are reachable and five are not, in four different ways:
+--
+--   provider_error_retryable          `ScriptedStep` has no error channel.
+--   provider_error_non_retryable      Same field; one named change away.
+--   provider_protocol_inconsistent_   the generator's tool_args are always
+--   result                            well-formed JSON.
+--   provider_partial_stream_then_     `live_ports` returns emissions: []
+--   error                             until Milestone B. Externally blocked.
+--   provider_empty_terminal_response  UNREACHABLE BY SEARCH and reachable by
+--                                     CONSTRUCTION: every generated terminal
+--                                     step carries non-empty prose
+--                                     (`gp${draws}-${arg}`).
+--
+-- The last is cluster 12's limit arriving where the plan predicted its SHAPE
+-- and not its INSTANCE — the plan named the provider fault class; the
+-- measurement adds this one. It is covered by a CONSTRUCTED member, and the
+-- construction's justification is checkable: `ConstructedForReachableClass`
+-- fires the moment a swept seed reaches it, so the register can only shrink.
+--
+-- None of the five is a waiver. D3 requires a waived class to be named with its
+-- waiving condition, and a class nobody waived that nobody reached is a
+-- coverage gap, not a permission.
+
+module scripts/dst/corpus_pr_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (contains)
+import std/string as Str (length)
+import std/ai (Message, ToolCall)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (GeneratedWorld, RecordingWorld, ScriptedStep)
+import src/core/ports (
+  WorldState, empty_world_state,
+  ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable,
+  decode_provider_outcome
+)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/dst_interaction (
+  Interaction, interaction_kind, outcome_status_id, all_interaction_kinds
+)
+import src/core/dst_generator (
+  GeneratorBounds, generator_state, choose_environment, generator_failed
+)
+import src/core/dst_program (
+  ExecutionProgram, program_schema_version, validate_program, program_ok, program_message,
+  ProgramRejection
+)
+import src/core/dst_persistence (
+  EncodeOutcome, Encoded, EncodeRefused, encode_artifact, artifact_identity,
+  PersistOutcome, Persisted, PersistRefusedSecrets, PersistCollision, PersistIoError,
+  persist_program, persist_rule, persist_message, artifact_path,
+  LoadOutcome, Loaded, LoadRefused, LoadIoError, load_program, first_decode_message
+)
+import src/core/dst_driver_only (driver_only_manifest, driver_only, driver_only_id, driver_only_version)
+import src/core/dst_profile (ExecutionManifest, ProfileDefinition)
+import src/core/dst_fault_catalogue (
+  FaultClass, fault_catalogue, required_class_ids, conditional_class_ids, find_class,
+  branch_id,
+  fault_class_tool_failed,
+  fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded
+)
+import src/core/dst_corpus (
+  Corpus, CorpusMember, CorpusJob, CorpusRejection,
+  MemberKind, FixedSeed, PromotedRegression, ConstructedForClass,
+  member_of, member_kind_id, member_reason, constructed_for, all_member_kind_ids,
+  trajectory_key, trajectory_text,
+  pr_job, job_projection, measured_ms_per_seed, seeds_affordable_in,
+  validate_corpus, corpus_ok, corpus_rule, corpus_message,
+  has_corpus_rule, first_corpus_message, corpus_rules_of,
+  required_non_waived, bank_classes, bank_branches,
+  render_corpus, corpus_rules_version
+)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan, BudgetPatch, Delegate, ExtCtx, ExtRuntime, ExtensionHooks,
+  FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
+  PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
+  ToolPolicyDecision, ToolSchema
+)
+
+-- ---------------------------------------------------------------------------
+-- Reporting
+-- ---------------------------------------------------------------------------
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}")
+          else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+pure func join_str(xs: [string]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => x,
+    x :: rest => "${x}, ${join_str(rest)}"
+  }
+}
+
+pure func join_ints(xs: [int]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => "${x}",
+    x :: rest => "${x}, ${join_ints(rest)}"
+  }
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Driver plumbing — identical to seeded_generator_dst's, because the bank must
+-- be generated by the SAME generator under the SAME profile the pinned seeds
+-- were swept under. A second plumbing here would make the seeds' reasons true
+-- of a configuration nothing else runs.
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func generator_id() -> string { "motoko_driver_only" }
+func generator_version() -> string { "1" }
+
+func bounds() -> GeneratorBounds {
+  { max_interactions: 96,
+    max_chunks_per_interaction: 4,
+    max_payload_bytes: 512,
+    max_resource_size: 8,
+    max_clock_advance_ms: 2000 }
+}
+
+func generated_world(seed: int) -> WorldState {
+  generated_world_at(generator_version(), seed)
+}
+
+func generated_world_at(version: string, seed: int) -> WorldState {
+  let g = generator_state(generator_id(), version, seed, bounds());
+  let e = choose_environment(g, "initial_world");
+  { empty_world_state() | gen: e.state, env: e.entries }
+}
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate }
+func no_intercept(_ctx: ExtCtx, _text: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
+func no_solver(_ctx: ExtCtx, _text: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("generated: approval required", DenyAfterTimeout)
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks: ExtensionHooks = {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: passthrough_pre_step,
+    on_tool_policy: pending_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  };
+  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+}
+
+func run_generated(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), GeneratedWorld(w))
+}
+
+func run_recording(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w))
+}
+
+pure func run_manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.26.0", "4.0", "{}",
+                       ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD")
+}
+
+pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
+  { schema_version: program_schema_version(),
+    generator_id: initial.gen.id,
+    generator_version: initial.gen.version,
+    seed: initial.gen.seed,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
+      synthetic_environment: initial.env,
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_only/1"
+    },
+    bounds: initial.gen.bounds,
+    manifest: run_manifest(),
+    interactions: w.log }
+}
+
+pure func store_root() -> string { ".ailang/dst-corpus" }
+
+-- ---------------------------------------------------------------------------
+-- THE CLASS OBSERVERS — three of them, each named at its site
+-- ---------------------------------------------------------------------------
+
+pure func count_fault_class(xs: [Interaction], cls: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if i.outcome.fault_class_id == cls then 1 else 0) + count_fault_class(rest, cls)
+  }
+}
+
+-- `approval_denied` is the world serving a DENY answer, and the answer is the
+-- payload — the operator's raw line, which `tool_phase.resolve_approval` parses
+-- into `ApprovalDenied`. There is no fault class id on this interaction and
+-- there should not be: the world answered the question it was asked.
+pure func count_approval_denied(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if interaction_kind(i) == "expect_approval" && contains(i.outcome.payload, "\"type\":\"deny\"")
+       then 1 else 0)
+        + count_approval_denied(rest)
+  }
+}
+
+-- `provider_empty_terminal_response` is `session.c2_loop`'s empty-stop guard
+-- read off the record: empty prose, a "stop" finish and no tool calls is
+-- exactly what makes `trim(info.output) == ""` true at the Finalize arm.
+pure func count_provider_empty_terminal(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => {
+      let here =
+        if interaction_kind(i) != "expect_provider" then 0
+        else match decode_provider_outcome(i.outcome.payload) {
+          ProviderServed(s) =>
+            if s.prose == "" && s.finish_reason == "stop" && List.length(s.tool_calls) == 0
+            then 1 else 0,
+          ProviderScriptExhausted => 0,
+          ProviderUndecodable(_) => 0
+        };
+      here + count_provider_empty_terminal(rest)
+    }
+  }
+}
+
+-- The observed class set for one run. Derived from the log, never declared.
+pure func observed_classes(xs: [Interaction]) -> [string] {
+  (if count_fault_class(xs, fault_class_tool_failed()) > 0 then [fault_class_tool_failed()] else [])
+    ++ (if count_fault_class(xs, fault_class_tool_correlation_mismatch()) > 0
+        then [fault_class_tool_correlation_mismatch()] else [])
+    ++ (if count_fault_class(xs, fault_class_tool_deadline_exceeded()) > 0
+        then [fault_class_tool_deadline_exceeded()] else [])
+    ++ (if count_approval_denied(xs) > 0 then ["approval_denied"] else [])
+    ++ (if count_provider_empty_terminal(xs) > 0 then ["provider_empty_terminal_response"] else [])
+}
+
+-- The branch ids the catalogue names for the classes this run reached. The id
+-- is READ FROM THE CATALOGUE ROW, never supplied here, so a member cannot claim
+-- coverage of a branch nobody declared. The evidence that the branch RAN is the
+-- wire, counted by `make corpus_pr`; this list is what the wire count is
+-- checked against.
+pure func branches_for(classes: [string], rows: [FaultClass]) -> [string] {
+  match classes {
+    [] => [],
+    c :: rest =>
+      (match find_class(rows, c) {
+         None => [],
+         Some(row) => [branch_id(row.recovery_branch)]
+       }) ++ branches_for(rest, rows)
+  }
+}
+
+pure func count_kind_of(xs: [Interaction], kind: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if interaction_kind(i) == kind then 1 else 0) + count_kind_of(rest, kind)
+  }
+}
+
+pure func count_status_of_kind(xs: [Interaction], kind: string, status_id: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if interaction_kind(i) == kind && outcome_status_id(i.outcome.status) == status_id then 1 else 0)
+        + count_status_of_kind(rest, kind, status_id)
+  }
+}
+
+pure func count_with_chunks(xs: [Interaction]) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if List.length(i.outcome.chunks) > 0 then 1 else 0) + count_with_chunks(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- THE BANK — a query's answer, with each member's reason asserted
+-- ---------------------------------------------------------------------------
+
+export type BankEntry = { seed: int, kind: MemberKind }
+
+pure func fixed_bank() -> [BankEntry] {
+  [{ seed: 1, kind: FixedSeed("the SHORTEST eligible trajectory of 260 (n=9): S8's complement says a bank that walks only the middle certifies only the middle") },
+   { seed: 2, kind: FixedSeed("first of two witnesses for approval_denied — the smallest seed of 260 reaching it") },
+   { seed: 3, kind: FixedSeed("second witness for approval_denied; two per class, because a single witness is lost silently to any generator drift that moves one seed") },
+   { seed: 6, kind: FixedSeed("first of two witnesses for ToolCorrelationMismatch — the smallest seed of 260 reaching it") },
+   { seed: 14, kind: FixedSeed("first of two witnesses for ToolDeadlineExceeded — the smallest seed of 260 reaching it") },
+   { seed: 15, kind: FixedSeed("second witness for ToolDeadlineExceeded") },
+   { seed: 20, kind: FixedSeed("second witness for ToolCorrelationMismatch") },
+   { seed: 23, kind: FixedSeed("first of two witnesses for ToolFailed — the smallest seed of 260 reaching it") },
+   { seed: 39, kind: FixedSeed("second witness for ToolFailed") },
+   { seed: 114, kind: PromotedRegression("the richest Err-terminating trajectory of 260: three fault classes in one run that does NOT end Ok. D11's bank holds promoted regression programs as well as fixed seeds, and a bank whose every member terminates Ok pins only the happy shape of failure") },
+   { seed: 176, kind: FixedSeed("the LONGEST eligible trajectory of 260 (n=50), the other trajectory extreme") },
+   { seed: 195, kind: FixedSeed("THE ONLY SEED OF 260 reaching all four sweep-reachable required classes by itself — one in 260, which is why the bank is a query's answer and not an author's list") }]
+}
+
+-- The class no seed reaches and construction does. Its justification is
+-- CHECKABLE: `ConstructedForReachableClass` fires if a swept seed ever reaches
+-- it, so this entry can only close, and closing it is forced to be recorded.
+pure func constructed_class() -> string { "provider_empty_terminal_response" }
+
+pure func constructed_kind() -> MemberKind {
+  ConstructedForClass(constructed_class(),
+    "no generated program can reach it: every generated terminal step carries non-empty prose (`gp<draws>-<arg>`, derived from a draw so that a seed reaching no choice reaches no byte), and `session.c2_loop`'s empty-stop branch is guarded by `trim(info.output) == \"\"`. Measured: 0 of 260 swept seeds, and 0 `empty_stop_finalize` records on the wire across the whole sweep. Cluster 12's limit — sweeping selects among things that exist and cannot cover a space the producer does not reach")
+}
+
+-- The constructed world: one terminal step with EMPTY prose. Everything else is
+-- the ordinary shape, so the only thing distinguishing this program from a
+-- generated one is the quantity the class is about.
+pure func empty_terminal_world() -> WorldState {
+  let step: ScriptedStep = {
+    prose: "",
+    tool_calls: [],
+    input_tokens: 11,
+    output_tokens: 7,
+    finish_reason: "stop",
+    chunks: []
+  };
+  { empty_world_state() | script: [step],
+    env: [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "37" }] }
+}
+
+pure func constructed_program(w: WorldState, initial: WorldState) -> ExecutionProgram {
+  { program_of(w, initial) |
+    generator_id: "motoko_constructed",
+    generator_version: "1",
+    seed: 0 }
+}
+
+-- ---------------------------------------------------------------------------
+-- Building a member: generate, validate, persist, LOAD BACK, key
+-- ---------------------------------------------------------------------------
+
+export type BuiltMember = {
+  member: CorpusMember,
+  program: ExecutionProgram,
+  log: [Interaction],
+  ended_ok: bool,
+  persisted: string,
+  loaded_identity: string
+}
+
+func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Interaction], ended_ok: bool)
+  -> BuiltMember ! {FS, IO} {
+  let rows = fault_catalogue();
+  let classes = observed_classes(log);
+  let branches = branches_for(classes, rows);
+  let encoded = encode_artifact(p);
+  let bytes_len = match encoded { Encoded(b) => Str.length(b), EncodeRefused(_) => 0 };
+  let identity = match encoded { Encoded(b) => artifact_identity(b), EncodeRefused(_) => "" };
+  let outcome = persist_program(store_root(), p);
+  let persisted = persist_rule(outcome);
+  let path = artifact_path(store_root(), p);
+  -- D8's retained bytes, LOADED BACK. A member whose bytes do not read back is
+  -- a digest with no artifact behind it, and the whole corpus is references.
+  let back = load_program(path);
+  let loaded_identity = match back {
+    Loaded(lp) => match encode_artifact(lp) {
+      Encoded(b) => artifact_identity(b),
+      EncodeRefused(_) => ""
+    },
+    LoadRefused(_) => "",
+    LoadIoError(_) => ""
+  };
+  let m = member_of(member_id, kind, p, path, identity, bytes_len, classes, branches);
+  { member: m, program: p, log: log, ended_ok: ended_ok,
+    persisted: persisted, loaded_identity: loaded_identity }
+}
+
+func build_seed(e: BankEntry)
+  -> BuiltMember ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let initial = generated_world(e.seed);
+  let r = run_generated("corpus_${e.seed}", initial);
+  let p = program_of(r.world, initial);
+  let ok = match r.result { Ok(_) => true, Err(_) => false };
+  build("seed-${e.seed}", e.kind, p, r.world.log, ok)
+}
+
+func build_all(es: [BankEntry])
+  -> [BuiltMember] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match es {
+    [] => [],
+    e :: rest => {
+      let here = build_seed(e);
+      here :: build_all(rest)
+    }
+  }
+}
+
+func build_constructed()
+  -> BuiltMember ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let initial = empty_terminal_world();
+  let r = run_recording("corpus_constructed", initial);
+  let p = constructed_program(r.world, initial);
+  let ok = match r.result { Ok(_) => true, Err(_) => false };
+  build("constructed-empty-terminal", constructed_kind(), p, r.world.log, ok)
+}
+
+pure func members_of(bs: [BuiltMember]) -> [CorpusMember] {
+  match bs { [] => [], b :: rest => b.member :: members_of(rest) }
+}
+
+pure func seeds_of(bs: [BuiltMember]) -> [int] {
+  match bs { [] => [], b :: rest => b.member.seed :: seeds_of(rest) }
+}
+
+pure func all_classes(bs: [BuiltMember]) -> [string] {
+  match bs { [] => [], b :: rest => b.member.classes_reached ++ all_classes(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- The corpus under test
+-- ---------------------------------------------------------------------------
+
+-- `seeds_attempted` is the SEEDED members only. The constructed member is not a
+-- seed and counting it would inflate the window by one — which is the direction
+-- D11's minimum exists to stop, and it would be inflated by the very member
+-- that exists because no seed reaches its class.
+pure func seeded_only(bs: [BuiltMember]) -> [BuiltMember] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      (match b.member.kind {
+         ConstructedForClass(_, _) => [],
+         FixedSeed(_) => [b],
+         PromotedRegression(_) => [b]
+       }) ++ seeded_only(rest)
+  }
+}
+
+-- `elapsed_ms` is 0 and that is DELIBERATE: this process cannot honestly time
+-- itself here, and a number invented at this line would be a measurement the
+-- run never took — the exact failure `documented_coverage()` was labelled to
+-- avoid. `make corpus_pr` times the run from OUTSIDE and compares it against
+-- `pr_job().budget_ms`; the mutant below proves the rule fires when it is
+-- exceeded, and the Makefile is what supplies a real elapsed figure.
+pure func the_corpus(bs: [BuiltMember], elapsed_ms: int) -> Corpus {
+  let ms = members_of(bs);
+  let seeded = seeded_only(bs);
+  { corpus_id: "dst-pr-fixed-bank",
+    job: pr_job(),
+    members: ms,
+    seeds_attempted: seeds_of(seeded),
+    runs_completed: List.length(seeded),
+    elapsed_ms: elapsed_ms }
+}
+
+-- What the BANK is held to: the required non-waived classes minus the four that
+-- no member of any kind can reach today. Derived from the catalogue in both
+-- directions and then reduced by a NAMED register, so an entry can only be
+-- removed by editing a list that says why.
+pure func unreachable_register() -> [{ class_id: string, why: string }] {
+  [{ class_id: "provider_error_retryable",
+     why: "`ScriptedStep` has no error channel, so a generated AIError has nowhere to be chosen into (cluster 10 correction 2; cluster 13 correction 2 separates this from the LATENCY field, which is a different change)" },
+   { class_id: "provider_error_non_retryable",
+     why: "as provider_error_retryable: the same missing ScriptedStep error case" },
+   { class_id: "provider_protocol_inconsistent_result",
+     why: "the generator's tool_args are always well-formed JSON, so the malformed-arguments branch is reachable by a scenario that writes one and is driven by no seed" },
+   { class_id: "provider_partial_stream_then_error",
+     why: "`live_ports` returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can produce a non-empty emission log; the retry/finalize half is reachable, the PARITY half is not observable. EXTERNALLY BLOCKED" }]
+}
+
+pure func unreachable_ids() -> [string] {
+  ids_of(unreachable_register())
+}
+
+pure func ids_of(rs: [{ class_id: string, why: string }]) -> [string] {
+  match rs { [] => [], r :: rest => r.class_id :: ids_of(rest) }
+}
+
+pure func drop_ids(xs: [string], drop: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (if contains_str(drop, x) then [] else [x]) ++ drop_ids(rest, drop)
+  }
+}
+
+pure func expected_bank_coverage() -> [string] {
+  drop_ids(required_non_waived(fault_catalogue()), unreachable_ids())
+}
+
+-- The classes a SEED SWEEP was observed to reach. Supplied to the gate so that
+-- `ConstructedForReachableClass` can fire: a constructed member justified by
+-- "no seed reaches this" is stale the moment a seed does.
+pure func swept_classes(bs: [BuiltMember]) -> [string] {
+  seed_classes(bs)
+}
+
+pure func seed_classes(bs: [BuiltMember]) -> [string] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      (match b.member.kind {
+         FixedSeed(_) => b.member.classes_reached,
+         PromotedRegression(_) => b.member.classes_reached,
+         ConstructedForClass(_, _) => []
+       }) ++ seed_classes(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Mutation helpers
+-- ---------------------------------------------------------------------------
+
+func mutant(label: string, c: Corpus, expected: [string], swept: [string], rule: string) -> bool ! {IO} {
+  let rs = validate_corpus(c, driver_only(), expected, swept);
+  report("mutant: ${label} → ${rule}", has_corpus_rule(rs, rule),
+         if List.length(rs) == 0 then "the mutant produced NO rejection — the rule cannot fire"
+         else "expected '${rule}', the mutant produced: ${join_str(corpus_rules_of(rs))}")
+}
+
+pure func head_member(ms: [CorpusMember]) -> CorpusMember {
+  match ms { [] => empty_member(), m :: _ => m }
+}
+
+pure func empty_member() -> CorpusMember {
+  { member_id: "", kind: FixedSeed(""),
+    generator_id: "", generator_version: "", seed: 0,
+    artifact_path: "", artifact_identity: "", artifact_bytes: 0,
+    trajectory_key: "", manifest: run_manifest(),
+    classes_reached: [], branches_reached: [] }
+}
+
+pure func replace_head(ms: [CorpusMember], m: CorpusMember) -> [CorpusMember] {
+  match ms { [] => [m], _ :: rest => m :: rest }
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenarios
+-- ---------------------------------------------------------------------------
+
+func scenario_the_bank_is_real(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- every member is a program this run generated, persisted and LOADED BACK --");
+  all_real(bs)
+}
+
+func all_real(bs: [BuiltMember]) -> bool ! {IO} {
+  match bs {
+    [] => true,
+    b :: rest => {
+      let m = b.member;
+      let a = report("${m.member_id}: persisted (${b.persisted}) with retained bytes (${m.artifact_bytes})",
+                     b.persisted == "artifact-persisted" && m.artifact_bytes > 0,
+                     "persist reported '${b.persisted}'");
+      -- D8: a digest without retained bytes is not sufficient for replay. The
+      -- identity is recomputed from the bytes READ BACK OFF DISK, so a member
+      -- whose file does not decode has no identity here and the row goes red.
+      let bb = report("${m.member_id}: the retained bytes load back to the same identity",
+                      b.loaded_identity != "" && b.loaded_identity == m.artifact_identity,
+                      "on disk ${b.loaded_identity}, in memory ${m.artifact_identity}");
+      let c = report("${m.member_id}: the manifest travels INSIDE the artifact",
+                     m.manifest.profile_id == driver_only_id()
+                       && m.manifest.profile_version == driver_only_version(),
+                     "manifest names ${m.manifest.profile_id}/${m.manifest.profile_version}");
+      let rest_ok = all_real(rest);
+      a && bb && c && rest_ok
+    }
+  }
+}
+
+func scenario_the_bank_covers_what_a_seed_can_reach(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- D11's collective coverage obligation --");
+  let c = the_corpus(bs, 0);
+  let expected = expected_bank_coverage();
+  let swept = swept_classes(bs);
+  let rs = validate_corpus(c, driver_only(), expected, swept);
+  let a = report("the corpus validates against ${List.length(expected)} expected class(es): ${join_str(expected)}",
+                 List.length(rs) == 0,
+                 "${join_str(corpus_rules_of(rs))}\n      ${first_corpus_message(rs)}");
+  let b = report("corpus_ok agrees", corpus_ok(c, driver_only(), expected, swept),
+                 "corpus_ok disagreed with validate_corpus");
+  -- The bank is held to the classes a MEMBER can reach, and the four it cannot
+  -- are named with reasons rather than dropped silently.
+  let d = report("the four unreachable classes are registered with reasons, not waived",
+                 List.length(unreachable_register()) == 4 && all_have_reasons(unreachable_register()),
+                 "an entry has a blank reason; D3's rule for a waived class applies to a coverage gap");
+  let e = report("expected + unreachable == every required non-waived class (${List.length(required_non_waived(fault_catalogue()))})",
+                 List.length(expected) + List.length(unreachable_register())
+                   == List.length(required_non_waived(fault_catalogue())),
+                 "the two lists do not partition the obligation, so a class could be in neither");
+  a && b && d && e
+}
+
+pure func all_have_reasons(rs: [{ class_id: string, why: string }]) -> bool {
+  match rs {
+    [] => true,
+    r :: rest => if r.why == "" then false else all_have_reasons(rest)
+  }
+}
+
+-- THE SWAP. Every class the bank claims is one it was OBSERVED to reach, and
+-- every class it was observed to reach is one it claims. Both directions, so
+-- the register may only shrink and closing an entry is forced to be recorded.
+func scenario_the_register_is_shrink_only(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- the declared register against the observation, in BOTH directions --");
+  let observed = all_classes(bs);
+  let expected = expected_bank_coverage();
+  let missing = drop_ids(expected, observed);
+  let surplus = drop_ids(observed_distinct(observed, []), expected);
+  let a = report("every expected class was OBSERVED (declared ⊆ observed)",
+                 List.length(missing) == 0,
+                 "declared but never observed: ${join_str(missing)}");
+  let b = report("every observed class is EXPECTED (observed ⊆ declared)",
+                 List.length(surplus) == 0,
+                 "observed and not declared: ${join_str(surplus)} — an unreachable-register entry has CLOSED and must be recorded, which is the whole point of asserting both directions");
+  -- And the unreachable register in the other direction: none of the four may
+  -- be observed. This is the row that fires when `ScriptedStep` gains its error
+  -- case and nobody updates the register.
+  let unreached = intersect(observed, unreachable_ids());
+  let c = report("no member reaches a class the register calls unreachable",
+                 List.length(unreached) == 0,
+                 "observed despite being registered unreachable: ${join_str(unreached)}");
+  a && b && c
+}
+
+pure func observed_distinct(xs: [string], seen: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      if contains_str(seen, x) then observed_distinct(rest, seen)
+      else x :: observed_distinct(rest, x :: seen)
+  }
+}
+
+pure func intersect(xs: [string], ys: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (if contains_str(ys, x) then [x] else []) ++ intersect(rest, ys)
+  }
+}
+
+-- The constructed member exists because no seed reaches its class, and that is
+-- asserted rather than described — it is the executable form of cluster 12's
+-- limit.
+func scenario_the_constructed_member_is_justified(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- the class no sweep reaches, and the construction that does --");
+  let swept = swept_classes(bs);
+  let a = report("no SWEPT member reaches ${constructed_class()}",
+                 not contains_str(swept, constructed_class()),
+                 "a seed now reaches it — the construction's justification has closed and must be recorded");
+  let b = report("the CONSTRUCTED member does reach it",
+                 contains_str(constructed_classes(bs), constructed_class()),
+                 "the constructed world did not produce an empty terminal provider response, so the member covers nothing");
+  -- And the guard fires when the justification goes stale. A corpus whose swept
+  -- set contains the constructed class must be rejected BY NAME.
+  let c = the_corpus(bs, 0);
+  let stale = mutant("a swept seed reaches the constructed class",
+                     c, expected_bank_coverage(), constructed_class() :: swept,
+                     "constructed-for-reachable-class");
+  a && b && stale
+}
+
+pure func constructed_classes(bs: [BuiltMember]) -> [string] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      (match b.member.kind {
+         ConstructedForClass(_, _) => b.member.classes_reached,
+         FixedSeed(_) => [],
+         PromotedRegression(_) => []
+       }) ++ constructed_classes(rest)
+  }
+}
+
+-- The two keys, and the measurement that says one cannot stand for the other.
+func scenario_the_corpus_has_two_keys(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- the two keys --");
+  let ms = members_of(bs);
+  let a = report("all ${List.length(ms)} artifact identities are distinct",
+                 distinct_identities(ms, []), "two members share exact bytes");
+  let b = report("all ${List.length(ms)} trajectory keys are distinct",
+                 distinct_trajectories(ms, []), "two members record the same trajectory");
+  a && b
+}
+
+-- SITE 22, RUN RATHER THAN CITED.
+--
+-- The version axis is not asserted by copying a member and editing its
+-- `generator_version` — that would make the trajectory keys equal BY
+-- CONSTRUCTION and the row would be asserting a relationship it had just
+-- created. Both halves here are real driver runs: `seed_state` is
+-- `in_range(salt_hash(id/version) + seed)`, so version "2" at seed s draws the
+-- same stream as version "1" at seed s+1, and the two programs are produced
+-- INDEPENDENTLY and then compared.
+--
+-- What the comparison establishes is the two-key argument itself:
+--
+--   the trajectory keys are EQUAL      one program's worth of coverage
+--   the artifact identities DIFFER     because generator_version is a field
+--                                      inside the encoded bytes
+--
+-- so a corpus keyed on the identity alone reports two programs where it holds
+-- one, and `AliasedTrajectory` is the only rule that can see it.
+func scenario_the_version_axis_aliases_and_the_identity_key_cannot_see_it(bs: [BuiltMember])
+  -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("\n-- site 22 at the corpus layer, run rather than cited --");
+  let seed_hi = 7;
+  let w2 = generated_world_at("2", seed_hi);
+  let r2 = run_generated("alias_v2", w2);
+  let p2 = program_of(r2.world, w2);
+  let w1 = generated_world_at("1", seed_hi + 1);
+  let r1 = run_generated("alias_v1", w1);
+  let p1 = program_of(r1.world, w1);
+
+  let k2 = trajectory_key(p2.interactions);
+  let k1 = trajectory_key(p1.interactions);
+  let i2 = identity_of(p2);
+  let i1 = identity_of(p1);
+
+  let a = report("(v2, seed ${seed_hi}) and (v1, seed ${seed_hi + 1}) record the SAME trajectory",
+                 k2 == k1,
+                 "the two keys differ, so this pair is not site 22's shape and the argument below is not demonstrated:\n        v2 ${k2}\n        v1 ${k1}");
+  let b = report("...and DIFFERENT artifact identities, because generator_version is inside the bytes",
+                 i2 != i1,
+                 "the identities collided, which would mean the identity key does merge the aliases after all");
+  -- And the gate: a corpus holding both is rejected on the trajectory rule and
+  -- NOT on the identity rule. That asymmetry is the whole two-key argument.
+  let mem2 = member_of("alias-v2", FixedSeed("site-22 demonstration"), p2, "p2", i2, 1, [], []);
+  let mem1 = member_of("alias-v1", FixedSeed("site-22 demonstration"), p1, "p1", i1, 1, [], []);
+  let c0 = the_corpus(bs, 0);
+  let paired: Corpus = { c0 | members: [mem2, mem1] };
+  let rs = validate_corpus(paired, driver_only(), [], []);
+  let c = report("a corpus holding both is rejected: aliased-trajectory",
+                 has_corpus_rule(rs, "aliased-trajectory"),
+                 "the rule did not fire; produced: ${join_str(corpus_rules_of(rs))}");
+  let d = report("...and the identity rule stays SILENT, which is the finding",
+                 not has_corpus_rule(rs, "duplicate-identity"),
+                 "duplicate-identity fired too, so the two keys are not distinguishing anything here");
+  a && b && c && d
+}
+
+pure func identity_of(p: ExecutionProgram) -> string {
+  match encode_artifact(p) {
+    Encoded(b) => artifact_identity(b),
+    EncodeRefused(_) => ""
+  }
+}
+
+pure func distinct_identities(ms: [CorpusMember], seen: [string]) -> bool {
+  match ms {
+    [] => true,
+    m :: rest =>
+      if contains_str(seen, m.artifact_identity) then false
+      else distinct_identities(rest, m.artifact_identity :: seen)
+  }
+}
+
+pure func distinct_trajectories(ms: [CorpusMember], seen: [string]) -> bool {
+  match ms {
+    [] => true,
+    m :: rest =>
+      if contains_str(seen, m.trajectory_key) then false
+      else distinct_trajectories(rest, m.trajectory_key :: seen)
+  }
+}
+
+-- S7, both halves, executable. The bank is the surviving fixture here.
+func scenario_s7_the_bank_must_survive(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- S7: the surviving fixture, both obligations asserted --");
+  let ms = members_of(bs);
+  -- EVERY SHAPE THE SPECIFICATION PROTECTS: all three member kinds, both
+  -- terminal outcomes, every expected class, and both trajectory extremes.
+  let kinds = kinds_present(ms, []);
+  let a = report("the bank carries all ${List.length(all_member_kind_ids())} member kinds: ${join_str(kinds)}",
+                 List.length(kinds) == List.length(all_member_kind_ids()),
+                 "D11 names fixed seeds AND promoted regression programs, and cluster 12's limit forces the third");
+  let b = report("the bank carries both terminal outcomes",
+                 count_ended(bs, true) > 0 && count_ended(bs, false) > 0,
+                 "every member terminates the same way, so nothing here distinguishes a run that ended from one that failed");
+  -- NO TWO QUANTITIES EQUAL, over the NAMED distinctness set. A14's refinement:
+  -- name it, do not infer it from the numbers. These are the six counts that at
+  -- least two checks in this file read and could therefore confuse.
+  let n_members = List.length(ms);
+  let n_seeds = List.length(seeds_of(bs));
+  let n_expected = List.length(expected_bank_coverage());
+  let n_unreachable = List.length(unreachable_register());
+  let n_kinds = List.length(all_member_kind_ids());
+  let n_minimum = pr_job().minimum_seeds;
+  let quantities = [n_expected, n_unreachable, n_kinds, n_minimum, n_members];
+  let c = report("the named distinctness set is pairwise distinct: expected=${n_expected} unreachable=${n_unreachable} kinds=${n_kinds} minimum=${n_minimum} members=${n_members}",
+                 all_distinct_ints(quantities, []),
+                 "two of the quantities this suite reads are equal, so no check here can be shown to be reading the one it names");
+  a && b && c
+}
+
+pure func kinds_present(ms: [CorpusMember], seen: [string]) -> [string] {
+  match ms {
+    [] => [],
+    m :: rest => {
+      let id = member_kind_id(m.kind);
+      if contains_str(seen, id) then kinds_present(rest, seen)
+      else id :: kinds_present(rest, id :: seen)
+    }
+  }
+}
+
+pure func count_ended(bs: [BuiltMember], want: bool) -> int {
+  match bs {
+    [] => 0,
+    b :: rest => (if b.ended_ok == want then 1 else 0) + count_ended(rest, want)
+  }
+}
+
+pure func all_distinct_ints(xs: [int], seen: [int]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_int(seen, x) then false else all_distinct_ints(rest, x :: seen)
+  }
+}
+
+pure func contains_int(xs: [int], t: int) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_int(rest, t) }
+}
+
+-- C5: one single-field mutant per rejection rule this corpus can produce, each
+-- asserting ITS OWN rule. Cluster 13's site 26 is the fourth time a row that
+-- merely asserted "some finding" would have been green on the wrong rule.
+func scenario_every_rule_fires(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- mutation: every rule this corpus can produce, each asserting its own --");
+  let c = the_corpus(bs, 0);
+  let expected = expected_bank_coverage();
+  let swept = swept_classes(bs);
+  let ms = c.members;
+  let m0 = head_member(ms);
+
+  let r1 = mutant("no members", { c | members: [] }, expected, swept, "corpus-empty");
+  let r2 = mutant("no seeds attempted", { c | seeds_attempted: [] }, expected, swept, "window-zero");
+  let r3 = mutant("fewer seeds than the declared minimum",
+                  { c | seeds_attempted: [1, 2, 3], runs_completed: 3 }, expected, swept, "window-below-minimum");
+  let r4 = mutant("a seed started and did not complete",
+                  { c | runs_completed: c.runs_completed - 1 }, expected, swept, "window-truncated");
+  let dup: CorpusMember = { m0 | member_id: "dup", trajectory_key: "${m0.trajectory_key}-x" };
+  let r5 = mutant("the same bytes filed twice", { c | members: dup :: ms }, expected, swept, "duplicate-identity");
+  let r6 = mutant("a digest with no retained bytes",
+                  { c | members: replace_head(ms, { m0 | artifact_path: "" }) }, expected, swept,
+                  "member-digest-without-bytes");
+  let r7 = mutant("a manifest that drifted from HEAD",
+                  { c | members: replace_head(ms, { m0 | manifest: { m0.manifest | fault_catalogue_version: "fault-catalogue/0" } }) },
+                  expected, swept, "member-manifest-stale");
+  let r8 = mutant("a promoted regression naming no failure",
+                  { c | members: replace_head(ms, { m0 | kind: PromotedRegression("") }) },
+                  expected, swept, "promoted-without-failure");
+  let r9 = mutant("a constructed member for a class the catalogue does not declare",
+                  { c | members: replace_head(ms, { m0 | kind: ConstructedForClass("no_such_class", "why") }) },
+                  expected, swept, "constructed-for-unknown-class");
+  let r10 = mutant("a required class no member reaches",
+                   c, "provider_error_retryable" :: expected, swept, "required-class-not-covered");
+  let stripped = strip_branches(ms);
+  let r11 = mutant("the classes are reached and no BRANCH is",
+                   { c | members: stripped }, expected, swept, "required-branch-not-covered");
+  let r12 = mutant("the run outlived its declared budget",
+                   { c | elapsed_ms: pr_job().budget_ms + 1 }, expected, swept, "corpus-budget-exceeded");
+  r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && r10 && r11 && r12
+}
+
+pure func strip_branches(ms: [CorpusMember]) -> [CorpusMember] {
+  match ms {
+    [] => [],
+    m :: rest => {
+      let bare: CorpusMember = { m | branches_reached: [] };
+      bare :: strip_branches(rest)
+    }
+  }
+}
+
+-- The job's numbers are ARITHMETIC over a measured constant, and the suite
+-- says so rather than the comment saying so.
+func scenario_the_minimum_is_selected_from_measured_cost(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- D11's operator-accepted minimum, selected from measured CI cost --");
+  let j = pr_job();
+  let a = report("declared: ${job_projection(j)}", j.minimum_seeds > 0, "no minimum declared");
+  let seeded = List.length(seeded_only(bs));
+  let b = report("the bank's SEED count meets the declared minimum (${seeded} ≥ ${j.minimum_seeds})",
+                 seeded >= j.minimum_seeds,
+                 "the bank declares fewer seeds than the job's minimum, which D11 fails as a below-minimum window");
+  let c = report("the minimum fits the budget at the measured ${measured_ms_per_seed()} ms/seed (${seeds_affordable_in(j.budget_ms)} affordable)",
+                 seeds_affordable_in(j.budget_ms) >= j.minimum_seeds,
+                 "the declared minimum cannot run inside the declared budget, so one of the two is a number nobody measured");
+  a && b && c
+}
+
+-- ---------------------------------------------------------------------------
+-- The machine-readable rows `make corpus_pr` re-derives the branch counter from
+-- ---------------------------------------------------------------------------
+
+func emit_rows(bs: [BuiltMember]) -> () ! {IO} {
+  match bs {
+    [] => (),
+    b :: rest => {
+      let m = b.member;
+      let _ = println("CORPUSROW ${m.member_id} kind=${member_kind_id(m.kind)} seed=${m.seed} n=${List.length(b.log)} ended=${if b.ended_ok then "Ok" else "Err"} bytes=${m.artifact_bytes} classes=${join_str(m.classes_reached)} identity=${m.artifact_identity} trajectory=${m.trajectory_key}");
+      emit_rows(rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Entry point
+-- ---------------------------------------------------------------------------
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let _ = println("WI-A15 commit 1 — D11's blocking PR corpus (${corpus_rules_version()})");
+  let seeded = build_all(fixed_bank());
+  let constructed = build_constructed();
+  let bs = seeded ++ [constructed];
+
+  let _ = println("\n-- the bank --");
+  let _ = emit_rows(bs);
+
+  let a = scenario_the_bank_is_real(bs);
+  let b = scenario_the_bank_covers_what_a_seed_can_reach(bs);
+  let c = scenario_the_register_is_shrink_only(bs);
+  let d = scenario_the_constructed_member_is_justified(bs);
+  let e = scenario_the_corpus_has_two_keys(bs);
+  let e2 = scenario_the_version_axis_aliases_and_the_identity_key_cannot_see_it(bs);
+  let f = scenario_s7_the_bank_must_survive(bs);
+  let g = scenario_every_rule_fires(bs);
+  let h = scenario_the_minimum_is_selected_from_measured_cost(bs);
+
+  let _ = println("\n${render_corpus(the_corpus(bs, 0))}");
+
+  if a && b && c && d && e && e2 && f && g && h then
+    println("\n✓ WI-A15 commit 1: the blocking PR corpus")
+  else {
+    let _ = println("\n✗ WI-A15 commit 1 FAILED");
+    exit(1)
+  }
+}
