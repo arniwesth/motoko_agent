@@ -1560,9 +1560,15 @@ that `check_core` type-checks `src/core/*.ail` but never *runs* their inline tes
 wire strings — were executed by nothing. A16 put those two files in `make terminal_trace`, but the
 general defect stands: **`ailang check` coverage and `ailang test` coverage are separate axes and
 only the first has a target.** Cluster 1's C6/C7 did not catch it because they looked at
-`src/core/test/` rather than `src/core/`. Also fix or retire `scripts/dst/probe_phase_vocab_sealed.ail`,
-which fails at baseline (`IMP010: symbol 'MkHistory' not exported`) and stayed broken precisely
-because it is in no target.
+`src/core/test/` rather than `src/core/`. **And wire `scripts/probe_phase_vocab_sealed.ail` with INVERTED polarity — it is not broken.**
+An earlier revision of this item said "fix or retire" it, at the wrong path (`scripts/dst/`), on the
+grounds that it "fails at baseline with `IMP010` and stayed broken because it is in no target". Its
+first line reads *"This probe is expected to FAIL with IMP010: phase_vocab's sealed constructors must
+not be importable outside `src/core/phase_vocab.ail`"*, and project 004 records that failure as its
+pass condition. **The compiler refusing the import IS the sealing assertion holding**; making it
+compile inverts an invariant that has held since 004. Six cluster reports carried it as "pre-existing,
+broken, in no target" and none checked what it asserts. The target must require the `IMP010` failure,
+and treat a successful compile as the failure.
 *Acceptance evidence:* every `.ail` file carrying inline tests is in a target CI invokes, verified
 by an inventory that fails when a file with tests is unreferenced — not a hand-maintained list;
 breaking one inline test turns CI red.
