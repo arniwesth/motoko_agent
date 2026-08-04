@@ -1,5 +1,13 @@
 # AILANG: an out-of-scope constructor name binds as a fresh variable, silently, with no unreachable-arm warning
 
+**✅ FIXED BEHAVIOURALLY in AILANG v0.33.0, ⚠️ DIAGNOSTIC STILL ABSENT** (verified 2026-08-04
+during WI-B1, independently re-verified). The silent-wrong-answer mode is gone: the repro that
+returned `trap(Full(42)) = -1` on v0.26.0 now returns **`42`** — an out-of-scope pattern head no
+longer binds irrefutably, and an unmatched scrutinee is a loud runtime `no pattern matched`.
+**But `ailang check` still reports nothing**, so the check-time diagnostic this issue asked for does
+not exist. Code relying on the compiler to reject an out-of-scope constructor still gets no warning.
+Half clear.
+
 ## Status
 
 Filed upstream 2026-08-03 — public feedback ticket **`fb_b39697480a4e8bbc`**, category `limitation`.
