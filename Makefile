@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -746,21 +746,119 @@ invariants:
 		echo "      while one obligation had no instrument behind it."; \
 		exit 1; \
 	fi; \
-	vio_t=$$(awk '/^export type Violation/,/^$$/' src/core/dst_invariants.ail | grep -c '^  [|=]'); \
-	vio_s=$$(awk '/^pure func sample_violations\(\)/,/^}/' src/core/dst_invariants.ail | grep -oE '[A-Z][A-Za-z]+\(' | wc -l); \
-	if [ "$$vio_t" -ne "$$vio_s" ]; then \
-		echo "FAIL: Violation declares $$vio_t constructors and sample_violations() builds $$vio_s."; \
+	vio_t=0; missing=""; \
+	sample=$$(awk '/^pure func sample_violations\(\)/,/^}/' src/core/dst_invariants.ail); \
+	for c in $$(awk '/^export type Violation/,/^$$/' src/core/dst_invariants.ail | sed -n 's/^  [|=] \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p'); do \
+		vio_t=$$((vio_t + 1)); \
+		printf '%s\n' "$$sample" | grep -qE "(^|[^A-Za-z0-9_])$$c\\(" || missing="$$missing $$c"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "FAIL: sample_violations() does not build:$$missing"; \
 		echo "      violation_rule/_family/_message are total matches, so a new rule is a"; \
 		echo "      compile error there — but one missing from sample_violations() is never"; \
 		echo "      checked for a distinct rule id, a family, or a message naming it."; \
+		echo "      Membership by NAME rather than by count, because a count is satisfied"; \
+		echo "      by sampling one constructor twice and omitting another."; \
 		exit 1; \
 	fi; \
-	echo "  ✓ $$fam_t InvariantFamily variants == $$fam_l in all_families(); $$vio_t Violation constructors == $$vio_s sampled"; \
+	echo "  ✓ $$fam_t InvariantFamily variants == $$fam_l in all_families(); all $$vio_t Violation constructors sampled by name"; \
 	if ailang test src/core/dst_invariants.ail < /dev/null > /dev/null 2>&1; then \
 		echo "  ✓ src/core/dst_invariants.ail"; \
 	else \
 		echo "  ✗ src/core/dst_invariants.ail"; \
 		ailang test src/core/dst_invariants.ail < /dev/null 2>&1 | tail -20; \
+		exit 1; \
+	fi
+
+# D11's run report and its counters (WI-A14 piece 3). Four checks.
+#
+#   1. THE SUITE. A complete report that must SURVIVE — a gate built only from
+#      rejecting fixtures passes on a validator that rejects unconditionally —
+#      then one single-field mutant per rejection rule, each asserting its own.
+#
+#   2. TWO STRUCTURAL GUARDS anchored to the syntactic form of the type
+#      declarations:
+#
+#        variants in `export type ReachStatus`    == all_reach_ids()      (5)
+#        variants in `export type ReportRejection` == sample_rejections() (13)
+#
+#      ReachStatus is the load-bearing one. Cluster 12's finding is that the
+#      three unreached fault classes are unreached in three DIFFERENT ways and a
+#      merged "unreached" number reports three facts as one — so the statuses
+#      are a sum with a reason each, and a sixth added without an id would let a
+#      fourth kind of gap be silently counted as one of the existing three.
+#
+#   3. THE ENTRY POINT THE REPLAY COMMAND NAMES MUST EXIST. `replay_command`
+#      renders a copy-pasteable line into CI output (D8), and a command naming
+#      an entry point nobody wrote satisfies every AILANG-side check while being
+#      unpasteable — the same shape as D8's forbidden "digest without retained
+#      bytes": a reference that looks like one and is not. The grep is anchored
+#      to the syntactic form `export func <name>(` rather than to the bare name,
+#      so a mention in a comment does not satisfy it.
+#
+#   4. AND THE COMMAND IS ACTUALLY RUN, against the frozen v1 specimen. Check 3
+#      proves the entry point exists; only running it proves it loads retained
+#      bytes. D8's clause is about replayability, and an affordance nobody
+#      executes is exactly the kind of claim this project keeps finding green
+#      and empty.
+.PHONY: run_report
+run_report:
+	@set -eu; \
+	ailang run --caps IO --entry main scripts/dst/run_report_dst.ail < /dev/null; \
+	reach_t=$$(awk '/^export type ReachStatus/,/^$$/' src/core/dst_run_report.ail | grep -c '^  [|=]'); \
+	reach_l=$$(awk '/^export pure func all_reach_ids\(\)/,/^}/' src/core/dst_run_report.ail | grep -c 'reach_id('); \
+	if [ "$$reach_t" -ne "$$reach_l" ]; then \
+		echo "FAIL: ReachStatus declares $$reach_t variants and all_reach_ids() lists $$reach_l."; \
+		echo "      D11's counters distinguish four ways of not being reached plus a waiver;"; \
+		echo "      a status with no id would let a new kind of gap be counted as an old one."; \
+		exit 1; \
+	fi; \
+	rej_t=0; missing=""; \
+	sample=$$(awk '/^pure func sample_rejections\(\)/,/^}/' src/core/dst_run_report.ail); \
+	for c in $$(awk '/^export type ReportRejection/,/^$$/' src/core/dst_run_report.ail | sed -n 's/^  [|=] \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p'); do \
+		rej_t=$$((rej_t + 1)); \
+		printf '%s\n' "$$sample" | grep -qE "(^|[^A-Za-z0-9_])$$c([^A-Za-z0-9_]|$$)" || missing="$$missing $$c"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "FAIL: sample_rejections() does not build:$$missing"; \
+		echo "      report_rule/_message are total matches, so a new rule is a compile error"; \
+		echo "      there — but one missing from sample_rejections() is never checked for a"; \
+		echo "      distinct rule id or a message that names it. Membership is checked by"; \
+		echo "      NAME and not by count, because SeedWindowEmpty is nullary — a count keyed"; \
+		echo "      on '\''Constructor('\'' silently misses every constructor without arguments,"; \
+		echo "      which is how this guard first went red."; \
+		exit 1; \
+	fi; \
+	entry=$$(sed -n 's/^export pure func replay_entry_point() -> string { "\(.*\)" }$$/\1/p' src/core/dst_run_report.ail); \
+	if [ -z "$$entry" ]; then \
+		echo "FAIL: could not read replay_entry_point() out of src/core/dst_run_report.ail."; \
+		exit 1; \
+	fi; \
+	if ! grep -q "^export func $$entry(" scripts/dst/run_report_dst.ail; then \
+		echo "FAIL: replay_command names entry point '$$entry' and scripts/dst/run_report_dst.ail"; \
+		echo "      declares no 'export func $$entry('. D8 requires CI output to carry a"; \
+		echo "      copy-pasteable local replay command; a command naming an entry point"; \
+		echo "      nobody wrote is unpasteable, which is the reporting-layer twin of the"; \
+		echo "      digest-without-retained-bytes D8 forbids outright."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ $$reach_t ReachStatus variants == $$reach_l ids; all $$rej_t ReportRejection constructors sampled by name; entry point '$$entry' exists"; \
+	out=$$(MOTOKO_DST_PROGRAM=scripts/dst/fixtures/execution-program-v1.artifact \
+	  ailang run --caps IO,FS,Env --entry $$entry scripts/dst/run_report_dst.ail < /dev/null 2>&1); \
+	if printf '%s\n' "$$out" | grep -q '✓ gen.specimen/gv-2 seed 23'; then \
+		echo "  ✓ the rendered replay command runs and loads the frozen v1 specimen's retained bytes"; \
+	else \
+		echo "  ✗ the rendered replay command did not load the frozen specimen — the CI"; \
+		echo "      replay affordance is decorative, which is what D8's retained-bytes"; \
+		echo "      clause exists to prevent."; \
+		printf '%s\n' "$$out" | tail -10; \
+		exit 1; \
+	fi; \
+	if ailang test src/core/dst_run_report.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ src/core/dst_run_report.ail"; \
+	else \
+		echo "  ✗ src/core/dst_run_report.ail"; \
+		ailang test src/core/dst_run_report.ail < /dev/null 2>&1 | tail -20; \
 		exit 1; \
 	fi
 

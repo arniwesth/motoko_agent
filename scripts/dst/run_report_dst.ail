@@ -1,0 +1,610 @@
+-- scripts/dst/run_report_dst.ail
+--
+-- WI-A14 piece 3 acceptance, under ADR-001 D11.
+--
+-- ============================================================================
+-- What this suite claims, and what it deliberately does NOT
+-- ============================================================================
+--
+-- It claims the REPORT and its GATE are correct: D11's field list is carried,
+-- class-reached and branch-reached are separate counters read from D3's
+-- catalogue, every rejection rule fires on its own single-field mutant, and a
+-- complete report survives.
+--
+-- It does NOT claim a MEASURED coverage number for today's suite. Feeding these
+-- counters from a real seed sweep is WI-A15's corpora work, and a script that
+-- invented a number here would be reporting a measurement it never took —
+-- which is the failure mode this project has spent twelve clusters learning to
+-- avoid. What stands in for it is `documented_coverage()`: a DECLARED register,
+-- sourced per class from the cluster reports and the catalogue, asserted
+-- complete against `required_class_ids()` and asserted to keep the three
+-- unreached classes in THREE DIFFERENT statuses.
+--
+-- ============================================================================
+-- The three-reasons obligation, which is the thing tidying destroys
+-- ============================================================================
+--
+-- Cluster 12: three classes are unreached for three different reasons, and a
+-- single "unreached" number states three facts as one. `ReachStatus` gives each
+-- its own constructor with a reason, and `scenario_three_gaps_three_reasons`
+-- asserts they do not collapse — that the three carry three DISTINCT reach ids,
+-- and that none of them is `waived`, because a waiver is a permission and a gap
+-- is not.
+
+module scripts/dst/run_report_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/env (getEnvOr)
+
+import src/core/dst_persistence (
+  LoadOutcome, Loaded, LoadRefused, LoadIoError,
+  load_program, artifact_identity, first_decode_message
+)
+import src/core/dst_program (ExecutionProgram)
+
+import src/core/dst_fault_catalogue (
+  FaultClass,
+  fault_catalogue, fault_catalogue_version, required_class_ids,
+  conditional_class_ids, waiving_condition,
+  fault_class_tool_failed, fault_class_tool_correlation_mismatch,
+  fault_class_tool_deadline_exceeded
+)
+
+import src/core/dst_program (program_schema_version)
+import src/core/dst_event_vocabulary (event_vocabulary_version)
+import src/core/dst_driver_only (driver_only_id, driver_only_version)
+import src/core/dst_discovery (EnvExpectation, driver_env_keys)
+
+import src/core/dst_invariants (
+  Violation, NegativeAdvance
+)
+
+import src/core/dst_run_report (
+  RunReport, ReportRejection,
+  ReachStatus, Reached, UnreachableStructurally, UnreachableUntilChange,
+  CoveredNotExercised, Waived,
+  ClassCoverage, BranchCoverage, CoveragePair,
+  CompletenessEvidence, EvidenceKind, RuntimeWitness, SourceDerivedKeySet,
+  ReplayReference,
+  HarnessFailureCount, TerminalReasonCount,
+  run_report_version,
+  reach_id, reach_reason, is_reached, is_waived, all_reach_ids,
+  empty_class_coverage, empty_branch_coverage, mark_class, mark_branch,
+  classes_with_status, branches_with_status, coverage_pair,
+  env_evidence, runtime_evidence, evidence_kind_id, evidence_note,
+  replay_command, replay_line, replay_entry_point,
+  validate_report, report_ok, report_rule, report_message,
+  has_report_rule, first_report_message,
+  render_report
+)
+
+-- ---------------------------------------------------------------------------
+-- Reporting helpers
+-- ---------------------------------------------------------------------------
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}")
+          else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+pure func rules_of(rs: [ReportRejection]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest => report_rule(r) :: rules_of(rest)
+  }
+}
+
+pure func join_str(xs: [string]) -> string {
+  match xs {
+    [] => "(none)",
+    x :: [] => x,
+    x :: rest => "${x}, ${join_str(rest)}"
+  }
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The COMPLETE report: the one that must survive
+-- ---------------------------------------------------------------------------
+--
+-- Every always-applicable class reached, every branch executed, both
+-- conditional classes waived with the catalogue's own condition. This is what a
+-- passing coverage bank looks like, and it exists so the validator is shown NOT
+-- to reject everything — a gate of only-rejecting fixtures passes on a
+-- validator that rejects unconditionally.
+
+pure func reached_everything(cs: [ClassCoverage], ids: [string]) -> [ClassCoverage] {
+  match ids {
+    [] => cs,
+    id :: rest => reached_everything(mark_class(cs, id, Reached), rest)
+  }
+}
+
+pure func reached_all_branches(bs: [BranchCoverage], ids: [string]) -> [BranchCoverage] {
+  match bs {
+    [] => bs,
+    _ => match ids {
+      [] => bs,
+      id :: rest => reached_all_branches(mark_branch(bs, id, Reached), rest)
+    }
+  }
+}
+
+-- Everything except the two conditional classes, which stay waived. Derived
+-- from the catalogue rather than listed, so a class added to D3 arrives here
+-- automatically instead of silently staying unreached.
+pure func always_applicable_ids() -> [string] {
+  without_all(required_class_ids(), conditional_class_ids(fault_catalogue()))
+}
+
+pure func without_all(xs: [string], drop: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      if contains_str(drop, x) then without_all(rest, drop) else x :: without_all(rest, drop)
+  }
+}
+
+pure func complete_classes() -> [ClassCoverage] {
+  reached_everything(empty_class_coverage(fault_catalogue()), always_applicable_ids())
+}
+
+-- `extension_effect_fault`'s branch is `NoReachableBranch` in the catalogue, so
+-- `empty_branch_coverage` already gives it `unreachable-structurally` and the
+-- gate does not demand it. That is D3's own declaration travelling through
+-- rather than being re-decided here.
+pure func complete_branches() -> [BranchCoverage] {
+  reached_all_branches(empty_branch_coverage(fault_catalogue()), always_applicable_ids())
+}
+
+pure func env_expectations() -> [EnvExpectation] {
+  [{ key: "MOTOKO_SESSION_ID", count: 1 },
+   { key: "MOTOKO_PERSIST_RETRIES", count: 1 },
+   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+   { key: "OPENAI_BASE_URL", count: 1 },
+   { key: "MOTOKO_HEADLESS", count: 1 },
+   { key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", count: 1 },
+   -- THE MULTIPLICITY ONE. Once per native tool dispatch, so its expected count
+   -- is expressed in terms of an independently-witnessed quantity — which is
+   -- what stops the whole env expectation from being a source-derived guess.
+   { key: "MOTOKO_TOOL_TIMEOUT_MS", count: 3 }]
+}
+
+pure func complete_evidence() -> [CompletenessEvidence] {
+  [runtime_evidence("expect_provider", 4, 4),
+   runtime_evidence("expect_tool", 3, 3),
+   runtime_evidence("expect_approval", 5, 5),
+   runtime_evidence("advance_clock", 2, 2),
+   runtime_evidence("runtime_random_draw", 6, 6),
+   runtime_evidence("expect_extension_effect", 0, 0),
+   -- The seventh, and the one that is a DIFFERENT KIND.
+   env_evidence(env_expectations(), 9)]
+}
+
+pure func complete_replay_ref() -> ReplayReference {
+  { generator_id: "motoko_driver_only",
+    generator_version: "1",
+    seed: 13,
+    artifact_path: ".dst/programs/motoko_driver_only/1/seed-13.artifact",
+    artifact_identity: "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    manifest_id: "driver_only/3" }
+}
+
+pure func complete_report() -> RunReport {
+  { generator_id: "motoko_driver_only",
+    generator_version: "1",
+    program_schema_version: program_schema_version(),
+    event_vocabulary_version: event_vocabulary_version(),
+    fault_catalogue_version: fault_catalogue_version(),
+    profile_id: driver_only_id(),
+    profile_version: driver_only_version(),
+    manifest_id: "driver_only/3",
+    seeds_attempted: [9, 13, 94, 101, 137],
+    seeds_minimum: 5,
+    runs_completed: 5,
+    harness_failures: [],
+    generator_failures: [],
+    class_coverage: complete_classes(),
+    branch_coverage: complete_branches(),
+    terminal_reasons: [{ reason: "stop", count: 3 },
+                       { reason: "max_steps", count: 1 },
+                       { reason: "cost_exhausted", count: 1 }],
+    completeness: complete_evidence(),
+    first_failed_invariant: None,
+    elapsed_ms: 4200,
+    budget_ms: 60000,
+    replay_refs: [complete_replay_ref()] }
+}
+
+-- ---------------------------------------------------------------------------
+-- The DOCUMENTED register: what is unreached today, and WHY, per class
+-- ---------------------------------------------------------------------------
+--
+-- Not a measurement. Each entry's reason is sourced from a cluster report or
+-- from the catalogue's own coverage gaps, and the register exists so that the
+-- THREE DIFFERENT REASONS survive contact with a counter. WI-A15's corpora
+-- replace it with observations; until then this is the honest statement, and it
+-- is executable rather than prose.
+
+pure func documented_coverage() -> [ClassCoverage] {
+  let base = empty_class_coverage(fault_catalogue());
+  let c1 = mark_class(base, "provider_error_retryable",
+    UnreachableUntilChange("ScriptedStep has no error channel, so a generated AIError has nowhere to be chosen into (cluster 10 correction 2); WI-A14 piece 2 adds the LATENCY field, which is a different field — the fault half needs its own"));
+  let c2 = mark_class(c1, "provider_error_non_retryable",
+    UnreachableUntilChange("as provider_error_retryable: no ScriptedStep error channel"));
+  let c3 = mark_class(c2, "provider_protocol_inconsistent_result",
+    CoveredNotExercised("the generator's tool_args are always well-formed JSON, so the malformed-arguments branch is reachable by a scenario that writes one and is not driven by any seed today"));
+  let c4 = mark_class(c3, "provider_partial_stream_then_error",
+    UnreachableStructurally("live_ports returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can produce a non-empty emission log to compare the projection against; the retry/finalize half is reachable, the PARITY half is not observable"));
+  let c5 = mark_class(c4, "provider_empty_terminal_response", Reached);
+  let c6 = mark_class(c5, fault_class_tool_failed(), Reached);
+  let c7 = mark_class(c6, fault_class_tool_correlation_mismatch(),
+    CoveredNotExercised("codec-covered and pinned by round-trip rows; the generator's ToolChoiceMismatch can produce it, so MORE SEEDS IS THE FIX — which is what separates this status from the two above"));
+  let c8 = mark_class(c7, fault_class_tool_deadline_exceeded(),
+    CoveredNotExercised("as ToolCorrelationMismatch: same codec, reachable by ToolChoiceLate, undriven by the pinned seeds"));
+  mark_class(c8, "approval_denied", Reached)
+  -- The two conditional classes keep the Waived status empty_class_coverage
+  -- gave them, carrying the catalogue's own condition verbatim.
+}
+
+-- The three classes cluster 12 names, and the statuses that must stay distinct.
+pure func the_three_gaps() -> [string] {
+  ["approval_deadline_exceeded",
+   "provider_error_retryable",
+   fault_class_tool_correlation_mismatch()]
+}
+
+pure func status_of(cs: [ClassCoverage], id: string) -> Option[ReachStatus] {
+  match cs {
+    [] => None,
+    c :: rest => if c.class_id == id then Some(c.status) else status_of(rest, id)
+  }
+}
+
+pure func status_ids(cs: [ClassCoverage], ids: [string]) -> [string] {
+  match ids {
+    [] => [],
+    id :: rest =>
+      (match status_of(cs, id) { None => "<absent>", Some(s) => reach_id(s) })
+        :: status_ids(cs, rest)
+  }
+}
+
+pure func all_distinct(xs: [string], seen: [string]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if contains_str(seen, x) then false else all_distinct(rest, x :: seen)
+  }
+}
+
+pure func reasons_present(cs: [ClassCoverage]) -> bool {
+  match cs {
+    [] => true,
+    c :: rest =>
+      if is_reached(c.status) then reasons_present(rest)
+      else if reach_reason(c.status) == "" then false
+      else reasons_present(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Mutation helpers
+-- ---------------------------------------------------------------------------
+
+func mutant(label: string, r: RunReport, rule: string) -> bool ! {IO} {
+  let rs = validate_report(r);
+  report("mutant: ${label} → ${rule}", has_report_rule(rs, rule),
+         if List.length(rs) == 0 then "the mutant produced NO rejection — the rule cannot fire"
+         else "expected '${rule}', the mutant produced: ${join_str(rules_of(rs))}")
+}
+
+-- ---------------------------------------------------------------------------
+-- Scenarios
+-- ---------------------------------------------------------------------------
+
+func scenario_the_complete_report_survives() -> bool ! {IO} {
+  let _ = println("\n-- the complete report, which must survive --");
+  let rs = validate_report(complete_report());
+  let a = report("a complete report validates", List.length(rs) == 0,
+                 "${join_str(rules_of(rs))}\n      ${first_report_message(rs)}");
+  let b = report("report_ok agrees", report_ok(complete_report()), "report_ok disagreed with validate_report");
+  a && b
+}
+
+-- D11's field list, asserted rather than assumed present. Each of the nine
+-- fields the decision names is read back off the report.
+func scenario_d11_field_list_is_carried() -> bool ! {IO} {
+  let _ = println("\n-- D11's field list --");
+  let r = complete_report();
+  let pair = coverage_pair(r.class_coverage, r.branch_coverage);
+  let a = report("generator id/version", r.generator_id != "" && r.generator_version != "", "blank");
+  let b = report("attempted seeds (${List.length(r.seeds_attempted)}) and declared minimum (${r.seeds_minimum})",
+                 List.length(r.seeds_attempted) > 0 && r.seeds_minimum > 0, "blank");
+  let c = report("completed SystemRun count (${r.runs_completed})", r.runs_completed > 0, "zero");
+  let d = report("harness and generator failure lists are present and separate",
+                 List.length(r.harness_failures) == 0 && List.length(r.generator_failures) == 0,
+                 "a failure list is populated in the clean fixture");
+  let e = report("fault classes reached: ${pair.classes_reached} of ${List.length(r.class_coverage)}",
+                 pair.classes_reached == List.length(always_applicable_ids()), "wrong class count");
+  let f = report("NAMED recovery branches reached: ${pair.branches_reached} of ${List.length(r.branch_coverage)}",
+                 pair.branches_reached == List.length(always_applicable_ids()), "wrong branch count");
+  let g = report("waived classes carry their conditions",
+                 waivers_carry_conditions(r.class_coverage, conditional_class_ids(fault_catalogue())),
+                 "a waived class has a blank condition");
+  let h = report("terminal reasons reached (${List.length(r.terminal_reasons)})",
+                 List.length(r.terminal_reasons) > 0, "none");
+  let i = report("elapsed budget (${r.elapsed_ms} of ${r.budget_ms} ms)",
+                 r.budget_ms > 0 && r.elapsed_ms > 0, "unset");
+  a && b && c && d && e && f && g && h && i
+}
+
+pure func waivers_carry_conditions(cs: [ClassCoverage], ids: [string]) -> bool {
+  match ids {
+    [] => true,
+    id :: rest =>
+      match status_of(cs, id) {
+        None => false,
+        Some(s) =>
+          if is_waived(s) && reach_reason(s) != "" then waivers_carry_conditions(cs, rest) else false
+      }
+  }
+}
+
+-- THE COUNTER PAIR. The point is not that the numbers agree; it is that they
+-- CAN disagree. A merged counter is green on a report that reached every class
+-- and executed no branch, and that is exactly the report D11 says is not the
+-- coverage the acceptance test asks for.
+func scenario_the_two_counters_can_disagree() -> bool ! {IO} {
+  let _ = println("\n-- D11: class-reached and branch-reached are SEPARATE counters --");
+  let base = complete_report();
+  -- Every class reached; not one branch executed.
+  let no_branches = empty_branch_coverage(fault_catalogue());
+  let classes_only: RunReport = { base | branch_coverage: no_branches };
+  let pair = coverage_pair(classes_only.class_coverage, classes_only.branch_coverage);
+  let a = report("a report can reach every class and execute no branch (classes=${pair.classes_reached} branches=${pair.branches_reached})",
+                 pair.classes_reached > 0 && pair.branches_reached == 0,
+                 "the two counters moved together — they are not independent");
+  let b = report("and the gate fails it on required-branch-not-reached, not on a class rule",
+                 has_report_rule(validate_report(classes_only), "required-branch-not-reached")
+                   && not has_report_rule(validate_report(classes_only), "required-class-not-reached"),
+                 "the branch miss did not report its own rule: ${join_str(rules_of(validate_report(classes_only)))}");
+  a && b
+}
+
+func scenario_three_gaps_three_reasons() -> bool ! {IO} {
+  let _ = println("\n-- cluster 12: three unreached classes, three DIFFERENT reasons --");
+  let cs = documented_coverage();
+  let ids = status_ids(cs, the_three_gaps());
+  let a = report("the three named gaps carry three DISTINCT statuses (${join_str(ids)})",
+                 List.length(ids) == 3 && all_distinct(ids, []) && not contains_str(ids, "<absent>"),
+                 "the three gaps collapsed into fewer statuses: ${join_str(ids)}");
+  -- A waiver is not one of the three. `approval_deadline_exceeded` IS
+  -- conditional in the catalogue and therefore waived — but the OTHER two are
+  -- not waived, and reporting a gap as a waiver converts it into a permission.
+  let b = report("the two gaps the catalogue does not waive are not reported as waivers",
+                 not_waived(cs, "provider_error_retryable")
+                   && not_waived(cs, fault_class_tool_correlation_mismatch()),
+                 "an unwaived gap is reported as a waiver");
+  let c = report("every non-reached class carries a reason", reasons_present(cs),
+                 "a non-reached class has a blank reason — a gap nobody can plan against");
+  let d = report("the register is complete against D3's required set",
+                 List.length(cs) == List.length(required_class_ids()),
+                 "${List.length(cs)} rows for ${List.length(required_class_ids())} required classes");
+  let e = report("all five reach statuses are distinct ids", List.length(all_reach_ids()) == 5,
+                 "the status set changed");
+  a && b && c && d && e
+}
+
+pure func not_waived(cs: [ClassCoverage], id: string) -> bool {
+  match status_of(cs, id) { None => false, Some(s) => not is_waived(s) }
+}
+
+-- Clusters 7/8: the env class's completeness evidence is a DIFFERENT KIND, and
+-- the difference is reported rather than dissolved into one "complete".
+func scenario_env_evidence_is_a_different_kind() -> bool ! {IO} {
+  let _ = println("\n-- clusters 7/8: two kinds of completeness evidence --");
+  let es = complete_evidence();
+  let runtime = of_kind(es, "runtime-witness");
+  let derived = of_kind(es, "source-derived-key-set");
+  let a = report("six classes carry a runtime witness, one carries a source-derived key set (${List.length(runtime)} / ${List.length(derived)})",
+                 List.length(runtime) == 6 && List.length(derived) == 1,
+                 "the evidence kinds do not split 6/1");
+  let b = report("the env evidence is the source-derived one",
+                 is_derived(es, "environment_read"),
+                 "environment_read is not reported as source-derived — the weaker evidence would inherit the stronger's standing");
+  -- MULTIPLICITY, not presence. The expected total exceeds the key count
+  -- precisely because MOTOKO_TOOL_TIMEOUT_MS is read once per tool dispatch, so
+  -- a recorder logging the first read of each key would report 7 against 9.
+  let ev = env_evidence(env_expectations(), 9);
+  let c = report("the env expectation asserts MULTIPLICITY (${ev.witnessed} reads over ${List.length(driver_env_keys())} keys), not presence",
+                 ev.witnessed > List.length(driver_env_keys()),
+                 "the expected read total equals the key count — the check is presence, and a recorder that dropped repeats would look complete");
+  let d = report("a first-read-only recorder is caught",
+                 env_evidence(env_expectations(), List.length(driver_env_keys())).logged
+                   != env_evidence(env_expectations(), 9).witnessed,
+                 "a recorder logging one read per key matched the expectation");
+  a && b && c && d
+}
+
+pure func of_kind(es: [CompletenessEvidence], id: string) -> [CompletenessEvidence] {
+  match es {
+    [] => [],
+    e :: rest =>
+      if evidence_kind_id(e.kind) == id then e :: of_kind(rest, id) else of_kind(rest, id)
+  }
+}
+
+pure func is_derived(es: [CompletenessEvidence], world_class: string) -> bool {
+  match es {
+    [] => false,
+    e :: rest =>
+      if e.world_class == world_class then evidence_kind_id(e.kind) == "source-derived-key-set"
+      else is_derived(rest, world_class)
+  }
+}
+
+-- D8: "a digest without retained bytes is not sufficient for replay."
+func scenario_the_ci_replay_affordance() -> bool ! {IO} {
+  let _ = println("\n-- D8: the CI replay affordance --");
+  let r = complete_replay_ref();
+  let a = report("the reference carries a path AND an identity, not a digest alone",
+                 r.artifact_path != "" && r.artifact_identity != "",
+                 "half the reference is missing");
+  let b = report("it carries the execution manifest it ran under",
+                 r.manifest_id != "",
+                 "no manifest — D8's reproducibility promise is conditioned on it, so the program is not a reproduction unit");
+  let c = report("a copy-pasteable local replay command names the artifact path",
+                 replay_command(r) != "" && contains_path(replay_command(r), r.artifact_path),
+                 "the command does not name the artifact: ${replay_command(r)}");
+  let _ = println("      ${replay_line(r)}");
+  a && b && c
+}
+
+-- Reconstructed rather than substring-searched: a fold over characters would be
+-- a second string library, and reconstruction also pins the ENTRY POINT name,
+-- which is the half that makes the command runnable rather than decorative.
+pure func contains_path(cmd: string, path: string) -> bool {
+  cmd == "MOTOKO_DST_PROGRAM=${path} ailang run --caps IO,FS,Env --entry ${replay_entry_point()} scripts/dst/run_report_dst.ail"
+}
+
+-- ---------------------------------------------------------------------------
+-- D8's replay affordance, for real
+-- ---------------------------------------------------------------------------
+--
+-- The entry point `replay_command` names. It exists so the command in CI output
+-- is pasteable rather than illustrative: it loads the RETAINED BYTES from the
+-- path and reports what they decode to. D8 forbids a digest without bytes as a
+-- replay unit, and a command that cannot be run is the same failure wearing a
+-- different hat.
+export func replay_artifact() -> () ! {IO, FS, Env} {
+  let path = getEnvOr("MOTOKO_DST_PROGRAM", "");
+  if path == "" then
+    println("set MOTOKO_DST_PROGRAM to an artifact path, e.g.\n  ${replay_command(complete_replay_ref())}")
+  else {
+    let _ = println("loading ${path}");
+    match load_program(path) {
+      LoadIoError(e) => {
+        let _ = println("  ✗ could not read the artifact: ${e}");
+        exit(1)
+      },
+      LoadRefused(rs) => {
+        let _ = println("  ✗ the artifact was refused: ${first_decode_message(rs)}");
+        exit(1)
+      },
+      Loaded(p) =>
+        println("  ✓ ${p.generator_id}/${p.generator_version} seed ${p.seed}, schema ${p.schema_version}, ${List.length(p.interactions)} interaction(s)")
+    }
+  }
+}
+
+func scenario_mutants() -> bool ! {IO} {
+  let _ = println("\n-- mutants: one per rejection rule, each asserting its own --");
+  let b = complete_report();
+
+  -- EVERY call in a record-update field position is `let`-bound first. That is
+  -- the workaround for an AILANG defect on the pin — a call in the field-value
+  -- position of a record update is not registered as a dependency, so
+  -- `{ b | class_coverage: drop_class(...) }` reports `undefined variable:
+  -- drop_class` depending on a declaration ordering the author cannot see.
+  -- Written up in .agent/issues/ailang-record-update-field-call-is-not-a-dependency.md.
+  let dropped = drop_class(complete_classes(), "approval_denied");
+  let unreached = mark_class(complete_classes(), "approval_denied",
+                             CoveredNotExercised("no scenario drove it"));
+  let branch_missed = mark_branch(complete_branches(), "approval_denied",
+                                  CoveredNotExercised("the class was reached, the branch was not"));
+  let blank_waiver = mark_class(complete_classes(), "approval_deadline_exceeded", Waived(""));
+  let bogus_waiver = mark_class(complete_classes(), "approval_denied", Waived("a made-up condition"));
+  let invented = complete_classes() ++ [{ class_id: "InventedClass", status: Reached, times: 1 }];
+  let renamed = rename_branch(complete_branches(), "approval_denied", "some/other/branch");
+  let ref_base = complete_replay_ref();
+  let no_bytes = { ref_base | artifact_path: "" };
+  let no_manifest = { ref_base | manifest_id: "" };
+
+  let m1 = mutant("no attempted seeds",
+                  { b | seeds_attempted: [], runs_completed: 0 }, "seed-window-empty");
+  let m2 = mutant("fewer seeds than the declared minimum",
+                  { b | seeds_attempted: [9, 13], runs_completed: 2, seeds_minimum: 5 },
+                  "seed-window-below-minimum");
+  -- Attempted five, accounted for four: a window that started runs nobody can
+  -- account for. Distinct from "below minimum", which is about the window's
+  -- SIZE rather than about runs going missing inside it.
+  let m3 = mutant("a silently truncated window",
+                  { b | runs_completed: 4 }, "seed-window-truncated");
+  let m4 = mutant("a required class with no coverage row",
+                  { b | class_coverage: dropped }, "required-class-unaccounted");
+  let m5 = mutant("a required class neither reached nor waived",
+                  { b | class_coverage: unreached }, "required-class-not-reached");
+  let m6 = mutant("a recovery branch that did not execute",
+                  { b | branch_coverage: branch_missed }, "required-branch-not-reached");
+  let m7 = mutant("a waiver with a blank condition",
+                  { b | class_coverage: blank_waiver }, "waived-without-condition");
+  -- The direction that LOSES coverage: an unconditional class reported waived
+  -- converts a gap into a permission.
+  let m8 = mutant("an AlwaysApplicable class reported waived",
+                  { b | class_coverage: bogus_waiver }, "waived-but-not-conditional");
+  let m9 = mutant("a class the catalogue does not declare",
+                  { b | class_coverage: invented }, "unknown-class-counted");
+  let m10 = mutant("a branch id the catalogue does not name",
+                   { b | branch_coverage: renamed }, "branch-not-in-catalogue");
+  let m11 = mutant("a replay reference that is a digest alone",
+                   { b | replay_refs: [no_bytes] }, "replay-reference-digest-without-bytes");
+  let m12 = mutant("a replay reference with no manifest",
+                   { b | replay_refs: [no_manifest] }, "replay-reference-without-manifest");
+  let m13 = mutant("a window over its declared budget",
+                   { b | elapsed_ms: 90000 }, "budget-exceeded");
+  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10 && m11 && m12 && m13
+}
+
+pure func drop_class(cs: [ClassCoverage], id: string) -> [ClassCoverage] {
+  match cs {
+    [] => [],
+    c :: rest => if c.class_id == id then rest else c :: drop_class(rest, id)
+  }
+}
+
+pure func rename_branch(bs: [BranchCoverage], class_id: string, to: string) -> [BranchCoverage] {
+  match bs {
+    [] => [],
+    x :: rest =>
+      if x.class_id == class_id then ({ x | branch_id: to }) :: rest
+      else x :: rename_branch(rest, class_id, to)
+  }
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("=== run_report_dst (D11, ${run_report_version()}) ===");
+
+  let c1 = scenario_the_complete_report_survives();
+  let c2 = scenario_d11_field_list_is_carried();
+  let c3 = scenario_the_two_counters_can_disagree();
+  let c4 = scenario_three_gaps_three_reasons();
+  let c5 = scenario_env_evidence_is_a_different_kind();
+  let c6 = scenario_the_ci_replay_affordance();
+  let c7 = scenario_mutants();
+
+  let _ = println("\n-- the rendered report (a complete window) --");
+  let _ = println(render_report(complete_report()));
+
+  let _ = println("\n  i TODAY's DOCUMENTED coverage register — declared, not measured.");
+  let _ = println("  i WI-A15's corpora feed these counters from a real seed sweep; until then");
+  let _ = println("  i the statuses below are sourced per class from the cluster reports and D3.");
+  let doc_classes = documented_coverage();
+  let doc_base = complete_report();
+  let documented: RunReport = { doc_base | class_coverage: doc_classes };
+  let _ = println(render_report(documented));
+
+  if c1 && c2 && c3 && c4 && c5 && c6 && c7 then println("\nrun_report_dst PASS")
+  else {
+    let _ = println("\nrun_report_dst FAIL");
+    exit(1)
+  }
+}
