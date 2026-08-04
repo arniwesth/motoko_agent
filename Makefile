@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -861,6 +861,50 @@ run_report:
 		ailang test src/core/dst_run_report.ail < /dev/null 2>&1 | tail -20; \
 		exit 1; \
 	fi
+
+# D4's latency pair (WI-A14 piece 2). Two checks.
+#
+#   1. THE SUITE. Two worlds identical but for one integer, run through the REAL
+#      driver, demonstrating completion versus timeout; the S8 control (same
+#      latency, no declared deadline, must COMPLETE); both programs replaying
+#      deterministically; and the two artifacts having different identities, so
+#      the pair is two programs rather than one reported twice.
+#
+#   2. A WIRE WITNESS, and it is here for the same reason strict_replay's is.
+#      Every assertion in the AILANG suite reads the INTERACTION LOG, which the
+#      recorder wrote — so a recorder that stamped `ToolDeadlineExceeded` on
+#      both halves would satisfy all of them. `native_tool_results` carries the
+#      fault class to the wire from PRODUCTION code (tool_phase's
+#      tool_outcome_message) that knows nothing about the interaction log, and
+#      it must appear exactly as many times as the run has slow halves.
+#
+#      The suite runs the slow world THREE times (the pair, the replay pair, and
+#      the identity check) and the fast world three times, so the wire carries
+#      three deadline faults and no more. Counted rather than grepped for
+#      presence: presence is satisfied by a recorder that faults everything.
+.PHONY: latency_pair
+latency_pair:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/latency_pair_dst.ail < /dev/null > /tmp/latency_pair.out 2>&1 || \
+	  { tail -40 /tmp/latency_pair.out; exit 1; }; \
+	grep -v '^{' /tmp/latency_pair.out; \
+	late=$$(grep -c '"fault_class":"ToolDeadlineExceeded"' /tmp/latency_pair.out || true); \
+	total=$$(grep -c '"type":"native_tool_results"' /tmp/latency_pair.out || true); \
+	if [ "$$late" -eq 0 ]; then \
+		echo "FAIL: the driver emitted no ToolDeadlineExceeded to the wire. Every"; \
+		echo "      assertion in the suite reads the interaction log, which the recorder"; \
+		echo "      wrote; the wire witness comes from production code that knows nothing"; \
+		echo "      about that log, and without it the pair is graded by its own recorder."; \
+		exit 1; \
+	fi; \
+	if [ "$$late" -eq "$$total" ]; then \
+		echo "FAIL: every one of the $$total tool dispatches faulted with ToolDeadlineExceeded."; \
+		echo "      The fast half must NOT fault — a recorder or a world that faults"; \
+		echo "      everything satisfies a presence check and proves nothing about latency."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ wire witness: $$late of $$total native_tool_results carry ToolDeadlineExceeded (the slow halves, and only those)"
 
 # WI-A12's advancement + trace-completeness gate, landed BEFORE the threading it
 # watches — the plan's binding sequencing rule. The script header carries the
