@@ -1,9 +1,12 @@
 # Draft reply to `sunholo-data/ailang#546` — the `IncompleteStream` question
 
-**⚑ DESTINATION CHANGED 2026-08-04: post to [#578](https://github.com/sunholo-data/ailang/issues/578),
-not #546.** Upstream's closing comment on #546 — *"Shipped in v0.33.0 … S2 continues under #578 (your
-`IncompleteStream` question is the open thread there)"* — moved the thread. The content and the
-permalinks are unaffected.
+**⚑ SUPERSEDED 2026-08-04 by `DRAFT-reply-578-cancellable-context-and-incomplete-stream.md`.**
+Do not post this one. #546 is closed (shipped in v0.33.0) and the thread moved to
+[#578](https://github.com/sunholo-data/ailang/issues/578) — but simply re-addressing this text was
+not enough: #578 has zero comments, its body does not restate the `IncompleteStream` question, and
+it explicitly asks for **demand evidence** for the cancellable context, which is its actual subject.
+The successor leads with that evidence and a scope correction, then answers the question. This file
+is kept only so the reasoning's provenance is readable.
 
 **Status: DRAFT, not posted.** Posting is outward-facing and awaits the operator's decision.
 Answering the question asked 2026-08-03T10:20Z and repeated 16:35Z as owed before S2.
