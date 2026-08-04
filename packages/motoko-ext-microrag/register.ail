@@ -32,7 +32,7 @@ import std/process (exec)
 import std/fs (writeFile)
 import std/bytes (toString)
 import std/json (get, asString, encode, jo)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtCtx,
   ExtensionHooks,
   ToolSchema,
@@ -133,7 +133,7 @@ func microrag_context_for(path: string, content: string) -> string ! {Process} {
 -- Auto-injection wrap: write the file, run microRAG, return combined result.
 -- The retrieval gets surfaced via the tool's stdout so it's in the model's
 -- next-turn history — adaptive context based on what was just written.
-func auto_write_with_microrag(call: ToolCallEnvelope) -> ToolHandleDecision ! {FS, Process, Rand} {
+func auto_write_with_microrag(call: ToolCallEnvelope) -> ToolHandleDecision ! {FS, Process, Rand}  {
   let path = get_str(call, "path");
   let content = get_str(call, "content");
   if path == "" then Handled(make_error_result(call, "WriteFile: missing 'path'"))
@@ -157,14 +157,14 @@ pure func microrag_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPol
 -- Auto-fire on WriteFile to .ail. For everything else, Delegate to motoko's
 -- default handlers (the actual WriteFile / EditFile / ReadFile path-validation
 -- + sha256 hash + emit_event chain in src/core/tool_runtime.ail).
-func microrag_tool_handle(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+func microrag_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
   if call.tool == "WriteFile" then {
     let path = get_str(call, "path");
     if is_ail_file(path) then auto_write_with_microrag(call)
     else Delegate
   }
   else Delegate
-}
+}, next_state: ctx.world } }
 
 export func register_with_config(_cfg: a) -> ExtensionHooks {
   {
@@ -183,18 +183,18 @@ export func register_with_config(_cfg: a) -> ExtensionHooks {
         { requested_total: None, requested_solver: None, requested_verifier: None }
       },
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
         PassThrough
-      },
+      }, next_state: ctx.world } },
     on_tool_policy: microrag_tool_policy,
     on_tool_handle: microrag_tool_handle,
     on_response_intercept:
-      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(ctx: ExtCtx, _resp: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
         NoIntercept
-      },
+      }, next_state: ctx.world } },
     on_solver_candidate:
-      func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
         NoDecision
-      }
+      }, next_state: ctx.world } }
   }
 }

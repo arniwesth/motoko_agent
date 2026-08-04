@@ -194,7 +194,7 @@ import src/core/dst_result (
 import src/core/dst_driver_only (driver_only, driver_only_manifest, driver_only_version)
 import src/core/dst_profile (ExecutionManifest, validate_manifest, replay_metadata_of)
 import src/core/dst_fault_catalogue (required_class_ids)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
   Delegate,
@@ -239,7 +239,7 @@ func multi_step(prose: string, calls: [ToolCall], chunks: [string]) -> ScriptedS
     input_tokens: 200,
     output_tokens: 100,
     finish_reason: "tool_calls",
-    chunks: chunks }
+    chunks: chunks , error_code: "", error_message: "", advance_ms: 0}
 }
 
 func approve_line() -> string { "{\"type\":\"approve\"}" }
@@ -267,14 +267,14 @@ func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
 func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
-func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate }
-func no_intercept(_ctx: ExtCtx, _text: string)
-  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
-func no_solver(_ctx: ExtCtx, _text: string)
-  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
-func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
+func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } }
+func no_solver(ctx: ExtCtx, _text: string)
+  -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
+func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("strict replay: approval required", DenyAfterTimeout)
 }

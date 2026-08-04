@@ -162,12 +162,12 @@ pure func fixture_chunks() -> [StreamChunkRecord] {
 
 pure func step_with_calls() -> ScriptedStep {
   { prose: "p0", tool_calls: [{ id: "call-1", name: "BashExec", arguments: "{}" }],
-    input_tokens: 11, output_tokens: 12, finish_reason: "tool_calls", chunks: [] }
+    input_tokens: 11, output_tokens: 12, finish_reason: "tool_calls", chunks: [], error_code: "", error_message: "", advance_ms: 0 }
 }
 
 pure func step_terminal() -> ScriptedStep {
   { prose: "p1", tool_calls: [], input_tokens: 13, output_tokens: 14,
-    finish_reason: "stop", chunks: [] }
+    finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 }
 }
 
 -- The provider interaction that carries chunks. Chunks live on the timed

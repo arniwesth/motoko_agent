@@ -23,7 +23,7 @@ import src/core/types  (Msg, version)
 import src/core/prompts (with_cache_hint, with_agents_context)
 import src/core/cache   (get_hint)
 import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config, CostRates)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime)
 import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, dispatch_build_system_prompt, dispatch_budget_plan)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
@@ -121,7 +121,7 @@ func compute_budget_plan(
 	    context_limit: context_limit,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry()
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
 	  };
   let patched = dispatch_budget_plan(ext_runtime, ctx, base);
   clamp_budget_plan(patched, max_steps)
@@ -230,7 +230,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
 	    context_limit: context_limit,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry()
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
 	  };
   let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_hint);
 

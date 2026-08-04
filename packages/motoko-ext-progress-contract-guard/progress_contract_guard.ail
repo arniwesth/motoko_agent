@@ -3,7 +3,7 @@ module sunholo/motoko_ext_progress_contract_guard/progress_contract_guard
 import std/string (trim, contains, toLower)
 import std/json (Json, jo)
 import std/result (Result, Err)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
 
 export pure func guard_marker() -> string {
   "[motoko-progress-contract-guard]"
@@ -133,9 +133,9 @@ func assistant(content: string) -> Msg {
   { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
 }
 
-func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} { { result: {
   Err("ext ai_step port unavailable")
-}
+}, next_state: world } }
 
 func noop_proc_exec(_cmd: string, _cwd: string) -> string ! {IO, Process, FS} {
   ""
@@ -183,7 +183,7 @@ func test_ctx(task: string, history: [Msg]) -> ExtCtx {
     context_limit: 0,
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry()
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
   }
 }
 

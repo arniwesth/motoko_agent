@@ -30,7 +30,7 @@ module sunholo/motoko_ext_decision_framework/register
 
 import std/option (None)
 import std/string (length, toLower, contains)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtCtx,
   ExtensionHooks,
   ToolSchema,
@@ -152,20 +152,20 @@ export func register_with_config(_cfg: a) -> ExtensionHooks {
       },
     on_tool_policy: \_ctx _call. NoOpinion,
     on_tool_handle:
-      func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+      func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
         Delegate
-      },
+      }, next_state: ctx.world } },
     on_response_intercept:
-      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(ctx: ExtCtx, _resp: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
         NoIntercept
-      },
+      }, next_state: ctx.world } },
     on_solver_candidate:
-      func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
         NoDecision
-      },
+      }, next_state: ctx.world } },
     on_pre_step:
-      func(_ctx: ExtCtx, _history: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+      func(ctx: ExtCtx, _history: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
         PassThrough
-      }
+      }, next_state: ctx.world } }
   }
 }

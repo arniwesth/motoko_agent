@@ -45,7 +45,8 @@ import src/core/types (Msg)
 import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome) -- WI-B2b: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
+import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
 import src/core/context_usage (resolve_context_limit)
 import src/core/ext/runtime (
@@ -693,28 +694,52 @@ func capture_failing_payload(e: AIError, msgs: [Message]) -> () ! {FS} {
   match writeFileResult(".motoko/failing_payload.json", payload) { Ok(_) => (), Err(_) => () }
 }
 
-func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Result[string, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+-- WI-B2b. THIS IS THE SITE D1's EXTENSION-MODEL EXCLUSION WAS ABOUT, and the
+-- exclusion is lifted here.
+--
+-- What it used to do, and why: it passed `empty_world_state()` and threw the
+-- successor away. Not an oversight — `ExtPorts.ai_step` returned
+-- `Result[string, string]` and the hook results above it were decision-only, so
+-- a successor had no way back to `C2LoopState`. Threading the driver's live
+-- cursor IN and discarding the successor would have recreated F6 (a cursor that
+-- serves the same answer forever while nothing crashes); capturing it in this
+-- closure would have created the second home D1 prohibits. Handing over a fresh
+-- empty world was the only honest option, and the cost was recorded rather than
+-- hidden: against a Scripted provider the empty script served `terminal_step()`
+-- and the extension was told the model had answered.
+--
+-- What it does now: takes the world in and returns the successor out, so the
+-- caller — `ext_ports_of`'s bridge, and through it the hook and the dispatch
+-- fold — can thread it back to `C2LoopState`. The world still has exactly one
+-- home; this function neither captures nor stores it.
+--
+-- STILL DROPPED, and named rather than left for a reader to discover:
+-- `exchange.emissions`. That is WI-A1's loss channel, not D1's cursor, and
+-- closing it means widening `ExtPorts.ai_step` again to carry a chunk log the
+-- ABI has no type for. It is a separate change from this one.
+-- NAMED, not an inline `{ result: ..., next_state: ... }`. Two reasons, and the
+-- second is the one that bites: `derive.py` finds a function's body by taking
+-- the first `{` after its signature that is not an effect row — so an anonymous
+-- RECORD RETURN TYPE is mistaken for the body, no `p.model_step(` is found in
+-- it, and `ai_step` is reported **unrouted**, the tool's fail-open answer. A
+-- named type keeps the signature brace-free up to the body.
+type ExtAiStepResult = { result: Result[string, string], next_state: WorldState }
+
+func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, msgs: [Msg]) -> ExtAiStepResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
   -- Resolve the provider API model the same way the main step loop does
-  -- (dispatch_step calls provider_api_model at src/core/session.ail:1695).
-  -- Extensions (e.g. compaction_ai) pass their configured model verbatim,
-  -- which for OpenRouter still carries the "openrouter/" routing prefix; sent
-  -- raw the provider rejects it with 400 "not a valid model ID", surfacing as
-  -- compaction_ai.summarizer_failed / provider_error. Strip it here.
-  -- Both the emission log and the successor cursor are dropped here, and that
-  -- is an ABI limit rather than an oversight: ExtPorts.ai_step returns
-  -- Result[string, string] (packages/motoko-ext-abi/types.ail:63) and the hook
-  -- results above it are decision-only, so a successor has no way back to
-  -- C2LoopState. Threading the driver's live cursor in and discarding the
-  -- successor would recreate F6; capturing it in this closure would create the
-  -- second home D1 prohibits. So the extension model path is EXCLUDED rather
-  -- than hand-waved: it is handed a fresh empty state, and WI-A2 is a partial
-  -- cursor fix that says so. Any conformant interim profile must exclude every
-  -- hook registered by an extension that calls this. Widening ExtPorts.ai_step
-  -- belongs to the ABI major the repin forces (ADR-001 D1, Milestone B).
-  match p.model_step(empty_world_state(), provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk).result {
-    Ok(result) => Ok(result.message.content),
-    Err(e) => Err("${e.code}: ${e.message}")
+  -- (dispatch_step calls provider_api_model). Extensions (e.g. compaction_ai)
+  -- pass their configured model verbatim, which for OpenRouter still carries
+  -- the "openrouter/" routing prefix; sent raw the provider rejects it with 400
+  -- "not a valid model ID", surfacing as compaction_ai.summarizer_failed /
+  -- provider_error. Strip it here.
+  let exchange = p.model_step(world, provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk);
+  {
+    result: match exchange.result {
+      Ok(result) => Ok(result.message.content),
+      Err(e) => Err("${e.code}: ${e.message}")
+    },
+    next_state: exchange.next_state
   }
 }
 
@@ -769,8 +794,26 @@ pure func decode_or_empty(raw: string) -> Json {
 }
 
 func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
-  let ai_step = func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
-    ext_ai_step(p, model, base_url, msgs)
+  -- WI-B2b. The bridge takes the token IN and returns the successor OUT, so
+  -- this closure captures no world at all — which is the point. `world` below
+  -- is still captured by `env_get` and `proc_exec`, and those two remain
+  -- classifier-2 members precisely because they cannot return a successor.
+  -- WI-C5 owns widening them.
+  --
+  -- THE `let w0` IS LOad-BEARING FOR A TOOL, not for the compiler.
+  -- `tools/ext_call_inventory/derive.py` decides whether this field reaches a
+  -- core `Ports` seam by following ONE level of named call that forwards the
+  -- port — and its matcher for that call is `\b(IDENT)\s*\(([^()]*)\)`, which
+  -- cannot match an argument list containing nested parentheses. Written
+  -- inline as `ext_ai_step(p, token_to_world(w), ...)` the tool fails to follow
+  -- the call, reports `ai_step` as **unrouted**, and that is its documented
+  -- FAIL-OPEN answer — "the single most expensive bug in this tool's history",
+  -- in its own words. It looks like a clean result. Keep the conversion in its
+  -- own `let`, and if you must inline it, fix the tool first.
+  let ai_step = func(w: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+    let w0 = token_to_world(w);
+    let out = ext_ai_step(p, w0, model, base_url, msgs);
+    { result: out.result, next_state: world_to_token(out.next_state) }
   };
   let env_get = func(key: string, fallback: string) -> string ! {Env} {
     p.env_get(world, key, fallback).value
@@ -1122,7 +1165,11 @@ func mk_v2_ext_ctx(
   context_limit: int,
   ports: ExtPorts,
   artifacts: Json,
-  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int }
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
+  -- WI-B2b. The driver's CURRENT world, tokenised. Every caller passes
+  -- `world_to_token(st.world_state)` — the live cursor, not a fresh one — which
+  -- is what makes the hook's successor meaningful when it comes back.
+  world: ExtWorld
 ) -> ExtCtx {
   let remaining = if budget.total - step_idx < 0 then 0 else budget.total - step_idx;
   {
@@ -1141,7 +1188,7 @@ func mk_v2_ext_ctx(
     context_limit: context_limit,
     ports: ports,
     artifacts: artifacts,
-    telemetry: ext_token_telemetry(telemetry)
+    telemetry: ext_token_telemetry(telemetry), world: world
   }
 }
 
@@ -1891,7 +1938,7 @@ func c2_loop(
               -- catches — the queue would never advance.
               let post: C2LoopState = { st | world_state: input.next_state };
               let tool_step_idx = c2_done_step(post.step_idx);
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), resolve_context_limit(model), ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry);
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), resolve_context_limit(model), ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
               match resolution {
                 ApprovalDenied(reason) => {
                   let _ = ledger_emit(session_id, NativeToolDenied({
@@ -1921,7 +1968,7 @@ func c2_loop(
           let calls = c2_tool_plan_calls(plan.entries);
           let request_id = "step-${show(tool_step_idx)}";
           let ctx_msgs = c2_pending_context(st);
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let _ = if emit_calls then
             ledger_emit(session_id, NativeToolCalls({
@@ -1975,7 +2022,7 @@ func c2_loop(
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
           let ext_context_limit = if context_limit - pinned_tokens < 0 then 0 else context_limit - pinned_tokens;
-          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
@@ -2014,7 +2061,13 @@ func c2_loop(
                 model: model
               });
               let _ = ledger_emit(session_id, prepared_event);
-              let exchange = dispatch_step(st.provider, st.world_state, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
+              -- WI-B2b: `chain.next_state`, not `st.world_state`. The pre-step
+              -- chain runs BEFORE this call and a compaction hook may have made
+              -- provider calls of its own; starting the model step from the
+              -- world the chain was entered with would re-serve whatever the
+              -- chain already consumed. This is the pre-step half of the same
+              -- threading the intercept and solver hooks do below.
+              let exchange = dispatch_step(st.provider, token_to_world(chain.next_state), provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
               -- exchange.emissions rides along but has no driver consumer yet:
               -- live_ports returns [] until the recorded-stream API lands, and
               -- projecting the log into the ledger is WI-A12's work. WI-A1 is
@@ -2067,9 +2120,14 @@ func c2_loop(
                   let applied = apply_state_delta(step_state, phase.delta);
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry);
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
                   let trace_after_model = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), phase.events);
-                  match dispatch_response_intercept(rt, post_ctx, result.message.content) {
+                  -- WI-B2b. Bound rather than matched inline, because the
+                  -- successor has to outlive the match: `intercepted.next_state`
+                  -- is what the loop carries forward, and `exchange.next_state`
+                  -- is now stale by exactly the effects the hook performed.
+                  let intercepted = dispatch_response_intercept(rt, post_ctx, result.message.content);
+                  match intercepted.decision {
                     InterceptHandled(envelope) => {
                       let event = ExtInterceptHandled({
                         step: step_idx,
@@ -2087,7 +2145,10 @@ func c2_loop(
 	                        ext_artifacts: chain.artifacts,
 	                        telemetry: applied.telemetry,
 	                        provider: st.provider,
-	                        world_state: exchange.next_state,
+	                        -- WI-B2b: the INTERCEPT's successor, not the model
+	                        -- step's. The hook ran after the exchange, so
+	                        -- `exchange.next_state` is stale by whatever it did.
+	                        world_state: token_to_world(intercepted.next_state),
                         pending_tool_calls: [],
                         pending_tool_context: [],
                         pending_tool_prefix: [],
@@ -2173,9 +2234,14 @@ func c2_loop(
                             c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                           },
                           None => {
-                            match dispatch_solver_candidate(rt, post_ctx, result.message.content) {
+                            -- WI-B2b. Bound, for the same reason the intercept
+                            -- above is: every branch below carries the world
+                            -- forward, and the solver hook's successor is the
+                            -- current one from here on.
+                            let finalized = dispatch_solver_candidate(rt, post_ctx, result.message.content);
+                            match finalized.decision {
                               Accept(output) =>
-	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, exchange.next_state, st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
+	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
                               ContinueWithFeedback(feedback) => {
                                 let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
                                 let _ = ledger_emit(session_id, event);
@@ -2186,7 +2252,7 @@ func c2_loop(
 	                                  ext_artifacts: chain.artifacts,
 	                                  telemetry: applied.telemetry,
 	                                  provider: st.provider,
-	                                  world_state: exchange.next_state,
+	                                  world_state: token_to_world(finalized.next_state),
                                   pending_tool_calls: [],
                                   pending_tool_context: [],
                                   pending_tool_prefix: [],
@@ -2217,7 +2283,7 @@ func c2_loop(
 	                                    ext_artifacts: chain.artifacts,
 	                                    telemetry: applied.telemetry,
 	                                    provider: st.provider,
-	                                    world_state: exchange.next_state,
+	                                    world_state: token_to_world(finalized.next_state),
                                     pending_tool_calls: [],
                                     pending_tool_context: [],
                                     pending_tool_prefix: [],

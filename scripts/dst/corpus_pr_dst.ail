@@ -148,7 +148,7 @@ import src/core/dst_corpus (
   UnreachableClass, unreachable_by_search, unreachable_class_ids, expected_bank_coverage,
   render_corpus, corpus_rules_version
 )
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan, BudgetPatch, Delegate, ExtCtx, ExtRuntime, ExtensionHooks,
   FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
   PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
@@ -228,14 +228,14 @@ func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
 func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
-func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate }
-func no_intercept(_ctx: ExtCtx, _text: string)
-  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
-func no_solver(_ctx: ExtCtx, _text: string)
-  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
-func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
+func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } }
+func no_solver(ctx: ExtCtx, _text: string)
+  -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
+func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("generated: approval required", DenyAfterTimeout)
 }
@@ -328,7 +328,7 @@ pure func count_provider_empty_terminal(xs: [Interaction]) -> int {
     i :: rest => {
       let here =
         if interaction_kind(i) != "expect_provider" then 0
-        else match decode_provider_outcome(i.outcome.payload) {
+        else match decode_provider_outcome(i.outcome.payload, i.outcome.advance_ms) {
           ProviderServed(s) =>
             if s.prose == "" && s.finish_reason == "stop" && List.length(s.tool_calls) == 0
             then 1 else 0,
@@ -431,7 +431,7 @@ pure func empty_terminal_world() -> WorldState {
     input_tokens: 11,
     output_tokens: 7,
     finish_reason: "stop",
-    chunks: []
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
   };
   { empty_world_state() | script: [step],
     env: [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "37" }] }

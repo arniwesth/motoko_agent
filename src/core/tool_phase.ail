@@ -305,7 +305,7 @@ export func execute_allowed_tool_call(
     let _ = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
     { msg: handled_tool_message(call.id, result_env), next_state: world }
   } else {
-    let handle_decision = dispatch_tool_handle(rt, ctx, envelope);
+    let handle_decision = dispatch_tool_handle(rt, ctx, envelope).decision;
     match handle_decision {
       Handled(result_env) => {
         let _ = emit(ExtToolHandled({

@@ -84,7 +84,40 @@ export type ScriptedStep = {
   input_tokens: int,
   output_tokens: int,
   finish_reason: string,
-  chunks: [string]
+  chunks: [string],
+
+  -- WI-B2b, WIDENING 1 of 2: THE PROVIDER FAULT. An ERROR CASE, and it is a
+  -- different change from `advance_ms` below — earlier revisions of the plan
+  -- conflated the two with each other and with D4's latency pair.
+  --
+  -- Until now a scripted step could only ever serve `Ok`: `stub_step`'s world
+  -- provider wraps every entry in `Ok(scripted_to_step_result(s))`, so the
+  -- provider fault classes the catalogue declares
+  -- (`provider_error_retryable`, `provider_error_non_retryable`, …) had no
+  -- scripted delivery at all. A non-empty `error_code` makes the entry serve
+  -- `Err({code, message})` instead, which is what gives those classes a
+  -- deterministic instrument.
+  --
+  -- Flat `code`/`message` rather than a sum, mirroring `ScriptedTool` directly
+  -- above: the two are the provider-side and tool-side halves of the same
+  -- scripted-fault idea and a reader should not have to learn two shapes. Empty
+  -- `error_code` means "no fault", which keeps every existing entry's meaning.
+  error_code: string,
+  error_message: string,
+
+  -- WI-B2b, WIDENING 2 of 2: THE PROVIDER LATENCY. Not a fault — how long the
+  -- provider TOOK. `ScriptedTool.duration_ms` has always carried this for the
+  -- tool side, and `decode_tool_outcome(payload, advance_ms)` already restores
+  -- it on replay from `TimedOutcome.advance_ms`. The provider side had no such
+  -- field, so `decode_provider_outcome` took no `advance_ms` and a replayed
+  -- provider call always took zero virtual time.
+  --
+  -- Restored the SAME way and for the same reason: the elapsed time is what
+  -- actually happened to the clock, so it is read back from the recorded
+  -- outcome rather than from the payload. That is why this needs NO codec
+  -- change on the wire — `advance_ms` is not written into the provider payload,
+  -- it is passed in beside it. See `decode_provider_outcome`.
+  advance_ms: int
 }
 
 -- The driver's explicit world state, threaded through the ports in and out.
@@ -700,7 +733,7 @@ export pure func generated_provider_entry(state: WorldState, salt: string) -> { 
             input_tokens: d.input_tokens,
             output_tokens: d.output_tokens,
             finish_reason: d.finish_reason,
-            chunks: repeat_chunk(d.chunk_text, d.chunk_count) },
+            chunks: repeat_chunk(d.chunk_text, d.chunk_count), error_code: "", error_message: "", advance_ms: 0 },
     gen: choice.state
   }
 }
@@ -849,7 +882,11 @@ export pure func encode_provider_outcome(s: ScriptedStep) -> string {
     kv("finish_reason", js(s.finish_reason)),
     kv("input_tokens", jnum(_int_to_float(s.input_tokens))),
     kv("output_tokens", jnum(_int_to_float(s.output_tokens))),
-    kv("tool_calls", ja(tool_calls_json(s.tool_calls)))
+    kv("tool_calls", ja(tool_calls_json(s.tool_calls))),
+    -- WI-B2b widening 1: the FAULT travels in the payload, because it is what
+    -- the provider said. Contrast `advance_ms` below, which does not.
+    kv("error_code", js(s.error_code)),
+    kv("error_message", js(s.error_message))
   ]))
 }
 
@@ -857,7 +894,15 @@ export pure func encode_exhausted_provider_outcome() -> string {
   encode(jo([kv("served", jb(false))]))
 }
 
-export pure func decode_provider_outcome(payload: string) -> ProviderOutcome {
+-- `advance_ms` comes from the recorded `TimedOutcome`, not from the payload —
+-- WI-B2b widening 2, and it is deliberately the SAME shape as
+-- `decode_tool_outcome(payload, advance_ms)` directly below, for the same
+-- reason: the elapsed time is what happened to the CLOCK, so recording it in
+-- the payload as well would be a second representation of one quantity, and the
+-- two could drift. Before this parameter existed a replayed provider call
+-- always advanced the virtual clock by zero, which made every recorded
+-- provider latency unreplayable while every count still balanced.
+export pure func decode_provider_outcome(payload: string, advance_ms: int) -> ProviderOutcome {
   match decode(payload) {
     Err(_) => ProviderUndecodable("the payload is not JSON"),
     Ok(root) =>
@@ -871,7 +916,10 @@ export pure func decode_provider_outcome(payload: string) -> ProviderOutcome {
         output_tokens: int_field(root, "output_tokens", 0),
         finish_reason: str_field(root, "finish_reason", ""),
         -- Read back from `TimedOutcome.chunks` by the caller; see above.
-        chunks: []
+        chunks: [],
+        error_code: str_field(root, "error_code", ""),
+        error_message: str_field(root, "error_message", ""),
+        advance_ms: advance_ms
       })
   }
 }
@@ -963,20 +1011,39 @@ pure func codec_fixture_step() -> ScriptedStep {
     -- Deliberately DISAGREES with the tool calls: a derived finish reason would
     -- produce "tool_calls" here, so this row is what proves it is recorded.
     finish_reason: "stop",
-    chunks: [] }
+    chunks: [],
+    -- WI-B2b widening 1. Distinct from every other string in this fixture, so a
+    -- decoder that reads `message` into `code` (or either into `prose`) is
+    -- visible rather than merely decodable.
+    error_code: "provider_error_retryable",
+    error_message: "upstream 503",
+    -- WI-B2b widening 2. 449 is distinct from 211, 307 and every other quantity
+    -- here, and it is deliberately NOT the value the round trip passes in — see
+    -- the test, which passes 983 and asserts the PASSED value wins, because
+    -- `advance_ms` travels beside the payload rather than inside it.
+    advance_ms: 449 }
 }
 
 pure func test_the_provider_outcome_round_trips_every_field() -> bool
   tests [((), true)]
   {
     let s = codec_fixture_step();
-    match decode_provider_outcome(encode_provider_outcome(s)) {
+    -- 983, not `s.advance_ms` (449). WI-B2b widening 2 puts the elapsed time
+    -- BESIDE the payload rather than inside it, so the round trip must show the
+    -- passed value winning. Asserting `back.advance_ms == s.advance_ms` would
+    -- pass just as readily against an encoder that wrote the field into the
+    -- payload and a decoder that ignored the parameter — the exact silent loss
+    -- this suite exists to catch.
+    match decode_provider_outcome(encode_provider_outcome(s), 983) {
       ProviderServed(back) =>
         back.prose == s.prose
           && back.finish_reason == s.finish_reason
           && back.input_tokens == s.input_tokens
           && back.output_tokens == s.output_tokens
-          && eq_tool_calls(back.tool_calls, s.tool_calls),
+          && eq_tool_calls(back.tool_calls, s.tool_calls)
+          && back.error_code == s.error_code
+          && back.error_message == s.error_message
+          && back.advance_ms == 983,
       ProviderScriptExhausted => false,
       ProviderUndecodable(_) => false
     }
@@ -989,13 +1056,13 @@ pure func test_the_provider_outcome_round_trips_every_field() -> bool
 pure func test_the_three_provider_cases_are_distinguished() -> bool
   tests [((), true)]
   {
-    let exhausted = match decode_provider_outcome(encode_exhausted_provider_outcome()) {
+    let exhausted = match decode_provider_outcome(encode_exhausted_provider_outcome(), 0) {
       ProviderScriptExhausted => true, _ => false
     };
-    let not_json = match decode_provider_outcome("stub: script exhausted") {
+    let not_json = match decode_provider_outcome("stub: script exhausted", 0) {
       ProviderUndecodable(_) => true, _ => false
     };
-    let json_without_discriminator = match decode_provider_outcome("{\"prose\":\"s0\"}") {
+    let json_without_discriminator = match decode_provider_outcome("{\"prose\":\"s0\"}", 0) {
       ProviderUndecodable(_) => true, _ => false
     };
     exhausted && not_json && json_without_discriminator

@@ -2,7 +2,7 @@ module sunholo/motoko_ext_omnigraph/omnigraph
 
 import std/json (Json, encode, jo, kv, js)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (ToolCallEnvelope, ToolResultEnvelope, ExtCtx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision)
+import pkg/sunholo/motoko_ext_abi/types (ToolHandleOutcome, ToolCallEnvelope, ToolResultEnvelope, ExtCtx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision)
 import pkg/sunholo/motoko_ext_omnigraph/exec (run_omnigraph)
 import pkg/sunholo/motoko_ext_omnigraph/args (arg_string)
 import pkg/sunholo/motoko_ext_omnigraph/guardrail (denied_mutation_reason)
@@ -76,7 +76,7 @@ export func on_tool_policy(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDe
   }
 }
 
-func handle_branch(ctx: ExtCtx, req_id: string, args: Json) -> ToolHandleDecision ! {Process} {
+func handle_branch(ctx: ExtCtx, req_id: string, args: Json) -> ToolHandleDecision ! {Process}  {
   let action = arg_string(args, "action", "");
   let name = arg_optional(args, "name");
   let from = arg_optional(args, "from");
@@ -110,7 +110,7 @@ func handle_branch(ctx: ExtCtx, req_id: string, args: Json) -> ToolHandleDecisio
   }
 }
 
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process} {
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process}  { { decision: {
   match normalize_call(call) {
     None => Delegate,
     Some(canonical) => {
@@ -129,4 +129,4 @@ export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDec
       } else Delegate
     }
   }
-}
+}, next_state: ctx.world } }

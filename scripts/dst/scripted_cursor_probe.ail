@@ -66,7 +66,7 @@ import src/core/test/stub_step (Scripted, tool_step, prose_step)
 import src/core/ports (ScriptedStep)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
   Compacted,
@@ -131,12 +131,12 @@ func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 func no_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
-func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate }
-func no_intercept(_ctx: ExtCtx, _text: string)
-  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
-func no_solver(_ctx: ExtCtx, _text: string)
-  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } }
+func no_solver(ctx: ExtCtx, _text: string)
+  -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
 
 func deny_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Deny("probe: tools denied") }
 
@@ -167,19 +167,19 @@ pure func assistants(msgs: [Msg]) -> int {
 }
 
 func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
   let folded = fold(msgs);
   let _ = println("  PRESTEP step=${show(ctx.step)} segment_in=${show(List.length(msgs))} assistants_in=${show(assistants(msgs))} -> segment_out=${show(List.length(folded))} assistants_out=${show(assistants(folded))}");
   if List.length(folded) == List.length(msgs) then PassThrough
   else Compacted(folded, "probe: folded older turns into one summary", jo([]))
-}
+}, next_state: ctx.world } }
 
-func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
   PassThrough
-}
+}, next_state: ctx.world } }
 
-func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -194,7 +194,7 @@ func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, F
   }
 }
 
-func rt_with(pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}, id: string) -> ExtRuntime {
+func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}, id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
 }

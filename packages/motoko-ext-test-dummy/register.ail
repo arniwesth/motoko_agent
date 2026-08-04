@@ -12,7 +12,7 @@ import std/option (Option, Some, None)
 import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/json (jo)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtensionHooks, ExtCtx, ToolSchema,
   BudgetPlan, BudgetPatch, PromptPatch,
   ToolCallEnvelope, ToolResultEnvelope,
@@ -78,22 +78,22 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env} {
         else if tool_decision == "deny" then Deny("dummy deny")
         else NoOpinion,
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: list[Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+      func(ctx: ExtCtx, _msgs: list[Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
         PassThrough
-      },
+      }, next_state: ctx.world } },
     on_tool_handle:
-      func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+      func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
         Delegate
-      },
+      }, next_state: ctx.world } },
     on_response_intercept:
-      func(_ctx: ExtCtx, _resp: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(ctx: ExtCtx, _resp: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
         NoIntercept
-      },
+      }, next_state: ctx.world } },
     on_solver_candidate:
-      func(_ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
         if finalize == "accept" then Accept(candidate)
         else if finalize == "continue" then ContinueWithFeedback("dummy feedback")
         else NoDecision
-      }
+      }, next_state: ctx.world } }
   }
 }

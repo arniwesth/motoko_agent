@@ -8,7 +8,7 @@ import std/result (Ok, Err)
 import std/string (startsWith, length as string_length, charAt, charCode)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (RuntimeConfig, VerificationConfig)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, FinalizeOutcome, 
   BudgetPlan,
   ExtCtx,
   PromptPatch,
@@ -21,7 +21,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   PreStepDecision,
   DiagnosticField,
   ExtensionHooks,
-  ExtRuntime
+  ExtRuntime, ExtWorld, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome -- WI-B2b; on one line to hold A5's anchor at :190
 )
 import src/core/types (Msg)
 import src/core/ext/registry_generated (parse_core_ext_order)
@@ -30,7 +30,7 @@ import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_toke
 
 export type StageOutcome = StageApplied(string) | StageRejected(string) | StageObserved(string, [DiagnosticField]) | StagePassed
 export type PreStepStage = { ext_id: string, outcome: StageOutcome }
-export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage], artifacts: Json }
+export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage], artifacts: Json, next_state: ExtWorld } -- WI-B2b: `next_state` is the chain's successor world, threaded stage to stage
 
 export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   {
@@ -231,11 +231,23 @@ export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) 
 
 -- Fold compaction hooks in registry order. Each stage receives the previous
 -- valid stage's messages; invalid output is recorded and skipped.
-func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], artifacts: Json) -> PreStepChainResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+-- WI-B2b threads the world token through this fold, and the threading is the
+-- whole point: stage N+1 must see stage N's successor, or the second compactor
+-- in a chain replays the first one's world and D1's single home has quietly
+-- become two. `{ ctx | world: world }` is what makes each stage see the current
+-- one — the ctx the caller built is otherwise a snapshot from before the chain.
+--
+-- Every arm below carries `next` through, INCLUDING the rejected-output arm:
+-- a stage whose compaction is thrown away may still have performed effects
+-- (it can call `ai_step` before deciding), so discarding its successor there
+-- would drop a real cursor. The decision is rejected, not the world.
+func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], artifacts: Json, world: ExtWorld) -> PreStepChainResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   match hooks {
-    [] => { msgs: msgs, stages: [], artifacts: artifacts },
+    [] => { msgs: msgs, stages: [], artifacts: artifacts, next_state: world },
     h :: rest => {
-      let decision = (h.on_pre_step)(ctx, msgs);
+      let outcome = (h.on_pre_step)({ ctx | world: world }, msgs);
+      let decision = outcome.decision;
+      let world1 = outcome.next_state;
       let _ = if is_test_dummy(h.id) then {
         let tag = match decision {
           PassThrough => "passthrough",
@@ -246,23 +258,25 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
       } else ();
       match decision {
         PassThrough => {
-          let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts);
-          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StagePassed } :: next.stages, artifacts: next.artifacts }
+          let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts, world1);
+          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StagePassed } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
         },
         PassThroughObserved(code, fields) => {
           let observation = normalize_diagnostic(code, fields);
-          let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts);
-          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageObserved(observation.code, observation.fields) } :: next.stages, artifacts: next.artifacts }
+          let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts, world1);
+          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageObserved(observation.code, observation.fields) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
         },
         Compacted(compacted_msgs, note, next_artifacts) => {
           match validate_compactor_output(msgs, compacted_msgs) {
             Ok(_) => {
-              let next = fold_pre_step_chain_rec(rest, ctx, compacted_msgs, next_artifacts);
-              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageApplied(note) } :: next.stages, artifacts: next.artifacts }
+              let next = fold_pre_step_chain_rec(rest, ctx, compacted_msgs, next_artifacts, world1);
+              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageApplied(note) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
             },
             Err(reason) => {
-              let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts);
-              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageRejected(reason) } :: next.stages, artifacts: next.artifacts }
+              -- `world1`, not `world`: see the header. The compaction is
+              -- rejected; the effects the stage already performed are not.
+              let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts, world1);
+              { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageRejected(reason) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
             }
           }
         }
@@ -272,7 +286,7 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
 }
 
 export func dispatch_pre_step_chain(rt: ExtRuntime, ctx: ExtCtx, msgs: [Msg]) -> PreStepChainResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
-  fold_pre_step_chain_rec(rt.registry.hooks, ctx, msgs, ctx.artifacts)
+  fold_pre_step_chain_rec(rt.registry.hooks, ctx, msgs, ctx.artifacts, ctx.world)
 }
 
 func decide_one_policy(h: ExtensionHooks, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
@@ -330,41 +344,52 @@ func contains_tool(xs: [string], name: string) -> bool {
   }
 }
 
-func first_handle(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope, name: string) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+-- WI-B2b. A DELEGATING hook still threads its successor: it was invoked, so it
+-- may have performed effects before deciding it had nothing to offer, and the
+-- next hook must see that world. Only a hook that is never invoked — one whose
+-- `provided_tools` does not contain this tool — passes `world` through
+-- untouched, and that is correct because nothing ran.
+func first_handle(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope, name: string, world: ExtWorld) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
   match hooks {
-    [] => Delegate,
+    [] => { decision: Delegate, next_state: world },
     h :: rest => {
       if contains_tool(h.provided_tools, name) then {
-        match (h.on_tool_handle)(ctx, call) {
-          Delegate => first_handle(rest, ctx, call, name),
-          Handled(r) => Handled(r)
+        let outcome = (h.on_tool_handle)({ ctx | world: world }, call);
+        match outcome.decision {
+          Delegate => first_handle(rest, ctx, call, name, outcome.next_state),
+          Handled(r) => { decision: Handled(r), next_state: outcome.next_state }
         }
-      } else first_handle(rest, ctx, call, name)
+      } else first_handle(rest, ctx, call, name, world)
     }
   }
 }
 
-export func dispatch_tool_handle(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-  first_handle(rt.registry.hooks, ctx, call, tool_name(call))
+export func dispatch_tool_handle(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  first_handle(rt.registry.hooks, ctx, call, tool_name(call), ctx.world)
 }
 
-func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+-- Unlike `first_handle` above, EVERY hook here is invoked until one intercepts,
+-- so every one threads its successor — there is no "not invoked" case.
+func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string, world: ExtWorld) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
   match hooks {
-    [] => NoIntercept,
-    h :: rest =>
-      match (h.on_response_intercept)(ctx, response_text) {
-        InterceptHandled(r) => InterceptHandled(r),
-        NoIntercept => first_intercept(rest, ctx, response_text)
+    [] => { decision: NoIntercept, next_state: world },
+    h :: rest => {
+      let outcome = (h.on_response_intercept)({ ctx | world: world }, response_text);
+      match outcome.decision {
+        InterceptHandled(r) => { decision: InterceptHandled(r), next_state: outcome.next_state },
+        NoIntercept => first_intercept(rest, ctx, response_text, outcome.next_state)
       }
+    }
   }
 }
 
-export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  first_intercept(rt.registry.hooks, ctx, response_text)
+export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  first_intercept(rt.registry.hooks, ctx, response_text, ctx.world)
 }
 
-func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  let decision = (h.on_solver_candidate)(ctx, candidate);
+func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string, world: ExtWorld) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let outcome = (h.on_solver_candidate)({ ctx | world: world }, candidate);
+  let decision = outcome.decision;
   let _ = if is_test_dummy(h.id) then {
     let tag = match decision {
       Accept(_) => "accept",
@@ -373,13 +398,22 @@ func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string) -> F
     };
     emit_dummy_hook("on_solver_candidate", "decision", tag)
   } else ();
-  decision
+  outcome
 }
 
-func collect_finalize_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, candidate: string) -> [FinalizeDecision] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func collect_finalize_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, candidate: string, world: ExtWorld) -> { decisions: [FinalizeDecision], next_state: ExtWorld } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
   match hooks {
-    [] => [],
-    h :: rest => decide_one_finalize(h, ctx, candidate) :: collect_finalize_decisions(rest, ctx, candidate)
+    [] => { decisions: [], next_state: world },
+    -- Sequenced with `let` rather than written as `decide_one(...) :: collect(...)`.
+    -- The original could be written as one expression because the calls were
+    -- independent; threading makes the second depend on the first's successor,
+    -- and leaving that to the evaluation order of `::` would be a silent
+    -- ordering assumption on a world cursor.
+    h :: rest => {
+      let outcome = decide_one_finalize(h, ctx, candidate, world);
+      let next = collect_finalize_decisions(rest, ctx, candidate, outcome.next_state);
+      { decisions: outcome.decision :: next.decisions, next_state: next.next_state }
+    }
   }
 }
 
@@ -410,8 +444,12 @@ export func merge_finalize_decisions(xs: [FinalizeDecision]) -> FinalizeDecision
   }
 }
 
-export func dispatch_solver_candidate(rt: ExtRuntime, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  merge_finalize_decisions(collect_finalize_decisions(rt.registry.hooks, ctx, candidate))
+export func dispatch_solver_candidate(rt: ExtRuntime, ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let collected = collect_finalize_decisions(rt.registry.hooks, ctx, candidate, ctx.world);
+  -- The MERGE is unchanged and stays a pure function of the decision list. Only
+  -- the successor is new, and it is the LAST hook's, not the merged winner's:
+  -- every hook ran, so every hook's effects happened, whichever decision won.
+  { decision: merge_finalize_decisions(collected.decisions), next_state: collected.next_state }
 }
 
 func smoke_ctx() -> ExtCtx {
@@ -432,23 +470,23 @@ func smoke_ctx() -> ExtCtx {
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry()
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
 	  }
 	}
 
 func smoke_hook_a() -> ExtensionHooks {
-  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
     if call.tool == "Alpha" then Handled({ tool_call_id: call.id, tool: "Alpha", exit_code: 0, stdout: "alpha", stderr: "", metadata: jo([]) })
     else Delegate
-  };
-  let intercept = func(_ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     if response_text == "trip" then InterceptHandled({ tool_call_id: "ri", tool: "Intercept", exit_code: 0, stdout: "ok", stderr: "", metadata: jo([]) })
     else NoIntercept
-  };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     ContinueWithFeedback("needs-fix")
-  };
-  let budget = func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  }, next_state: ctx.world } };
+  let budget = func(ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
     { requested_total: Some(9), requested_solver: None, requested_verifier: None }
   };
   {
@@ -457,7 +495,7 @@ func smoke_hook_a() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: ["A"] },
     on_budget_plan: budget,
-    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
+    on_pre_step: \ctx _msgs. { decision: PassThrough, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
     on_tool_policy: \_ctx _call. Allow,
     on_tool_handle: handle,
     on_response_intercept: intercept,
@@ -466,16 +504,16 @@ func smoke_hook_a() -> ExtensionHooks {
 }
 
 func smoke_hook_b() -> ExtensionHooks {
-  let handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let handle = func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
     Delegate
-  };
-  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let intercept = func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     NoIntercept
-  };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     Accept("accepted")
-  };
-  let budget = func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  }, next_state: ctx.world } };
+  let budget = func(ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
     { requested_total: None, requested_solver: Some(5), requested_verifier: None }
   };
   {
@@ -484,7 +522,7 @@ func smoke_hook_b() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: ["B"] },
     on_budget_plan: budget,
-    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
+    on_pre_step: \ctx _msgs. { decision: PassThrough, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
     on_tool_policy: \_ctx _call. Deny("blocked"),
     on_tool_handle: handle,
     on_response_intercept: intercept,
@@ -504,7 +542,7 @@ func chain_tool_msg(id: string, content: string) -> Msg {
   { role: "tool", content: content, tool_calls: [], tool_call_id: id }
 }
 
-func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
+func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -515,39 +553,39 @@ func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, 
     },
     on_pre_step: pre,
     on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate },
-    on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-    on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
   }
 }
 
 func chain_hook_a() -> ExtensionHooks {
-  chain_base_hook("chain_A", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  chain_base_hook("chain_A", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
     Compacted(msgs ++ [chain_msg("user", "chain-A")], "A", jo([]))
-  })
+  }, next_state: ctx.world } })
 }
 
 func chain_hook_b_bad() -> ExtensionHooks {
-  chain_base_hook("chain_B", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  chain_base_hook("chain_B", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
     Compacted([chain_call_msg("tc-chain")], "B", jo([]))
-  })
+  }, next_state: ctx.world } })
 }
 
 func chain_hook_c() -> ExtensionHooks {
-  chain_base_hook("chain_C", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  chain_base_hook("chain_C", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
     Compacted([chain_call_msg("tc-chain"), chain_tool_msg("tc-chain", "rewritten")] ++ msgs, "C", jo([]))
-  })
+  }, next_state: ctx.world } })
 }
 
 func chain_hook_observed() -> ExtensionHooks {
-  chain_base_hook("chain_observed", func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  chain_base_hook("chain_observed", func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
     PassThroughObserved("bad code", [
       { key: "z", value: "last" },
       { key: "a", value: "first" },
       { key: "a", value: "duplicate" },
       { key: "", value: "dropped" }
     ])
-  })
+  }, next_state: ctx.world } })
 }
 
 func observed_stage_normalizes_and_preserves_flow_test() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
@@ -646,17 +684,17 @@ func dispatch_smoke_record_hooks() -> bool ! {AI, Clock, Env, FS, IO, Net, Proce
         Pending(_, _) => false
       };
     let handle_ok =
-      match dispatch_tool_handle(rt, ctx, { id: "h", tool: "Alpha", arguments: jo([]) }) {
+      match dispatch_tool_handle(rt, ctx, { id: "h", tool: "Alpha", arguments: jo([]) }).decision {
         Handled(r) => r.exit_code == 0 && r.stdout == "alpha",
         Delegate => false
       };
     let intercept_ok =
-      match dispatch_response_intercept(rt, ctx, "trip") {
+      match dispatch_response_intercept(rt, ctx, "trip").decision {
         InterceptHandled(r) => r.tool_call_id == "ri",
         NoIntercept => false
       };
     let finalize_ok =
-      match dispatch_solver_candidate(rt, ctx, "candidate") {
+      match dispatch_solver_candidate(rt, ctx, "candidate").decision {
         ContinueWithFeedback(msg) => msg == "needs-fix",
         _ => false
       };
@@ -707,11 +745,11 @@ func dispatch_pending_hook() -> bool ! {Clock, IO}
       on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
         { requested_total: None, requested_solver: None, requested_verifier: None }
       },
-      on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough },
+      on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
       on_tool_policy: \_ctx _call. Pending("write outside cwd", DenyAfterTimeout),
-      on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate },
-      on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-      on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+      on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
+      on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } },
+      on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
     };
     let vpending: VerificationConfig = { enabled: false, command: "make check_core" };
     let rt = { registry: { hooks: [pending_hook] }, strict_mode: false, verification: vpending };

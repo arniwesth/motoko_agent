@@ -19,7 +19,7 @@ module scripts/smoke_v2_policy_denial
 
 import std/io (println)
 import std/option (None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PromptPatch, BudgetPatch, Msg, PreStepDecision, PassThrough)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PromptPatch, BudgetPatch, Msg, PreStepDecision, PassThrough)
 import src/core/ext/runtime (dispatch_tool_policy)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/tool_contract (ToolCallEnvelope)
@@ -33,13 +33,13 @@ pure func deny_all_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPol
   Deny("synthetic-deny-all: blocked for M4 smoke test")
 }
 
-pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func noop_response_intercept(ctx: ExtCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   NoIntercept
-}
+}, next_state: ctx.world } }
 
-pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func nodecision_solver_candidate(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   NoDecision
-}
+}, next_state: ctx.world } }
 
 pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
   { prepend: [], append: [] }
@@ -49,15 +49,15 @@ pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch !
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+pure func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
   Delegate
-}
+}, next_state: ctx.world } }
 
 pure func empty_describe_tools() -> [ToolSchema] { [] }
 
-pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+pure func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
   PassThrough
-}
+}, next_state: ctx.world } }
 
 func mk_deny_all_hook() -> ExtensionHooks {
   {
@@ -99,7 +99,7 @@ export func main() -> () ! {IO, Clock, Env} {
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry()
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
 	  };
 
   -- Construct a synthetic ToolCallEnvelope (mirrors what tool_call_to_envelope

@@ -13,7 +13,7 @@ import std/option (Some, None)
 import std/rand (rand_seed, rand_int)
 import std/result (Result, Ok, Err)
 import std/string (repeat, stringToInt)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   compact_for_pre_step,
   estimate_tokens_messages,
@@ -65,7 +65,7 @@ func ctx(limit: int) -> ExtCtx {
     state_key: "k",
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry()
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
   }
 }
 
