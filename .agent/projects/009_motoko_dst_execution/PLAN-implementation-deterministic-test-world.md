@@ -1351,9 +1351,17 @@ prohibition is discharged.**
 2. **The three unreached fault classes are unreached in three DIFFERENT ways and D11's counters must
    not merge them.** `approval_deadline_exceeded` is *structurally* unreachable — D2 gives
    `ExpectApproval` a deadline and the driver's approval channel carries no duration, so this is a
-   declared gap and not a solved problem. The provider fault class is *one `ScriptedStep` field away*
-   (cluster 10's correction 2, and this item's D4 latency pair is the same field). `ToolCorrelationMismatch`
-   and `ToolDeadlineExceeded` are *codec-covered, scenario-unreached*. Three counters, three meanings.
+   declared gap and not a solved problem. The provider fault class needs **an error case on
+   `ScriptedStep`** — **not** the `advance_ms` latency field, and **not** D4's latency pair; all three
+   were conflated by earlier revisions of this plan, by A14's handoff and by cluster 10, and cluster
+   13 separated them (corrections 1 and 2). A provider *fault* is delivered on the `AIError` path and
+   a provider *latency* is an advance: **two fields, two changes.** And **D4's pair needed neither** —
+   it requires a class with a latency channel, a declared deadline **and** a comparison between them,
+   and the **tool** class has had all three since WI-A12 (`ScriptedTool.duration_ms`,
+   `ToolInvocation.timeout_ms`, `world_tool`'s guard), so A14 built the pair on that class touching no
+   world-input type. A provider latency with no provider deadline has no
+   completion-versus-timeout behaviour to demonstrate. `ToolCorrelationMismatch` and
+   `ToolDeadlineExceeded` are *codec-covered, scenario-unreached*. Three counters, three meanings.
 3. **`max_resource_size` — DECIDED by A14, and it is a generator-version item rather than a field
    edit.** Deleting it is a schema change, and specifically: `bounds` encodes as a five-field
    tab-separated line with `required_header_tags()` declaring arity 5, and both frozen specimens

@@ -1,7 +1,20 @@
 # AILANG: `ailang test`'s cluster harness fails a passing test NON-DETERMINISTICALLY with `record has no field: <name>`
 
-**Status:** reproduced against the pin, **non-deterministic**, workaround applied. Not minimised to a
-standalone module — see "What did not reproduce".
+**Status:** **Filed upstream 2026-08-04 — ticket `fb_2ad074d754cd2c25`, category `bug`.** Reproduced
+against the pin, **non-deterministic**, workaround applied. Not minimised to a standalone module —
+see "What did not reproduce".
+
+**Independently re-reproduced before filing, at the same rate.** The workaround had removed the
+trigger from the tree, so a reviewer re-created it: appended a one-line test with the same body to
+`dst_invariants.ail`, ran `ailang test` ten times, and counted — **6 failures in 10**, matching this
+note's measurement exactly, with the identical nested message
+(`harness evaluation failed: harness evaluation failed: record has no field: site`). The source was
+restored afterwards and `git diff` is clean. **Two independent 6-in-10 measurements is what made this
+worth filing unminimised**: the rate itself is evidence, and the nested "harness evaluation failed"
+gives whoever owns the harness a lead that does not require our closure.
+
+Filed via the `ailang-feedback` skill's Channel 3, with the same trackability caveat as the other
+tickets — see `ailang-no-warning-for-unreachable-match-arm.md`'s *How it was filed*.
 **Pin:** AILANG v0.26.0 (`3b52a24`).
 **Found:** WI-A14 piece 1, building `src/core/dst_invariants.ail`.
 **Severity:** it fails in the good direction (a correct test is reported as failing), but it makes a

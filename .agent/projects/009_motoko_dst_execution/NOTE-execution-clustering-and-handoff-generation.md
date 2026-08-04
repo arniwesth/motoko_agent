@@ -26,6 +26,15 @@ rejected:
 **The cut that works is by shared source surface**: a cluster is a set of items that touch the same
 files and can end in one green state.
 
+**Cluster 13 sharpened this into the sizing rule as well: grounding is paid PER SESSION, not per
+piece.** WI-A14's three pieces measured 56 / 12 / 10 minutes, and piece 3 — a new module, a new
+acceptance script, a new make target with three guards and thirteen mutation rows — came in at twelve
+because **piece 1 had already read every input artifact piece 3 needed.** That is S6's *first* term,
+paid once for the session rather than once per piece. So an item whose pieces share inputs is
+markedly cheaper than the same obligations split across sessions, and **cutting by shared inputs
+beats cutting by obligation** — the same shape as cluster 12's finding that A13's stage 6 was two
+pieces sized as one.
+
 ## The cluster map
 
 Dependencies are from the plan; clusters inherit them. Nothing here overrides the plan — if they
