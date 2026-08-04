@@ -130,12 +130,8 @@ import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (
   LedgerRecord, WireRecord, ProviderCallPrepared, LedgerTrace
 )
-import src/core/test/stub_step (GeneratedWorld, RecordingWorld, ScriptedStep)
-import src/core/ports (
-  WorldState, ScriptedTool, empty_world_state,
-  ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable,
-  decode_provider_outcome
-)
+import src/core/test/stub_step (GeneratedWorld, RecordingWorld)
+import src/core/ports (ScriptedStep, WorldState, ScriptedTool, empty_world_state, ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable, decode_provider_outcome)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/dst_interaction (
@@ -278,7 +274,7 @@ func no_intercept(_ctx: ExtCtx, _text: string)
 func no_solver(_ctx: ExtCtx, _text: string)
   -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
 func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("generated: approval required", DenyAfterTimeout)
 }
@@ -305,7 +301,7 @@ func approval_rt(id: string) -> ExtRuntime {
 -- ---------------------------------------------------------------------------
 
 func run_world(id: string, w: WorldState, generating: bool) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(),
@@ -593,7 +589,7 @@ export type GeneratedRun = {
 -- seed-ignoring mutant, which is the whole mechanism of axis B: the mutant is a
 -- real driver run whose generator was handed a constant.
 func generate(label: string, seed_claimed: int, seed_used: int, version: string, b: GeneratorBounds)
-  -> GeneratedRun ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> GeneratedRun ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = generated_world(generator_id(), version, seed_used, b);
   let r = run_world("gen_${label}", initial, true);
   { label: label, seed: seed_claimed, version: version,
@@ -702,7 +698,7 @@ func all_consulted(rs: [GeneratedRun]) -> bool ! {IO} {
 -- ---------------------------------------------------------------------------
 
 func axis_bounds(honest: [GeneratedRun])
-  -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("");
   let _ = println("axis D — declared bounds (D2):");
 
@@ -764,7 +760,7 @@ pure func names_bound(fs: [{ bound: string, limit: int, requested: int }], name:
 -- ---------------------------------------------------------------------------
 
 func axis_program(r: GeneratedRun, is_survive_fixture: bool)
-  -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let log = r.run.world.log;
   let program = program_of(r.run.world, r.initial);
 
@@ -1077,7 +1073,7 @@ func axis_canary() -> bool ! {IO} {
 -- Entry points
 -- ---------------------------------------------------------------------------
 
-export func wire_witness() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let rich = generate("rich", 94, 94, generator_version(), bounds());
   let a = generate("pairA", 9, 9, generator_version(), bounds());
   let b = generate("pairB", 13, 13, generator_version(), bounds());
@@ -1085,7 +1081,7 @@ export func wire_witness() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Cl
   ()
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("WI-A13 stage 4 — D2's seeded generator");
 
   -- The honest row set. `pairA`/`pairB` are the equal-census pair axis A's

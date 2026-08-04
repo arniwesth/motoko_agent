@@ -11,7 +11,8 @@ import src/core/config (CostRates, VerificationConfig)
 import src/core/phase_vocab (DecisionRecord, LedgerRecord, LedgerTrace)
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
-import src/core/test/stub_step (Scripted, ScriptedStep, prose_step, empty_rt)
+import src/core/test/stub_step (Scripted, prose_step, empty_rt)
+import src/core/ports (ScriptedStep)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/types (Msg)
@@ -52,7 +53,7 @@ func zero_rates() -> CostRates {
   { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
 }
 
-func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(rt, "task", "", false, budget(), "runtime-status-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
 }
 
@@ -96,7 +97,7 @@ func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   PassThrough
 }
 
@@ -218,7 +219,7 @@ func mixed_tool_order_ok(msgs: [Message]) -> bool {
   }
 }
 
-func scenario_runtime_status_basic() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_runtime_status_basic() -> Result[(), ScenarioFailure] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let traced = run_scripted(empty_rt(), [status_step("status-basic"), prose_step("done")]);
   match traced.result {
     Ok(history_after) => {
@@ -233,7 +234,7 @@ func scenario_runtime_status_basic() -> Result[(), ScenarioFailure] ! {AI, FS, P
   }
 }
 
-func scenario_runtime_status_mixed_pending() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_runtime_status_mixed_pending() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let traced = run_scripted(pending_rt(), [status_then_bash_step(), prose_step("done")]);
   match traced.result {
     Ok(history_after) => {

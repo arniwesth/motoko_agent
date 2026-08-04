@@ -29,10 +29,8 @@ import std/ai (Message, AIError)
 import src/core/config (CostRates, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime, ExtensionHooks)
 import src/core/test/scripted_ports (run_v2_with_scripted_ports)
-import src/core/test/stub_step (
-  ScriptedStep,
-  prose_step
-)
+import src/core/test/stub_step (prose_step)
+import src/core/ports (ScriptedStep)
 
 -- Build a runtime with DP7 verification ENABLED. Required since a78e4db made
 -- DP7 opt-in: stub_step's empty_rt() defaults to verification.enabled=false,
@@ -64,7 +62,7 @@ func parity_system_message() -> Message {
 --    With DP7 active, the loop must NOT terminate at the first done attempt
 --    because the gate rejects. With a small step_budget, the loop will eventually
 --    return Err (Scripted([]) → terminal_step → DP7 rejects → ... → budget).
-func test_dp7_rejects_broken_workdir() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_dp7_rejects_broken_workdir() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let script: [ScriptedStep] = [prose_step("done")];
   let result = run_v2_with_scripted_ports(
     enabled_rt("/tmp/dp7-smoke", "make check_core"),
@@ -85,7 +83,7 @@ func test_dp7_rejects_broken_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
 
 -- 2. Clean workdir: check_core passes. The script declares done.
 --    DP7 should approve, loop terminates Ok at step 0.
-func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_dp7_approves_clean_workdir() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let script: [ScriptedStep] = [prose_step("done")];
   let result = run_v2_with_scripted_ports(
     enabled_rt("/tmp/dp7-smoke-pass", "make check_core"),
@@ -109,7 +107,7 @@ func test_dp7_approves_clean_workdir() -> bool ! {AI, FS, Process, IO, Env, Net,
 --    exec returns Ok with a non-zero exit code and stderr "No such file or
 --    directory". is_missing_infrastructure() detects that pattern and approves
 --    so projects without DP7 setup are not blocked.
-func test_dp7_fail_open_on_missing_make() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_dp7_fail_open_on_missing_make() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let script: [ScriptedStep] = [prose_step("done")];
   let result = run_v2_with_scripted_ports(
     enabled_rt("/tmp/dp7-smoke-empty", "make check_core"),
@@ -133,7 +131,7 @@ func report(name: string, ok: bool) -> () ! {IO} {
   else println("  ✗ ${name}")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} = {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} = {
   println("=== smoke_v2_dp7_gate ===");
   let r1 = test_dp7_rejects_broken_workdir();
   report("broken check_core → DP7 rejects → loop returns Err",       r1);

@@ -25,8 +25,8 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
 
   let initial_msgs: [Msg] = [
-    { role: "system", content: "You are a coding assistant. Use the BashExec tool to run shell commands." },
-    { role: "user", content: "Run the shell command: echo build-ok . Then tell me what it printed." }
+    { role: "system", content: "You are a coding assistant. Use the BashExec tool to run shell commands.", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "Run the shell command: echo build-ok . Then tell me what it printed.", tool_calls: [], tool_call_id: "" }
   ];
 
   let model_arg = match getEnv("AILANG_SMOKE_MODEL") {

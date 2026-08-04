@@ -69,8 +69,8 @@ import src/core/phase_vocab (
   ErrorEvent,
   LedgerTrace
 )
-import src/core/test/stub_step (Scripted, ScriptedWorld, ScriptedStep, tool_step, prose_step)
-import src/core/ports (WorldState, empty_world_state)
+import src/core/test/stub_step (Scripted, ScriptedWorld, tool_step, prose_step)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -161,16 +161,16 @@ pure func fold(msgs: [Msg]) -> [Msg] {
 }
 
 func folding_pre_step(_ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   let folded = fold(msgs);
   if List.length(folded) == List.length(msgs) then PassThrough
   else Compacted(folded, "probe: folded older turns into one summary", jo([]))
 }
 
 func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
 
-func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -185,7 +185,7 @@ func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, F
   }
 }
 
-func rt_with(pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}, id: string) -> ExtRuntime {
+func rt_with(pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}, id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
 }
@@ -359,7 +359,7 @@ func assert_deterministic(label: string, a: TracedSessionResult, b: TracedSessio
 -- ---------------------------------------------------------------------------
 
 func run_with(rt: ExtRuntime, steps: int, s: [ScriptedStep]) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     rt, "task", "", false, budget(), "phase-c-model", history(), ".",
     steps, false, 0, zero_rates(), Scripted(s)
@@ -422,12 +422,12 @@ pure func reasons_in_order(expected: [string], contents: [string]) -> bool {
 }
 
 func run_world(rt: ExtRuntime, steps: int, w: WorldState) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   run_world_history(rt, steps, w, history())
 }
 
 func run_world_history(rt: ExtRuntime, steps: int, w: WorldState, h: [Message]) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     rt, "task", "", false, budget(), "phase-c-model", h, ".",
     steps, false, 0, zero_rates(), ScriptedWorld(w)
@@ -446,7 +446,7 @@ pure func finish_from_trace(records: [LedgerRecord]) -> string {
   }
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("world_state_probe: WI-A12 advancement + trace completeness");
 
   -- advance: the clean path.

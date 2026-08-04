@@ -183,7 +183,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks {
         { requested_total: None, requested_solver: None, requested_verifier: None }
       },
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
         PassThrough
       },
     on_tool_policy: microrag_tool_policy,

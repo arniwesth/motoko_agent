@@ -51,8 +51,8 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   -- solver_candidate hook returns NoDecision (empty registry), and v2 emits
   -- `done` with the model's text.
   let initial_msgs: [Msg] = [
-    { role: "system", content: "You are a helpful assistant. Answer briefly." },
-    { role: "user", content: "What is 2+2? Just the number, no explanation." }
+    { role: "system", content: "You are a helpful assistant. Answer briefly.", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "What is 2+2? Just the number, no explanation.", tool_calls: [], tool_call_id: "" }
   ];
 
   let result = run_v2(

@@ -77,8 +77,8 @@ import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
-import src/core/test/stub_step (RecordingWorld, ScriptedStep)
-import src/core/ports (WorldState, ScriptedTool, empty_world_state)
+import src/core/test/stub_step (RecordingWorld)
+import src/core/ports (ScriptedStep, WorldState, ScriptedTool, empty_world_state)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtensionHooks, ExtCtx, ToolSchema, PromptPatch, BudgetPatch, BudgetPlan,
   PreStepDecision, PassThrough,
@@ -147,7 +147,7 @@ func no_intercept(_ctx: ExtCtx, _text: string)
 func no_solver(_ctx: ExtCtx, _text: string)
   -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
 func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("latency pair: approval required", DenyAfterTimeout)
 }
@@ -169,7 +169,7 @@ func rt(id: string) -> ExtRuntime {
 }
 
 func run_recording(id: string, w: WorldState) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
     6, false, 0, zero_rates(), RecordingWorld(w)
@@ -360,7 +360,7 @@ pure func envs_equal(a: [{ key: string, value: string }], b: [{ key: string, val
 export type HalfRun = { log: [Interaction], ok: bool, clock: int }
 
 func run_half(label: string, w: WorldState) -> HalfRun
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = run_recording("lat_${label}", w);
   { log: run.world.log,
     ok: match run.result { Ok(_) => true, Err(_) => false },
@@ -368,7 +368,7 @@ func run_half(label: string, w: WorldState) -> HalfRun
 }
 
 func scenario_the_pair() -> bool
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("\n-- D4: the same request and completion result, two latencies --");
   let fast = run_half("fast", fast_world());
   let slow = run_half("slow", slow_world());
@@ -423,7 +423,7 @@ func scenario_the_pair() -> bool
 -- ---------------------------------------------------------------------------
 
 func scenario_no_deadline_no_fault() -> bool
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("\n-- S8's control: the SAME slow latency with no declared deadline must COMPLETE --");
   let run = run_half("control", slow_no_deadline_world());
   match first_tool(run.log) {
@@ -452,7 +452,7 @@ func scenario_no_deadline_no_fault() -> bool
 -- ---------------------------------------------------------------------------
 
 func replay_half(label: string, w: WorldState) -> bool
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let discovery = run_recording("latd_${label}", w);
   let program = program_of(discovery.world.log, w, label);
   let structural = validate_program(program, required_class_ids());
@@ -507,7 +507,7 @@ pure func durations(ts: [ScriptedTool]) -> string {
 }
 
 func scenario_both_replay() -> bool
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("\n-- D4: both programs must replay deterministically --");
   let a = replay_half("fast", fast_world());
   let b = replay_half("slow", slow_world());
@@ -524,7 +524,7 @@ func scenario_both_replay() -> bool
 -- unique.
 
 func scenario_the_pair_is_two_programs() -> bool
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("\n-- the pair is TWO programs, not one reported twice --");
   let fast_run = run_recording("latid_fast", fast_world());
   let slow_run = run_recording("latid_slow", slow_world());
@@ -547,7 +547,7 @@ func scenario_the_pair_is_two_programs() -> bool
 }
 
 export func main() -> ()
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("=== latency_pair_dst (D4) ===");
   let _ = println("  i deadline=${deadline_ms()}ms, fast=${fast_ms()}ms, slow=${slow_ms()}ms");
 

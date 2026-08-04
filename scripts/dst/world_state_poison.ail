@@ -58,7 +58,7 @@ func allow_rt() -> ExtRuntime {
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough },
     on_tool_policy: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow },
     on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate },
     on_response_intercept: func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
@@ -89,7 +89,7 @@ func empty_rt() -> ExtRuntime {
 --
 -- It uses the SCRIPTED provider deliberately: the point is to isolate the tool
 -- effect, so the provider must not be what kills the run.
-func unseeded_tools_run() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func unseeded_tools_run() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("world_state_poison: unseeded tool world, driving the real dispatcher");
   let w: WorldState = { empty_world_state() | script: [tool_step("BashExec", "{\"cmd\":\"true\"}", "p0"), prose_step("done")] };
   let traced = Session.run_v2_session_traced(
@@ -100,7 +100,7 @@ func unseeded_tools_run() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clo
   println("world_state_poison REACHED COMPLETION outcome=${outcome} — the withheld capability was not load-bearing")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   if getEnvOr("POISON_ARM", "") == "tools" then unseeded_tools_run()
   else {
   let _ = println("world_state_poison: driving the LIVE world with a capability withheld");

@@ -76,17 +76,17 @@ func drop_first_tool_result(msgs: [Msg]) -> [Msg] {
 }
 
 func prefix_pre_step(_ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   Compacted([system_msg()] ++ msgs, "reject fixture: system injection", jo([]))
 }
 
 func pair_pre_step(_ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   Compacted(drop_first_tool_result(msgs), "reject fixture: severed tool pair", jo([]))
 }
 
 func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   let summary = match ctx.ports.ai_step(ctx.model, msgs) {
     Ok(content) => content,
     Err(e) => "ERR ${e}"
@@ -94,7 +94,7 @@ func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
   Compacted([assistant_summary(summary), first_msg(msgs)], "reject fixture: no cache", jo([]))
 }
 
-func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],

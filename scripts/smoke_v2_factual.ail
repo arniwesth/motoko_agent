@@ -28,8 +28,8 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
 
   let initial_msgs: [Msg] = [
-    { role: "system", content: "You are a helpful assistant. Answer concisely." },
-    { role: "user", content: "What is the capital of France? One word." }
+    { role: "system", content: "You are a helpful assistant. Answer concisely.", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "What is the capital of France? One word.", tool_calls: [], tool_call_id: "" }
   ];
 
   let model_arg = match getEnv("AILANG_SMOKE_MODEL") {

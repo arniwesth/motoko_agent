@@ -32,7 +32,7 @@ export type StageOutcome = StageApplied(string) | StageRejected(string) | StageO
 export type PreStepStage = { ext_id: string, outcome: StageOutcome }
 export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage], artifacts: Json }
 
-export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, FS, Net} {
+export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   {
     registry: parse_core_ext_order(join_order(cfg.extensions.order), cfg),
     strict_mode: cfg.extensions.strict,
@@ -231,7 +231,7 @@ export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) 
 
 -- Fold compaction hooks in registry order. Each stage receives the previous
 -- valid stage's messages; invalid output is recorded and skipped.
-func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], artifacts: Json) -> PreStepChainResult ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], artifacts: Json) -> PreStepChainResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   match hooks {
     [] => { msgs: msgs, stages: [], artifacts: artifacts },
     h :: rest => {
@@ -271,7 +271,7 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
   }
 }
 
-export func dispatch_pre_step_chain(rt: ExtRuntime, ctx: ExtCtx, msgs: [Msg]) -> PreStepChainResult ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func dispatch_pre_step_chain(rt: ExtRuntime, ctx: ExtCtx, msgs: [Msg]) -> PreStepChainResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   fold_pre_step_chain_rec(rt.registry.hooks, ctx, msgs, ctx.artifacts)
 }
 
@@ -457,7 +457,7 @@ func smoke_hook_a() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: ["A"] },
     on_budget_plan: budget,
-    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
     on_tool_policy: \_ctx _call. Allow,
     on_tool_handle: handle,
     on_response_intercept: intercept,
@@ -484,7 +484,7 @@ func smoke_hook_b() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: ["B"] },
     on_budget_plan: budget,
-    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
     on_tool_policy: \_ctx _call. Deny("blocked"),
     on_tool_handle: handle,
     on_response_intercept: intercept,
@@ -504,7 +504,7 @@ func chain_tool_msg(id: string, content: string) -> Msg {
   { role: "tool", content: content, tool_calls: [], tool_call_id: id }
 }
 
-func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -522,25 +522,25 @@ func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, 
 }
 
 func chain_hook_a() -> ExtensionHooks {
-  chain_base_hook("chain_A", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  chain_base_hook("chain_A", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
     Compacted(msgs ++ [chain_msg("user", "chain-A")], "A", jo([]))
   })
 }
 
 func chain_hook_b_bad() -> ExtensionHooks {
-  chain_base_hook("chain_B", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  chain_base_hook("chain_B", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
     Compacted([chain_call_msg("tc-chain")], "B", jo([]))
   })
 }
 
 func chain_hook_c() -> ExtensionHooks {
-  chain_base_hook("chain_C", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  chain_base_hook("chain_C", func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
     Compacted([chain_call_msg("tc-chain"), chain_tool_msg("tc-chain", "rewritten")] ++ msgs, "C", jo([]))
   })
 }
 
 func chain_hook_observed() -> ExtensionHooks {
-  chain_base_hook("chain_observed", func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  chain_base_hook("chain_observed", func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
     PassThroughObserved("bad code", [
       { key: "z", value: "last" },
       { key: "a", value: "first" },
@@ -550,9 +550,8 @@ func chain_hook_observed() -> ExtensionHooks {
   })
 }
 
-func observed_stage_normalizes_and_preserves_flow_test() -> bool
-  tests [((), true)]
-  {
+func observed_stage_normalizes_and_preserves_flow_test() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
     let artifacts = jo([kv("sentinel", js("unchanged"))]);
     let ctx = { smoke_ctx() | artifacts: artifacts };
     let input = [chain_msg("user", "unchanged")];
@@ -613,9 +612,8 @@ func stages_are_applied_rejected_applied(stages: [PreStepStage]) -> bool {
   }
 }
 
-func dispatch_pre_step_chain_fold_test() -> bool
-  tests [((), true)]
-  {
+func dispatch_pre_step_chain_fold_test() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
     let vchain: VerificationConfig = { enabled: false, command: "make check_core" };
     let rt = { registry: { hooks: [chain_hook_a(), chain_hook_b_bad(), chain_hook_c()] }, strict_mode: false, verification: vchain };
     let result = dispatch_pre_step_chain(rt, smoke_ctx(), [chain_call_msg("tc-chain"), chain_tool_msg("tc-chain", "original")]);
@@ -632,9 +630,8 @@ func dispatch_pre_step_chain_fold_test() -> bool
     }
   }
 
-func dispatch_smoke_record_hooks() -> bool
-  tests [((), true)]
-  {
+func dispatch_smoke_record_hooks() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream}
+  tests [((), true)]{
     let vsmoke: VerificationConfig = { enabled: false, command: "make check_core" };
     let rt = { registry: { hooks: [smoke_hook_a(), smoke_hook_b()] }, strict_mode: false, verification: vsmoke };
     let ctx = smoke_ctx();
@@ -700,9 +697,8 @@ func merge_deny_over_pending() -> bool
   }
 
 -- dispatch_tool_policy returns Pending when an extension hook returns it.
-func dispatch_pending_hook() -> bool
-  tests [((), true)]
-  {
+func dispatch_pending_hook() -> bool ! {Clock, IO}
+  tests [((), true)]{
     let pending_hook: ExtensionHooks = {
       id: "pending_hook",
       provided_tools: [],
@@ -711,7 +707,7 @@ func dispatch_pending_hook() -> bool
       on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
         { requested_total: None, requested_solver: None, requested_verifier: None }
       },
-      on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
+      on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough },
       on_tool_policy: \_ctx _call. Pending("write outside cwd", DenyAfterTimeout),
       on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate },
       on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },

@@ -181,7 +181,7 @@ export func make_hooks(cfg: A2AConfig) -> ExtensionHooks ! {Net, Rand} {
     on_tool_handle:        handle,
     on_response_intercept: intercept,
     on_solver_candidate:   finalize,
-    on_pre_step:           func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+    on_pre_step:           func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
   }
 }
 

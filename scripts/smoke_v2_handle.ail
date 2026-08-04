@@ -67,7 +67,7 @@ pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch !
 
 pure func empty_describe_tools() -> [ToolSchema] { [] }
 
-pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   PassThrough
 }
 
@@ -86,7 +86,7 @@ func mk_handle_hook() -> ExtensionHooks {
   }
 }
 
-export func main() -> () ! {IO, Clock, Env} {
+export func main() -> () ! {Clock, Env, IO, AI, FS, Net, Process, Rand, SharedMem, Stream} {
   let v: VerificationConfig = { enabled: false, command: "" };
   let rt: ExtRuntime = {
     registry: { hooks: [mk_handle_hook()] },

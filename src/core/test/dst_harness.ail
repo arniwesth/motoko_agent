@@ -14,7 +14,7 @@ export type Scenario = {
   id: string,
   seed: string,
   run: () -> Result[(), ScenarioFailure]
-    ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace}
+    ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand}
 }
 
 export func print_trace(lines: [string]) -> () ! {IO} {

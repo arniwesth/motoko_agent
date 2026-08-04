@@ -813,7 +813,7 @@ func join_csv(xs: [string]) -> string {
   }
 }
 
-export func register_with_config(runtime_cfg: ComposeHostConfig) -> ExtensionHooks ! {Env, FS} {
+export func register_with_config(runtime_cfg: ComposeHostConfig) -> ExtensionHooks ! {Env, FS, AI, Clock, IO, Process, Rand} {
   let composition_mode = runtime_cfg.compose.mode;
   let snippet_caps = join_csv(runtime_cfg.snippet_caps);
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
@@ -832,7 +832,7 @@ export func register_with_config(runtime_cfg: ComposeHostConfig) -> ExtensionHoo
     on_build_system_prompt: on_build_system_prompt,
     on_budget_plan: budget_hook,
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
         PassThrough
       },
     on_tool_policy: \ctx call. on_tool_policy_with_mode(composition_mode, ctx, call),

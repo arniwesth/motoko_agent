@@ -13,6 +13,6 @@ export func ports_of(ctx: ExtCtx) -> ExtPorts {
 }
 
 export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
-  -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  -> Result[string, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   ports_of(ctx).ai_step(model, msgs)
 }

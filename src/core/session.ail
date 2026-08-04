@@ -140,13 +140,13 @@ import src/core/phase_vocab (
   Finalize,
   Fail
 )
-import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, ScriptedStep, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, Ported, live_ports, scripted_ports, recording_ports, generating_ports, scripted_world_state)
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state)
+import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state)
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -693,7 +693,7 @@ func capture_failing_payload(e: AIError, msgs: [Message]) -> () ! {FS} {
   match writeFileResult(".motoko/failing_payload.json", payload) { Ok(_) => (), Err(_) => () }
 }
 
-func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Result[string, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
   -- Resolve the provider API model the same way the main step loop does
   -- (dispatch_step calls provider_api_model at src/core/session.ail:1695).
@@ -768,8 +768,8 @@ pure func decode_or_empty(raw: string) -> Json {
   match decode(raw) { Ok(j) => j, Err(_) => jo([]) }
 }
 
-func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
-  let ai_step = func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let ai_step = func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
     ext_ai_step(p, model, base_url, msgs)
   };
   let env_get = func(key: string, fallback: string) -> string ! {Env} {
@@ -833,7 +833,7 @@ pure func ext_token_telemetry(t: { last_input_tokens: int, last_output_tokens: i
 -- `world_state` replaces it. This is that replacement, so the parameter goes
 -- with it (cluster 1, C5). Six call sites, all of which were passing a message
 -- list nothing read.
-func ported_provider(rt: ExtRuntime, provider: StepProvider) -> PortedProvider {
+func ported_provider(rt: ExtRuntime, provider: StepProvider) -> PortedProvider ! {AI, Clock, Env, FS, IO, Process, Trace}{
   match provider {
     Ported(p) => { ports: p, world: empty_world_state() },
     LiveAI => { ports: live_ports(rt), world: empty_world_state() },
@@ -1423,7 +1423,7 @@ pure func parse_persist_retries_budget(raw: string) -> int {
 -- `live_ports`' env closure both return their input.
 export type SessionPolicyInit = { policy: SessionPolicy, next_state: WorldState }
 
-func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicyInit ! {Env} {
+func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicyInit ! {Env, FS} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
   let r_persist = ports.env_get(world, "MOTOKO_PERSIST_RETRIES", "0");
   let r_retry = ports.env_get(r_persist.next_state, "MOTOKO_RETRY_STREAM_ERROR", "1");
@@ -1459,7 +1459,7 @@ func session_policy_init(ports: Ports, world: WorldState, model: string, step_bu
   }
 }
 
-pure func session_policy_with_model(policy: SessionPolicy, model: string) -> SessionPolicy {
+pure func session_policy_with_model(policy: SessionPolicy, model: string) -> SessionPolicy ! {Env, FS}{
   {
     step: {
       step_budget: policy.step.step_budget,
@@ -1595,7 +1595,7 @@ func c2_finish_tool_batch(
   tool_step_idx: int,
   stream_id: string,
   tool_msgs: [Message]
-) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let request_id = "step-${show(tool_step_idx)}";
   let _ = if st.pending_tool_batched then
     ledger_emit(session_id, NativeToolResults({
@@ -1647,7 +1647,7 @@ func c2_continue_tool_batch(
   trace: LedgerTrace,
   req: ApprovalRequest,
   accumulated: [Message]
-) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match req.remaining {
     [] => c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace, c2_done_step(st.step_idx), req.stream_id, accumulated),
     _ => {
@@ -1703,7 +1703,7 @@ func c2_after_dp7(
   done_step_idx: int,
   output: string,
   source: string
-) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match dp7_rejection_errors(rt, workdir, done_step_idx, session_id) {
     Some(errors) => {
       let next_state: C2LoopState = {
@@ -1771,7 +1771,7 @@ func c2_loop(
   session_id: string,
   started_at_ms: int,
   st: C2LoopState
-) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match c2_step_state(st) {
     -- Terminal: invalid history. This path emitted no run_summary at all
     -- before A9 — it is one of the two terminal returns the ADR's five-call-site
@@ -2265,7 +2265,7 @@ func run_v2_from_messages_traced_with_policy(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: PortedProvider
-) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   run_v2_from_messages_traced_with_policy_and_counts(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, zero_runtime_status_counts())
 }
 
@@ -2284,7 +2284,7 @@ func run_v2_from_messages_traced_with_policy_and_counts(
   cost_rates: CostRates,
   provider: PortedProvider,
   prior_counts: RuntimeStatusCounts
-) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- WI-A12's clock class. Two of the four driver clock sites are here, both
   -- BEFORE the loop starts, and both successors must reach the loop's world:
   -- `started.next_state` is what `c2_initial_state_with_counts` receives, not
@@ -2315,7 +2315,7 @@ export func run_v2_session_traced(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- WI-A12: the provider is normalised FIRST so policy init can read the env
   -- through its ports instead of ambiently.
   let pp = ported_provider(rt, provider);
@@ -2338,7 +2338,7 @@ export func run_v2_session_traced_with_persist_retries(
   cost_rates: CostRates,
   persist_retries: int,
   provider: StepProvider
-) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let pp = ported_provider(rt, provider);
   let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
   let base = init.policy;
@@ -2375,7 +2375,7 @@ func run_v2_from_messages_with_policy(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: PortedProvider
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   run_v2_from_messages_with_policy_and_counts(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider, zero_runtime_status_counts())
 }
 
@@ -2394,7 +2394,7 @@ func run_v2_from_messages_with_policy_and_counts(
   cost_rates: CostRates,
   provider: PortedProvider,
   prior_counts: RuntimeStatusCounts
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- WI-A12's clock class. Two of the four driver clock sites are here, both
   -- BEFORE the loop starts, and both successors must reach the loop's world:
   -- `started.next_state` is what `c2_initial_state_with_counts` receives, not
@@ -2425,7 +2425,7 @@ export func run_v2(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let messages = msgs_to_messages(initial_msgs);
   let pp = ported_provider(rt, provider);
   let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
@@ -2450,7 +2450,7 @@ export func run_v2_from_messages(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let pp = ported_provider(rt, provider);
   let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
   run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, init.policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, { pp | world: init.next_state })
@@ -2499,7 +2499,7 @@ func conversation_loop_v2_with_policy(
   provider: PortedProvider,
   session_id: string,
   prior_counts: RuntimeStatusCounts
-) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- Headless mode (M-MOTOKO-HEADLESS, 2026-05-08): skip the stdin-polling
   -- conversation loop entirely when MOTOKO_HEADLESS=1. The TS TUI layer
   -- (src/tui/src/index.ts) sets this env var when stdin is not a TTY
@@ -2590,7 +2590,7 @@ export func conversation_loop_v2(
   cost_rates: CostRates,
   provider: StepProvider,
   session_id: string
-) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let live_provider = ported_provider(rt, provider);
   let init = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
   conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, init.policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, { live_provider | world: init.next_state }, session_id, zero_runtime_status_counts())
@@ -2616,7 +2616,7 @@ export func run_v2_with_conversation(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial_messages = msgs_to_messages(initial_msgs);
   let live_provider = ported_provider(rt, provider);
   let init = session_policy_init(live_provider.ports, live_provider.world, model, step_budget, max_cost_millicents, cost_rates);
@@ -2659,7 +2659,7 @@ export func run_v2_with_stub(
   max_cost_millicents: int,
   cost_rates: CostRates,
   script: [ScriptedStep]
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
 }
 
@@ -2680,7 +2680,7 @@ export func run_v2_with_stub_port_adapter(
   max_cost_millicents: int,
   cost_rates: CostRates,
   script: [ScriptedStep]
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   run_v2_with_stub(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, script)
 }
 
@@ -2795,7 +2795,7 @@ pure func test_per_step_usage_kvs_full_cache() -> bool
     kv_len(per_step_usage_kvs(r, 1500)) == 5
   }
 
-pure func test_runtime_status_includes_prior_conversation_counts() -> bool
+func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Trace}
   tests [((), true)]
   {
     let prior: RuntimeStatusCounts = {
@@ -2878,7 +2878,7 @@ pure func test_runtime_status_includes_prior_conversation_counts() -> bool
       && contains(encoded, "\"steps_executed_so_far\":27")
   }
 
-pure func test_runtime_status_reports_actual_context_window() -> bool
+func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
   tests [((), true)]
   {
     let st: C2LoopState = {

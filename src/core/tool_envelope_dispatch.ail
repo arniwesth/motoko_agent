@@ -33,7 +33,7 @@ func native_result(call: ToolCallEnvelope, payload: Json) -> ToolResultEnvelope 
   }
 }
 
-export func dispatch_tool_envelope(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolResultEnvelope ! {IO, Clock, FS, Process, AI, Env, Net, SharedMem, Stream} {
+export func dispatch_tool_envelope(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolResultEnvelope ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand} {
   if call.tool == "scratchpad" || call.tool == "Scratchpad" then
     error_result(call, "recursive scratchpad loopback is disabled")
   else {

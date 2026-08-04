@@ -62,7 +62,8 @@ import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderResult)
-import src/core/test/stub_step (Scripted, ScriptedStep, tool_step, prose_step)
+import src/core/test/stub_step (Scripted, tool_step, prose_step)
+import src/core/ports (ScriptedStep)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -166,7 +167,7 @@ pure func assistants(msgs: [Msg]) -> int {
 }
 
 func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   let folded = fold(msgs);
   let _ = println("  PRESTEP step=${show(ctx.step)} segment_in=${show(List.length(msgs))} assistants_in=${show(assistants(msgs))} -> segment_out=${show(List.length(folded))} assistants_out=${show(assistants(folded))}");
   if List.length(folded) == List.length(msgs) then PassThrough
@@ -174,11 +175,11 @@ func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
 }
 
 func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   PassThrough
 }
 
-func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -193,7 +194,7 @@ func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, F
   }
 }
 
-func rt_with(pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}, id: string) -> ExtRuntime {
+func rt_with(pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}, id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
 }
@@ -255,14 +256,14 @@ func report(label: string, traced: TracedSessionResult) -> () ! {IO} {
 }
 
 func run(rt: ExtRuntime) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     rt, "task", "", false, budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), Scripted(script())
   )
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let control = run(rt_with(passthrough_pre_step, "probe_control"));
   let _ = report("control", control);
   let folding = run(rt_with(folding_pre_step, "probe_folding"));

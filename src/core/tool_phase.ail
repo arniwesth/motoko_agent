@@ -283,7 +283,7 @@ export func execute_allowed_tool_call(
   stream_id: string,
   ohmy_pi: bool,
   emit: (LedgerEvent) -> () ! {IO, Trace}
-) -> { msg: Message, next_state: WorldState } ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+) -> { msg: Message, next_state: WorldState } ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let envelope = tool_call_to_envelope(call);
   if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
     let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
@@ -378,7 +378,7 @@ export func dispatch_tool_entries(
   ohmy_pi: bool,
   accumulated: [Message],
   emit: (LedgerEvent) -> () ! {IO, Trace}
-) -> ToolDispatchOutcome ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+) -> ToolDispatchOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   dispatch_tool_entries_with_builtin(ports, world, rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, emit, \_ . None)
 }
 
@@ -395,7 +395,7 @@ export func dispatch_tool_entries_with_builtin(
   accumulated: [Message],
   emit: (LedgerEvent) -> () ! {IO, Trace},
   builtin: (ToolCall) -> Option[Message]
-) -> ToolDispatchOutcome ! {FS, Process, IO, Clock, AI, Env, Net, SharedMem, Stream, Trace} {
+) -> ToolDispatchOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match entries {
     [] => ToolDispatchDone({ msgs: accumulated, world: world }),
     entry :: rest => {
