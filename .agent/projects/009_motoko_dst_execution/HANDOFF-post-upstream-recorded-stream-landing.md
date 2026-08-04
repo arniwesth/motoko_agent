@@ -21,8 +21,10 @@ grep -c 'stepWithStreamRecorded\|chunks:' "$(dirname "$(command -v ailang)")/../
 As of 2026-07-31 the answer on v0.31.0 is `0`. **A prototype on a fork is not this** — one exists
 (see *State you inherit*) and it does not satisfy D1, no matter how green it runs.
 
-If the trigger has not fired, the only items worth doing are **Open item 1** (the port widening,
-which has no upstream dependency) and the ADR revision round. Stop after those.
+**⚑ THE TRIGGER FIRED 2026-08-04 — see the section immediately below.** `v0.33.0` exports
+`stepWithStreamRecorded`, verified against the released tag. The sentence that used to sit here told
+a reader to do "the port widening (Open item 1)" and stop; that item is WI-A1 and landed 2026-08-02,
+and Milestone A completed 2026-08-04. **There is no longer anything to stop after.**
 
 ## STOP — this handoff was written 2026-07-31 and Milestone A has since completed
 
@@ -166,7 +168,62 @@ Findable, unresolved, each with enough detail to pick up cold:
 
 ---
 
-# UPSTREAM STATUS — checked 2026-08-04 against the API, not the changelog
+# ⚑ TRIGGER FIRED — 2026-08-04. THE GATE IS CLEARED.
+
+**`std/ai.stepWithStreamRecorded` shipped in released AILANG `v0.33.0`** (published
+2026-08-04T12:25:38Z), adopted from this project's prototype with authorship credited in
+`ab209fcbf`. Upstream #546 is answered.
+
+**Verified against the released tag itself, not the changelog and not `dev`** — which is what the
+trigger condition at the top of this file demands:
+
+```
+std/ai.ail @ v0.33.0
+  export type RecordedStream = {
+    chunks: [StreamChunk],
+    outcome: Result[StepResult, AIError]
+  }
+
+  export func stepWithStreamRecorded(
+    model: string, messages: [Message], tools: [ToolSchema],
+    cache_breakpoints: [CacheBreakpoint],
+    on_chunk: (StreamChunk) -> () ! {IO}
+  ) -> RecordedStream ! {AI}
+```
+
+**It is the shape D1 selected, on both halves.** The `{chunks, outcome}` form — not
+`Result[{result, chunks}, err]`, which discards chunks observed before a mid-stream failure, the case
+replay needs most. And `on_chunk` survives unchanged, so **immediate projection is preserved**, which
+is the half D1 refused to trade away.
+
+**What this does and does not clear.** D1 names three conditions:
+
+| | |
+|---|---|
+| 1. A **released** AILANG exports a recorded-stream API | ✅ **MET** — v0.33.0, verified above |
+| 2. This repo's toolchain **repinned** to it | ⬜ WI-B1 |
+| 3. D1's **positive integration probe** passes | ⬜ WI-C2 |
+
+**Milestone B is unblocked. Start at WI-B1.**
+
+## One correction to B1's sizing, and it is not small
+
+**The repin target is v0.33.0, and M2's measured 381 effect-row edits across 71 files was
+v0.26.0 → v0.31.0.** Two further releases have landed since (v0.32.0, v0.33.0). **Treat 381 as a
+floor, not the number** — and per the standing discipline, re-measure rather than re-cite: the first
+honest signal after B1 is `ailang check` failing across the tree, and its size is the measurement.
+
+## The `IncompleteStream` question moved
+
+Upstream's closing comment says: *"S2 continues under #578 (your `IncompleteStream` question is the
+open thread there)."* **The draft reply in
+`DRAFT-reply-546-incomplete-stream-error-code.md` should target #578, not #546.** Its content and
+permalinks are unaffected; only the destination changed. It is still unposted and still needs an
+operator decision.
+
+---
+
+# UPSTREAM STATUS — checked 2026-08-04 against the API, not the changelog (superseded by the above)
 
 **The gate is NOT cleared, and it is closer than any prior check.** `sunholo-data/ailang#546` moved
 substantially between 2026-08-01 (this project's last recorded status) and 2026-08-03.

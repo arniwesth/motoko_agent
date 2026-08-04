@@ -1,5 +1,10 @@
 # Draft reply to `sunholo-data/ailang#546` — the `IncompleteStream` question
 
+**⚑ DESTINATION CHANGED 2026-08-04: post to [#578](https://github.com/sunholo-data/ailang/issues/578),
+not #546.** Upstream's closing comment on #546 — *"Shipped in v0.33.0 … S2 continues under #578 (your
+`IncompleteStream` question is the open thread there)"* — moved the thread. The content and the
+permalinks are unaffected.
+
 **Status: DRAFT, not posted.** Posting is outward-facing and awaits the operator's decision.
 Answering the question asked 2026-08-03T10:20Z and repeated 16:35Z as owed before S2.
 
