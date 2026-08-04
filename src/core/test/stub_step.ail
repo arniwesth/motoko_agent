@@ -534,7 +534,7 @@ export func deny_all_rt() -> ExtRuntime {
     Deny("test: all tools denied")
   };
   let no_handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope)
-    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
     Delegate
   };
   let no_intercept = func(_ctx: ExtCtx, _text: string)

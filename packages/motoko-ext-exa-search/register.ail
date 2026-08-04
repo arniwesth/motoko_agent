@@ -13,7 +13,7 @@ func parse_int_or(s: string, fallback: int) -> int {
   }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process, Rand} {
   let workdir         = getEnvOr("MOTOKO_WORKDIR", ".");
   let timeout_ms      = parse_int_or(getEnvOr("EXA_TIMEOUT_MS", "30000"), 30000);
   let max_output_chars = parse_int_or(getEnvOr("EXA_MAX_OUTPUT_CHARS", "8000"), 8000);

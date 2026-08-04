@@ -103,7 +103,7 @@ func is_root(path: string) -> bool
 -- Returns only the files that exist, in order from root-most to closest.
 -- ---------------------------------------------------------------------------
 -- Helper function for walking up the directory tree
-func walk_agents(current: string, acc: [string]) -> [string] {
+func walk_agents(current: string, acc: [string]) -> [string] ! {FS} {
   if is_root(current) then {
     -- At root; check this level, then reverse acc to get root-first order
     if fileExists("${current}/AGENTS.md") then {
@@ -129,7 +129,7 @@ func walk_agents(current: string, acc: [string]) -> [string] {
   }
 }
 
-func find_agents_files(dir: string) -> [string] =
+func find_agents_files(dir: string) -> [string] ! {FS} =
   walk_agents(dir, [])
 
 -- ---------------------------------------------------------------------------

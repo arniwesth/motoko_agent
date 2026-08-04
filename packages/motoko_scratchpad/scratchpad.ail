@@ -87,7 +87,7 @@ func result_from_exec(call: ToolCallEnvelope, result: { stdout: string, stderr: 
   }
 }
 
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleDecision ! {Net} {
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleDecision ! {Net, Rand} {
   if not is_scratchpad_tool(call.tool) then Delegate
   else {
     let cells = cells_arg(call.arguments);
@@ -96,8 +96,8 @@ export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: in
   }
 }
 
-export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net} {
-  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net, Rand} {
+  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
     on_tool_handle(ctx, call, timeout_secs)
   };
   {

@@ -242,7 +242,7 @@ func emergency_recovery_or_defer_scenario() -> Scenario {
   { id: "compaction.emergency_recovery_or_defer", seed: "fixed", run: scenario_emergency_recovery_or_defer }
 }
 
-export func main() -> () ! {IO} {
+export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Stream, Trace} {
   let scenarios = [
     estimate_tier_ladder_scenario(),
     tool_shape_preserved_by_elision_scenario(),

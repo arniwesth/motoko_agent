@@ -46,7 +46,7 @@ export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> Promp
   build_prompt_patch(cached_prompt)
 }
 
-export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process} {
+export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS, Rand} {
   match resolve_tool(call.tool, mappings) {
     Some(m) => match run_mcp_tool(call.id, m.canonical, ctx.workdir, cfg, m.mcp_name, call.arguments) {
       Some(result) => Handled(result),
@@ -56,11 +56,11 @@ export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx
   }
 }
 
-export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS} {
+export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS, Process, Rand} {
   let cfg = mcp_config(timeout_ms, max_output_chars);
   let mappings = tool_mappings();
   let cached_prompt = load_agent_prompt(workdir);
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
     on_tool_handle(cfg, mappings, ctx, call)
   };
   let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {

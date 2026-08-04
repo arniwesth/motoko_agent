@@ -151,11 +151,11 @@ func no_budget_patch() -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-export func make_hooks(cfg: A2AConfig) -> ExtensionHooks {
+export func make_hooks(cfg: A2AConfig) -> ExtensionHooks ! {Net, Rand} {
   let agents = cfg.agents;
   let schemas = collect_schemas(agents);
   let names = collect_tool_names(agents);
-  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
     match find_agent_for_tool(agents, call.tool) {
       None  => Delegate,
       Some(a) => {

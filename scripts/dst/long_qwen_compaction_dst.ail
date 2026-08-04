@@ -368,7 +368,7 @@ func long_tool_hook() -> ExtensionHooks {
     on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
     on_pre_step: \_ _ . PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
     on_tool_policy: \_ _ . Allow,
-    on_tool_handle: func(_ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle: func(_ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       let next = next_marker_from_call_id(call.id);
       Handled({
         tool_call_id: call.id,

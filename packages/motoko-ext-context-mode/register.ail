@@ -53,10 +53,10 @@ func config_from_env() -> CtxConfig ! {Env} {
   }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process, SharedMem, Rand} {
   let cfg = config_from_env();
   let cached_prompt = load_agent_prompt(getEnvOr("MOTOKO_WORKDIR", "."));
-  let handle = func(ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
     on_tool_handle(cfg, ctx, call)
   };
   let finalize = func(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {

@@ -157,7 +157,7 @@ export type ExtensionHooks = {
   on_pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
   on_tool_handle: (ExtCtx, ToolCallEnvelope)
-    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
   on_response_intercept: (ExtCtx, string)
     -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
   on_solver_candidate: (ExtCtx, string)
