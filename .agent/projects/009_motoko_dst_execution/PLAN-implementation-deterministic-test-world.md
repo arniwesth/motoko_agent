@@ -178,6 +178,39 @@ API probe — which is the most natural reading of D1's "a direct positive versi
 a green gate over a broken adoption. **Two subjects, not one**, wherever an item adopts an external
 API. This generalises past streaming and binds C5.
 
+**S16. A parity check whose two sides share a PRODUCER tests threading, not parity — and the
+difference is the whole defect class.** Earned by WI-C3, and measured rather than argued. D6.4 says
+the projected sequence and the returned emission log must match; in-process there is exactly ONE
+observation of the stream (`ProviderExchange.emissions`), because the callback's projections go to
+`ledger_emit`, which returns `()`, and the callback's row is closed `{IO}` so it cannot accumulate
+what it saw. So the invariant's two sides both derive from the returned log. **A de-duplication
+injected into the callback — the projection disagreeing with the returned log, which is literally the
+defect D6.4 names — leaves `stream_parity_dst` COMPLETELY GREEN**, and is caught only by comparing the
+WIRE (what the callback projected) against the returned trace (what the driver appended), which is out
+of process and lives in `run_stream_parity_wire.sh`.
+
+**Two consequences, and the second is the transferable one.** First, an in-process check built this
+way is still worth having — it tests that every branch carries both channels forward, which is S12's
+identity-transition class on a pair of channels, and WI-C3's mutant A reddens 5 rows with it. Second,
+and generalising past streaming: **before writing any "the projection matches the record" check, name
+the two producers. If they are the same expression, say what the check actually tests at the site, and
+build the second gate somewhere the other producer is observable.** This binds C5's
+declared-versus-performed detector directly, which has exactly this shape.
+
+**The corollary that resized WI-C3, and it is cheap to miss: a variant in `d64_gap_register` has NO
+trace side at all.** `ledger_emit` does not call `ledger_append`. Before WI-C3 the emission witness was
+`[]` because nothing read it AND the trace held zero `StreamDelta` records because nothing appended
+them — **both sides empty, and two empty sides are green.** Any future item that reads "parity is
+checked over the returned trace" for a registered variant is reading a comparison against an empty
+list.
+
+**S17. A mutation loop must save and restore by FILE COPY, never by `git checkout`.** Earned by WI-C3,
+which lost the item's entire implementation to `git checkout src/core/session.ail` used to revert a
+mutant, and recovered only from a `cp` taken seconds earlier in the same command block. **During an
+item the working tree IS the work and git is the only copy of the state before it**; a path-scoped
+checkout does not distinguish the mutant from the ninety minutes underneath it. S8 already asks items
+to budget mutation loops as the cost of a detector — this is the operational half.
+
 **S13. Sweep the whole tree before believing a gate — `check_core` is a SUBSET gate, and the sweep is
 the step every item under budget pressure drops.** Milestone B found five frontiers and **the fifth
 differs in kind**: the first four were found by a compiler that could not reach them yet; the fifth was
@@ -187,6 +220,24 @@ dropped the sweep and said so; B4 ran it first and it refuted the wave's green c
 classifier-2 fixtures B2a had found the same way one item earlier. **A repair loop seeded from the
 failing set cannot see what its own change breaks.** That lesson has now been learned twice and lost
 once. Run the sweep cache-cold (S9), and run it *first*.
+
+**AND RUN IT WITH `AILANG_RELAX_MODULES=1`, which no prior report records and which is worth 76
+files.** Every module under `packages/**` declares a `sunholo/...` module path that does not match its
+file path, so a bare `ailang check` reports MOD010 on all of them. Measured at WI-C3: the unflagged
+sweep reads **146 pass / 93 fail**, the flagged one **222 / 17**. That is a false red four times larger
+than the fifth frontier B4 found, and it would consume an item's remaining budget chasing a break
+nobody made. The sweep is:
+
+```bash
+for f in $(find src scripts packages tools cmd -name '*.ail' | sort); do
+  AILANG_RELAX_MODULES=1 ailang check "$f" >/dev/null 2>&1 || echo "FAIL $f"
+done
+```
+
+The 17 expected failures are stable across B4, C1 and C3: the 7 `TC_ARITY_001` smoke scripts, the
+sealed-vocabulary probe (`IMP010`), 5 `src/examples/`, 3 code-graph fixtures and 1 test-coverage
+fixture. **Confirm the failing set member-for-member rather than the count** — the count moves by one
+whenever an item adds a file.
 
 **S12. An identity transition is the correct answer for a component that did nothing and a silent
 defect for one that did something — and no type distinguishes them.** Earned by B2b, and it is the

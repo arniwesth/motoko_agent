@@ -164,10 +164,17 @@ type SessionPolicy = {
 -- site — the structural guard in `make terminal_trace` counts exactly one
 -- terminal record literal — so this is one field at one place, and every
 -- existing consumer reads `.result` and `.trace` and is untouched.
+-- WI-C3 adds the third channel, and it is a D6-level widening rather than a
+-- convenience: `ExecutionUnderTest` needs the returned outcome, the complete
+-- trace AND D6.4's emission witness, and before this the triple carried the
+-- first two. A bridge from a run to an `ExecutionUnderTest` could not be built
+-- without it — `emissions: []` was the only value available, and an empty
+-- witness reads identically to a run that emitted nothing.
 export type TracedSessionResult = {
   result: Result[[Message], AIError],
   trace: LedgerTrace,
-  world: WorldState
+  world: WorldState,
+  emissions: [LedgerEvent]
 }
 
 -- Convert Motoko's UI/profile model identifier to the provider API model id
@@ -386,7 +393,23 @@ type C2LoopState = {
   nudges_used: int,
   finalize_source: string,
   prior_counts: RuntimeStatusCounts,
-  trace: LedgerTrace
+  trace: LedgerTrace,
+
+  -- WI-C3. D6.4's emission witness: every logical StreamDelta the driver
+  -- projected during a provider callback, in order, across every step of the
+  -- run. `ledger_emit` is `-> () ! {IO, Trace}` and keeps no in-memory log, and
+  -- the callback's row is closed `{IO}` so it cannot accumulate one either —
+  -- this field is where the log the PROVIDER returned is carried instead, which
+  -- is the only in-process observation of the stream that exists (see
+  -- `stream_chunk_events` and the note at the model-step site).
+  --
+  -- It is threaded ALONGSIDE `trace` and deliberately not derived from it. The
+  -- trace has ONE junction after the call (`trace_after_call`); the witness is
+  -- set in each of the branch literals below. That asymmetry is the point: a
+  -- branch that carries one channel forward and drops the other goes red as
+  -- StreamParityCount, which is S12's identity-transition class arriving on a
+  -- pair of channels rather than on a world token.
+  emissions: [LedgerEvent]
 }
 
 type RuntimeStatusCounts = {
@@ -650,7 +673,8 @@ func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, 
     nudges_used: count_persist_nudges(history),
     finalize_source: "",
     prior_counts: prior_counts,
-    trace: empty_ledger_trace()
+    trace: empty_ledger_trace(),
+    emissions: []
   }
 }
 
@@ -713,10 +737,13 @@ func capture_failing_payload(e: AIError, msgs: [Message]) -> () ! {FS} {
 -- fold — can thread it back to `C2LoopState`. The world still has exactly one
 -- home; this function neither captures nor stores it.
 --
--- STILL DROPPED, and named rather than left for a reader to discover:
--- `exchange.emissions`. That is WI-A1's loss channel, not D1's cursor, and
--- closing it means widening `ExtPorts.ai_step` again to carry a chunk log the
--- ABI has no type for. It is a separate change from this one.
+-- STILL DROPPED ON THIS PATH, and named rather than left for a reader to
+-- discover: `exchange.emissions`. WI-C3 gave the DRIVER's own model-step site a
+-- consumer, but this is the EXTENSION bridge and it is unchanged — closing it
+-- means widening `ExtPorts.ai_step` again to carry a chunk log the ABI has no
+-- type for. So an extension's provider call streams into the wire and
+-- contributes nothing to the run's emission witness, which is a narrower gap
+-- than WI-A1's and is still a separate change from this one.
 -- NAMED, not an inline `{ result: ..., next_state: ... }`. Two reasons, and the
 -- second is the one that bites: `derive.py` finds a function's body by taking
 -- the first `{` after its signature that is not an effect row — so an anonymous
@@ -952,10 +979,31 @@ pure func c2_done_step(step_idx: int) -> int {
 --
 -- Extracted from agent_loop_v2 because match inside lambda hits a known
 -- AILANG parser bug.
+--
+-- WI-C3: THE MAPPING ITSELF NOW LIVES IN ONE PLACE, `stream_chunk_event`, and
+-- that is load-bearing rather than tidy. D6.4's parity check compares a witness
+-- built from the returned chunk log against the StreamDelta records that reach
+-- the returned trace. Two converters would be two notions of one quantity, and
+-- the disagreement would show up as a parity finding blaming the driver for a
+-- difference the CHECK introduced. In particular `Usage` is RETURNED by
+-- `stepWithStreamRecorded` and is NOT projected, so a witness built by mapping
+-- every chunk to a StreamDelta is off by one on every real run — the naive
+-- version reports StreamParityCount(N+1, N) forever, and the two-line repairs
+-- for that (skip the check when the witness is empty; loosen count to a subset
+-- test) both make the invariant vacuous while looking like fixes.
 func append_stream_delta(session_id: string, step_idx: int, stream_id: string, chunk: StreamChunk) -> () ! {IO, Trace} {
+  match stream_chunk_event(step_idx, stream_id, chunk) {
+    Some(e) => ledger_emit(session_id, e),
+    None => ()
+  }
+}
+
+-- The single StreamChunk -> Option[LedgerEvent] core. `None` is "this chunk is
+-- not a logical emission", which today is exactly `Usage`.
+export pure func stream_chunk_event(step_idx: int, stream_id: string, chunk: StreamChunk) -> Option[LedgerEvent] {
   match chunk {
     ContentDelta(text) =>
-      ledger_emit(session_id, StreamDelta({
+      Some(StreamDelta({
         step: step_idx,
         stream_id: stream_id,
         seq: 0,
@@ -963,16 +1011,80 @@ func append_stream_delta(session_id: string, step_idx: int, stream_id: string, c
         text: text
       })),
     ThinkingDelta(text) =>
-      ledger_emit(session_id, StreamDelta({
+      Some(StreamDelta({
         step: step_idx,
         stream_id: stream_id,
         seq: 0,
         kind: "reasoning",
         text: text
       })),
-    Usage(_) => ()
+    Usage(_) => None
   }
 }
+
+-- The same core over a returned chunk log, preserving order and dropping the
+-- non-projected variants. This is what the driver appends to the returned trace
+-- AND what it accumulates as D6.4's emission witness — one function, so the
+-- `Usage` exclusion and the thinking/reasoning selection cannot drift apart.
+--
+-- What parity therefore does NOT test, stated so the green is not over-read:
+-- whether this mapping is RIGHT. Both sides use it, so a wrong `kind` is
+-- invisible here. That is A8's event-vocabulary contract, not D6.4's.
+export pure func stream_chunk_events(step_idx: int, stream_id: string, chunks: [StreamChunk]) -> [LedgerEvent] {
+  match chunks {
+    [] => [],
+    c :: rest =>
+      match stream_chunk_event(step_idx, stream_id, c) {
+        Some(e) => e :: stream_chunk_events(step_idx, stream_id, rest),
+        None => stream_chunk_events(step_idx, stream_id, rest)
+      }
+  }
+}
+
+-- THE OFF-BY-ONE, pinned. `--ai-stub` returns TWO chunks — a ContentDelta and a
+-- Usage — and a live provider's returned log carries Usage too, so a witness
+-- built by mapping every returned chunk yields N+1 against the trace's N and
+-- `stream_parity_findings` reports StreamParityCount on every real run. No
+-- scripted world in this tree plays a Usage chunk, so no acceptance script can
+-- reach this and it would be caught only on a live provider. It is a unit test
+-- for that reason, and the value is the DIFFERENCE rather than the count: a row
+-- asserting `== 2` is also green on an implementation that drops the first
+-- ContentDelta instead.
+pure func test_usage_chunks_are_not_projected() -> bool
+  tests [((), true)]
+  {
+    let with_usage = [ContentDelta("a"), Usage({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }), ContentDelta("b")];
+    let without = [ContentDelta("a"), ContentDelta("b")];
+    List.length(stream_chunk_events(0, "s", with_usage)) + 1 == List.length(with_usage)
+      && List.length(stream_chunk_events(0, "s", with_usage)) == List.length(stream_chunk_events(0, "s", without))
+  }
+
+-- The kind selection, pinned separately from the exclusion. Both live in
+-- `stream_chunk_event` and a single row over a mixed list cannot say which of
+-- the two it read.
+pure func test_thinking_and_reasoning_kinds_are_distinguished() -> bool
+  tests [((), true)]
+  {
+    match stream_chunk_events(3, "sid", [ContentDelta("c"), ThinkingDelta("t")]) {
+      a :: rest =>
+        match rest {
+          b :: [] =>
+            match a {
+              StreamDelta(ia) =>
+                match b {
+                  StreamDelta(ib) =>
+                    ia.kind == "thinking" && ia.text == "c"
+                      && ib.kind == "reasoning" && ib.text == "t"
+                      && ia.step == 3 && ib.stream_id == "sid",
+                  _ => false
+                },
+              _ => false
+            },
+          _ => false
+        },
+      [] => false
+    }
+  }
 
 -- Derive a session_id from MOTOKO_SESSION_ID env var (set by the TS wrapper
 -- to match the JSONL filename) or fall back to a clock-derived id. The
@@ -1085,6 +1197,7 @@ func c2_finalize(
   error_msg: string,
   started_at_ms: int,
   trace: LedgerTrace,
+  emissions: [LedgerEvent],
   result: Result[[Message], AIError]
 ) -> TracedSessionResult ! {IO, Clock, Trace} {
   -- The successor of this read is now THREADED into the returned world rather
@@ -1098,7 +1211,7 @@ func c2_finalize(
   let now_ms = reading.now_ms;
   let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit());
   let _ = ledger_emit(session_id, summary);
-  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: reading.next_state }
+  { result: result, trace: ledger_append(trace, WireRecord(summary)), world: reading.next_state, emissions: emissions }
 }
 
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
@@ -1601,7 +1714,8 @@ func c2_fail(
   code: string,
   message: string,
   retryable: bool,
-  trace: LedgerTrace
+  trace: LedgerTrace,
+  emissions: [LedgerEvent]
 ) -> TracedSessionResult ! {IO, Clock, Trace} {
   let _ = if code == "BudgetExceeded" then
     ledger_emit(session_id, CostExhausted({
@@ -1612,7 +1726,7 @@ func c2_fail(
     }))
   else ();
   let result: Result[[Message], AIError] = Err({ code: code, message: message, retryable: retryable });
-  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace, result)
+  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace, emissions, result)
 }
 
 pure func c2_pending_context(st: C2LoopState) -> [Message] {
@@ -1671,7 +1785,8 @@ func c2_finish_tool_batch(
     nudges_used: st.nudges_used,
     finalize_source: "",
     prior_counts: st.prior_counts,
-    trace: trace
+    trace: trace,
+    emissions: st.emissions
   };
   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
 }
@@ -1717,7 +1832,8 @@ func c2_continue_tool_batch(
         nudges_used: st.nudges_used,
         finalize_source: "",
         prior_counts: st.prior_counts,
-        trace: trace
+        trace: trace,
+        emissions: st.emissions
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
     }
@@ -1746,6 +1862,7 @@ func c2_after_dp7(
   session_id: string,
   started_at_ms: int,
   trace: LedgerTrace,
+  emissions: [LedgerEvent],
   next_step_idx: int,
   done_step_idx: int,
   output: string,
@@ -1772,7 +1889,8 @@ func c2_after_dp7(
         nudges_used: count_persist_nudges(msgs_with_assistant),
         finalize_source: "",
         prior_counts: prior_counts,
-        trace: trace
+        trace: trace,
+        emissions: emissions
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
     },
@@ -1796,7 +1914,8 @@ func c2_after_dp7(
         nudges_used: count_persist_nudges(msgs_with_assistant),
         finalize_source: source,
         prior_counts: prior_counts,
-        trace: trace
+        trace: trace,
+        emissions: emissions
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
     }
@@ -1825,7 +1944,7 @@ func c2_loop(
     -- enumeration missed. It now finalizes like every other.
     Err(reason) => {
       let result: Result[[Message], AIError] = Err({ code: "InvalidHistory", message: reason, retryable: false });
-      c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInvalidHistory, reason, started_at_ms, st.trace, result)
+      c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInvalidHistory, reason, started_at_ms, st.trace, st.emissions, result)
     },
     Ok(step_state) => {
       let decision = decide(step_state, policy.step);
@@ -1833,7 +1952,7 @@ func c2_loop(
       match decision {
         -- Terminal: budget, max steps, compaction exhaustion or internal,
         -- discriminated by decision_fail_reason.
-        Fail(info) => c2_fail(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision),
+        Fail(info) => c2_fail(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision, st.emissions),
         Finalize(info) => {
           let done_step = c2_done_step(st.step_idx);
           let empty_event = EmptyStopFinalize({
@@ -1856,7 +1975,7 @@ func c2_loop(
           -- order is untouched: D6.4 asks for PARITY, not one transition.
           let done_event = DoneEvent({ step: done_step, output: info.output, source: st.finalize_source });
           let trace_with_done = ledger_append(trace_after_empty_floor, WireRecord(done_event));
-          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, Ok(st.msgs));
+          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, st.emissions, Ok(st.msgs));
           let _ = ledger_emit(session_id, done_event);
           finalized
         },
@@ -1882,7 +2001,8 @@ func c2_loop(
             nudges_used: next_nudges,
             finalize_source: "",
             prior_counts: st.prior_counts,
-            trace: trace_with_decision
+            trace: trace_with_decision,
+            emissions: st.emissions
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
         },
@@ -1908,7 +2028,8 @@ func c2_loop(
             nudges_used: st.nudges_used,
             finalize_source: st.finalize_source,
             prior_counts: st.prior_counts,
-            trace: ledger_append(trace_with_decision, WireRecord(cp.event))
+            trace: ledger_append(trace_with_decision, WireRecord(cp.event)),
+            emissions: st.emissions
           };
           c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
         },
@@ -1919,7 +2040,7 @@ func c2_loop(
             None => {
               let msg = "approval requested without pending approval state";
               let result: Result[[Message], AIError] = Err({ code: "Internal", message: msg, retryable: false });
-              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, st.emissions, result)
             },
             Some(req) => {
               -- WI-A12's approval class. The operator's input comes from the
@@ -2009,7 +2130,8 @@ func c2_loop(
                 nudges_used: st.nudges_used,
                 finalize_source: "",
                 prior_counts: st.prior_counts,
-                trace: trace_with_decision
+                trace: trace_with_decision,
+                emissions: st.emissions
               };
               c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
             }
@@ -2035,14 +2157,14 @@ func c2_loop(
               let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
-              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
             },
             -- Terminal: compaction exhausted.
             Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
-              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
             },
             Ok(payload) => {
               let compacted_msgs = payload_messages(payload);
@@ -2068,15 +2190,43 @@ func c2_loop(
               -- chain already consumed. This is the pre-step half of the same
               -- threading the intercept and solver hooks do below.
               let exchange = dispatch_step(st.provider, token_to_world(chain.next_state), provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
-              -- exchange.emissions rides along and STILL has no driver consumer
-              -- — but the reason changed at WI-C1 and the difference matters.
-              -- It used to be empty at the source: `live_ports` returned []
-              -- unconditionally. It is now NON-EMPTY on a live exchange
-              -- (`stepWithStreamRecorded`, AILANG v0.33.0) and this line still
-              -- drops it on the floor. The gap moved from producer to consumer.
-              -- Projecting the log into the ledger is D6.4's stream-parity
-              -- invariant, which is WI-C3's. Until that lands, a green tree is
-              -- NOT evidence of stream parity: nothing reads this field.
+              -- WI-C3: THE READER. `exchange.emissions` had no consumer until
+              -- this line; WI-A1 built the channel, WI-C1 made it non-empty on a
+              -- live exchange, and this is where it is spent.
+              --
+              -- Two channels come out of one conversion, and they are threaded
+              -- SEPARATELY on purpose (see `C2LoopState.emissions`):
+              --
+              --   * the returned trace gets these events appended, which closes
+              --     `StreamDelta` in `d64_gap_register` — the driver used to
+              --     ledger_emit every delta and append none, so the returned
+              --     trace held zero StreamDelta records on every path and D6.4's
+              --     parity had no second side to compare against at all;
+              --   * `C2LoopState.emissions` carries the same events forward as
+              --     the run's emission witness, which is what an
+              --     `ExecutionUnderTest` needs and what `emissions: []` could
+              --     never be.
+              --
+              -- WHAT THIS PAIR DOES AND DOES NOT TEST, because a green
+              -- `stream_parity_findings` on a real run must not be over-read.
+              -- Both sides are derived from `exchange.emissions` here, and that
+              -- is not a shortcut — it is the only observation of the stream
+              -- that exists in this process. The callback's own projections go
+              -- to `ledger_emit`, which returns `()`, and the callback's row is
+              -- closed `{IO}` so it cannot accumulate them; D1 rejected the
+              -- scoped recorder and SharedMem explicitly. So in-process parity
+              -- tests that every branch below carries BOTH channels forward —
+              -- the trace has one junction (`trace_after_call`), the witness is
+              -- set in six branch literals, and a branch that keeps one and
+              -- drops the other goes red. It does NOT test that the callback
+              -- projected what the provider returned. That comparison needs the
+              -- WIRE, which is out of process, and it is what
+              -- `make stream_parity` does.
+              let stream_events = stream_chunk_events(step_idx, stream_id, exchange.emissions);
+              let emissions_after_call = st.emissions ++ stream_events;
+              -- The stream deltas sit between the prepared event and whatever
+              -- the outcome produces, which is when they actually happened.
+              let trace_after_call = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), stream_events);
               match exchange.result {
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
@@ -2105,12 +2255,13 @@ func c2_loop(
                       nudges_used: st.nudges_used,
                       finalize_source: "",
                       prior_counts: st.prior_counts,
-                      trace: ledger_append(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), WireRecord(retry_event))
+                      trace: ledger_append(trace_after_call, WireRecord(retry_event)),
+                      emissions: emissions_after_call
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                   } else {
                     -- Terminal: unretried provider/stream failure.
-                    c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), Err(e))
+                    c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_call, emissions_after_call, Err(e))
                   }
                 },
                 Ok(result) => {
@@ -2126,7 +2277,7 @@ func c2_loop(
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
                   let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
-                  let trace_after_model = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), phase.events);
+                  let trace_after_model = c2_trace_wire_events(trace_after_call, phase.events);
                   -- WI-B2b. Bound rather than matched inline, because the
                   -- successor has to outlive the match: `intercepted.next_state`
                   -- is what the loop carries forward, and `exchange.next_state`
@@ -2165,7 +2316,8 @@ func c2_loop(
                         nudges_used: applied.nudges_used,
                         finalize_source: "",
                         prior_counts: st.prior_counts,
-                        trace: ledger_append(trace_after_model, WireRecord(event))
+                        trace: ledger_append(trace_after_model, WireRecord(event)),
+                        emissions: emissions_after_call
                       };
                       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                     },
@@ -2198,7 +2350,8 @@ func c2_loop(
                           nudges_used: applied.nudges_used,
                           finalize_source: "",
                           prior_counts: st.prior_counts,
-                          trace: trace_after_model
+                          trace: trace_after_model,
+                          emissions: emissions_after_call
                         };
                         c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                       } else {
@@ -2234,7 +2387,8 @@ func c2_loop(
                               nudges_used: applied.nudges_used,
                               finalize_source: "",
                               prior_counts: st.prior_counts,
-                              trace: ledger_append(trace_after_model, WireRecord(event))
+                              trace: ledger_append(trace_after_model, WireRecord(event)),
+                              emissions: emissions_after_call
                             };
                             c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                           },
@@ -2246,7 +2400,7 @@ func c2_loop(
                             let finalized = dispatch_solver_candidate(rt, post_ctx, result.message.content);
                             match finalized.decision {
                               Accept(output) =>
-	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
+	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, output, "ext_solver_accept"),
                               ContinueWithFeedback(feedback) => {
                                 let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
                                 let _ = ledger_emit(session_id, event);
@@ -2269,7 +2423,8 @@ func c2_loop(
                                   nudges_used: applied.nudges_used,
                                   finalize_source: "",
                                   prior_counts: st.prior_counts,
-                                  trace: ledger_append(trace_after_model, WireRecord(event))
+                                  trace: ledger_append(trace_after_model, WireRecord(event)),
+                                  emissions: emissions_after_call
                                 };
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                               },
@@ -2300,11 +2455,12 @@ func c2_loop(
                                     nudges_used: st.nudges_used,
                                     finalize_source: "",
                                     prior_counts: st.prior_counts,
-                                    trace: ledger_append(trace_after_model, WireRecord(event))
+                                    trace: ledger_append(trace_after_model, WireRecord(event)),
+                                    emissions: emissions_after_call
                                   };
                                   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                                 } else
-	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, exchange.next_state, st.prior_counts, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, result.message.content, "")
+	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, exchange.next_state, st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, result.message.content, "")
                               }
                             }
                           }
@@ -2920,7 +3076,8 @@ func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Tra
       nudges_used: 0,
       finalize_source: "",
       prior_counts: prior,
-      trace: trace
+      trace: trace,
+      emissions: []
     };
     let policy: SessionPolicy = {
       step: {
@@ -2971,7 +3128,8 @@ func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
       nudges_used: 0,
       finalize_source: "",
       prior_counts: zero_runtime_status_counts(),
-      trace: { records: [] }
+      trace: { records: [] },
+      emissions: []
     };
     let policy: SessionPolicy = {
       step: {

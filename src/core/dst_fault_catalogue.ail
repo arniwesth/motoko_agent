@@ -330,7 +330,7 @@ export pure func catalogue_coverage_gaps() -> [CoverageGap] {
     {
       class_id: "provider_partial_stream_then_error",
       form: "the PARTIAL-STREAM half of the class",
-      why: "The retry/finalize half of the class is reachable; the parity half is not observable yet. WI-C1 removed the external half of that: live_ports adopted AILANG v0.33.0's stepWithStreamRecorded, so a live exchange now returns the chunks observed before a mid-stream failure — the exact partial-stream-then-error case, proven against a real broken SSE stream by `make recorded_stream`. What is left is ours: nothing in the driver consumes ProviderExchange.emissions, and the deterministic adapters a seeded run drives still report []. D6.4's stream-parity invariant that would consume it is WI-C3's."
+      why: "The retry/finalize half of the class is reachable. The PARITY half is now observable and observed — WI-C1 adopted stepWithStreamRecorded so a live exchange returns the chunks observed before a mid-stream failure (proven against a real broken SSE stream by `make recorded_stream`), and WI-C3 built the consumer: the driver appends those events to the returned trace and threads them out as the run's emission witness, checked on a real run by `make stream_parity`. WHAT REMAINS IS NARROWER AND IT IS THE OTHER HALF OF THE CLASS NAME: a seeded run cannot produce a stream that fails PART-WAY, because ScriptedStep has no error channel, so parity is exercised on completed streams only. That is one named field away and is not a parity gap."
     },
     {
       class_id: "approval_deadline_exceeded",

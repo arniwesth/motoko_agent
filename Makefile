@@ -92,6 +92,37 @@ smoke_parity:
 recorded_stream:
 	./scripts/dst/run_recorded_stream_probe.sh
 
+# ADR-001 D6.4's stream-parity obligation (WI-C3), held on a RUN.
+#
+# TWO GATES, and they cover different halves — the split is measured rather than
+# claimed, and it is the item's main finding.
+#
+#   1. `stream_parity_dst.ail`. The first thing in the tree that drives the real
+#      driver, bridges what it returns into an `ExecutionUnderTest`
+#      (`src/core/dst_execution.execution_of`), and evaluates all sixteen D7
+#      families over it. Before WI-C3 the whole suite had ONE construction site,
+#      a hand-authored fixture. Both sides of the parity comparison derive from
+#      `ProviderExchange.emissions`, because that is the only in-process
+#      observation of the stream, so what this proves is that the driver carries
+#      the trace and the emission witness forward TOGETHER on every branch after
+#      the provider call.
+#   2. `run_stream_parity_wire.sh`. The wire against the trace. The wire is what
+#      the CALLBACK projected during the call; the trace is what the driver
+#      APPENDED from the log the provider returned. Different producers, so this
+#      is the half D6.4 actually names — and it is the only one that can see a
+#      projection which disagrees with the returned log.
+#
+# MEASURED: a de-duplication injected into `append_stream_delta` — the callback
+# dropping adjacent repeats — leaves gate 1 fully GREEN and turns gate 2 red on
+# count, order and fixture adequacy. Neither gate subsumes the other, and gate 1
+# alone would ship a green check over the defect D6.4 exists to find.
+.PHONY: stream_parity
+stream_parity:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	  --entry main scripts/dst/stream_parity_dst.ail < /dev/null | grep -v '^{'; \
+	./scripts/dst/run_stream_parity_wire.sh
+
 phase_c_l1: compaction_dst
 	ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
 	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
@@ -99,7 +130,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage recorded_stream smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #

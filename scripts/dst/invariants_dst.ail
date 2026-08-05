@@ -658,8 +658,10 @@ func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
   let a = report("the register agrees with the vocabulary in both directions", List.length(vs) == 0,
                  "${rule_list(vs)}\n      ${first_message(vs)}");
   let gap = logical_variants_not_in_trace(event_vocabulary());
-  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14)",
-                 List.length(gap) == 14 && not contains_str(gap, "DoneEvent"),
+  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3)",
+                 List.length(gap) == 13
+                   && not contains_str(gap, "DoneEvent")
+                   && not contains_str(gap, "StreamDelta"),
                  "the gap is ${List.length(gap)}: ${join_str(gap)}");
   let c = report("every registered gap carries a reason",
                  List.length(parity_gap_reasons()) == List.length(d64_gap_register()),
@@ -680,12 +682,27 @@ func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
   let e = report("DoneEvent left the gap by being APPENDED, not by being reclassified",
                  is_logical(event_vocabulary(), "DoneEvent"),
                  "DoneEvent is no longer classified Logical — the gap was dissolved, not closed");
-  a && b && c && d && e
+  -- WI-C3's closure gets the SAME guard, and it needs it more than DoneEvent
+  -- did: StreamDelta is D6.4's named exception, so "it is out of the gap" is
+  -- also true if somebody classified the exception as DisplayOnly, and that
+  -- reading is one field flip away and turns the parity obligation vacuous.
+  let f = report("StreamDelta left the gap by being APPENDED, not by being reclassified",
+                 is_logical(event_vocabulary(), "StreamDelta"),
+                 "StreamDelta is no longer classified Logical — D6.4's named exception was dissolved, not closed");
+  a && b && c && d && e && f
 }
 
--- D6.4's NAMED EXCEPTION. No run produces a non-empty emission log today, so
--- every branch below is reached by CONSTRUCTION. A count-only check is green on
--- the reordering case, which is why order is a separate rule.
+-- D6.4's NAMED EXCEPTION, reached by CONSTRUCTION. A count-only check is green
+-- on the reordering case, which is why order is a separate rule.
+--
+-- WHY THESE ROWS SURVIVE WI-C3, since the sentence they used to carry ("no run
+-- produces a non-empty emission log today") stopped being true: a run now does,
+-- and `scripts/dst/stream_parity_dst.ail` drives the same three mutants against
+-- a witness a real run produced. These stay because they test the CHECKER over
+-- shapes a scripted run does not reach — a `seq` that differs, a trace holding
+-- exactly one of two deltas — and because a constructed row cannot be made
+-- vacuous by a driver change. The two are complements, and per S14 the real-run
+-- pair is the one that certifies the adoption.
 func scenario_stream_parity_branches_are_entered() -> bool ! {IO} {
   let _ = println("\n-- D6.4's named exception: stream parity, constructed --");
   let d1 = StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "text", text: "a" });

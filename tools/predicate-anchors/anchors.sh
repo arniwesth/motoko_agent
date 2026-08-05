@@ -43,9 +43,9 @@ echo "attribution anchors:"
 check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"
 check src/core/tool_phase.ail 288 'is_scratchpad_tool_name' "the mixed guard"
 check src/core/tool_phase.ail 289 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
-check src/core/session.ail 851 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"
-check src/core/test/stub_step.ail 182 'now()' "live_ports' real clock (declared UNROUTED core)"
-for l in 992 1097 2365 2475; do
+check src/core/session.ail 878 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"
+check src/core/test/stub_step.ail 202 'now()' "live_ports' real clock (declared UNROUTED core)"
+for l in 1104 1210 2521 2631; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 344 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
