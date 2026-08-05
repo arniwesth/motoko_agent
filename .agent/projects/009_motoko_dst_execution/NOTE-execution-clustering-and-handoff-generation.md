@@ -75,7 +75,15 @@ Handoff: `HANDOFF-execute-b4-close-the-repin-wave.md` — the wave's
 green gate and the last of Milestone B. Original B2b handoff:
 `HANDOFF-execute-b2b-world-token-widening.md` — the last of
 Milestone B's content, and the change that is *supposed* to move classifier 2's pinned membership.
-Original B2a handoff: `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
+**MILESTONE C IS OPEN. Cluster 16 = WI-C1 + WI-C2: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-c1-c2-recorded-stream-adoption.md`. **The two items are one cluster and the reason is
+measured, not stylistic:** C1's edit is two lines plus an import, and with it applied `ailang check`,
+`make check_core` (52/52) and `make driver_only` (exit 0) are **byte-identical to their values without
+it**. C1 alone is a commit that provably certifies nothing — the S8/S13 shape — and C2 is its only
+evidence. This is the first cluster to pair an item with its own gate for that reason, and the rule
+generalises: **when an item's whole deliverable is invisible to every existing gate, it does not ship
+as its own cluster.** Original B2a handoff:
+`HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —
 **B3 before B2, because B2's scope is unmeasurable until the `images` wall clears** (B1 could see only
 one of M2's three predicted ABI changes; the rest sit behind it, and absent reads identically to
