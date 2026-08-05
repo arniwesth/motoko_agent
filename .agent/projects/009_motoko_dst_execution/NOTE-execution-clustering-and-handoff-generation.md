@@ -144,7 +144,35 @@ gates the name.**
 **The pattern is now stable enough to state as clustering guidance: in Milestone C, grounding has
 changed the item's shape every single time, and three of four times it changed which thing was
 blocking.** Budget the first twenty minutes of any C-item handoff for reading the ADR clause the item
-answers to, not the plan's summary of it. Original B2a handoff:
+answers to, not the plan's summary of it.
+
+**Cluster 19 outcome: WI-C4 DONE 2026-08-05**, ~40 min, `183fbbb`. **VERDICT: NO** — seven of eleven
+rows hold, two of them vacuously. Earned **S19** and found a sixth instrument certifying nothing:
+`make event_vocabulary` exited 0 over a unit test that had been red since C3, because
+`cmd > /dev/null && echo "✓"` in non-terminal position swallows the status under `set -e`.
+
+---
+
+## THE PLAN IS EXHAUSTED. Clusters from here are scheduled from C4's work list.
+
+**C1–C5 are complete and no item after them was ever planned** — that is C4's planning defect 1, and
+it is why five consecutive items tracked the extension install as the blocker while the row that
+actually blocks the name had no owner. **Sequence the remaining work by acceptance row**, not by plan
+order, because the plan has nothing left to order.
+
+| Next | Rows closed | Why this position |
+|---|---|---|
+| **Fault reachability** (handed off) | **4 and 11** | Two rows, one producer set, no external dependency. The cheapest ratio left |
+| **Close `d64_gap_register`** | **7** | The largest single blocker. Eleven `driver_only`-reachable variants; mechanical but with its own red surface |
+| **A filesystem world class** | **10** | Needs a new world class so `resolve_context_limit`'s `Env` and `FS` halves route together. Routing env alone is refused on record |
+
+**Cluster 20 = fault reachability: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-fault-reachability-rows-4-and-11.md`. **Grounding resized it for the fifth item
+running, and this time the direction reversed: the work is SMALLER than recorded, not larger.** Every
+recorded reason for these four gaps says `ScriptedStep` has no error channel and no latency channel;
+**B2b added both fields** and five reasons across `dst_corpus` and `dst_generator` still say
+otherwise. What is genuinely missing is named by none of them — **`ScriptedStep` carries no
+`retryable`**, and that bool is the entire distinction between two of the four classes. Original B2a handoff:
 `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —
 **B3 before B2, because B2's scope is unmeasurable until the `images` wall clears** (B1 could see only
