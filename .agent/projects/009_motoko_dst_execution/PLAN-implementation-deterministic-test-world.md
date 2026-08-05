@@ -248,6 +248,27 @@ numbers were derived, which moved four `session.ail` line numbers by nine. **S15
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
 
+**S19. A gate's success markers are an INVENTORY, and a missing tick is a failure report.** Earned by
+WI-C4, and it is the first defect in this project that turned *nothing* red — it printed one fewer
+line. `make event_vocabulary` ran its unit suite as
+`ailang test X > /dev/null && echo "  ✓ X"; \` in NON-TERMINAL position. Under `set -e` a failure on
+the left of `&&` does not exit — that is what `&&` is for — and the following `;` discards the status.
+So the target printed no tick for that file and **exited 0**. The same form in TERMINAL position is
+safe, because the recipe's status is the last command's, and that asymmetry is why it survived
+seventeen sites and eight items: eleven were fine and the pattern read as uniform.
+
+**What it hid:** `test_logical_gap_is_recorded` was RED from WI-C3 — which flipped
+`StreamDelta.reaches_trace_today` without updating the pinned literal beside it — until WI-C4 found
+it. **Two consecutive execution reports state that every `make dst` target but two passed.**
+
+**Measured rather than inferred:** six sites were non-terminal; all six were run directly and
+**exactly one was masking a real failure**. All six are now checked commands.
+
+**The transferable half is the detection, not the fix.** Every mutation rule here (S1, S7, S16) asks
+what turns RED. Nothing asked what stopped printing. **Read a gate's ticks as a checklist against the
+files it names**, because a check that vanishes is indistinguishable from a check that passes in every
+signal this project was watching.
+
 **S17. A mutation loop must save and restore by FILE COPY, never by `git checkout`.** Earned by WI-C3,
 which lost the item's entire implementation to `git checkout src/core/session.ail` used to revert a
 mutant, and recovered only from a `cp` taken seconds earlier in the same command block. **During an
@@ -2203,6 +2224,37 @@ evidence.** Every row's evidence is produced earlier — the latency pair in A14
 A15, routing audit in A4/A5, hermeticity probes in A12, trace contract in A9 — and a row with no
 earlier producer is a planning defect to fix here rather than an experiment to run at the gate. Only after every row holds does any target adopt the "DST"/"simulation"
 name (D10). Until then, all new targets keep non-simulation working names.
+
+**RUN AT WI-C4, 2026-08-05. THE VERDICT IS NO: seven rows of eleven hold.** Full row-by-row evidence
+in `NOTE-c4-name-adoption-gate-verdict.md`; the four failing rows and their named producers are:
+
+| Row | Why it fails | Producer the work needs |
+|---|---|---|
+| **Is the oracle complete?** | `d64_gap_register` holds **13** Logical variants that never reach the returned trace; **11 are `driver_only`-reachable** | Close the register: 2 terminal paths (unblocked), the 7-variant tool-dispatch fold, `ThinkingStreamEnd`, and 3 gated on an installable extension or a suspend trigger |
+| **Do injected faults reach production recovery?** | 5 of 9 required non-waived classes reached; 4 registered as gaps, not waivers | An **error case on `ScriptedStep`** (closes 3) and a generator that emits malformed `tool_args` (closes 1). Neither externally blocked |
+| **Is there actual search?** | Same 4 classes — the bank does not reach every required non-waived class | As above |
+| **Is hermeticity enforced?** | The host-env class has **no poison pair**; `resolve_context_limit` reads 4 env vars ambiently at 6 driver sites | A **filesystem class in the world**, so the `Env` and `FS` halves route together. Routing env alone is refused on record |
+
+**TWO ROWS PASS ONLY BECAUSE THE INSTALL LIST IS EMPTY, and per D10 a vacuous pass does not
+transfer.** The boundary row's clauses over installed extensions are all vacuous (it passes on the
+row's own visibility reading — a weak profile must be *visible* as weak, which `driver_only` is), and
+`extension_effect_fault`'s waiver is purchased by installing nothing.
+
+**THREE PLANNING DEFECTS THE GATE EXPOSED, and the first explains five items of misdirected effort:**
+
+1. **The oracle row has NO SCHEDULED PRODUCER.** The text above asserts every row's evidence is
+   produced earlier and lists A14, A15, A4/A5, A12, A9, C3 — but **no item was ever scheduled to
+   close D6.4's general obligation.** C3 discharged the *named stream exception* only and said so.
+   This is why every handoff from B4 to C5 tracked "can any extension be installed?" as the blocker:
+   the row that actually blocks the name had no owner, so nothing reported on it. **The install is
+   not the blocker and never was.**
+2. **The host-env poison pair has no owner.** A12 was to produce the hermeticity probes and its
+   specified order contains no filesystem class, so the env pair was deferrable at A12 with no later
+   item picking it up. `world_state`'s Makefile note already called this a plan finding; it was never
+   lifted into the plan.
+3. **This entry did not say what to do with a NO.** It describes running the table and adopting the
+   name. "Expect NO" had to arrive by handoff rather than by plan. **A gate that reports NO with a
+   work list is the successful outcome, not the failed one.**
 
 **WI-C5. The second profile: `compose`-bearing.** Depends on **B2, A5, A10 and A12** — B2 for the
 coverage widening, A5 because its routed-set claim is a routing-completeness claim gated on the

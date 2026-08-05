@@ -803,18 +803,31 @@ pure func test_duplicate_row_is_rejected() -> bool
 -- a row silently flipping `reaches_trace_today` shows up here rather than
 -- quietly shrinking WI-A14's work list.
 --
--- FIFTEEN at WI-A8, FOURTEEN after WI-A14 closed `DoneEvent`. The assertion on
--- DoneEvent is stated in the NEGATIVE direction on purpose: the gap may only
--- shrink, and `dst_invariants.d64_gap_register` carries the remaining fourteen
--- with a reason each, asserted equal to this list in both directions — so a
+-- FIFTEEN at WI-A8, FOURTEEN after WI-A14 closed `DoneEvent`, THIRTEEN after
+-- WI-C3 closed `StreamDelta`. Each closed variant is asserted in the NEGATIVE
+-- direction on purpose: the gap may only shrink, and
+-- `dst_invariants.d64_gap_register` carries the remaining thirteen with a
+-- reason each, asserted equal to this list in both directions — so a
 -- variant that leaves the gap without leaving the register is red there, and a
 -- variant reclassified into DisplayOnly to leave it is red on the pinned
 -- display-only baseline. Neither escape is available by editing one place.
+--
+-- CORRECTED AT WI-C4, AND THE CORRECTION IS THE FINDING RATHER THAN THE NUMBER.
+-- WI-C3 flipped `StreamDelta.reaches_trace_today` to `true` and did not update
+-- this test, so the literal stayed 14 and the second clause still asserted
+-- StreamDelta was IN the gap. This test was therefore RED from WI-C3 until
+-- WI-C4 — through two items whose reports state that every `make dst` target
+-- but two passed. It was invisible because the Makefile ran it as
+-- `ailang test ... && echo ✓` in non-terminal position, where `set -e` does not
+-- fire and the exit status is discarded: the target printed no tick for this
+-- file and exited 0 anyway. The recipe now runs it as a checked command. **A
+-- pinned literal is only as good as the propagation of its failure**, which is
+-- S16's shape one level out — the instrument was right and its wiring was not.
 pure func test_logical_gap_is_recorded() -> bool
   tests [((), true)]
   {
-    List.length(logical_variants_not_in_trace(event_vocabulary())) == 14
-      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "StreamDelta")
+    List.length(logical_variants_not_in_trace(event_vocabulary())) == 13
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "StreamDelta")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "DoneEvent")
   }
 

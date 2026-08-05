@@ -410,7 +410,7 @@ discovery:
 	else \
 		echo "  ✓ driver_env_keys() re-derived from the driver's ports.env_get call sites ($$(printf '%s\n' "$$derived" | wc -l | tr -d ' ') keys)"; \
 	fi; \
-	ailang test src/core/dst_discovery.ail > /dev/null && echo "  ✓ src/core/dst_discovery.ail"; \
+	ailang test src/core/dst_discovery.ail > /dev/null; echo "  ✓ src/core/dst_discovery.ail"; \
 	ailang test src/core/dst_interaction.ail > /dev/null && echo "  ✓ src/core/dst_interaction.ail"
 
 # WI-A13 stage 3: strict replay against `driver_only`. Four checks, in order.
@@ -491,7 +491,7 @@ strict_replay:
 	else \
 		echo "  ✓ discovery and replay agree with the driver's own wire emissions (provider=$$w_prov, tool=$$w_tool over the pair)"; \
 	fi; \
-	ailang test src/core/ports.ail > /dev/null && echo "  ✓ src/core/ports.ail (recorded-outcome codec round trips)"; \
+	ailang test src/core/ports.ail > /dev/null; echo "  ✓ src/core/ports.ail (recorded-outcome codec round trips)"; \
 	ailang test src/core/dst_replay.ail > /dev/null && echo "  ✓ src/core/dst_replay.ail"
 
 # D2's SEEDED GENERATOR (WI-A13 stage 4). Three checks:
@@ -674,7 +674,7 @@ program_persistence:
 		exit 1; \
 	fi; \
 	echo "  ✓ nothing in the tree writes to scripts/dst/fixtures — the specimen has no regeneration target"; \
-	ailang test src/core/dst_persistence.ail > /dev/null && echo "  ✓ src/core/dst_persistence.ail (the escape, the tag tables, and the path-vs-identity split site 22 forces)"; \
+	ailang test src/core/dst_persistence.ail > /dev/null; echo "  ✓ src/core/dst_persistence.ail (the escape, the tag tables, and the path-vs-identity split site 22 forces)"; \
 	imports=$$(grep -E '^import ' src/core/dst_secrets.ail \
 	   | sed -E 's/^import +([a-zA-Z0-9_/]+).*/\1/' | sort -u); \
 	if [ -z "$$imports" ]; then \
@@ -772,6 +772,18 @@ fault_catalogue:
 # `variant: "` inside the body of `event_vocabulary()`. Writing that string in
 # prose inside that function turns this gate red for no reason — the same shape
 # as terminal_trace's `{ result:` counter over session.ail.
+# WI-C4 REPAIR, AND IT IS A GATE DEFECT RATHER THAN A CONTENT ONE. Six recipes
+# in this file ran their unit suite as `ailang test X > /dev/null && echo "✓ X"`
+# in NON-TERMINAL position. Under `set -e` a failure on the left of `&&` does
+# not exit, and the status is discarded by the following `;` — so the target
+# printed no tick for that file and exited 0. Terminal-position uses of the same
+# form are safe (the recipe's status is the last command's), which is why this
+# survived: eleven of seventeen sites were fine and the pattern read as uniform.
+# Measured at WI-C4: of the six swallowing sites exactly one was masking a real
+# failure — `dst_event_vocabulary`'s `test_logical_gap_is_recorded`, red since
+# WI-C3 flipped `StreamDelta.reaches_trace_today` without updating its pinned
+# literal. Two items reported "every target but two passes" over it. All six now
+# run as checked commands.
 .PHONY: event_vocabulary
 event_vocabulary:
 	@set -eu; \
@@ -794,7 +806,7 @@ event_vocabulary:
 		exit 1; \
 	fi; \
 	echo "  ✓ $$variants LedgerEvent variants == $$rows vocabulary rows == $$goldens golden-pinned variants"; \
-	ailang test src/core/dst_event_vocabulary.ail > /dev/null && echo "  ✓ src/core/dst_event_vocabulary.ail"; \
+	ailang test src/core/dst_event_vocabulary.ail > /dev/null; echo "  ✓ src/core/dst_event_vocabulary.ail"; \
 	ailang test src/core/phase_vocab.ail > /dev/null && echo "  ✓ src/core/phase_vocab.ail (goldens)"
 
 # D7's whole-execution invariant set (WI-A14 piece 1). Three checks, and the
@@ -1485,8 +1497,8 @@ terminal_trace:
 	else \
 		echo "  ✓ all terminal returns route through c2_finalize"; \
 	fi; \
-	ailang test src/core/dst_result.ail > /dev/null && echo "  ✓ src/core/dst_result.ail"; \
-	ailang test src/core/phase_vocab.ail > /dev/null && echo "  ✓ src/core/phase_vocab.ail"; \
+	ailang test src/core/dst_result.ail > /dev/null; echo "  ✓ src/core/dst_result.ail"; \
+	ailang test src/core/phase_vocab.ail > /dev/null; echo "  ✓ src/core/phase_vocab.ail"; \
 	ailang test src/core/session.ail > /dev/null && echo "  ✓ src/core/session.ail"
 
 # Driver full-loop coverage (WI-A16). These eight smoke scripts exercise the v2
