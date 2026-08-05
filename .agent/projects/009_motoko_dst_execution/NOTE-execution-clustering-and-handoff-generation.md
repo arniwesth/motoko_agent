@@ -103,7 +103,27 @@ not exist is a **bridge from a run to an `ExecutionUnderTest`** — measured at 
 seeded runner imports `dst_invariants` at all. **So the whole D7 suite, not just the emission log, has
 no real-run consumer.** The handoff makes the scope call explicit rather than letting a green
 `make dst` settle it, because the two readings differ in whether D6.4 is discharged and C4 reads that
-answer directly. Original B2a handoff:
+answer directly.
+
+**Cluster 17 outcome: WI-C3 DONE 2026-08-05**, ~72 min, `b145eef` — **BRIDGE taken**. All sixteen D7
+families now evaluate over a real run; `d64_gap_register` 14 → 13; earned **S16** and **S17**. The
+resizing finding was one level deeper than the handoff predicted: `ledger_emit` never calls
+`ledger_append`, so the returned trace held **zero** `StreamDelta` records — **both parity sides were
+empty, and two empty sides are green.**
+
+**Cluster 18 = WI-C5: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-c5-compose-bearing-profile.md`. **C5 is sequenced before C4**, and the plan settles it
+rather than preference: Milestone A's boundary says it delivered everything the name gate needs
+*except streaming parity and extension-model coverage*; C3 supplied the first, C5 owns the second, and
+C4 "runs the gate; it builds no evidence."
+
+**Grounding again resized the item before it started, and this is now the pattern for Milestone C —
+three items running, three preconditions discovered at grounding rather than at planning.** C5's own
+text says compose is un-installable *"until B2's world-token/coverage widening lands"*; B2 landed and
+compose is still un-installable, because B4 found a **different** blocker one item later —
+`on_budget_plan`'s closed ABI row `! {Env, FS}` on an unconditionally-dispatched slot that compose
+binds. **A work item's stated precondition can be satisfied while the thing it gates stays blocked**,
+and nothing goes red when that happens: the plan text still reads as current. Original B2a handoff:
 `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —
 **B3 before B2, because B2's scope is unmeasurable until the `images` wall clears** (B1 could see only
