@@ -168,6 +168,18 @@ artifact was prose nothing checks. When a mechanical edit crosses into commentar
 reference needs a tense: say *"was `:163` at WI-A13, is `:182` now"* rather than letting a bare
 number silently re-date itself.
 
+**EXTENDED BY WI-C4, AND THE EXTENSION IS THE EXPENSIVE HALF: a stale number in prose gets QUOTED
+FORWARD into a handoff and read as measurement.** Three stale instances this item
+(`dst_event_vocabulary:808`, `dst_invariants:600`, `:628`), and the C4 handoff pointed at the first
+while asserting *"the assertion beside it is correct and derives the list; only the prose is stale."*
+**That was exactly backwards.** The assertion was `== 14 && contains_str(…, "StreamDelta")`; WI-C3 had
+flipped `StreamDelta` out of the gap, so **both conjuncts were false and the test had been RED for two
+items** — reproduced at review by running the pre-C4 file: `12 passed, 1 failed`, exit 1. The prose was
+merely agreeing with an assertion nobody had checked. **So the rule is not "prose goes stale while code
+stays true"; it is that a number repeated in two places will be reconciled by whichever copy a reader
+finds first, and a handoff that states which one is authoritative without running it launders a guess
+into a fact.** Third consecutive item to carry this class.
+
 **S14. A direct probe of an upstream API is NOT evidence that OUR adoption of it works — the gate
 must drive our own closure.** Earned by WI-C1, and **measured rather than argued**: the natural wrong
 adoption of `stepWithStreamRecorded` (match on the outcome, `Err` arm drops the chunks) is green under
@@ -263,6 +275,13 @@ it. **Two consecutive execution reports state that every `make dst` target but t
 
 **Measured rather than inferred:** six sites were non-terminal; all six were run directly and
 **exactly one was masking a real failure**. All six are now checked commands.
+
+**Reproduced end to end at review, because a rule this cheap to state should not rest on one run.**
+The swallow: `bash -c 'set -e; false > /dev/null && echo tick; echo END'` reaches `END` and **exits
+0**. The hidden failure: the pre-C4 `dst_event_vocabulary.ail` under `ailang test` gives
+`13 tests: 12 passed, 1 failed`, **exit 1**. And the repair is falsifiable — the stale assertion
+against the *repaired* Makefile takes `make event_vocabulary` to **exit 2**, where the same assertion
+against the old recipe exited 0.
 
 **The transferable half is the detection, not the fix.** Every mutation rule here (S1, S7, S16) asks
 what turns RED. Nothing asked what stopped printing. **Read a gate's ticks as a checklist against the
