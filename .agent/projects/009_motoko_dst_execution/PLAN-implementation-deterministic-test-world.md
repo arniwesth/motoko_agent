@@ -156,6 +156,28 @@ field the encoder writes and the decoder ignores; both halves type-check and the
 until a replay serves a different response while every count still balances. A14 and A15 encode
 programs for D8's persistence and inherit this directly.
 
+**S15. A global `sed` over a line-number reference is safe for DATA and unsafe for PROSE, because
+prose has tense.** Earned by WI-C1. Its anchor cascade rewrote `stub_step.ail:163` → `:182`
+everywhere, correctly in every `site_key`, and **wrongly inside two notes that are records of PAST
+state** — `driver_only`'s v3 note about what WI-A13 stage 4 did not disturb, and `ports.ail`'s
+technique note. Both values are well-formed, both read like the same kind of fact, and after the
+rewrite one of each pair was a **false claim about history**. Nothing goes red; it was caught by
+reading the diff. **This is S12's shape in a new file class** — a live claim and a historical record
+are indistinguishable by inspection — and it is the second time in two items that the dangerous
+artifact was prose nothing checks. When a mechanical edit crosses into commentary, the anchor
+reference needs a tense: say *"was `:163` at WI-A13, is `:182` now"* rather than letting a bare
+number silently re-date itself.
+
+**S14. A direct probe of an upstream API is NOT evidence that OUR adoption of it works — the gate
+must drive our own closure.** Earned by WI-C1, and **measured rather than argued**: the natural wrong
+adoption of `stepWithStreamRecorded` (match on the outcome, `Err` arm drops the chunks) is green under
+`ailang check`, green under `make check_core` at 52/52, green under `make driver_only`, and green on
+**every substrate row of C2's own probe** — because the substrate rows never call `live_ports`. Only
+the *adoption* rows, and only in partial-stream-then-error, go red. Anyone who builds only the direct
+API probe — which is the most natural reading of D1's "a direct positive version of the spike" — ships
+a green gate over a broken adoption. **Two subjects, not one**, wherever an item adopts an external
+API. This generalises past streaming and binds C5.
+
 **S13. Sweep the whole tree before believing a gate — `check_core` is a SUBSET gate, and the sweep is
 the step every item under budget pressure drops.** Milestone B found five frontiers and **the fifth
 differs in kind**: the first four were found by a compiler that could not reach them yet; the fifth was
@@ -262,34 +284,24 @@ does not arrive by checkout**, and no cross-branch hazard exists. **Do not cite 
 either:** the number of live cache directories is however many source directories have been compiled
 — two at the time of writing, not 34, which was a tracked-*file* count read as a directory count.
 
+**Carried forward from the three phantoms that came before B2a's, because the rewrite dropped the
+reason the rule exists.** The first two corrupted a *diagnostic*: a stale cache reported row
+mismatches against source that was already correct, once across a stdlib change and once across a
+compiler version change, and clearing fixed both with no source edit. **WI-B1's corrupted a
+*detector*** — its mutation loop dropped `Rand` from the ABI row and read **GREEN on a warm cache and
+RED on a cold one**, so the verdicts were partly cache artifacts and it nearly argued for reverting a
+correct, load-bearing ABI change. **A stale diagnostic is noise; a stale detector inverts a verdict**,
+and C5 mutation testing is required by most remaining items. That is why this rule is not merely
+hygiene. **Bookkeeping note, found at WI-C1:** this plan carried TWO copies of S9 and S10 from
+`d7c6dd0` until now — B2a inserted its rewritten pair without deleting the originals, so the older S9
+survived three items with different text and neither copy was marked superseded. The duplicate pair is
+removed and the unique content above is the merge. **It is S15's defect one level up: a superseded
+rule and a current one look identical.**
+
 **The retroactive consequence stands and is the part to carry:** every whole-tree sweep this project
 has recorded — B1's 130/105 and its v0.26.0 baseline of 213/22, B3's 161/74 — cleared the root cache
 only, so **none is the cache-cold measurement it claims.** They are not necessarily wrong, since a
 warm cache only misleads when its input changed, but they are not what they say.
-
-**S10. Drive tooling off the compiler's VERDICT, never off its prose — a diagnostic's labels are an
-interface, and this one is context-dependent.** Earned by WI-B3. `ailang check` reports
-`expected`/`actual` in an order that **flips by error context**: under a `let`/`return type
-annotation` the *literal* is `expected`, while under `function application, parameter N` or
-`list element N` the *parameter type* is. So the identical text `extra fields: images` means **add**
-in one context and **remove** in the other — and the `Hint:` is derived from whichever order was
-used, so **on every revert site the hint reads "add the field(s) to the literal" when the fix is to
-delete it.** A fix loop reading those labels re-added the field to three sites that had already been
-correctly reverted, then oscillated thirty times on a fourth. The repair was to stop reading labels
-entirely: **flip the literal and ask the compiler whether that site's error moved.** That is immune
-to label order, it converged in 60 edits, and the one site it could not satisfy turned out to be a
-genuine implicit crossing rather than a shape problem — which is information the label-reading loop
-could never have produced.
-
-**S9. Clear the compile cache before believing ANY check whose input you just mutated — not only a
-type error after a toolchain change.** Three phantoms now, and the third is a different species. The
-first two corrupted a *diagnostic*: a stale cache reported row mismatches against source that was
-already correct, once across a stdlib change and once across a compiler version change, and clearing
-`.ailang/cache` fixed both with no source edit. **WI-B1's corrupts a *detector*.** Its mutation loop
-dropped `Rand` from the ABI row and read **GREEN on a warm cache and RED on a cold one** — so the
-verdicts were partly cache artifacts, and it nearly argued for reverting a correct, load-bearing ABI
-change. A stale diagnostic is noise; a stale detector **inverts a verdict**, and C5 mutation testing
-is now required by most remaining items. Clear first, every run.
 
 **S8. When a guard asserts that X influences Y, check that X cannot reach Y except through the
 mechanism under test.** Earned by A13 stage 4, and it is the first rule this project has that
@@ -2093,6 +2105,20 @@ block the name:
   with third-party latency, and per upstream's own advice the project does not idle against it.
 - **Milestone C** unblocks the name. Its gate is the ADR's acceptance-test table, nothing less —
   and C4 only *runs* that table, since every row's evidence is produced in A or B.
+  **C1 + C2 landed 2026-08-05** (`c0fbf10`, `12577c2`; ~57 min): `live_ports` adopts
+  `stepWithStreamRecorded`, and `make recorded_stream` answers **D1's five clauses in 23 rows across
+  two subjects and two outcomes** — the first time they have been answered against a *pinned release*
+  rather than a local prototype, which is exactly what D1 asks for. The rejected delayed-projection
+  fallback is a **permanent negative control** that the runner asserts must fail, so clause 1 enforces
+  the rejection instead of merely agreeing with it. `driver_only` re-issued **v4 → v5** with coverage
+  unmoved.
+  **What C2's green does NOT mean, stated because it is the available misreading:** D1's substrate
+  gate is answered; **D6.4's parity obligation is not discharged.** `live_ports` now *produces* a real
+  ordered emission log and **nothing reads it** — `session.ail`'s `exchange.emissions` still goes
+  nowhere, `stream_parity_findings` is still exercised only by constructed executions, and the two
+  scripted `play_chunks` sites still report `emissions: []` while playing chunks. The gap moved from
+  producer to consumer. **WI-C3 is what changes that sentence**, and it is now unblocked in a way it
+  has never been: the thing it consumes exists.
 
 ## Traps carried forward
 
@@ -2101,6 +2127,23 @@ merged** (conflicts in six files, reverts `89a1d67`); clear `.ailang` caches bef
 errors that contradict source; never probe from `/tmp` (`MOD010` auto-relaxes there); the spike
 branch is not HEAD state; the `arniwesth/ailang` fork is not the upstream gate — D1 requires a
 **release**; the pin is v0.26.0 with a Makefile drift guard.
+
+**Added by execution, each measured:**
+
+- **`--ai-stub` fires the callback exactly TWICE and always returns `Ok`.** Measured at WI-C1:
+  `ContentDelta` then `Usage`, returned chunk count 2 — it is a provider without native streaming, per
+  `std/ai`'s own contract. **Any gate claiming to exercise chunk ordering, duplication, or provider
+  failure through `--ai-stub` is claiming something the substrate cannot deliver**, and partial-stream-
+  then-error is unreachable through it entirely. Two chunks and a real stream look identical in the
+  output. This is why `make recorded_stream` stands up a real loopback SSE endpoint while every other
+  `make dst` target uses the stub.
+- **The line-number anchor cascade is NOT half-avoidable**, and `driver_only`'s v3 note claiming it is
+  stands refuted at the site. The technique it names — *insert below the anchor, widen import lists in
+  place* — covers imports only. WI-C1 moved an anchor with **nothing but a comment** placed above
+  `live_ports`, where a reader of `live_ports` will find it, and paid the full re-issue. *Insert below
+  the anchor* is not available to a comment whose job is to be read before the thing it describes, and
+  avoiding the cascade would mean writing documentation in the wrong place. **Three consecutive items
+  have now paid this; the case for a coordinate-independent anchor is no longer speculative.**
 
 ## Out of scope
 
