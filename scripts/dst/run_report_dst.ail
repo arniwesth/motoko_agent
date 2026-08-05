@@ -255,16 +255,20 @@ pure func complete_report() -> RunReport {
 -- it: 0 of 260, and 0 `empty_stop_finalize` records on the wire across the
 -- whole sweep. It is reached by a CONSTRUCTED corpus member, which is a
 -- different fact from "a seed reaches it" and is now the fact recorded.
+--
+-- AND WI-D1 CLOSED THE OTHER FOUR. All four provider entries above were fed
+-- from `dst_corpus.unreachable_by_search()`, which WI-D1 emptied; they are
+-- `Reached` here now, measured over a re-run 260-seed sweep at 18, 23, 91 and
+-- 49 seeds respectively. Three of the four had carried the same reason —
+-- "`ScriptedStep` has no error channel" — which had been false since WI-B2b
+-- and was quoted forward as a measurement for four items; see
+-- `dst_corpus.unreachable_by_search` for what was actually missing.
 pure func documented_coverage() -> [ClassCoverage] {
   let base = empty_class_coverage(fault_catalogue());
-  let c1 = mark_class(base, "provider_error_retryable",
-    UnreachableUntilChange(unreachable_reason("provider_error_retryable")));
-  let c2 = mark_class(c1, "provider_error_non_retryable",
-    UnreachableUntilChange(unreachable_reason("provider_error_non_retryable")));
-  let c3 = mark_class(c2, "provider_protocol_inconsistent_result",
-    CoveredNotExercised(unreachable_reason("provider_protocol_inconsistent_result")));
-  let c4 = mark_class(c3, "provider_partial_stream_then_error",
-    UnreachableStructurally(unreachable_reason("provider_partial_stream_then_error")));
+  let c1 = mark_class(base, "provider_error_retryable", Reached);
+  let c2 = mark_class(c1, "provider_error_non_retryable", Reached);
+  let c3 = mark_class(c2, "provider_protocol_inconsistent_result", Reached);
+  let c4 = mark_class(c3, "provider_partial_stream_then_error", Reached);
   let c5 = mark_class(c4, "provider_empty_terminal_response", Reached);
   let c6 = mark_class(c5, fault_class_tool_failed(), Reached);
   let c7 = mark_class(c6, fault_class_tool_correlation_mismatch(), Reached);
@@ -288,19 +292,37 @@ pure func status_ids_of(rs: [UnreachableClass]) -> [string] {
   match rs { [] => [], r :: rest => r.status_id :: status_ids_of(rest) }
 }
 
--- The three classes cluster 12 names, and the statuses that must stay distinct.
--- WI-A14 named THREE gaps in three different ways; WI-A15 measured them and
--- one CLOSED — `ToolCorrelationMismatch` is reached by the fixed bank, with two
--- witnesses. Recording the closure is what asserting both directions is for, so
--- the list is not patched back to three: the surviving gaps are FOUR, in four
--- different ways, and the row below is strictly stronger for it.
+-- The classes cluster 12 names, and the REASONS that must stay distinct.
+-- WI-A14 named THREE gaps in three different ways; WI-A15 closed one
+-- (`ToolCorrelationMismatch`); the list then grew to FOUR because recording a
+-- closure is what asserting both directions is for.
 --
--- Two of the four come from `dst_corpus.unreachable_by_search()` and the third
--- and fourth from the catalogue and the register respectively, so no entry here
--- is a second copy of a fact stated elsewhere.
+-- WI-D1 CLOSED THREE MORE and the list is now TWO. Both survivors are the
+-- catalogue's conditional classes, so both carry the SAME status id — which
+-- retires the form this row used to take. The obligation cluster 12 states is
+-- that N gaps do not collapse into one fact; it was expressed as "N distinct
+-- STATUS IDS" because, while the gaps were unwaived, the status was where the
+-- difference lived. It is now expressed on the REASON, which is where the
+-- difference lives for two waived classes: `approval_deadline_exceeded` is
+-- waived because no approval deadline is routed, `extension_effect_fault`
+-- because `driver_only` installs nothing. Same obligation, stated on the field
+-- that still carries it — NOT a relaxation, and the row below is what would go
+-- red if a future item gave the two the same condition.
+--
+-- Neither survivor comes from `dst_corpus.unreachable_by_search()` any more:
+-- that register is empty. Both come from the catalogue's own waiving
+-- conditions, so no entry here is a second copy of a fact stated elsewhere.
 pure func the_surviving_gaps() -> [string] {
   ["approval_deadline_exceeded",
-   "provider_error_retryable",
+   "extension_effect_fault"]
+}
+
+-- The four WI-D1 closed, asserted to STAY closed for the same reason `b2`
+-- asserts it of WI-A15's entry: a class that quietly stops being reached is a
+-- coverage loss the register would otherwise absorb.
+pure func the_classes_wi_d1_closed() -> [string] {
+  ["provider_error_retryable",
+   "provider_error_non_retryable",
    "provider_partial_stream_then_error",
    "provider_protocol_inconsistent_result"]
 }
@@ -318,6 +340,29 @@ pure func status_ids(cs: [ClassCoverage], ids: [string]) -> [string] {
     id :: rest =>
       (match status_of(cs, id) { None => "<absent>", Some(s) => reach_id(s) })
         :: status_ids(cs, rest)
+  }
+}
+
+-- WI-D1. The reason beside each status, for the row that now asserts on it.
+pure func status_reasons(cs: [ClassCoverage], ids: [string]) -> [string] {
+  match ids {
+    [] => [],
+    id :: rest =>
+      (match status_of(cs, id) { None => "", Some(s) => reach_reason(s) })
+        :: status_reasons(cs, rest)
+  }
+}
+
+-- WI-D1. Every named class must be `Reached` — which also excludes `Waived`,
+-- so this is the whole of the old row's waiver clause plus the closure claim.
+pure func all_reached(cs: [ClassCoverage], ids: [string]) -> bool {
+  match ids {
+    [] => true,
+    id :: rest =>
+      match status_of(cs, id) {
+        None => false,
+        Some(s) => if is_reached(s) then all_reached(cs, rest) else false
+      }
   }
 }
 
@@ -426,18 +471,22 @@ func scenario_three_gaps_three_reasons() -> bool ! {IO} {
   let _ = println("\n-- cluster 12: the surviving unreached classes, each in its OWN way --");
   let cs = documented_coverage();
   let ids = status_ids(cs, the_surviving_gaps());
-  let a = report("the ${List.length(the_surviving_gaps())} surviving gaps carry ${List.length(the_surviving_gaps())} DISTINCT statuses (${join_str(ids)})",
-                 List.length(ids) == List.length(the_surviving_gaps()) && all_distinct(ids, [])
-                   && not contains_str(ids, "<absent>"),
-                 "the gaps collapsed into fewer statuses: ${join_str(ids)}");
-  -- A waiver is not one of the three. `approval_deadline_exceeded` IS
-  -- conditional in the catalogue and therefore waived — but the OTHER two are
-  -- not waived, and reporting a gap as a waiver converts it into a permission.
-  let b = report("the three gaps the catalogue does not waive are not reported as waivers",
-                 not_waived(cs, "provider_error_retryable")
-                   && not_waived(cs, "provider_partial_stream_then_error")
-                   && not_waived(cs, "provider_protocol_inconsistent_result"),
-                 "an unwaived gap is reported as a waiver — which converts a coverage finding into a permission");
+  let whys = status_reasons(cs, the_surviving_gaps());
+  -- WI-D1 moved this from the status id to the REASON. See
+  -- `the_surviving_gaps`'s note: both survivors are waived, so the status id no
+  -- longer carries the difference and asserting on it would pass by being
+  -- uniform. The reason still carries it and is still what a planner reads.
+  let a = report("the ${List.length(the_surviving_gaps())} surviving gaps carry ${List.length(the_surviving_gaps())} DISTINCT reasons (statuses: ${join_str(ids)})",
+                 List.length(whys) == List.length(the_surviving_gaps()) && all_distinct(whys, [])
+                   && not contains_str(ids, "<absent>") && not contains_str(whys, ""),
+                 "the gaps collapsed into fewer reasons — cluster 12's defect is stating several different facts as one");
+  -- WI-D1: the four provider classes this row used to name are REACHED, so the
+  -- clause is asserted the other way round and is the stronger direction. A
+  -- waiver is a permission and a gap is not; the way that distinction is lost
+  -- now is a reached class quietly becoming a waived one.
+  let b = report("the ${List.length(the_classes_wi_d1_closed())} classes WI-D1 closed stay closed and none is reported as a waiver",
+                 all_reached(cs, the_classes_wi_d1_closed()),
+                 "a class WI-D1 made reachable by search is no longer Reached — the register must GAIN an entry with a reason rather than the coverage being lost silently, and if it became a waiver a coverage finding has been converted into a permission");
   -- THE CLOSURE, ASSERTED. `ToolCorrelationMismatch` was one of A14's three and
   -- A15's bank reaches it. If it ever stops being reached, this row goes red
   -- and the register has to gain an entry rather than quietly losing coverage.

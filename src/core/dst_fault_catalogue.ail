@@ -92,6 +92,105 @@ export pure func fault_class_tool_failed() -> string { "ToolFailed" }
 export pure func fault_class_tool_correlation_mismatch() -> string { "ToolCorrelationMismatch" }
 export pure func fault_class_tool_deadline_exceeded() -> string { "ToolDeadlineExceeded" }
 
+-- WI-D1's four, for the same reason the three above are here: `ports` and
+-- `stub_step` name them at the moment a fault is recorded, and a copied literal
+-- is where the risk lives (S6).
+export pure func fault_class_provider_error_retryable() -> string { "provider_error_retryable" }
+export pure func fault_class_provider_error_non_retryable() -> string { "provider_error_non_retryable" }
+export pure func fault_class_provider_partial_stream_then_error() -> string { "provider_partial_stream_then_error" }
+export pure func fault_class_provider_protocol_inconsistent_result() -> string { "provider_protocol_inconsistent_result" }
+
+-- ============================================================================
+-- WI-D1 — THE PROVIDER ERROR CODE VOCABULARY, AND THE RETRYABLE DERIVATION
+-- ============================================================================
+--
+-- THE BINDING THIS ITEM EXISTED TO CHOOSE, RECORDED HERE BECAUSE IT IS THE
+-- ITEM'S DURABLE OUTPUT AND NOT A DETAIL.
+--
+-- `std/ai`'s `AIError` is `{ code, message, retryable }`, and `retryable` is
+-- the WHOLE difference between two required fault classes:
+-- `session.c2_loop` branches on it through
+-- `recovery.should_retry_stream_error(e.retryable, ...)`, taking the retry
+-- branch or the `TermProviderFailure` finalize. A scripted provider fault that
+-- cannot vary that bool produces `provider_error_retryable` and
+-- `provider_error_non_retryable` as THE SAME SCENARIO TWICE, and the two
+-- classes are not distinguished however the counters read.
+--
+-- `ScriptedStep` (WI-B2b) carries `error_code` and `error_message` and no
+-- third field. Two ways to supply the bool, and the choice is DECIDED rather
+-- than discovered:
+--
+--   A. A fifth `ScriptedStep` field, `error_retryable: bool`. Truth in one
+--      place, at the cost of ~22 record-literal sites across `src/`,
+--      `scripts/` and `packages/` — AND a change to `encode_provider_outcome`
+--      / `decode_provider_outcome`, because a field a replay cannot restore is
+--      a fault that replays as a DIFFERENT fault while every count still
+--      balances (the codec failure mode S7's record rule names). That codec is
+--      D8's persisted artifact surface, and widening it is a compatibility
+--      change the handoff for this item reserves as a stop-and-report.
+--
+--   B. DERIVE it from `error_code`. CHOSEN. `error_code` already round-trips
+--      through both codecs — `encode_provider_outcome` writes it,
+--      `decode_provider_outcome` reads it, `ext_world`'s world token carries it
+--      — so the distinction between the two classes survives replay with NO
+--      codec change and no compatibility surface touched.
+--
+-- The objection to B is that a derivation puts the truth in a second place.
+-- That objection is answered by WHERE the derivation lives rather than waved
+-- away: the code vocabulary and its classification are HERE, in the fault
+-- artifact, and `dst_generator` — which chooses the code — imports them rather
+-- than restating them. There is exactly one list. A generator that could invent
+-- its own code string is the version of B the objection is actually about, and
+-- it is not the version built.
+--
+-- It is also the more faithful model. Retryability at a real provider boundary
+-- IS a function of what went wrong: `recovery.ail` says so in as many words —
+-- retryable is "transient: timeout / connection / rate-limit / 5xx" and
+-- non-retryable is "ProtocolError, ContextLength, SchemaValidation". A separate
+-- bool would let a scripted world serve `E_PROVIDER_CONTEXT_LENGTH` marked
+-- retryable, which no provider can do, and nothing would go red.
+--
+-- THE FAIL-SAFE DIRECTION IS DELIBERATE. An unrecognised code classifies as
+-- NON-retryable: a world that does not know whether an error is transient must
+-- not manufacture a retry. That is also the direction a gate can see — an
+-- unknown code silently classified retryable would reach the retry branch and
+-- look like coverage, where the fail-safe direction leaves
+-- `provider_error_retryable` UNREACHED and turns `make corpus_pr` red, because
+-- `expected_bank_coverage()` now demands it.
+export pure func provider_error_codes_retryable() -> [string] {
+  ["E_PROVIDER_TIMEOUT", "E_PROVIDER_RATE_LIMIT", "E_PROVIDER_UNAVAILABLE"]
+}
+
+export pure func provider_error_codes_non_retryable() -> [string] {
+  ["E_PROVIDER_PROTOCOL", "E_PROVIDER_CONTEXT_LENGTH", "E_PROVIDER_SCHEMA"]
+}
+
+export pure func provider_error_is_retryable(code: string) -> bool {
+  contains_code(provider_error_codes_retryable(), code)
+}
+
+pure func contains_code(xs: [string], code: string) -> bool {
+  match xs { [] => false, x :: rest => if x == code then true else contains_code(rest, code) }
+}
+
+-- The class id a served provider fault is RECORDED under, derived from the two
+-- quantities that decide it and from nothing else.
+--
+-- `chunks_played` is why this is one function rather than two. D3's
+-- `provider_partial_stream_then_error` is "a partial stream FOLLOWED BY an
+-- error", so a faulted exchange that played emissions before failing is that
+-- class and not the plain error class — its accompanying AIError still decides
+-- the retry-or-finalize transition, exactly as the catalogue row says, but a
+-- `TimedOutcome` carries ONE `fault_class_id` and the partial-stream fact is
+-- the one that would otherwise be unobservable. A blank code is not a fault and
+-- returns "", which is what stage 1's validator requires of an `OutcomeOk`.
+export pure func provider_fault_class_id(code: string, chunks_played: int) -> string {
+  if code == "" then ""
+  else if chunks_played > 0 then fault_class_provider_partial_stream_then_error()
+  else if provider_error_is_retryable(code) then fault_class_provider_error_retryable()
+  else fault_class_provider_error_non_retryable()
+}
+
 -- The one string that separates TermMaxSteps from TermInternalFailure. See the
 -- header for why it is a shared constant rather than a new error code.
 export pure func max_steps_discriminator_message() -> string { "v2 loop: step budget exhausted" }
@@ -329,8 +428,8 @@ export pure func catalogue_coverage_gaps() -> [CoverageGap] {
     },
     {
       class_id: "provider_partial_stream_then_error",
-      form: "the PARTIAL-STREAM half of the class",
-      why: "The retry/finalize half of the class is reachable. The PARITY half is now observable and observed — WI-C1 adopted stepWithStreamRecorded so a live exchange returns the chunks observed before a mid-stream failure (proven against a real broken SSE stream by `make recorded_stream`), and WI-C3 built the consumer: the driver appends those events to the returned trace and threads them out as the run's emission witness, checked on a real run by `make stream_parity`. WHAT REMAINS IS NARROWER AND IT IS THE OTHER HALF OF THE CLASS NAME: a seeded run cannot produce a stream that fails PART-WAY, because ScriptedStep has no error channel, so parity is exercised on completed streams only. That is one named field away and is not a parity gap."
+      form: "an ADVERSARIAL partial stream: emissions whose content the driver has begun to act on before the error arrives",
+      why: "CLOSED AT WI-D1 IN THE FORM THIS ENTRY DESCRIBED, and the entry is rewritten rather than deleted because the residue is real. What it said was: `a seeded run cannot produce a stream that fails PART-WAY, because ScriptedStep has no error channel, so parity is exercised on completed streams only`. THE CLAUSE AFTER `because` HAD BEEN FALSE SINCE WI-B2b, which added error_code/error_message to ScriptedStep; this is the sixth artifact found carrying that clause and the only one no handoff named. What was actually missing was that stub_step's two scripted model_step closures wrapped every entry in Ok(...), so nothing could serve Err on the core Ports.model_step path. WI-D1 built that branch: a faulted entry plays its chunks and THEN returns Err, so a seeded run produces a stream that fails part-way, and the class is reached by 91 of 260 swept seeds with two witnesses in the fixed bank. WHAT REMAINS is narrower again and is not a field: the generated partial stream is a PREFIX of a well-formed one, so the driver consumes chunks it would have consumed anyway. A stream whose emissions are internally inconsistent before the error — a tool-call delta the error then contradicts — has no generator and would need one; it is the streaming form of the inconsistency the provider_protocol_inconsistent_result gap above describes for a completed result."
     },
     {
       class_id: "approval_deadline_exceeded",
@@ -658,6 +757,55 @@ pure func test_tool_class_ids_are_the_wire_names() -> bool
       && fault_class_tool_failed() == "ToolFailed"
       && fault_class_tool_correlation_mismatch() == "ToolCorrelationMismatch"
       && fault_class_tool_deadline_exceeded() == "ToolDeadlineExceeded"
+  }
+
+-- WI-D1. The four provider ids are held to the catalogue the same way, and the
+-- code vocabulary is held to the property that makes the derivation sound:
+-- the two lists are non-empty and DISJOINT, so no code is both. A code in both
+-- lists would make `provider_error_is_retryable` answer by list order, which is
+-- a silently wrong answer of exactly the kind this project counts.
+pure func test_provider_class_ids_and_the_code_vocabulary() -> bool
+  tests [((), true)]
+  {
+    let ids = class_ids(fault_catalogue());
+    contains_str(ids, fault_class_provider_error_retryable())
+      && contains_str(ids, fault_class_provider_error_non_retryable())
+      && contains_str(ids, fault_class_provider_partial_stream_then_error())
+      && contains_str(ids, fault_class_provider_protocol_inconsistent_result())
+      && List.length(provider_error_codes_retryable()) > 0
+      && List.length(provider_error_codes_non_retryable()) > 0
+      && disjoint_codes(provider_error_codes_retryable(), provider_error_codes_non_retryable())
+      && all_codes_classify(provider_error_codes_retryable(), true)
+      && all_codes_classify(provider_error_codes_non_retryable(), false)
+  }
+
+pure func disjoint_codes(a: [string], b: [string]) -> bool {
+  match a { [] => true, x :: rest => if contains_code(b, x) then false else disjoint_codes(rest, b) }
+}
+
+pure func all_codes_classify(xs: [string], want: bool) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => if provider_error_is_retryable(x) == want then all_codes_classify(rest, want) else false
+  }
+}
+
+-- The class derivation, asserted on every branch INCLUDING the two that are
+-- easy to get silently wrong: an unknown code must be non-retryable (the
+-- fail-safe direction), and chunks-then-error must win over the retryability
+-- split rather than the other way round. Both alternatives type-check.
+pure func test_the_provider_fault_class_derivation() -> bool
+  tests [((), true)]
+  {
+    provider_fault_class_id("", 0) == ""
+      && provider_fault_class_id("", 3) == ""
+      && provider_fault_class_id("E_PROVIDER_TIMEOUT", 0) == fault_class_provider_error_retryable()
+      && provider_fault_class_id("E_PROVIDER_PROTOCOL", 0) == fault_class_provider_error_non_retryable()
+      && provider_fault_class_id("E_PROVIDER_TIMEOUT", 2) == fault_class_provider_partial_stream_then_error()
+      && provider_fault_class_id("E_PROVIDER_PROTOCOL", 2) == fault_class_provider_partial_stream_then_error()
+      -- the fail-safe direction for a code no list names
+      && not provider_error_is_retryable("E_NOT_A_DECLARED_CODE")
+      && provider_fault_class_id("E_NOT_A_DECLARED_CODE", 0) == fault_class_provider_error_non_retryable()
   }
 
 pure func test_max_steps_discriminator_is_shared() -> bool

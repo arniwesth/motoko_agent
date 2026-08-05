@@ -27,7 +27,7 @@ import src/core/config (VerificationConfig)
 import src/core/ports (
   Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
   ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
-  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval
+  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
 )
 import src/core/dst_interaction (
   Interaction, StreamChunkRecord, TimedOutcome,
@@ -243,8 +243,31 @@ export func scripted_ports() -> Ports ! {IO, Trace} {
         [] => { emissions: [], result: Ok(terminal_step()), next_state: state },
         s :: rest => {
           let played = scripted_chunks(s.chunks);
+          -- The chunks are played BEFORE the outcome is decided, faulted or
+          -- not, and that ordering is the whole of
+          -- `provider_partial_stream_then_error`: a stream that fails part-way
+          -- is one whose emissions reached the callback and whose result did
+          -- not. Deciding the outcome first and skipping the play on a fault
+          -- would type-check, keep every count balanced, and make the class
+          -- unreachable while the fault classes still looked covered.
           let _ = play_chunks(played, on_chunk);
-          { emissions: played, result: Ok(scripted_to_step_result(s)), next_state: { state | script: rest } }
+          {
+            emissions: played,
+            -- WI-D1. WI-B2b gave `ScriptedStep` `error_code`/`error_message`
+            -- and wired them through the EXTENSION seam only; this closure and
+            -- `recording_model_step` below still wrapped every entry in
+            -- `Ok(...)`, so nothing above the transport could serve `Err` and
+            -- the provider fault classes had no delivery on the core
+            -- `Ports.model_step` path at all. This is that branch.
+            result: if scripted_step_faults(s) then Err(scripted_step_ai_error(s))
+                    else Ok(scripted_to_step_result(s)),
+            -- The cursor advances on BOTH paths. A faulted entry is CONSUMED —
+            -- the world served it and the provider call happened — so leaving
+            -- the script unadvanced would re-serve the same fault forever and
+            -- turn a retryable error into an infinite retry loop, which is F6's
+            -- pinned cursor wearing a fault.
+            next_state: { state | script: rest }
+          }
         }
       }
     };
@@ -318,7 +341,14 @@ func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (S
         let _ = play_chunks(played, on_chunk);
         {
           emissions: played,
-          result: Ok(scripted_to_step_result(s)),
+          -- WI-D1, and the SAME expression as `scripted_ports` above rather
+          -- than a second copy of the branch: this closure exists to wrap that
+          -- cursor logic rather than reimplement it, for the reason the header
+          -- gives — a second copy is a second chance for the served response
+          -- and the recorded one to disagree, and a faulted step recorded as a
+          -- success is exactly that defect.
+          result: if scripted_step_faults(s) then Err(scripted_step_ai_error(s))
+                  else Ok(scripted_to_step_result(s)),
           next_state: record_interaction(
             { state | script: rest },
             ProviderIdentity("loop_v2", provider_step, model),
@@ -332,11 +362,16 @@ func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (S
             -- at step 0 while agreeing with the program at every position it
             -- reached. The chunks stay in `chunks` and are NOT duplicated into
             -- the payload; `world_state_of` reads them from there.
-            { advance_ms: 0,
-              chunks: chunk_records(s.chunks, state.clock_ms),
-              payload: encode_provider_outcome(s),
-              status: OutcomeOk,
-              fault_class_id: "" })
+            --
+            -- WI-D1 replaced the inline literal with `provider_outcome_record`,
+            -- which is where the status and the class id are now decided. The
+            -- literal was `status: OutcomeOk, fault_class_id: ""` on EVERY
+            -- path, so a served fault recorded as an ok outcome with no class —
+            -- which D11's class-reached counter cannot see, and which stage 1's
+            -- validator would have rejected the other way round but not this
+            -- one. The payload expression is unchanged; only the two graded
+            -- fields moved.
+            provider_outcome_record(s, chunk_records(s.chunks, state.clock_ms)))
         }
       }
     }

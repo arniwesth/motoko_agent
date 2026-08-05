@@ -2282,8 +2282,8 @@ func c2_loop(
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                   } else {
-                    -- Terminal: unretried provider/stream failure.
-                    c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_call, emissions_after_call, Err(e))
+                    -- Terminal: unretried provider/stream failure. WI-D1 made this `exchange.next_state` rather than `st.world_state` — plan rule S12, and the measurement is recorded at `ports.provider_outcome_record`. This edit is deliberately line-count-neutral (S18): the four routed clock anchors below it must not move.
+                    c2_finalize(st.provider, exchange.next_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_call, emissions_after_call, Err(e))
                   }
                 },
                 Ok(result) => {

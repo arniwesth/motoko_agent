@@ -95,18 +95,35 @@
 -- WHY THE SEEDS ARE LITERALS, AND WHAT WOULD MAKE THEM STALE
 -- ---------------------------------------------------------------------------
 --
--- 9, 13 and 94 were found by sweeping 1..260 and reading the class census of
+-- 132, 176 and 77 were found by sweeping 1..260 and reading the class census of
 -- every generated program. They are not arbitrary and they are not
 -- interchangeable:
 --
---   * 9 and 13 are the EQUAL-CENSUS pair axis A's anti-count control needs.
---     Their class censuses agree in every column — 14 interactions, 2 provider,
---     1 tool ok, 1 approval ok, 1 env ok, 2 chunked, 4 clock — so no count
---     anywhere in this suite can tell them apart and only the recorded
---     outcomes can.
---   * 94 is the S7 surviving fixture: of 260 seeds, exactly two reach every
+--   * 132 and 176 are the EQUAL-CENSUS pair axis A's anti-count control needs.
+--     Their class censuses agree in every column — 21 interactions, 4 provider,
+--     2 tool dispatches, 3 approval reads, 3 served, 2 tool ok, 3 env ok, 3
+--     chunked, 5 clock — so no count anywhere in this suite can tell them apart
+--     and only the recorded outcomes can.
+--   * 77 is the S7 surviving fixture: of 260 seeds, exactly four reach every
 --     protected shape with pairwise-distinct quantities and still terminate Ok
---     (68 and 94), and 94 is the richer of the two.
+--     (14, 77, 125, 198), and 77 is the richest — 35 interactions, 10 provider
+--     calls, and the only one of the four with two tool-ok outcomes.
+--
+-- RE-SWEPT AT WI-D1, AND THE PREVIOUS PINS WERE 9, 13 AND 94. The paragraph
+-- below said a generator change would move all of them and that the failure
+-- would be loud. **Both halves held.** WI-D1 added two draws to
+-- `choose_provider`; `draw` threads `g.rng`, so every choice after the
+-- insertion re-phased. Axis H went red on BOTH obligations at once — seed 94's
+-- fixture no longer reached `tool_ok` at all (`tool_ok=0`) and its quantities
+-- collapsed onto each other — and axis E/F/G went red on seed 9 with three
+-- witnesses at zero. Nothing was relaxed; the sweep was re-run and the pins
+-- re-derived from it, which is the procedure this note prescribes.
+--
+-- The new pair is also STRICTLY BETTER than the old one and that is worth
+-- recording rather than presenting as luck: 21 interactions against 14, with
+-- non-zero tool dispatches, approval reads and served approvals on both halves,
+-- so the anti-count control now stands on a pair that exercises every class
+-- rather than on the smallest pair that happened to tie.
 --
 -- A change to the generator, to a request PROJECTION STRING, or to the driver's
 -- control flow moves all of them, and the failure will be loud: axis H's shape
@@ -707,7 +724,7 @@ func axis_bounds(honest: [GeneratedRun])
   -- The tightened bound. `max_interactions: 6` is below every honest
   -- trajectory, so the generator must force termination rather than run on.
   let tight = { bounds() | max_interactions: 6 };
-  let squeezed = generate("bounded", 94, 94, generator_version(), tight);
+  let squeezed = generate("bounded", 77, 77, generator_version(), tight);
   let failures = squeezed.run.world.gen.failures;
   let _ = report_bound_failures(failures);
   let ok_fires = check("a tightened max_interactions is reported as a GENERATOR failure",
@@ -1074,9 +1091,9 @@ func axis_canary() -> bool ! {IO} {
 -- ---------------------------------------------------------------------------
 
 export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let rich = generate("rich", 94, 94, generator_version(), bounds());
-  let a = generate("pairA", 9, 9, generator_version(), bounds());
-  let b = generate("pairB", 13, 13, generator_version(), bounds());
+  let rich = generate("rich", 77, 77, generator_version(), bounds());
+  let a = generate("pairA", 132, 132, generator_version(), bounds());
+  let b = generate("pairB", 176, 176, generator_version(), bounds());
   let _ = emit_rows([rich, a, b]);
   ()
 }
@@ -1087,11 +1104,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- The honest row set. `pairA`/`pairB` are the equal-census pair axis A's
   -- anti-count control stands on; `rich` is the S7 surviving fixture; `repeat`
   -- is reproducibility; `versioned` is D8's version axis.
-  let rich = generate("rich", 94, 94, generator_version(), bounds());
-  let pair_a = generate("pairA", 9, 9, generator_version(), bounds());
-  let pair_b = generate("pairB", 13, 13, generator_version(), bounds());
-  let repeat = generate("repeat", 9, 9, generator_version(), bounds());
-  let versioned = generate("versioned", 9, 9, "2", bounds());
+  let rich = generate("rich", 77, 77, generator_version(), bounds());
+  let pair_a = generate("pairA", 132, 132, generator_version(), bounds());
+  let pair_b = generate("pairB", 176, 176, generator_version(), bounds());
+  let repeat = generate("repeat", 132, 132, generator_version(), bounds());
+  let versioned = generate("versioned", 132, 132, "2", bounds());
   let honest = [rich, pair_a, pair_b, repeat, versioned];
 
   let _ = println("");
@@ -1100,9 +1117,9 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let _ = emit_rows(honest);
 
   -- The mutant: three DIFFERENT requested seeds, all built with a constant.
-  let m1 = generate("mutantA", 9, 0, generator_version(), bounds());
-  let m2 = generate("mutantB", 13, 0, generator_version(), bounds());
-  let m3 = generate("mutantC", 94, 0, generator_version(), bounds());
+  let m1 = generate("mutantA", 132, 0, generator_version(), bounds());
+  let m2 = generate("mutantB", 176, 0, generator_version(), bounds());
+  let m3 = generate("mutantC", 77, 0, generator_version(), bounds());
   let mutant = [m1, m2, m3];
 
   let ok_a = axis_seed_sensitivity(honest, mutant);

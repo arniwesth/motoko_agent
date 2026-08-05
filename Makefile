@@ -1073,11 +1073,17 @@ corpus_pr:
 	tf=$$(grep -c '"fault_class":"ToolFailed"' /tmp/corpus_pr.out || true); \
 	tcm=$$(grep -c '"fault_class":"ToolCorrelationMismatch"' /tmp/corpus_pr.out || true); \
 	tde=$$(grep -c '"fault_class":"ToolDeadlineExceeded"' /tmp/corpus_pr.out || true); \
+	retry=$$(grep -c '"type":"stream_error_retry"' /tmp/corpus_pr.out || true); \
+	pfail=$$(grep -o '"error":"generated E_PROVIDER_[A-Z_]*"' /tmp/corpus_pr.out | wc -l); \
+	badargs=$$(grep -o '"arguments":{}' /tmp/corpus_pr.out | wc -l); \
 	for pair in "session.c2_loop/approval_denied:$$denied" \
 	            "session.c2_loop/empty_stop_finalize:$$empty" \
 	            "tool_phase.tool_outcome_message/ToolFailed:$$tf" \
 	            "tool_phase.tool_outcome_message/ToolCorrelationMismatch:$$tcm" \
-	            "tool_phase.tool_outcome_message/ToolDeadlineExceeded:$$tde"; do \
+	            "tool_phase.tool_outcome_message/ToolDeadlineExceeded:$$tde" \
+	            "session.c2_loop/stream_error_retry:$$retry" \
+	            "session.c2_loop/provider_failure_finalize:$$pfail" \
+	            "tool_dispatch_adapter.tool_call_to_envelope/malformed_arguments:$$badargs"; do \
 		branch=$${pair%:*}; n=$${pair##*:}; \
 		if [ "$$n" -eq 0 ]; then \
 			echo "FAIL: the fixed bank reached the fault class and the wire carries NO"; \
@@ -1110,7 +1116,39 @@ corpus_pr:
 		echo "      approval decision have to appear."; \
 		exit 1; \
 	fi; \
-	echo "  ✓ wire witness, branch-reached: approval_denied×$$denied empty_stop_finalize×$$empty ToolFailed×$$tf ToolCorrelationMismatch×$$tcm ToolDeadlineExceeded×$$tde (against $$served executed dispatch batch(es), so neither side of the approval decision is unwalked)"; \
+	echo "  ✓ wire witness, branch-reached: approval_denied×$$denied empty_stop_finalize×$$empty ToolFailed×$$tf ToolCorrelationMismatch×$$tcm ToolDeadlineExceeded×$$tde stream_error_retry×$$retry provider_failure_finalize×$$pfail malformed_arguments×$$badargs (against $$served executed dispatch batch(es), so neither side of the approval decision is unwalked)"; \
+	nonretry_re=$$(awk '/^export pure func provider_error_codes_non_retryable/,/^}/' src/core/dst_fault_catalogue.ail | grep -o 'E_PROVIDER_[A-Z_]*' | paste -sd'|' -); \
+	retry_re=$$(awk '/^export pure func provider_error_codes_retryable/,/^}/' src/core/dst_fault_catalogue.ail | grep -o 'E_PROVIDER_[A-Z_]*' | paste -sd'|' -); \
+	if [ -z "$$nonretry_re" ] || [ -z "$$retry_re" ]; then \
+		echo "FAIL: could not read the provider error code vocabulary out of"; \
+		echo "      src/core/dst_fault_catalogue.ail. The two checks below are derived from"; \
+		echo "      those lists rather than restating them, so an unreadable list must be a"; \
+		echo "      red rather than an empty pattern that matches nothing and passes."; \
+		exit 1; \
+	fi; \
+	leak=$$(grep '"type":"stream_error_retry"' /tmp/corpus_pr.out | grep -cE "$$nonretry_re" || true); \
+	fin_nonretry=$$(grep '"type":"run_summary"' /tmp/corpus_pr.out | grep -oE "\"error\":\"generated ($$nonretry_re)\"" | wc -l); \
+	retry_retryable=$$(grep '"type":"stream_error_retry"' /tmp/corpus_pr.out | grep -cE "$$retry_re" || true); \
+	if [ "$$leak" -ne 0 ]; then \
+		echo "FAIL: $$leak stream_error_retry record(s) on the wire carry a NON-RETRYABLE"; \
+		echo "      provider error code. session.c2_loop branches on AIError.retryable through"; \
+		echo "      should_retry_stream_error, and dst_fault_catalogue derives that bool from"; \
+		echo "      the code — so a non-retryable code reaching the retry branch means the"; \
+		echo "      derivation and the driver disagree, and the two provider error classes are"; \
+		echo "      not the two branches D3 says they are."; \
+		exit 1; \
+	fi; \
+	if [ "$$retry_retryable" -eq 0 ] || [ "$$fin_nonretry" -eq 0 ]; then \
+		echo "FAIL: the two provider error classes did not reach DIFFERENT production"; \
+		echo "      branches: retryable→retry×$$retry_retryable, non-retryable→finalize×$$fin_nonretry."; \
+		echo "      This is the clause acceptance row 4 turns on and the reason WI-D1 could"; \
+		echo "      not answer it with a counter. provider_error_retryable and"; \
+		echo "      provider_error_non_retryable differ by exactly AIError.retryable; if both"; \
+		echo "      reach the same branch they are ONE scenario recorded under two names, the"; \
+		echo "      class-reached counter still reads 9 of 9, and the row is not closed."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ the two provider error classes reach DIFFERENT branches: retryable→stream_error_retry×$$retry_retryable, non-retryable→provider_failure_finalize×$$fin_nonretry, and NO retry carries a non-retryable code"; \
 	rej_t=0; missing=""; \
 	sample=$$(awk '/^pure func sample_rejections\(\)/,/^}/' src/core/dst_corpus.ail); \
 	for c in $$(awk '/^export type CorpusRejection/,/^$$/' src/core/dst_corpus.ail | sed -n 's/^  [|=] \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p'); do \

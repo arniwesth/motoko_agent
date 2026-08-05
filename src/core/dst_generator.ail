@@ -111,6 +111,17 @@ module src/core/dst_generator
 
 import std/list as List (length)
 import std/string as Str (length, foldChars, charCode)
+-- WI-D1. The ONE import this module has ever taken outside std, and it is
+-- taken rather than the vocabulary restated for the reason the whole binding
+-- turns on: the generator chooses the provider error CODE and `stub_step`
+-- classifies it into a fault class, so a second list here would be a second
+-- place for the truth about which codes are retryable — which is precisely the
+-- objection the derivation had to answer. `dst_fault_catalogue` imports nothing
+-- but std, so this closes no cycle and does not widen `ports`' import graph:
+-- `ports` already imports both modules.
+import src/core/dst_fault_catalogue (
+  provider_error_codes_retryable, provider_error_codes_non_retryable
+)
 
 -- ---------------------------------------------------------------------------
 -- PART 1 — THE SEED-SENSITIVITY ASSERTION
@@ -447,30 +458,41 @@ export pure func generator_failed(g: GeneratorState) -> bool {
 -- ---------------------------------------------------------------------------
 
 -- D2: the generator chooses "a compatible response, fault, and latency". On the
--- provider class it chooses the RESPONSE ONLY, and both omissions are declared
--- gaps rather than oversights. Neither is waived; both are reachable by a
--- bounded change that belongs to a later item.
+-- provider class it now chooses the response AND the fault; the latency is
+-- still a declared gap, and the two notes below are kept apart because
+-- conflating them is what earlier revisions of the plan did.
 --
---   NO PROVIDER FAULT. D3 puts provider faults on the `AIError` path.
---   `Ports.model_step` returns `Result[StepResult, AIError]` and can express
---   one, but `ScriptedStep` — the world's provider input — has no error case,
---   so a generated provider fault has nowhere to be chosen INTO.
+--   THE PROVIDER FAULT — CHOSEN, AT WI-D1. D3 puts provider faults on the
+--   `AIError` path and `Ports.model_step` returns `Result[StepResult, AIError]`.
+--   `error_code`/`error_message` below are the choice; `ports`'
+--   `generated_provider_entry` maps them onto `ScriptedStep`'s fields of the
+--   same name, and `stub_step`'s two scripted `model_step` closures turn a
+--   non-blank code into `Err({code, message, retryable})`.
 --
---   NO PROVIDER LATENCY. `ScriptedTool.duration_ms` is the tool class's latency
---   channel and `world_tool` advances the virtual clock from it; `ScriptedStep`
---   has no counterpart, and the scripted provider advances nothing. A generated
---   provider latency would therefore have to be advanced by the generating
---   adapter and recorded by a recorder that cannot see it, which
---   `check_discovery`'s clock balance turns red immediately — correctly, since
---   the log would then account for less time than the world spent.
+--   HISTORY, IN THE PAST TENSE (plan rule S15), because the sentence that
+--   stood here was quoted forward for three items as a fact and had been false
+--   for two. It said: "`ScriptedStep` — the world's provider input — has no
+--   error case, so a generated provider fault has nowhere to be chosen INTO."
+--   **WI-B2b added `error_code` and `error_message` to `ScriptedStep`**, so the
+--   field existed from B2b onward and this note went stale the day it landed.
+--   What was actually missing was never written down anywhere: the two scripted
+--   `model_step` closures wrapped every entry in `Ok(...)` unconditionally
+--   (B2b wired the fault through the EXTENSION seam only), `ProviderDecision`
+--   had no fault to choose, and `AIError.retryable` had no scripted source —
+--   the last being the one that made the two error classes indistinguishable.
 --
--- Both are ONE field on `ScriptedStep` away (`advance_ms`, restored on replay
--- from `TimedOutcome.advance_ms` exactly as the tool class's duration already
--- is, with no codec change). That is a widening of a world-input type used at
--- roughly thirty literal sites across the smoke scripts, and it is WI-A14's D4
--- latency pair by name — which this stage's handoff puts out of scope and which
--- will consume this generator. `dst_program`'s design note 3 does not stand in
--- the way: `ScriptedStep` is a world INPUT, not a field on the program.
+--   NO PROVIDER LATENCY, AND THIS HALF IS STILL TRUE — RESTATED AT WI-D1 IN
+--   TERMS OF WHAT IS ACTUALLY MISSING. The field is NOT missing:
+--   `ScriptedStep.advance_ms` exists (WI-B2b widening 2) and
+--   `decode_provider_outcome(payload, advance_ms)` already restores it on
+--   replay. What is missing is the RECORDER side. A generated provider latency
+--   would have to be advanced by the generating adapter and recorded by a
+--   recorder that cannot see it, which `check_discovery`'s clock balance turns
+--   red immediately — correctly, since the log would then account for less time
+--   than the world spent. So WI-D1 leaves every generated entry at
+--   `advance_ms: 0`, faulted or not: the fault needed no clock advance, and
+--   giving it one would have coupled this item to D4's latency pair through a
+--   gate that is red for a good reason. That pair is still owed.
 --
 -- What is NOT deferred is the clock bound. `max_clock_advance_ms` is declared,
 -- enforced and mutation-tested on the tool class, where a latency channel
@@ -492,7 +514,21 @@ export type ProviderDecision = {
   chunk_count: int,
   chunk_text: string,
   input_tokens: int,
-  output_tokens: int
+  output_tokens: int,
+
+  -- WI-D1. Blank means "no fault", which keeps every prior meaning of a
+  -- decision and mirrors `ScriptedStep.error_code`'s own convention.
+  --
+  -- NO `retryable` FIELD AND NO FAULT-CHOICE CONSTRUCTOR, deliberately, and for
+  -- the reason this module already gives for not returning `terminate`
+  -- separately: both would be a SECOND representation of one fact.
+  -- Retryability is `dst_fault_catalogue.provider_error_is_retryable(code)` and
+  -- the class is `provider_fault_class_id(code, chunks)`; a bool here could
+  -- disagree with the code beside it and nothing would go red. Contrast
+  -- `ToolDecision.fault`, which is a constructor because `world_tool` matches
+  -- on four genuinely different OUTCOME shapes rather than on one string.
+  error_code: string,
+  error_message: string
 }
 
 export type ToolFaultChoice
@@ -571,6 +607,48 @@ export pure func choose_provider(
     if terminate then "stop"
     else if d_finish.value == 0 then "stop"
     else "tool_calls";
+
+  -- WI-D1: THE PROVIDER FAULT DRAW. One in twelve retryable and one in twelve
+  -- non-retryable, and the distribution is chosen from what the two branches
+  -- COST rather than for symmetry with the tool class:
+  --
+  --   * a NON-retryable fault is TERMINAL — `session.c2_loop` finalizes as
+  --     `TermProviderFailure` — so its rate is directly the rate at which a
+  --     trajectory dies early. At 1/12 roughly one run in twelve ends on its
+  --     first provider call, which leaves the tool and approval classes their
+  --     trajectories. A uniform-over-three fault choice would have killed a
+  --     third of every sweep at step 0 and taken the tool classes with it.
+  --   * a RETRYABLE fault re-sends and consumes a step of budget, so it length-
+  --     ens rather than shortens; that is affordable and it is what puts a
+  --     `stream_error_retry` on the wire.
+  --
+  -- The PARTIAL-STREAM class needs no draw of its own and deliberately gets
+  -- none. `chunk_count` above is already drawn 0..3, and a faulted step that
+  -- played chunks IS D3's "partial stream followed by an error" — so the class
+  -- falls out of two choices that already existed rather than out of a third
+  -- that would have let the generator emit a chunked step whose recorded class
+  -- disagreed with its own chunk list.
+  let d_fault = draw(d_finish.state, "${salt}|provider_fault", 12);
+  let error_code =
+    if d_fault.value == 0 then nth_code(provider_error_codes_retryable(), 0)
+    else if d_fault.value == 1 then nth_code(provider_error_codes_non_retryable(), 0)
+    else "";
+
+  -- WI-D1: THE MALFORMED ARGUMENTS DRAW, which is the whole of
+  -- `provider_protocol_inconsistent_result` — a typed provider result whose
+  -- tool-call arguments are not the JSON object the schema says they are. One
+  -- in eight, and the payload is a TRUNCATED object rather than a random
+  -- string, because the branch it must reach is `tool_dispatch_adapter`'s
+  -- `decode(...)` returning `Err` and a reader of a corpus artifact should be
+  -- able to see what the provider claimed to be sending.
+  --
+  -- Measured before this draw existed: 0 of 260 seeds produced one. That is the
+  -- register entry this closes, and it was the one entry of the four whose
+  -- recorded reason was accurate.
+  let d_args = draw(d_fault.state, "${salt}|args_malformed", 8);
+  let args =
+    if d_args.value == 0 then "{\"n\":${d_arg.value}"
+    else "{\"n\":${d_arg.value}}";
   {
     decision: {
       terminate: terminate,
@@ -585,15 +663,32 @@ export pure func choose_provider(
       -- choice reaches no byte of the program.
       prose: clamp_text("gp${g.draws}-${d_arg.value}", g.bounds.max_payload_bytes),
       tool_name: tool_name,
-      tool_args: "{\"n\":${d_arg.value}}",
+      tool_args: args,
       tool_call_id: "gcall_${interactions_so_far}_${d_arg.value}",
       finish_reason: finish,
       chunk_count: d_chunks.value,
       chunk_text: "c${d_arg.value}",
       input_tokens: d_in.value,
-      output_tokens: d_out.value
+      output_tokens: d_out.value,
+      error_code: error_code,
+      -- Derived from the code, so a reader of a faulted artifact sees which
+      -- code produced it and the message cannot drift away from the fault it
+      -- describes.
+      error_message: if error_code == "" then "" else "generated ${error_code}"
     },
-    state: d_finish.state
+    state: d_args.state
+  }
+}
+
+-- The catalogue's lists are non-empty and their first entry is the one the
+-- generator serves; a total accessor rather than a partial one, because an
+-- out-of-range index here would be a world serving a BLANK code, which
+-- `provider_fault_class_id` reads as "no fault" and which would therefore
+-- silently un-fault a step the generator meant to fault.
+pure func nth_code(xs: [string], i: int) -> string {
+  match xs {
+    [] => "",
+    x :: rest => if i <= 0 then x else nth_code(rest, i - 1)
   }
 }
 
@@ -1108,16 +1203,42 @@ export pure func check_canary_version_axis(as_: [CanaryRow], bs: [CanaryRow]) ->
 -- are chosen to walk the extremes as well as the middle.
 export pure func canary_generator_id() -> string { "motoko_driver_only" }
 
+-- RE-PINNED AT WI-D1, AND THIS IS THE CANARY'S FIRST REAL FIRING. It was built
+-- at WI-C5 and had never been red on a change it was not shown deliberately.
+-- WI-D1 added the provider-fault and malformed-arguments draws to
+-- `choose_provider`; `draw` threads `g.rng`, so the trajectory shape and the
+-- choices both moved at every seed. The canary reported
+-- `generator-trajectory-reshaped-without-a-version-bump` and
+-- `generator-choices-remapped-without-a-version-bump` at all three seeds and at
+-- both versions — six findings — and NOT
+-- `generator-seed-remapped-without-a-version-bump`, which is exactly right:
+-- `seed_state` was untouched, so the seeding is unchanged and only the layers
+-- above it moved. **The three quantities did the job they exist for: they said
+-- WHICH layer moved without anyone having to guess.**
+--
+-- Re-swept, not regenerated. There is no regeneration path and this item did
+-- not add one; `scripts/dst/canary_sweep_tmp.ail` emitted a row per seed for
+-- 1..260 at both versions and was deleted, as WI-C5's did. Of 260 seeds,
+-- 942678 triples satisfy the filter (all three quantities pairwise distinct
+-- within each version's table, both layers remapped by the version bump at
+-- every seed, no two pinned seeds adjacent), so the rows below are a query's
+-- answer rather than a judgement.
+--
+-- The trajectory-coverage preference is unchanged and re-applied to the new
+-- numbers: seed 1 draws 97, the MAXIMUM, so the schedule's cap and the `|BOUND`
+-- path stay pinned; seed 5 draws 22, the MINIMUM, where the wide walk
+-- terminated early; seed 7 draws 50 and sits between them. A pinned digest
+-- certifies the paths its trajectory walks and no others.
 export pure func pinned_canary_v1() -> [CanaryRow] {
-  [{ seed: 1, initial_state: 1760396834, draws: 78, digest: 1749163738 },
-   { seed: 4, initial_state: 1760396837, draws: 83, digest: 279631833 },
-   { seed: 9, initial_state: 1760396842, draws: 18, digest: 930043259 }]
+  [{ seed: 1, initial_state: 1760396834, draws: 97, digest: 840647018 },
+   { seed: 5, initial_state: 1760396838, draws: 22, digest: 399270517 },
+   { seed: 7, initial_state: 1760396840, draws: 50, digest: 672935065 }]
 }
 
 export pure func pinned_canary_v2() -> [CanaryRow] {
-  [{ seed: 1, initial_state: 1760396835, draws: 30, digest: 2082027779 },
-   { seed: 4, initial_state: 1760396838, draws: 18, digest: 88385705 },
-   { seed: 9, initial_state: 1760396843, draws: 66, digest: 1230598725 }]
+  [{ seed: 1, initial_state: 1760396835, draws: 92, digest: 1125006629 },
+   { seed: 5, initial_state: 1760396839, draws: 22, digest: 1388470833 },
+   { seed: 7, initial_state: 1760396841, draws: 50, digest: 548917106 }]
 }
 
 -- ---------------------------------------------------------------------------
