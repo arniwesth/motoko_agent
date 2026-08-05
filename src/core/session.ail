@@ -1551,15 +1551,27 @@ func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string
   }
 }
 
-func dp7_rejection_errors(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[string] ! {Process, IO, Trace} {
+-- WI-D2 WIDENED THE RETURN, and it is the same move `ToolDispatchOutcome` took
+-- one file over: this returned the rejection text and dropped the event it had
+-- just projected, so `Dp7VerifierRejected` reached the wire and nothing else.
+-- The caller has the trace; giving it the event is what lets the driver stay the
+-- sole appender.
+--
+-- The re-injection path is NOT terminal — the run continues and terminates later
+-- via max-steps or the budget — so D6.1's ordering constraint does not bind this
+-- append, unlike `CostExhausted` above.
+export type Dp7Rejection = { errors: string, event: LedgerEvent }
+
+func dp7_rejection_errors(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Dp7Rejection] ! {Process, IO, Trace} {
   match run_dp7_verifier(rt, workdir) {
     Approve => None,
     Reject(errors) => {
-      let _ = ledger_emit(session_id, Dp7VerifierRejected({
+      let event = Dp7VerifierRejected({
         step: step_idx,
         errors: errors
-      }));
-      Some(errors)
+      });
+      let _ = ledger_emit(session_id, event);
+      Some({ errors: errors, event: event })
     }
   }
 }
@@ -1739,16 +1751,27 @@ func c2_fail(
   trace: LedgerTrace,
   emissions: [LedgerEvent]
 ) -> TracedSessionResult ! {IO, Clock, Trace} {
-  let _ = if code == "BudgetExceeded" then
-    ledger_emit(session_id, CostExhausted({
-      step: step_idx,
-      total_cost_millicents: totals.cost_millicents,
-      total_cost_usd: millicents_to_usd(totals.cost_millicents),
-      cap_millicents: max_cost_millicents
-    }))
-  else ();
+  let cost_event = CostExhausted({
+    step: step_idx,
+    total_cost_millicents: totals.cost_millicents,
+    total_cost_usd: millicents_to_usd(totals.cost_millicents),
+    cap_millicents: max_cost_millicents
+  });
+  let _ = if code == "BudgetExceeded" then ledger_emit(session_id, cost_event) else ();
+  -- WI-D2, AND IT IS `DoneEvent`'S EXACT PRECEDENT (WI-A14). This is a terminal
+  -- path, so the append must land BEFORE `c2_finalize` writes the RunSummary or
+  -- D6.1's "the summary is the FINAL record" breaks — which is also row 7's
+  -- first conjunct, and `terminal_summary_findings`' `after_summary` half is
+  -- what says so. Appending after the finalizer type-checks and reddens
+  -- `record-after-terminal` on every capped run.
+  --
+  -- The wire is untouched: `cost_exhausted` still precedes `run_summary` there,
+  -- exactly as it did, so no compatibility surface moves (D8).
+  let trace_with_cost =
+    if code == "BudgetExceeded" then ledger_append(trace, WireRecord(cost_event))
+    else trace;
   let result: Result[[Message], AIError] = Err({ code: code, message: message, retryable: retryable });
-  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace, emissions, result)
+  c2_finalize(ports, world, session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace_with_cost, emissions, result)
 }
 
 pure func c2_pending_context(st: C2LoopState) -> [Message] {
@@ -1780,14 +1803,18 @@ func c2_finish_tool_batch(
   tool_msgs: [Message]
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let request_id = "step-${show(tool_step_idx)}";
-  let _ = if st.pending_tool_batched then
-    ledger_emit(session_id, NativeToolResults({
-      request_id: request_id,
-      step: tool_step_idx,
-      stream_id: stream_id,
-      payload: ja(tool_messages_to_result_jsons(tool_msgs))
-    }))
-  else ();
+  let results_event = NativeToolResults({
+    request_id: request_id,
+    step: tool_step_idx,
+    stream_id: stream_id,
+    payload: ja(tool_messages_to_result_jsons(tool_msgs))
+  });
+  let _ = if st.pending_tool_batched then ledger_emit(session_id, results_event) else ();
+  -- WI-D2, and the condition is shared with the emission for the reason the
+  -- announcement site gives.
+  let trace_with_results =
+    if st.pending_tool_batched then ledger_append(trace, WireRecord(results_event))
+    else trace;
   let next_state: C2LoopState = {
     msgs: c2_pending_prefix(st) ++ tool_msgs,
 	    step_idx: st.step_idx,
@@ -1807,7 +1834,7 @@ func c2_finish_tool_batch(
     nudges_used: st.nudges_used,
     finalize_source: "",
     prior_counts: st.prior_counts,
-    trace: trace,
+    trace: trace_with_results,
     emissions: st.emissions
   };
   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -1891,7 +1918,8 @@ func c2_after_dp7(
   source: string
 ) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match dp7_rejection_errors(rt, workdir, done_step_idx, session_id) {
-    Some(errors) => {
+    Some(rejection) => {
+      let errors = rejection.errors;
       let next_state: C2LoopState = {
         msgs: msgs_with_assistant,
 	        step_idx: next_step_idx,
@@ -1911,7 +1939,7 @@ func c2_after_dp7(
         nudges_used: count_persist_nudges(msgs_with_assistant),
         finalize_source: "",
         prior_counts: prior_counts,
-        trace: trace,
+        trace: ledger_append(trace, WireRecord(rejection.event)),
         emissions: emissions
       };
       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -2084,22 +2112,27 @@ func c2_loop(
               let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), resolve_context_limit(model), ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
               match resolution {
                 ApprovalDenied(reason) => {
-                  let _ = ledger_emit(session_id, NativeToolDenied({
+                  let denied_event = NativeToolDenied({
                     step: tool_step_idx,
                     stream_id: req.stream_id,
                     tool: req.call.name,
                     id: req.call.id,
                     reason: reason
-                  }));
+                  });
+                  let _ = ledger_emit(session_id, denied_event);
                   let denial_msg = policy_denied_message(req.call, reason);
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, trace_with_decision, req, post.accumulated_tool_msgs ++ [denial_msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, ledger_append(trace_with_decision, WireRecord(denied_event)), req, post.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
                   let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
                   -- `after` carries BOTH advanced cursors: the approval queue
                   -- (from `post`) and the tool queue (from this execution).
+                  -- WI-D2 adds a third thing to carry — `executed.emitted` — and
+                  -- this is the site where forgetting it is least visible,
+                  -- because the batch continues and the events would simply
+                  -- never appear.
                   let after: C2LoopState = { post | world_state: executed.next_state };
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, after, trace_with_decision, req, after.accumulated_tool_msgs ++ [executed.msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, after, c2_trace_wire_events(trace_with_decision, executed.emitted), req, after.accumulated_tool_msgs ++ [executed.msg])
                 }
               }
             }
@@ -2113,22 +2146,36 @@ func c2_loop(
           let ctx_msgs = c2_pending_context(st);
           let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
-          let _ = if emit_calls then
-            ledger_emit(session_id, NativeToolCalls({
-              request_id: request_id,
-              step: tool_step_idx,
-              stream_id: stream_id,
-              payload: ja(tool_calls_to_envelope_jsons(calls))
-            }))
-          else ();
+          let calls_event = NativeToolCalls({
+            request_id: request_id,
+            step: tool_step_idx,
+            stream_id: stream_id,
+            payload: ja(tool_calls_to_envelope_jsons(calls))
+          });
+          let _ = if emit_calls then ledger_emit(session_id, calls_event) else ();
+          -- WI-D2. Appended under the SAME condition it is emitted under. An
+          -- unconditional append here type-checks and puts a record in the trace
+          -- for a batch that announced nothing on the wire — which the wire gate
+          -- reads as trace > wire, and is why the condition is shared rather
+          -- than restated.
+          let trace_with_calls =
+            if emit_calls then ledger_append(trace_with_decision, WireRecord(calls_event))
+            else trace_with_decision;
           let runtime_status_content = encode(runtime_status_json(st, policy, tool_step_idx));
           let runtime_builtin = \call. runtime_status_tool_message(call, runtime_status_content);
-          match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event), runtime_builtin) {
+          match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, [], \event. ledger_emit(session_id, event), runtime_builtin) {
             -- `done.world`, not `st.world_state`. The batch may have executed
             -- several tools and each one advanced the cursor; taking it off `st`
             -- type-checks and rewinds the world to before the batch.
+            --
+            -- WI-D2: `done.emitted` is the same rule on the second channel the
+            -- fold now returns. The tool-dispatch events land BETWEEN the batch
+            -- announcement and whatever the batch produces, which is when they
+            -- happened — the same positioning the stream deltas get at the
+            -- provider call, and for the same reason: a block appended in the
+            -- wrong place satisfies a count and fails order.
             ToolDispatchDone(done) =>
-              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, { st | world_state: done.world }, trace_with_decision, tool_step_idx, stream_id, done.msgs),
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, { st | world_state: done.world }, c2_trace_wire_events(trace_with_calls, done.emitted), tool_step_idx, stream_id, done.msgs),
             ToolDispatchPending(pending) => {
               let next_state: C2LoopState = {
                 msgs: st.msgs,
@@ -2152,7 +2199,10 @@ func c2_loop(
                 nudges_used: st.nudges_used,
                 finalize_source: "",
                 prior_counts: st.prior_counts,
-                trace: trace_with_decision,
+                -- WI-D2: `pending.emitted`, and the suspension is exactly where
+                -- this is easy to drop — the branch already had to remember
+                -- `pending.world` and `pending.accumulated` for the same reason.
+                trace: c2_trace_wire_events(trace_with_calls, pending.emitted),
                 emissions: st.emissions
               };
               c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
@@ -2253,6 +2303,14 @@ func c2_loop(
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
                   let _ = ledger_emit(session_id, end_event);
+                  -- WI-D2 CLOSES THE BRACKET. `ThinkingStreamStart` has been in
+                  -- the returned trace since A8 and its closing half was
+                  -- `ledger_emit`-only — the same code path appending one
+                  -- bracket and projecting the other, which was the sharpest
+                  -- single statement of D6.4's gap. Appended AFTER the deltas
+                  -- and before whatever the outcome produces, because that is
+                  -- when the stream ended.
+                  let trace_after_end = ledger_append(trace_after_call, WireRecord(end_event));
                   -- WI-A12's env class: the sixth and last driver env read.
                   let _ = if not e.retryable && st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", "").value != "" then capture_failing_payload(e, compacted_msgs) else ();
                   if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
@@ -2277,13 +2335,13 @@ func c2_loop(
                       nudges_used: st.nudges_used,
                       finalize_source: "",
                       prior_counts: st.prior_counts,
-                      trace: ledger_append(trace_after_call, WireRecord(retry_event)),
+                      trace: ledger_append(trace_after_end, WireRecord(retry_event)),
                       emissions: emissions_after_call
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                   } else {
                     -- Terminal: unretried provider/stream failure. WI-D1 made this `exchange.next_state` rather than `st.world_state` — plan rule S12, and the measurement is recorded at `ports.provider_outcome_record`. This edit is deliberately line-count-neutral (S18): the four routed clock anchors below it must not move.
-                    c2_finalize(st.provider, exchange.next_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_call, emissions_after_call, Err(e))
+                    c2_finalize(st.provider, exchange.next_state, session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, trace_after_end, emissions_after_call, Err(e))
                   }
                 },
                 Ok(result) => {
@@ -2299,7 +2357,7 @@ func c2_loop(
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
                   let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
-                  let trace_after_model = c2_trace_wire_events(trace_after_call, phase.events);
+                  let trace_after_model = c2_trace_wire_events(ledger_append(trace_after_call, WireRecord(end_event)), phase.events);
                   -- WI-B2b. Bound rather than matched inline, because the
                   -- successor has to outlive the match: `intercepted.next_state`
                   -- is what the loop carries forward, and `exchange.next_state`

@@ -99,13 +99,22 @@
 --                                 exactly `session.c2_loop`'s guard
 --                                 `trim(info.output) == ""`
 --
--- AND THE BRANCH OBSERVER IS NOT IN THIS PROCESS AT ALL. `NativeToolDenied` and
--- `NativeToolResults` are both in `dst_invariants.d64_gap_register()` — they do
--- not reach the returned trace — so a branch-reached counter read in here would
--- be reading the recorder that wrote the log. The branch witness is the WIRE,
--- and `make corpus_pr` counts it from production code that knows nothing about
--- the interaction log. That is why D11 makes them separate counters: they have
--- different observers, and only one of them is independent.
+-- AND THE BRANCH OBSERVER IS NOT IN THIS PROCESS AT ALL. The branch witness is
+-- the WIRE, and `make corpus_pr` counts it from production code that knows
+-- nothing about the interaction log. That is why D11 makes them separate
+-- counters: they have different observers, and only one of them is independent.
+--
+--   THE ORIGINAL REASON EXPIRED AT WI-D2 AND THE CONCLUSION DID NOT, so the two
+--   are separated rather than the paragraph re-dated. Until WI-D2 the argument
+--   was that `NativeToolDenied` and `NativeToolResults` were in
+--   `dst_invariants.d64_gap_register()` and so reached no returned trace at
+--   all; WI-D2 closed both, and a branch counter read from the trace would now
+--   type-check and produce numbers. It would still be the wrong instrument, for
+--   the reason that outlives the register: the returned trace and the
+--   interaction log are written by the same process, so a counter read from
+--   either is the recorder grading itself. **A structural reason went stale
+--   within one item of being written and the measured one did not** — S15's
+--   discriminator, on this file, second instance.
 --
 -- ============================================================================
 -- WHAT NO SEED CAN REACH, AND WHY THAT IS A FINDING RATHER THAN A WAIVER

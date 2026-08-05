@@ -396,11 +396,17 @@ func approval_rt(id: string) -> ExtRuntime {
 -- equivalent of `served_from_trace`.
 --
 -- Read off the RETURNED MESSAGES, not the trace, and that is not a shortcut.
--- `NativeToolDenied` is `ledger_emit`-only: it goes to the wire and is never
--- appended to the returned trace (cluster 4 measured the same emit/append
--- imbalance, 37 vs 15). The tool result message IS the production-visible
+-- The tool result message IS the production-visible
 -- consequence — it is what the model sees on the next turn — so asserting on it
 -- tests the thing that matters rather than the thing that is convenient.
+--
+--   TENSED AT WI-D2. The original note gave a second reason that has expired:
+--   `NativeToolDenied` WAS `ledger_emit`-only at cluster 4, which measured the
+--   emit/append imbalance at 37 against 15, and WI-D2 closed it — the denial now
+--   reaches the returned trace on both the policy path and the approval path.
+--   The reason above is the one that never depended on that, and it is why this
+--   assertion is not moved to the trace now that it could be: the returned
+--   message is what the next turn actually consumes.
 pure func tool_message_contents(msgs: [Message]) -> [string] {
   match msgs {
     [] => [],

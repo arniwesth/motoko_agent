@@ -690,12 +690,20 @@ func run_scenario(
 -- The wire witness, on its own entry point
 -- ---------------------------------------------------------------------------
 --
--- THE STRONGEST WITNESS IN THIS STAGE, and it cannot be consumed from inside
--- AILANG. `V2ToolDispatchStart` (tool_phase.ail:332) is emitted BEFORE the port
--- calls at :342-343, which makes it the one tool witness that exists whether or
--- not the port was ever reached — but it goes to the wire through `ledger_emit`
--- and is never appended to the returned trace, so `run.trace.records` cannot
--- see it. Cluster 4 measured the same emit/append imbalance (37 against 15).
+-- THE STRONGEST WITNESS IN THIS STAGE, and it is strongest because it is
+-- OUT OF PROCESS. `V2ToolDispatchStart` is emitted BEFORE the port calls that
+-- follow it, which makes it the one tool witness that exists whether or not the
+-- port was ever reached.
+--
+--   TENSED AT WI-D2, AND THE CONCLUSION SURVIVED THE REASON. Until WI-D2 the
+--   note read "it goes to the wire through `ledger_emit` and is never appended
+--   to the returned trace, so `run.trace.records` cannot see it" — cluster 4
+--   measured that emit/append imbalance at 37 against 15. WI-D2 appends it, so
+--   `run.trace.records` CAN see it now. This gate still reads the wire, because
+--   what makes it an oracle is that the two records have different AUTHORS, and
+--   a witness read from the returned trace would be produced by the same
+--   process as the census it is compared against. The append made the witness
+--   available in a second place; it did not make the second place independent.
 --
 -- `make discovery` therefore runs THIS entry, captures stdout, and compares the
 -- JSONL the driver emitted against the census this prints. Two authors, two

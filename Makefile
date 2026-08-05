@@ -123,6 +123,28 @@ stream_parity:
 	  --entry main scripts/dst/stream_parity_dst.ail < /dev/null | grep -v '^{'; \
 	./scripts/dst/run_stream_parity_wire.sh
 
+# WI-D2. D6.4's GENERAL obligation — acceptance row 7's third conjunct — as a
+# wire-against-trace comparison over every Logical variant `d64_gap_register()`
+# does not excuse.
+#
+# TWO PRODUCERS, named as S16 requires: the wire is written by `ledger_emit` at
+# the site the event happened; the returned trace is written by `ledger_append`
+# in the driver and printed after the run. In process both derive from one bound
+# value, which is why the comparison is here and not in the .ail suite — WI-C3
+# built `run_stream_parity_wire.sh` for exactly this reason on one variant, and
+# WI-D1's M5 measured what an in-process-only parity check is worth: completely
+# green over a wire that was leaking ten retries.
+#
+# THE COUPLING THAT MAKES THE REGISTER REAL: the required set is
+# `event_vocabulary()` minus `d64_gap_register()`, read out of the run rather
+# than restated here. Removing a name from the register is what makes this gate
+# demand its append, so a register shrunk without the production change is red —
+# which the two in-process pins cannot see, because both of them compare the
+# register against the `reaches_trace_today` SURVEY and the survey is the claim.
+.PHONY: ledger_parity
+ledger_parity:
+	./scripts/dst/run_ledger_parity_wire.sh
+
 phase_c_l1: compaction_dst
 	ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
 	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
@@ -174,7 +196,7 @@ hook_guard:
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #

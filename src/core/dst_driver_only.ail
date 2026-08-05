@@ -251,14 +251,39 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- The COVERAGE claim is unchanged: still an empty install list, still nothing
 -- covered provably. What moved is the routed-set arithmetic (6 routed of 7,
 -- from 5 of 7), not what this profile can claim about extensions.
-export pure func driver_only_version() -> string { "7" }
+--
+-- v7 -> v8 AT WI-D2, and this one is a RE-MEASUREMENT rather than a correction.
+-- Five anchors moved because WI-D2 widened `ToolDispatchOutcome` and
+-- `execute_allowed_tool_call` to return the events they emit, and added the
+-- appends that consume them: `tool_phase.ail` 288 -> 313, 289 -> 314,
+-- 344 -> 373, and `session.ail` 2543 -> 2601, 2653 -> 2711. `session.ail`
+-- 881/1126/1232, `stub_step.ail:202` and `ext/runtime.ail:190` did not move.
+--
+-- **The CLAIM did not change: same seven sites, same effects, same routed
+-- flags, same reviewers, still 6 routed of 7.** Every anchor was re-derived the
+-- way B4, C1, C3 and C5 derived theirs, and with the same answer: `now()` is
+-- unique in `stub_step.ail`, `exec_scratchpad_cell_ws` and `ports.clock_now(`
+-- are each unique in `tool_phase.ail`, and `session.ail` has exactly four
+-- `ports.clock_now(` call sites. **One candidate each, so NO JUDGEMENT was
+-- available** — said plainly rather than claimed as a decision.
+--
+-- Coverage did not change either: install list still empty, waived set
+-- unchanged, no hook classification moved, catalogue still `fault-catalogue/2`.
+--
+-- **AND WI-D2 PAID THE CASCADE EXACTLY ONCE**, which C3 and C5 both failed to
+-- do. S18 is why: every source edit including the six comment blocks tensed for
+-- S15 was finished BEFORE the anchor numbers were derived, so no number was
+-- re-dated by a later comment rewrite. Line-count neutrality (D1's route) was
+-- not available here — a record type gained a field on two variants and a fold
+-- gained a threaded accumulator, and neither has a "below the anchor" form.
+export pure func driver_only_version() -> string { "8" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
 -- `driver_only_version` and re-recording both halves of this pair.
 export pure func driver_only_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
-    content_hash: "sha256:addd5e2cad023e9ac49380c716272aa70a24a852f27a375cddc68e040977c64c" }
+    content_hash: "sha256:ff487d030bd98320790a29342faee0cfae621cd5fea02ce4d1f9b91316b402f7" }
 }
 
 -- ---------------------------------------------------------------------------
