@@ -120,7 +120,7 @@ pure func duplicate_site() -> [AttributionRow] {
 -- accounted for, the third is in neither the rows nor the unconditional-core
 -- set. Nothing about the TABLE is wrong.
 pure func omitted_site() -> [CoreSite] {
-  [{ site: { file: "src/core/session.ail", line: 1053 }, effect: "Clock",
+  [{ site: { file: "src/core/session.ail", line: 1097 }, effect: "Clock",
      routed: true, note: "in the unconditional-core set" },
    { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
      routed: false, note: "attributed to test_dummy" },
@@ -134,7 +134,7 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 287 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 289 }, effect: "Process",
           routed: false, note: "" }]
 }
 
@@ -146,8 +146,8 @@ func scenario_empty_intersection() -> bool ! {IO} {
   let absent = classify_site("src/core/ext/runtime.ail:190", ["compaction_ai#0", "scratchpad#1"]);
   let present = classify_site("src/core/ext/runtime.ail:190", ["test_dummy#0"]);
   -- and the mixed-guard row, the case a semantic test would have dropped
-  let sp_absent = classify_site("src/core/tool_phase.ail:287", ["compaction_ai#0"]);
-  let sp_present = classify_site("src/core/tool_phase.ail:287", ["scratchpad#5"]);
+  let sp_absent = classify_site("src/core/tool_phase.ail:289", ["compaction_ai#0"]);
+  let sp_present = classify_site("src/core/tool_phase.ail:289", ["scratchpad#5"]);
   let ok = absent == "attributed-unreachable" && present == "attributed-reachable"
         && sp_absent == "attributed-unreachable" && sp_present == "attributed-reachable";
   let _ = if ok then println("  ✓ empty intersection removes the site; a matching install restores it")

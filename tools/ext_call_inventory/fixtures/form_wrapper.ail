@@ -10,17 +10,18 @@ module tools/ext_call_inventory/fixtures/form_wrapper
 -- rather than on the call would happily count it as a resolved site. It is the
 -- opposite: the call site is elsewhere and invisible.
 
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg)
+import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, ExtCtx, ExtWorld, Msg)
 
 export func call_step(
-  f: (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream},
+  f: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace},
+  w: ExtWorld,
   model: string,
   msgs: [Msg]
-) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
-  f(model, msgs)
+) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+  f(w, model, msgs)
 }
 
 export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
-  -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
-  call_step(ctx.ports.ai_step, model, msgs)
+  -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+  call_step(ctx.ports.ai_step, ctx.world, model, msgs)
 }

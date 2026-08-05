@@ -215,6 +215,29 @@ def main() -> int:
         print(f"self-test: agree={agree} disagree={disagree}")
         for line in bad:
             print(f"  {line}")
+        # WI-B4. A control that must SURVIVE certifies nothing if the mechanism
+        # never reached it (A17 site 32) -- and this self-test walked straight
+        # into it on the v0.33.0 repin. At v0.26.0 exactly ONE stdlib module
+        # (std/secret) failed MOD010 and the run reported `agree=43 disagree=0`.
+        # On v0.33.0 `ailang iface <abs path>` fails MOD010 for EVERY stdlib
+        # module, so nothing is comparable, `agree=0 disagree=0` -- and the old
+        # `return 1 if disagree else 0` reported that as a PASS. The fallback
+        # became the sole derivation for all 46 modules at the same moment the
+        # check that makes it trustworthy stopped checking anything, and both
+        # targets kept exiting 0.
+        #
+        # Zero comparisons is therefore a FAILURE, not a clean run. Note the
+        # compiler names two escape hatches in its own MOD010 message and
+        # neither works for this subcommand on v0.33.0: `AILANG_RELAX_MODULES=1`
+        # is ignored by `iface`, and `--relax-modules` is not a defined flag for
+        # it ("flag provided but not defined: -relax-modules").
+        if agree + disagree == 0:
+            print("FAIL: the self-test compared ZERO modules, so it certified nothing.\n"
+                  "      `ailang iface` produced no parseable interface for any stdlib\n"
+                  "      module, which means the textual fallback is the only derivation\n"
+                  "      in play AND is now completely unvalidated. This is a pass-shaped\n"
+                  "      absence, not a pass.", file=sys.stderr)
+            return 1
         return 1 if disagree else 0
 
     proj = builtin_projection()

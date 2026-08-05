@@ -14,14 +14,46 @@
 -- ============================================================================
 --
 -- No shipped configuration can be the first profile. All fourteen install
--- `compaction_ai`, which calls `ExtPorts.ai_step` — a classifier-2 field, whose
--- core seam threads successor state that the ext seam cannot carry. Under D1/D5
--- such an extension must have every hook it registers excluded, and seven of
--- the eight ABI slots are dispatched unconditionally, so exclusion cannot save
--- it: the run would fail closed on the first system-prompt build. The conformant
--- move is to OMIT it, named, with the reason — which is `omitted_extensions`
--- below, and which `make driver_only` re-derives from the call inventory rather
--- than trusting this file.
+-- `compaction_ai`, and it must be OMITTED — named, with the reason, in
+-- `omitted_extensions` below.
+--
+-- WI-B4 RE-DERIVED THIS REASON, because WI-B2b killed the original one and left
+-- the conclusion standing on nothing. Until B2b, the argument was classifier 2:
+-- `ExtPorts.ai_step` fronted `Ports.model_step`, whose `ProviderExchange`
+-- threads successor state, and the ext seam returned `Result[string, string]`
+-- and could not carry it. B2b widened `ai_step` to
+-- `(ExtWorld, string, [Msg]) -> AiStepOutcome`, so **`ai_step` left the
+-- classifier-2 set** — derived, 3 → 2, with zero member call sites — and that
+-- sentence is now false. The omission is unchanged; only its basis moved.
+--
+-- The basis now is D5's coverage criterion read directly, and it is stronger
+-- than the old one because it does not depend on `compaction_ai` at all. See
+-- `omitted_extensions` for the full argument. In outline:
+--
+--   * D5 admits a hook as covered only if it is (1) deterministic and
+--     effect-free for its explicit inputs, or (2) effectful only through D1
+--     world-mediated ports, with origin tagged by extension id and explicit
+--     world state returned to the host.
+--   * **Classification reads DECLARED effect rows, not performed ones** — the
+--     reconciling detector that would license reading them the other way is
+--     D5 obligation 2's, and it is still unbuilt (WI-C5 owns it).
+--   * `ExtensionHooks.on_budget_plan` declares `! {Env, FS}` in the ABI. Rows
+--     are CLOSED, so every implementation of it declares exactly that row —
+--     there is no narrower binding available to any extension. `Env` and `FS`
+--     are not world-mediated ports, so criterion 1 fails on the declared row;
+--     and `BudgetPatch` has no successor field, so criterion 2's "explicit
+--     world state returned" cannot be satisfied by any binding either.
+--   * `OnBudgetPlan` is UNCONDITIONALLY dispatched
+--     (`dst_profile_coverage.hook_dispatch`, `ext/runtime.ail:229`), and D5
+--     forbids installing an extension with any unconditionally-dispatched hook
+--     excluded.
+--
+-- So on this ABI **no extension in the tree is installable in a conformant
+-- profile**, and the empty install list below is FORCED rather than chosen.
+-- That is a sharper claim than the one this header used to make, and it is
+-- guarded rather than asserted: `make driver_only` re-checks the ABI facts it
+-- rests on and goes red the day `on_budget_plan` is widened — which is exactly
+-- the day the decision has to be retaken.
 --
 -- An empty install list makes the coverage floor and the per-hook disclosure
 -- hold VACUOUSLY, and that vacuity is safe rather than convenient: the
@@ -84,13 +116,13 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 export pure func driver_only_id() -> string { "driver_only" }
 -- v3, WI-A13 stage 4. RE-ISSUED for the SECOND time and for the same mechanical
 -- reason: stage 4 added one `GeneratedWorld` arm to `ported_provider`
--- (session.ail:843), which sits above four attributed clock sites, so all four
+-- (session.ail:887), which sits above four attributed clock sites, so all four
 -- moved by five lines and A5's table was re-measured. THE CLAIM DID NOT CHANGE
 -- — same seven sites, same effects, same routed flags, same reviewers; only the
 -- coordinates moved.
 --
 -- Two clusters have now paid this, and the second is the useful data point. The
--- stub_step.ail:161 anchor was NOT disturbed, because that cascade is
+-- stub_step.ail:163 anchor was NOT disturbed, because that cascade is
 -- documented and an author who knows about it can insert below the anchor and
 -- widen import lists in place. The session.ail anchors were disturbed anyway,
 -- because a new `StepProvider` variant forces a new match arm and a match arm
@@ -113,14 +145,28 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- as a re-issue is the safe direction and is what the header already chose
 -- ("that cost IS the rule"), but the fragility is a finding worth A14/A15's
 -- attention rather than something to absorb silently each cluster.
-export pure func driver_only_version() -> string { "3" }
+-- BUMPED TO 4 AT WI-B4, for two independent reasons and both are D-rule
+-- mandated rather than housekeeping:
+--
+--   1. D4. A5's attribution table was re-derived — nine of its ten anchors were
+--      stale at HEAD, before any WI-B4 edit, and `make dst` had exited 2 short
+--      of the check for long enough that nobody saw it. Correcting the table
+--      re-issues every referring profile, and the identity pair below is
+--      re-recorded with it.
+--   2. D5/D8. The fault catalogue moved to `fault-catalogue/2`
+--      (`extension_effect_fault` gained a reachable branch), which this
+--      profile's manifest records.
+--
+-- Coverage did NOT change: the install list is still empty, the waived class
+-- set is still every conditional class, and no hook classification moved.
+export pure func driver_only_version() -> string { "4" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
 -- `driver_only_version` and re-recording both halves of this pair.
 export pure func driver_only_attribution_ref() -> AttributionRef {
-  { source_revision: "5ad3433",
-    content_hash: "sha256:f22042d889e5ef7b5f3918fcd242534fc1042d0b4d5a34d83fb851342ead65b3" }
+  { source_revision: "eed1d7c",
+    content_hash: "sha256:ef253d92b42aac0ee52614e577b967bf17c197ed32a1eac35c9df742e3cf9231" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -217,23 +263,33 @@ export pure func driver_only() -> ProfileDefinition {
     -- D5 field 8. Literals, deliberately: see the header.
     attribution_ref: driver_only_attribution_ref(),
 
-    -- D5 field 10. The reason names the field AND the call site, because
-    -- "calls ai_step" alone is not falsifiable by a reader and the site is.
-    -- `make driver_only` re-derives this from the tool and fails if an
-    -- installable classifier-2 caller is missing from this list.
+    -- D5 field 10. REWRITTEN AT WI-B4. The previous reason was the classifier-2
+    -- one, and WI-B2b made it false: `ai_step` now returns `AiStepOutcome`,
+    -- carries `next_state`, and has LEFT the classifier-2 set. A reason that
+    -- has become false is worse than no reason, because it still reads as an
+    -- argument.
+    --
+    -- Note what this costs in guarding: `tools/profile_definition/check_fixtures.py`
+    -- used to re-derive this omission from `member_call_sites`, so the list
+    -- could not silently drop `compaction_ai`. With zero member call sites in
+    -- the tree that check is now VACUOUS — it passes because there is nothing
+    -- to require, which is the "absent reads identically to unchanged" shape
+    -- this project keeps finding. The replacement guard is the ABI-fact check
+    -- described in the header and implemented in the same script; it is not the
+    -- same check and it is named rather than quietly substituted.
     omitted_extensions: [
       { extension_id: "compaction_ai",
-        reason: "calls the classifier-2 field ExtPorts.ai_step at packages/motoko-ext-compaction-ai/compaction_ai.ail:106. Ports.model_step threads successor state through ProviderExchange and ExtPorts.ai_step returns Result[string, string], which cannot carry it — so every hook compaction_ai registers would have to be excluded, and seven of the eight ABI slots are dispatched unconditionally. Excluding them is not a runnable configuration, so it is OMITTED (D1/D5). Widening ExtPorts is Milestone B's ABI major, not a fix available here." }
+        reason: "OMITTED under D5's coverage criterion, on DECLARED effect rows. Its eight slots split: on_describe_tools, on_build_system_prompt and on_tool_policy are rowless constants and are coverable under criterion 1; on_tool_handle is GATED, so excluding it is a coverage cost rather than a rejection; and four UNCONDITIONALLY-dispatched slots are coverable under neither criterion. on_budget_plan declares the ABI's closed row ! {Env, FS} and returns BudgetPatch, which has no successor field — so criterion 1 fails on the declared row and criterion 2 fails for want of returned world state, and no binding of that slot by ANY extension can do better while the ABI row stands. on_response_intercept and on_solver_candidate return constants beside ctx.world while declaring nine effects each; the declared-row rule is precisely the rule that refuses to let a profile claim those down. on_pre_step is the one slot WI-B2b changed the answer for and it still does not qualify: criterion 2 is a conjunction — effectful ONLY through D1 world-mediated ports, origin tagged by extension id, AND explicit world state returned — and B2b bought only the third conjunct (PreStepOutcome.next_state, threaded at ext/runtime.ail:262-279, where PreStepStage.ext_id already satisfied the second). The first conjunct fails, because on the declared row on_pre_step carries IO, FS, Net and Process, none of which are world-mediated ports; admitting it anyway IS the claim that a hook performs less than it declares, and D5 names the detector that would license that claim as explicitly unavailable. MEASURED, and recorded because it says what WI-C5 will find: compaction_ai in FACT reaches effects only through ExtPorts.ai_step — compaction_ai.ail imports std/ai (a type only), std/crypto, std/json, std/list, std/option, std/result and std/string, every one of which classifier 1 derives as proven effect-free, and calls no ambient builtin. So criterion 2's first conjunct is TRUE on performed effects and FALSE on declared ones, and the gap between them is exactly the missing successor detector. D5 forbids installing an extension with any unconditionally-dispatched hook excluded, so the omission stands on four independent barriers, of which on_budget_plan's alone is sufficient and is untouched by anything Milestone B did." }
     ],
 
     -- A10 decision 1, in force. Exactly the reachable-and-unrouted set; the
     -- machinery checks BOTH directions, so a site that gets routed or moves
     -- cannot leave a stale declaration behind reading as if the gap were live.
     unrouted_reachable_sites: [
-      { site_key: "src/core/session.ail:807",
+      { site_key: "src/core/session.ail:851",
         instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site",
         why_unroutable: "ext_unrouted_clock. ExtPorts.clock_now is zero-argument and AILANG has no zero-arg lambdas in expression position on the pin, so no world capture is possible here at all. Standing rule S2 chose the ambient read over a frozen snapshot deliberately: a frozen cursor is silently wrong and invisible to every gate, while the ambient read turns the Clock poison probe red the moment anyone calls it. Closing it is WI-C5's, behind Milestone B's ABI widening." },
-      { site_key: "src/core/test/stub_step.ail:161",
+      { site_key: "src/core/test/stub_step.ail:163",
         instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read",
         why_unroutable: "live_ports' clock adapter — the one place the driver's call graph reads a real wall clock, by design, and therefore the one place {Clock} is genuinely load-bearing. It is IN this profile's reachable set even though a deterministic run binds the scripted adapter instead: D4's profile-reachable is INSTALLATION-scoped, not execution-scoped, and carving it out on execution-scope grounds would put a fail-open exception into an installation-scoped rule (A10 decision 1)." }
     ],

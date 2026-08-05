@@ -72,15 +72,29 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 287 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 289 }, effect: "Process",
           routed: false, note: "" }]
 }
 
 -- Classifier 2's member call sites in installable extensions, as the tool
--- derives them. `make driver_only` asserts this matches the tool's own output.
+-- derives them.
+--
+-- EMPTY AT WI-B4, and the emptiness is measured rather than convenient.
+-- WI-B2b widened `ExtPorts.ai_step` to return `AiStepOutcome`, which carries
+-- `next_state`, so `ai_step` LEFT the classifier-2 set: the derived set is
+-- {env_get, proc_exec} and there are ZERO member call sites anywhere in the
+-- tree. The entry that used to sit here — `compaction_ai / ai_step` — named a
+-- site that no longer qualifies (and had drifted to :111 besides).
+--
+-- Say plainly what that costs, because the comment here used to claim more than
+-- it delivered: with this list empty, every check keyed on it is VACUOUS. It
+-- passes because there is nothing to require, which is not the same observation
+-- as passing because everything is right, and no amount of green here says the
+-- omission below is still correct. What holds the omission now is the ABI-fact
+-- guard in tools/profile_definition/check_fixtures.py — see the header of
+-- src/core/dst_driver_only.ail.
 pure func head_classifier_2_calls() -> [Classifier2Call] {
-  [{ extension_id: "compaction_ai", field: "ai_step",
-     site: "packages/motoko-ext-compaction-ai/compaction_ai.ail:106" }]
+  []
 }
 
 func report(rs: [ProfileRejection]) -> () ! {IO} {
@@ -210,7 +224,7 @@ func show_declarations(ds: [UnroutedSiteDeclaration]) -> () ! {IO} {
 -- dispatch can violate. It becomes binding at WI-C5.
 func scenario_exclusion_check_is_vacuous() -> bool ! {IO} {
   let meta: ReplayMetadata =
-    { source_revision: "HEAD", toolchain_version: "ailang 0.26.0",
+    { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: driver_only_id(), profile_version: driver_only_version(),
       event_vocabulary_version: "event-vocabulary/1" };
   let none_excluded = not is_excluded_hook(driver_only(), "compose", "on_tool_handle");
@@ -228,8 +242,8 @@ func scenario_exclusion_check_is_vacuous() -> bool ! {IO} {
 
 -- The per-run manifest, built and validated against the definition it realizes.
 func scenario_manifest() -> bool ! {IO} {
-  let m = driver_only_manifest("HEAD", "ailang 0.26.0", "4.0", "{}",
-                               ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD");
+  let m = driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
+                               ["env_get", "proc_exec"], ["clock_now"], "HEAD");
   let rs = validate_manifest(m, driver_only());
   let ok = List.length(rs) == 0;
   let _ = if ok then {

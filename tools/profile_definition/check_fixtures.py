@@ -95,6 +95,80 @@ def owning_extension(file_path, dirs):
     return None
 
 
+ABI_TYPES = REPO / "packages/motoko-ext-abi/types.ail"
+
+
+def check_omission_basis(profile_src, required):
+    """WI-B4. Check 3 above re-derives `driver_only`'s omission list from
+    `member_call_sites`, and until WI-B2b that was a real check: `compaction_ai`
+    called `ExtPorts.ai_step`, `ai_step` was a classifier-2 member, so the list
+    could not silently drop it. B2b widened `ai_step` to return `AiStepOutcome`.
+    It left the classifier-2 set, `member_call_sites` went empty, and check 3
+    became VACUOUS — it now passes because it requires nothing, which is
+    indistinguishable from passing because everything is right.
+
+    The omission is still correct, but its basis moved from classifier 2 to D5's
+    coverage criterion read on DECLARED effect rows. This is the guard for the
+    new basis. It does not re-derive the whole criterion — it pins the single
+    ABI fact that makes the conclusion hold for EVERY extension rather than for
+    `compaction_ai` in particular:
+
+        `ExtensionHooks.on_budget_plan` is unconditionally dispatched, declares
+        a non-empty effect row, and returns a type with no successor field.
+
+    Rows are closed, so that row is not a property of any one binding — every
+    implementation in the tree declares exactly it. `Env` and `FS` are not
+    world-mediated ports, so criterion 1 fails on the declared row; `BudgetPatch`
+    carries no successor, so criterion 2 fails for want of returned world state.
+    D5 forbids installing an extension with any unconditionally-dispatched hook
+    excluded, so no extension is installable at all and the empty install list is
+    forced.
+
+    This goes red the day WI-C5 widens `on_budget_plan` — which is exactly the
+    day the omission has to be decided again rather than inherited.
+    """
+    abi = ABI_TYPES.read_text()
+
+    m = re.search(r"^\s*on_budget_plan:\s*\([^)]*\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
+                  abi, re.M)
+    if not m:
+        fail("could not read `on_budget_plan`'s declaration in "
+             f"{ABI_TYPES.relative_to(REPO)} — the omission basis cannot be checked")
+    ret_type, row = m.group(1), (m.group(3) or "").strip()
+
+    if not row:
+        fail("`ExtensionHooks.on_budget_plan` no longer declares an effect row.\n"
+             "      driver_only's omission of every extension rests on that row failing\n"
+             "      D5 criterion 1 on DECLARED effects. Re-decide the omission; do not\n"
+             "      inherit it. See the header of src/core/dst_driver_only.ail.")
+
+    rm = re.search(r"^export type " + re.escape(ret_type) + r"\s*=\s*\{(.*?)\}", abi, re.M | re.S)
+    if not rm:
+        fail(f"could not read `{ret_type}` in {ABI_TYPES.relative_to(REPO)}")
+    if "next_state" in rm.group(1):
+        fail(f"`{ret_type}` now carries a successor field, so `on_budget_plan` may satisfy\n"
+             "      D5 criterion 2. driver_only's omission basis has changed — re-decide it.")
+
+    disp = (REPO / "src/core/dst_profile_coverage.ail").read_text()
+    if not re.search(r"OnBudgetPlan\s*=>\s*Unconditional", disp):
+        fail("`OnBudgetPlan` is no longer unconditionally dispatched, so excluding it is a\n"
+             "      coverage cost rather than a rejection. driver_only's omission basis has\n"
+             "      changed — re-decide it.")
+
+    if "compaction_ai" not in re.findall(r'extension_id:\s*"([^"]+)",\s*reason:', profile_src):
+        fail("driver_only no longer omits `compaction_ai`, and check 3 above can no longer\n"
+             "      require it (zero classifier-2 member call sites). If installing it is\n"
+             "      intended, that is a coverage claim and a profile version bump.")
+
+    print(f"  ✓ omission basis intact: on_budget_plan is Unconditional, declares "
+          f"! {{{row}}}, and returns {ret_type} (no successor)")
+    print("    → no extension is installable under D5 on declared rows; the empty install "
+          "list is forced")
+    if not required:
+        print("    ! note: check 3 is now VACUOUS (zero classifier-2 member call sites). "
+              "This check, not that one, is what holds the omission.")
+
+
 def main():
     data = derive()
     fixture = FIXTURE.read_text()
@@ -155,6 +229,7 @@ def main():
                 "      OMITTED with a reason, not installed-and-excluded."
             )
         print(f"  ✓ every installable classifier-2 caller is omitted by name in the profile: {sorted(required)}")
+        check_omission_basis(profile_src, required)
     else:
         print("  i src/core/dst_driver_only.ail not present yet (machinery commit); profile check skipped")
 

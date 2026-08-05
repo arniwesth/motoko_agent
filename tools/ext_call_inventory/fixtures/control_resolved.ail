@@ -9,9 +9,9 @@ module tools/ext_call_inventory/fixtures/control_resolved
 -- fixtures while being useless, so the suite has to contain a case that must
 -- come back clean.
 
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg)
+import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, ExtCtx, Msg)
 
 export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
-  -> Result[string, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
-  ctx.ports.ai_step(model, msgs)
+  -> AiStepOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  ctx.ports.ai_step(ctx.world, model, msgs)
 }

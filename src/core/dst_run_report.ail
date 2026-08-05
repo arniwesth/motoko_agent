@@ -101,6 +101,7 @@ import src/core/dst_fault_catalogue (
   FaultClass,
   RecoveryBranch, Branch, NoReachableBranch,
   Applicability, AlwaysApplicable, ConditionalOn,
+  FaultBoundary, ExtensionEffectBoundary,
   branch_id,
   fault_catalogue,
   fault_catalogue_version,
@@ -824,13 +825,52 @@ pure func test_empty_coverage_is_built_from_the_catalogue() -> bool
 -- D3's `NoReachableBranch` must arrive in the branch counter AS a structural
 -- gap, carrying the catalogue's own reason — not flattened to "not covered",
 -- which would demand coverage of something the artifact says does not exist.
+-- REWRITTEN AT WI-B4 ONTO ITS OWN FIXTURE, and the reason is the rule this
+-- project keeps re-learning. It used to read `extension_effect_fault` out of the
+-- LIVE catalogue, which happened to be the one class carrying
+-- `NoReachableBranch`. WI-B4 gave that class a real branch — WI-B2b's widening
+-- means the ai_step seam now threads the driver's world and a faulted
+-- ScriptedStep delivers `Err`, so `NoReachableBranch` became false — and this
+-- test went red having found nothing wrong with the MECHANISM it exists to
+-- check. A test keyed on whichever row currently happens to have the shape is a
+-- test whose subject can be legislated away.
+--
+-- It now builds the shape it is about. That means the mechanism stays covered
+-- when NO class in the catalogue is structurally unreachable, which is the state
+-- the tree is in as of WI-B4 and the state it should stay in: an empty
+-- `NoReachableBranch` set is good news about the system, not a reason to stop
+-- checking the branch that reports one.
+pure func structurally_unreachable_fixture() -> [FaultClass] {
+  [{ class_id: "b4_fixture_unreachable",
+     boundary: ExtensionEffectBoundary,
+     applicability: AlwaysApplicable,
+     delivery_constructor: "fixture",
+     recovery_branch: NoReachableBranch("the seam delivers no fault on this pin"),
+     logical_transition: "undefined at this seam" }]
+}
+
 pure func test_no_reachable_branch_becomes_a_structural_gap() -> bool
+  tests [((), true)]
+  {
+    let bs = empty_branch_coverage(structurally_unreachable_fixture());
+    match find_branch_row(bs, "b4_fixture_unreachable") {
+      None => false,
+      Some(b) => reach_id(b.status) == "unreachable-structurally" && reach_reason(b.status) != ""
+    }
+  }
+
+-- The control that makes the row above falsifiable: the SAME builder over a
+-- class that HAS a reachable branch must not report a structural gap. Without
+-- it, `empty_branch_coverage` returning `UnreachableStructurally` for everything
+-- would pass. This is also the assertion that now covers the live
+-- `extension_effect_fault` row, which WI-B4 moved into exactly this case.
+pure func test_a_reachable_branch_is_not_a_structural_gap() -> bool
   tests [((), true)]
   {
     let bs = empty_branch_coverage(fault_catalogue());
     match find_branch_row(bs, "extension_effect_fault") {
       None => false,
-      Some(b) => reach_id(b.status) == "unreachable-structurally" && reach_reason(b.status) != ""
+      Some(b) => reach_id(b.status) != "unreachable-structurally"
     }
   }
 

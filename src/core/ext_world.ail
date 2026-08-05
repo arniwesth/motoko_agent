@@ -614,3 +614,107 @@ pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
     };
     approvals_ok && env_ok && tools_ok
   }
+
+-- ---------------------------------------------------------------------------
+-- S12's instrument: did a hook that PERFORMED a call return the world it was
+-- given?
+-- ---------------------------------------------------------------------------
+--
+-- WI-B2b found this defect twice, in the one hook in the tree that actually
+-- calls `ai_step`: a re-wrap that discarded the world the summarizer advanced,
+-- and failure branches returning the ENTERED world after attempts had been made
+-- and script entries consumed. `next_state: ctx.world` type-checks everywhere
+-- and passes every test in the tree. B2b shipped a comment-level mitigation and
+-- said, correctly, that a comment is weaker than a check.
+--
+-- It also said the real instrument "needs a counter the `ExtWorld` does not
+-- carry". THAT PART IS WRONG, and it is why this check exists rather than
+-- another paragraph. The counter is already in the token: `WorldState.log` is
+-- D2's ordered record of every request the driver made, `record_interaction`
+-- appends to it on every recorded seam call, and `world_json`/`world_of_json`
+-- round-trip it in full — asserted field by field by the tests above. A hook
+-- that performed a recorded call therefore returns a world with a LONGER log
+-- than the one it entered with, and a hook that returned `ctx.world` returns one
+-- of exactly the same length. The two are distinguishable, mechanically, from
+-- the token alone.
+--
+-- The check is deliberately one-directional. `advanced == false` proves nothing
+-- on its own: a hook that legitimately did nothing also returns an unchanged
+-- world, and that is the CORRECT identity transition S12 names. What the pair
+-- says is: IF the hook performed a call, THEN the world must have advanced —
+-- so the caller supplies "did it perform one" and this supplies the rest.
+
+-- How many interactions the world behind this token has recorded.
+export pure func world_interaction_count(t: ExtWorld) -> int {
+  List.length(token_to_world(t).log)
+}
+
+-- Did the world advance between entering a hook and leaving it? Log growth is
+-- the signal rather than inequality of the whole world, because a world can
+-- differ in ways that are not evidence of a performed call (a clock tick from
+-- an unrelated adapter), and because `Json` has no structural comparison on this
+-- pin that would make whole-world inequality cheap or total.
+export pure func world_advanced(before: ExtWorld, after: ExtWorld) -> bool {
+  world_interaction_count(after) > world_interaction_count(before)
+}
+
+-- THE S12 PREDICATE. True exactly when a hook performed a recorded call and
+-- handed back the world it was given — the silent defect. A caller asserts
+-- `not dropped_successor(...)`.
+export pure func dropped_successor(before: ExtWorld, after: ExtWorld, performed_a_call: bool) -> bool {
+  performed_a_call && not world_advanced(before, after)
+}
+
+-- A world carrying `n` recorded interactions, for the tests below. Built from
+-- the codec fixture so the count is the only thing that varies.
+pure func world_with_log_of(n: int) -> ExtWorld {
+  let base = codec_fixture_world();
+  world_to_token({ base | log: take_interactions(base.log ++ base.log ++ base.log, n) })
+}
+
+pure func take_interactions(xs: [Interaction], n: int) -> [Interaction] {
+  if n <= 0 then []
+  else match xs {
+    [] => [],
+    x :: rest => x :: take_interactions(rest, n - 1)
+  }
+}
+
+-- The instrument fires on the defect it was built for: a hook that performed a
+-- call and returned the world it was given.
+pure func test_dropped_successor_is_detected() -> bool
+  tests [((), true)]
+  {
+    let entered = world_with_log_of(1);
+    dropped_successor(entered, entered, true)
+  }
+
+-- And it does NOT fire on the case S12 says is CORRECT: a hook that performed
+-- nothing and therefore returned the world unchanged. Without this row the
+-- check could be `performed_a_call` alone and every row above would still pass.
+pure func test_identity_transition_is_not_a_defect() -> bool
+  tests [((), true)]
+  {
+    let entered = world_with_log_of(1);
+    not dropped_successor(entered, entered, false)
+  }
+
+-- The other direction: a hook that performed a call AND advanced the world is
+-- clean. This is the control that must survive — without it, a predicate that
+-- returned `performed_a_call` unconditionally would pass both rows above.
+pure func test_advanced_world_is_not_a_defect() -> bool
+  tests [((), true)]
+  {
+    not dropped_successor(world_with_log_of(1), world_with_log_of(2), true)
+      && world_advanced(world_with_log_of(1), world_with_log_of(2))
+  }
+
+-- And the counter itself survives the token, which is the fact the whole
+-- instrument rests on and which WI-B2b believed was absent.
+pure func test_the_interaction_counter_survives_the_token() -> bool
+  tests [((), true)]
+  {
+    world_interaction_count(world_with_log_of(0)) == 0
+      && world_interaction_count(world_with_log_of(1)) == 1
+      && world_interaction_count(world_with_log_of(3)) == 3
+  }

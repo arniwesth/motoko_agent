@@ -10,10 +10,10 @@ module tools/ext_call_inventory/fixtures/form_alias
 -- which this tool resolves and counts. The annotation is the whole difference:
 -- it is what makes the receiver's type readable from the file.
 
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg)
+import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, ExtCtx, Msg)
 
 export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
-  -> Result[string, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  -> AiStepOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let p = ctx.ports;
-  p.ai_step(model, msgs)
+  p.ai_step(ctx.world, model, msgs)
 }
