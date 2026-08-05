@@ -68,7 +68,10 @@ standing rule **S10**. **Cluster 13 = WI-B2a: DONE 2026-08-04**, 2h13m — ABI a
 GREEN, tree 218/17 above the v0.26.0 baseline; rewrote **S9** and earned **S11**.
 **Cluster 14 = WI-B2b: DONE 2026-08-04**, ~2h05m — opaque `ExtWorld` token, `ai_step` left the
 classifier-2 set, `check_core` green at 52; earned **S12** and S11's second clause.
-**Cluster 15 = WI-B4**, handoff written: `HANDOFF-execute-b4-close-the-repin-wave.md` — the wave's
+**Cluster 15 = WI-B4: DONE 2026-08-04 — MILESTONE B COMPLETE.** ~2h05m; sweep 219/17,
+`check_core` green, `driver_only` v4, `compaction_ai` stays omitted and the empty install list is
+proved *forced*. Earned **S13** and refuted B2a's closed-row argument for function-typed parameters.
+Handoff: `HANDOFF-execute-b4-close-the-repin-wave.md` — the wave's
 green gate and the last of Milestone B. Original B2b handoff:
 `HANDOFF-execute-b2b-world-token-widening.md` — the last of
 Milestone B's content, and the change that is *supposed* to move classifier 2's pinned membership.

@@ -156,6 +156,16 @@ field the encoder writes and the decoder ignores; both halves type-check and the
 until a replay serves a different response while every count still balances. A14 and A15 encode
 programs for D8's persistence and inherit this directly.
 
+**S13. Sweep the whole tree before believing a gate — `check_core` is a SUBSET gate, and the sweep is
+the step every item under budget pressure drops.** Milestone B found five frontiers and **the fifth
+differs in kind**: the first four were found by a compiler that could not reach them yet; the fifth was
+found by nobody for two items, because eleven files were red that nothing in `src/core/` imports. B2b
+dropped the sweep and said so; B4 ran it first and it refuted the wave's green claim in ten minutes —
+**and five of the eleven were files B2b had itself edited and left broken**, including the five
+classifier-2 fixtures B2a had found the same way one item earlier. **A repair loop seeded from the
+failing set cannot see what its own change breaks.** That lesson has now been learned twice and lost
+once. Run the sweep cache-cold (S9), and run it *first*.
+
 **S12. An identity transition is the correct answer for a component that did nothing and a silent
 defect for one that did something — and no type distinguishes them.** Earned by B2b, and it is the
 band B2a's closed-row argument does **not** cover. That argument holds and was re-confirmed: closed
@@ -1877,6 +1887,35 @@ two riders honoured: tooling first (the brace-balanced rewriter and fix loop are
 minutes true), and the settled decision that Motoko's `Msg` and the ext-ABI `Msg` stay at four
 fields, vision parts dropped at the seam.
 
+**WI-B4 LANDED 2026-08-04 — MILESTONE B IS COMPLETE.** Whole-tree sweep **219 pass / 17 fail**
+cache-cold, the 17 identical to B2a's member for member; `make check_core` exit 0 at 52 modules;
+`make dst` exit 2 with **two** red targets, down from six, and neither this milestone's class. Four
+targets went red→green. Four artifacts reconciled; `driver_only` **v3 → v4** (D4's re-derived
+attribution table, D5/D8's `fault-catalogue/1 → /2`), with **no coverage movement**.
+
+**The conformance answer: `compaction_ai` stays OMITTED, and the reason is now provable.** Criterion 2
+is a **conjunction of three clauses** and B2b bought only the third — `next_state` is threaded, origin
+was already tagged by `PreStepStage`, but `on_pre_step` declares `IO`, `FS`, `Net`, `Process`, which
+are not world-mediated ports. **My handoff's open question is answered NO**: the declared-row rule is
+scoped to *"per-hook classification"* full stop, not to criterion 1 — criterion 1 is its worked
+example. And the independently sufficient argument: **admitting `on_pre_step` under criterion 2 IS the
+claim that a hook performs less than it declares**, which D5 names a detector for and states is
+explicitly unavailable.
+
+**And the stronger result, which does not depend on `compaction_ai` at all:**
+`ExtensionHooks.on_budget_plan` declares `! {Env, FS}` **in the ABI**, rows are closed so no
+implementation can bind narrower, `Env`/`FS` are not world-mediated, `BudgetPatch` carries no
+successor, and the slot is **unconditionally dispatched**. **Therefore no extension in the tree is
+installable in a conformant profile, and `driver_only`'s empty install list is FORCED rather than
+chosen** — now guarded by a mutation-tested check that prints its own vacuity.
+
+**Two fail-open instruments were found certifying nothing, both exiting 0.** Classifier 1's self-test
+reports `agree=0 disagree=0` on v0.33.0 — 46 stdlib modules now resolve by *textual fallback* because
+`ailang iface` fails `MOD010` on every one — and `return 1 if disagree` called that a pass. **It is
+now deliberately RED.** And `check_fixtures.py` check 3 re-derived the omission from
+`member_call_sites`, which `ai_step` leaving the set emptied — so it passed by requiring nothing, at
+the same commit that made the omission's reason false.
+
 **WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** **A5's attribution anchors were ALREADY STALE at HEAD — nine of ten — and re-deriving them is
 yours** (B2a). `make dst` reached `attribution_table` for the first time since the repin and it went
 red on nine anchors that do not match at HEAD, *before any repin edit*: `tool_phase.ail:286` points at
@@ -1912,8 +1951,28 @@ Both were fixed at the source by hoisting a `let` and naming the type. **Any run
 needs a **positive control**: a fixture whose field *must* resolve to a seam and which fails loudly if
 it stops. `control_resolved.ail` checks call-site resolution, not the bridge.
 
-**B2a narrows the target and says why.** Its **123 closed-row lockstep sites need no mutation loop**:
-a closed row admits exactly one width — an implementation must *equal* its ABI field's row, not be a
+**B2a's closed-row argument is REFUTED for function-typed parameters — measured at B4 and
+independently reproduced.** `ext/runtime.ail:545`'s
+`chain_base_hook(id, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {…, Trace})` assigns `pre` straight into
+`on_pre_step`, whose ABI row is **closed and includes `Trace`**. **Drop `Trace` from that
+*parameter's* row and `ailang check` is green, and so is `make check_core`.** Two widths type-check,
+in exactly the population declared structurally incapable of it. Seven sites share the shape and are
+**deliberately held at the full row**, documented at the ABI beside `PreStepOutcome` so a tidy-up does
+not narrow them. It is the declaration-side view of `fb_74f53de3ae65854c`, which D5 already records
+from the performed side.
+
+**Its companion claim is refuted too, in the opposite direction: a wider FUNCTION row does not
+type-check fine — it propagates.** Widen `omnigraph.handle_branch` and its caller immediately demands
+the effect and the file goes red. The effect checker is transitive through named helpers, so an
+over-wide function row is silent only if every caller above it already declares the effect up to a
+closed row that also declares it. That is why B4's loop returned **140 of 199 load-bearing**, and why
+B1's three "known over-widenings" all read load-bearing at HEAD.
+
+**So "no band exists" was too strong in both directions.** The 123 lockstep sites remain *mostly*
+safe; the exception is the function-typed parameter.
+
+~~**B2a narrows the target and says why.** Its 123 closed-row lockstep sites need no mutation loop:
+a closed row admits exactly one width~~ — an implementation must *equal* its ABI field's row, not be a
 subset or superset — so there is no band where two answers type-check, and both rows it changed were
 mutation-tested and are load-bearing. **The loop belongs on the 180 function rows instead**, where a
 *wider* row type-checks fine. That is the silent band B1's three known over-widenings live in
