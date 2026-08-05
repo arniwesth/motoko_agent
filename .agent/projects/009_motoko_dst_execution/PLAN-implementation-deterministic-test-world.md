@@ -2446,6 +2446,27 @@ was already absorbing driver overhead the generator never authored** — the che
 budget against a log the DRIVER also writes into. D3 widened the driver's share until the slack ran
 out.
 
+**A THIRD TARGET IS RED AND WI-D3'S REPORT DOES NOT MENTION IT — found at review, and it has a
+counterexample to the report's own stated basis.** `make smoke_parity` was green through D2 and is red
+at HEAD. `make dst` therefore has **five** red targets, not the two this series has carried:
+`corpus_pr`, `seeded_generator`, **`smoke_parity`**, `test_coverage`, `test_coverage_selftest` — and
+its ✓ rows fall **831 → 701**, because an aborting target stops producing rows rather than reporting
+failures.
+
+The chain, measured: `scripts/smoke_v2_compaction_full_loop.ail` drives the **scripted** world through
+`run_v2_with_scripted_ports`, and its compaction behaviour depends on `test/tiny`'s context limit —
+**which is in `.motoko/model-catalog.json` at 100.** With `resolve_context_limit` routed and the
+fixture's `files` table empty, it now resolves to **0**, compaction never fires structurally, and the
+parity harness's `grep -q '"type":"compaction_extension".*"note":"structural:'` finds **zero** where
+it requires one. The adjacent `msg_count":14` assertion still passes, so the target fails on one
+clause of two.
+
+**D3's stated basis for believing this safe was:** *"The DST fixtures did not depend on the VALUES —
+their models are absent from the catalogue and resolve to 0."* **`test/tiny` is not absent.** The
+claim held for the fixtures checked and there was a fixture that was not checked. **This is S13's
+lesson in a new place: `make world_state`, `discovery`, `strict_replay` and `compaction_dst` were all
+run and all pass; the target that broke is one none of them covers.**
+
 **The repair is named, measured and deliberately not taken:** `session_policy_init` already resolves
 the limit into `policy.step.compaction.context_limit` and the four `c2_loop` sites recompute it;
 reading the policy instead takes a run from 12–19 resolutions to one. A temporary assertion reported
