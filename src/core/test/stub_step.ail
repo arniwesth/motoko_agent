@@ -12,7 +12,7 @@
 -- with deny_all_rt() so the tool calls don't actually run.
 module src/core/test/stub_step
 
-import std/ai (step, stepWithCache, stepWithStream, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk, ContentDelta)
+import std/ai (step, stepWithCache, stepWithStream, stepWithStreamRecorded, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk, ContentDelta)
 import std/trace as Trace
 import std/clock (now)
 import std/io (readLine)
@@ -135,11 +135,30 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
   [{ position: "system", ttl: "ephemeral" }]
 }
 
--- This is the one closure the recorded-stream adoption has to fill: chunks are
--- handed to `on_chunk` and then discarded here, one layer above `std/ai`, so
--- the emission log is empty until an API that returns the recorded stream
--- lands. Widening the port first (WI-A1) is what shrinks that adoption to this
--- closure instead of a migration.
+-- WI-C1: this is the one closure the recorded-stream adoption had to fill, and
+-- it is filled. `stepWithStreamRecorded` (AILANG v0.33.0) fires `on_chunk` at
+-- each chunk's arrival exactly as `stepWithStream` did, and ALSO returns the
+-- ordered chunks beside the final outcome. Widening the port first (WI-A1) is
+-- what shrank that adoption to this closure instead of a migration.
+--
+-- THE ONE THING NOT TO WRITE HERE, and it type-checks: do not `match` on
+-- `rec.outcome` and rebuild the exchange per branch. `chunks` is populated on
+-- BOTH outcomes — the API's own docstring says a stream that fails part-way
+-- still returns every chunk observed before the failure — and the natural
+-- error branch drops them. That version compiles, passes `check_core` and
+-- passes `driver_only`, and defeats exactly the clause D1 names:
+-- partial-stream-then-error parity. `rec.outcome` is threaded through
+-- unmatched so there is no branch in which the chunks can be lost.
+--
+-- THAT IS GUARDED, NOT MERELY WRITTEN CORRECTLY ONCE. `make recorded_stream`
+-- (WI-C2) drives THIS closure against a real native SSE stream that fails
+-- part-way, and its `C1 err_branch_keeps_chunks` row asserts the emission log
+-- is still non-empty on the `Err` outcome. Measured against the mutant above:
+-- `ailang check` green, `make check_core` 52/52, `make driver_only` exit 0,
+-- and every substrate row of the C2 probe green — because those all watch
+-- `std/ai` rather than this closure. Only the adoption rows go red, and only in
+-- partial_error mode. If you are reading this because you want to restructure
+-- the closure, run that target; nothing else in the tree can see the defect.
 --
 -- It is also stateless, so it returns its input state unchanged. That identity
 -- transition is D1's specified answer, not a decision left to construction sites.
@@ -147,8 +166,8 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, IO} {
   let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
     func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
-      let result = stepWithStream(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
-      { emissions: [], result: result, next_state: state }
+      let rec = stepWithStreamRecorded(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
+      { emissions: rec.chunks, result: rec.outcome, next_state: state }
     };
   -- The live clock: read ambient wall time, return the world unchanged. The
   -- world's `clock_ms` is ignored here by design — D1's identity transition —

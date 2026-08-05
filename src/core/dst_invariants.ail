@@ -75,9 +75,14 @@
 -- D6.4 names as its explicit exception — streams — through
 -- `ExecutionUnderTest.emissions`.
 --
--- That channel is `ProviderExchange.emissions`, which is `[]` on every path
--- today (`live_ports` returns it unconditionally empty until the recorded-stream
--- API lands, Milestone B). Per S8's complement, a check whose trajectory never
+-- That channel is `ProviderExchange.emissions`. WI-C1 made it non-empty on a
+-- live exchange — `live_ports` adopted `stepWithStreamRecorded` — so it is no
+-- longer `[]` on every path. THE REASON THIS PARAGRAPH SURVIVES IS UNCHANGED:
+-- the driver still has no consumer for the field (`session.ail`'s
+-- `exchange.emissions` goes nowhere until WI-C3 builds D6.4's stream-parity
+-- reader), and the deterministic adapters that could supply a replayable log
+-- still report none. So a REAL RUN still cannot produce the executions this
+-- check needs to select among. Per S8's complement, a check whose trajectory never
 -- enters its branches certifies nothing and reads identically to one that does
 -- — so `stream_parity_findings` is exercised by CONSTRUCTED executions in the
 -- acceptance script (omission, duplication, reordering, content drift), not by
@@ -632,7 +637,7 @@ export type ParityGap = { variant: string, why: string }
 
 export pure func parity_gap_reasons() -> [ParityGap] {
   [{ variant: "StreamDelta",
-     why: "D6.4's NAMED EXCEPTION. The provider callback's closed effect row means the projection happens DURING the call and any append happens after it returns, so a shared transition is impossible by construction (D1). The obligation is discharged by stream_parity_findings instead — which needs a non-empty emission log, and live_ports returns emissions: [] on every path until the recorded-stream API lands (Milestone B). Externally blocked, not deferred by choice." },
+     why: "D6.4's NAMED EXCEPTION. The provider callback's closed effect row means the projection happens DURING the call and any append happens after it returns, so a shared transition is impossible by construction (D1) — that half is permanent. The obligation is discharged by stream_parity_findings instead, which needs a non-empty emission log. NO LONGER EXTERNALLY BLOCKED: AILANG v0.33.0 shipped stepWithStreamRecorded and WI-C1 adopted it, so live_ports now returns the ordered observed chunks (proven by `make recorded_stream`, D1's five clauses on both outcomes). What remains is OURS and is deferred by choice: the driver has no consumer for the field, and building D6.4's stream-parity reader over it is WI-C3." },
    { variant: "CostExhausted",
      why: "Emitted on the cost-cap terminal path immediately before the finalizer. Closing it is the same one-line append the DoneEvent took and it is NOT blocked; it is out of this item's scope only because it is a second terminal path and the item that changes a terminal path should change one at a time." },
    { variant: "Dp7VerifierRejected",

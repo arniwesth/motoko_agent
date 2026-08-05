@@ -70,7 +70,7 @@
 --                                    under plan rule S2, because
 --                                    ExtPorts.clock_now's zero-argument shape
 --                                    admits no world capture on this pin.
---   src/core/test/stub_step.ail:163  live_ports' clock adapter.
+--   src/core/test/stub_step.ail:182  live_ports' clock adapter.
 --
 -- ANSWER: conformant, but only when the site is DECLARED and INSTRUMENTED.
 --
@@ -105,7 +105,7 @@
 -- reaches them. Containment, falsifiably.
 --
 -- THE SUB-QUESTION, answered the same way rather than scoped away.
--- `stub_step.ail:163` sits inside `live_ports`, which is not the adapter a
+-- `stub_step.ail:182` sits inside `live_ports`, which is not the adapter a
 -- deterministic run uses, so it is tempting to say it is not in a deterministic
 -- profile's reachable set at all. That is rejected. D4's "profile-reachable" is
 -- INSTALLATION-scoped, not execution-scoped: a site in a core module is in the
@@ -1247,7 +1247,7 @@ pure func test_declared_unrouted_site_needs_an_instrument() -> bool
     let d: ProfileDefinition = { fixture_base() |
       unrouted_reachable_sites: [
         { site_key: "src/core/session.ail:851", instrument: "", why_unroutable: "S2" },
-        { site_key: "src/core/test/stub_step.ail:163", instrument: "make world_state", why_unroutable: "live adapter" }
+        { site_key: "src/core/test/stub_step.ail:182", instrument: "make world_state", why_unroutable: "live adapter" }
       ] };
     has_rule(validate_routing(d), "unrouted-site-without-instrument")
   }
@@ -1261,7 +1261,7 @@ pure func test_stale_declaration_is_rejected() -> bool
     let d: ProfileDefinition = { fixture_base() |
       unrouted_reachable_sites: [
         { site_key: "src/core/session.ail:851", instrument: "make world_state", why_unroutable: "S2" },
-        { site_key: "src/core/test/stub_step.ail:163", instrument: "make world_state", why_unroutable: "live adapter" },
+        { site_key: "src/core/test/stub_step.ail:182", instrument: "make world_state", why_unroutable: "live adapter" },
         { site_key: "src/core/gone.ail:1", instrument: "make world_state", why_unroutable: "moved" }
       ] };
     let rs = validate_routing(d);

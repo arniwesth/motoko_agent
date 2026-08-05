@@ -983,7 +983,7 @@ export pure func unreachable_by_search() -> [UnreachableClass] {
      why: "the generator's tool_args are always well-formed JSON, so the malformed-arguments branch is reachable by a scenario that writes one and is driven by no seed. Measured: 0 of 260" },
    { class_id: "provider_partial_stream_then_error",
      status_id: "unreachable-structurally",
-     why: "`live_ports` returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can produce a non-empty emission log to compare a projection against; the retry/finalize half is reachable, the PARITY half is not observable. EXTERNALLY BLOCKED" }]
+     why: "The retry/finalize half is reachable; the PARITY half is still not observable BY SEARCH, but the reason changed at WI-C1 and it is no longer external. `live_ports` now returns the ordered observed chunks (AILANG v0.33.0 stepWithStreamRecorded), so a LIVE exchange produces a non-empty emission log — measured against a real partial stream by `make recorded_stream`. Two of our own things still stand between that and a seeded run: the deterministic adapters this corpus drives report emissions: [] even when they play chunks, and the driver has no consumer for the field. Both are WI-C3's. NOT externally blocked" }]
 }
 
 export pure func unreachable_class_ids() -> [string] {

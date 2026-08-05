@@ -231,11 +231,28 @@ find . -type d -name cache -path '*.ailang*' \
      -not -path './ailang/*' -not -path './tools/code-graph/*' -exec rm -rf {} +
 ```
 
-**Two exclusions, and both are load-bearing.** `./ailang/` is a git-ignored clone of the compiler, not
-ours. **`./tools/code-graph/` holds 34 committed `.gob`/`.json` files under two
-`.ailang/cache` fixture directories that are deliberate test fixtures**, read by
-`test_source_index.py` and `test_precision_recall.py` — an unguarded sweep **deletes tracked
-fixtures and breaks those tests.** B2a's proposed version of this rule omitted the exclusion.
+**Two exclusions. `./ailang/` is load-bearing** — a git-ignored clone of the compiler, not ours.
+
+**The `./tools/code-graph/` exclusion's stated rationale was WRONG, and WI-C1 corrected both the
+rationale and the condition that made it matter.** The claim was that the `.ailang/cache` directories
+there hold "deliberate test fixtures, read by `test_source_index.py` and `test_precision_recall.py`".
+**They are not read by anything** — measured: both tests read the fixtures' `.ail` SOURCE files
+(`build_source_index` walks the fixture directory; `test_sample3_precision_recall` reads
+`fixtures/sample3`), and no Python in `tools/code-graph` mentions `.ailang` or `cache` at all.
+
+What the caches actually were is **accidentally committed build output**, twice: B2a's `7bca61c`
+added 34 files, B2b's `eed1d7c` deleted them, and B4's `072bb05` added 34 again — because
+`.gitignore`'s `!tools/code-graph/**` re-included the whole subtree, so a sweep's compile output
+showed up as untracked files asking to be committed. **That inverted this very rule**: the exclusion
+written to protect fixtures was instead protecting tracked stale caches, which is what S9 exists to
+condemn. And a tracked cache is the one file class that *does* create the cross-branch hazard this
+rule's own correction says does not exist — a fresh checkout starts with a stale cache it never
+built.
+
+**Fixed at WI-C1 (`10b9583`):** `tools/code-graph/**/.ailang/` is now ignored explicitly and the 34
+files are untracked. **Keep the exclusion anyway** — it saves recompiling fixtures on every sweep —
+but it now means only what it says, and there are **no tracked `.ailang/cache` paths anywhere in the
+repo.** B2a's proposed version of this rule omitted the exclusion.
 
 **Correcting B2a's framing, because it is alarming and wrong in the direction that matters:** its
 report says the caches "are TRACKED IN GIT … they travel between branches … a phantom no per-session

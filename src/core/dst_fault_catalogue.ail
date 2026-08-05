@@ -330,7 +330,7 @@ export pure func catalogue_coverage_gaps() -> [CoverageGap] {
     {
       class_id: "provider_partial_stream_then_error",
       form: "the PARTIAL-STREAM half of the class",
-      why: "live_ports returns emissions: [] unconditionally until the recorded-stream API lands (Milestone B), so no run can currently produce a non-empty emission log to compare the projection against. The retry/finalize half of the class is reachable; the parity half is not observable yet, and D6.4's stream-parity invariant that would consume it is WI-A14's."
+      why: "The retry/finalize half of the class is reachable; the parity half is not observable yet. WI-C1 removed the external half of that: live_ports adopted AILANG v0.33.0's stepWithStreamRecorded, so a live exchange now returns the chunks observed before a mid-stream failure — the exact partial-stream-then-error case, proven against a real broken SSE stream by `make recorded_stream`. What is left is ours: nothing in the driver consumes ProviderExchange.emissions, and the deterministic adapters a seeded run drives still report []. D6.4's stream-parity invariant that would consume it is WI-C3's."
     },
     {
       class_id: "approval_deadline_exceeded",

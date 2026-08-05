@@ -349,9 +349,26 @@ export pure func empty_world_state() -> WorldState {
 -- recover from. The ordering rule is: widen the port before adopting whatever
 -- fills it, because the port is where the information is thrown away.
 --
--- Every construction site returns `emissions: []` today, so this widening is
--- behaviour-preserving; what it buys is that adopting a recorded-stream API
--- later fills exactly one closure, in `live_ports`.
+-- WI-A1 shipped this with `emissions: []` at every construction site, which
+-- made the widening behaviour-preserving; what it bought is that adopting a
+-- recorded-stream API later filled exactly one closure. WI-C1 spent that: as of
+-- AILANG v0.33.0's `stepWithStreamRecorded`, `live_ports` returns the ordered
+-- observed chunks, and the prediction that the adoption would be one closure
+-- held exactly — two lines and one import symbol.
+--
+-- SAY WHAT IS TRUE NOW, WHICH IS NARROWER THAN "UNBLOCKED". The log is
+-- PRODUCED; it has NO DRIVER CONSUMER. `session.ail`'s `exchange.emissions`
+-- still goes nowhere, and D6.4's stream-parity invariant that would read it is
+-- WI-C3's. A non-empty log and a consumed log are different claims, and only
+-- the first is true here.
+--
+-- The scripted construction sites still return `[]`, and for 17 of the 18 that
+-- is correct — an error path or a terminal step emits nothing. The two that
+-- call `play_chunks` are the exception worth knowing about: they PLAY chunks
+-- through `on_chunk` and then report none, which is this field's own loss
+-- channel one layer down. That is the deterministic half of D1's parity claim
+-- and it belongs to the item that builds the reader, not to the one that
+-- filled the producer.
 --
 -- The rule is scoped to ports with a *demonstrated* loss channel, and today
 -- that is exactly this one field: `approval_read` is a synchronous resolution
@@ -710,7 +727,7 @@ export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecu
 --
 --   * all three class mappings are then one screen apart, so "which fields of
 --     a decision reach the world" is answerable in one place;
---   * `stub_step.ail:163` is an A5 attribution anchor (re-derived at WI-B4; it was :161 until WI-B2b's threading moved it). Putting this here means
+--   * `stub_step.ail:182` is an A5 attribution anchor (re-derived at WI-B4; it was :161 until WI-B2b's threading moved it). Putting this here means
 --     `stub_step` widens ONE existing import line and adds no import
 --     statement, so the anchor does not move. Cluster 8 paid a five-artifact
 --     cascade including a mandatory `driver_only` re-issue for a line that
