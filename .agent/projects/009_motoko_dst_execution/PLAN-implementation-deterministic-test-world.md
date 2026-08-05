@@ -189,6 +189,12 @@ defect D6.4 names — leaves `stream_parity_dst` COMPLETELY GREEN**, and is caug
 WIRE (what the callback projected) against the returned trace (what the driver appended), which is out
 of process and lives in `run_stream_parity_wire.sh`.
 
+**Reproduced independently at review**, because a claim this load-bearing should not rest on one
+run: a callback that drops one delta class leaves the in-process gate green with **0 findings**
+across all sixteen families on the recording subject, while the wire gate goes red on three rows at
+**`wire_deltas=10` against `trace_deltas=14`** — including the fixture-adequacy row that exists to
+make de-duplication visible.
+
 **Two consequences, and the second is the transferable one.** First, an in-process check built this
 way is still worth having — it tests that every branch carries both channels forward, which is S12's
 identity-transition class on a pair of channels, and WI-C3's mutant A reddens 5 rows with it. Second,
@@ -227,6 +233,15 @@ file path, so a bare `ailang check` reports MOD010 on all of them. Measured at W
 sweep reads **146 pass / 93 fail**, the flagged one **222 / 17**. That is a false red four times larger
 than the fifth frontier B4 found, and it would consume an item's remaining budget chasing a break
 nobody made. The sweep is:
+
+**And the MECHANISM, measured at review and worth more than the flag: a WARM CACHE MASKS `MOD010`
+COMPLETELY.** Same file, same command — `packages/motoko-ext-abi/types.ail` passes cache-warm
+without the flag, 12 of 12 sampled package files fail `MOD010` cache-cold without it, and 12 of 12
+pass cache-cold with it. **So the flag's necessity appears ONLY under the discipline S9 and S13
+impose**, which is exactly why three items measured sweeps without ever needing it. Cache-warm and
+unflagged fails *green*; cache-cold and unflagged fails *red* by 76 files — **opposite directions,
+which is why neither reads as a defect on its own**, and only cache-cold with the flag is the real
+number.
 
 ```bash
 for f in $(find src scripts packages tools cmd -name '*.ail' | sort); do
@@ -2170,6 +2185,23 @@ block the name:
   scripted `play_chunks` sites still report `emissions: []` while playing chunks. The gap moved from
   producer to consumer. **WI-C3 is what changes that sentence**, and it is now unblocked in a way it
   has never been: the thing it consumes exists.
+  **C3 landed 2026-08-05** (`b145eef`; ~72 min) and **took the BRIDGE option**:
+  `dst_execution.execution_of` builds an `ExecutionUnderTest` from a real run, and
+  `make stream_parity` evaluates **all sixteen D7 families over an execution a run produced** — the
+  first time in this project that any family has been checked against anything but a constructed
+  fixture. **D6.4's named stream exception is discharged**; `StreamDelta` left `d64_gap_register` by
+  being **appended**, not reclassified, and the register went 14 → 13. **D6.4's general obligation is
+  NOT discharged** — twelve of the remaining thirteen are the tool-dispatch fold and the terminal
+  paths.
+  **The finding that resized the item, and it falsifies what the handoff told C3 to expect:**
+  `ledger_emit` writes the wire and calls `emit_trace_event`; it never calls `ledger_append`, which is
+  the only thing that puts a record in the returned `LedgerTrace`. **So the returned trace held ZERO
+  `StreamDelta` records on every path in the driver's history** — the register said so at the site the
+  whole time. It was never "the log has no reader": **both sides were empty, and a parity check over
+  two empty lists is green.** The trace append was therefore a precondition C3 discovered, not a bonus
+  it picked up — and it was *unwritable* before C1, because there was nothing to append from.
+  **The remaining honest gap:** fifteen families run on a real run because they ride along with parity
+  in one script, on one profile, with two adapters — not because anything wires them deliberately.
 
 ## Traps carried forward
 
@@ -2195,6 +2227,21 @@ branch is not HEAD state; the `arniwesth/ailang` fork is not the upstream gate �
   the anchor* is not available to a comment whose job is to be read before the thing it describes, and
   avoiding the cascade would mean writing documentation in the wrong place. **Three consecutive items
   have now paid this; the case for a coordinate-independent anchor is no longer speculative.**
+  **WI-C3 refutes the rest of the claim and adds the operational rule.** C1 moved an anchor with a
+  comment; C3 moved six with a **record field** and an **extracted function**, neither of which has a
+  below-the-anchor version — a record's fields have an order, and a converter must be in scope before
+  its caller. **Four consecutive items have now paid it, and C3 paid it TWICE in one item**: the second
+  payment was caused by three lines of prose added after the first, and was found by `make dst` rather
+  than by remembering. **The cascade is not idempotent across an item — finish every source edit,
+  including comments, BEFORE running it.** Two consumers exist that no checklist in this project names:
+  the `predicate-anchors` script itself, and `attribution_table_dst`'s `omitted_site()` fixture. Both
+  were found by a gate rather than by search.
+- **A tripwire planted for a future item WORKS, and WI-C3 is the first evidence.** WI-A1 spent one line
+  asserting `emission_count == 0` in `phase_c2_wiring_scenarios`, with a written prediction of what its
+  failure would mean. It fired on the first `make dst` after C3 populated the log — the item it was
+  planted for — and was answered by *strengthening* the row rather than relaxing it. **A pin edited to
+  match whatever the code now does is not a pin.** This is the cheapest instrument in the project's
+  inventory and it should be planted deliberately rather than as a byproduct.
 
 ## Out of scope
 
