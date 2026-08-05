@@ -1,5 +1,12 @@
 # 2026-08-05 Cluster 27: WI-D3 — the filesystem world class, and the last red row
 
+> **CORRECTED AT REVIEW, and the correction is on the headline.** A reviewing session
+> (`54abc1b`) found a THIRD red target this session did not report — `make smoke_parity` — and a
+> counterexample to a basis this report stated. Both are recorded in place below rather than edited
+> away. **Row 10's own producer is green; C4's TABLE was NOT green at HEAD `14ba6f9`**, because
+> `corpus_pr` is rows 4 and 11's producer and it aborts before printing their evidence. `smoke_parity`
+> is repaired in a follow-up commit; `corpus_pr` and `seeded_generator` are not.
+
 ## Context
 
 Branch: `arniwesth/mot-66-close-acceptance-row-10`.
@@ -12,7 +19,7 @@ session of project 009, **third and last of C4's post-gate work list**. Pin **v0
 production change — `Ports` gains a seam, `WorldState` gains a table, one module gains two parameters.
 It is in the CASCADE: routing a function the driver calls at eight sites moved four environment keys
 into the recorded interaction log, and six separate artifacts are keyed to that log or to the driver's
-env surface. Two of them are still red; see below.
+env surface. Three targets went red; two are still red at the end of the session.
 
 **Grounding was clean.** `git status` clean at `77c44d3`, branch name matched the handoff.
 
@@ -28,12 +35,23 @@ env surface. Two of them are still red; see below.
 | S13 whole-tree sweep, cache-cold, `AILANG_RELAX_MODULES=1` | **met** — 226/17 of 243, failing set identical to baseline |
 | S9: every live cache cleared, `~/.ailang/cache/registry` untouched | **met** |
 | S17: mutation loops restore by `cp` | **met** — four mutants, each verified byte-identical after restore |
-| Green table is not an adopted name, D10's two conditions named | **met** |
+| Green table is not an adopted name, D10's two conditions named | **met** — and the table is not green either |
 
 ## THE ANSWER
 
-**Acceptance row 10 is GREEN. C4's table is 11 of 11. The name is not adopted and this item does not
-adopt it.**
+**Acceptance row 10's own producer is GREEN — `make world_state` enforces five two-sided poison pairs.
+The TABLE is not green at `14ba6f9`, and this report originally claimed it was.**
+
+**The claim was wrong for a reason worth stating exactly:** a row is only as green as the target that
+produces its evidence, and this item turned `corpus_pr` red. `corpus_pr` is rows 4 and 11's producer;
+it aborts at the WI-A15 commit gate before printing `every expected class was OBSERVED`, so those two
+rows have no passing producer. **They were green at D2 and this item took them away.** Counting row 10
+as closed and then adding up the other ten from a previous item's output is exactly the
+stale-number-quoted-forward class this project has carried five items running — committed here by the
+item that had just finished writing about it.
+
+**The name is not adopted, and that conclusion is unchanged** — it never rested on the table being
+green, and D10's gate re-run has not happened.
 
 | | before | after |
 |---|---|---|
@@ -41,7 +59,7 @@ adopt it.**
 | `resolve_context_limit` sites reading the host | 8 | **0** |
 | `Ports` seams | 5 | **6** |
 | `driver_env_keys()` | 7 | **11** |
-| C4's acceptance rows holding | 10 of 11 | **11 of 11** |
+| C4's acceptance rows holding | 10 of 11 | **10 of 11** — row 10 gained, rows 4 and 11 lost their producer |
 
 ## The finding: the poison pair is blind to the thing the world is for
 
@@ -80,7 +98,15 @@ Three measurements, taken at HEAD, before a line of production code moved.
 2. **AILANG gates on PERFORMED, not DECLARED.** The probe dispatches seeded tools through `world_tool`,
    which **declares** `! {IO, Process, FS}`, and completes with `FS` withheld. The declared row says
    the opposite, and the whole pair rests on the interpreter's behaviour rather than the row's.
-3. **The deterministic runs were reading host files today**, and one suite was reading the PROCESS
+3. **The deterministic runs were reading host files today** — and this session UNDER-COUNTED which
+   ones, which is the item's own worst finding. The report said *"the DST fixtures did not depend on
+   the VALUES — their models are absent from the catalogue"*. **`test/tiny` is in the catalogue, at
+   100**, and `scripts/smoke_v2_compaction_full_loop.ail` drives the SCRIPTED world on it through
+   `run_v2_with_scripted_ports`. Its whole fixture is the header's "100 tokens = ~400 chars"
+   arithmetic. I saw `test/tiny` early in the session, reasoned that that script "runs the live-ish
+   path", and never checked — it does not. **The claim held for the fixtures checked and there was a
+   fixture that was not checked.** Also true, and separately:
+   one suite was reading the PROCESS
    ENVIRONMENT: `compaction_dst`'s recipe set `MOTOKO_MODELS_FILE` to a fixture catalogue and
    `context_usage` read both the variable and the file ambiently, so `long_qwen_compaction_dst`'s
    context limit was a property of how the target was INVOKED. Both halves were load-bearing — with
@@ -188,9 +214,29 @@ reporting the old ones after every `.ail` consumer was updated.
   `run_report`, `anchors` (10/10), `driver_only`, `profile_definition`, `attribution_table` (v9),
   `ledger_parity`, `stream_parity`, `invariants`, `event_vocabulary`, `terminal_trace`.
 
-### TWO TARGETS ARE RED AND WERE NOT REPAIRED
+### THE RED SET WAS UNDER-REPORTED: THREE TARGETS, NOT TWO
 
-**`make seeded_generator` and `make corpus_pr`**, both green at HEAD. One cause.
+**`make seeded_generator`, `make corpus_pr` and `make smoke_parity`** were all green at HEAD and all
+red at `14ba6f9`. `make dst` therefore had **five** red targets, not the two this series has carried,
+and its ✓ rows fell **831 → 701** — because an aborting target stops producing rows rather than
+reporting failures, so the missing evidence looks like nothing at all. **S19's shape again: a check
+that vanishes is indistinguishable from a check that passes.**
+
+**How the third was missed, stated plainly because the method is the lesson.** Final verification ran a
+HAND-PICKED list of fifteen targets rather than `make dst` to completion. The list was assembled from
+the artifacts this item had touched, so it could only ever confirm what the author already suspected.
+The full run that would have caught it was started three times and killed each time for being stale
+against ongoing edits — and then never restarted before reporting. **`make world_state`, `discovery`,
+`strict_replay` and `compaction_dst` all pass; the target that broke is one none of them covers, which
+is S13's lesson in a new place.**
+
+`smoke_parity` is REPAIRED in the follow-up: `scripted_ports` gains a
+`run_v2_with_scripted_world` sibling and the fixture declares `test/tiny` at 100 and
+`anthropic/claude-sonnet-4-6` at 200000 in its own `files` table, the same move `long_qwen` needed.
+`totally-unknown-model` is deliberately left out of that table so test 4 asserts what it says rather
+than passing because no catalogue was found.
+
+**`seeded_generator` and `corpus_pr` remain red.** One cause, and a different one.
 
 **Routing puts the driver's config reads into the RECORDED INTERACTION LOG** — 15 extra interactions on
 the shortest run, up to 95 on the measured suites, because the driver re-resolves a static value on
@@ -234,7 +280,9 @@ this item pinned.
 
 ## THE NAME
 
-**C4's table is green: eleven of eleven. That has not been true before in this project.**
+**Row 10's producer is green. C4's TABLE IS NOT — rows 4 and 11 lost their producer to this item's
+own regression, and the sentence "eleven of eleven" was written before `make dst` was run to
+completion.**
 
 **IT DOES NOT ADOPT THE NAME.** D10 has two conditions: the acceptance test passing for a documented
 baseline profile — the table is green, but **re-running it is a separate act**, which is precisely why
@@ -242,7 +290,8 @@ C4's item exists — and the project-007 definition/taxonomy ADR being accepted,
 **`Accepted 2026-07-26`** and has been satisfied for weeks. The outstanding condition is the gate
 re-run, not the ADR.
 
-**Eleven items have now declined the name and this is the eleventh.**
+**Eleven items have now declined the name and this is the eleventh** — and this one would have had
+to decline it anyway, because the table it claimed was green was not.
 
 And a green gate for `driver_only` is a green gate for `driver_only`. Two of the eleven passes remain
 **vacuous in their installed-extension clauses** and per D10 transfer to no second profile. Row 10
