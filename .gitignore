@@ -55,5 +55,12 @@ code-graph/
 tools/code-graph/.out/
 tools/code-graph/**/__pycache__/
 tools/code-graph/.pytest_cache/
+# The two un-ignores above re-include EVERYTHING under tools/code-graph/, which swept
+# AILANG compile caches into git twice (B2a's 7bca61c, WI-B4's 072bb05 — 34 files each).
+# A tracked compile cache is the worst file class in this repo: a stale .ailang cache
+# produces phantom type errors, and a fresh checkout would start with one it never built.
+# Nothing reads them — test_precision_recall.py and test_source_index.py read the
+# fixtures' .ail sources, not the cache.
+tools/code-graph/**/.ailang/
 .venv-marimo/
 __marimo__
