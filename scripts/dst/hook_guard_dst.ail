@@ -1,0 +1,251 @@
+-- scripts/dst/hook_guard_dst.ail
+--
+-- WI-C5's acceptance for `routing_violation_at`'s production call site.
+--
+-- The plan puts this in C5's acceptance rather than letting it be assumed from
+-- load-time validation, and the reason is the sentence worth keeping: **an
+-- exclusion checked only at load time is an exclusion nothing enforces at
+-- dispatch.** So these rows drive `dst_hook_guard.guarded_dispatch_tool_handle`
+-- — the thing production would call — rather than `routing_violation_at`
+-- directly. `scripts/dst/profile_definition_dst.ail` already tests the
+-- predicate in isolation; testing it twice would not be this file's excuse.
+--
+-- That distinction is S14's, one level down: a direct probe of the check is not
+-- evidence that the DISPATCH consults it.
+--
+-- THE FIXTURE IS SYNTHETIC AND THAT IS DISCLOSED. No profile in this tree can
+-- reach this guard today — `driver_only` installs nothing, and no extension is
+-- installable while `ExtensionHooks.on_budget_plan` carries the ABI's closed
+-- `! {Env, FS}` row. These rows therefore establish that the MECHANISM works,
+-- not that any shipping profile is protected by it. See the header of
+-- `src/core/dst_hook_guard.ail`.
+
+module scripts/dst/hook_guard_dst
+
+import std/io (println, exit)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/json (jo)
+
+import src/core/config (VerificationConfig)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/phase_vocab (LedgerTrace, empty_ledger_trace)
+import src/core/dst_result (DstResult, RunFailed, ReplayMetadata, harness_failure_kind_name)
+import src/core/dst_profile (ProfileDefinition)
+import src/core/dst_hook_guard (guarded_dispatch_tool_handle)
+import src/core/dst_attribution_table (table_identity)
+import src/core/dst_fault_catalogue (fault_catalogue, conditional_class_ids)
+import src/core/dst_profile (waivers_from)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtRuntime, ExtensionHooks, ToolHandleOutcome,
+  BudgetPlan, BudgetPatch, PreStepOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  ToolPolicyDecision, ToolHandleDecision, PreStepDecision,
+  ResponseInterceptDecision, FinalizeDecision,
+  PassThrough, Allow, Delegate, Handled, NoIntercept, NoDecision,
+  empty_ext_world
+)
+
+-- ---------------------------------------------------------------------------
+-- The extension under guard
+-- ---------------------------------------------------------------------------
+
+pure func guarded_tool() -> string { "GuardedTool" }
+pure func other_tool() -> string { "SomeOtherTool" }
+pure func guarded_ext_id() -> string { "guarded_ext" }
+
+-- The marker is the evidence that the hook BODY ran. A guard that returned the
+-- right error while still having invoked the hook would be useless — D5 exists
+-- to stop the hook's effects, not to relabel them afterwards — so the rows
+-- below assert on this marker rather than on the error alone.
+pure func ran_marker() -> string { "GUARDED-HOOK-BODY-RAN" }
+
+func guarded_hook() -> ExtensionHooks {
+  { id: guarded_ext_id(),
+    provided_tools: [guarded_tool()],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_tool_policy: \_ctx _call. Allow,
+    -- Returns `Handled` with the marker in `stdout`, so a caller can tell
+    -- "the body ran" from "the body was skipped" — the two are otherwise
+    -- indistinguishable from an `Err`.
+    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+      { decision: { Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0,
+                              stdout: ran_marker(), stderr: "", metadata: jo([]) }) },
+        next_state: ctx.world }
+    },
+    on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { { decision: { NoDecision }, next_state: ctx.world } } }
+}
+
+func rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [guarded_hook()] }, strict_mode: false, verification: v }
+}
+
+func ctx() -> ExtCtx {
+  { task: "hook_guard", step: 1, model: "m", cwd: ".", hybrid_tools: false,
+    budget: { total: 10, solver: 6, verifier: 4 }, mode: "default", workdir: ".",
+    env_server_url: "", budget_remaining: 10, history_slice: [], state_key: "k",
+    context_limit: 0, ports: noop_ext_ports(), artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), world: empty_ext_world() }
+}
+
+pure func call_for(tool: string) -> ToolCallEnvelope {
+  { id: "call-1", tool: tool, arguments: jo([]) }
+}
+
+pure func meta() -> ReplayMetadata {
+  { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
+    profile_id: "fixture_guard", profile_version: "1",
+    event_vocabulary_version: "event-vocabulary/1" }
+}
+
+-- ---------------------------------------------------------------------------
+-- Two definitions differing in ONE field, so a row that goes green cannot be
+-- green for an incidental reason (S7's shape: hold everything else constant)
+-- ---------------------------------------------------------------------------
+
+pure func definition_with(disclosures: [{ extension_id: string, covered: [string], excluded: [string] }]) -> ProfileDefinition {
+  let id = table_identity();
+  let cat = fault_catalogue();
+  { profile_id: "fixture_guard",
+    profile_version: "1",
+    installed_packages: [],
+    hook_classifications: [],
+    disclosures: disclosures,
+    adapter_boundaries: [{ boundary_id: "b", included: true, note: "n" }],
+    resource_models: [{ model_id: "m", promise: "p" }],
+    diagnostic_projections: [{ projection_id: "d", note: "n" }],
+    forbidden_capabilities: [{ capability: "Clock", instrument: "make world_state" }],
+    waived_fault_classes: waivers_from(cat, conditional_class_ids(cat)),
+    exercised_fault_classes: [],
+    attribution_ref: { source_revision: id.source_revision, content_hash: id.content_hash },
+    omitted_extensions: [],
+    unrouted_reachable_sites: [],
+    scan_roots: ["src", "packages"] }
+}
+
+pure func all_slots_but_tool_handle() -> [string] {
+  ["on_describe_tools", "on_build_system_prompt", "on_budget_plan", "on_pre_step",
+   "on_tool_policy", "on_response_intercept", "on_solver_candidate"]
+}
+
+-- EXCLUDES the gated slot.
+pure func excluding() -> ProfileDefinition {
+  definition_with([{ extension_id: guarded_ext_id(),
+                     covered: all_slots_but_tool_handle(),
+                     excluded: ["on_tool_handle"] }])
+}
+
+-- COVERS every slot. Identical in every other field.
+pure func covering() -> ProfileDefinition {
+  definition_with([{ extension_id: guarded_ext_id(),
+                     covered: all_slots_but_tool_handle() ++ ["on_tool_handle"],
+                     excluded: [] }])
+}
+
+-- ---------------------------------------------------------------------------
+-- The rows
+-- ---------------------------------------------------------------------------
+
+func outcome_stdout(o: ToolHandleOutcome) -> string {
+  match o.decision {
+    Handled(r) => r.stdout,
+    Delegate => "<delegated>"
+  }
+}
+
+-- 1. Dispatch reaching an EXCLUDED gated hook returns the typed failure, with
+--    the partial evidence D6.6 requires and WITHOUT having run the body.
+func scenario_excluded_hook_fails_closed() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let got = guarded_dispatch_tool_handle(excluding(), rt(), ctx(), call_for(guarded_tool()),
+                                         7, empty_ledger_trace(), meta());
+  let ok = match got {
+    Err(RunFailed(f)) =>
+      harness_failure_kind_name(f.kind) == "routing_violation"
+      -- The position travels, so the failure is locatable in the program that
+      -- produced it. D6.7 reserves -1 for a failure predating any interaction;
+      -- a dispatch-time violation has interactions behind it by definition.
+      && f.interaction_position == 7,
+    Err(_) => false,
+    -- The body running at all is the failure this row exists to catch: an
+    -- excluded hook that performs its effects and is labelled afterwards has
+    -- not been excluded.
+    Ok(_) => false
+  };
+  let _ = if ok then println("  ✓ dispatch reaching an EXCLUDED gated hook returns RoutingViolation at its interaction position")
+          else println("  ✗ dispatch reaching an excluded gated hook did not fail closed");
+  ok
+}
+
+-- 2. The SAME call under a definition that covers the slot proceeds AND the
+--    body runs. Without this row, a guard that failed everything closed would
+--    pass row 1 — which is S7's "a guard that fires too much" exactly.
+func scenario_covered_hook_proceeds() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let got = guarded_dispatch_tool_handle(covering(), rt(), ctx(), call_for(guarded_tool()),
+                                         7, empty_ledger_trace(), meta());
+  let ok = match got {
+    Ok(o) => outcome_stdout(o) == ran_marker(),
+    Err(_) => false
+  };
+  let _ = if ok then println("  ✓ the SAME call under a COVERING definition proceeds and the hook body runs")
+          else println("  ✗ a covered gated hook was blocked, or its body did not run");
+  ok
+}
+
+-- 3. The exclusion is DISPATCH-scoped, not registry-scoped. The same excluding
+--    definition, a tool this hook does not provide: `first_handle` would never
+--    invoke it, so the guard must stay silent.
+--
+--    This row is what pins `dst_hook_guard.provides_tool` to
+--    `ext/runtime.first_handle`'s gate. The guard mirrors that predicate, and a
+--    mirror that drifts fails OPEN — it would report a violation for a hook the
+--    fold never dispatches, or miss one it does.
+func scenario_unreached_hook_is_not_a_violation() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let got = guarded_dispatch_tool_handle(excluding(), rt(), ctx(), call_for(other_tool()),
+                                         7, empty_ledger_trace(), meta());
+  let ok = match got {
+    Ok(o) => outcome_stdout(o) == "<delegated>",
+    Err(_) => false
+  };
+  let _ = if ok then println("  ✓ an EXCLUDED hook the call never reaches is not a violation — the check is dispatch-scoped")
+          else println("  ✗ the guard fired for a hook this call would never dispatch");
+  ok
+}
+
+-- 4. An empty install list cannot violate. This is `driver_only`'s shape, and
+--    the row states the vacuity as a claim rather than leaving it in a comment.
+func scenario_empty_install_is_vacuous() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let got = guarded_dispatch_tool_handle(definition_with([]), rt(), ctx(), call_for(guarded_tool()),
+                                         7, empty_ledger_trace(), meta());
+  let ok = match got {
+    Ok(o) => outcome_stdout(o) == ran_marker(),
+    Err(_) => false
+  };
+  let _ = if ok then println("  ✓ a definition disclosing nothing excludes nothing — vacuous for driver_only, as WI-A10 said")
+          else println("  ✗ an empty disclosure list produced a routing violation");
+  ok
+}
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let _ = println("hook_guard — routing_violation_at's production call site (WI-C5)");
+  let r1 = scenario_excluded_hook_fails_closed();
+  let r2 = scenario_covered_hook_proceeds();
+  let r3 = scenario_unreached_hook_is_not_a_violation();
+  let r4 = scenario_empty_install_is_vacuous();
+  let all = r1 && r2 && r3 && r4;
+  let _ = println("");
+  let _ = println("  i SYNTHETIC FIXTURE. No profile in this tree can reach this guard today:");
+  let _ = println("    driver_only installs nothing, and no extension is installable while");
+  let _ = println("    ExtensionHooks.on_budget_plan carries the ABI's closed ! {Env, FS} row.");
+  let _ = println("    These rows establish the MECHANISM, not that a shipping profile uses it.");
+  if all then println("hook_guard: 4 passed, 0 failed")
+  else { let _ = println("hook_guard: FAILED"); exit(1) }
+}

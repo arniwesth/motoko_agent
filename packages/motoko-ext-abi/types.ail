@@ -127,6 +127,19 @@ export type AiStepOutcome = {
   next_state: ExtWorld
 }
 
+-- The result of a world-threading `clock_now`. WI-C5, and it is the SAME shape
+-- as `AiStepOutcome` above and `ClockReading` in `src/core/ports.ail` for the
+-- same reason: a record, so a later effect class adds a field rather than
+-- restructuring every match site (plan decision P1).
+--
+-- `next_state` is again named for D5's classifier-2 criterion rather than for
+-- taste — `tools/ext_call_inventory/derive.py` looks for that literal field
+-- name. Renaming it puts `clock_now` back in the classifier-2 set silently.
+export type ExtClockReading = {
+  now_ms: int,
+  next_state: ExtWorld
+}
+
 export type ExtPorts = {
   -- WI-B2b: takes and returns the world token. This is the widening that lifts
   -- D1's extension-model-path exclusion — `session.ext_ai_step` handed
@@ -144,7 +157,22 @@ export type ExtPorts = {
   -- successor, so both still drop one. Widening them is WI-C5's, and leaving
   -- them measured-and-named is S2: the classifier keeps reporting them.
   proc_exec: (string, string) -> string ! {IO, Process, FS},
-  clock_now: () -> int ! {Clock},
+  -- WI-C5: takes and returns the world token, exactly as `ai_step` does.
+  --
+  -- WHAT THIS WIDENING BOUGHT, precisely, because the shape and the coverage are
+  -- different questions. Before it, this field was `() -> int` — zero-argument,
+  -- and AILANG has no zero-arg lambdas in expression position on the pin, so
+  -- `session.ext_ports_of` could not write a closure capturing the world AT ALL.
+  -- Plan rule S2 therefore bound it to an ambient `now()` deliberately, choosing
+  -- a read that reddens the Clock poison probe over a frozen snapshot that
+  -- nothing could see. That was the ONLY unroutable-by-shape seam in the ABI and
+  -- it is now routed: `ext_ports_of` bridges it to `Ports.clock_now` through the
+  -- same `token_to_world`/`world_to_token` codec `ai_step` uses, and
+  -- `src/core/session.ail:878` has left the declared-unrouted set.
+  --
+  -- It did NOT make any extension coverable. Coverage is D5's per-hook question
+  -- and it is blocked on `on_budget_plan`'s row below, not on this one.
+  clock_now: (ExtWorld) -> ExtClockReading ! {Clock},
   env_get: (string, string) -> string ! {Env}
 }
 

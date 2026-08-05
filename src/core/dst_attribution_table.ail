@@ -76,18 +76,24 @@
 --    stale, the example itself is intact.
 --
 -- 2. **The core clock inventory is no longer "four driver sites".** D4's table
---    says four; at HEAD there are FIVE routed core sites, because WI-A12 added
---    `tool_phase.ail:344`, and TWO ambient core sites that did not exist when
---    that table was written (`session.ail:878`, created by A12 under plan rule
---    S2, and `stub_step.ail:202`, the live adapter). See
---    `unconditional_core_sites` for the measured set. This is why the
+--    says four; at HEAD there are SIX routed core sites and ONE ambient one.
+--    WI-A12 added `tool_phase.ail:344` (the fifth) and created two ambient
+--    sites that did not exist when D4's table was written. WI-C5 then widened
+--    `ExtPorts.clock_now` to thread the world token, which let
+--    `session.ext_ports_of` route its extension seam through `Ports.clock_now`
+--    like every other: that added `session.ail:881` as the SIXTH routed site
+--    and RETIRED the ambient `session.ail:878` entirely — the function that
+--    carried it (`ext_unrouted_clock`) no longer exists. The one ambient site
+--    left is `stub_step.ail:202`, the live adapter, which is ambient by design.
+--    See `unconditional_core_sites` for the measured set. This is why the
 --    completeness check below takes the discovered set as an ARGUMENT and does
 --    not transcribe a number from the ADR.
 --
--- 3. **`session.ail:878` is core, unattributed, and UNROUTED.** Falling it back
+-- 3. **`stub_step.ail:202` is core, unattributed, and UNROUTED.** Falling it back
 --    to clause 1 makes it unconditional core, which is right — but a profile
 --    that then claims to route its whole unconditional set would be claiming
---    something false. So the declaration carries `routed` per site and an
+--    something false. (`session.ail:878` was the OTHER member of this note
+--    until WI-C5 routed it; the rule is unchanged, the membership shrank.) So the declaration carries `routed` per site and an
 --    unrouted entry is a declared, visible gap (plan S2: prefer the un-routed
 --    option that fails loudly) rather than a silent one. Whether such a profile
 --    is conformant is D4's all-or-nothing rule to apply, and WI-A10's to apply
@@ -217,18 +223,18 @@ export pure func attribution_rows() -> [AttributionRow] {
 -- eight reads are reachable by installation, not by attribution.
 export pure func unconditional_core_sites() -> [CoreSite] {
   [
-    { site: { file: "src/core/session.ail", line: 1104 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 881 }, effect: "Clock", routed: true,
+      note: "ext_ports_of's extension clock seam — the SIXTH routed core site, added by WI-C5. It replaced the ambient `session.ail:878` rather than joining it: widening ExtPorts.clock_now to take the world token removed the shape obstacle that plan rule S2 had accommodated, so the seam routes through Ports.clock_now like every other" },
+    { site: { file: "src/core/session.ail", line: 1126 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 1210 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1232 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2521 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2543 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2631 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2653 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
     { site: { file: "src/core/tool_phase.ail", line: 344 }, effect: "Clock", routed: true,
       note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it" },
-    { site: { file: "src/core/session.ail", line: 878 }, effect: "Clock", routed: false,
-      note: "ext_unrouted_clock: ambient now(), UNROUTED by plan rule S2 because ExtPorts.clock_now's zero-argument shape admits no world capture; the Clock poison probe is its instrument" },
     { site: { file: "src/core/test/stub_step.ail", line: 202 }, effect: "Clock", routed: false,
       note: "live_ports' clock adapter — the one place the driver reads a real clock, by design; a deterministic profile uses the scripted adapter and never reaches it" }
   ]
@@ -645,7 +651,7 @@ pure func test_discovered_site_in_neither_list_is_rejected() -> bool
   tests [((), true)]
   {
     let discovered: [CoreSite] = [
-      { site: { file: "src/core/session.ail", line: 1210 }, effect: "Clock", routed: true, note: "" },
+      { site: { file: "src/core/session.ail", line: 1232 }, effect: "Clock", routed: true, note: "" },
       { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
       { site: { file: "src/core/omitted.ail", line: 42 }, effect: "Clock", routed: false, note: "" }
     ];
@@ -677,13 +683,17 @@ pure func test_identity_is_revision_and_hash() -> bool
   }
 
 -- An unrouted unconditional-core site is DECLARED, not hidden. Header note 3:
--- `session.ail:878` is core, unattributed and ambient by plan rule S2, and a
+-- `stub_step.ail:202` is core, unattributed and ambient by design, and a
 -- profile claiming to route its whole unconditional set would be claiming
 -- something false. This test is what keeps that fact visible.
+--
+-- WENT FROM 2 TO 1 AT WI-C5, and the literal is deliberately a literal: a row
+-- asserting the count equals itself is green after any edit. It went red when
+-- `session.ail:878` was routed, which is exactly what it is for.
 pure func test_unrouted_core_sites_are_declared() -> bool
   tests [((), true)]
   {
-    count_unrouted(unconditional_core_sites()) == 2
+    count_unrouted(unconditional_core_sites()) == 1
   }
 
 pure func count_unrouted(cs: [CoreSite]) -> int {

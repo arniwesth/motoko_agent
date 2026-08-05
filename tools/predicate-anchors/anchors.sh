@@ -43,9 +43,12 @@ echo "attribution anchors:"
 check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"
 check src/core/tool_phase.ail 288 'is_scratchpad_tool_name' "the mixed guard"
 check src/core/tool_phase.ail 289 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
-check src/core/session.ail 878 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"
-check src/core/test/stub_step.ail 202 'now()' "live_ports' real clock (declared UNROUTED core)"
-for l in 1104 1210 2521 2631; do
+# WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
+# exists: widening ExtPorts.clock_now to thread the world token let
+# ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
+# replacement is :881 below, and it is checked as ROUTED rather than as ambient.
+check src/core/test/stub_step.ail 202 'now()' "the one remaining ambient clock (declared UNROUTED core)"
+for l in 881 1126 1232 2543 2653; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 344 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

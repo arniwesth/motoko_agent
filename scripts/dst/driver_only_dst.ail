@@ -242,8 +242,13 @@ func scenario_exclusion_check_is_vacuous() -> bool ! {IO} {
 
 -- The per-run manifest, built and validated against the definition it realizes.
 func scenario_manifest() -> bool ! {IO} {
+  -- The unrouted-field list is EMPTY since WI-C5. `clock_now` was its only
+  -- member; widening it to return `ExtClockReading` gave it a `next_state`
+  -- field, which is exactly what `tools/ext_call_inventory/derive.py` looks for,
+  -- so the tool no longer derives it as unrouted. The empty list is re-derived
+  -- by `tools/profile_definition/check_fixtures.py` rather than trusted here.
   let m = driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
-                               ["env_get", "proc_exec"], ["clock_now"], "HEAD");
+                               ["env_get", "proc_exec"], [], "HEAD");
   let rs = validate_manifest(m, driver_only());
   let ok = List.length(rs) == 0;
   let _ = if ok then {

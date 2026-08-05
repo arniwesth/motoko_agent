@@ -25,8 +25,12 @@
     "the gated set entirely. WI-B2b hit it twice in one item. Pinning the state",
     "alone would also miss a slip that resolved a field to the WRONG seam, so the",
     "seam is pinned too. `\"seam\": null` is correct ONLY for a genuinely unrouted",
-    "field: `clock_now` is un-bridgeable on this pin by plan rule S2, and the",
-    "Clock poison probe covers it instead of this classifier."
+    "field, and AT HEAD THERE IS NO SUCH FIELD. `clock_now` was the one example",
+    "until WI-C5 widened ExtPorts.clock_now to (ExtWorld) -> ExtClockReading and",
+    "routed it through Ports.clock_now, so it derives `returns-it` like ai_step.",
+    "The `null` seam is kept described here because the next un-widened seam",
+    "re-introduces it, and because a pin whose only legal value is unreachable is",
+    "worth naming as such rather than deleting."
   ],
   "fixtures": {
     "control_resolved.ail": {
@@ -59,6 +63,6 @@
     "ai_step": { "state": "returns-it", "seam": "model_step" },
     "proc_exec": { "state": "member", "seam": "tool_exec" },
     "env_get": { "state": "member", "seam": "env_get" },
-    "clock_now": { "state": "unrouted", "seam": null }
+    "clock_now": { "state": "returns-it", "seam": "clock_now" }
   }
 }

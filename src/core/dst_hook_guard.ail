@@ -1,0 +1,144 @@
+-- src/core/dst_hook_guard.ail
+--
+-- WI-C5. `routing_violation_at`'s PRODUCTION call site.
+--
+-- ============================================================================
+-- Why this exists as a module rather than as a line in ext/runtime.ail
+-- ============================================================================
+--
+-- D5: "An explicitly excluded hook is not covered, must be named in the result,
+-- and causes a fail-closed HarnessFailure if dispatch reaches it."
+--
+-- `src/core/dst_profile.routing_violation_at` has been the check since WI-A10
+-- and until now its only callers were its own self-tests and two acceptance
+-- scripts. **An exclusion checked only at load time is an exclusion nothing
+-- enforces at dispatch**, which is the gap this module closes.
+--
+-- It is a separate module because of a layering fact, not a preference:
+-- `ExtRuntime` lives in `packages/motoko-ext-abi` and `ProfileDefinition` lives
+-- in `src/core/dst_profile`. The ABI package cannot import core, so the runtime
+-- record has nowhere to carry a profile and the guard cannot live inside the
+-- folds themselves. It composes over them instead, which also keeps
+-- `ext/runtime.ail` free of any DST dependency.
+--
+-- ============================================================================
+-- WHY THE GATED SLOT, AND ONLY THE GATED SLOT
+-- ============================================================================
+--
+-- Seven of the eight ABI slots are dispatched by an UNCONDITIONAL fold. D5's
+-- load-time rules already reject a profile that excludes one of those, because
+-- such a profile cannot complete a single run — the exclusion would be reached
+-- before any provider call and the run would terminate as a HarnessFailure
+-- every time. So for those seven a dispatch-time check is unreachable by
+-- construction: the load-time rejection fires first, and always.
+--
+-- `on_tool_handle` is the ONE gated slot (`contains_tool`, ext/runtime.ail:356).
+-- It is therefore the only slot whose dispatch can be reached-or-not at runtime,
+-- which makes it the only slot where a dispatch-time check can say something a
+-- load-time check cannot. `dst_profile.is_excluded_hook`'s header has said this
+-- since WI-A10; this module is where it becomes executable.
+--
+-- ============================================================================
+-- WHAT IS VACUOUS TODAY, SAID PLAINLY
+-- ============================================================================
+--
+-- **No profile in this tree can currently reach this guard, and the reason is
+-- the same one that blocks the compose install.** `driver_only` installs
+-- nothing, so its disclosure list is empty and `is_excluded_hook` is false for
+-- every argument. A profile that installed an extension and excluded its
+-- `on_tool_handle` would reach it — but no extension in this tree is
+-- installable while `ExtensionHooks.on_budget_plan` carries the ABI's closed
+-- `! {Env, FS}` row and returns a `BudgetPatch` with no successor field
+-- (`packages/motoko-ext-abi/types.ail:298`).
+--
+-- So the guard is STRUCTURE, not enforcement-in-effect, and the acceptance
+-- script drives it with a SYNTHETIC definition that does exclude a gated hook.
+-- That is a real exercise of the mechanism and it is not a claim that any
+-- shipping profile is protected by it. Recorded here rather than left for a
+-- reader to discover from a green.
+
+module src/core/dst_hook_guard
+
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+
+import src/core/dst_profile (ProfileDefinition, routing_violation_at)
+import src/core/dst_result (DstResult, ReplayMetadata)
+import src/core/phase_vocab (LedgerTrace)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/ext/runtime as Rt (dispatch_tool_handle)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtRuntime, ExtensionHooks, ToolHandleOutcome
+)
+
+-- The dispatch predicate, mirrored from `ext/runtime.first_handle`.
+--
+-- IT IS A MIRROR AND THAT IS A LIABILITY, stated because the alternative is to
+-- pretend otherwise: if `first_handle`'s gate ever stops being
+-- `contains_tool(h.provided_tools, name)`, this guard silently starts checking
+-- a different set of hooks than the fold dispatches — fail-OPEN, in the
+-- direction that grants coverage credit. The acceptance script pins the two
+-- together by driving a case where the gate is false and asserting the guard
+-- stays silent; that is the only thing standing between them.
+pure func provides_tool(xs: [string], name: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == name then true else provides_tool(rest, name)
+  }
+}
+
+-- The first hook that WOULD be dispatched for this call and is excluded.
+--
+-- Order matters and matches the fold's: `first_handle` walks the registry in
+-- order and stops at the first hook that both provides the tool and returns
+-- `Handled`. The guard reports the first hook that would be INVOKED, because
+-- that is the one whose dispatch is reached.
+pure func first_excluded_for_call(
+  d: ProfileDefinition,
+  hooks: [ExtensionHooks],
+  name: string,
+  position: int,
+  partial: LedgerTrace,
+  meta: ReplayMetadata
+) -> Option[DstResult] {
+  match hooks {
+    [] => None,
+    h :: rest => {
+      if provides_tool(h.provided_tools, name) then
+        match routing_violation_at(d, h.id, "on_tool_handle", position, partial, meta) {
+          Some(v) => Some(v),
+          None => first_excluded_for_call(d, rest, name, position, partial, meta)
+        }
+      else first_excluded_for_call(d, rest, name, position, partial, meta)
+    }
+  }
+}
+
+-- The guarded dispatch. `Err` carries the typed `RunFailed` with the partial
+-- ledger trace and the interaction position, which is D6.6's distinction from a
+-- raw capability bypass: an exclusion violation is observed by the runner while
+-- the driver is still running, so it returns a VALUE. A capability bypass
+-- terminates evaluation and can return nothing at all.
+--
+-- `position` is the interaction position at the moment of dispatch, so the
+-- failure is locatable in the program that produced it. It is deliberately NOT
+-- -1, which D6.7 reserves for a failure predating any interaction — and a
+-- dispatch-time violation by definition has interactions behind it.
+export func guarded_dispatch_tool_handle(
+  d: ProfileDefinition,
+  rt: ExtRuntime,
+  ctx: ExtCtx,
+  call: ToolCallEnvelope,
+  position: int,
+  partial: LedgerTrace,
+  meta: ReplayMetadata
+) -> Result[ToolHandleOutcome, DstResult] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  match first_excluded_for_call(d, rt.registry.hooks, call.tool, position, partial, meta) {
+    -- Checked BEFORE the fold runs. A guard that dispatched first and inspected
+    -- afterwards would have let the excluded hook perform its effects, which is
+    -- the whole thing D5 is preventing.
+    Some(violation) => Err(violation),
+    None => Ok(Rt.dispatch_tool_handle(rt, ctx, call))
+  }
+}

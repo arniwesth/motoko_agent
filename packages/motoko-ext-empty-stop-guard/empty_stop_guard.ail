@@ -3,7 +3,7 @@ module sunholo/motoko_ext_empty_stop_guard/empty_stop_guard
 import std/string (trim, contains)
 import std/json (Json, jo)
 import std/result (Result, Err)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
 
 export pure func is_blank(s: string) -> bool {
   trim(s) == ""
@@ -57,8 +57,14 @@ func noop_proc_exec(_cmd: string, _cwd: string) -> string ! {IO, Process, FS} {
   ""
 }
 
-func noop_clock_now() -> int ! {Clock} {
-  0
+-- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION, and here it is the correct
+-- answer rather than a silent defect: this clock reads nothing, so there is no
+-- cursor to advance. The distinction matters because the same expression is a
+-- real defect in a port that DID something — S12 exists because no type tells
+-- the two apart.
+func noop_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 0, next_state: world }
 }
 
 func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
