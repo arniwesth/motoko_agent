@@ -210,6 +210,25 @@ the name needs the acceptance table *and* project-007's taxonomy ADR accepted. *
 `Accepted 2026-07-26`**, so the table is the only thing outstanding, and re-running it is its own item
 after this one.
 
+**Cluster 22 outcome: WI-D3 DONE 2026-08-05**, ~2h05m, `14ba6f9` — **row 10 CLOSES and C4's table is
+GREEN, eleven of eleven.** Five two-sided poison pairs, `resolve_context_limit` threaded at eight
+sites (the deferral note said six), and a filesystem POINT READ class. Its central finding extends S16
+a third time: **a poison pair is silent on whether the world is read at all** — reproduced at review,
+with the deterministic runs producing no capability error and failing only the provenance assertion.
+
+**AND THE FIRST REGRESSION IN THE SERIES: `seeded_generator` and `corpus_pr` went red and were
+reported rather than repaired.** One cause — routing `context_usage` put the driver's config reads
+into the recorded interaction log, and `seeded_generator`'s `3 * max_interactions` bound had been
+absorbing driver overhead the generator never authored. **The repair is named and measured (read the
+policy instead of re-resolving; zero mismatches across four suites) and deliberately deferred to the
+next item's first move.**
+
+**Clustering consequence, and it is the first time this has applied: the next item is NOT the obvious
+one.** The acceptance-table re-run is what everything has been pointing at, but it must not run first
+— the deferred repair moves the env census numbers D3 just pinned, and re-running the gate on numbers
+about to change would produce a verdict with a shelf life of one item. **Sequence the repair, then the
+re-run.**
+
 **Worth recording as clustering guidance in its own right: the seven-for-seven grounding record in
 Milestones C and D is not a run of luck, it is a property of this plan.** Items were sized from the
 ADR's decisions, and the ADR describes *what must be true*, not *what the tree currently does*. Every

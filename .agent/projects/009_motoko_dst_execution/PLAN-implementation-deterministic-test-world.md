@@ -267,6 +267,19 @@ truth** — and the fix is to drive the requirement off the claim under test, as
 deriving its required set from `event_vocabulary()` minus the register, so *removing a name from the
 register is what makes the gate demand its append.*
 
+**EXTENDED AGAIN AT WI-D3 TO A CHECK'S COMPLEMENT, and this is the form with no shared producer at
+all.** C3's version is a check whose two sides share a producer; D2's is two artifacts pinned against
+each other. D3's poison pairs have neither problem — the AILANG interpreter kills the run, the exit
+code is the whole observation, and nothing in this tree participates — **and they are still green over
+a world the driver never reads.** Measured: bind the deterministic file seam to ignore
+`WorldState.files` entirely and the Env- and FS-withheld deterministic runs produce **no capability
+error at all**; they complete the session and fail only a separate provenance assertion. Reproduced
+independently at review. **A poison pair is a statement about what a run does NOT read and is silent
+on whether the world is read at all.** So: **a gate establishing what a run does not do says nothing
+about what it does. Poison pairs and provenance assertions are complements, and closing a row on one
+of them closes half of it.** C4 ruled that provenance is not hermeticity; D3 establishes the converse
+just as strictly.
+
 **A further C5 finding, for any future "did X perform effect E" check: prefer the ENFORCEMENT
 mechanism over the RECORD.** The world interaction log looks like a second producer and is not one
 for ambient effects — it records what was requested *through the world*, so absence from it is not
@@ -432,6 +445,14 @@ The 17 expected failures are stable across B4, C1, C3 and C5: the 7 `TC_ARITY_00
 sealed-vocabulary probe (`IMP010`), 5 `src/examples/`, 3 code-graph fixtures and 1 test-coverage
 fixture. **Confirm the failing set member-for-member rather than the count** — the count moves by one
 whenever an item adds a file.
+
+**AND A SOURCE-DERIVED GATE HAS ITS OWN HAND-MAINTAINED INPUT — the literal the gate cannot see.**
+Earned by WI-D3. `make discovery` re-derives `driver_env_keys()` from source rather than trusting a
+literal, which is the right shape; but **the FILE LIST it derives from is itself a literal nobody
+re-derives.** It named two files, the driver's env surface had moved into a third, and the derived set
+came back four keys short. It failed *loudly* — a derivation with a wrong input disagrees with the
+literal it checks rather than agreeing with it — but that is luck of direction, not design. **When a
+gate derives a claim from source, ask what tells it WHICH source.**
 
 **S12. An identity transition is the correct answer for a component that did nothing and a silent
 defect for one that did something — and no type distinguishes them.** Earned by B2b, and it is the
@@ -2399,6 +2420,40 @@ with four — but it is **one item away**, and that item is named, sized and has
 **filesystem class in the world**, so `resolve_context_limit`'s `Env` and `FS` halves route together.
 **Two of the ten passes stay VACUOUS in their installed-extension clauses**; closing row 10 makes the
 gate green and does not make those non-vacuous, and per D10 a second profile earns them from scratch.
+
+**WI-D3, 2026-08-05 (`14ba6f9`, ~2h05m) — ROW 10 CLOSES. C4's TABLE IS GREEN, ELEVEN OF ELEVEN.**
+The world gained a filesystem class (`Ports.file_read`, a POINT READ), `resolve_context_limit` is
+threaded at all **eight** call sites — the Makefile's deferral note said six — and the effect classes
+with two-sided poison pairs go 3 → **5**. Verified at review: `make world_state` exit 0 with AI, Clock,
+Env, FS and the tool contract each showing both halves, plus RNG's structural "no driver module
+reaches `std/rand`".
+
+**THE NAME IS STILL NOT ADOPTED, and D10's outstanding condition is the gate RE-RUN, not the ADR.**
+007's taxonomy ADR is `Accepted 2026-07-26`, so the second condition has been satisfied for weeks.
+**Eleven items have now declined the name.** And a green gate for `driver_only` is a green gate for
+`driver_only`: two of the eleven passes stay **VACUOUS in their installed-extension clauses**, and per
+D10 they transfer to no second profile.
+
+**THE FIRST REGRESSION IN THE SERIES, and the item reports it rather than repairing it.**
+`make seeded_generator` and `make corpus_pr` were green at HEAD and are red here — **one cause, not
+two.** Routing `context_usage` puts the driver's config reads into the **recorded interaction log**:
+each `resolve_context_limit` performs five env requests and the driver re-resolves a static value on
+every loop arm, so a run carries 15–95 interactions no generator authored. Confirmed at review —
+`seeded_generator` reports `the bounded run recorded 24 interactions against a declared budget of 6`
+and `env_missing=50` dominating the S7 distinctness set. **This is not new breakage so much as newly
+visible breakage:** `seeded_generator`'s bound is `log length <= 3 * max_interactions`, and **the `3 *`
+was already absorbing driver overhead the generator never authored** — the check compares a GENERATOR
+budget against a log the DRIVER also writes into. D3 widened the driver's share until the slack ran
+out.
+
+**The repair is named, measured and deliberately not taken:** `session_policy_init` already resolves
+the limit into `policy.step.compaction.context_limit` and the four `c2_loop` sites recompute it;
+reading the policy instead takes a run from 12–19 resolutions to one. A temporary assertion reported
+**zero mismatches** across `world_state`, `discovery`, `strict_replay` and `compaction_dst`. It was
+left because it is a change to the driver's call pattern rather than to its hermeticity, and landing a
+behavioural refactor at the end of a long session without its assertion first (S1) is how this project
+ships the defect it counts. **Owed as the next item's FIRST move, before the acceptance-table re-run,
+because it moves the env census numbers D3 just pinned.**
 
 3. **This entry did not say what to do with a NO.** It describes running the table and adopting the
    name. "Expect NO" had to arrive by handoff rather than by plan. **A gate that reports NO with a
