@@ -123,7 +123,28 @@ text says compose is un-installable *"until B2's world-token/coverage widening l
 compose is still un-installable, because B4 found a **different** blocker one item later —
 `on_budget_plan`'s closed ABI row `! {Env, FS}` on an unconditionally-dispatched slot that compose
 binds. **A work item's stated precondition can be satisfied while the thing it gates stays blocked**,
-and nothing goes red when that happens: the plan text still reads as current. Original B2a handoff:
+and nothing goes red when that happens: the plan text still reads as current.
+
+**Cluster 18 outcome: WI-C5 DONE 2026-08-05**, ~95 min, `05275ab` — clock seam routed,
+`routing_violation_at` given a production call site, **D5's declared-versus-performed detector built**,
+and **the install REFUSED**. Earned **S18** and sharpened S16 twice.
+
+**Cluster 19 = WI-C4: HANDED OFF 2026-08-05**, handoff `HANDOFF-execute-c4-name-adoption-gate.md`.
+**Grounding reframed this one too — four for four in Milestone C — and this time it moved the
+blocker.** Since B4 the project has tracked *"can any extension be installed?"* as what stands between
+`driver_only` and the name. Reading the ADR's acceptance table row by row says otherwise: the
+boundary-honesty row's final clause (*"so a profile covering only ABI-pure no-op slots is visible as
+such"*) **anticipates a weak profile and asks that it be visible, not strong**, so an empty install
+list is arguably compliant. **The row that fails is the ORACLE row** — *all logical ledger emissions
+appear in the returned trace* — against `d64_gap_register`'s **thirteen** Logical variants that do not,
+all of them tool-dispatch and terminal-path events reachable in `driver_only`. C3 discharged D6.4's
+named stream exception and said the general obligation was not discharged; **that sentence is what
+gates the name.**
+
+**The pattern is now stable enough to state as clustering guidance: in Milestone C, grounding has
+changed the item's shape every single time, and three of four times it changed which thing was
+blocking.** Budget the first twenty minutes of any C-item handoff for reading the ADR clause the item
+answers to, not the plan's summary of it. Original B2a handoff:
 `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —
 **B3 before B2, because B2's scope is unmeasurable until the `images` wall clears** (B1 could see only
