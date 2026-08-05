@@ -229,6 +229,26 @@ one.** The acceptance-table re-run is what everything has been pointing at, but 
 about to change would produce a verdict with a shelf life of one item. **Sequence the repair, then the
 re-run.**
 
+**Verified at review, and it is worse than the report states: `make dst` has FIVE red targets, not
+two.** `smoke_parity` also went red and D3's report does not mention it — zero occurrences. ✓ rows
+fall **831 → 701**, because an aborting target stops *producing* rows rather than reporting failures.
+**And C4's table is not green:** `corpus_pr` aborts before printing the class-coverage rows that are
+rows 4 and 11's evidence, so those rows did not fail — they went missing. Rows 7 and 10 are genuinely
+green; the table was green at D2.
+
+**Cluster 23 = WI-D4, restore the three red targets: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-d4-restore-the-three-red-targets.md`. **Two clustering lessons, both new:**
+
+**A regression's blast radius is not the set the item verified.** D3 ran `world_state`, `discovery`,
+`strict_replay` and `compaction_dst` — all pass, all relevant, and the target that broke is covered by
+none of them. **Only a full `make dst` surfaced the third.** Where an item changes a seam every run
+touches, the verification set is `make dst`, not the targets whose names match the change.
+
+**A deferred repair needs its blast radius re-measured, not inherited.** D3 named a repair and
+measured it at one site. The handoff carries that measurement forward as a *condition* rather than a
+result, because the item that takes it will delete four world-successor threadings — the same
+population D1's production defect came from.
+
 **Worth recording as clustering guidance in its own right: the seven-for-seven grounding record in
 Milestones C and D is not a run of luck, it is a property of this plan.** Items were sized from the
 ADR's decisions, and the ADR describes *what must be true*, not *what the tree currently does*. Every
