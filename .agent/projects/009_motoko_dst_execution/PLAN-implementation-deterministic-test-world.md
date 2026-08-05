@@ -204,6 +204,14 @@ asserts on must be one the subject can only produce BY DOING THE WORK.** C5's fi
 hook after the subject in the same unconditional fold, so the asserted sentinel is unobtainable
 unless the fold ran and invoked the subject first.
 
+**Independently reproduced at review, and the fix is stronger than the report claims.** Deleting
+`compose_budget`'s dispatch and leaving its `reached(...)` marker behind reddens **two** rows, not one:
+the witness row (`compose_budget exited 0 but its witness is not '4242' — the fold did not run past
+compose, so this row measures nothing`, witness=100, the arm's own input) **and** an independent
+structural row (`expected 6 mentions of compose_then_witness (1 definition + 5 arms), found 5`). The
+second catches the same deletion by a different route, which is what makes the repair robust rather
+than a patch over one mutant.
+
 **And the limit C5 measured on its own fix, because it is the honest boundary:** a subject whose
 binding is a CONSTANT NO-OP is unobservable in a dispatch result by definition. Removing the subject
 from the registry entirely reddened only the ONE arm that names it by id. Three of four arms
@@ -294,13 +302,29 @@ unflagged fails *green*; cache-cold and unflagged fails *red* by 76 files — **
 which is why neither reads as a defect on its own**, and only cache-cold with the flag is the real
 number.
 
-**`cmd` IS NOT A ROOT IN THIS REPO, AND NAMING IT COST WI-C5 A SILENT GREEN OVER ZERO FILES.**
-Earlier revisions of this block listed `find src scripts packages tools cmd`. GNU `find` warns about
-the missing directory and continues; this environment's `find` is `bfs`, which **aborts the whole
-traversal**. The loop then iterates over nothing and the sweep reports **0 failures** — a perfect
-green having checked not one file. Removed below. This is the same failure shape as every other
-instrument in this project that certified nothing while exiting 0, and it is the cheapest one to
-have prevented.
+**`cmd` is not a root in this repo and is removed from the command below** — it produces a spurious
+error and a non-zero exit from `find`, which is reason enough not to name it.
+
+**But the consequence WI-C5's report drew from that is WRONG, and it is corrected here rather than
+carried, because it is alarming in the direction that would void every sweep this project has
+recorded.** The report says this environment's `bfs` "aborts the whole traversal", so the loop
+"iterates over nothing" and the sweep is "a perfect green having checked not one file."
+**Measured — `bfs 4.1.1` does not abort.** With the missing root in first, middle or last position
+the traversal returns **242 files every time**, identical to the command without it, and the exact
+`for f in $(find src scripts packages tools cmd -name '*.ail' | sort)` loop iterates **242** times.
+Nor is it silent: `bfs` prints `bfs: error: cmd: No such file or directory.` to stderr and exits 1.
+**So no prior sweep measurement is invalidated, and this was not an instrument certifying nothing.**
+
+**What it DID cost is real and is the part to carry: WI-C5 reported no whole-tree sweep at all**,
+having concluded from the wrong diagnosis that the sweep was broken. S13 requires one. **A wrong
+diagnosis of an instrument suppresses the measurement just as effectively as a broken instrument
+does** — and unlike a broken instrument, nothing goes red.
+
+**The missing sweep, run at review, cache-cold with the flag: `225 pass / 17 fail`.** 225 rather than
+C3's 222 because `dst_hook_guard.ail`, `declared_vs_performed.ail` and `hook_guard_dst.ail` are new.
+**The failing set matches the expected seventeen member for member** — 7 `TC_ARITY_001` smoke scripts,
+1 sealed-vocabulary probe, 5 `src/examples/`, 3 code-graph fixtures, 1 test-coverage fixture — so the
+set is now stable across B4, C1, C3 **and** C5.
 
 ```bash
 for f in $(find src scripts packages tools -name '*.ail' | sort); do
@@ -2270,7 +2294,9 @@ block the name:
   it picked up — and it was *unwritable* before C1, because there was nothing to append from.
   **The remaining honest gap:** fifteen families run on a real run because they ride along with parity
   in one script, on one profile, with two adapters — not because anything wires them deliberately.
-  **C5 landed 2026-08-05** (~55 min) and its durable output is **D5's declared-versus-performed
+  **C5 landed 2026-08-05** (**~95 min**, `10:39Z → 12:14Z`; the plan first recorded ~55, which
+  contradicts the report's own timestamps and is corrected here because these windows are the
+  project's sizing evidence) and its durable output is **D5's declared-versus-performed
   detector**, which D5 names and records as unavailable. `make declared_vs_performed` compares two
   genuinely independent producers — the ABI's static effect row, grepped from source, against the
   AILANG interpreter's capability trap observed OUT OF PROCESS as an exit status — and measures that
