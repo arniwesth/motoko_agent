@@ -92,7 +92,18 @@ naturally describes. **The generalised rule is S14.**
 
 **The clustering rule this earns, and it is narrower than "pair items with their gates":** when an
 item's whole deliverable is invisible to every existing gate, it does not ship as its own cluster —
-**and the gate it ships with must drive the item's own closure, not the dependency it adopts.** Original B2a handoff:
+**and the gate it ships with must drive the item's own closure, not the dependency it adopts.**
+
+**Cluster 17 = WI-C3: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-c3-streaming-trace-parity.md`. **Grounding resized the item before it started.** The
+plan reads C3 as *build the parity invariant*; the invariant already exists, is already keyed on
+content, and is already proven red against omission, duplication and reordering mutants. What does
+not exist is a **bridge from a run to an `ExecutionUnderTest`** — measured at HEAD, that type has
+**exactly one construction site in the tree**, a hand-authored fixture in `invariants_dst.ail`, and no
+seeded runner imports `dst_invariants` at all. **So the whole D7 suite, not just the emission log, has
+no real-run consumer.** The handoff makes the scope call explicit rather than letting a green
+`make dst` settle it, because the two readings differ in whether D6.4 is discharged and C4 reads that
+answer directly. Original B2a handoff:
 `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —
 **B3 before B2, because B2's scope is unmeasurable until the `images` wall clears** (B1 could see only
