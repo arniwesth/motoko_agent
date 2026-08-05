@@ -222,6 +222,21 @@ and its ✓ rows fell **831 → 701** — because an aborting target stops produ
 reporting failures, so the missing evidence looks like nothing at all. **S19's shape again: a check
 that vanishes is indistinguishable from a check that passes.**
 
+**CONFIRMED BY THIS SESSION'S OWN RUN, after the correction rather than before it.** `make dst` was
+finally run to completion and exited 2 with exactly the five targets the review named:
+
+```
+corpus_pr   seeded_generator   smoke_parity   test_coverage   test_coverage_selftest
+```
+
+The tick count on that run is 745 rather than the review's 701, and the difference is **not** a
+disagreement: the review measured `14ba6f9`, while this run happened against a tree that had already
+gained the `run_report`, `program_persistence` and `compaction_dst` repairs, and it straddled a
+working-tree revert of the `smoke_parity` fix partway through. **The tick count is therefore not
+cleanly attributable and is recorded as such; the failing-target SET is, and it matches member for
+member.** Quoting the review's number as though this run produced it would be the same defect the
+correction is about.
+
 **How the third was missed, stated plainly because the method is the lesson.** Final verification ran a
 HAND-PICKED list of fifteen targets rather than `make dst` to completion. The list was assembled from
 the artifacts this item had touched, so it could only ever confirm what the author already suspected.
