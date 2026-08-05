@@ -6,10 +6,27 @@ a session that just read HEAD; you are that session.
 **Milestone B closed 2026-08-04.** `check_core` green at 52 modules, tree at 219 pass / 17 fail,
 `make dst` down to two red targets. **Confirm the tree state with `git status` rather than believing
 any sentence in this handoff** — five consecutive handoffs restated commit state and all five were
-wrong. What I measured, so you can check it cheaply: B4's *docs* are committed (`b1dd860`), and
-**B4's source work is not** — 35 modified files plus 3 untracked, timestamped 2026-08-04. The two
-untracked `tools/code-graph/tests/fixtures/*/.ailang/` directories are the unfixed `.gitignore:54`
-trap, not your work and not to be committed.
+wrong. As of 2026-08-05 all of B4 is committed (`072bb05` source, `24425cd` its report) and the
+working tree is clean at `24425cd`.
+
+## Before anything else: 34 stale build-cache files entered git yesterday
+
+**`.gitignore:54`'s `!tools/code-graph/**` re-includes everything under that path**, including
+`.ailang/cache/`, so `git add -A` swept the compile caches in. Measured: **0 tracked cache files at
+`b1dd860`, 34 at HEAD**, all added by `072bb05` — `.gob`, `iface.json`, `manifest.json` under
+`tools/code-graph/tests/fixtures/{sample3,source_index}/.ailang/cache/compile/`.
+
+**This is the worst possible file class to track in this repo**, and the project's own trap list says
+why: *a stale `.ailang` compile cache produces phantom type errors.* A committed cache means the next
+fresh checkout starts with a stale one it did not build, keyed to v0.33.0, and S9 exists precisely to
+clear those. It also collides with S9 directly — S9's `tools/code-graph` exclusion was written to
+protect **tracked test fixtures**, and it now also protects **tracked stale caches**, which is the
+opposite of what S9 is for.
+
+**Fix it first — it is a two-minute change and it is not part of C1:** narrow `.gitignore:54` so the
+re-include does not cover `.ailang/`, then `git rm -r --cached` the 34 files. Do it as its own commit
+so it does not ride inside the adoption diff. **Do not simply delete them from disk** — untracked and
+tracked-but-stale are different problems and only the second is git's.
 
 **Read first:** `NOTE-b4-execution-report-and-plan-corrections.md`, then the plan's
 `## Standing rules` — **S13 is new** and it is the rule this item is most likely to violate.
@@ -152,7 +169,9 @@ green while eleven files were broken, twice. Run the sweep cache-cold and report
 status with each remaining red target attributed to a class.
 
 **Per S9 — clear EVERY live `.ailang/cache`, with both exclusions.** They are per-directory. An
-unguarded sweep deletes `tools/code-graph`'s tracked test fixtures.
+unguarded sweep deletes `tools/code-graph`'s tracked test fixtures. **And note S9 now shields
+something it was never meant to** — see the `.gitignore` section above; if you fix that first, S9's
+exclusion goes back to meaning only what it says.
 
 ## Out of scope
 
@@ -165,7 +184,9 @@ unguarded sweep deletes `tools/code-graph`'s tracked test fixtures.
   ABI's closed `! {Env, FS}` row.
 - **WI-C5** — `proc_exec`/`env_get` widening and the declared-versus-performed detector.
 - The `motoko-ext-abi` major and lockstep re-release; the `ailang iface` MOD010 filing; the 7
-  `TC_ARITY_001` scripts; `.gitignore:54`; the two v0.33.0-fixed workarounds.
+  `TC_ARITY_001` scripts; the two v0.33.0-fixed workarounds. **`.gitignore:54` is no longer on this
+  list** — it stopped being a latent carry-over the moment it put 34 stale caches in git, and it is
+  now the first thing above.
 
 ## Stop and report rather than deciding inline
 
