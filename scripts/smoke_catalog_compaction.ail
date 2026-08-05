@@ -14,6 +14,7 @@ import std/io (println, exit)
 import std/result (Ok, Err)
 import std/string (repeat)
 import src/core/context_usage (catalog_context_limit_for)
+import src/core/ports (ambient_context_reader, empty_world_state)
 import pkg/sunholo/motoko_ext_abi/types (Msg)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_step_with_limit)
 
@@ -38,7 +39,9 @@ func fail(message: string) -> () ! {IO} {
 
 export func main() -> () ! {IO, FS, Env} {
   let model = "test/tiny";
-  let limit = catalog_context_limit_for(model);
+  -- WI-D3: ambient, because this smoke deliberately exercises the effectful
+  -- path named in the header — the real catalogue file through the real reader.
+  let limit = catalog_context_limit_for(ambient_context_reader(), empty_world_state(), model).value;
   let _ =
     if limit == 100 then println("PASS: catalog_context_limit_for(test/tiny)=100")
     else fail("expected catalog limit 100 for test/tiny, got ${show(limit)}");
@@ -56,7 +59,7 @@ export func main() -> () ! {IO, FS, Env} {
 
   -- Unknown models have no hardcoded provider-family fallback. They should
   -- resolve to 0 and therefore skip compaction rather than guessing.
-  let unknown = catalog_context_limit_for("anthropic/unlisted-future-model");
+  let unknown = catalog_context_limit_for(ambient_context_reader(), empty_world_state(), "anthropic/unlisted-future-model").value;
   let _ =
     if unknown == 0 then println("PASS: uncatalogued model has no guessed limit")
     else fail("uncatalogued model unexpectedly got limit ${show(unknown)}");

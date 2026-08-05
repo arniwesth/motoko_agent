@@ -23,6 +23,8 @@ import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, 
 -- happened while these codecs were being written, and the round-trip tests
 -- below are what caught it; nothing else could have.
 import std/option (Option, Some, None)
+import std/fs (fileExists, readFile)
+import std/env (getEnvOr)
 import src/core/phase_vocab (ApprovalRequest)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/tool_dispatch_adapter (dispatch_one)
@@ -186,6 +188,34 @@ export type WorldState = {
   -- ordinals) without changing this port's shape to do it.
   env: [{ key: string, value: string }],
 
+  -- WI-D3's synthetic filesystem: the path/content map a deterministic run
+  -- reads instead of the process's filesystem. Acceptance row 10's host-env
+  -- clause, and the class `make world_state` deferred at WI-A12 because the
+  -- order that item was given did not contain one.
+  --
+  -- A POINT READ and not a filesystem, deliberately. The driver's whole call
+  -- graph asks two questions of a path — does it exist, and what does it hold —
+  -- so `FileRead` answers exactly those, and this table is a KEYED LOOKUP like
+  -- `env` rather than a cursor like `script`. There are no writes and no
+  -- listings here because nothing the driver observes needs them, and a world
+  -- that models more than the driver observes is a world whose extra shape no
+  -- gate can keep honest.
+  --
+  -- AN ABSENT PATH READS AS ABSENT AND DOES NOT FALL BACK TO THE HOST. That is
+  -- the one place this class deliberately differs from `tools`, whose empty
+  -- queue delegates to the real dispatcher: a tool the world has no opinion
+  -- about must still run, while a FILE the world has no opinion about is the
+  -- ambient dependency this class exists to remove. `scripted_env` is the right
+  -- analogue — it serves the CALLER's fallback, never the host's value.
+  --
+  -- The consequence is not free and is stated rather than discovered later: a
+  -- scripted run whose table is empty resolves `resolve_context_limit` to 0
+  -- ("unknown"), where before WI-D3 it read whatever `.motoko/model-catalog.json`
+  -- the checkout happened to carry. That read was the defect; a fixture that
+  -- wants a context limit now declares one, and `long_qwen_compaction_dst`
+  -- always did.
+  files: [{ path: string, content: string }],
+
   -- The tool-execution cursor: the remaining queue of scripted tool outcomes,
   -- consumed head-first like `script` and `approvals`.
   --
@@ -217,7 +247,10 @@ export type WorldState = {
   -- its own counter.
   --
   -- Every adapter carries it forward through record update (`{ state | ... }`),
-  -- so the four deterministic seams below preserve it without naming it. Only
+  -- so the FIVE deterministic seams below preserve it without naming it — four
+  -- from WI-A12 until WI-D3 added `scripted_file`, and the count is stated
+  -- rather than left to drift because record update is exactly what makes a new
+  -- seam cost nothing here. Only
   -- the RECORDING adapters append, and they are separate closures — a live or
   -- plain scripted run leaves this empty, which is why adding the field is
   -- behaviour-preserving for every existing target.
@@ -239,8 +272,9 @@ export type WorldState = {
   -- script, because its output is still a valid, replayable, perfectly
   -- reproducible program — it is simply the same program for every seed.
   --
-  -- `no_generator()` is the default and means "not installed". The four
-  -- deterministic seams and the four recording ones never read it; only the
+  -- `no_generator()` is the default and means "not installed". The five
+  -- deterministic seams — four until WI-D3 added `scripted_file` — and the four
+  -- recording ones never read it; only the
   -- GENERATING adapters do, which is what keeps adding this field
   -- behaviour-preserving for every existing target.
   gen: GeneratorState
@@ -308,6 +342,20 @@ export type EnvRead = {
   next_state: WorldState
 }
 
+-- One file read and its successor world. WI-D3.
+--
+-- `present` is carried EXPLICITLY rather than inferred from an empty `content`,
+-- for exactly `ApprovalInput.eof`'s reason: a file that exists and is empty is a
+-- different world from a file that is not there, and `context_usage` branches
+-- differently on the two — `fileExists(path)` guards a `readFile(path)` at every
+-- one of its sites. A reader that inferred absence from "" would turn an empty
+-- config into a missing one and silently take the other branch.
+export type FileRead = {
+  present: bool,
+  content: string,
+  next_state: WorldState
+}
+
 -- One approval read and its successor world. `eof` is carried explicitly rather
 -- than inferred from `raw == ""`: a recorded world must be able to replay an
 -- empty line that the operator actually typed as distinct from a closed
@@ -338,7 +386,7 @@ export type PortedProvider = {
 -- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
-  { script: [], clock_ms: 0, approvals: [], env: [], tools: [], log: [], gen: no_generator() }
+  { script: [], clock_ms: 0, approvals: [], env: [], files: [], tools: [], log: [], gen: no_generator() }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -409,12 +457,56 @@ export type Ports = {
   clock_now: (WorldState) -> ClockReading ! {Clock},
   -- WI-A12's env class. State-threaded like the rest.
   env_get: (WorldState, string, string) -> EnvRead ! {Env},
+  -- WI-D3's filesystem class. State-threaded like the rest, and NARROW by
+  -- construction: a path in, existence and contents out.
+  --
+  -- It is not `tool_exec` under another name. `tool_exec` declares `{FS}` and is
+  -- a process dispatch; this is the driver's own read of its own configuration,
+  -- and the two are separated because the poison pair for one must not be
+  -- satisfiable by the other. The `{FS}` row here is load-bearing in exactly one
+  -- binding — `ambient_file` — which is what makes the host-env pair's live half
+  -- die and its deterministic half mean something.
+  file_read: (WorldState, string) -> FileRead ! {FS},
   -- WI-A12's typed tool contract. State-threaded, typed request, typed result.
   -- No `{Clock}` in the row: the adapter ADVANCES the virtual clock
   -- arithmetically from the scripted duration, it never reads one. That keeps
   -- this row identical to `ExtPorts.proc_exec`'s, which is what lets the
   -- extension seam project onto it without widening the ABI.
   tool_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS}
+}
+
+-- WI-D3. The two seams a context-limit resolution needs, and no others.
+--
+-- It is a PROJECTION of `Ports`, not a second port set, and `context_reader_of`
+-- is the only constructor the driver uses — so a seam bound here and the seam
+-- bound in `Ports` are the same closure value and cannot disagree. That is the
+-- difference between this and a parallel port record, which is a thing that
+-- drifts.
+--
+-- It exists because `resolve_context_limit` needs an env read and a file read
+-- and NOTHING else, while `Ports` also carries a provider, an approval channel
+-- and a tool dispatcher. Demanding the whole record would force every caller to
+-- have a `model_step` — including the three catalogue probes, which have no
+-- provider and no business acquiring one to ask what a file says.
+export type ContextReader = {
+  env_get: (WorldState, string, string) -> EnvRead ! {Env},
+  file_read: (WorldState, string) -> FileRead ! {FS}
+}
+
+-- The driver's reader: whatever the run's `Ports` bound. A deterministic run
+-- projects `scripted_env`/`scripted_file`; a live run projects the ambient pair.
+-- The driver never chooses — that is D1's prohibition on production test-mode
+-- branching, preserved here by making the projection total.
+export pure func context_reader_of(p: Ports) -> ContextReader {
+  { env_get: p.env_get, file_read: p.file_read }
+}
+
+-- The ambient reader, for callers that are DELIBERATELY reading the host: the
+-- three catalogue probes, whose subject IS the file on disk, and the host-env
+-- poison pair's live half. Both bindings perform their effect, which is what
+-- makes a run with the capability withheld die here.
+export func ambient_context_reader() -> ContextReader {
+  { env_get: ambient_env, file_read: ambient_file }
 }
 
 -- The deterministic approval channel: serve the queue head, advance past it.
@@ -460,6 +552,56 @@ pure func lookup_env(entries: [{ key: string, value: string }], key: string, fal
     [] => fallback,
     e :: rest => if e.key == key then e.value else lookup_env(rest, key, fallback)
   }
+}
+
+-- The deterministic filesystem: serve the world's own table, and report a path
+-- the table does not carry as ABSENT rather than deferring to the host.
+--
+-- Like `virtual_clock` and `scripted_env` it declares an effect it never
+-- performs, and that is the mechanism rather than an oversight: AILANG demands a
+-- capability only when the effect is PERFORMED, so a deterministic run keeps
+-- `{FS}` in its row and still completes with the capability withheld. The
+-- declaration is also forced — a `pure` function will not unify into the
+-- effectful port slot ("incompatible closed rows").
+--
+-- MEASURED at WI-D3 rather than assumed, because the whole pair rests on it:
+-- `world_state_probe` dispatches seeded tools through `world_tool`, which
+-- DECLARES `! {IO, Process, FS}`, and completes with `FS` withheld.
+export func scripted_file(state: WorldState, path: string) -> FileRead ! {FS} {
+  match lookup_file(state.files, path) {
+    Some(content) => { present: true, content: content, next_state: state },
+    None => { present: false, content: "", next_state: state }
+  }
+}
+
+pure func lookup_file(entries: [{ path: string, content: string }], path: string) -> Option[string] {
+  match entries {
+    [] => None,
+    e :: rest => if e.path == path then Some(e.content) else lookup_file(rest, path)
+  }
+}
+
+-- The ambient filesystem: the real one. This is the ONLY binding in the Ports
+-- surface that performs a filesystem read, exactly as `live_ports`' clock
+-- closure is the only binding that reads a real clock, and for the same reason —
+-- one ambient reader is a thing a poison pair can point at.
+--
+-- `readFile` is called only under `fileExists`, which is the guard every call
+-- site in `context_usage` already carried; hoisting it here means a caller
+-- cannot forget it.
+export func ambient_file(state: WorldState, path: string) -> FileRead ! {FS} {
+  let here = fileExists(path);
+  let content = if here then readFile(path) else "";
+  { present: here, content: content, next_state: state }
+}
+
+-- The ambient environment: the process environment. Hoisted out of `live_ports`'
+-- inline closure at WI-D3 so that the live env read and the live file read are
+-- ONE named pair a probe can install together — see `ambient_context_reader`.
+-- `live_ports` binds this same function, so the seam a poison run exercises and
+-- the seam a live session exercises cannot drift.
+export func ambient_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  { value: getEnvOr(key, fallback), next_state: state }
 }
 
 -- The tool adapter. One implementation serves both worlds, which is why
@@ -671,7 +813,8 @@ pure func tool_outcome_record(o: ToolOutcome, advanced: int) -> TimedOutcome {
 -- mappings belong one screen apart, so "which fields of a scripted fault reach
 -- the world, and under which class id" is answerable in one place. Putting them
 -- in `stub_step` would also have needed a NEW import statement there, and
--- `stub_step.ail:202` is an A5 attribution anchor (S18).
+-- `stub_step.ail:203` is an A5 attribution anchor (S18). It was `:202` from
+-- WI-A5 until WI-D3, which added one import line above it.
 --
 -- 1. THE PRODUCTION VALUE. What `Ports.model_step` hands the driver in place of
 --    a `StepResult`, and `retryable` is the whole item: `session.c2_loop` reads
@@ -813,7 +956,8 @@ export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecu
 --
 --   * all three class mappings are then one screen apart, so "which fields of
 --     a decision reach the world" is answerable in one place;
---   * `stub_step.ail:202` is an A5 attribution anchor. Its history is the point:
+--   * `stub_step.ail:203` — `:202` until WI-D3 — is an A5 attribution anchor.
+--     Its history is the point:
 --     `:161` until WI-B2b's threading moved it, re-derived to `:163` at WI-B4,
 --     moved to `:182` by WI-C1 and to `:202` by WI-C3. Putting the decision
 --     mapping HERE
@@ -1253,6 +1397,7 @@ export func ports_shape_probe(
     approval_read: scripted_approval,
     clock_now: virtual_clock,
     env_get: scripted_env,
+    file_read: scripted_file,
     tool_exec: world_tool
   }
 }

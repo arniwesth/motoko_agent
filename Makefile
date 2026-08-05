@@ -415,7 +415,7 @@ discovery:
 		echo "  ✓ the interaction log matches the driver's own wire emissions (provider=$$w_prov, tool=$$w_tool)"; \
 	fi; \
 	derived=$$(grep -ohE '\.env_get\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*,\s*"[A-Z_]+"' \
-	     src/core/session.ail src/core/tool_phase.ail \
+	     src/core/session.ail src/core/tool_phase.ail src/core/context_usage.ail \
 	   | sed -E 's/.*"([A-Z_]+)"/\1/' | sort -u); \
 	declared=$$(sed -n '/^export pure func driver_env_keys/,/^}/p' src/core/dst_discovery.ail \
 	   | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u); \
@@ -1393,27 +1393,60 @@ corpus_rotating:
 # no partial trace. That is D6.6 and it must stay a raw non-zero run rather
 # than being unified into a typed HarnessFailure.
 #
-# THE ENV CLASS HAS NO POISON PAIR, DELIBERATELY, AND THIS IS THE REASON.
-# All six of the driver's own env reads are routed (session.ail has zero
-# getEnvOr calls). But withholding Env still kills a deterministic run, because
-# `src/core/context_usage.ail` reads MOTOKO_MODELS_FILE / MOTOKO_REPO /
-# MOTOKO_PROFILE_DIR / MOTOKO_CONFIG from `resolve_context_limit`, which the
-# driver calls at six sites.
+# THE HOST-READ CLASSES HAVE A POISON PAIR AS OF WI-D3, and the note that used
+# to stand here — explaining why the env class deliberately had none — is
+# deleted rather than edited, because the thing it deferred exists.
 #
-# Those reads are NOT routable on their own. `resolve_context_limit` is
-# `! {Env, FS}` and every env read in it exists to compute a FILE PATH that it
-# then reads. Threading the world through the env half would hand back a
-# world-supplied path to an ambient file — a run that passes an Env poison probe
-# while still depending on ambient state. That is a green check implying absent
-# coverage, which is exactly cluster 4's C1b defect, so it is not done here.
-# Completing it needs a filesystem class, which WI-A12's specified order does
-# not contain. Reported as a plan finding rather than worked around.
+# What it deferred: `src/core/context_usage.ail` read MOTOKO_MODELS_FILE /
+# MOTOKO_REPO / MOTOKO_PROFILE_DIR / MOTOKO_CONFIG ambiently, and every one of
+# those reads existed to compute a FILE PATH it then read ambiently too. Routing
+# the env half alone would have handed back a world-supplied path to a HOST file
+# — a run that passes an Env poison probe while still depending on ambient state,
+# which is cluster 4's C1b defect. Completing it needed a filesystem class, and
+# WI-A12's specified order did not contain one. WI-D3 added `Ports.file_read`,
+# `WorldState.files` and `ContextReader`, and routed BOTH halves together.
 #
-# The env class's evidence is therefore PROVENANCE, not capability: the probe
-# seeds MOTOKO_HEADLESS in the world and asserts the driver acted on the world's
-# value, with a control run proving the two branches differ. CI's process
-# environment does not set that variable, so the world cannot pass by agreeing
-# with it.
+# The note also undercounted: it said `resolve_context_limit` was called at six
+# sites. It is EIGHT — six in session.ail and two in rpc.ail — and all eight are
+# threaded now.
+#
+# TWO CLASSES, FOUR RUNS, and they share a subject on purpose. The deterministic
+# half and the live half run the SAME session call; the only difference between
+# them is which closures `ported_provider` bound. So a live run that dies where
+# the scripted one completes locates the failure in the binding rather than
+# somewhere in the driver, which is the argument the AI and Clock pairs make and
+# the reason the pair is worth more than either half.
+#
+# MEASURED at WI-D3, both directions. At HEAD before the item, withholding
+# either capability killed the DETERMINISTIC run, and short-circuiting
+# `resolve_context_limit` alone made both pass — so it was the sole cause and
+# the class is a point read rather than something wider. After the item, binding
+# `live_ports.file_read` to `scripted_file` makes the FS-withheld LIVE run
+# COMPLETE, which is what pins the live half's death to `ambient_file` instead
+# of to anything incidental on the path.
+#
+# WHAT THE PAIR CANNOT SEE, MEASURED AT WI-D3 RATHER THAN ARGUED. Bind
+# `scripted_file` so that it IGNORES `WorldState.files` entirely and ALL FOUR
+# halves stay green: the deterministic runs still perform no ambient read, and
+# the live runs still die on `ambient_file`. A poison pair is a statement about
+# what a run does NOT read, and it is silent on whether the world is read at
+# all. That is S16's shape — the two sides of the pair share no producer, and
+# the property they establish is simply a different property. The
+# world_state_probe assertions below are what catch it, and they went red on
+# that mutant while every pair row stayed green.
+#
+# The env class ALSO keeps its provenance assertion in world_state_probe — the
+# probe seeds MOTOKO_HEADLESS in the world and asserts the driver acted on the
+# world's value, with a control run proving the two branches differ. That is a
+# different claim from this pair and neither replaces the other: provenance says
+# the driver read the world where it was asked to, and the pair says nothing
+# else in the run reads the host. C4 ruled that provenance is not hermeticity,
+# and it is still not.
+#
+# The poison entry point is `--entry main_host_class`, NOT a POISON_ARM value.
+# `main` selects its arm with getEnvOr, which performs an Env read before it
+# reaches any subject, so an Env-withheld run of `main` would die on the
+# selector and report a non-zero exit that establishes nothing.
 .PHONY: world_state
 world_state:
 	@set -eu; \
@@ -1448,9 +1481,37 @@ world_state:
 	else \
 		echo "  ✓ live world dies with Clock withheld"; \
 	fi; \
-	echo "  -- env class --"; \
-	echo "  i Env-withheld pair DEFERRED, not skipped — see the note in the Makefile above"; \
-	echo "  i the env class's evidence is the provenance assertion in world_state_probe"; \
+	echo "  -- host-env class poison pair (Env withheld) --"; \
+	if ailang run --caps IO,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
+	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ deterministic world completes with Env withheld (WI-D3; all 8 resolve_context_limit sites routed)"; \
+	else \
+		echo "FAIL: the deterministic entry point needs Env — a driver env read or a context_usage read is un-routed"; \
+		exit 1; \
+	fi; \
+	if ailang run --caps IO,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub \
+	     --entry main_host_class scripts/dst/world_state_poison.ail < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: the LIVE world completed with Env withheld — the capability is not load-bearing, so the check above is vacuous"; \
+		exit 1; \
+	else \
+		echo "  ✓ live world dies with Env withheld"; \
+	fi; \
+	echo "  -- filesystem class poison pair (FS withheld) --"; \
+	if ailang run --caps IO,Env,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
+	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
+		echo "  ✓ deterministic world completes with FS withheld (WI-D3's file class)"; \
+	else \
+		echo "FAIL: the deterministic entry point still reads an ambient file — a file_read seam is un-routed"; \
+		exit 1; \
+	fi; \
+	if ailang run --caps IO,Env,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub \
+	     --entry main_host_class scripts/dst/world_state_poison.ail < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: the LIVE world completed with FS withheld — ambient_file is not load-bearing, so the check above is vacuous"; \
+		exit 1; \
+	else \
+		echo "  ✓ live world dies with FS withheld"; \
+	fi; \
+	echo "  i the env class ALSO keeps its provenance assertion in world_state_probe — a different claim, not a replacement"; \
 	echo "  -- typed tool contract poison pair (Process withheld) --"; \
 	if ailang run --caps IO,Env,FS,AI,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
 	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \
@@ -1615,8 +1676,7 @@ compaction_dst:
 	ailang run --caps IO,Env,FS --entry main scripts/dst/compaction_catalog_dst.ail
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/scripted_cursor_probe.ail < /dev/null
-	MOTOKO_MODELS_FILE=scripts/fixtures/qwen36-small-model-catalog.json \
-	  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
 	  scripts/dst/long_qwen_compaction_dst.ail < /dev/null
 
 conformance:

@@ -9,7 +9,7 @@ import std/result (Result, Ok, Err)
 import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
-import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead, ToolInvocation, ToolExecution, ToolCompleted)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead, FileRead, ToolInvocation, ToolExecution, ToolCompleted)
 import src/core/ext_world (token_to_world, world_to_token, dropped_successor, world_advanced, world_interaction_count)
 import src/core/test/stub_step (StepProvider, Ported, recording_ports, scripted_world_state, prose_step, empty_rt)
 import src/core/session as Session
@@ -200,8 +200,39 @@ func fixed_ext_clock(world: ExtWorld) -> ExtClockReading ! {Clock} {
 -- WI-A12 made `Ports.env_get` state-threaded; this fixture always served the
 -- caller's fallback, so the threaded form does the same and returns the world
 -- unchanged. `fixed_ext_env` is the un-widened `ExtPorts` shape (WI-C5's).
-func fixed_env(state: WorldState, _key: string, fallback: string) -> EnvRead ! {Env} {
-  { value: fallback, next_state: state }
+-- WI-D3 gave this seam a key to answer. Every other key still falls back.
+--
+-- `MOTOKO_MODELS_FILE` used to come from the PROCESS environment: the
+-- `compaction_dst` recipe set it, `context_usage` read it ambiently, and this
+-- suite's context limit was therefore a property of how the target was invoked
+-- rather than of the world it declares. Now the world says it, and the recipe
+-- does not have to.
+func fixed_env(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
+  let value = if key == "MOTOKO_MODELS_FILE" then qwen_catalog_path() else fallback;
+  { value: value, next_state: state }
+}
+
+func qwen_catalog_path() -> string { "scripts/fixtures/qwen36-small-model-catalog.json" }
+
+-- WI-D3. THE FIXTURE'S OWN CATALOGUE, DECLARED RATHER THAN INHERITED.
+--
+-- Until WI-D3 this suite's context limit came from a file on the HOST reached
+-- through a PROCESS environment variable — `compaction_dst` set
+-- MOTOKO_MODELS_FILE and `context_usage` read both the variable and the file
+-- ambiently. Both halves are the dependency acceptance row 10 exists to remove,
+-- and it was load-bearing: with the world serving neither, the driver resolves 0
+-- and the two scenarios that need a small limit stop reaching their invariants.
+--
+-- The value is the one `scripts/fixtures/qwen36-small-model-catalog.json`
+-- carries, so the suite's behaviour is unchanged and only its INPUT moved — off
+-- the host and into the world, where a reader can see it. The path is the one
+-- the driver COMPUTES from `fixed_env`'s answer, not one this fixture asserts.
+func fixed_file(state: WorldState, path: string) -> FileRead ! {FS} {
+  let here = path == qwen_catalog_path();
+  let content =
+    if here then "{\"context_limits\":{\"openrouter/qwen/qwen3.6-35b-a3b\":1200}}"
+    else "";
+  { present: here, content: content, next_state: state }
 }
 
 func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback }
@@ -225,11 +256,17 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
     { emissions: [], result: routed_step(max_tools, model, msgs, on_chunk), next_state: state }
   };
   let base = ports_shape_probe(model_step);
+  -- WI-D3 added `file_read`. This site rebuilds the record FIELD BY FIELD rather
+  -- than by record update, so a new seam in `Ports` lands here as a type error
+  -- rather than being inherited — which is the trade this shape makes and the
+  -- reason the other construction sites use `{ base | ... }`. It takes the
+  -- deterministic file seam from `base`, like `approval_read`.
   {
     model_step: base.model_step,
     approval_read: base.approval_read,
     clock_now: fixed_clock,
     env_get: fixed_env,
+    file_read: fixed_file,
     tool_exec: fixed_exec
   }
 }
@@ -295,11 +332,17 @@ func strict_ports() -> Ports ! {AI, IO, Trace} {
     { emissions: [], result: routed_step_strict(model, msgs, on_chunk), next_state: state }
   };
   let base = ports_shape_probe(model_step);
+  -- WI-D3 added `file_read`. This site rebuilds the record FIELD BY FIELD rather
+  -- than by record update, so a new seam in `Ports` lands here as a type error
+  -- rather than being inherited — which is the trade this shape makes and the
+  -- reason the other construction sites use `{ base | ... }`. It takes the
+  -- deterministic file seam from `base`, like `approval_read`.
   {
     model_step: base.model_step,
     approval_read: base.approval_read,
     clock_now: fixed_clock,
     env_get: fixed_env,
+    file_read: fixed_file,
     tool_exec: fixed_exec
   }
 }

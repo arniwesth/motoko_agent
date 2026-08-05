@@ -100,6 +100,33 @@ func unseeded_tools_run() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
   println("world_state_poison REACHED COMPLETION outcome=${outcome} — the withheld capability was not load-bearing")
 }
 
+-- WI-D3's host-env and filesystem classes, live half.
+--
+-- IT IS A SEPARATE ENTRY POINT RATHER THAN A `POISON_ARM` VALUE, and that is the
+-- whole reason it is trustworthy. `main` below selects its arm with
+-- `getEnvOr("POISON_ARM", …)`, which PERFORMS an Env read before it reaches any
+-- subject — so an Env-withheld run of `main` dies on the selector and reports a
+-- non-zero exit that says nothing about whether the driver's env reads are
+-- load-bearing. That is a probe green (here, red) because the effect was never
+-- performed by the thing under test: S16's shape, and the exact defect this
+-- item was told to hunt for in its own instrument. `--entry` costs nothing and
+-- reads no environment.
+--
+-- The body is `main`'s LiveAI arm verbatim, and that is what makes the pair an
+-- argument rather than two observations: `world_state_probe` runs the SAME
+-- session call over a scripted world and completes with either capability
+-- withheld, while this one dies. One difference between the runs — which
+-- closures `ported_provider` bound — so the death is in the binding.
+export func main_host_class() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("world_state_poison: driving the LIVE world with a host-read capability withheld");
+  let traced = Session.run_v2_session_traced(
+    empty_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    2, false, 0, zero_rates(), LiveAI
+  );
+  let outcome = match traced.result { Ok(_) => "ok", Err(e) => "err ${e.code}" };
+  println("world_state_poison REACHED COMPLETION outcome=${outcome} — the withheld capability was not load-bearing")
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   if getEnvOr("POISON_ARM", "") == "tools" then unseeded_tools_run()
   else {

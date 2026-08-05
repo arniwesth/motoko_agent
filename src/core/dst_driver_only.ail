@@ -276,14 +276,58 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- re-dated by a later comment rewrite. Line-count neutrality (D1's route) was
 -- not available here — a record type gained a field on two variants and a fold
 -- gained a threaded accumulator, and neither has a "below the anchor" form.
-export pure func driver_only_version() -> string { "8" }
+-- v8 -> v9 AT WI-D3, a RE-MEASUREMENT like WI-D2's and not a correction.
+-- Three anchors moved because WI-D3 added `Ports.file_read`, `WorldState.files`
+-- and `ContextReader`, bound the file seam in `live_ports`, and threaded
+-- `resolve_context_limit` at eight call sites: `stub_step.ail` 202 -> 203 (one
+-- import line above it) and `session.ail` 2601 -> 2654, 2711 -> 2764.
+-- `session.ail` 881/1126/1232, `tool_phase.ail` 313/314/373 and
+-- `ext/runtime.ail:190` did not move.
+--
+-- **The CLAIM did not change: same seven sites, same effects, same routed
+-- flags, same reviewers, still 6 routed of 7.** WI-D3 adds no clock site — its
+-- new ambient reader is `ports.ambient_file`, which is an FS read and this table
+-- is the CLOCK attribution. Every anchor was re-derived with the same answer the
+-- last five items got: `now()` is still unique in `stub_step.ail` and
+-- `session.ail` still has exactly four `ports.clock_now(` call sites. **One
+-- candidate each, so NO JUDGEMENT was available.**
+--
+-- Coverage did not change: install list still empty, waived set unchanged, no
+-- hook classification moved, catalogue still `fault-catalogue/2`.
+--
+-- WHAT DID CHANGE IN THIS FILE IS THE ENV ENTRY'S INSTRUMENT, and it is a
+-- correction rather than a re-measurement: the forbidden-capability row for
+-- `Env` claimed PROVENANCE ONLY on the grounds that the Env-withheld poison pair
+-- was deferred. WI-D3 built the pair, so the claim was false the moment the
+-- Makefile's deferral note was deleted.
+--
+-- `FS` is deliberately NOT added to `forbidden_capabilities`, and the reason is
+-- scope rather than evidence: `make world_state` now proves the deterministic
+-- entry point completes with FS withheld, so the claim would be true and
+-- instrumented. Adding it is a PROFILE claim with its own machinery — a coverage
+-- row, a waiver review and another version bump — and WI-D3's remit was the
+-- world class and row 10. That is the thing that would have to change, named
+-- rather than located.
+--
+-- **WI-D3 PAID THE CASCADE ONCE**, following S18 as WI-D2 did: every source
+-- edit including the seven comment blocks tensed for S15 was finished BEFORE the
+-- anchor numbers were derived. Line-count neutrality was not available — two
+-- record types gained a field and a module gained two parameters.
+export pure func driver_only_version() -> string { "9" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
 -- `driver_only_version` and re-recording both halves of this pair.
 export pure func driver_only_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
-    content_hash: "sha256:ff487d030bd98320790a29342faee0cfae621cd5fea02ce4d1f9b91316b402f7" }
+    -- Re-recorded at WI-D3 for v9. The hash covers the ROWS, so it moves when an
+    -- anchor moves even though the claim does not — three line numbers changed
+    -- and nothing about which sites are attributed or routed did. The previous
+    -- value, recorded for v8 at WI-D2, was
+    -- sha256:ff487d030bd98320790a29342faee0cfae621cd5fea02ce4d1f9b91316b402f7.
+    -- `source_revision` is unchanged because WI-D3 did not re-bind the table to a
+    -- new revision; it re-derived the same table's anchors.
+    content_hash: "sha256:affd24637c63ee5aaa102815487bc8083f86413f20d3e5a05ec3ba741f9736bb" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -365,7 +409,7 @@ export pure func driver_only() -> ProfileDefinition {
       { capability: "Rand",
         instrument: "make world_state — no module under src/core/*.ail reaches std/rand, checked structurally; D1 names an ambient RNG as a prohibited hiding place for world state" },
       { capability: "Env",
-        instrument: "make world_state — PROVENANCE ONLY, stated as the weaker instrument it is: the Env-withheld poison pair is deferred, so the evidence is world_state_probe's provenance assertion rather than a withheld-capability pair" }
+        instrument: "make world_state — the host-env poison PAIR, as of WI-D3: the deterministic entry point completes with Env withheld and the live world dies with it withheld. This entry said PROVENANCE ONLY from WI-A10 until WI-D3, and it was correct while it stood — resolve_context_limit read four keys ambiently at eight driver call sites, so the deterministic half could not pass. Routing both its halves through Ports.env_get and Ports.file_read is what made the pair possible. world_state_probe's provenance assertion is STILL RUN and is not what this entry rests on: provenance says the driver read the world where it was asked to, the pair says nothing else in the run reads the host, and C4 ruled that the first is not hermeticity." }
     ],
 
     -- D5 field 7. READ from A7's catalogue, both the id list and each
@@ -411,7 +455,7 @@ export pure func driver_only() -> ProfileDefinition {
     -- declaration left behind here for a site that is no longer
     -- reachable-and-unrouted would be a rejection.
     unrouted_reachable_sites: [
-      { site_key: "src/core/test/stub_step.ail:202",
+      { site_key: "src/core/test/stub_step.ail:203",
         instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read",
         why_unroutable: "live_ports' clock adapter — the one place the driver's call graph reads a real wall clock, by design, and therefore the one place {Clock} is genuinely load-bearing. It is IN this profile's reachable set even though a deterministic run binds the scripted adapter instead: D4's profile-reachable is INSTALLATION-scoped, not execution-scoped, and carving it out on execution-scope grounds would put a fail-open exception into an installation-scoped rule (A10 decision 1)." }
     ],

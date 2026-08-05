@@ -2,9 +2,14 @@ module scripts/dst/compaction_catalog_dst
 
 import std/io (println, exit)
 import src/core/context_usage (catalog_context_limit_for)
+import src/core/ports (ambient_context_reader, empty_world_state)
 
+-- WI-D3 gave the resolver a reader. This probe installs the AMBIENT one because
+-- its subject IS the file on disk: it exists to assert that the checkout's
+-- `.motoko/model-catalog.json` maps qwen to 262144. A scripted reader here would
+-- assert that a table this script wrote says what this script put in it.
 export func main() -> () ! {IO, Env, FS} {
-  let n = catalog_context_limit_for("ollama/qwen3.6:35b-a3b-mxfp8");
+  let n = catalog_context_limit_for(ambient_context_reader(), empty_world_state(), "ollama/qwen3.6:35b-a3b-mxfp8").value;
   if n == 262144 then println("scenario=compaction.catalog_limit_qwen ok")
   else {
     let _ = println("scenario=compaction.catalog_limit_qwen invariant=qwen maps to 262144 actual=${show(n)}");

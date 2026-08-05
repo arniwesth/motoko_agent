@@ -145,7 +145,17 @@ pure func synthetic_env() -> [{ key: string, value: string }] {
    { key: "OPENAI_BASE_URL", value: "https://api.example.com/v1" },
    { key: "MOTOKO_HEADLESS", value: "1" },
    { key: "MOTOKO_CAPTURE_FAILED_PAYLOAD", value: "0" },
-   { key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" }]
+   { key: "MOTOKO_TOOL_TIMEOUT_MS", value: "5000" },
+   -- WI-D3's four. They are here because scenario 3 asserts this list IS
+   -- `driver_env_keys()` — routing `context_usage` put four more keys into the
+   -- recorded interaction log, and therefore into every persisted artifact, so
+   -- they are part of the surface the redaction detector has to cover. Values
+   -- are paths by nature and carry no credential shape, which is what the
+   -- name-axis row below then confirms rather than assumes.
+   { key: "MOTOKO_PROFILE_DIR", value: "/srv/motoko/.motoko/config/default" },
+   { key: "MOTOKO_CONFIG", value: "default" },
+   { key: "MOTOKO_REPO", value: "/srv/motoko" },
+   { key: "MOTOKO_MODELS_FILE", value: "/srv/motoko/.motoko/model-catalog.json" }]
 }
 
 pure func chunk(offset: int, text: string) -> StreamChunkRecord {
@@ -284,7 +294,7 @@ func scenario_the_synthetic_fixture_survives() -> bool ! {IO} {
   let log_untouched = List.length(redacted_log.redactions) == 0
                         && str_eq_list(payloads_of(redacted_log.interactions),
                                        payloads_of(synthetic_interactions()));
-  let _ = if env_clean then println("  ✓ the synthetic environment map produces no finding (7 driver keys)")
+  let _ = if env_clean then println("  ✓ the synthetic environment map produces no finding (${show(List.length(synthetic_env()))} driver keys)")
           else { let _ = println("  ✗ the synthetic environment map was flagged — the detector rejects honest artifacts"); report(env_findings) };
   let _ = if log_clean then println("  ✓ the synthetic interaction log produces no finding (9 interactions)")
           else { let _ = println("  ✗ the synthetic interaction log was flagged"); report(log_findings) };

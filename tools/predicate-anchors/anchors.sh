@@ -47,8 +47,8 @@ check src/core/tool_phase.ail 314 'exec_scratchpad_cell_ws' "the call attributed
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
-check src/core/test/stub_step.ail 202 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 881 1126 1232 2601 2711; do
+check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
+for l in 881 1126 1232 2654 2764; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 373 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

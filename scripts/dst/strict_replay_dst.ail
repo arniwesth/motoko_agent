@@ -379,19 +379,60 @@ func witness_of(initial: WorldState, run: TracedSessionResult, expected_env: [En
 -- one), each reached exactly once per traced run — derived from the driver's
 -- source, as `dst_discovery`'s header requires for the one class with no
 -- runtime witness.
-func env_reads_always() -> [EnvExpectation] {
+func env_reads_always(resolutions: int) -> [EnvExpectation] {
   [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
    { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
    { key: "OPENAI_BASE_URL",           count: 1 },
    { key: "MOTOKO_HEADLESS",           count: 1 },
    { key: "MOTOKO_SESSION_ID",         count: 1 }]
+    ++ env_reads_per_context_resolution(resolutions)
 }
 
 -- MOTOKO_TOOL_TIMEOUT_MS is read once per NATIVE dispatch (tool_phase.ail:343),
 -- so its count is expressed in terms of the independently witnessed dispatch
 -- count rather than as a literal.
-func env_reads_with_dispatch(dispatches: int) -> [EnvExpectation] {
-  env_reads_always() ++ [{ key: "MOTOKO_TOOL_TIMEOUT_MS", count: dispatches }]
+
+-- WI-D3's four context-resolution keys, and their MULTIPLICITY.
+--
+-- `resolve_context_limit` performs five env requests per call against a world
+-- whose env table does not carry these keys: MOTOKO_PROFILE_DIR, then
+-- MOTOKO_CONFIG, then MOTOKO_REPO (from `profile_dir_path`), then
+-- MOTOKO_MODELS_FILE, then MOTOKO_REPO again (from `catalog_path`). MOTOKO_REPO
+-- is therefore read TWICE per resolution and the other three once, which is why
+-- the rates below are not uniform — a uniform set would be satisfied by a
+-- recorder that lost one of the two MOTOKO_REPO reads.
+--
+-- MEASURED PER SCENARIO, and the resolution count is a PARAMETER because the
+-- first version of this made it a shared constant and that was wrong. WI-D3 set
+-- it to 12 — correct for discovery's approve, deny and eof, read off
+-- `make discovery`'s own census (environment_read=68/65/66 against 8/5/6
+-- accounted for before this item, 60 = 12 x 5 in every case) — and strict
+-- replay's scenarios reject it immediately: `rich` reaches 19 resolutions and
+-- `maxsteps` 8, so the shared literal was over-recorded on one and
+-- under-recorded on the other. The count tracks the loop arms a scenario takes,
+-- not the run length, and no formula over the witnessed quantities fits the
+-- three data points — 12 at provider=4, 19 at provider=5, 8 at provider=1 — so
+-- each scenario states its own measurement rather than deriving a rule from
+-- three observations.
+--
+-- The count is a literal because there is NO runtime witness to anchor it to:
+-- the env class emits no ledger event, which is the same reason this whole set
+-- exists, and deriving it from the log would put both sides of the check on one
+-- producer — the defect S16 names.
+--
+-- It goes RED rather than stale when the driver's loop structure changes the
+-- number of resolutions, and that is the intended failure: a changed count is a
+-- changed env surface and this set is the env class's only independent evidence.
+func env_reads_per_context_resolution(resolutions: int) -> [EnvExpectation] {
+  [{ key: "MOTOKO_PROFILE_DIR", count: resolutions },
+   { key: "MOTOKO_CONFIG",      count: resolutions },
+   { key: "MOTOKO_MODELS_FILE", count: resolutions },
+   { key: "MOTOKO_REPO",        count: resolutions * 2 }]
+}
+
+
+func env_reads_with_dispatch(dispatches: int, resolutions: int) -> [EnvExpectation] {
+  env_reads_always(resolutions) ++ [{ key: "MOTOKO_TOOL_TIMEOUT_MS", count: dispatches }]
 }
 
 -- ---------------------------------------------------------------------------
@@ -610,7 +651,11 @@ func run_scenario(
   -- Whether this scenario is the one carrying S7's obligation. Only one needs
   -- to be, and saying which makes the obligation locatable instead of assumed
   -- of all of them.
-  is_survive_fixture: bool
+  is_survive_fixture: bool,
+  -- WI-D3: how many times this scenario's control flow reaches
+  -- `resolve_context_limit`. Stated per scenario and measured — see
+  -- `env_reads_per_context_resolution`.
+  context_resolutions: int
 ) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world(script, answers, tools);
 
@@ -683,8 +728,8 @@ func run_scenario(
       -- not a tautology.
       let probe = witness_of(replay_world, replay, []);
       let expected_env = if probe.tool_dispatches > 0
-                         then env_reads_with_dispatch(probe.tool_dispatches)
-                         else env_reads_always();
+                         then env_reads_with_dispatch(probe.tool_dispatches, context_resolutions)
+                         else env_reads_always(context_resolutions);
       let w = { probe | expected_env_reads: expected_env };
       let _ = println("${label}: replay witness provider=${show(w.provider_calls)} tool=${show(w.tool_dispatches)} approval_reads=${show(w.approval_reads)} approvals_served=${show(w.approvals_consumed)} clock_delta=${show(w.clock_delta_ms)}ms");
       let fs = check_discovery(actual, w);
@@ -1051,8 +1096,8 @@ func failure_answers() -> [string] { [approve_line(), deny_line("bravo")] }
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only");
 
-  let ok_rich = run_scenario("rich", rich_script(), rich_answers(), rich_tools(), 12, true, true);
-  let ok_fail = run_scenario("maxsteps", rich_script(), failure_answers(), rich_tools(), 1, false, false);
+  let ok_rich = run_scenario("rich", rich_script(), rich_answers(), rich_tools(), 12, true, true, 19);
+  let ok_fail = run_scenario("maxsteps", rich_script(), failure_answers(), rich_tools(), 1, false, false, 8);
 
   let _ = println("");
   if ok_rich && ok_fail then

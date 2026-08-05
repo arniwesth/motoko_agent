@@ -2,10 +2,13 @@ module scripts/long_qwen_catalog_fixture_probe
 
 import std/io (println, exit)
 import src/core/context_usage (catalog_context_limit_for)
+import src/core/ports (ambient_context_reader, empty_world_state)
 
 export func main() -> () ! {IO, Env, FS} {
   let model = "openrouter/qwen/qwen3.6-35b-a3b";
-  let n = catalog_context_limit_for(model);
+  -- WI-D3: the ambient reader, for `compaction_catalog_dst`'s reason — this
+  -- probe's subject is the fixture catalogue MOTOKO_MODELS_FILE points at.
+  let n = catalog_context_limit_for(ambient_context_reader(), empty_world_state(), model).value;
   if n == 1200 then println("scenario=compaction.long_qwen_catalog_fixture ok")
   else {
     let _ = println("scenario=compaction.long_qwen_catalog_fixture invariant=qwen fixture maps to 1200 actual=${show(n)}");

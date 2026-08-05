@@ -549,6 +549,51 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
                          fin_p == "error",
                          "finish_reason=${fin_p}, expected error — if this also passes, the assertion above proves nothing");
 
+  -- files: THE FILESYSTEM CLASS'S ASSERTION (WI-D3).
+  --
+  -- The poison pair in `make world_state` establishes that a deterministic run
+  -- performs no ambient file read and that a live one dies without the
+  -- capability. It CANNOT see the other failure: a `scripted_file` that is bound
+  -- and whose table the driver never consults. Both halves of the pair stay
+  -- green over a world whose `files` are ignored — the deterministic run reads
+  -- nothing either way, and the live run still dies on `ambient_file`. So the
+  -- class needs the same PROVENANCE assertion the env class needed, for the same
+  -- reason and in the same shape: a value the world supplies, a behaviour that
+  -- branches on it, and a control proving the branches differ.
+  --
+  -- The discriminator is the profile's `agent.context_limit`. Seeded at 1 token
+  -- it makes any history oversized, so compaction fires and exhausts and the run
+  -- seals; absent, the limit resolves to 0 ("unknown") and compaction is skipped
+  -- entirely:
+  --
+  --   files seeded -> compaction exhausted -> finish_reason "compaction_exhausted"
+  --   files empty  -> limit 0, no compaction -> the scripted terminator, "stop"
+  --
+  -- The path is the one the driver COMPUTES rather than one this probe asserts:
+  -- with an empty env table `profile_dir_path` resolves MOTOKO_PROFILE_DIR to
+  -- "", MOTOKO_CONFIG to "default" and MOTOKO_REPO to "", giving
+  -- `.motoko/config/default/config.json`. That file exists in this checkout and
+  -- carries NO `agent.context_limit`, so an un-routed read yields 0 and the
+  -- seeded case fails — the world cannot pass by agreeing with the host.
+  let files_world: WorldState = {
+    empty_world_state() |
+    script: [prose_step("done")],
+    files: [{ path: ".motoko/config/default/config.json",
+              content: "{\"agent\":{\"context_limit\":1}}" }]
+  };
+  let no_files_world: WorldState = { empty_world_state() | script: [prose_step("done")] };
+  let with_files = run_world(approval_rt("probe_files_s"), 4, files_world);
+  let without_files = run_world(approval_rt("probe_files_c"), 4, no_files_world);
+  let fin_f = finish_from_trace(with_files.trace.records);
+  let fin_n = finish_from_trace(without_files.trace.records);
+  let _ = println("files: limit-from-world finish=${fin_f}, no-file finish=${fin_n}");
+  let ok_files = check("files: the driver read the context limit from the world's file table, not the host's",
+                       fin_f == "compaction_exhausted",
+                       "finish_reason=${fin_f}, expected compaction_exhausted — an un-routed read sees .motoko/config/default/config.json, which declares no agent.context_limit");
+  let ok_files_ctl = check("files: the same world without the file takes the other branch",
+                           fin_n == "stop",
+                           "finish_reason=${fin_n}, expected stop — if this also fails the assertion above proves nothing");
+
   -- tools: THE TYPED TOOL CONTRACT'S ASSERTION.
   --
   -- All four behaviours the plan names, through one production adapter
@@ -596,7 +641,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let ok_det = assert_deterministic("repeat", advance, again);
 
   if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
-     && ok_appr && ok_appr_det && ok_env && ok_env_ctl
+     && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_files && ok_files_ctl
      && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det then
     println("world_state_probe PASS")
   else {

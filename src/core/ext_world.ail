@@ -212,6 +212,28 @@ pure func env_of(xs: [Json]) -> [{ key: string, value: string }] {
   }
 }
 
+-- WI-D3's file table across the token. It has to cross: the driver ADOPTS the
+-- world an extension hook returns (`token_to_world` at five sites in
+-- session.ail), so a field the encoder omits is a field every hook silently
+-- empties mid-run. The decoder would still type-check — `world_of_json` builds a
+-- full record and AILANG demands every label — but the ENCODER omitting a key is
+-- the half nothing forces, and `codec_fixture_world` carries a distinct `files`
+-- entry so the round trip fails rather than the run.
+pure func files_json(xs: [{ path: string, content: string }]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => jo([kv("path", js(x.path)), kv("content", js(x.content))]) :: files_json(rest)
+  }
+}
+
+pure func files_of(xs: [Json]) -> [{ path: string, content: string }] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ path: str_field(x, "path", ""), content: str_field(x, "content", "") }) :: files_of(rest)
+  }
+}
+
 -- ---------------------------------------------------------------------------
 -- IdentityBody. A SUM, and the discriminator is written explicitly rather than
 -- derived from `identity_kind`: that function's strings are an artifact surface
@@ -413,6 +435,7 @@ export pure func world_json(w: WorldState) -> Json {
     kv("clock_ms", jint(w.clock_ms)),
     kv("approvals", ja(strings_json(w.approvals))),
     kv("env", ja(env_json(w.env))),
+    kv("files", ja(files_json(w.files))),
     kv("tools", ja(scripted_tools_json(w.tools))),
     kv("log", ja(interactions_json(w.log))),
     kv("gen", generator_json(w.gen))
@@ -424,6 +447,7 @@ export pure func world_of_json(j: Json) -> WorldState {
     clock_ms: int_field(j, "clock_ms", 0),
     approvals: strings_of(json_array(j, "approvals")),
     env: env_of(json_array(j, "env")),
+    files: files_of(json_array(j, "files")),
     tools: scripted_tools_of(json_array(j, "tools")),
     log: interactions_of(json_array(j, "log")),
     gen: generator_of(obj_field(j, "gen")) }
@@ -482,6 +506,11 @@ pure func codec_fixture_world() -> WorldState {
     clock_ms: 1213,
     approvals: ["yes", "no", ""],
     env: [{ key: "MOTOKO_MODE", value: "dst" }],
+    -- WI-D3's file table. TWO entries so a decoder that collapses the list is
+    -- visible, and the second holds "" content at a path that EXISTS — the one
+    -- state `FileRead.exists` carries that content alone cannot express.
+    files: [{ path: "/w/catalog.json", content: "{\"context_limits\":{\"m\":71}}" },
+            { path: "/w/present-but-empty.json", content: "" }],
     tools: [{ tool_call_id: "t-17", duration_ms: 199, code: "E_TOOL",
               message: "tool said no", content: "the content" }],
     log: [
@@ -516,6 +545,7 @@ pure func test_the_world_token_round_trips_every_scalar_field() -> bool
       && List.length(back.script) == List.length(w.script)
       && List.length(back.approvals) == List.length(w.approvals)
       && List.length(back.env) == List.length(w.env)
+      && List.length(back.files) == List.length(w.files)
       && List.length(back.tools) == List.length(w.tools)
       && List.length(back.log) == List.length(w.log)
   }
@@ -612,7 +642,17 @@ pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
                    && t.message == "tool said no" && t.content == "the content",
       _ => false
     };
-    approvals_ok && env_ok && tools_ok
+    -- WI-D3. Asserted by VALUE and in order, for the reason the approvals queue
+    -- is: an encoder that drops the key leaves the decoder's fallback behind, and
+    -- an empty table reads exactly like a world whose files were never seeded.
+    -- The second entry pins the present-but-empty path, which is the case a
+    -- decoder inferring existence from content gets wrong.
+    let files_ok = match back.files {
+      f :: g :: [] => f.path == "/w/catalog.json" && f.content == "{\"context_limits\":{\"m\":71}}"
+                        && g.path == "/w/present-but-empty.json" && g.content == "",
+      _ => false
+    };
+    approvals_ok && env_ok && tools_ok && files_ok
   }
 
 -- ---------------------------------------------------------------------------

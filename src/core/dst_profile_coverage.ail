@@ -32,7 +32,15 @@
 --
 --   src/core/tool_catalog.ail:114  collect_ext_schemas folds every hook
 --   src/core/tool_catalog.ail:125  tools_with_extensions calls that fold
---   src/core/test/stub_step.ail:133  live_ports calls it on EVERY model step
+--   src/core/test/stub_step.ail:190  live_ports calls it on EVERY model step
+--
+-- That anchor said `:133` from WI-A16 until WI-D3 and had been STALE the whole
+-- time — `:133` is a comment about scripted chunk `Usage`, not the
+-- `tools_with_extensions(rt)` call this line names. It was found by re-deriving
+-- every anchor in the tree rather than only the ones a gate checks, and nothing
+-- was checking it: `make anchors` covers the A5 attribution set, and this one is
+-- prose in a coverage module's header. Verified against HEAD before the WI-D3
+-- edits, so it is a pre-existing staleness rather than one this item introduced.
 --
 -- The ADR's survey looked only in `src/core/ext/runtime.ail`, where six
 -- dispatches live; the seventh is in the tool catalog because it builds the
