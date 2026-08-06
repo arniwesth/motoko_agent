@@ -249,6 +249,31 @@ measured it at one site. The handoff carries that measurement forward as a *cond
 result, because the item that takes it will delete four world-successor threadings — the same
 population D1's production defect came from.
 
+**Cluster 23 outcome: WI-D4 DONE 2026-08-05**, ~3h25m — **all three targets restored**, `make dst`
+back to its two pre-existing reds, ✓ rows 745 → **845**, `corpus_pr`'s class rows green and printed,
+`resolve_context_limit` 8 sites → **1**. Verified at review. Earned **S20**, extended S19 and S9, and
+corrected this reviewer twice: `corpus_pr`'s rows were **red, not missing** (the recipe truncates on
+failure), and the conflation had **three channels** where the handoff named one — the *salt*, not the
+budget, was the deep one.
+
+**Cluster 24 = WI-D5, re-run the acceptance table: HANDED OFF 2026-08-06**, handoff
+`HANDOFF-execute-d5-rerun-the-acceptance-table.md`. **This is the one the project has been walking
+toward**, and grounding made it smaller than expected rather than larger — the first time in
+Milestones C and D that has happened.
+
+**There is no rename cascade.** 007 grandfathers every existing `dst` identifier and says the
+exception *"does not confer the new meaning"*; every target project 009 added already uses a
+non-simulation working name. **D10's adoption permits the label, it does not require renaming
+anything.** The public record is one document —
+`design_docs/implemented/motoko_agent/m-motoko-dst-framework.md`, which states the distinction in
+three places.
+
+**The item's real difficulty is a reading, not a build.** D10 adopts the label **for the axis**, gated
+on **one documented baseline profile** — and `driver_only` passes two of its eleven rows *vacuously*,
+because it installs nothing, which B4 proved is forced rather than chosen. **So the question is
+whether a baseline covering no extension earns an axis-wide name**, and the handoff requires it
+answered out loud with the zero-coverage fact stated either way.
+
 **Worth recording as clustering guidance in its own right: the seven-for-seven grounding record in
 Milestones C and D is not a run of luck, it is a property of this plan.** Items were sized from the
 ADR's decisions, and the ADR describes *what must be true*, not *what the tree currently does*. Every
