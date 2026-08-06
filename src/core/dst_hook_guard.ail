@@ -51,6 +51,27 @@
 -- `! {Env, FS}` row and returns a `BudgetPatch` with no successor field
 -- (`packages/motoko-ext-abi/types.ail:298`).
 --
+-- SUPERSEDED IN ITS SECOND HALF AT WI-D6 (2026-08-06); the CONCLUSION stands
+-- and the REASON does not. Restated in two parts per WI-D2's rule, so the next
+-- reader can see which half is load-bearing:
+--
+--   STILL TRUE: no profile in this tree reaches this guard. `driver_only`
+--   installs nothing, so its disclosure list is empty and `is_excluded_hook`
+--   is false for every argument. The fixture below is still synthetic and
+--   these rows still establish the MECHANISM rather than a protected profile.
+--
+--   NO LONGER TRUE: the clause about `on_budget_plan`. WI-D6 narrowed that row
+--   to none after measuring all fifteen bindings, so an extension IS now
+--   installable in a conformant profile. What keeps this guard unreached is no
+--   longer the ABI — it is simply that `driver_only` chooses to install
+--   nothing, and it is the ONLY remaining reason where there used to be two.
+--
+-- That is plan rule S21 in its narrowest form: closing the ABI barrier did not
+-- make this guard reachable, it CONCENTRATED the reason it is unreachable onto
+-- the profile's empty install list alone. The guard becomes reachable when a
+-- profile installs an extension and excludes its `on_tool_handle`, which is
+-- WI-C5's.
+--
 -- So the guard is STRUCTURE, not enforcement-in-effect, and the acceptance
 -- script drives it with a SYNTHETIC definition that does exclude a gated hook.
 -- That is a real exercise of the mechanism and it is not a claim that any

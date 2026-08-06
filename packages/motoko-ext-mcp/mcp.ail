@@ -175,7 +175,7 @@ export func make_hooks(cfg: McpConfig) -> ExtensionHooks {
     provided_tools: tool_names,
     on_describe_tools: \_ . [],
     on_build_system_prompt: \ctx. { prepend: [], append: [] },
-    on_budget_plan:       func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} { no_budget_patch() },
+    on_budget_plan:       func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch { no_budget_patch() },
     on_tool_policy:       func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion },
     on_pre_step:          func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
     on_tool_handle:       handle,

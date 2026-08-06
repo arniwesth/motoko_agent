@@ -59,7 +59,7 @@ export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) 
     on_describe_tools: \_ . schemas,
     on_build_system_prompt: \ctx. build_prompt_patch(ctx.task),
     on_budget_plan:
-      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
         no_budget_patch()
       },
     on_pre_step:

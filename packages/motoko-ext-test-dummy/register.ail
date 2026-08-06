@@ -65,7 +65,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env} {
         if prompt_marker == "" then { prepend: [], append: [] }
         else { prepend: [], append: [prompt_marker] },
     on_budget_plan:
-      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
         {
           requested_total: budget_total,
           requested_solver: None,

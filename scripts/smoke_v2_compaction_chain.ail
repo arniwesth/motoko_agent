@@ -107,7 +107,7 @@ func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process
     provided_tools: [],
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
     on_pre_step: pre,

@@ -19,6 +19,13 @@
 -- `! {Env, FS}` row. These rows therefore establish that the MECHANISM works,
 -- not that any shipping profile is protected by it. See the header of
 -- `src/core/dst_hook_guard.ail`.
+--
+-- WI-D6 (2026-08-06) REMOVED THE SECOND OF THOSE TWO REASONS AND LEFT THE
+-- FIRST. The `on_budget_plan` clause above was true when written at WI-C5 and
+-- is kept rather than re-dated (S15); it is now false, because D6 narrowed that
+-- row and an extension IS installable. The conclusion is unchanged — this
+-- fixture is still synthetic and still unreachable by any profile — but it now
+-- rests on `driver_only` installing nothing and on nothing else. S21.
 
 module scripts/dst/hook_guard_dst
 
@@ -67,7 +74,7 @@ func guarded_hook() -> ExtensionHooks {
     provided_tools: [guarded_tool()],
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
     on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
@@ -242,9 +249,12 @@ export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Str
   let r4 = scenario_empty_install_is_vacuous();
   let all = r1 && r2 && r3 && r4;
   let _ = println("");
-  let _ = println("  i SYNTHETIC FIXTURE. No profile in this tree can reach this guard today:");
-  let _ = println("    driver_only installs nothing, and no extension is installable while");
-  let _ = println("    ExtensionHooks.on_budget_plan carries the ABI's closed ! {Env, FS} row.");
+  let _ = println("  i SYNTHETIC FIXTURE. No profile in this tree can reach this guard today,");
+  let _ = println("    and from WI-D6 that rests on ONE reason where it used to rest on two:");
+  let _ = println("    driver_only installs nothing. The other reason — that no extension was");
+  let _ = println("    installable while ExtensionHooks.on_budget_plan carried the ABI's closed");
+  let _ = println("    ! {Env, FS} row — is gone: D6 narrowed that row after measuring all");
+  let _ = println("    fifteen bindings, so an extension IS now installable (make declared_vs_performed).");
   let _ = println("    These rows establish the MECHANISM, not that a shipping profile uses it.");
   if all then println("hook_guard: 4 passed, 0 failed")
   else { let _ = println("hook_guard: FAILED"); exit(1) }

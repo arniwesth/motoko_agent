@@ -381,7 +381,7 @@ func compaction_ai_hook() -> ExtensionHooks ! {AI, Clock, Env, FS, IO, Net, Proc
     provided_tools: [],
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
     on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { compact_with_ai(ctx, msgs, cfg) },
     on_tool_policy: \_ _ . Allow,
     on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
@@ -396,7 +396,7 @@ func structural_hook() -> ExtensionHooks {
     provided_tools: [],
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
     on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
       compact_for_pre_step(ctx, msgs)
     }, next_state: ctx.world } },
@@ -428,7 +428,7 @@ func long_tool_hook() -> ExtensionHooks {
     provided_tools: ["LongResult"],
     on_describe_tools: \_ . [{ name: "LongResult", description: "deterministic long-result fixture", parameters: "{\"type\":\"object\"}" }],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
     on_pre_step: \ctx _. { decision: PassThrough, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
     on_tool_policy: \_ _ . Allow,
     on_tool_handle: func(ctx: ExtCtx, call) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {

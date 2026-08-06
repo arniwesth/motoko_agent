@@ -99,7 +99,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {AI, Clock, Env, F
     provided_tools: [],
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
-    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None },
     -- WI-B2b. FORWARDS the outcome; it does not re-wrap it. This is the one
     -- hook in the tree that actually calls `ai_step`, so it is the one place
     -- where `next_state: ctx.world` would be a real defect rather than a

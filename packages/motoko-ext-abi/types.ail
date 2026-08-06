@@ -172,6 +172,10 @@ export type ExtPorts = {
   --
   -- It did NOT make any extension coverable. Coverage is D5's per-hook question
   -- and it is blocked on `on_budget_plan`'s row below, not on this one.
+  -- SUPERSEDED IN ITS SECOND CLAUSE AT WI-D6 (2026-08-06), and the first clause
+  -- stands: this widening still made nothing coverable, but `on_budget_plan`'s
+  -- row below no longer blocks anything — D6 narrowed it. The sentence was true
+  -- when written at WI-C5 and is kept rather than re-dated, per plan rule S15.
   clock_now: (ExtWorld) -> ExtClockReading ! {Clock},
   env_get: (string, string) -> string ! {Env}
 }
@@ -323,7 +327,48 @@ export type ExtensionHooks = {
   provided_tools: [string],
   on_describe_tools: () -> [ToolSchema],
   on_build_system_prompt: (ExtCtx) -> PromptPatch,
-  on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS},
+  -- WI-D6 NARROWED THIS ROW, and it is the row that blocked every install in
+  -- the tree from the ABI's first version until 2026-08-06.
+  --
+  -- WAS, through WI-D5: `! {Env, FS}` — closed. Under D5's coverage criteria
+  -- the slot was then coverable under NEITHER: criterion 1 (deterministic and
+  -- effect-free) failed on the declared row, and criterion 2 (world-mediated
+  -- with explicit world state returned) failed because `BudgetPatch` carries no
+  -- successor field. The slot is also UNCONDITIONALLY dispatched, so a profile
+  -- could not exclude it either. Every extension in the tree binds it, so no
+  -- extension was installable in a conformant profile — see WI-D5's verdict,
+  -- which named this row as "the one item that would make the name transfer".
+  --
+  -- IS, from WI-D6 (2026-08-06): no row. The slot is coverable under criterion
+  -- 1, and the empty install list of `driver_only` is now a CHOICE rather than
+  -- a consequence of this line.
+  --
+  -- WHY THIS IS A NARROWING TO THE MEASUREMENT RATHER THAN A RELAXATION.
+  -- `make declared_vs_performed` measures all fifteen bindings against two
+  -- independent producers and NOT ONE of them performs `Env` or `FS`:
+  --   * the runtime capability trap, out of process, witnessed 7 of 15
+  --     directly (the other 8 are unreachable by that instrument because their
+  --     own `register_with_config` reads `Env`/`FS` BEFORE any hook runs — the
+  --     confound is documented in the runner);
+  --   * the effect checker, over all 15, total over inputs — which is what
+  --     licenses the claim for the 8 the runtime producer cannot reach.
+  -- WI-D5's verdict had already concluded from C5's single measurement that
+  -- "the barrier is the rule, not the behaviour". D6 measured the other
+  -- fourteen and moved the rule to the behaviour.
+  --
+  -- THE COMPILER NOW ENFORCES THIS, and that is the point rather than a bonus.
+  -- Record-field rows are CLOSED and admit exactly one width, so a binding that
+  -- performs `Env` or `FS` here no longer type-checks:
+  --   incompatible closed rows: r1 has extra labels [], r2 has extra labels [Env FS]
+  -- An extension that starts reading a config file in its budget hook fails to
+  -- build. Re-widening this row is therefore a deliberate act, not a drift, and
+  -- `make declared_vs_performed` asserts the narrow row on every run.
+  --
+  -- WHAT THIS DID NOT DO: it did not make any profile cover anything.
+  -- `driver_only` still installs nothing, and the axis's extension-model
+  -- coverage is still ZERO. This row removed the blocker; spending it is
+  -- WI-C5's `compose`-bearing profile.
+  on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch,
   -- WI-B2a: `+ Trace`, and it is the SECOND and last row this item changed.
   -- It is a CONSEQUENCE of `ExtPorts.ai_step` above, not an independent finding:
   -- `Trace` reaches the extension surface only through `ai_step`, and the only
