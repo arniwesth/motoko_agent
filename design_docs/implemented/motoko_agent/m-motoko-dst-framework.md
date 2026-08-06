@@ -1,11 +1,32 @@
 # M-MOTOKO-DST-FRAMEWORK — Deterministic Simulation Testing, as built
 
 **Status**: Implemented (as-built reference; refreshed 2026-07-24 for the seeded axis and the
-naming amendment)
-**Naming**: The word "DST" in this document's title, in every `dst*` make target, and in every
-`*_dst.ail` script name is **grandfathered historical usage**. Per
-`.agent/projects/007_dst_consolidation/ADR-001-motoko-dst-definition-and-taxonomy.md`, what is
-built here does not yet meet that ADR's conformance bar — see *What DST means in Motoko* below.
+naming amendment; **name adopted 2026-08-06** at the WI-D5 conformance gate)
+**Naming**: **The unqualified "DST" / "simulation" label is ADOPTED for the generated axis as of
+2026-08-06**, under D10 of
+`.agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md`: the
+acceptance test passes eleven of eleven rows for the documented baseline profile **`driver_only/10`**
+(under execution manifest `driver_only/3`), and project-007's definition/taxonomy ADR is
+`Accepted 2026-07-26`. **Every report naming the axis must name the profile.**
+
+> **This statement was superseded on 2026-08-06 and is kept because it was true when written.**
+> From 2026-07-24 until the WI-D5 gate, this document read: *"The word 'DST' in this document's
+> title, in every `dst*` make target, and in every `*_dst.ail` script name is grandfathered
+> historical usage. Per 007's ADR, what is built here does not yet meet that ADR's conformance bar."*
+> **The grandfathering clause still stands** — 007's ADR grandfathers every existing `dst` identifier
+> and that exception is unchanged, so **adoption renamed nothing**. What changed is the second half:
+> the conformance bar is now met for one profile.
+
+**What the label does NOT assert — mandatory in every report:** **the axis's extension-model
+coverage is ZERO, and that is structural rather than incidental.** `driver_only` installs no
+extension, and the empty install list is **forced**: while `ExtensionHooks.on_budget_plan` declares
+the ABI's closed row `! {Env, FS}` and returns a `BudgetPatch` with no successor field, no extension
+in the tree is installable in a conformant profile. Four of the eleven acceptance rows lean on that
+emptiness in a named clause — the boundary row passes **vacuously** in every installed-extension
+clause; the fault row's `extension_effect_fault` waiver and the oracle row's `ScratchpadResult`
+exemption are both bought by it; and the virtual-time row's pass, while real, does not transfer.
+**Per D10, additional profiles earn coverage separately and inherit none of these four.** Full
+row-by-row evidence: `.agent/projects/009_motoko_dst_execution/NOTE-d5-acceptance-table-rerun-and-name-decision.md`.
 **Role**: The durable, navigable spine for the DST topic — what the framework *is* at HEAD, where
 every piece lives, and how to extend it. Decision history stays in the ADRs linked at the bottom;
 this doc describes the result. (Convention per
@@ -40,19 +61,36 @@ definition and naming threshold above** while preserving all five decisions — 
 code, use explicit fakes, record normalized traces, assert structural invariants, report id/seed/
 trace. It also supersedes ADR-001's clock-normalization rule as a permanent answer.
 
-That ADR reserves the unqualified words **"DST" / "simulation"** for a bar this framework does not
-yet meet: a seed must generate the *ordering* of environment events, inject logical faults, and
-advance a virtual clock, with invariants over a complete returned `LedgerTrace`. What is built here
-— fixed scenarios plus the seeded axis below — is **property-based testing over agent-loop state**:
-strictly stronger than trace replay, strictly weaker than DST. The interim name for the seeded axis
-is **"deterministic trajectory testing"**.
+That ADR reserves the unqualified words **"DST" / "simulation"** for a bar the framework had not yet
+met when this section was written: a seed must generate the *ordering* of environment events, inject
+logical faults, and advance a virtual clock, with invariants over a complete returned `LedgerTrace`.
 
-Concretely, at HEAD the framework has *no* test scheduler, *no* injected-fault mechanism, and *no*
-virtual clock. Closing that gap is project
-`.agent/projects/009_motoko_dst_execution/` — it is a cross-cutting change to effect routing and
-the terminal-trace contract, **not** a `ScriptedStep` extension (`ScriptedStep` is a success-only
-record; approvals, native tools, and session time bypass the ports boundary; and
-`run_v2_from_messages` returns messages, not a trace).
+**That bar is now MET for the baseline profile `driver_only/10`, as of 2026-08-06** — project 009
+built the deterministic test world, and the WI-D5 gate ran the eleven-row acceptance table and found
+eleven of eleven. The interim name is retired.
+
+> **Two claims here were superseded on 2026-08-06 and are kept because they were true when written.**
+>
+> * From 2026-07-24: *"What is built here — fixed scenarios plus the seeded axis below — is
+>   **property-based testing over agent-loop state**: strictly stronger than trace replay, strictly
+>   weaker than DST. The interim name for the seeded axis is 'deterministic trajectory testing'."*
+>   The generated axis is no longer weaker than the bar; **the fixed scenarios still are**, and they
+>   are a different axis that the label does not cover (see D10 — the label is adopted for the
+>   *generated* axis only).
+> * From 2026-07-24: *"Concretely, at HEAD the framework has no test scheduler, no injected-fault
+>   mechanism, and no virtual clock."* All three now exist: a seeded generator whose output is a
+>   function of its seed alone (WI-D4), a fault catalogue reaching nine required classes and nine
+>   named production recovery branches by search (WI-D1), and a single world clock with every
+>   profile-reachable time-bearing read routed through it (WI-A12/D3).
+
+**The scope of the adoption, restated because it is the available misreading:** the label is adopted
+for the **generated axis under one profile**, whose **extension-model coverage is zero and
+structurally so** — see the Naming block at the top. It is not a claim about the fixed scenarios,
+and it is not a claim about any profile that installs an extension, because none exists.
+
+The route was a cross-cutting change to effect routing and the terminal-trace contract, **not** a
+`ScriptedStep` extension (`ScriptedStep` was a success-only record; approvals, native tools, and
+session time bypassed the ports boundary; and `run_v2_from_messages` returns messages, not a trace).
 
 ## Architecture
 
@@ -289,9 +327,19 @@ Execution record: `001_DST` and `004_phase_core_refactor` PLAN/HANDOFF/NOTE file
 `.agent/projects/007_dst_consolidation/` (this consolidation: scope note, plans, as-built
 handoff with the full migration commit list and baseline table).
 
-Known deferred work: the deterministic test world that would earn the DST name (project 009 —
-generated event orderings, logical faults, virtual time, complete returned traces, exact-program
-replay; currently blocked on an upstream AILANG recorded-stream API), shrinking and automatic
+**Delivered 2026-08-06** (was "known deferred work" from 2026-07-24 until then, and the entry read:
+*"the deterministic test world that would earn the DST name (project 009 — generated event
+orderings, logical faults, virtual time, complete returned traces, exact-program replay; currently
+blocked on an upstream AILANG recorded-stream API)"*). **Two halves of that entry expired at
+different times and both are recorded rather than deleted:** the upstream recorded-stream API landed
+in a released AILANG and was repinned at WI-B1 and adopted at WI-C1/C2, so the *blocked-on* clause
+had already been false for some time; and the world itself was completed and gated at WI-D5, which
+is what earned the name — **for the baseline profile `driver_only/10`, whose extension-model coverage
+is zero.**
+
+Known deferred work: **the `on_budget_plan` ABI widening** — the one change that would let any
+profile install an extension, and so the one that would make the four extension-dependent acceptance
+clauses non-vacuous; a second (`compose`-bearing) profile; shrinking and automatic
 promotion of failing seeds, the `smoke_v2_*` subsumption audit
 (operator-deferred 2026-07-12), in-flight extension diagnostics (`ExtPorts.emit_diagnostic`),
 and the gated AILANG env-manifest Layer-2 scenarios (ADR-003; blocked on the WI-1/WI-2 track in

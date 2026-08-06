@@ -321,6 +321,27 @@ numbers were derived, which moved four `session.ail` line numbers by nine. **S15
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
 
+**S21. When a row closes, re-ask of every surviving exemption in every OTHER row why it survives — a
+closure narrows the set of reasons, and a reason that used to be one of many can become the only
+one.** Earned by WI-D5, and it is the only rule here about a defect that gets WORSE as the work gets
+better. This project has tracked which acceptance rows pass vacuously since C4, carefully, row by row.
+**The count still moved from two to four without any item noticing**, because each caveat was recorded
+correctly inside its own row's prose and nothing ever counted them together.
+
+The instance: at C4, `d64_gap_register` held thirteen variants of which **eleven were
+`driver_only`-reachable**, so the profile's empty install list was irrelevant to row 7 — the row failed
+for reasons that had nothing to do with extensions. **WI-D2 closed those eleven.** What remained was a
+residue of two, and **one of them (`ScratchpadResult`) is unreachable precisely because no extension is
+installed to emit it** — its own recorded reason says it needs "a hook returning `Handled` with a
+`cells` key". So the proportion of row 7 purchased by the profile's emptiness went **up** as the row
+got better, and the row's pass became a fourth place the vacuity leans.
+
+**Closing a row can CONCENTRATE a vacuity rather than remove it.** No gate in this project can see
+that: every individual reason stayed true, every row's prose stayed accurate, and the aggregate claim
+— *what does this green table actually rest on* — is not an artifact anything computes. **The
+detection is to enumerate the surviving exemptions across all rows and ask, of each, why it survives;
+the fix is to make the aggregate a checked output rather than prose.**
+
 **S20. For a generator, assert what its output is a function OF — not only that it is a function.**
 Earned by WI-D4, and it is the deepest defect this project has found. All three generating seams
 salted every choice with `n=${List.length(state.log)}` — the RAW log length, which the DRIVER also
@@ -2539,8 +2560,37 @@ and the conflation was three channels rather than one. The first matters most: *
 understated "failing"**, and the real state was a required fault class that no member of D11's
 blocking bank reached.
 
-**THE TABLE IS UNOBSTRUCTED AND IS NOT CLAIMED.** Rows 4 and 11's evidence is green and printed, rows
-7 and 10 were green throughout, and nothing here re-ran the table — that is the next item's job.
+**WI-D5, 2026-08-06 (~25 min) — THE TABLE IS RE-RUN AT ELEVEN OF ELEVEN AND THE NAME IS ADOPTED.**
+The first run of the full table since C4. `make dst` exit 2 with **only** `test_coverage` and
+`test_coverage_selftest` (pre-existing since B2a), **845 ✓ rows** — identical to D4's, same
+methodology — and a cache-cold sweep at **226/17, member for member**. The baseline profile is
+**`driver_only/10` under manifest `driver_only/3`**, named per D10's requirement that every report
+name the profile. Condition 2 (007's taxonomy ADR) confirmed `Accepted 2026-07-26`. Adoption is
+recorded in `design_docs/implemented/motoko_agent/m-motoko-dst-framework.md` with the three
+superseded claims **restated with their date rather than deleted** (S15). **Nothing was renamed** —
+007 grandfathers the existing `dst` identifiers and D10's adoption permits the label without
+requiring churn.
+
+**THE VERDICT CARRIES A MANDATORY CAVEAT: the axis's extension-model coverage is ZERO, and it is
+STRUCTURAL.** The empty install list is forced while `on_budget_plan` declares `! {Env, FS}` and
+returns a successor-free `BudgetPatch`. **Four rows lean on that emptiness, not two** — and the
+fourth is the item's finding: row 3 passes **vacuously**; row 4's `extension_effect_fault` waiver and
+**row 7's `ScratchpadResult` exemption** are bought by it; row 5's pass is real but does not transfer.
+**Row 7's leaning is NEW and appeared because D2 succeeded** — at C4 the register's thirteen entries
+made the profile's emptiness irrelevant there, and closing eleven of them left a residue in which one
+of two survivors is purchased by the empty install list. **Closing a row can concentrate a vacuity
+rather than remove it**, and nothing in these rules tracks that.
+
+**One row passes on a stated reading, reported rather than buried.** Row 7's third conjunct is
+literally false for two Logical variants; it passes on WI-D2's recorded reading — *emissions that
+OCCUR reach the trace* — backed by 17 variants compared wire-against-trace out of process. **This is
+not the narrowing C4 forbade** (no reclassification, no shrunk profile claim; D2 closed the row by
+appending eleven variants). But it is the table's single interpretive dependency: reject the reading
+and row 7 is red and the verdict is NO. **At C4 the row failed under every reading, which is why
+nobody had to adjudicate it then.**
+
+**THE TABLE AS OF WI-D4 WAS UNOBSTRUCTED AND WAS NOT CLAIMED.** Rows 4 and 11's evidence is green and
+printed, rows 7 and 10 were green throughout, and nothing in D4 re-ran the table — that was D5's job.
 Three things it must not inherit as settled: **the env census numbers moved 12/12/12/19/8 → 1 across
 the board**, the profile is **v10** so any artifact naming v9 is stale, and **two of the eleven passes
 remain vacuous** in their installed-extension clauses. **Twelve items have now declined the name.**
@@ -2548,6 +2598,18 @@ remain vacuous** in their installed-extension clauses. **Twelve items have now d
 3. **This entry did not say what to do with a NO.** It describes running the table and adopting the
    name. "Expect NO" had to arrive by handoff rather than by plan. **A gate that reports NO with a
    work list is the successful outcome, not the failed one.**
+4. **AND IT STILL DOES NOT SAY WHAT A YES MEANS.** Defect 3 was answered; its mirror was not.
+   Nothing in this entry says that adoption is a **documentation act with a mandatory caveat** rather
+   than a rename — that 007 grandfathers the existing identifiers, that D10's adoption permits the
+   label without requiring churn, and that the verdict must carry what the label does *not* assert.
+   All of that had to arrive by handoff at WI-D5, which is the same failure mode as defect 3 one
+   branch over.
+5. **"WHAT THE LABEL DOES NOT ASSERT" IS PROSE, AND IT IS NOW LOAD-BEARING FOR EVERY FUTURE REPORT.**
+   The zero-extension-coverage sentence lives in a note and a design document — **exactly the class
+   S15 says gets quoted forward and re-dated**, and this project has carried that class in five
+   consecutive items. Everything it asserts is already computed: the install list is empty, the
+   emptiness is forced by `on_budget_plan`'s row, and `make driver_only` guards both. **A row that
+   printed the caveat as gate output would make it impossible to report a green table without it.**
 
 **WI-C5. The second profile: `compose`-bearing.** Depends on **B2, A5, A10 and A12** — B2 for the
 coverage widening, A5 because its routed-set claim is a routing-completeness claim gated on the
