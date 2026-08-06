@@ -564,3 +564,27 @@ amendment.
 source-anchor kind.** Four items paid the `make anchors` version. This is the same shape in a
 different medium, it is cheaper (no profile re-issue, no content hash), and it was invisible until
 someone counted.
+
+
+## Cluster 28 = the acceptance reviewers' admission. Handed off 2026-08-06.
+
+`HANDOFF-acceptance-reviewers-admit-classifier-3.md`. **Addressed to both ADR-001 acceptance
+reviewers jointly — the second non-execution handoff in this project, and a different kind again from
+the amendment review.** That one asked for a disposition on a draft; this asks for a **governance
+act**: changing a count two people signed as finite.
+
+**The ADR says in its own text that this is not the amendment's to make** (`:1493-1496`), which is why
+WI-D10 landed both amendments and stopped one edit short.
+
+**Grounding found the act is not the count — it is a ruling nobody has made.** WI-D10 annotated
+classifier 1's row to *"Built; its acceptance criterion is NOT met at HEAD"* and flagged the cell edit
+rather than burying it. **So the table now asks a question its own shape cannot express: is a
+mechanism whose acceptance criterion is unmet still "Built"?** Three readings are available and they
+give three different counts — four, or five, or a state the table has no vocabulary for. **The count
+being changed from three depends on which is taken**, which is why the ruling and the admission are
+one handoff rather than two.
+
+**Clustering note: a handoff can be addressed to a ROLE rather than to a session.** Every prior one
+assumed whoever picks it up executes it. This one cannot be executed by a session that is not those
+two people, and saying so is the deliverable — an item that could be picked up and done by anyone
+would be the wrong artifact here.
