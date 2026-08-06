@@ -374,6 +374,14 @@ sides.** D6's answer is the general one: the gate now derives its subject list f
 `registry_generated.ail` and asserts membership both ways, so **an extension added tomorrow cannot
 escape measurement by not being noticed.**
 
+**AND THE FALSIFIER MUST COVER HOW THE SET IS RESOLVED, NOT ONLY WHAT IT CONTAINS.** Found by the
+amendment review, and it is the sharpest instance of this rule yet: `scratchpad`'s package directory
+is `packages/motoko_scratchpad`, **not** `packages/motoko-ext-scratchpad`. **A derivation that
+resolves package directories by naming convention silently resolves 14 of 15 — and 14 is exactly the
+answer being claimed.** A wrong derivation and the right number, indistinguishable by inspection and
+by the residue check. The mapping must be read from its producer, `ailang.toml:24`. **A falsifier that
+counts members does not catch a resolver that lost one; it has to assert the resolution too.**
+
 **EXTENDED BY WI-D7, ONE LEVEL UP AND AGAINST THE ITEM THAT EARNED THIS RULE: when an item's
 conclusion is "X IS NOW UNBLOCKED", derive the list of things that BLOCK X from a producer and assert
 the COUNT — not just the list of things you changed.** D6 derived its *subject* list from
@@ -647,6 +655,18 @@ The 17 expected failures are stable across B4, C1, C3 and C5: the 7 `TC_ARITY_00
 sealed-vocabulary probe (`IMP010`), 5 `src/examples/`, 3 code-graph fixtures and 1 test-coverage
 fixture. **Confirm the failing set member-for-member rather than the count** — the count moves by one
 whenever an item adds a file.
+
+**AND A GATE THAT IS NOT IN `make dst` DEGRADES INVISIBLY, however loudly it fails when run.** Found
+by the amendment review, outside its scope. **Classifier 1 — the ADR's one *built* gate mechanism —
+does not meet its recorded acceptance criterion at HEAD.** `ADR:2108` records it *"Built and
+independently verified … Met at `a0d4edb`, run by both acceptance reviewers: 0 unresolved,
+`agree=43 disagree=0`"*, and its criterion has two clauses. **Verified at review: `make
+effect_inventory_selftest` exits 2 reporting `agree=0 disagree=0` and "This is a pass-shaped absence,
+not a pass"** — all 46 `ailang iface` calls fail `MOD010`, so every classification comes from an
+unvalidated textual fallback. **Neither `effect_inventory` nor `effect_inventory_selftest` is in
+`make dst`**, so thirty-three items ran without seeing it, across a toolchain repin the Makefile
+itself says to re-run after. **The tool failed closed correctly and said so in plain words; nothing
+was listening.** A gate's loudness is worth nothing if no aggregate target invokes it.
 
 **AND A SOURCE-DERIVED GATE HAS ITS OWN HAND-MAINTAINED INPUT — the literal the gate cannot see.**
 Earned by WI-D3. `make discovery` re-derives `driver_env_keys()` from source rather than trusting a
@@ -2822,6 +2842,44 @@ because no gate compares them.
 
 **What D6 delivered, stated at its true size: one barrier of four removed, and the argument that
 could remove the other three.** That is a real result.
+
+**THE AMENDMENT REVIEW, 2026-08-06 — BOTH ACCEPT WITH CONDITIONS. B first, then A, then the table.**
+`REVIEW-adr-001-criterion-2-amendment.md`, by a reviewer independent of D6/D7/D8/D9. **Neither is
+Revise**, and per the handoff's question the revision is to *neither* A's argument nor its fail-closed
+default. **All four re-derivations confirm D9**, and two of them are stronger than D9's own.
+
+**D8's 8/7 was reconstructed arithmetically, which D9 could not do**: 8 sites with `on_pre_step:` and
+`func` sharing a line, 6 with the label alone on its line, 1 named — `8 + 6 + 1 = 15`, and `6 + 1 = 7`.
+**D8's table was a line-keyed count reported as a binding-form count, and it contradicted the
+mechanism D8 stated four paragraphs above it.** Confirmed independently at review.
+
+**Four conditions on A, all additions, and A-4 is the one that changes WI-C5's ordering a third
+time.** A-2: the Route B sufficiency clause is wrong in the *permissive* direction — a fail-closed
+closure classifier would report `compose` (17 modules) and `context_mode` (7) **dirty** on their std
+imports, so "Route B plus classifier 3 buys all three barriers" is false for the two extensions it
+names unless Route B also strips every effect-bearing import. A-3: classifier 3's honest yield is
+**4 of 15** extensions, not fifteen. **A-4: classifier 3 ALONE, with zero Route B work, would clear
+all three barriers for `compaction_structural`** — verified at review: its three barrier-slot bodies
+are measurably effect-free, its closure imports only effect-free stdlib, and it is the **one**
+extension binding `on_pre_step` as a named function. **That is the tree's first installable extension
+and the cheapest path to a non-zero coverage number, and the draft never names it.**
+
+**The architecture test clears classifier 3, and the handoff's D5-level escalation does NOT fire.**
+Its absence degrades to exactly HEAD, which is the ground both acceptance reviewers used for the other
+three. And the escalation is refused on a measurement: a measurably-effect-free hook is blocked by the
+**ABI record's closed row** — a named binding cannot declare narrower than its slot — not by the
+classifier layer. **So the extension model is uncovered, not uncoverable by construction**, and the
+route that needs no classifier is an ABI change already sitting inside the deferred major.
+
+**A cannot license a `WorldMediated` classification at HEAD** — verified four ways — **but the
+prohibition is unenforced prose.** `classification_agrees` validates a `WorldMediated` entry against
+the excluded-id list and nothing else; **what actually keeps it unreachable is the barrier count.**
+True before the amendment and not worsened by it.
+
+**Applying it is three edits with three different owners**, and only the third needs the acceptance
+reviewers: the table gains a **fourth** deferred mechanism where `ADR:20-22` and `:2113` both say
+three. **Condition A-1 blocks that edit specifically** — see S13's extension; classifier 1's row must
+not keep reading "Built and independently verified" in the pass that adds a row beneath it.
 
 **WI-D9, 2026-08-06 (~39 min) — CRITERION 2 ADMITS EVIDENCE. NOTHING CAN PRODUCE IT. COUNT STILL
 THREE.** The answer splits, and which half fails is the item's value.
