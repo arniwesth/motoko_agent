@@ -156,6 +156,28 @@ field the encoder writes and the decoder ignores; both halves type-check and the
 until a replay serves a different response while every count still balances. A14 and A15 encode
 programs for D8's persistence and inherit this directly.
 
+**TWO FURTHER EXTENSIONS FROM WI-D6, and the second changes what this project should reach for
+first.**
+
+**A producer's blind spot is a property of the QUESTION, not of the instrument.** C5's detector is
+sound and its capability trap is the right producer for the question C5 asked about one hook. Pointed
+at fifteen extensions it can answer for **seven** — because AILANG's capabilities are per-process, so
+a registration that performs `Env` cannot be granted it while the dispatch is denied it, and nine of
+fifteen `register_with_config` implementations read `Env` before any hook is dispatched. **No arm can
+be written around that.** The fix was not a better arm but a *third producer*. **Before extending an
+instrument to a larger subject set, ask what fraction of the new set its producer can reach, and
+report the fraction rather than the subset.**
+
+**And the compiler is an UNDERUSED producer here, which narrowing a row unlocks.** Every
+declared-versus-performed argument since D5 assumed the declaration was fixed and therefore needed a
+runtime witness. **The moment the declaration is a variable, the effect checker answers the same
+question TOTALLY** — 15 of 15 over all inputs, where the trap witnesses 7 over the paths its arms
+exercise. Verified at review: after the narrowing, a budget hook that reads `Env` is **rejected**
+(`incompatible closed rows: r1 has extra labels [Env], r2 has extra labels []`), so a performing body
+is not merely absent but *unwritable*. **`on_response_intercept`, `on_solver_candidate` and
+`on_pre_step` are the three slots D5 still refuses on declared rows, and the same move is available to
+each** — each with its own measurement, none of which has been taken.
+
 **S15. A global `sed` over a line-number reference is safe for DATA and unsafe for PROSE, because
 prose has tense.** Earned by WI-C1. Its anchor cascade rewrote `stub_step.ail:163` → `:182`
 everywhere, correctly in every `site_key`, and **wrongly inside two notes that are records of PAST
@@ -312,6 +334,11 @@ required fault class no bank member reached, which is a coverage regression rath
 bookkeeping gap "missing" implies. **The correction matters in the direction that costs more:
 "unevidenced" understates "failing".**
 
+**A FOURTH MEDIUM, from WI-D6: a SWALLOWED EXIT CODE.** Reading `$?` after piping a script through
+`tail` reported success over a run that exited 1. The four are now: an absent tick (C4), an absent
+count (D1), a truncated artifact row (D4), and a discarded exit status (D6). **Every one is a signal
+that was produced and then lost between the producer and the reader.**
+
 **S18. Tensing a comment IS a source edit for anchor-cascade purposes.** Earned by WI-C5, which is
 the SECOND consecutive item to pay the line-number cascade twice, both times for the same reason:
 comment edits landed after the anchors were computed. C3's operational rule ("finish every source
@@ -320,6 +347,25 @@ edits; what broke it was rewriting a historical comment block for tense under S1
 numbers were derived, which moved four `session.ail` line numbers by nine. **S15 and the anchor rule
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
+
+**S22. When an item's scope is "every X", DERIVE the list of X from a producer in the tree and assert
+the agreement in the gate. Never take it from prose.** Earned by WI-D6, against its own handoff.
+**The handoff named eight extensions binding `on_budget_plan`; there are fourteen besides compose.**
+Verified at review: 17 packages reference the slot, of which 15 are binding extensions, and the six
+the handoff missed — `mcp`, `context_mode`, `ailang_docs`, `decision_framework`,
+`compaction_structural`, `empty_stop_guard` — are all in `registry_generated.ail`, the host's own
+install set.
+
+**Nothing turned on it, and that is luck rather than design.** All six bind the slot with a constant.
+**But the same handoff argued that "a single binding that genuinely performs `Env` or `FS` blocks
+Route A" — which makes the count load-bearing by its own reasoning.** An undercount of six in a
+population where one member can refuse the whole change is a scope claim doing the work of a
+measurement.
+
+**This is S16's independence requirement applied to a work item's SCOPE rather than to a check's two
+sides.** D6's answer is the general one: the gate now derives its subject list from
+`registry_generated.ail` and asserts membership both ways, so **an extension added tomorrow cannot
+escape measurement by not being noticed.**
 
 **S21. When a row closes, re-ask of every surviving exemption in every OTHER row why it survives — a
 closure narrows the set of reasons, and a reason that used to be one of many can become the only
@@ -2610,6 +2656,46 @@ remain vacuous** in their installed-extension clauses. **Twelve items have now d
    consecutive items. Everything it asserts is already computed: the install list is empty, the
    emptiness is forced by `on_budget_plan`'s row, and `make driver_only` guards both. **A row that
    printed the caveat as gate output would make it impossible to report a green table without it.**
+
+**WI-D6, 2026-08-06 (~66 min) — THE INSTALL IS UNBLOCKED. ROUTE A. COVERAGE DID NOT MOVE.**
+`ExtensionHooks.on_budget_plan` went from the ABI's closed `! {Env, FS}` to **no row at all**, at 48
+binding sites across 38 files, and the cascade was **two lines** the compiler found. Route B was not
+needed: criterion 1 is satisfied outright, so no successor field was added. `driver_only` **v10 →
+v11** — and unlike D2/D3/D4's re-measurements, **this bump changes a claim**: `compaction_ai`'s
+omission reason no longer says the omission is forced by the ABI.
+
+**Verified at review: a budget hook that reads `Env` is now REJECTED** —
+`incompatible closed rows: r1 has extra labels [Env], r2 has extra labels []`. **A performing body in
+this slot is not merely absent, it is unwritable**, so re-widening is a deliberate act rather than a
+drift.
+
+**The measurement is the item's durable output and its finding is the confound.** Fifteen bindings
+measured declared-against-performed, **zero blocking** — but **nine of fifteen `register_with_config`
+implementations read `Env` before any hook is dispatched**, so the naive arm scores nine extensions as
+"the hook performs `Env`", which is a false positive *in the direction that refuses Route A*. Measured
+before the arms were written, which is why every runtime subject is a register-only / dispatch pair
+and `CONFOUNDED` is a first-class outcome.
+
+**B4's guard fired on the OPPOSITE change from the one it anticipated.** It was written to go red "the
+day WI-C5 widens `on_budget_plan`"; D6 *narrowed* it and the guard fired anyway, on the same clause,
+because **it pinned the fact rather than the direction.** That is the standard for a pin in this
+project.
+
+**S21's first deliberate application, and the count HELD at four.** None of the four leaning rows
+closed — `driver_only` still installs nothing by its own definition — but **every reason
+concentrated**: row 3's vacuity now rests on a list this profile *chooses* not to fill; row 4's
+waiver rested on two reasons and now rests on one; rows 5 and 7 are unchanged in words and now
+actionable. A fifth site concentrated the same way outside the table (`dst_hook_guard`'s
+unreachability). **The rule working is the count holding, not the count moving.**
+
+**D5's caveat is updated in both places, dated rather than deleted.** *"Structural rather than
+incidental"* and the whole **forced** clause are **FALSE from 2026-08-06**. Still true and still
+mandatory: **the axis's extension-model coverage is ZERO.** **The emptiness moved from FORCED to
+CHOSEN, which is a WEAKER claim than D5's, not a stronger one** — a chosen emptiness covers exactly as
+much as a forced one. The gate now prints it, which partially discharges D5's planning defect 5.
+
+**D5 called this "the one item that would make the name transfer." It was necessary and not
+sufficient, and the name did not transfer.** WI-C5 spends it.
 
 **WI-C5. The second profile: `compose`-bearing.** Depends on **B2, A5, A10 and A12** — B2 for the
 coverage widening, A5 because its routed-set claim is a routing-completeness claim gated on the

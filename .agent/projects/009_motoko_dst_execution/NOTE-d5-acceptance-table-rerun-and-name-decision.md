@@ -392,6 +392,35 @@ two-sided poison pairs; and searches with a bounded corpus that meets an operato
 > binding by any extension can do better. **Nothing about the extension model has been tested by this
 > gate, and nothing in this verdict says otherwise.**
 
+**UPDATED BY WI-D6 ON 2026-08-06 — one clause is now false, and the claim the sentence exists to make
+is not.** The paragraph above is left exactly as D5 wrote it, per S15; this is the amendment beneath
+it rather than an edit inside it.
+
+**FALSE FROM 2026-08-06:** *"that is structural rather than incidental"*, and the whole `forced`
+clause. WI-D6 narrowed `on_budget_plan`'s ABI row to none after measuring all fifteen bindings in
+the tree against two producers independent of the declaration — the runtime capability trap out of
+process (7 of 15 directly witnessed) and the effect checker over all 15, total over inputs. **Not
+one performs `Env` or `FS`.** An extension is installable in a conformant profile.
+
+**STILL TRUE, STILL MANDATORY IN EVERY REPORT:** *"the axis's extension-model coverage is ZERO …
+nothing about the extension model has been tested by this gate."* `driver_only` installs no
+extension. **The emptiness moved from FORCED to CHOSEN, which is a weaker claim than D5's, not a
+stronger one** — a chosen emptiness covers exactly as much as a forced one.
+
+**And per S21, applied to the four rows in the table below, which is the rule's first deliberate
+use.** None of the four closed. Each one's REASON concentrated:
+
+| Row | Before WI-D6 | After WI-D6 |
+|---|---|---|
+| 3 | Vacuous, on an install list that **no profile could fill** | Vacuous, on an install list **this profile chooses not to fill** |
+| 4 | `extension_effect_fault` waived by construction — doubly secured, by the empty list AND by the ABI | Waived by construction — the waiver text never named the ABI, so it is **unchanged in words**; it now rests on one reason where it rested on two |
+| 5 | Compose's eight unrouted clock reads outside reach because nothing is installed | Unchanged, and now **actionable**: compose is installable, so the next profile must route them or declare them |
+| 7 | `ScratchpadResult` unreachable because no hook is installed to emit it | Unchanged. It needs a hook returning `Handled` with a `cells` key, and a profile that installs one |
+
+**The count is still four.** WI-D6 removed a barrier, not a vacuity — and the distinction is exactly
+what S21 was written to make visible. A reader who takes "extensions are now installable" as movement
+on any of these four rows has made the error D5's mandatory sentence exists to prevent.
+
 **Four of the eleven rows lean on that emptiness in a named clause — two more than the handoff
 carried forward, and finding the fourth is this item's analytic result:**
 
@@ -544,6 +573,9 @@ have proved nothing at all.
 
 - **The `on_budget_plan` ABI change** — the one item that would make the two vacuous passes
   non-vacuous, and the only substantive work left. A second ABI major with a profile bump behind it.
+  **DONE AT WI-D6 (2026-08-06), and it made no pass non-vacuous** — see the closing section. The
+  profile bump happened (`driver_only/10` → `/11`); the ABI major is still owed and now covers five
+  changed rows.
 - **A second profile** (WI-C5, `compose`-bearing). None exists; additional profiles earn coverage
   separately.
 - **The two sibling `st.world_state` finalize sites**, still ignoring `chain.next_state`; file reads
@@ -562,3 +594,20 @@ profile can earn rows 3, 4, 5 and 7 non-vacuously**, and the label — correctly
 
 **Twelve items declined this name. The thirteenth adopts it, for one profile, on a green table of
 eleven rows, and says in the same breath what that profile does not cover.**
+
+---
+
+**DONE AT WI-D6, 2026-08-06 — AND THE NAME DID NOT TRANSFER.** The section above is kept as written.
+D6 did the item it names: `ExtensionHooks.on_budget_plan`'s row was narrowed to none, and every
+extension in the tree is now installable in a conformant profile.
+
+**What the section got right:** the row was the barrier, and one item removed it.
+
+**What it got wrong, and it is worth stating because the same slip is available to the next reader:**
+the section says removing the barrier is *"the one item that would make the name transfer"* and that
+until it changes *"no profile can install anything, so no profile can earn rows 3, 4, 5 and 7
+non-vacuously."* The second clause is true; **the first does not follow from it.** Removing the
+barrier is NECESSARY for those rows and nowhere near SUFFICIENT — the rows are earned by a profile
+that installs something and passes the table, and `driver_only` still installs nothing. **Nothing
+transferred. The four rows lean exactly as far as they did.** What D6 bought is that WI-C5's
+`compose`-bearing profile is now buildable at all, which is a precondition rather than a result.
