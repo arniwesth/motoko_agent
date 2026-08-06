@@ -728,6 +728,27 @@ sealed-vocabulary probe (`IMP010`), 5 `src/examples/`, 3 code-graph fixtures and
 fixture. **Confirm the failing set member-for-member rather than the count** — the count moves by one
 whenever an item adds a file.
 
+**AND S9 REACHES ONE DIRECTORY TOO FEW: THERE IS A COMPILE CACHE BESIDE THE STDLIB, AND
+`effect_inventory_selftest`'S ANSWER IS A FUNCTION OF IT.** Measured at the acceptance-reviewers'
+governance act and pinned at review. **Three sessions ran the same gate on the same tree today and got
+three different answers** — `agree=0` (this reviewer), `agree=1` (both acceptance reviewers, four
+consecutive runs), `agree=45` (this reviewer again, hours later). Not one of them is a fact about the
+tree.
+
+**The variable is `/home/motoko/.local/share/ailang/std/.ailang/cache/`**, which held **230 files
+written that day**. It is outside S9's sweep by construction: the sweep runs from the repository root
+and excludes `./ailang/` and `./tools/code-graph/`, and this path is under `~/.local/share`.
+**Demonstrated two-sided:** clearing it takes the selftest `agree=45 → agree=1`, and restoring the
+230 files takes it back to 45. `std/env` is the one module that resolves cold, which is the
+acceptance reviewers' unexplained observation, explained.
+
+**So both of the competing findings about classifier 1 were readings of cache warmth.** *"Its
+acceptance criterion is NOT met at HEAD"* (WI-D10) was true at `agree=0`; *"the criterion is met and
+that is worse than the red"* (the governance act) was true at `agree=1`. **The gate measures the
+cache, not the tree** — and the amended ≥90% criterion inherits the same defect, because its numerator
+is *modules `ailang iface` can resolve*, which is exactly what the cache decides. **S9's sweep needs
+this path, and any coverage criterion over `ailang iface` needs a cache-state precondition.**
+
 **AND A GATE THAT IS NOT IN `make dst` DEGRADES INVISIBLY, however loudly it fails when run.** Found
 by the amendment review, outside its scope. **Classifier 1 — the ADR's one *built* gate mechanism —
 does not meet its recorded acceptance criterion at HEAD.** The ADR's gate-mechanism table — classifier

@@ -17,9 +17,12 @@ remain, both finite and neither self-regenerating:
    recorded-stream API must land in a *released* AILANG, the toolchain must be repinned, and the
    positive integration probe must pass. A fork prototype does not satisfy it. Nine correction passes
    and fourteen delta reviews moved it exactly zero, because nothing in this repository can.
-2. **Three deferred gate mechanisms**, each with a stated acceptance criterion in *Gate mechanisms:
-   built, and deferred*. They block the **name**, not this decision. The fourth is built and was
-   independently run by both acceptance reviewers against its published criterion.
+2. **Four deferred gate mechanisms**, each with a stated acceptance criterion in *Gate mechanisms:
+   built, and deferred*. They block the **name**, not this decision. Classifier 3 was admitted as the
+   fourth on 2026-08-06 by both acceptance reviewers jointly, on the architecture test recorded under
+   that table. **The fifth mechanism is built, and it also blocks the name**: classifier 1 passes its
+   criterion at HEAD only because that criterion had no coverage clause, so the reviewers amended the
+   criterion in the same act — see the qualification under the table.
 
 **An earlier revision listed "the latest correction pass has not been independently verified" as a
 peer blocker, and that was a mistake of kind, not of fact.** It is true after every pass by
@@ -34,11 +37,17 @@ What replaced it is the two-item list above. D1–D11 were re-derived and confir
 since the F1–F6 verifications, reopened by none, and ruled sound by both acceptance reviewers, who
 independently applied the test *"if all three deferred mechanisms turned out unbuildable, would
 D1–D11 still be the right architecture?"* and both answered yes, because each mechanism's absence
-degrades conservatively.
+degrades conservatively. **That application was to the three mechanisms deferred on 2026-08-02 and it
+is left as the historical record it is.** The same two reviewers applied the same test to
+classifier 3 on 2026-08-06, jointly and independently of the amendment review that first proposed it,
+and admitted it as the fourth; that application is recorded under
+[*Gate mechanisms: built, and deferred*](#adr-gate-mechanisms) and is **not** a citation of the
+review's.
 
 **What is required next is not another delta review of a correction pass.** The loop those rounds
 ran has been closed deliberately; see the Status note above. What remains is a scoped architecture
-review if one is wanted, the three deferred mechanisms, and the external release event.
+review if one is wanted, the four deferred mechanisms, classifier 1's repair against its amended
+criterion, and the external release event.
 F1, F2, F3, F5, F6, the narrowed D1 blocking clause, the upstream return-shape ruling, and M2 were
 each independently confirmed by all three verifications, and D6.1's zero-`RunSummary` claim by two of
 the three. The fourteen delta reviews additionally confirmed D4's clock count (13) and routing state,
@@ -2376,12 +2385,13 @@ multi-actor simulation inside one run.
 | 6 Invariant oracle | D6 authoritative complete trace; D7 whole-execution invariants |
 | 7 Search and reproduction | D8 strict replay/artifacts; D11 fixed and rotating search corpora |
 
+<a id="adr-gate-mechanisms"></a>
 ## Gate mechanisms: built, and deferred
 
-This ADR names four detection/validation mechanisms. It is scoped to the detector layer: D3's fault
+This ADR names five detection/validation mechanisms. It is scoped to the detector layer: D3's fault
 catalogue and D6's event vocabulary are deferred constructed artifacts too, with fail-closed
 acceptance contracts stated in their own decisions, but they are architecture components rather than
-hermeticity/coverage detectors and are tracked there rather than here. **One is built; three are
+hermeticity/coverage detectors and are tracked there rather than here. **One is built; four are
 deferred to the
 implementation plan behind the acceptance criteria below, and this section is the boundary between
 "the ADR decides it" and "the plan builds it."**
@@ -2389,39 +2399,125 @@ implementation plan behind the acceptance criteria below, and this section is th
 The distinction matters because it was ignored for eight review rounds. A mechanism whose prose
 specification has been rewritten twice and is still found unsound is not under-specified — it is in
 the wrong artifact. Prose cannot establish that a scan is sound; only running it can. The four
-mechanisms below have collectively been rewritten thirteen times, and the one that was finally built
-was correct on its first run and immediately produced a fact four prose revisions had missed.
+mechanisms this section originally listed had collectively been rewritten thirteen times, and the one
+that was finally built was correct on its first run and immediately produced a fact four prose
+revisions had missed. **The fifth row, classifier 3, was added on 2026-08-06 and the same discipline
+binds it: its criterion below is what it must run and report, not what it must be specified to do.**
 
 | Mechanism | State | Acceptance criterion |
 |---|---|---|
-| **Classifier 1** — effect-bearing stdlib module set | **Built; its acceptance criterion is NOT met at HEAD** (see the qualification below this table): `tools/effect-inventory/derive.py`, `make effect_inventory` | Exits 0 on the profile's roots with zero unresolved modules; `make effect_inventory_selftest` reports zero disagreements; derived set and scan-root commit recorded in the manifest. **Was met at `a0d4edb`**, run by both acceptance reviewers: 0 unresolved, `agree=43 disagree=0`. **It is NOT met at the v0.33.0 toolchain pin — see below** |
+| **Classifier 1** — effect-bearing stdlib module set | **Built, and passing a criterion that no longer certifies what it was written to certify** (see the qualification below this table): `tools/effect-inventory/derive.py`, `make effect_inventory` | **AMENDED 2026-08-06, by both acceptance reviewers.** Exits 0 on the profile's roots with zero unresolved modules; the derived set and scan-root commit are recorded in the manifest; and `make effect_inventory_selftest` reports zero disagreements **over a comparison set covering at least 90% of the stdlib modules the profile's roots import — a self-test that compares fewer is a FAILURE, whatever it agrees about**. The first two clauses and the old third are met at the v0.33.0 pin (`agree=1 disagree=0`, 1 of 46 modules compared); **the coverage clause is not**. Met in full at `a0d4edb`, run by both acceptance reviewers: 0 unresolved, `agree=43 disagree=0` |
 | **Classifier 2** — `ExtPorts` typed-call inventory | Deferred | A type-aware field-call inventory over the in-profile roots, failing closed on every alias, wrapper, re-export, or computed access it cannot resolve. `grep -rn '\.ai_step('` is its conservative approximation, not its definition |
 | **Site-to-hook attribution table** | Deferred | Produced source-global with a per-row named reviewer; profile-load validation rejects unknown hook ids, stale bindings and malformed rows; necessity is manually reviewed and that is a **stated exception** to the automated-gate promise until the interprocedural validator exists |
 | **Coverage floor validation** | Deferred | Profile load rejects any installed extension with zero covered hooks, and any installed extension with an unconditionally-dispatched hook excluded. The carve-out and its reverse check are gone — the configuration they blessed cannot execute (D5) — so this no longer depends on classifier 2 |
+| **Classifier 3** — extension-closure ambient-effect inventory (ADMITTED 2026-08-06 as the fourth deferred mechanism) | Deferred | A structural import-and-call-name inventory over an installed extension's **transitive module closure**, deciding per effect whether the call that performs it is a field call on an `ExtPorts`-typed value. All four properties of the [amended criterion-2 passage](#adr-criterion-2-evidentiary-basis) are required, and three of them are what this criterion adds to obligation 2 clause 2: the unit is the **extension closure**, not the file; classification is **symbol-granular**, not module-granular; and every alias, wrapper, re-export, computed access, unannotated `export func` and effect-*variable* row it cannot resolve to a concrete answer is an **UNRESOLVED rejection, not a pass**. It must therefore be built on per-symbol effect data from the compiler — `.ailang/cache/compile/modules/*/iface.json` (`ailang.iface/v1`) or `ailang iface` stdout — and **not** on a per-declaration textual parse. Accepted when it runs over all fifteen registrable extensions, reports its producer and that producer's revision per extension, and its rejection discipline is fixture-tested on each of the five unresolvable shapes. **Yield, which is what this instrument is worth and is stated here rather than in a note: 4 of 15 extensions — `decision_framework`, `compaction_structural`, `empty_stop_guard`, `progress_contract_guard` — and 4 only on a compiler-derived producer. On the textual route the same fail-closed discipline yields 1 of 15**, because `std/json.jo` carries no row and three of those four import it |
 
-**QUALIFICATION on Classifier 1's row, recorded at WI-D10 and NOT a change to the count or to the
-list of deferred mechanisms.** Classifier 1's criterion has two clauses — zero unresolved modules
-**and** `make effect_inventory_selftest` reporting zero disagreements. **The second clause is failing
-at HEAD.** Measured at the amendment review and again at WI-D10: the self-test **exits non-zero**
-reporting `agree=0 disagree=0` and *"the self-test compared ZERO modules, so it certified nothing …
-This is a pass-shaped absence, not a pass."* All 46 `ailang iface` calls fail `MOD010` on the
-v0.33.0 pin, so every module classification now comes from an unvalidated textual fallback, and
-`make effect_inventory` stays green while reporting INTERFACE FAILURE for 46 of 46 modules. **Neither
-target is in `make dst`**, so this degraded without being seen across a toolchain repin the Makefile
-itself says to re-run after. The tool failed closed correctly and said so in plain words; nothing was
-listening.
+**QUALIFICATION on Classifier 1's row — REVISED 2026-08-06 by both acceptance reviewers, replacing
+the qualification WI-D10 recorded.** WI-D10 flagged its edit to this cell for ratification rather than
+burying it, which was right; the flag is what caused this measurement, and **the measurement does not
+reproduce.**
 
-**This row is otherwise untouched and no row was added, removed or reordered.** Adding a mechanism to
-this table is both ADR-001 acceptance reviewers' jointly, and WI-D10 does not do it. The
-qualification is recorded here rather than left to the amendment body because a status table that
-reads "Built and independently verified" against a red gate is the artifact a future reader will
-trust. **Repairing classifier 1 is owed and unowned.**
+WI-D10 and the amendment review before it recorded that all 46 `ailang iface` calls fail `MOD010`,
+that the self-test reports `agree=0 disagree=0`, and that it exits non-zero with *"a pass-shaped
+absence, not a pass."* Re-measured at HEAD on the same v0.33.0 pin, from the repository root, four
+consecutive runs:
 
-**None of the three deferred mechanisms blocks acceptance of this ADR.** They block the *name*: D5's
+```text
+make effect_inventory           EXIT 0   INTERFACE FAILURES (45), not 46 -- std/env alone resolves
+                                         21 imported std/* modules, ZERO unresolved
+                                         13 effect-bearing, 8 proven effect-free
+make effect_inventory_selftest  EXIT 0   self-test: agree=1 disagree=0
+```
+
+So classifier 1's criterion **as it was written is met at HEAD, in both clauses**, and that is worse
+than the red WI-D10 reported. The guard in `tools/effect-inventory/derive.py` is
+`if agree + disagree == 0`, a **zero-check, not a coverage check**: exactly one comparable stdlib
+module out of forty-six converts a pass-shaped absence into a literal pass, and both targets go
+green. The self-test agreed with itself about 2.2% of the surface it exists to validate. Every other
+module classification still comes from the unvalidated textual fallback, exactly as reported — only
+now nothing says so.
+
+**The defect is therefore in the criterion, not only in the tool, and amending an acceptance
+criterion in this table is ours.** The criterion now carries a coverage clause (≥90% of the imported
+stdlib modules compared), which is the clause that was missing when the tool was accepted at
+`a0d4edb` with `agree=43`, and whose absence is why a regression to `agree=1` reads as a pass.
+Against the amended criterion classifier 1 is **failing**, and it blocks the name.
+
+**Two corrections to the record, made rather than inherited.** The count is **45 of 46** interface
+failures, not 46 of 46; and the self-test's failure exit is **1**, not 2 — `derive.py` returns 1 for
+that path and reserves 2 for harness error. Both numbers were carried forward across three documents
+without being re-run. Running them from a directory under `/tmp` instead reports `agree=46
+disagree=0`, because AILANG auto-relaxes `MOD010` inside a temp directory — `derive.py`'s own
+docstring warns about this, and it is why the repository root is the only legitimate cwd for either
+target. **Why `std/env` alone resolves is an AILANG-side question and is an addendum owed to the
+existing `MOD010` filing, not a finding against this tree.**
+
+**No row was removed or reordered; classifier 3's row was added and classifier 1's State and criterion
+cells were revised.** The qualification lives here rather than in the amendment body because a status
+table that reads "Built and independently verified" against a mechanism certifying nothing is the
+artifact a future reader will trust — and a green gate makes that failure mode strictly harder to
+catch than the red one WI-D10 found. **Repairing classifier 1 against the amended criterion is owed
+and unowned, and putting both targets into `make dst` is its precondition**: a gate outside the
+aggregate target degrades invisibly whether it fails loudly or passes vacuously.
+
+**None of the four deferred mechanisms blocks acceptance of this ADR.** They block the *name*: D5's
 routing audit is not citable as name-adoption gate evidence until each is built and passes its
-criterion above. That is a finite, checkable list, and it is deliberately not the same thing as "this
-correction pass has not been independently verified" — a condition that regenerates with every edit
-and can therefore never be discharged.
+criterion above. **Classifier 1 blocks the name too**, on the coverage clause added above — so the
+name turns on five mechanisms, of which four are unbuilt and one is built and failing. That is a
+finite, checkable list, and it is deliberately not the same thing as "this correction pass has not
+been independently verified" — a condition that regenerates with every edit and can therefore never
+be discharged.
+
+### The architecture test, applied to classifier 3 by both acceptance reviewers, 2026-08-06
+
+Recorded in full because a test inherited is a test not run, and because the amendment review's
+application of it is evidence, not authority. Both reviewers applied
+*"if this mechanism turned out unbuildable, would D1–D11 still be the right architecture?"*
+independently, on two different arms.
+
+**First arm — what in D1–D11 would have to change. Nothing, and the counterfactual is already the
+observed state.** Absent classifier 3, criterion 2's text is unchanged, the interim declared-row rule
+is unchanged, and D5's contract, floor, disclosure and fail-closed exclusion rule all stand. HEAD
+*is* the classifier-3-absent world: barrier count derived at **3** (`on_pre_step`,
+`on_response_intercept`, `on_solver_candidate`), `driver_only` installs nothing, and there are zero
+classification entries in the tree. The architecture was accepted in that state and does not depend
+on leaving it. **Yes.**
+
+**Second arm — is the degradation conservative, and what carries it.** Absent classifier 3, no
+extension becomes installable and no profile may record `WorldMediated` on a measured basis, so the
+cost is *coverage*, not *correctness* — the same direction as classifier 2 and the attribution table,
+and the opposite of coverage-floor validation, which is the one deferred mechanism whose failure is
+fail-open. **Yes — but not for free, and this is the condition the reviewers attach rather than
+inherit.** The fail-closed default is prose: `classification_agrees`
+(`src/core/dst_profile.ail:893-910`) validates a `WorldMediated` entry against the excluded-id list
+and against nothing else, and `HookClassificationEntry` has no `basis` field. What actually makes
+classifier 3's absence conservative is the **barrier count being derived rather than asserted**. If
+an ABI change ever cleared the barriers while `basis` were still absent, classifier 3's absence would
+stop degrading conservatively and start licensing an unevidenced claim. **The admission is therefore
+granted on the condition that `basis` lands with or before any change that lowers the barrier
+count** — whichever comes first, and neither is classifier 3's builder's to skip.
+
+**Disposition: ADMITTED as the fourth deferred mechanism, unanimously, with that one condition.** The
+escalation branch does not fire: the extension model is *uncovered*, not uncoverable by construction,
+because what stops a measurably-effect-free hook from declaring what it performs is the ABI record's
+**closed row**, not the classifier layer. Verified from the compiler's own interface data rather than
+from the review's probes: `ExtensionHooks.on_pre_step` carries the concrete label set
+`{AI, IO, Trace}` with **no row variable**, `on_response_intercept` `{Clock, FS, IO, Process}`, and
+`on_solver_candidate` `{Process}` — closed rows a named binding cannot narrow. That is an ABI change,
+and it already sits inside the deferred `motoko-ext-abi` major.
+
+**What the reviewers re-derived rather than accepted.** The 4-of-15 yield was reproduced from source
+at admission: fifteen extensions resolved through `ailang.toml` rather than by directory-name
+convention, transitive closures of 2–17 modules, **zero unresolved imports**, and exactly
+`decision_framework`, `compaction_structural`, `empty_stop_guard`, `progress_contract_guard` clean.
+The producer-conditioning in the row is new and is the reviewers' own: `std/json` exports 38 symbols
+of which **33 carry no effect row at all**, one of them `jo`, which `compaction_structural`,
+`empty_stop_guard` and `progress_contract_guard` all import. On the textual route those are
+UNRESOLVED and all three are refused, leaving `decision_framework` alone — **1 of 15**. The
+compiler's cached interface answers `jo` positively (`purity: true`, empty effect row), which is why
+the criterion above requires a compiler-derived producer. **The consequence is worth stating plainly:
+the cheapest producer would have destroyed the result the amendment names as the cheapest path to
+non-zero coverage.**
 
 **What acceptance of this ADR turns on is the architecture** — D1's world boundary and state
 threading, D2's discovery/replay split, D3's fault-as-outcome rule, D4's single virtual clock, D5's
