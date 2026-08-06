@@ -67,6 +67,13 @@ each of them. They bind every remaining item. **Grouped behaviour-first (S1–S3
 (S4–S6); the numbering is chronological, so it is not sequential in this order** — references in the
 cluster reports are by number, so they are not renumbered.
 
+**A REPRO CITED AS EVIDENCE IS A CLAIM ABOUT WHAT WAS MINIMISED AWAY, and it must be re-run against
+the production type before it is cited a second time.** Earned by WI-D9. The ADR's four-line
+record-field repro minimised away **the import**, which is the variable that decides the answer. It
+was recorded at ADR time, cited at B4, and not run again for eleven items — during which D8 built a
+finding on it and this reviewer built a handoff on it. **A minimal repro is minimal with respect to a
+question; cited for a different question it is an untested assumption wearing evidence's clothes.**
+
 **S1. Land the executable assertion *before* the change it guards, and make it cover advancement
 *and* completeness — never determinism alone.** Clusters 1, 4 and 6 produced ten sites where both
 alternatives type-check and the wrong one is silent. The compiler forces the *edit*; it does not
@@ -498,6 +505,22 @@ enclosing row absorbs both, while the *identical body* bound as a named function
 rediscovered in another because nothing connected them.** A3 filed it, B4 characterised it, the plan
 cites the ticket three times, and D8 met it fresh — which is why the four-position matrix is a
 contribution and "not filed" is not.
+
+**FOURTH EXTENSION, FROM WI-D9, AND IT IS ABOUT THE SUBJECT'S TYPE RATHER THAN ITS SYNTAX: an
+instrument must exercise the subject through the same TYPE DECLARATION the subject uses.** A probe
+over a *locally declared copy* of an imported record measures a different language. Measured at D9 and
+reproduced at review: the ADR's own record-field repro at `:1404-1410` is a property of a **local**
+`type Ports`; through the **imported** `ExtPorts` the same rowless caller is **REJECTED** with
+`Missing effects: AI, IO, Trace`. **So the ADR's stated mechanism — "`ExtCtx.ports: ExtPorts` is
+exactly that shape" — is false of the ABI**, and three decisions have cited it since B4 without
+re-running it.
+
+**Every conclusion the ADR draws survives on a different mechanism**, which is the inert *inline* row:
+verified at review against the shipped `ExtPorts`, an annotated inline lambda declaring
+`! {AI, IO, Trace}` on the real `ai_step` field, whose body reads `Env`, **type-checks clean** when the
+enclosing row absorbs it. **The gap is real; the ADR's account of why is not.** This reviewer's own
+four-position matrix reached the right conclusion through a local type and would not have transferred
+had the claim been the ADR's.
 
 **EXTENDED BY WI-D8, AND THE EXTENSION IS ABOUT THE SUBJECT'S SYNTAX RATHER THAN THE CHECK'S
 PRODUCERS: an instrument must exercise the subject in the FORM the subject is written in.** C5's
@@ -2799,6 +2822,41 @@ because no gate compares them.
 
 **What D6 delivered, stated at its true size: one barrier of four removed, and the argument that
 could remove the other three.** That is a real result.
+
+**WI-D9, 2026-08-06 (~39 min) — CRITERION 2 ADMITS EVIDENCE. NOTHING CAN PRODUCE IT. COUNT STILL
+THREE.** The answer splits, and which half fails is the item's value.
+
+**Half 1, the reading — YES, and the ADR concedes it.** Criterion 2 (`ADR:1290-1291`) names no
+declared row; the declared-row rule is a separate sentence at `ADR:1392` beginning **"Per-hook
+classification reads *declared* effect rows IN THE INTERIM"** — a convention with a stated expiry.
+Eleven items were right to use it; none tested whether it is what refuses `on_pre_step`. It is.
+
+**Half 2, the evidence — NO, and it is a CATEGORY ERROR rather than a gap.** The successor detector
+the ADR defers reconciles **labels**; criterion 2 is a claim about the **call path**. Measured
+two-sided against the shipped ABI: a fully port-mediated body and a fully ambient body, at the
+**identical declared row**, get the **identical verdict** — with a control (each arm one effect short)
+rejected, proving the checker is running and label-sensitive. **The effect checker is blind to
+provenance by construction, and no reconciliation of label sets at any precision produces the sentence
+criterion 2 needs.**
+
+**So the declared-row rule is RETAINED as the fail-closed default**, two amendments are **drafted not
+applied** (D5 is Accepted), and a narrower "named bindings plus ambient-free closure" amendment was
+**refused on fail-closure** — mutation-measured: one `getEnvOr` added inside `compaction_ai`'s
+`on_pre_step` lambda leaves `ailang check`, `make profile_definition` and `make declared_vs_performed`
+**all green and byte-identical**.
+
+**THE ORDERING IS THE MOST USEFUL OUTPUT: Route B alone clears ZERO barriers; Route B plus a new
+CLASSIFIER 3 clears all three.** `check_fixtures.py:226-230` states the category error in the gate
+itself — *"an effect label is never a port"* — so criterion 2 is unsatisfiable by construction for any
+non-empty row whatever the behaviour underneath. Classifier 3 is a **provenance** instrument
+(positive port-call inventory + per-extension ambient-source enumeration at symbol granularity), it is
+**not** blocked by the record-field limitation, and it is **ordered before Route B**.
+
+**And it corrected two things this reviewer carried.** The binding-form split is **14 inline / 1
+named**, not D8's 8/7 — re-derived here with S22's falsifier and **independently confirmed at review**:
+only `compaction_structural` binds `on_pre_step: pre_step`; the other fourteen bind inline, six of them
+with the label alone on its line, which is what a line-keyed classifier miscounts. **So D6's, D7's and
+D8's recorded enforcement prize is real at ONE binding of fifteen, not seven.**
 
 **WI-D8, 2026-08-06 (~80 min) — `ExtPorts.ai_step` MEASURED FOR THE FIRST TIME. OVER-DECLARED BY
 SEVEN. THE BARRIER STILL STANDS AND THE COUNT IS STILL THREE.**
