@@ -2697,6 +2697,29 @@ much as a forced one. The gate now prints it, which partially discharges D5's pl
 **D5 called this "the one item that would make the name transfer." It was necessary and not
 sufficient, and the name did not transfer.** WI-C5 spends it.
 
+**CORRECTION, APPLIED AT REVIEW: D6 DID NOT UNBLOCK THE INSTALL, AND IT CONTRADICTED ITSELF.** Its
+report and its design-document edit both state *"an extension is now installable in a conformant
+profile."* **It is not.** `on_budget_plan` was **one of four barriers**; three remain and all three
+are **unconditionally dispatched** — verified in `dst_profile_coverage.hook_dispatch`: `OnPreStep`,
+`OnResponseIntercept` and `OnSolverCandidate` are `Unconditional`, and only `OnToolHandle` is `Gated`.
+`on_pre_step` declares `IO`, `FS`, `Net`, `Process`, none world-mediated; the other two declare nine
+effects while returning constants. Under D5 an extension may not install with any unconditional hook
+excluded, **so no extension is installable.**
+
+**`dst_driver_only.ail`'s own omission reason says this correctly** — *"The three other former
+barriers stand and are unaffected"* — **so the two artifacts D6 wrote in the same item disagree, and
+the profile is right.** The design document was corrected at review; the report's summary stands as
+written, per S15, since it is a historical record.
+
+**The lesson is S22's, one level up.** D6 derived its *subject* list from a producer and asserted the
+agreement — exactly right — and then took its *barrier* count from prose. **A scope claim and a
+completeness claim are the same kind of claim**, and the one that was checked held while the one that
+was not did not. **Nothing went red**: the profile and the design document can disagree indefinitely,
+because no gate compares them.
+
+**What D6 delivered, stated at its true size: one barrier of four removed, and the argument that
+could remove the other three.** That is a real result.
+
 **WI-C5. The second profile: `compose`-bearing.** Depends on **B2, A5, A10 and A12** — B2 for the
 coverage widening, A5 because its routed-set claim is a routing-completeness claim gated on the
 attribution table, A10 for the profile machinery it instantiates, A12 for the world clock its

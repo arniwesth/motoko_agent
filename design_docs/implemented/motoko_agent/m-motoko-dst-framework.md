@@ -6,7 +6,8 @@ naming amendment; **name adopted 2026-08-06** at the WI-D5 conformance gate)
 2026-08-06**, under D10 of
 `.agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md`: the
 acceptance test passes eleven of eleven rows for the documented baseline profile **`driver_only/10`**
-(under execution manifest `driver_only/3`), and project-007's definition/taxonomy ADR is
+(under execution manifest `driver_only/3`; the profile is **`driver_only/11`** from WI-D6, which
+changed no claim the table rests on — see the superseded-clause note below), and project-007's definition/taxonomy ADR is
 `Accepted 2026-07-26`. **Every report naming the axis must name the profile.**
 
 > **This statement was superseded on 2026-08-06 and is kept because it was true when written.**
@@ -18,15 +19,47 @@ acceptance test passes eleven of eleven rows for the documented baseline profile
 > the conformance bar is now met for one profile.
 
 **What the label does NOT assert — mandatory in every report:** **the axis's extension-model
-coverage is ZERO, and that is structural rather than incidental.** `driver_only` installs no
-extension, and the empty install list is **forced**: while `ExtensionHooks.on_budget_plan` declares
-the ABI's closed row `! {Env, FS}` and returns a `BudgetPatch` with no successor field, no extension
-in the tree is installable in a conformant profile. Four of the eleven acceptance rows lean on that
-emptiness in a named clause — the boundary row passes **vacuously** in every installed-extension
-clause; the fault row's `extension_effect_fault` waiver and the oracle row's `ScratchpadResult`
-exemption are both bought by it; and the virtual-time row's pass, while real, does not transfer.
-**Per D10, additional profiles earn coverage separately and inherit none of these four.** Full
-row-by-row evidence: `.agent/projects/009_motoko_dst_execution/NOTE-d5-acceptance-table-rerun-and-name-decision.md`.
+coverage is ZERO.** `driver_only` installs no extension. Four of the eleven acceptance rows lean on
+that emptiness in a named clause — the boundary row passes **vacuously** in every
+installed-extension clause; the fault row's `extension_effect_fault` waiver and the oracle row's
+`ScratchpadResult` exemption are both bought by it; and the virtual-time row's pass, while real,
+does not transfer. **Per D10, additional profiles earn coverage separately and inherit none of these
+four.** Full row-by-row evidence:
+`.agent/projects/009_motoko_dst_execution/NOTE-d5-acceptance-table-rerun-and-name-decision.md`.
+
+> **One clause of that caveat was superseded on 2026-08-06 and is kept because it was true when
+> written.** From the ABI's first version until WI-D6, the sentence above continued: *"and that is
+> structural rather than incidental … the empty install list is **forced**: while
+> `ExtensionHooks.on_budget_plan` declares the ABI's closed row `! {Env, FS}` and returns a
+> `BudgetPatch` with no successor field, no extension in the tree is installable in a conformant
+> profile."*
+>
+> **WI-D6 narrowed that row**, after measuring all fifteen `on_budget_plan` bindings in the tree
+> against two producers independent of the declaration — the runtime capability trap out of process
+> (7 of 15 directly witnessed) and the effect checker over all 15, total over inputs. Not one
+> performs `Env` or `FS`.
+>
+> **CORRECTION, same day: an extension is NOT yet installable, and an earlier revision of this
+> paragraph said it was.** `on_budget_plan` was one of **four** barriers, not the only one. Three
+> remain, and all three are **unconditionally dispatched** (`dst_profile_coverage.hook_dispatch`:
+> `OnPreStep`, `OnResponseIntercept`, `OnSolverCandidate` are `Unconditional`; only `OnToolHandle` is
+> `Gated`), so under D5 an extension cannot be installed with any of them excluded and none of the
+> three is coverable: `on_pre_step` declares `IO`, `FS`, `Net` and `Process`, which are not
+> world-mediated ports, and `on_response_intercept` and `on_solver_candidate` declare nine effects
+> each while returning constants. **`src/core/dst_driver_only.ail`'s own omission reason says exactly
+> this** — *"The three other former barriers stand and are unaffected"* — so the two artifacts
+> disagreed and the profile was right. **What WI-D6 delivered is one barrier removed of four, and the
+> argument that could remove the other three.**
+>
+> **The zero-coverage claim itself is UNCHANGED and stays mandatory.** What changed is only its
+> reason: the empty install list is now **chosen** rather than **forced**, which is a *weaker*
+> statement, not a stronger one — a chosen emptiness covers exactly as much as a forced one, which
+> is nothing. **All four leaning rows still lean, to exactly the same extent**, because
+> `driver_only` still installs nothing; per plan rule S21 their reasons **concentrated** rather than
+> closed, each now resting on the profile's own emptiness where two of them used to rest on the ABI
+> as well. Coverage moves when a profile installs something, which is WI-C5's `compose`-bearing
+> profile and is not an ABI edit.
+
 **Role**: The durable, navigable spine for the DST topic — what the framework *is* at HEAD, where
 every piece lives, and how to extend it. Decision history stays in the ADRs linked at the bottom;
 this doc describes the result. (Convention per
@@ -84,9 +117,11 @@ eleven of eleven. The interim name is retired.
 >   profile-reachable time-bearing read routed through it (WI-A12/D3).
 
 **The scope of the adoption, restated because it is the available misreading:** the label is adopted
-for the **generated axis under one profile**, whose **extension-model coverage is zero and
-structurally so** — see the Naming block at the top. It is not a claim about the fixed scenarios,
-and it is not a claim about any profile that installs an extension, because none exists.
+for the **generated axis under one profile**, whose **extension-model coverage is zero** — see the
+Naming block at the top. It is not a claim about the fixed scenarios, and it is not a claim about any
+profile that installs an extension, because none exists. (This sentence read *"zero and structurally
+so"* until 2026-08-06. WI-D6 removed the structural part and left the zero: an extension is now
+installable, and no profile installs one.)
 
 The route was a cross-cutting change to effect routing and the terminal-trace contract, **not** a
 `ScriptedStep` extension (`ScriptedStep` was a success-only record; approvals, native tools, and
@@ -335,11 +370,17 @@ different times and both are recorded rather than deleted:** the upstream record
 in a released AILANG and was repinned at WI-B1 and adopted at WI-C1/C2, so the *blocked-on* clause
 had already been false for some time; and the world itself was completed and gated at WI-D5, which
 is what earned the name — **for the baseline profile `driver_only/10`, whose extension-model coverage
-is zero.**
+is zero.** (The profile is `driver_only/11` from WI-D6; the sentence names v10 because that is the
+version the name was earned on, and v11 changed no claim it rests on.)
 
-Known deferred work: **the `on_budget_plan` ABI widening** — the one change that would let any
-profile install an extension, and so the one that would make the four extension-dependent acceptance
-clauses non-vacuous; a second (`compose`-bearing) profile; shrinking and automatic
+Known deferred work — **the `on_budget_plan` entry was DONE at WI-D6, 2026-08-06, and is kept here
+restated rather than deleted (S15).** It read: *"the `on_budget_plan` ABI widening — the one change
+that would let any profile install an extension, and so the one that would make the four
+extension-dependent acceptance clauses non-vacuous"*. **The first half happened and the second half
+did not follow from it**: the row was narrowed rather than widened, any profile may now install an
+extension — and **not one of the four clauses became non-vacuous**, because `driver_only` still
+installs nothing. Making them non-vacuous needs the profile, not the ABI. Still deferred: a second
+(`compose`-bearing) profile; shrinking and automatic
 promotion of failing seeds, the `smoke_v2_*` subsumption audit
 (operator-deferred 2026-07-12), in-flight extension diagnostics (`ExtPorts.emit_diagnostic`),
 and the gated AILANG env-manifest Layer-2 scenarios (ADR-003; blocked on the WI-1/WI-2 track in
