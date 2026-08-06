@@ -12,7 +12,7 @@ import std/result (Result, Ok, Err)
 import std/trace as Trace
 import src/core/ports (ScriptedStep, ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ProviderExchange, WorldState, ports_shape_probe, virtual_clock)
 import src/core/phase_vocab (ApprovalRequest, ExecNative)
-import src/core/test/stub_step (StepProvider, Scripted, LiveAI, Ported, scripted_to_step_result)
+import src/core/test/stub_step (StepProvider, Scripted, ScriptedWorld, LiveAI, Ported, scripted_to_step_result, scripted_world_state)
 import src/core/config (CostRates, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/session as Session
@@ -91,9 +91,61 @@ export func run_v2_with_scripted_ports(
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- WI-A2: the script rides in WorldState now, so wrapping a Ports in
-  -- Ported() here would strand it. Hand the entry point Scripted(script) and
-  -- let `ported_provider` build the (ports, initial state) pair.
-  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
+  -- Ported() here would strand it. Hand the entry point a world and let
+  -- `ported_provider` build the (ports, initial state) pair.
+  --
+  -- WI-D4 made this a DELEGATION rather than a second call to
+  -- `run_v2_from_messages`, and the two are behaviour-identical by construction
+  -- rather than by inspection: `ported_provider` maps `Scripted(script)` to
+  -- `{ scripted_ports(), scripted_world_state(script) }` and `ScriptedWorld(w)`
+  -- to `{ scripted_ports(), w }`, so passing `scripted_world_state(script)` is
+  -- the same pair. Written as a delegation because the sibling below carries the
+  -- comment claiming they cannot drift, and a claim like that should be enforced
+  -- by there being one call rather than by two calls agreeing today.
+  run_v2_with_scripted_world(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, scripted_world_state(script))
+}
+
+-- WI-D4. The same entry point, taking the WHOLE WORLD instead of just a script.
+--
+-- It exists because routing `resolve_context_limit` at WI-D3 made a fixture's
+-- context limit a property of the WORLD rather than of the checkout: a scripted
+-- run whose `files` table is empty resolves 0, and a fixture whose compaction
+-- depends on a catalogue value has to declare that value somewhere.
+-- `Scripted(script)` builds its world from a script alone and has nowhere to put
+-- one, which is what took `make smoke_parity` red at WI-D3 and is what this
+-- restores.
+--
+-- THE CONFORMANCE QUESTION, ANSWERED THE SAME WAY WI-D3 ANSWERED IT: a scripted
+-- run reads the model catalogue from the WORLD. The alternative on offer was to
+-- seed the catalogue into the deterministic world BY DEFAULT, in the scripted
+-- constructor, and it is refused for two reasons. Reading the host at
+-- construction time to build that default is cluster 4's C1b defect wearing a
+-- different hat — a run that passes an FS poison probe while still depending on
+-- the checkout. And a HARD-CODED default is no better: every DST fixture in this
+-- tree resolves 0 today precisely BECAUSE its model is absent from the world's
+-- table, so a default that supplies one changes what those fixtures resolve. The
+-- fixture that wants a limit declares it; nothing else moves.
+--
+-- A SIBLING rather than a widened parameter, because `run_v2_with_scripted_ports`
+-- has THIRTEEN call sites (measured, across seven `scripts/smoke_*.ail` files)
+-- and twelve of them seed no file. The one that does calls this instead — and the
+-- original DELEGATES here, so the claim that the two cannot drift is structural.
+export func run_v2_with_scripted_world(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  world: WorldState
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, ScriptedWorld(world))
 }
 
 pure func tool_call() -> ToolCall {

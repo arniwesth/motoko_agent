@@ -618,9 +618,20 @@ func run_scenario(
   label: string,
   answers: [string],
   tool_timeout_read_per_dispatch: bool,
-  -- WI-D3: how many times this scenario's control flow reaches
-  -- `resolve_context_limit`. Stated per scenario and measured — see
-  -- `env_reads_per_context_resolution`.
+  -- WI-D3 added this as a per-scenario count because `resolve_context_limit` was
+  -- reached once in `session_policy_init` AND again on every loop arm taken, so
+  -- the number genuinely varied with control flow — 12 here, 19 and 8 in strict
+  -- replay. WI-D4 removed the four per-arm resolutions (they re-derived a value
+  -- `session_policy_init` had already stored), so the driver reaches it exactly
+  -- ONCE per run and every scenario's answer is 1.
+  --
+  -- THE PARAMETER STAYS even though every caller now passes the same number, and
+  -- that is deliberate rather than an oversight: what makes the answer 1 is a
+  -- property of the driver's call graph, not of this suite, and the moment
+  -- anything re-resolves per arm the quantity varies again. A parameter that is
+  -- currently constant expresses "this may differ per scenario and today does
+  -- not"; folding it into a shared literal would express "this cannot differ",
+  -- which is the claim WI-D3 measured to be false.
   context_resolutions: int
 ) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world(answers);
@@ -772,14 +783,14 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- approve: three approvals granted, three native dispatches follow.
   let ok_approve = run_scenario("approve",
                                 [approve_line(), approve_line(), approve_line()],
-                                true, 12);
+                                true, 1);
 
   -- deny: three approvals refused, ZERO dispatches. This is the scenario in
   -- which a recorder that logged an approval as a tool interaction is visible,
   -- and it is invisible in `approve` where the counts happen to agree.
   let ok_deny = run_scenario("deny",
                              [deny_line("alpha"), deny_line("bravo"), deny_line("charlie")],
-                             false, 12);
+                             false, 1);
 
   -- eof: THREE tool calls and ONE queued answer, so the approval queue runs dry
   -- and the last two reads hit end-of-input.
@@ -803,7 +814,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- default-deny policy, so `tool_dispatches` is 1 while `approval_reads` is 3
   -- and `approvals_consumed` is 1 — three quantities that are pairwise distinct
   -- here and pairwise equal in `approve`.
-  let ok_eof = run_scenario("eof", [approve_line()], true, 12);
+  let ok_eof = run_scenario("eof", [approve_line()], true, 1);
 
   let _ = println("");
   if ok_approve && ok_deny && ok_eof then

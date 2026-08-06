@@ -26,10 +26,10 @@ import std/string (repeat, contains, concat, substring, length)
 import std/ai (Message, AIError)
 import src/core/config (CostRates, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
-import src/core/test/scripted_ports (run_v2_with_scripted_ports)
+import src/core/test/scripted_ports (run_v2_with_scripted_world)
 import pkg/sunholo/motoko_ext_compaction_structural/register (register_with_config as register_structural_compaction)
 import src/core/test/stub_step (prose_step)
-import src/core/ports (ScriptedStep)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state)
 
 -- test/tiny model has context_limit_for = 100 tokens = ~400 chars
 -- under the (length+3)/4 token estimator. Crossing thresholds:
@@ -94,14 +94,49 @@ func structural_rt() -> ExtRuntime ! {Env, FS} {
   { registry: { hooks: [register_structural_compaction(())] }, strict_mode: false, verification: v }
 }
 
+-- WI-D4. THE CATALOGUE THIS SUITE RUNS ON, DECLARED RATHER THAN INHERITED.
+--
+-- `test/tiny`'s 100-token limit is what makes every assertion below mean
+-- something — the header's "100 tokens = ~400 chars" arithmetic is the whole
+-- fixture. Until WI-D3 that number came from the CHECKOUT's
+-- `.motoko/model-catalog.json` through an ambient read, so a scripted run's
+-- compaction behaviour depended on a file no scenario declared.
+--
+-- IT WAS LOAD-BEARING AND WI-D3 BROKE IT WITHOUT NOTICING: with the world
+-- serving no file, `resolve_context_limit` returns 0, compaction never fires
+-- structurally, and `make smoke_parity`'s grep for a `"note":"structural:` entry
+-- finds zero. That regression is why this helper exists, and it is the
+-- counterexample to WI-D3's stated basis: that item reported "the DST fixtures
+-- did not depend on the VALUES — their models are absent from the catalogue and
+-- resolve to 0", which held for the four suites it ran and not for this one.
+-- `test/tiny` IS in the catalogue, at 100, and it is the whole arithmetic of the
+-- header above.
+--
+-- The path is the one the driver COMPUTES from an empty env table, not one this
+-- fixture asserts, and both values are the ones the checkout's catalogue carries
+-- — so behaviour is unchanged and only the INPUT moved into the world.
+--
+-- `anthropic/claude-sonnet-4-6` is here for test 5, whose whole point is that the
+-- structural extension EMITS a compaction stage: that is the line
+-- `make smoke_parity` greps for, and it does not appear at a resolved limit of 0.
+-- `totally-unknown-model` in test 4 is deliberately NOT here — with the catalogue
+-- present and the model absent from it, that test asserts what it says it does
+-- rather than passing because no catalogue was found at all.
+func catalog_world(script: [ScriptedStep]) -> WorldState {
+  { empty_world_state() |
+    script: script,
+    files: [{ path: ".motoko/model-catalog.json",
+              content: "{\"context_limits\":{\"test/tiny\":100,\"anthropic/claude-sonnet-4-6\":200000}}" }] }
+}
+
 -- 1. Light history (10 chars total = ~2% usage). Compaction passthrough.
 func test_light_history_completes() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = mk_history(10);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_scripted_ports(
+  let result = run_v2_with_scripted_world(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
   );
   match result {
     Ok(_) => true,
@@ -115,10 +150,10 @@ func test_light_history_completes() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
 func test_tier1_history_completes() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = mk_history(300);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_scripted_ports(
+  let result = run_v2_with_scripted_world(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
   );
   match result {
     Ok(_) => true,
@@ -134,10 +169,10 @@ func test_tier1_history_completes() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
 func test_extreme_history_compacts() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = mk_history(385);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_scripted_ports(
+  let result = run_v2_with_scripted_world(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
   );
   match result {
     Ok(_) => true,
@@ -151,10 +186,10 @@ func test_extreme_history_compacts() -> bool ! {AI, Clock, Env, FS, IO, Net, Pro
 func test_unknown_model_fail_open() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = mk_history(1000);
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_scripted_ports(
+  let result = run_v2_with_scripted_world(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "totally-unknown-model", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
   );
   match result {
     Ok(_) => true,
@@ -168,10 +203,10 @@ func test_unknown_model_fail_open() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
 func test_multi_tool_tier1_elides() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let history = multi_tool_history();
   let script: [ScriptedStep] = [prose_step("ok")];
-  let result = run_v2_with_scripted_ports(
+  let result = run_v2_with_scripted_world(
     structural_rt(), "stub-test", "", false, mk_budget(),
     "anthropic/claude-sonnet-4-6", history, "/tmp", 4, false,
-    0, no_rates(), script
+    0, no_rates(), catalog_world(script)
   );
   match result {
     Ok(_) => true,

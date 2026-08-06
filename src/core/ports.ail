@@ -38,7 +38,7 @@ import src/core/tool_dispatch_adapter (dispatch_one)
 import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
-  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing, generator_authored_count
 )
 -- WI-A13 stage 4. The GENERATOR STATE rides in `WorldState` for exactly the
 -- reason the interaction log does: the ports are the only place that sees a
@@ -929,7 +929,7 @@ export pure func provider_outcome_record(s: ScriptedStep, chunks: [StreamChunkRe
 export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
   if not generator_installed(state.gen) then recording_tool(state, inv)
   else {
-    let salt = "tool call_id=${inv.call.id} tool=${inv.call.tool} timeout_ms=${inv.timeout_ms} at=${state.clock_ms} n=${List.length(state.log)}";
+    let salt = "tool call_id=${inv.call.id} tool=${inv.call.tool} timeout_ms=${inv.timeout_ms} at=${state.clock_ms} n=${generator_authored_count(state.log)}";
     let choice = choose_tool(state.gen, salt, inv.timeout_ms, inv.call.id);
     let d = choice.decision;
     let entry: ScriptedTool = {
@@ -979,7 +979,7 @@ export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecu
 -- reads. Returning the flag as well would be a second representation of one
 -- fact, and the driver would still ignore it.
 export pure func generated_provider_entry(state: WorldState, salt: string) -> { step: ScriptedStep, gen: GeneratorState } {
-  let choice = choose_provider(state.gen, salt, List.length(state.log));
+  let choice = choose_provider(state.gen, salt, generator_authored_count(state.log));
   let d = choice.decision;
   let calls: [ToolCall] =
     if d.terminate then []
@@ -1022,7 +1022,7 @@ pure func repeat_chunk(text: string, n: int) -> [string] {
 export func generating_approval(state: WorldState, req: ApprovalRequest) -> ApprovalInput ! {IO} {
   if not generator_installed(state.gen) then recording_approval(state, req)
   else {
-    let salt = "approval call_id=${req.call.id} tool=${req.call.name} default_allow=${req.default_allow} at=${state.clock_ms} n=${List.length(state.log)}";
+    let salt = "approval call_id=${req.call.id} tool=${req.call.name} default_allow=${req.default_allow} at=${state.clock_ms} n=${generator_authored_count(state.log)}";
     let choice = choose_approval(state.gen, salt);
     let d = choice.decision;
     let queued =

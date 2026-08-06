@@ -32,7 +32,7 @@ import src/core/ports (
 )
 import src/core/dst_interaction (
   Interaction, StreamChunkRecord, TimedOutcome,
-  ProviderIdentity, OutcomeOk
+  ProviderIdentity, OutcomeOk, generator_authored_count
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
@@ -478,7 +478,7 @@ func generating_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (
     let seeded =
       match state.script {
         [] => {
-          let salt = "model_step model=${model} msg_count=${show(List.length(msgs))} at=${state.clock_ms} n=${show(List.length(state.log))}";
+          let salt = "model_step model=${model} msg_count=${show(List.length(msgs))} at=${state.clock_ms} n=${show(generator_authored_count(state.log))}";
           let entry = generated_provider_entry(state, salt);
           { state | script: [entry.step], gen: entry.gen }
         },

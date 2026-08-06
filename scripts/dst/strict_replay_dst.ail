@@ -652,9 +652,20 @@ func run_scenario(
   -- to be, and saying which makes the obligation locatable instead of assumed
   -- of all of them.
   is_survive_fixture: bool,
-  -- WI-D3: how many times this scenario's control flow reaches
-  -- `resolve_context_limit`. Stated per scenario and measured — see
-  -- `env_reads_per_context_resolution`.
+  -- WI-D3 added this as a per-scenario count because `resolve_context_limit` was
+  -- reached once in `session_policy_init` AND again on every loop arm taken, so
+  -- the number genuinely varied with control flow — 12 here, 19 and 8 in strict
+  -- replay. WI-D4 removed the four per-arm resolutions (they re-derived a value
+  -- `session_policy_init` had already stored), so the driver reaches it exactly
+  -- ONCE per run and every scenario's answer is 1.
+  --
+  -- THE PARAMETER STAYS even though every caller now passes the same number, and
+  -- that is deliberate rather than an oversight: what makes the answer 1 is a
+  -- property of the driver's call graph, not of this suite, and the moment
+  -- anything re-resolves per arm the quantity varies again. A parameter that is
+  -- currently constant expresses "this may differ per scenario and today does
+  -- not"; folding it into a shared literal would express "this cannot differ",
+  -- which is the claim WI-D3 measured to be false.
   context_resolutions: int
 ) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world(script, answers, tools);
@@ -1096,8 +1107,8 @@ func failure_answers() -> [string] { [approve_line(), deny_line("bravo")] }
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only");
 
-  let ok_rich = run_scenario("rich", rich_script(), rich_answers(), rich_tools(), 12, true, true, 19);
-  let ok_fail = run_scenario("maxsteps", rich_script(), failure_answers(), rich_tools(), 1, false, false, 8);
+  let ok_rich = run_scenario("rich", rich_script(), rich_answers(), rich_tools(), 12, true, true, 1);
+  let ok_fail = run_scenario("maxsteps", rich_script(), failure_answers(), rich_tools(), 1, false, false, 1);
 
   let _ = println("");
   if ok_rich && ok_fail then

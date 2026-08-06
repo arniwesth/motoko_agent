@@ -309,12 +309,21 @@ export type CorpusJob = {
   retention_runs: int
 }
 
--- MEASURED, not chosen: 260 seeds through the real driver in 76.0 s of wall
--- clock, one process start included — 292 ms per seed, taken from the slower of
--- two runs (the faster was 66.0 s / 254 ms). Every number below is this
--- constant times a declared budget, so re-measuring moves them together and the
+-- MEASURED, not chosen: 100 seeds BUILT through the real driver — generated,
+-- programmed, encoded, persisted and loaded back — in 38.2 s of wall clock, one
+-- process start included: 381 ms per seed. Every number below is this constant
+-- times a declared budget, so re-measuring moves them together and the
 -- arithmetic is visible instead of being folded into a literal.
-export pure func measured_ms_per_seed() -> int { 292 }
+--
+-- RE-MEASURED AT WI-D4, 292 -> 381, AND THE RISE IS A CONSEQUENCE RATHER THAN
+-- NOISE. Until WI-D4 the generator spent `max_interactions` against the whole
+-- interaction log, so every environment read the DRIVER made shortened the
+-- trajectory the generator was allowed to produce. Charging the budget only for
+-- generator-authored interactions gives each seed back the trajectory it was
+-- always declared to have, and a longer trajectory costs more to run, encode and
+-- persist. The old constant was measuring a generator that had been quietly
+-- truncated.
+export pure func measured_ms_per_seed() -> int { 381 }
 
 export pure func seeds_affordable_in(budget_ms: int) -> int {
   budget_ms / measured_ms_per_seed()
@@ -322,8 +331,12 @@ export pure func seeds_affordable_in(budget_ms: int) -> int {
 
 -- The BLOCKING job. It runs on every PR, so its budget is a share of a gate a
 -- human waits for: `make dst` is 200 s measured at this item's start, and 5 s is
--- 2.5% of it. 5000 / 292 = 17 seeds affordable; the declared minimum is 12,
--- which leaves the promoted and constructed members inside the same budget.
+-- 2.5% of it. 5000 / 381 = 13 seeds affordable; the declared minimum is 12,
+-- which still leaves the promoted and constructed members inside the same
+-- budget — but by one seed rather than by five, and that is worth stating
+-- plainly: the next measured rise in per-seed cost puts the affordable count
+-- BELOW the declared minimum, and the honest response then is to raise the
+-- budget or lower the minimum, not to re-measure until the number is convenient.
 export pure func pr_job() -> CorpusJob {
   { job_id: "dst-pr-corpus",
     minimum_seeds: 12,
@@ -333,8 +346,8 @@ export pure func pr_job() -> CorpusJob {
 }
 
 -- The SCHEDULED job. Nobody waits for it, so the budget is a wall-clock window
--- rather than a share of a gate: 600 s / 292 ms = 2054 seeds affordable, and the
--- declared minimum is 240 — under 12% of what the budget permits, which is the
+-- rather than a share of a gate: 600 s / 381 ms = 1574 seeds affordable, and the
+-- declared minimum is 240 — about 15% of what the budget permits, which is the
 -- headroom a rotating window needs for the runs that terminate long.
 --
 -- 4 shards of 60. `retention_runs` is 14: a fortnight of scheduled runs, which
@@ -350,15 +363,35 @@ export pure func scheduled_job() -> CorpusJob {
 
 -- The whole TARGET's wall clock, which is a DIFFERENT quantity from the seed
 -- window's and is not derivable from it: `make corpus_pr` also persists every
--- member, loads each back off disk and runs twelve mutation rows. Measured at
--- 28.5 s for the whole PR target (13 real driver runs, persistence, load-back,
--- twelve mutation rows and the module's own inline tests). The ceiling is a
--- regression guard on CI cost rather
+-- member, loads each back off disk and runs twelve mutation rows. Re-measured at
+-- WI-D4 for the whole PR target, which now runs FIFTEEN real driver seeds rather
+-- than thirteen — the re-derived bank needs two witnesses per class and the
+-- classes moved — over longer trajectories. The ceiling is a regression guard on
+-- CI cost rather
 -- than a budget — D11 delegates seed counts to measured cost, and a measured
 -- constant nobody re-measures is exactly the kind of number this project keeps
 -- finding stale. If this fires, re-measure and move `measured_ms_per_seed()`
 -- with it rather than raising the ceiling alone.
-export pure func pr_target_ceiling_ms() -> int { 45000 }
+--
+-- WI-D4 MOVED BOTH, IN THAT ORDER, AND THE MEASUREMENT IS A RANGE RATHER THAN A
+-- POINT. Observed at 47-50 s on a cold tree and 24 s within a warm `make dst`,
+-- against 28.5 s at WI-A15. The ceiling is set from the SLOW end, because a
+-- ceiling set from the fast one fails on the first cold run and teaches whoever
+-- meets it to raise the ceiling — which is the failure mode the paragraph above
+-- is written against. It keeps the same headroom ratio the previous pair had:
+-- 45000/28500 = 1.58, and 50000 x 1.58 rounds to 80000, so the guard is as tight
+-- relative to its measurement as it was before rather than being widened until
+-- it stopped complaining.
+--
+-- Two seeds of the rise are the re-derived bank (13 -> 15). The REST is not seed
+-- count and is worth naming: at 381 ms/seed the fifteen seeds are under 6 s of
+-- the 50, so the growth is in what the target does with each one — persistence,
+-- load-back and the mutation rows over trajectories that are now longer, because
+-- WI-D4 stopped the driver's environment reads from spending the generator's
+-- budget. A bank of restored-length trajectories is more expensive than a bank
+-- of truncated ones, and that is the cost of the repair rather than an
+-- inefficiency in it.
+export pure func pr_target_ceiling_ms() -> int { 80000 }
 export pure func scheduled_target_ceiling_ms() -> int { 120000 }
 
 -- One shard's share of a job. The minimum and the budget are DIVIDED, so a

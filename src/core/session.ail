@@ -2026,17 +2026,33 @@ func c2_loop(
         Fail(info) => c2_fail(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision, st.emissions),
         Finalize(info) => {
           let done_step = c2_done_step(st.step_idx);
-          -- WI-D3. Bound UNCONDITIONALLY, exactly as the record literal that
-          -- used to hold it was built unconditionally. Moving the resolution
-          -- under the `trim(info.output) == ""` guard below would read fewer
-          -- times on the ordinary path and change the request census this run
-          -- produces — a behaviour change wearing an optimisation's clothes.
-          let r_limit = resolve_context_limit(context_reader_of(st.provider), st.world_state, model);
+          -- WI-D4. READ, not re-resolved. `session_policy_init` already resolved
+          -- this model's limit and stored it here; WI-D3 re-resolved it at this
+          -- and three sibling sites, which put the driver's config reads into
+          -- the recorded interaction log on every loop arm.
+          --
+          -- SAFE BECAUSE IT WAS MEASURED, not because the two look equal: a
+          -- temporary assertion at all four sites, comparing the stored value
+          -- against a fresh resolution and the loop's `model` against
+          -- `policy.step.model`, ran over the WHOLE of `make dst` and reported
+          -- 657 executions and ZERO mismatches — 282 here at `CallModel`, 205 at
+          -- `RunTools`, 75 at this site and 95 at the approval site. The
+          -- structural reason is that `model` and `policy.step.model` move
+          -- together: every `session_policy_init` caller passes the same model it
+          -- passes the loop, and the one model SWITCH,
+          -- `conversation_loop_v2_with_policy`'s `model_change`, rebuilds the
+          -- policy through `session_policy_with_model` and passes BOTH.
+          --
+          -- SUCCESSOR: none is lost. `r_limit.next_state` descended from
+          -- `st.world_state` with nothing between them, so `st.world_state` is
+          -- both the predecessor and — with no read performed — the successor.
+          -- This is NOT the shape WI-D1 found in production, where the discarded
+          -- state was the successor of work that had actually happened.
           let empty_event = EmptyStopFinalize({
             step: done_step,
             input_tokens: st.telemetry.last_input_tokens,
             estimated_input_tokens: st.telemetry.last_estimated_input_tokens,
-            context_limit: r_limit.value
+            context_limit: policy.step.compaction.context_limit
           });
           let trace_after_empty_floor =
             if trim(info.output) == "" then {
@@ -2052,7 +2068,7 @@ func c2_loop(
           -- order is untouched: D6.4 asks for PARITY, not one transition.
           let done_event = DoneEvent({ step: done_step, output: info.output, source: st.finalize_source });
           let trace_with_done = ledger_append(trace_after_empty_floor, WireRecord(done_event));
-          let finalized = c2_finalize(st.provider, r_limit.next_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, st.emissions, Ok(st.msgs));
+          let finalized = c2_finalize(st.provider, st.world_state, session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_with_done, st.emissions, Ok(st.msgs));
           let _ = ledger_emit(session_id, done_event);
           finalized
         },
@@ -2136,14 +2152,17 @@ func c2_loop(
               -- catches — the queue would never advance.
               let post: C2LoopState = { st | world_state: input.next_state };
               let tool_step_idx = c2_done_step(post.step_idx);
-              -- WI-D3. `post_ctx` carries the approval cursor AND the successor
-              -- of this resolution's requests, and every continuation below uses
-              -- it. Named rather than shadowed for the reason the comment above
-              -- gives: with two live states in one arm, "which one" must be a
-              -- question the name answers rather than one line order answers.
-              let r_limit = resolve_context_limit(context_reader_of(post.provider), post.world_state, model);
-              let post_ctx: C2LoopState = { post | world_state: r_limit.next_state };
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post_ctx), r_limit.value, ext_ports_of(post_ctx.provider, post_ctx.world_state, policy.step.provider_base_url), post_ctx.ext_artifacts, post_ctx.telemetry, world_to_token(post_ctx.world_state));
+              -- WI-D4 removed WI-D3's `post_ctx` here, and THIS is the site
+              -- where doing it carelessly would have cost something. `post_ctx`
+              -- was `post` advanced past the resolution's requests; `post` is
+              -- `st` advanced past the APPROVAL READ. Collapsing to `st` — the
+              -- edit the type checker accepts just as readily — would have
+              -- thrown the approval cursor away and frozen the queue, which is
+              -- WI-D1's production defect in miniature and exactly what the
+              -- comment above says this arm is prone to. The successor that
+              -- disappears with the resolution is the resolution's own; the one
+              -- that must survive is `input.next_state`, and it does, in `post`.
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(post), policy.step.compaction.context_limit, ext_ports_of(post.provider, post.world_state, policy.step.provider_base_url), post.ext_artifacts, post.telemetry, world_to_token(post.world_state));
               match resolution {
                 ApprovalDenied(reason) => {
                   let denied_event = NativeToolDenied({
@@ -2155,19 +2174,17 @@ func c2_loop(
                   });
                   let _ = ledger_emit(session_id, denied_event);
                   let denial_msg = policy_denied_message(req.call, reason);
-                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post_ctx, ledger_append(trace_with_decision, WireRecord(denied_event)), req, post_ctx.accumulated_tool_msgs ++ [denial_msg])
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, post, ledger_append(trace_with_decision, WireRecord(denied_event)), req, post.accumulated_tool_msgs ++ [denial_msg])
                 },
                 ApprovalAllowed => {
-                  let executed = execute_allowed_tool_call(post_ctx.provider, post_ctx.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
+                  let executed = execute_allowed_tool_call(post.provider, post.world_state, rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
                   -- `after` carries BOTH advanced cursors: the approval queue
-                  -- (from `post`, via `post_ctx`) and the tool queue (from this
-                  -- execution) — and since WI-D3 the context resolution's
-                  -- successor as well, which is what `post_ctx` adds.
+                  -- (from `post`) and the tool queue (from this execution).
                   -- WI-D2 adds a third thing to carry — `executed.emitted` — and
                   -- this is the site where forgetting it is least visible,
                   -- because the batch continues and the events would simply
                   -- never appear.
-                  let after: C2LoopState = { post_ctx | world_state: executed.next_state };
+                  let after: C2LoopState = { post | world_state: executed.next_state };
                   c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, after, c2_trace_wire_events(trace_with_decision, executed.emitted), req, after.accumulated_tool_msgs ++ [executed.msg])
                 }
               }
@@ -2180,14 +2197,16 @@ func c2_loop(
           let calls = c2_tool_plan_calls(plan.entries);
           let request_id = "step-${show(tool_step_idx)}";
           let ctx_msgs = c2_pending_context(st);
-          -- WI-D3. `st_ctx` is `st` advanced past this resolution's requests, and
-          -- the dispatch below starts from it. Handing the dispatcher
-          -- `st.world_state` instead type-checks and rewinds the world to before
-          -- the resolution — the same shape as the `done.world` note further
-          -- down, one seam earlier.
-          let r_limit = resolve_context_limit(context_reader_of(st.provider), st.world_state, model);
-          let st_ctx: C2LoopState = { st | world_state: r_limit.next_state };
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, r_limit.value, ext_ports_of(st_ctx.provider, st_ctx.world_state, policy.step.provider_base_url), st_ctx.ext_artifacts, st_ctx.telemetry, world_to_token(st_ctx.world_state));
+          -- WI-D4. The stored limit, and WI-D3's `st_ctx` goes with the
+          -- resolution that produced it.
+          --
+          -- SUCCESSOR: nothing is lost. Between `st` and the deleted resolution
+          -- stood only `c2_done_step` and `c2_pending_context`, both pure, so
+          -- `r_limit.next_state` was `st.world_state` plus this resolution's own
+          -- requests and nothing else. The dispatcher below therefore starts
+          -- from the same world it would have started from, and `done.world` —
+          -- the successor that IS load-bearing here — is untouched.
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, policy.step.compaction.context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let calls_event = NativeToolCalls({
             request_id: request_id,
@@ -2206,7 +2225,7 @@ func c2_loop(
             else trace_with_decision;
           let runtime_status_content = encode(runtime_status_json(st, policy, tool_step_idx));
           let runtime_builtin = \call. runtime_status_tool_message(call, runtime_status_content);
-          match dispatch_tool_entries_with_builtin(st_ctx.provider, st_ctx.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st_ctx.accumulated_tool_msgs, [], \event. ledger_emit(session_id, event), runtime_builtin) {
+          match dispatch_tool_entries_with_builtin(st.provider, st.world_state, rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, [], \event. ledger_emit(session_id, event), runtime_builtin) {
             -- `done.world`, not `st.world_state`. The batch may have executed
             -- several tools and each one advanced the cursor; taking it off `st`
             -- type-checks and rewinds the world to before the batch.
@@ -2254,19 +2273,23 @@ func c2_loop(
         },
         CallModel(_) => {
           let step_idx = st.step_idx;
-          -- WI-D3. This is the per-step resolution, and `st_ctx` is `st` advanced
-          -- past its requests. The two `c2_finalize` sites below take their world
-          -- from `st_ctx` for that reason and NOT because this item closed them:
-          -- they still ignore `chain.next_state`, which is the pre-step chain's
-          -- successor and a separate un-threaded seam this item leaves open.
-          let r_limit = resolve_context_limit(context_reader_of(st.provider), st.world_state, model);
-          let st_ctx: C2LoopState = { st | world_state: r_limit.next_state };
-          let context_limit = r_limit.value;
+          -- WI-D4. The stored limit, and WI-D3's `st_ctx` goes with it.
+          --
+          -- SUCCESSOR: nothing is lost — the deleted resolution was the first
+          -- thing this arm did to the world, so its successor was `st`'s own.
+          -- The two `SealSystemPrompt`/`SealExhausted` finalize sites below
+          -- therefore return to `st.world_state`, which is where they stood
+          -- before WI-D3 and is NOT a narrowing: WI-D3 pointed them at `st_ctx`
+          -- only so that item did not newly widen them, and with no resolution
+          -- here there is no widening to preserve. They still ignore
+          -- `chain.next_state`, the pre-step chain's successor, which remains a
+          -- separate un-threaded seam and is out of this item's scope.
+          let context_limit = policy.step.compaction.context_limit;
           let split = split_for_compaction(st.msgs);
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
           let ext_context_limit = if context_limit - pinned_tokens < 0 then 0 else context_limit - pinned_tokens;
-          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st_ctx.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st_ctx.world_state));
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), st.ext_artifacts, st.telemetry, world_to_token(st.world_state));
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
@@ -2279,14 +2302,14 @@ func c2_loop(
               let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
-              c2_finalize(st.provider, st_ctx.world_state, session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
             },
             -- Terminal: compaction exhausted.
             Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
-              c2_finalize(st.provider, st_ctx.world_state, session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
+              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
             },
             Ok(payload) => {
               let compacted_msgs = payload_messages(payload);
@@ -2365,7 +2388,7 @@ func c2_loop(
                   -- read" from WI-A12 until WI-D3; it is the last one IN
                   -- session.ail and it is no longer the last in the driver —
                   -- `context_usage` reads four more through the same port.
-                  let _ = if not e.retryable && st.provider.env_get(st_ctx.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", "").value != "" then capture_failing_payload(e, compacted_msgs) else ();
+                  let _ = if not e.retryable && st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", "").value != "" then capture_failing_payload(e, compacted_msgs) else ();
                   if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
                     let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
                     let _ = ledger_emit(session_id, retry_event);
@@ -2409,7 +2432,7 @@ func c2_loop(
                   let applied = apply_state_delta(step_state, phase.delta);
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st_ctx.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_of(st.provider, st.world_state, policy.step.provider_base_url), chain.artifacts, applied.telemetry, world_to_token(exchange.next_state));
                   let trace_after_model = c2_trace_wire_events(ledger_append(trace_after_call, WireRecord(end_event)), phase.events);
                   -- WI-B2b. Bound rather than matched inline, because the
                   -- successor has to outlive the match: `intercepted.next_state`

@@ -21,39 +21,53 @@
 -- change to the generator, to a request projection string or to the driver's
 -- control flow moves it and fails loudly.
 --
--- RE-SWEPT AT WI-D1, AND EVERY MEMBER MOVED — which is the sentence above
--- doing its job, not failing at it. The generator gained a provider-fault draw
--- and a malformed-arguments draw; `draw` threads `g.rng`, so a new draw
--- re-dates every choice after it and each seed now produces a different
--- trajectory. Four classes also joined the reachable set, so the query has
--- eight answers where it had four. The selections are unchanged:
+-- RE-SWEPT AGAIN AT WI-D4, AND AGAIN EVERY MEMBER MOVED. The mechanism is the
+-- same one WI-D1's paragraph below describes and the CAUSE is different, which
+-- is the part worth reading: WI-D1 moved the bank by adding draws to the
+-- generator, deliberately. WI-D4 moved it by removing the DRIVER from the
+-- generator's inputs, and the drift it repaired had happened at WI-D3 without
+-- anyone choosing it.
 --
---   1, 192      the shortest and longest eligible trajectories (n = 9 and 59).
+-- Until WI-D4 the three generating seams salted every choice with
+-- `n = List.length(world.log)` — the WHOLE log, including every environment read
+-- the driver made for its own configuration — and `choose_provider` spent
+-- `max_interactions` against the same total. WI-D3 routed `resolve_context_limit`
+-- through the ports, the driver's config reads entered that log, and every
+-- generated trajectory in this bank silently became a different trajectory. That
+-- is how `ToolCorrelationMismatch` stopped being reached by the two seeds pinned
+-- as its witnesses. The salts now count only GENERATOR-authored interactions
+-- (`dst_interaction.generator_authored_count`), so THIS re-derivation is the last
+-- one a change to the driver's environment surface can force: a trajectory is a
+-- function of the seed and of the generator, and of nothing else.
+--
+-- The selections are unchanged; only their answers move.
+--
+--   5, 244      the shortest and longest trajectories of 260 (n = 14 and 61).
 --               S8's complement: a bank that walks only the middle certifies
 --               only the middle, and the paths it does not walk are not pinned
 --               but ABSENT.
---   3, 11       the two smallest seeds reaching approval_denied.
---   26, 31      the two smallest reaching ToolCorrelationMismatch.
---   3, 14       the two smallest reaching ToolDeadlineExceeded.
---   8, 14       the two smallest reaching ToolFailed.
---   17, 20      the two smallest reaching provider_error_retryable.       (D1)
---   3, 36       the two smallest reaching provider_error_non_retryable.   (D1)
---   5, 9        the two smallest reaching
---               provider_partial_stream_then_error.                      (D1)
---   14, 17      the two smallest reaching
---               provider_protocol_inconsistent_result.                   (D1)
---   26          the richest Err-terminating trajectory (5 classes). It enters
+--   7, 10       the two smallest seeds reaching approval_denied.
+--   1, 19       the two smallest reaching ToolCorrelationMismatch.
+--   12, 15      the two smallest reaching ToolDeadlineExceeded.
+--   1, 62       the two smallest reaching ToolFailed.
+--   9, 32       the two smallest reaching provider_error_retryable.
+--   30, 32      the two smallest reaching provider_error_non_retryable.
+--   5, 7        the two smallest reaching
+--               provider_partial_stream_then_error.
+--   2, 4        the two smallest reaching
+--               provider_protocol_inconsistent_result.
+--   141         the richest Err-terminating trajectory (5 classes). It enters
 --               as a PROMOTED REGRESSION, so the bank carries D11's second kind
 --               and not only its first.
 --
--- The fifth selection CHANGED ITS ANSWER and is recorded as changed rather than
--- quietly restated: there is no longer a seed reaching every sweep-reachable
--- class by itself. The most any single trajectory of 260 reaches is FIVE of
--- eight, and three seeds (14, 26, 125) tie at it. 14 and 26 are in the bank on
--- other reasons; 125 adds nothing the bank does not already have, so no member
--- is carried on that selection alone. **A bank whose collective coverage now
--- exceeds any single member's is the shape D11 asks for and the previous bank
--- did not have** — seed 195 could carry the whole class obligation alone.
+-- The fifth selection keeps WI-D1's answer in KIND while changing it in detail,
+-- and is recorded rather than quietly restated: there is still no seed reaching
+-- every sweep-reachable class by itself. The most any single trajectory of 260
+-- reaches is FIVE of eight, and five seeds (42, 125, 141, 212, 216) tie at it.
+-- 141 is in the bank as the richest Err-terminating trajectory; the other four
+-- add nothing the bank does not already have, so no member is carried on that
+-- selection alone. **A bank whose collective coverage exceeds any single
+-- member's is the shape D11 asks for**, and it still holds.
 --
 -- Two witnesses per class rather than one, deliberately: a bank with a single
 -- witness for a class loses that class to any generator drift that moves one
@@ -121,24 +135,27 @@
 -- ============================================================================
 --
 -- Nine required classes are not waived by `driver_only`. Re-measured over 260
--- seeds at WI-D1: EIGHT are reachable by search and one is not.
+-- seeds at WI-D4: EIGHT are reachable by search and one is not. Every count
+-- below moved, because every trajectory did; the PARTITION did not.
 --
---   provider_error_retryable          18 seeds. WI-D1.
---   provider_error_non_retryable      23 seeds. WI-D1.
---   provider_partial_stream_then_     91 seeds. WI-D1.
---   error
---   provider_protocol_inconsistent_   49 seeds. WI-D1.
+--   provider_error_retryable          11 seeds. WI-D4 (18 at D1).
+--   provider_error_non_retryable      22 seeds. WI-D4 (23 at D1).
+--   provider_partial_stream_then_     91 seeds. WI-D4 (91 at D1 — the same
+--   error                             total over a different seed set, which is
+--                                     coincidence and is noted so no reader
+--                                     takes it for stability).
+--   provider_protocol_inconsistent_   58 seeds. WI-D4 (49 at D1).
 --   result
---   ToolFailed                        26 seeds.
---   ToolCorrelationMismatch           26 seeds.
---   ToolDeadlineExceeded              25 seeds.
---   approval_denied                  111 seeds.
+--   ToolFailed                        19 seeds. WI-D4 (26 at D1).
+--   ToolCorrelationMismatch           17 seeds. WI-D4 (26 at D1).
+--   ToolDeadlineExceeded              18 seeds. WI-D4 (25 at D1).
+--   approval_denied                   77 seeds. WI-D4 (111 at D1).
 --
 --   provider_empty_terminal_response  UNREACHABLE BY SEARCH and reachable by
 --                                     CONSTRUCTION: every generated terminal
 --                                     step carries non-empty prose
 --                                     (`gp${draws}-${arg}`). Re-measured at
---                                     WI-D1 under the new generator: still
+--                                     WI-D4 under the decoupled salts: still
 --                                     0 of 260, so the construction's
 --                                     justification holds unchanged.
 --
@@ -524,37 +541,45 @@ pure func count_with_chunks(xs: [Interaction]) -> int {
 
 export type BankEntry = { seed: int, kind: MemberKind }
 
--- RE-DERIVED AT WI-D1, AND EVERY MEMBER MOVED. Not one seed of the previous
--- bank survives, and that is the derivation working rather than failing: the
--- bank is a query's answer, WI-D1 changed the query, and every reason below is
--- the answer to the new one.
+-- RE-DERIVED AT WI-D4, AND AGAIN EVERY MEMBER MOVED. Only seed 1 and seed 5
+-- appear in both banks, and neither is carried for the reason it was carried
+-- before. That is the derivation working rather than failing: the bank is a
+-- query's answer, and a reason like "the smallest seed reaching ToolFailed" is a
+-- claim about a PARTICULAR generator that happens to still type-check under any
+-- other.
 --
--- TWO independent things changed it. First, the generator gained two draws —
--- the provider fault and the malformed arguments — and `draw` threads
--- `g.rng`, so inserting a draw re-dates every choice after it. The trajectory a
--- seed produces is therefore a different trajectory, and a reason like "the
--- smallest seed reaching ToolFailed" is a claim about the OLD generator that
--- happens to still type-check. Second, four classes joined the reachable set,
--- so the query itself has eight answers where it had four.
+-- WHAT CHANGED THE QUERY IS DIFFERENT IN KIND FROM WI-D1'S, and the difference is
+-- the finding. WI-D1 changed the generator on purpose, by adding two draws.
+-- WI-D3 changed it BY ACCIDENT: routing `resolve_context_limit` through the ports
+-- put the driver's environment reads into the world's interaction log, and the
+-- generating seams salted every choice with that log's LENGTH. The generator's
+-- output was therefore a function of how many times the driver happened to read
+-- its configuration, and nothing in this suite said so — the bank simply stopped
+-- reaching ToolCorrelationMismatch. WI-D4 made the salts count only
+-- generator-authored interactions, which is why this re-derivation should be the
+-- last one the driver can force.
 --
 -- The five selections are unchanged, and so is the two-witnesses rule: a bank
 -- with a single witness for a class loses it to any generator drift that moves
 -- one seed, and loses it SILENTLY, because the remaining members still pass.
--- WI-D1 is the item that would have lost it.
+-- WI-D3 is the item that WOULD have lost it, and did not only because the class
+-- it moved had two.
 pure func fixed_bank() -> [BankEntry] {
-  [{ seed: 1, kind: FixedSeed("the SHORTEST eligible trajectory of 260 (n=9): S8's complement says a bank that walks only the middle certifies only the middle") },
-   { seed: 3, kind: FixedSeed("the smallest seed of 260 reaching THREE required classes — approval_denied, ToolDeadlineExceeded and provider_error_non_retryable — so it is the first witness for each. One member, three obligations, and the reason has to name all three or a future reader will read it as satisfying one") },
-   { seed: 5, kind: FixedSeed("first of two witnesses for provider_partial_stream_then_error — the smallest seed of 260 reaching it. WI-D1: unreachable by any seed before this item, because the two scripted model_step closures could not serve Err") },
-   { seed: 8, kind: FixedSeed("first of two witnesses for ToolFailed — the smallest seed of 260 reaching it") },
-   { seed: 9, kind: FixedSeed("second witness for provider_partial_stream_then_error") },
-   { seed: 11, kind: FixedSeed("second witness for approval_denied; two per class, because a single witness is lost silently to any generator drift that moves one seed") },
-   { seed: 14, kind: FixedSeed("second witness for ToolFailed AND for ToolDeadlineExceeded, and first of two for provider_protocol_inconsistent_result. Also one of THREE seeds of 260 jointly reaching the most classes any single trajectory reaches (5 of 8) — the smallest of the three, and it is in the bank on the witness reasons regardless") },
-   { seed: 17, kind: FixedSeed("first of two witnesses for provider_error_retryable — the smallest seed of 260 reaching it — and second witness for provider_protocol_inconsistent_result") },
-   { seed: 20, kind: FixedSeed("second witness for provider_error_retryable") },
-   { seed: 26, kind: PromotedRegression("the richest Err-terminating trajectory of 260: FIVE fault classes in one run that does NOT end Ok. D11's bank holds promoted regression programs as well as fixed seeds, and a bank whose every member terminates Ok pins only the happy shape of failure. Also the smallest seed reaching ToolCorrelationMismatch, so it is that class's first witness") },
-   { seed: 31, kind: FixedSeed("second witness for ToolCorrelationMismatch") },
-   { seed: 36, kind: FixedSeed("second witness for provider_error_non_retryable. WI-D1 measured this class at 0 of 260 BEFORE fixing session.c2_loop's unretried-failure branch, which finalized from the world the step was entered with and so discarded the interaction recording the fault — the fault reached production and the log did not record it") },
-   { seed: 192, kind: FixedSeed("the LONGEST eligible trajectory of 260 (n=59), the other trajectory extreme") }]
+  [{ seed: 1, kind: FixedSeed("first of two witnesses for ToolFailed AND for ToolCorrelationMismatch — the smallest seed of 260 reaching either") },
+   { seed: 2, kind: FixedSeed("first of two witnesses for provider_protocol_inconsistent_result — the smallest seed of 260 reaching it") },
+   { seed: 4, kind: FixedSeed("second witness for provider_protocol_inconsistent_result") },
+   { seed: 5, kind: FixedSeed("first of two witnesses for provider_partial_stream_then_error — the smallest seed of 260 reaching it — and the SHORTEST trajectory of 260 (n=14): S8's complement says a bank that walks only the middle certifies only the middle") },
+   { seed: 7, kind: FixedSeed("second witness for provider_partial_stream_then_error, and first of two for approval_denied — the smallest seed of 260 reaching it") },
+   { seed: 9, kind: FixedSeed("first of two witnesses for provider_error_retryable — the smallest seed of 260 reaching it") },
+   { seed: 10, kind: FixedSeed("second witness for approval_denied; two per class, because a single witness is lost silently to any generator drift that moves one seed — which is exactly what WI-D3 did to this bank") },
+   { seed: 12, kind: FixedSeed("first of two witnesses for ToolDeadlineExceeded — the smallest seed of 260 reaching it") },
+   { seed: 15, kind: FixedSeed("second witness for ToolDeadlineExceeded") },
+   { seed: 19, kind: FixedSeed("second witness for ToolCorrelationMismatch") },
+   { seed: 30, kind: FixedSeed("first of two witnesses for provider_error_non_retryable — the smallest seed of 260 reaching it. WI-D1 measured this class at 0 of 260 BEFORE fixing session.c2_loop's unretried-failure branch, which finalized from the world the step was entered with and so discarded the interaction recording the fault — the fault reached production and the log did not record it") },
+   { seed: 32, kind: FixedSeed("second witness for provider_error_retryable AND for provider_error_non_retryable") },
+   { seed: 62, kind: FixedSeed("second witness for ToolFailed") },
+   { seed: 141, kind: PromotedRegression("the richest Err-terminating trajectory of 260: FIVE fault classes in one run that does NOT end Ok — ToolCorrelationMismatch, ToolDeadlineExceeded, provider_partial_stream_then_error, provider_protocol_inconsistent_result and approval_denied. D11's bank holds promoted regression programs as well as fixed seeds, and a bank whose every member terminates Ok pins only the happy shape of failure") },
+   { seed: 244, kind: FixedSeed("the LONGEST trajectory of 260 (n=61), the other trajectory extreme") }]
 }
 
 -- The class no seed reaches and construction does. Its justification is
