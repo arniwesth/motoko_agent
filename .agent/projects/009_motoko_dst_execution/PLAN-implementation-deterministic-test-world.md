@@ -477,6 +477,57 @@ never matches a leading member, so a census reported `ToolFailed` at 0 of 260 an
 hunting a defect in `world_tool` that did not exist. **Both halves of the lesson are the same: a zero
 is the cheapest thing for a broken instrument to produce.**
 
+**CORRECTION APPLIED AT REVIEW: THE RECORD-FIELD GAP IS NOT NEW, AND THIS PROJECT FILED IT.** WI-D8
+records it as *"THE FINDING THAT WAS NOT IN THE MISSION, AND IT IS THE BIGGEST ONE"* and lists
+*"filing the record-field lambda gap upstream"* as owed. **It was filed on 2026-08-02 at WI-A3 as
+ticket `fb_74f53de3ae65854c`**, and the ADR carries the original repro — `{ ai_step: \s. { let _ =
+println("EFFECT PERFORMED: ${s}"); "ok" } }` — which is a **record-field lambda**, D8's construct
+exactly. B4 already named its *declaration-side view*, and the plan references the ticket at three
+other places. **Do not file it again.**
+
+**What IS new in D8, and it is worth having:** the **four-position matrix** — top-level, `let`,
+argument, record-field, with only the last unchecked — where A3's repro contrasted a record-field call
+against a direct call; the finding that an **empty row on a lambda reads as *unannotated, infer*
+rather than as *performs nothing***; and the consequence measurement, that D6's and D7's recorded
+enforcement prize holds for roughly **half** their bindings. **Reproduced independently at review:** a
+field declaring `! {IO}` bound to a lambda performing `Env` and `IO` type-checks clean when the
+enclosing row absorbs both, while the *identical body* bound as a named function is rejected with
+`Effect checking failed for function 'named' … Missing effects: Env`.
+
+**The lesson is the project's own, one more time: a fact recorded correctly in one place was
+rediscovered in another because nothing connected them.** A3 filed it, B4 characterised it, the plan
+cites the ticket three times, and D8 met it fresh — which is why the four-position matrix is a
+contribution and "not filed" is not.
+
+**EXTENDED BY WI-D8, AND THE EXTENSION IS ABOUT THE SUBJECT'S SYNTAX RATHER THAN THE CHECK'S
+PRODUCERS: an instrument must exercise the subject in the FORM the subject is written in.** C5's
+version of S16 was about a check's two sides sharing a producer; D6's was about a producer's reach
+over a subject set. D8's is narrower and sharper. `run_declared_vs_performed.sh`'s two-sided control
+emits `export func mutant_hook(...)` — a **top-level function** — and every hook in this tree is bound
+as a **lambda in record-field position**. **AILANG effect-checks the first and not the second**, so
+the control is sound, its rejection is real, and it demonstrates an enforcement that does not exist at
+roughly half the binding sites. **A control in the wrong syntactic form is green for exactly the
+reason a control in the wrong process was.** Measured across four positions — top-level, `let`,
+argument, record-field — only record-field is unchecked; and separately, an EMPTY row on a lambda is
+not a claim at any position, because it reads as *unannotated, infer*.
+
+**AND THE COROLLARY, WHICH IS S1's: A COMPILER GUARANTEE IS A CLAIM ABOUT A LANGUAGE AND IS
+FALSIFIABLE THE SAME WAY A COUNT IS.** WI-D6 and WI-D7 each recorded "a binding that starts reading
+`Env` in this slot now fails to build", each from a control that demonstrated it once in one form.
+**D8 measured the fraction: 7 of 15 for `on_pre_step`, 11 of 15 for `on_budget_plan`, 8 of 15 for
+`on_response_intercept`, 9 of 15 for `on_solver_candidate`.** The enforcement is real but it lives on
+`register_with_config`'s row rather than on the slot's for every inline binding — and `Env` is
+admitted by all fourteen registration rows that exist, so the one effect all three items narrowed
+against is the one still absorbed everywhere. *When an item's prize is "the compiler now enforces X",
+probe the enforcement in every syntactic position the subjects actually use, and assert the
+fraction.*
+
+**AND S22 BIT AGAINST A DERIVATION RATHER THAN AGAINST PROSE, WHICH THE RULE AS WRITTEN DOES NOT
+COVER.** D8 derived its site set from source exactly as S22 requires, **and the derivation was still
+wrong by three**, because it classified a site by the return type named on the same line — which
+lambda-form bindings do not name. *Suggested: a derived set needs its own falsifier — an assertion
+that the residue is EMPTY — not just a derivation.* That residue row is what found the three.
+
 **S17. A mutation loop must save and restore by FILE COPY, never by `git checkout`.** Earned by WI-C3,
 which lost the item's entire implementation to `git checkout src/core/session.ail` used to revert a
 mutant, and recovered only from a `cp` taken seconds earlier in the same command block. **During an
@@ -2748,6 +2799,34 @@ because no gate compares them.
 
 **What D6 delivered, stated at its true size: one barrier of four removed, and the argument that
 could remove the other three.** That is a real result.
+
+**WI-D8, 2026-08-06 (~80 min) — `ExtPorts.ai_step` MEASURED FOR THE FIRST TIME. OVER-DECLARED BY
+SEVEN. THE BARRIER STILL STANDS AND THE COUNT IS STILL THREE.**
+D7's `on_pre_step` conclusion rested on the clause *"whose own port row is exactly those ten"*, taken
+as given. **It was never measured.** The port's entire effect demand comes from `session.ext_ai_step`,
+whose whole body is one call to `Ports.model_step` — `! {AI, IO, Trace}` since WI-A1 — and the effect
+checker names it from the body: `Effect checking failed for function 'ext_ai_step' … Missing effects:
+AI, IO, Trace`. **The other seven — `Process`, `FS`, `Env`, `Net`, `SharedMem`, `Clock`, `Stream` —
+are effects `model_step` cannot produce.** Both rows narrowed to `! {AI, IO, Trace}`; the chain
+fixpoint was re-derived one function at a time; 14 of 15 bindings still accept the empty row and
+`compaction_ai` still refuses, now at three effects rather than ten.
+
+**THE DECISION, taken against D5 criterion 2 read directly rather than inferred from the narrowing:
+`on_pre_step` REMAINS A BARRIER and D7's vocabulary conclusion SURVIVES.** At ten effects the row was
+positive evidence *against* mediation; at three it **stops contradicting** the claim without
+**starting to support** it, because `! {AI, IO, Trace}` is equally consistent with an ambient
+provider call. `make profile_definition` derived `3` on its own and no artifact had to be told.
+
+**AND THE ITEM'S LARGEST FINDING WAS NOT IN ITS MISSION: AILANG DOES NOT EFFECT-CHECK A LAMBDA'S
+DECLARED ROW IN RECORD-FIELD POSITION — WHICH IS HOW EVERY HOOK IN THIS TREE IS BOUND.** Measured
+across four positions (top-level, `let`, argument, record-field): only record-field is unchecked. An
+empty row on a lambda is separately not a claim at all — it reads as *unannotated, infer*. **So the
+prize D6 and D7 both banked — "a binding that starts reading `Env` now fails to build" — is true for
+the 7 of 15 `on_pre_step` bindings written as top-level functions and false for the 8 written
+inline.** The effect is not lost, it MOVES: it propagates to the enclosing `register_with_config`,
+whose row is checked — and `Env` is admitted by **all fourteen** registration rows that exist. **The
+enforcement lives one level up from where three items have recorded it.** Both limitations are now
+gate rows that go **red when FIXED**.
 
 **WI-D7, 2026-08-06 (~45 min) — THE OTHER THREE MEASURED. NONE FELL. THE COUNT IS STILL THREE.**
 Route A is **refused for all three slots**, each by exactly **one binding of fifteen**, and the
