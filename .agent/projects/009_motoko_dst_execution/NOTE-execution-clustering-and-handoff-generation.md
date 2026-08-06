@@ -274,6 +274,31 @@ because it installs nothing, which B4 proved is forced rather than chosen. **So 
 whether a baseline covering no extension earns an axis-wide name**, and the handoff requires it
 answered out loud with the zero-coverage fact stated either way.
 
+**Cluster 24 outcome: WI-D5 DONE 2026-08-06**, ~25 min — **VERDICT YES. THE NAME IS ADOPTED** for the
+generated axis, on `driver_only/10`, with the zero-extension-coverage caveat made mandatory. Thirteen
+items: twelve declined, the thirteenth adopted. Earned **S21**, and its analytic result was that the
+rows leaning on the empty install list are **four, not two** — row 7's `ScratchpadResult` exemption
+joined them **because D2 succeeded**, leaving a residue in which one of two survivors is purchased by
+that emptiness. **Closing a row can concentrate a vacuity rather than remove it.**
+
+**Cluster 25 = WI-D6, unblock the install: HANDED OFF 2026-08-06**, handoff
+`HANDOFF-execute-d6-unblock-the-install-on-budget-plan.md`. **Grounding found a route that is one ABI
+row rather than an ABI major**, and C5 already measured the evidence for it: the detector's headline
+is `DECLARED on_budget_plan : ! {Env, FS}` against `PERFORMED : ! {}`. Narrowing the declared row
+satisfies D5 criterion 1 outright, needs no successor, and is **structurally safe** — narrowing a
+record field's row is *rejected* by the compiler, so any binding that still performs more fails to
+build. B4's refutation is about function-typed parameters and does not apply.
+
+**Two sequencing facts worth carrying, both new in kind:**
+
+**An item can falsify a caveat written the day before, and must own updating it.** D5 put "the empty
+install list is **forced**" into a design document that outlives this project. D6 makes it false — the
+emptiness becomes *chosen* rather than forced, which is a weaker claim, not an absent one.
+
+**S21's first deliberate application is this item.** Unblocking the install closes none of the four
+leaning rows, because `driver_only` still installs nothing by its own definition. What changes is
+every reason's *content*, and S21 exists because that set grew from two to four unnoticed.
+
 **Worth recording as clustering guidance in its own right: the seven-for-seven grounding record in
 Milestones C and D is not a run of luck, it is a property of this plan.** Items were sized from the
 ADR's decisions, and the ADR describes *what must be true*, not *what the tree currently does*. Every
