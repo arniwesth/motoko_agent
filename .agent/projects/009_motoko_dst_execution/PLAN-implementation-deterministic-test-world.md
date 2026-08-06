@@ -301,6 +301,17 @@ them — **both sides empty, and two empty sides are green.** Any future item th
 checked over the returned trace" for a registered variant is reading a comparison against an empty
 list.
 
+**EXTENDED BY WI-D4 TO A GATE'S OWN REPORTING PATH: check the ARTIFACT, not the TRANSCRIPT.**
+`corpus_pr` writes its full output to `/tmp/corpus_pr.out` and, **on failure only**, prints
+`grep -v '^{' … | tail -40` (`Makefile:1091`) — while on success it prints the whole file
+(`:1092`). **A recipe that shows LESS on failure than on success has an inventory only on the happy
+path.** The class-coverage rows scrolled off that 40-line window, and **two sessions in a row read the
+make transcript and concluded the rows were absent** — this reviewer among them, having grepped a
+captured `make` log rather than the artifact. They were not absent. They were **RED**, naming a
+required fault class no bank member reached, which is a coverage regression rather than the
+bookkeeping gap "missing" implies. **The correction matters in the direction that costs more:
+"unevidenced" understates "failing".**
+
 **S18. Tensing a comment IS a source edit for anchor-cascade purposes.** Earned by WI-C5, which is
 the SECOND consecutive item to pay the line-number cascade twice, both times for the same reason:
 comment edits landed after the anchors were computed. C3's operational rule ("finish every source
@@ -309,6 +320,27 @@ edits; what broke it was rewriting a historical comment block for tense under S1
 numbers were derived, which moved four `session.ail` line numbers by nine. **S15 and the anchor rule
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
+
+**S20. For a generator, assert what its output is a function OF — not only that it is a function.**
+Earned by WI-D4, and it is the deepest defect this project has found. All three generating seams
+salted every choice with `n=${List.length(state.log)}` — the RAW log length, which the DRIVER also
+writes into. Verified at review against the pre-D4 tree: `ports.ail:932` (tool), `ports.ail:1025`
+(approval), `stub_step.ail:481` (provider), plus the budget at `ports.ail:982`. **So a generated
+trajectory was a function of how many times the driver happened to read its configuration.**
+
+**Determinism is not merely blind to this — it is actively reassuring.** The same seed gave the same
+trajectory on every run, every time, throughout. *"The same seed gives the same program"* was TRUE
+while *"the program is a function of the seed"* was FALSE. Nothing reveals it until an unrelated change
+moves the driver's read count, and then it presents as **fixture drift**: WI-D3's routing reshuffled
+the entire fixed bank, `ToolCorrelationMismatch` stopped being reached by the two seeds pinned as its
+witnesses, and `seeded_generator` went red on six checks whose symptoms all read like stale pins.
+**Giving `rich` more budget made its trajectory SHORTER**, which is the observation that found it.
+
+The fix is to count only what the generating adapters author — D4's
+`dst_interaction.generator_authored_count`, derived from `identity_kind` rather than three string
+literals. **The rule generalises past generators: where a component's output is salted or bounded by a
+quantity, assert what contributes to that quantity, because a wrong contributor is invisible to every
+determinism check and surfaces later as someone else's regression.**
 
 **S19. A gate's success markers are an INVENTORY, and a missing tick is a failure report.** Earned by
 WI-C4, and it is the first defect in this project that turned *nothing* red — it printed one fewer
@@ -586,6 +618,14 @@ rule and a current one look identical.**
 has recorded — B1's 130/105 and its v0.26.0 baseline of 213/22, B3's 161/74 — cleared the root cache
 only, so **none is the cache-cold measurement it claims.** They are not necessarily wrong, since a
 warm cache only misleads when its input changed, but they are not what they say.
+
+**AND BEFORE BELIEVING ANY GATE, CHECK THAT NOTHING ELSE IS RUNNING ONE.** Earned by WI-D4, which
+found a second Claude session with a `make dst` in flight in the same working tree at session start.
+The `.ailang` caches are shared and the recipes write hard-coded `/tmp` paths — `/tmp/corpus_pr.out`,
+`/tmp/latency_pair.out` — that two runs overwrite under each other. **Every measurement the item needed
+would have been poisoned, and nothing would have said so.** The item stopped its own run and waited.
+Concurrency in one tree is a measurement hazard of exactly the kind S9 exists for, and it is invisible
+in the same way a warm cache is.
 
 **S8. When a guard asserts that X influences Y, check that X cannot reach Y except through the
 mechanism under test.** Earned by A13 stage 4, and it is the first rule this project has that
@@ -2475,6 +2515,35 @@ left because it is a change to the driver's call pattern rather than to its herm
 behavioural refactor at the end of a long session without its assertion first (S1) is how this project
 ships the defect it counts. **Owed as the next item's FIRST move, before the acceptance-table re-run,
 because it moves the env census numbers D3 just pinned.**
+
+**WI-D4, 2026-08-05 (~3h25m) — THE THREE TARGETS RESTORED.** `make dst` back to its two pre-existing
+red targets, ✓ rows 745 → **845**, sweep 226/17 member-for-member, `corpus_pr`'s class rows green
+**and printed**, and `resolve_context_limit` down from 8 sites on a run's path to **1**. The four
+`c2_loop` re-resolves were licensed by **657 site executions across the whole gate with zero
+mismatches** — D3 owed that measurement at three sites and D4 took it at all four. `driver_only`
+re-issued v9 → **v10**.
+
+**The successor audit the handoff demanded found exactly what it was written for.** Three of four
+sites were not load-bearing; **`AwaitApproval` was** — `post_ctx` is `post` advanced past the
+resolution, and `post` is `st` advanced past the **approval read**, so collapsing to `st` rather than
+`post` type-checks and silently discards the approval cursor. **WI-D1's production defect in reverse,
+in exactly the population the handoff named.** Not shipped; caught by reading the arm's own comment.
+
+**And the conflation had THREE channels where the handoff named one — the second is the finding.**
+See **S20**: the budget was the small one; the *salt* meant the driver's read count changed which
+branch every generated choice took.
+
+**Two corrections to this reviewer's own analysis, both verified:** `corpus_pr`'s class rows were
+**red, not missing** (see S19's extension — I grepped a `make` transcript that truncates on failure),
+and the conflation was three channels rather than one. The first matters most: **"unevidenced"
+understated "failing"**, and the real state was a required fault class that no member of D11's
+blocking bank reached.
+
+**THE TABLE IS UNOBSTRUCTED AND IS NOT CLAIMED.** Rows 4 and 11's evidence is green and printed, rows
+7 and 10 were green throughout, and nothing here re-ran the table — that is the next item's job.
+Three things it must not inherit as settled: **the env census numbers moved 12/12/12/19/8 → 1 across
+the board**, the profile is **v10** so any artifact naming v9 is stale, and **two of the eleven passes
+remain vacuous** in their installed-extension clauses. **Twelve items have now declined the name.**
 
 3. **This entry did not say what to do with a NO.** It describes running the table and adopting the
    name. "Expect NO" had to arrive by handoff rather than by plan. **A gate that reports NO with a
