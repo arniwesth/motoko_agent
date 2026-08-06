@@ -509,3 +509,29 @@ the plan's decisions for ones that name an edit wave, not just its work items.**
 - Any cluster proving to be the wrong cut. That is expected for the later ones: the clustering past
   cluster 5 is reasoned rather than measured, and the first two or three executions are what turn it
   into something known.
+
+
+---
+
+## Cluster 26 = the amendment REVIEW. Handed off 2026-08-06.
+
+`HANDOFF-review-adr-001-criterion-2-amendment.md`. **The first review round since ADR-001's
+acceptance on 2026-08-02, and a different genre from the thirty-three execution items between it and
+here.** Producing source changes in it is a symptom.
+
+**Why a review rather than another execution item:** D5 is Accepted, and this project's founding
+mandate routes corrections to accepted decisions through a normal amendment with named reviewers.
+WI-D9 drafted two and deliberately did not apply them.
+
+**And the handoff author is not independent, which the handoff says in its own text.** The D7, D8 and
+D9 handoffs share an author with this one, and one of them carried D8's binding-form split of 8/7
+into the item that corrected it to 14/1 — a figure Amendment A's second clause rests on. **Four things
+must be re-derived rather than read**, and that is the first of them.
+
+**Clustering note, and it is new in kind: an execution item can produce a REVIEW as its successor.**
+Every prior cluster produced another build. D9's output was an argument and a draft, and the next
+thing the project needs is a disposition on them — from someone who did not write them. **Sequence a
+review when the deliverable is a claim about an accepted decision rather than a change to the tree.**
+
+**After the disposition, the order D9 established stands:** classifier 3 → Route B → WI-C5. Route B
+alone clears zero barriers, and the review is what authorises classifier 3.
