@@ -102,8 +102,9 @@
 -- checker answer over all inputs. Each is refused by exactly ONE binding, and
 -- the compiler named it:
 --
---   on_pre_step            compaction_ai   all ten effects, reached through
---                                          ExtPorts.ai_step
+--   on_pre_step            compaction_ai   AI, IO, Trace — reached through
+--                                          ExtPorts.ai_step, and WI-D7 read
+--                                          this as "all ten". See below.
 --   on_response_intercept  compose         Clock, FS, IO, Process — the
 --                                          inline-snippet path
 --   on_solver_candidate    context_mode    Process — a node bridge spawned
@@ -113,6 +114,30 @@
 -- nine → one). Neither narrowing removes a barrier: a non-empty row fails
 -- criterion 1 at four effects exactly as it did at nine, and none of the
 -- effects is a world-mediated port, so criterion 2 fails too.
+--
+-- WI-D8 NARROWED THE THIRD ROW TOO, AND CORRECTED WHAT WI-D7 RECORDED ABOVE.
+-- D7 wrote "all ten effects, reached through ExtPorts.ai_step" and the second
+-- half is right while the first was never measured. `ExtPorts.ai_step` had
+-- carried a ten-effect row since WI-B2a and nothing had ever checked it
+-- against a body; its whole effect demand comes from `session.ext_ai_step`,
+-- which calls `Ports.model_step` and nothing else, and `model_step` is
+-- `! {AI, IO, Trace}`. Seven of the ten — Process, FS, Env, Net, SharedMem,
+-- Clock, Stream — are effects that port CANNOT produce.
+--
+-- So `on_pre_step` narrowed to `! {AI, IO, Trace}`, by the same consequence
+-- WI-D7 named: the slot's row follows the port's. THE BARRIER DID NOT MOVE.
+-- The count is still THREE, and the reason is unchanged in kind — a non-empty
+-- row fails criterion 1 at three effects exactly as it did at ten.
+--
+-- What DID change is the evidence for criterion 2, and WI-D8 decided it
+-- explicitly rather than letting the narrowing decide it. At ten effects the
+-- row positively CONTRADICTED the mediation claim, because seven of them are
+-- effects the mediating port cannot produce. At three it stops contradicting
+-- it — every declared effect is exactly what the mediated port performs — but
+-- it does not begin supporting it either: `! {AI, IO, Trace}` is equally
+-- consistent with a binding that calls an ambient provider directly. D7's
+-- verdict therefore stands: THE BARRIER IS THE ROW'S VOCABULARY, and removing
+-- it needs a port-surface change or a criterion that can read mediation.
 --
 -- SO THE COUNT IS THREE, AND IT IS NOW A CHECKED ARTIFACT RATHER THAN PROSE.
 -- `make profile_definition` derives it from the ABI rows and the dispatch

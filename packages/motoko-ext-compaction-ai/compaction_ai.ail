@@ -106,7 +106,7 @@ func summarizer_max_attempts() -> int { 2 }
 -- see attempt 1's successor. Passing `world` again on the retry — the obvious
 -- edit — would re-serve the same script entry forever and pass every test,
 -- which is F6 exactly.
-func summarize_attempt(ctx: ExtCtx, prompt: string, model: string, attempts_left: int, world: ExtWorld) -> { result: Result[string, string], next_state: ExtWorld } ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+func summarize_attempt(ctx: ExtCtx, prompt: string, model: string, attempts_left: int, world: ExtWorld) -> { result: Result[string, string], next_state: ExtWorld } ! {AI, IO, Trace} {
   let prompt_msgs: [Msg] = [{ role: "user", content: prompt, tool_calls: [], tool_call_id: "" }];
   let out = ctx.ports.ai_step(world, model, prompt_msgs);
   match out.result {
@@ -124,7 +124,7 @@ func summarize_attempt(ctx: ExtCtx, prompt: string, model: string, attempts_left
 -- Result-returning summarizer used on the compaction path. Ok(summary) on
 -- success; Err(reason) once attempts are exhausted so compact_with_ai can
 -- degrade to PassThrough.
-export func summarize_with_ai_result(ctx: ExtCtx, prompt: string, model: string) -> { result: Result[string, string], next_state: ExtWorld } ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func summarize_with_ai_result(ctx: ExtCtx, prompt: string, model: string) -> { result: Result[string, string], next_state: ExtWorld } ! {AI, IO, Trace} {
   summarize_attempt(ctx, prompt, model, summarizer_max_attempts(), ctx.world)
 }
 
@@ -137,7 +137,7 @@ export func summarize_with_ai_result(ctx: ExtCtx, prompt: string, model: string)
 -- calls `summarize_with_ai_result` — so no cursor is lost where D1 cares. If a
 -- future caller puts this on the hook path it will drop a world silently, which
 -- is why the successor is named here rather than left implicit.
-export func summarize_with_ai(ctx: ExtCtx, prompt: string, model: string) -> string ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+export func summarize_with_ai(ctx: ExtCtx, prompt: string, model: string) -> string ! {AI, IO, Trace} {
   match summarize_with_ai_result(ctx, prompt, model).result {
     Ok(content) => content,
     Err(msg) => "[summarizer unavailable: ${msg}]"
@@ -489,7 +489,7 @@ func bounded_fold_budget(ctx: ExtCtx, body: [Msg], budget: int) -> int {
 -- advanced the script. Returning `ctx.world` there type-checks, passes every
 -- test in the tree, and silently replays the consumed entries — which is F6
 -- arriving through the error path instead of the happy one.
-func fresh_compaction(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig, pct: int, p: { prefix: [Msg], rest: [Msg] }, budget: int) -> PreStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+func fresh_compaction(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig, pct: int, p: { prefix: [Msg], rest: [Msg] }, budget: int) -> PreStepOutcome ! {AI, IO, Trace} {
   let eff_budget = bounded_fold_budget(ctx, p.rest, budget);
   let split_result = if budget > 0 then { prefix: p.prefix, old: split_body_tokens(p.rest, eff_budget).old, recent: split_body_tokens(p.rest, eff_budget).recent } else split_msgs(msgs, cfg.keep_recent);
   if list_length(split_result.old) == 0 then { decision: PassThroughObserved("compaction_ai.no_foldable_prefix", [
@@ -521,7 +521,7 @@ func fresh_compaction(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig, pct: in
   }
 }
 
-export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepOutcome ! {AI, IO, Trace} {
   let pct = usage_percent(ctx, msgs, ctx.context_limit);
   if pct < cfg.threshold_pct then { decision: PassThrough, next_state: ctx.world }
   else {
@@ -595,7 +595,7 @@ func test_ctx(step: int, limit: int, artifacts: Json) -> ExtCtx {
 
 -- A summarizer port that actually succeeds, so the compaction happy-path
 -- tests exercise a real summary rather than relying on the degrade path.
-func stub_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} { { result: {
+func stub_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
   Ok("stub summary of prior turns")
 }, next_state: world } }
 

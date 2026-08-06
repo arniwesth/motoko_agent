@@ -46,7 +46,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process,
       no_budget_patch()
     },
     on_pre_step:
-      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
         PassThrough
       }, next_state: ctx.world } },
     on_tool_policy: on_tool_policy,

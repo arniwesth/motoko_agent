@@ -143,7 +143,7 @@ import pkg/sunholo/motoko_ext_progress_contract_guard/register as ProgressContra
 -- has the field. Every one of them is a constant, so binding them cannot
 -- contribute a performed effect and cannot make a subject die for the harness's
 -- reasons rather than the hook's.
-func probe_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+func probe_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
   { result: { Ok("unused") }, next_state: world }
 }
 
@@ -273,19 +273,107 @@ pure func compose_cfg(mode: string) -> ComposeHostConfig {
 -- because it is total over inputs where the capability trap is a witness over
 -- one path.
 
--- Reads a real environment variable, inside a DISPATCHED hook.
-func env_reading_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let _ = getEnvOr("PATH", "");
-  { decision: { PassThrough }, next_state: ctx.world }
+-- WI-D8 MOVED THESE CONTROLS AGAIN, ONE SLOT LATER, AND THE MOVE IS NOT THE
+-- SAME KIND OF MOVE D6 MADE. D6 relocated them from `on_budget_plan` to
+-- `on_pre_step` because narrowing the first slot made a performing body
+-- unwritable there. D8 narrowed `on_pre_step` to `! {AI, IO, Trace}` — the row
+-- `ExtPorts.ai_step` actually performs — and a body reading `Env` or `FS` no
+-- longer fits this slot EITHER, when it is written as a top-level function:
+--
+--   Effect checking failed for function 'env_reading_pre_step'
+--   Missing effects: Env
+--
+-- SO THERE IS NOWHERE LEFT TO MOVE THEM TO, and the thing that keeps them
+-- alive is a LIMITATION rather than a slot. MEASURED AT WI-D8 across four
+-- syntactic positions, because the first reading of it was WRONG in the
+-- permissive direction and a single probe would have shipped that reading:
+--
+--   top-level `func`,    row ! {IO},  body reads Env  -> REJECTED
+--   `let`-bound lambda,  row ! {IO},  body reads Env  -> REJECTED
+--   argument lambda,     row ! {IO},  body reads Env  -> REJECTED
+--   RECORD-FIELD lambda, row ! {IO},  body reads Env  -> ACCEPTED   <-- the gap
+--
+-- and separately, at ANY position:
+--
+--   lambda,              row ! {},    body performs   -> ACCEPTED
+--
+-- because an EMPTY row on a lambda is read as "unannotated, infer" rather than
+-- as the claim "performs nothing".
+--
+-- RECORD-FIELD POSITION IS EXACTLY WHERE EVERY HOOK IN THIS TREE IS BOUND —
+-- eight of the fifteen extensions in `registry_generated.ail` bind THIS slot
+-- that way. Both facts are asserted as their own rows in
+-- `run_declared_vs_performed.sh`, so if either is fixed upstream these
+-- controls go RED rather than silently ceasing to perform.
+--
+-- AND THE EFFECT IS NOT LOST, IT MOVES — which is the half that matters and
+-- the half a reader would otherwise get backwards. The lambda's OWN annotation
+-- is not checked against its body, but the body's effects still propagate to
+-- the ENCLOSING top-level function, whose row IS checked. So the enforcement
+-- D6 and D7 recorded is real and it lives one level up from where those
+-- reports put it:
+--
+--   narrowing a HOOK SLOT's row constrains a binding written as a top-level
+--   function, and constrains NOTHING about a binding written inline in the
+--   record — for that one, the constraint is `register_with_config`'s row.
+--
+-- MEASURED, in `empty_stop_guard`: an inline `on_pre_step` reading `Env` under
+-- `! {AI, IO, Trace}` compiles while `register_with_config` carries a row that
+-- admits `Env`, and is REJECTED the moment that row is narrowed past it —
+-- `Effect checking failed for function 'register_with_config' … Missing
+-- effects: Env`.
+--
+-- SO THE ABSORPTION IS PER EFFECT, NOT GLOBAL, and the first draft of this note
+-- said "all fifteen carry the wide row and absorb anything", which the
+-- derivation refuted on sight. DERIVED, and asserted in the runner:
+--
+--   Env      admitted by 14 of the 14 registration ROWS
+--   FS       admitted by 12 of 14
+--   Process  admitted by  7 of 14
+--
+-- and the denominator is ROWS rather than extensions because the two differ:
+-- fifteen extensions declare fourteen rows between them. `decision_framework`
+-- and `microrag` declare NO registration row at all — so an inline hook there
+-- that performs anything is caught — and `compose` declares two, a wrapper in
+-- `register.ail` and the real one in `compose.ail`, which is also the file
+-- that binds the hook.
+--
+-- `Env` is admitted by every row that exists, which is the sharp end: an
+-- inline hook that begins reading `Env` is absorbed wherever a registration
+-- row exists at all.
+--
+-- Exactly ONE registration, `compaction_ai`'s, still carries the full
+-- ten-effect row and therefore absorbs everything. This item reports that and
+-- does NOT act on it: WI-D6 measured that nine of fifteen genuinely read `Env`
+-- at registration, so narrowing those rows is its own measurement item rather
+-- than an ABI edit.
+--
+-- These two builders declare `! {Env}` and `! {FS}` for exactly that reason —
+-- the leak reaches them, and they are honest about it.
+--
+-- The controls are therefore written in the SAME FORM THE SUBJECTS USE, which
+-- is what S16 asks of an instrument: a control bound as a top-level function
+-- would be measuring a construct no extension in this tree writes.
+-- The performing body is INLINE IN THE RECORD FIELD in each of the two
+-- builders below, and it has to be: passing it in as a parameter puts the
+-- lambda in ARGUMENT position, where the effect checker does fire, and the
+-- control stops compiling. That is why `control_hooks` is no longer
+-- parameterised over the hook.
+func env_control_hooks() -> ExtensionHooks ! {Env} {
+  { control_base() | on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+      let _ = getEnvOr("PATH", "");
+      { decision: { PassThrough }, next_state: ctx.world }
+    } }
 }
 
--- Reads a real file, inside a DISPATCHED hook.
-func fs_reading_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
-  let _ = readFile("ailang.toml");
-  { decision: { PassThrough }, next_state: ctx.world }
+func fs_control_hooks() -> ExtensionHooks ! {FS} {
+  { control_base() | on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+      let _ = readFile("ailang.toml");
+      { decision: { PassThrough }, next_state: ctx.world }
+    } }
 }
 
-func control_hooks(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
+func control_base() -> ExtensionHooks {
   { id: "dvp_control",
     provided_tools: [],
     on_describe_tools: \_ . [],
@@ -293,7 +381,7 @@ func control_hooks(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: pre,
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
     on_tool_policy: \_ctx _call. Allow,
     on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { { decision: { Delegate }, next_state: ctx.world } },
     on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
@@ -333,7 +421,7 @@ func witness_hooks() -> ExtensionHooks {
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: Some(budget_sentinel()), requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
     on_tool_policy: \_ctx _call. Allow,
     on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { { decision: { Delegate }, next_state: ctx.world } },
     on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
@@ -372,8 +460,9 @@ export func compose_budget() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand
   reached("compose_budget", show(out.total))
 }
 
--- SUBJECT. compose's `on_pre_step`. Declared with ten effects at the binding
--- site; the body is `PassThrough` beside `ctx.world`.
+-- SUBJECT. compose's `on_pre_step`. Declared `! {AI, IO, Trace}` at the
+-- binding site (ten effects until WI-D8 measured `ExtPorts.ai_step` and the
+-- slot followed the port down); the body is `PassThrough` beside `ctx.world`.
 -- The strongest witness of the four: `PreStepChainResult.stages` carries one
 -- entry PER HOOK, each tagged with `ext_id`, so this arm names compose directly
 -- rather than inferring it from fold order.
@@ -424,13 +513,13 @@ export func compose_intercept_inline() -> () ! {AI, Clock, Env, FS, IO, Net, Pro
 -- fold — see the note above `env_reading_pre_step` for why this control no
 -- longer lives in `on_budget_plan`.
 export func control_env() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
-  let out = Rt.dispatch_pre_step_chain(rt_of(control_hooks(env_reading_pre_step)), probe_ctx("tool"), []);
+  let out = Rt.dispatch_pre_step_chain(rt_of(env_control_hooks()), probe_ctx("tool"), []);
   reached("control_env", join_ids(stage_ids(out.stages)))
 }
 
 -- CONTROL for FS. Must die with FS withheld.
 export func control_fs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
-  let out = Rt.dispatch_pre_step_chain(rt_of(control_hooks(fs_reading_pre_step)), probe_ctx("tool"), []);
+  let out = Rt.dispatch_pre_step_chain(rt_of(fs_control_hooks()), probe_ctx("tool"), []);
   reached("control_fs", join_ids(stage_ids(out.stages)))
 }
 

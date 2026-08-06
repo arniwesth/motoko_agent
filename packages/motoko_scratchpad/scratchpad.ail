@@ -104,7 +104,7 @@ export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net, Rand} {
     on_describe_tools: \_ . on_describe_tools(),
     on_build_system_prompt: \_ctx. prompt_patch(),
     on_budget_plan: budget_hook,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
     on_tool_policy: on_tool_policy,
     on_tool_handle: handle,
     on_response_intercept: func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },

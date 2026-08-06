@@ -147,7 +147,7 @@ func no_intercept(ctx: ExtCtx, _text: string)
 func no_solver(ctx: ExtCtx, _text: string)
   -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
 func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("latency pair: approval required", DenyAfterTimeout)
 }

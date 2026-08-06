@@ -164,7 +164,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks {
         NoDecision
       }, next_state: ctx.world } },
     on_pre_step:
-      func(ctx: ExtCtx, _history: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+      func(ctx: ExtCtx, _history: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
         PassThrough
       }, next_state: ctx.world } }
   }

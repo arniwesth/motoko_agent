@@ -73,7 +73,7 @@ export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) 
     on_describe_tools: \_ . [],
     on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
     on_budget_plan: budget_hook,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
     on_tool_policy: no_tool_policy,
     on_tool_handle: handle,
     on_response_intercept: intercept,

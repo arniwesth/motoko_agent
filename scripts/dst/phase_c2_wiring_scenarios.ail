@@ -233,7 +233,7 @@ func bad_system_msg() -> Msg {
 }
 
 func stage_hook(id: string, mode: string) -> ExtensionHooks {
-  let on_pre = func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+  let on_pre = func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     if mode == "pass" then PassThrough
     else if mode == "apply" then Compacted(msgs, "applied", jo([]))
     else Compacted([bad_system_msg()], "rejected", jo([]))
@@ -259,7 +259,7 @@ func guard_hook() -> ExtensionHooks {
     on_describe_tools: no_describe,
     on_build_system_prompt: no_prompt,
     on_budget_plan: no_budget,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
     on_tool_policy: no_policy,
@@ -289,7 +289,7 @@ func pc_guard_hook() -> ExtensionHooks {
     on_describe_tools: no_describe,
     on_build_system_prompt: no_prompt,
     on_budget_plan: no_budget,
-    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
       PassThrough
     }, next_state: ctx.world } },
     on_tool_policy: no_policy,

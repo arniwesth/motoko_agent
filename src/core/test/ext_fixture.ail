@@ -85,7 +85,7 @@ pure func solve_candidate(ctx: ExtCtx, candidate: string)
 }, next_state: ctx.world } }
 
 pure func pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}", empty_ext_artifacts())
 }, next_state: ctx.world } }
 

@@ -151,7 +151,34 @@ export type ExtPorts = {
   -- `ExtPorts`, so the bridging lambda performs `Trace` and a closed row cannot
   -- hide it. M2 predicted this row; WI-B1 could not confirm it because the
   -- module died on `images` first.
-  ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace},
+  --
+  -- WI-D8 NARROWED THIS ROW FROM TEN EFFECTS TO THREE, AND NOTHING HAD EVER
+  -- MEASURED IT. Through WI-D7 it read
+  --   ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace}
+  -- and WI-D7's central conclusion about `on_pre_step` rested on that row being
+  -- what the port performs — "whose own port row is exactly those ten". It was
+  -- taken as given. It was over-declared by SEVEN.
+  --
+  -- MEASURED FROM THE BODY, per WI-D7's own method, because a green check after
+  -- narrowing an annotation is not evidence that a body performs less. This
+  -- port's entire effect demand comes from `session.ext_ai_step`, whose whole
+  -- body is one call to `Ports.model_step` — `! {AI, IO, Trace}` since WI-A1 —
+  -- and the effect checker names the row when `ext_ai_step`'s own declaration
+  -- is narrowed:
+  --
+  --   Effect checking failed for function 'ext_ai_step'
+  --   Missing effects: AI, IO, Trace
+  --
+  -- The other seven (`Process`, `FS`, `Env`, `Net`, `SharedMem`, `Clock`,
+  -- `Stream`) are effects `Ports.model_step` CANNOT produce. Of the nine
+  -- bindings of this field in the tree, seven are top-level functions with
+  -- effect-free bodies and both remaining ones are lambdas that reach
+  -- `model_step` and nothing else.
+  --
+  -- WHAT IT DID NOT DO: it did not make `on_pre_step` coverable. See that
+  -- slot's own note below — the narrowing removes the row's contradiction of
+  -- D5 criterion 2 without supplying the vocabulary criterion 2 needs.
+  ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Trace},
   -- `proc_exec` and `env_get` stay un-widened and stay in the classifier-2 set.
   -- They front `Ports.tool_exec` and `Ports.env_get`, both of which thread a
   -- successor, so both still drop one. Widening them is WI-C5's, and leaving
@@ -400,6 +427,20 @@ export type ExtensionHooks = {
   -- is a port-surface change and not a hook-row change. That is WI-C5/D1 work
   -- and deliberately not done here.
   --
+  -- ^ THAT PARAGRAPH IS SUPERSEDED AT WI-D8 AND KEPT PER PLAN RULE S15,
+  -- because it is a record of why the row stood at ten from WI-B2a to WI-D7.
+  -- Its reasoning was sound and its premise was false: it says the row is "a
+  -- consequence of the PORT's row", which is TRUE, and it takes the port's row
+  -- to be ten, which was never measured. WI-D8 measured it — the port performs
+  -- `! {AI, IO, Trace}` — and this row followed it down, by the same
+  -- consequence the paragraph names. The chain's every step was re-derived
+  -- from bodies: `summarize_attempt`, `summarize_with_ai_result`,
+  -- `summarize_with_ai`, `fresh_compaction` and `compact_with_ai` each demand
+  -- `{AI, IO, Trace}` and nothing more, read one at a time off the effect
+  -- checker. Re-measured after the narrowing: still 14 of 15 accepting the
+  -- empty row, still refused by `compaction_ai` alone, now at
+  -- `extra labels [AI IO Trace]` rather than ten.
+  --
   -- THE PART THAT MATTERS FOR D5'S CRITERIA, and it is a shape finding rather
   -- than a measurement. `ai_step` IS a D1 world-mediated port — WI-B2b widened
   -- it to return `AiStepOutcome` with `next_state` — `PreStepOutcome` carries
@@ -409,7 +450,41 @@ export type ExtensionHooks = {
   -- is evaluated against the DECLARED row, and a declared row cannot say
   -- "these ten arrive through a world-mediated port". THE BARRIER IS THE
   -- ROW'S VOCABULARY, not the behaviour and not the row's width.
-  on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
+  --
+  -- WI-D8 RE-ASKED THAT QUESTION AGAINST THE NARROWED ROW AND THE ANSWER IS
+  -- UNCHANGED: THIS IS STILL A BARRIER. The narrowing changes the evidence and
+  -- not the verdict, and the distinction is the whole of WI-D8's decision.
+  --
+  --   BEFORE, at ten effects, the row was positive evidence AGAINST mediation:
+  --   seven of the ten are effects `Ports.model_step` cannot produce, so a
+  --   reader comparing the row against the mediation claim found them in
+  --   contradiction.
+  --
+  --   NOW, at three, every declared effect is exactly what the mediated port
+  --   produces. The row STOPS CONTRADICTING the claim.
+  --
+  -- It does not start SUPPORTING it. D5 criterion 2 admits a hook that is
+  -- "effectful only through D1 world-mediated ports, with explicit world state
+  -- returned to the host". `! {AI, IO, Trace}` is equally consistent with a
+  -- binding that calls `println` and an ambient provider directly, and nothing
+  -- in the row distinguishes the two. D7's conclusion therefore SURVIVES: the
+  -- barrier is the row's vocabulary.
+  --
+  -- AND WI-D8 MEASURED A SECOND REASON THE ROW CANNOT CARRY THAT WEIGHT, which
+  -- D7 could not have known: the declared row is not even an upper bound on
+  -- what a binding performs. AILANG does not check a lambda's declared row
+  -- against its body when the lambda sits in RECORD-FIELD POSITION, which is
+  -- how eight of the fifteen extensions in `registry_generated.ail` bind this
+  -- slot. The effect does propagate to the enclosing `register_with_config`,
+  -- and all fifteen of those declare the ten-effect row, so today it is
+  -- absorbed. Both facts are asserted, two-sided, by
+  -- `make declared_vs_performed`.
+  --
+  -- SO WHAT THE NARROWING BUYS IS WHAT D7'S TWO BOUGHT: the compiler, at the
+  -- seven bindings written as top-level functions. It does not move the
+  -- barrier count, and `make profile_definition` derives that count rather
+  -- than being told it.
+  on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
   on_tool_handle: (ExtCtx, ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},

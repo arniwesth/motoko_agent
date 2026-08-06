@@ -13,7 +13,7 @@ module tools/ext_call_inventory/fixtures/form_alias
 import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, ExtCtx, Msg)
 
 export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
-  -> AiStepOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  -> AiStepOutcome ! {AI, IO, Trace} {
   let p = ctx.ports;
   p.ai_step(ctx.world, model, msgs)
 }

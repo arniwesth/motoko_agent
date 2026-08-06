@@ -752,7 +752,7 @@ func capture_failing_payload(e: AIError, msgs: [Message]) -> () ! {FS} {
 -- named type keeps the signature brace-free up to the body.
 type ExtAiStepResult = { result: Result[string, string], next_state: WorldState }
 
-func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, msgs: [Msg]) -> ExtAiStepResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, msgs: [Msg]) -> ExtAiStepResult ! {AI, IO, Trace} {
   let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
   -- Resolve the provider API model the same way the main step loop does
   -- (dispatch_step calls provider_api_model). Extensions (e.g. compaction_ai)
@@ -846,7 +846,7 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
   -- FAIL-OPEN answer — "the single most expensive bug in this tool's history",
   -- in its own words. It looks like a clean result. Keep the conversion in its
   -- own `let`, and if you must inline it, fix the tool first.
-  let ai_step = func(w: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let ai_step = func(w: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
     let w0 = token_to_world(w);
     let out = ext_ai_step(p, w0, model, base_url, msgs);
     { result: out.result, next_state: world_to_token(out.next_state) }
