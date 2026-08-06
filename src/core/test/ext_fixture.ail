@@ -71,14 +71,14 @@ pure func handle_tool(ctx: ExtCtx, call: ToolCallEnvelope)
 }, next_state: ctx.world } }
 
 pure func intercept_response(ctx: ExtCtx, response: string)
-  -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   if contains(response, "[FIXTURE_INTERCEPT]") then
     InterceptHandled(fixture_result("fixture-intercept-id", "FixtureIntercept", "fixture intercept"))
   else NoIntercept
 }, next_state: ctx.world } }
 
 pure func solve_candidate(ctx: ExtCtx, candidate: string)
-  -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  -> FinalizeOutcome ! {Process}  { { decision: {
   if contains(candidate, "[FIXTURE_CONTINUE]") then
     ContinueWithFeedback("fixture feedback")
   else NoDecision

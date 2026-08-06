@@ -51,10 +51,10 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process,
       }, next_state: ctx.world } },
     on_tool_policy: on_tool_policy,
     on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call) },
-    on_response_intercept: func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+    on_response_intercept: func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
       NoIntercept
     }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+    on_solver_candidate: func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
       NoDecision
     }, next_state: ctx.world } }
   }

@@ -66,11 +66,11 @@ pure func pending_allow_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPo
 
 -- Boilerplate filler hooks (non-policy slots return neutral values).
 
-pure func noop_response_intercept(ctx: ExtCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+pure func noop_response_intercept(ctx: ExtCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   NoIntercept
 }, next_state: ctx.world } }
 
-pure func nodecision_solver_candidate(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+pure func nodecision_solver_candidate(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
   NoDecision
 }, next_state: ctx.world } }
 

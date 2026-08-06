@@ -370,7 +370,7 @@ export func dispatch_tool_handle(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnve
 
 -- Unlike `first_handle` above, EVERY hook here is invoked until one intercepts,
 -- so every one threads its successor — there is no "not invoked" case.
-func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string, world: ExtWorld) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string, world: ExtWorld) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   match hooks {
     [] => { decision: NoIntercept, next_state: world },
     h :: rest => {
@@ -383,11 +383,17 @@ func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string
   }
 }
 
-export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   first_intercept(rt.registry.hooks, ctx, response_text, ctx.world)
 }
 
-func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string, world: ExtWorld) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+-- WI-D7 CASCADE. The `on_solver_candidate` SLOT narrowed to `! {Process}`;
+-- this dispatcher is wider, and the extra `{IO, Clock}` is the HOST's, not any
+-- extension's: `emit_dummy_hook` below prints a test-instrumentation record
+-- and reads the clock for its timestamp. Stated here because a reader
+-- comparing this row against the ABI's would otherwise read the difference as
+-- a stale row rather than as a host effect the slot never had.
+func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string, world: ExtWorld) -> FinalizeOutcome ! {Process, IO, Clock} {
   let outcome = (h.on_solver_candidate)({ ctx | world: world }, candidate);
   let decision = outcome.decision;
   let _ = if is_test_dummy(h.id) then {
@@ -401,7 +407,7 @@ func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string, worl
   outcome
 }
 
-func collect_finalize_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, candidate: string, world: ExtWorld) -> { decisions: [FinalizeDecision], next_state: ExtWorld } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func collect_finalize_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, candidate: string, world: ExtWorld) -> { decisions: [FinalizeDecision], next_state: ExtWorld } ! {Process, IO, Clock} {
   match hooks {
     [] => { decisions: [], next_state: world },
     -- Sequenced with `let` rather than written as `decide_one(...) :: collect(...)`.
@@ -444,7 +450,7 @@ export func merge_finalize_decisions(xs: [FinalizeDecision]) -> FinalizeDecision
   }
 }
 
-export func dispatch_solver_candidate(rt: ExtRuntime, ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func dispatch_solver_candidate(rt: ExtRuntime, ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process, IO, Clock} {
   let collected = collect_finalize_decisions(rt.registry.hooks, ctx, candidate, ctx.world);
   -- The MERGE is unchanged and stays a pure function of the decision list. Only
   -- the successor is new, and it is the LAST hook's, not the merged winner's:
@@ -479,11 +485,11 @@ func smoke_hook_a() -> ExtensionHooks {
     if call.tool == "Alpha" then Handled({ tool_call_id: call.id, tool: "Alpha", exit_code: 0, stdout: "alpha", stderr: "", metadata: jo([]) })
     else Delegate
   }, next_state: ctx.world } };
-  let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
     if response_text == "trip" then InterceptHandled({ tool_call_id: "ri", tool: "Intercept", exit_code: 0, stdout: "ok", stderr: "", metadata: jo([]) })
     else NoIntercept
   }, next_state: ctx.world } };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
     ContinueWithFeedback("needs-fix")
   }, next_state: ctx.world } };
   let budget = func(ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
@@ -507,10 +513,10 @@ func smoke_hook_b() -> ExtensionHooks {
   let handle = func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
     Delegate
   }, next_state: ctx.world } };
-  let intercept = func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  let intercept = func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
     NoIntercept
   }, next_state: ctx.world } };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
     Accept("accepted")
   }, next_state: ctx.world } };
   let budget = func(ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
@@ -554,8 +560,8 @@ func chain_base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, P
     on_pre_step: pre,
     on_tool_policy: \_ctx _call. NoOpinion,
     on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
-    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
+    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
   }
 }
 
@@ -748,8 +754,8 @@ func dispatch_pending_hook() -> bool ! {Clock, IO}
       on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
       on_tool_policy: \_ctx _call. Pending("write outside cwd", DenyAfterTimeout),
       on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
-      on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } },
-      on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
+      on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
+      on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
     };
     let vpending: VerificationConfig = { enabled: false, command: "make check_core" };
     let rt = { registry: { hooks: [pending_hook] }, strict_mode: false, verification: vpending };

@@ -164,10 +164,10 @@ export func make_hooks(cfg: McpConfig) -> ExtensionHooks {
           Delegate
     }
   }, next_state: ctx.world } };
-  let intercept = func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  let intercept = func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
     NoIntercept
   }, next_state: ctx.world } };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
     NoDecision
   }, next_state: ctx.world } };
   {

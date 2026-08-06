@@ -113,11 +113,11 @@ func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO,
   Delegate
 }, next_state: ctx.world } }
 
-func no_intercept(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+func no_intercept(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   NoIntercept
 }, next_state: ctx.world } }
 
-func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   NoDecision
 }, next_state: ctx.world } }
 

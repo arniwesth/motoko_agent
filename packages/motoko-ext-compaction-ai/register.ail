@@ -111,7 +111,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {AI, Clock, Env, F
     },
     on_tool_policy: \_ _ . Allow,
     on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
   }
 }

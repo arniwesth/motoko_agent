@@ -48,13 +48,13 @@ func delegate_tool(ctx: ExtCtx, _call: ToolCallEnvelope)
 
 -- S12: no port call, so the identity transition is the correct answer.
 func no_intercept(ctx: ExtCtx, _response: string)
-  -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   { decision: NoIntercept, next_state: ctx.world }
 }
 
 -- S12: no port call, so the identity transition is the correct answer.
 func no_solver_decision(ctx: ExtCtx, _candidate: string)
-  -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  -> FinalizeOutcome ! {Process} {
   { decision: NoDecision, next_state: ctx.world }
 }
 

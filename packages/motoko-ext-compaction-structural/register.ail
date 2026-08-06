@@ -34,7 +34,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
     on_pre_step: pre_step,
     on_tool_policy: \_ctx _call. NoOpinion,
     on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
-    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } },
-    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
+    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
   }
 }

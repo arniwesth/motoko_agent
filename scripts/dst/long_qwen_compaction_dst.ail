@@ -385,8 +385,8 @@ func compaction_ai_hook() -> ExtensionHooks ! {AI, Clock, Env, FS, IO, Net, Proc
     on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { compact_with_ai(ctx, msgs, cfg) },
     on_tool_policy: \_ _ . Allow,
     on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
   }
 }
 
@@ -402,8 +402,8 @@ func structural_hook() -> ExtensionHooks {
     }, next_state: ctx.world } },
     on_tool_policy: \_ _ . Allow,
     on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
   }
 }
 
@@ -442,8 +442,8 @@ func long_tool_hook() -> ExtensionHooks {
         metadata: jo([kv("fixture", js("long_qwen")), kv("next", js(next))])
       })
     }, next_state: ctx.world } },
-    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, Clock},
+    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {Process}
   }
 }
 

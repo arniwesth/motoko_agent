@@ -216,15 +216,15 @@ func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO,
   Delegate
 }, next_state: ctx.world } }
 
-func no_intercept(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+func no_intercept(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   NoIntercept
 }, next_state: ctx.world } }
 
-func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   NoDecision
 }, next_state: ctx.world } }
 
-func guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+func guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   decide_with_budget(ctx, text, 2)
 }, next_state: ctx.world } }
 
@@ -278,7 +278,7 @@ func guard_rt() -> ExtRuntime {
   }
 }
 
-func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {Process}  { { decision: {
   pc_decide_with_budget(ctx, text, 2)
 }, next_state: ctx.world } }
 
