@@ -3123,7 +3123,7 @@ route.
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
 
-**WI-D16, 2026-08-07 (~1h25m) — ROUTE B PART 1. `ExtPorts` 4 fields → 5, classifier-2 members 2 → 1.**
+**WI-D16, 2026-08-07 (~1h39m; the ~1h25m first recorded here read a D15 leftover commit as D16's start) — ROUTE B PART 1. `ExtPorts` 4 fields → 5, classifier-2 members 2 → 1.**
 Verified at review: `proc_exec` now `(ExtWorld, string, string) -> ExtProcOutcome`, a new
 `file_read: (ExtWorld, string) -> ExtFileRead`, and **`CLASSIFIER-2 SET (1): env_get`**. The pin went
 red on the widening and was moved deliberately, read as *membership* rather than as an exit code —

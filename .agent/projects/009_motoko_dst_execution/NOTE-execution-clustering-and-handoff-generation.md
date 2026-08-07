@@ -787,3 +787,38 @@ combined; D15 priced compose at 6 modules holding ~23 hook-reachable sources, a 
 the `ExtPorts` surface — world-thread `proc_exec`, add a file seam — which discharges the long-owed
 classifier-2 widening and is the precondition for routing anything. Part 2 routes compose. Part 3
 removes the imports.
+
+**Cluster 35 = WI-D17, the core filesystem WRITE class: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d17-the-file-write-world-class.md`. **The half D16 decided and deliberately did not
+build**, and the first of part 2's three blockers to become buildable.
+
+**The clustering choice: build the blocker whose SHAPE is already decided.** Part 2 is blocked on this
+class, a directory seam, and door 3's producer. The other two still need a decision; this one needs
+only code, because D16 settled it on a measurement — writes in the world, `println` out, split by
+whether the session ever observes the result.
+
+**And the item carries a real design first, which is why it is an item and not plumbing.** Every
+adapter in `Ports` today consumes from the world (`approvals: rest`, `tools: rest`), advances a scalar
+(`clock_ms + 1`), or passes state through unchanged — `scripted_file`, `ambient_file`, `scripted_env`
+and `ambient_env` all return `next_state: state` verbatim. **A write is the first class where the
+driver puts something INTO the world**, and `state.files` stops being seeded-and-read-only.
+
+**Which makes this project's counted failure mode structural rather than incidental.** A write adapter
+that forgets its update leaves the next `file_read` returning `present: false` — **byte-identical to
+what it returns if the write was never routed at all.** Absent reads identically to unchanged, and here
+the two branches are the *same observation*, so only a write-then-read-back fixture asserting content
+can tell them apart.
+
+**Two established rules disagree inside this item and the handoff refuses to resolve it quietly.** D3's
+rule is narrowness — *"a path in, existence and contents out"*, and D16's handoff said copy it, do not
+generalise. D16's rule is two-homes — anything that changes what a mediated read returns must be
+mediated. **Compose's write side is three builtins, not one: `writeFile` 7, `mkdirAll` 6, `removeFile`
+5, and `removeFile` changes exactly what compose's `fileExists` branch reads.** So narrowness alone
+leaves the defect standing on 5 of 18 sites. The item must answer out loud.
+
+**Clustering note to carry: when a decision is inherited, check what the PRECEDENT actually did rather
+than what it was described as doing.** D16 chose "world-mediated and recorded" for writes on the
+strength of D3's read class — and D3's read class **is not recorded**. There is no `FileReadIdentity`
+and no `recording_file`; the four recording adapters are clock, env, approval and tool, and
+`EnvironmentReadIdentity` exists. So the precedent being copied contains an asymmetry nobody has
+re-asked, and copying it silently would propagate one.
