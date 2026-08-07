@@ -588,3 +588,37 @@ one handoff rather than two.
 assumed whoever picks it up executes it. This one cannot be executed by a session that is not those
 two people, and saying so is the deliverable — an item that could be picked up and done by anyone
 would be the wrong artifact here.
+
+
+## Cluster 28 outcome, and cluster 29 = does the name adoption stand?
+
+**The governance act landed: classifier 3 ADMITTED (deferred 3 → 4, table 4 → 5), with a condition of
+the reviewers' own** — the admission holds only while the barrier count is *derived*, so `basis` must
+reach `HookClassificationEntry` with or before any change that lowers it. They applied the architecture
+test on two arms rather than inheriting it, took a **third reading** on classifier 1 that is neither
+"Built" nor "Deferred", **revised** WI-D10's cell edit rather than ratifying it, and found **two live
+count sites beyond the two the handoff named**.
+
+**And a measurement in it does not reproduce, which is how cluster 29 was found.** Three sessions ran
+`make effect_inventory_selftest` on the same tree on 2026-08-06 and got `agree=0`, `agree=1` and
+`agree=45`. The variable is a compile cache at `/home/motoko/.local/share/ailang/std/.ailang/cache/`
+that **S9's sweep cannot reach** — the sweep runs from the repo root, that path is under
+`~/.local/share`. Two-sided: clearing it gives `45 → 1`, restoring gives `1 → 45`. **Both competing
+findings about classifier 1 were readings of cache warmth.**
+
+**Cluster 29 = WI-D11, does the name adoption stand: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d11-does-the-name-adoption-stand.md`.
+
+**Grounding found a contradiction that predates the governance act by a full item.** The ADR says the
+gate mechanisms *"block the name: D5's routing audit is not citable as name-adoption gate evidence
+until each is built and passes its criterion"* — and it said so, with "three", **at the ADR state
+WI-D5 read**. WI-D5 adopted the name anyway, checking D10's two conditions and never mentioning that
+sentence. **Neither did this reviewer's handoff.** So the question is not whether the governance act
+broke something; it is whether the adoption was sound when it was made, and nobody asked.
+
+**Clustering note: a determination is a third genre, distinct from both execution and review.** A
+review dispositions someone else's draft; this asks whether a decision already taken was correct, on
+evidence anyone can re-derive. **It is the first item in this project pointed backwards at the
+project's own headline claim**, and the handoff's hardest instruction is the symmetric one — do not
+conclude the name stands because it was announced, and do not conclude it falls because a sentence
+says "blocks".
