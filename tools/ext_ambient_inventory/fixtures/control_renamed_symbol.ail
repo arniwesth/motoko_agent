@@ -1,0 +1,12 @@
+-- RESOLVING CONTROL for the alias boundary, and it is the pair to
+-- shape_module_alias.ail.  A SYMBOL rename names its source symbol, so it is
+-- fully resolvable and must stay AMBIENT.  A classifier that lumped all "as"
+-- forms together would report this UNRESOLVED and look more conservative while
+-- actually losing the ability to say what the extension performs.
+module fixtures/control_renamed_symbol
+
+import std/env (getEnvOr as ge)
+
+export func emit(k: string) -> string ! {Env} {
+  ge(k, "")
+}
