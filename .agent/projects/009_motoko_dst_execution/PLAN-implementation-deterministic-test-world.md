@@ -222,6 +222,16 @@ describes a run rather than a design. **So: when recording why something is unre
 measurement, not the diagnosis.** Fourth consecutive item to carry this class, and the first to say
 how to stop carrying it.
 
+**A STATUS COLUMN IS A LIVE CLAIM AND ROTS LIKE ONE — WI-D11 found the ADR's gate-mechanism table
+wrong on THREE OF FIVE ROWS.** `ADR:2410-2412` record classifier 2, the site-to-hook attribution table
+and coverage-floor validation as **"Deferred"**. **Verified at review: `make ext_call_inventory`,
+`make attribution_table` and `make profile_coverage` all exit 0** — every one built, green, and in
+`make dst`, and the same document describes each as built in its own amendment paragraphs. **The
+governance act checked five COUNT sites and found two the handoff had missed; it did not check the
+State column, and that is where the disagreement was.** The column is demonstrably live-maintained —
+WI-D10 edited classifier 1's State cell and the reviewers revised it four days later — so a reader is
+taught that it tracks HEAD, which makes three false rows **silent** rather than merely stale.
+
 **AND WI-D10 ADDS THE REFUSAL CASE, WHICH IS THE HARDEST ONE TO GET RIGHT: adding a CORRECT offset to
 a number that is ALREADY WRONG does not fix it — it makes it look freshly maintained.** The D10
 handoff instructed that 77 live ADR citations be re-derived after the amendment shifted them.
@@ -345,6 +355,19 @@ binding is a CONSTANT NO-OP is unobservable in a dispatch result by definition. 
 from the registry entirely reddened only the ONE arm that names it by id. Three of four arms
 therefore establish "the fold ran and performed nothing", not "the subject ran and performed
 nothing", and the two are joined by a separate structural row rather than conflated.
+
+**AND WI-D11 FOUND THE RULE STATED CORRECTLY IN ONE FILE AND VIOLATED IN THE NEXT.**
+`src/core/dst_attribution_table.ail:446-448` says, verbatim: *"The discovered set is an ARGUMENT,
+never a constant in this module. It comes from an inventory run against the source, and **hardcoding
+it here would make this check agree with itself by construction.**"* At the only live call,
+`scripts/dst/attribution_table_dst.ail:133` passes `head_inventory()` — which is
+`unconditional_core_sites()` **plus the two sites `attribution_rows()` already contains**
+(`ext/runtime.ail:190`, `tool_phase.ail:314`). **Verified at review: the "discovered" set is the union
+of the two lists `validate_completeness` checks membership against, so it cannot reject over them.**
+The negative fixture proves the *rule* discriminates; nothing feeds the *instrument* a real inventory.
+**A module that names its own failure mode in a header comment does not thereby avoid it** — the
+comment and the call site are in different files, and nothing connects them. This is acceptance row
+5's completeness guard.
 
 **GENERALISED AT WI-D2 FROM A PROPERTY'S TWO SIDES TO AN ARTIFACT'S TWO PINS.** C3's form is about a
 check whose two sides share a producer. D2's is about two SEPARATE artifacts pinned against each other
@@ -2965,6 +2988,43 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D11, 2026-08-07 (~21 min) — DOES THE NAME ADOPTION STAND? **YES, QUALIFIED.** Zero files
+changed.
+
+**The sentence that appeared to unseat the adoption has a FALSE ANTECEDENT, and it has been false
+since 2026-08-03.** `ADR:2038` reads *"**Classifier 2 is not built**, so D5's routing audit as a whole
+remains non-citable as name-adoption gate evidence until it is."* **Classifier 2 was built at WI-A4
+(`5ad3433`) and passes its published criterion** — verified at review, `make
+ext_call_inventory_selftest` exit 0, *"self-test: 0 failure(s)"*, fail-closed on all four
+unresolvable forms with a resolving control beside them. **So the routing audit's stated blocker was
+discharged three days before D5 adopted the name, and D5's adoption was sound.** D5 did not reason its
+way there — it checked D10's two conditions and never mentioned citability, and **neither did this
+reviewer's handoff.** It was right without checking.
+
+**D10 states TWO conditions, quoted and joined by "and"**, and `ADR:2463`'s gate-mechanism sentence is
+120 lines away in another section, glossed by its own colon as a constraint on **one instrument cited
+for one purpose** — corroborated by `ADR:2036-2041` and `PLAN:3201`, both of which make citability a
+two-classifier condition on the *audit*, not a five-mechanism condition on the *name*.
+
+**The constraint bites on exactly ONE of the eleven rows.** Row 5 names the routing audit in its own
+text and its evidence is that audit's output. **Row 3 names classifier 2 and borrows nothing from it**,
+because `driver_only` installs nothing so the quantifier is empty — **the fifth thing the empty install
+list buys**, and the reading that could have gone the other way.
+
+**The qualification is classifier 1, and the measurement turned out BOUNDED rather than unbounded** —
+the opposite of what this handoff expected. **No repository operation produces the 230-file stdlib
+cache**: a 243-file cache-cold sweep leaves it at 0, `make dst` in full leaves it at 52, and the
+selftest reads `agree=1` in both. So under **every cache state this repository can establish**,
+classifier 1's coverage against the amended criterion is **0/21** and it fails. **Its derived set is
+cache-invariant** — 13 effect-bearing / 8 proven-effect-free, byte-identical cold and warm — so what is
+missing is the *validation*, not the answers. That is why it qualifies the name rather than unseating
+it, and the repair now carries one more requirement: **state a cache precondition, or the repaired
+gate measures the cache again.**
+
+**Two findings reported and left, both the acceptance reviewers' or an owner's:** the gate table's
+State column (see S15's extension — three of five rows say "Deferred" for built, green mechanisms),
+and `head_inventory()` feeding `validate_completeness` its own output (see S16's extension).
 
 **THE AMENDMENT REVIEW, 2026-08-06 — BOTH ACCEPT WITH CONDITIONS. B first, then A, then the table.**
 `REVIEW-adr-001-criterion-2-amendment.md`, by a reviewer independent of D6/D7/D8/D9. **Neither is
