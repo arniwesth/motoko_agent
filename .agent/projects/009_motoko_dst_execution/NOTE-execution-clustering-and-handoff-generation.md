@@ -622,3 +622,33 @@ evidence anyone can re-derive. **It is the first item in this project pointed ba
 project's own headline claim**, and the handoff's hardest instruction is the symmetric one — do not
 conclude the name stands because it was announced, and do not conclude it falls because a sentence
 says "blocks".
+
+
+## Cluster 29 outcome, and cluster 30 = build classifier 3
+
+**WI-D11 answered: the name STANDS, qualified.** The sentence that appeared to unseat it has a **false
+antecedent** — `ADR:2038` says *"Classifier 2 is not built"*, and classifier 2 was built at WI-A4 on
+2026-08-03 and passes its criterion (verified: `ext_call_inventory_selftest` exit 0, zero failures).
+**So the routing audit's stated blocker was discharged three days before D5 adopted the name.** D5 was
+right without checking, and neither D5 nor this reviewer's handoff checked.
+
+**Two findings left for other pens, both verified at review:** the gate table records three built,
+green mechanisms as *"Deferred"* (`ext_call_inventory`, `attribution_table`, `profile_coverage` all
+exit 0), and `head_inventory()` feeds `validate_completeness` **its own output** at the only live call
+— which `dst_attribution_table.ail:446-448` forbids in as many words, one file over.
+
+**Cluster 30 = WI-D12, build classifier 3: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d12-build-classifier-3.md`.
+
+**Grounding settled the producer question, and the answer is neither candidate the review proposed.**
+The textual parse fails open on 44 of 465 symbols; `ailang iface`'s stdout needs a stdlib cache no
+project operation produces. **The compiler's own cached `iface.json` covers 21 of the 21 std modules
+the repo imports — zero missing — is keyed by symbol, and distinguishes a CLOSED EMPTY ROW from an
+EFFECT VARIABLE**, which is the distinction the whole yield turns on: `std/json`'s 38 exports carry no
+textual row, so the textual route reports all 38 unresolved including `jo`, and three of the four clean
+extensions import it. **That is what makes the yield 4 of 15 rather than 1.**
+
+**Clustering note: three consecutive clusters have been decided by a measurement taken at review of the
+previous one**, not by the plan and not by the handoff. D10's producer probe, D11's cache bound, and
+now D12's producer choice. **Grounding is no longer resizing items — it is choosing between designs**,
+and the handoff's job has shifted accordingly: carry the measurement, not the instruction.
