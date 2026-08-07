@@ -104,7 +104,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   PreStepDecision, ToolPolicyDecision, ToolHandleDecision,
   ResponseInterceptDecision, FinalizeDecision,
-  AiStepOutcome, ExtClockReading, TokenTelemetry,
+  AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, TokenTelemetry,
   PassThrough, Allow, Delegate, NoIntercept, NoDecision,
   InterceptHandled, Accept, ContinueWithFeedback,
   empty_ext_world
@@ -147,13 +147,15 @@ func probe_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutco
   { result: { Ok("unused") }, next_state: world }
 }
 
-func probe_proc_exec(_cmd: string, _args: string) -> string ! {IO, Process, FS} { "" }
+func probe_proc_exec(world: ExtWorld, _cmd: string, _args: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", next_state: world } }
+func probe_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: world } }
 func probe_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: 0, next_state: world } }
 func probe_env_get(_key: string, fallback: string) -> string ! {Env} { fallback }
 
 func probe_ports() -> ExtPorts {
   { ai_step: probe_ai_step,
     proc_exec: probe_proc_exec,
+    file_read: probe_file_read,
     clock_now: probe_clock_now,
     env_get: probe_env_get }
 }

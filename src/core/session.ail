@@ -45,7 +45,7 @@ import src/core/types (Msg)
 import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading) -- WI-B2b; ExtClockReading WI-C5: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
 import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
 import src/core/context_usage (resolve_context_limit)
@@ -831,10 +831,16 @@ pure func decode_or_empty(raw: string) -> Json {
 
 func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   -- WI-B2b. The bridge takes the token IN and returns the successor OUT, so
-  -- this closure captures no world at all — which is the point. `world` below
-  -- is still captured by `env_get` and `proc_exec`, and those two remain
-  -- classifier-2 members precisely because they cannot return a successor.
-  -- WI-C5 owns widening them.
+  -- this closure captures no world at all — which is the point.
+  --
+  -- UPDATED AT WI-D16. This note used to read "`world` below is still captured
+  -- by `env_get` and `proc_exec`, and those two remain classifier-2 members
+  -- precisely because they cannot return a successor." `proc_exec` no longer
+  -- does either: it takes the token now, so `env_get` is the LAST closure in
+  -- this bridge that captures `world`, and it is the last classifier-2 member.
+  -- That is deliberate and its reason is on the ABI row — its problematic
+  -- callers are in `register_with_config`, which has no `ExtCtx` to reach any
+  -- of this through.
   --
   -- THE `let w0` IS LOad-BEARING FOR A TOOL, not for the compiler.
   -- `tools/ext_call_inventory/derive.py` decides whether this field reaches a
@@ -854,21 +860,45 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
   let env_get = func(key: string, fallback: string) -> string ! {Env} {
     p.env_get(world, key, fallback).value
   };
-  -- `ExtPorts.proc_exec` is two-argument, so like `env_get` it CAN capture the
-  -- world. It projects the typed outcome back down to a string because that is
-  -- the un-widened ABI shape (WI-C5 owns widening it), and the fault variants
-  -- are rendered rather than dropped so an extension is not told "" when a tool
-  -- actually failed. Note this seam previously forwarded `fake_tool`, which
-  -- returned "" unconditionally — it was a stub, so any output at all is an
-  -- improvement rather than a regression.
-  let proc_exec = func(name: string, args: string) -> string ! {IO, Process, FS} {
+  -- WI-D16 widens this seam. HISTORY, in the past tense per plan rule S15: it
+  -- WAS `(string, string) -> string`, and it captured `world` from this bridge's
+  -- parameter rather than taking one — which it could, because two-argument
+  -- fields can capture (plan rule S3). Capturing was never the problem. The
+  -- problem was the RETURN: `p.tool_exec` hands back a `ToolExecution` whose
+  -- `next_state` this closure read and then threw away, so a scripted tool call
+  -- that consumed a `state.tools` entry and advanced the clock advanced a world
+  -- no caller could see. That is the drop classifier 2 selected it for.
+  --
+  -- Written with the SAME `let w0` shape as `ai_step` and `clock_now`, and for
+  -- the same tool reason rather than for symmetry — see `ai_step`'s note above.
+  --
+  -- The typed outcome is still PROJECTED onto a string. That is the ABI's
+  -- `ExtProcOutcome.output` shape and its own comment says why the fault typing
+  -- is a separate widening on a separate ground. Faults stay RENDERED rather
+  -- than dropped, so an extension is not handed "" when a tool actually failed.
+  let proc_exec = func(w: ExtWorld, name: string, args: string) -> ExtProcOutcome ! {IO, Process, FS} {
+    let w0 = token_to_world(w);
     let inv: ToolInvocation = {
       call: { id: "", tool: name, arguments: decode_or_empty(args) },
       workdir: ".",
       timeout_ms: 0,
       started_at_ms: 0
     };
-    tool_outcome_text(p.tool_exec(world, inv).outcome)
+    let execution = p.tool_exec(w0, inv);
+    { output: tool_outcome_text(execution.outcome), next_state: world_to_token(execution.next_state) }
+  };
+  -- WI-D16's file read seam, bridged to WI-D3's `Ports.file_read`. Same `let w0`
+  -- shape, same tool reason.
+  --
+  -- `present` is FORWARDED rather than re-derived from `content`. The core seam
+  -- already carries the distinction explicitly and collapsing it here would
+  -- reintroduce, at the bridge, exactly the empty-file-versus-missing-file
+  -- confusion `FileRead` was shaped to prevent — one layer below where anyone
+  -- would look for it.
+  let file_read = func(w: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+    let w0 = token_to_world(w);
+    let read = p.file_read(w0, path);
+    { present: read.present, content: read.content, next_state: world_to_token(read.next_state) }
   };
   -- WI-C5 routes the clock. It is written with the SAME `let w0` shape as
   -- `ai_step` above and for the same tool reason, not for symmetry: the
@@ -884,6 +914,10 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
   {
     ai_step: ai_step,
     proc_exec: proc_exec,
+    -- WI-D16. Nothing calls it yet — this item ships the seam and routes no
+    -- extension (that is part 2). A seam with no callers is the situation WI-D3
+    -- hit with `clock_now`; it is reported rather than presented as coverage.
+    file_read: file_read,
     -- WI-C5. Was `ext_unrouted_clock` — an ambient `now()` that plan rule S2
     -- chose deliberately, because `ExtPorts.clock_now`'s `() -> int` shape
     -- admitted no world capture and the alternative was a frozen snapshot that

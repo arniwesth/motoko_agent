@@ -2,14 +2,28 @@ module src/core/ext/ctx_defaults
 
 import std/json (Json, jo)
 import std/result (Result, Err)
-import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, AiStepOutcome, ExtPorts, Msg, TokenTelemetry)
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, AiStepOutcome, ExtPorts, Msg, TokenTelemetry)
 
 func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
   Err("ext ai_step port unavailable")
 }, next_state: world } }
 
-func noop_proc_exec(_cmd: string, _cwd: string) -> string ! {IO, Process, FS} {
-  ""
+-- WI-D16 widened `ExtPorts.proc_exec` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION and is the correct answer for
+-- exactly `noop_clock_now`'s reason below: this port executes nothing, so there
+-- is no cursor to advance. It would be a silent defect in a binding that DID
+-- something, and no type tells the two apart.
+func noop_proc_exec(world: ExtWorld, _cmd: string, _cwd: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  { output: "", next_state: world }
+}
+
+-- WI-D16's file read seam. `present: false` is the honest answer for a port
+-- with no filesystem behind it, and it is NOT the same claim as `content: ""` —
+-- see `ExtFileRead`'s comment. A no-op that reported `present: true` with empty
+-- contents would tell a caller an empty file exists, which is the branch this
+-- seam was shaped to keep distinguishable.
+func noop_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: false, content: "", next_state: world }
 }
 
 -- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
@@ -30,6 +44,7 @@ export func noop_ext_ports() -> ExtPorts {
   {
     ai_step: noop_ai_step,
     proc_exec: noop_proc_exec,
+    file_read: noop_file_read,
     clock_now: noop_clock_now,
     env_get: noop_env_get
   }

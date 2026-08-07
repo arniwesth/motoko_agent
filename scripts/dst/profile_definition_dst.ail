@@ -172,7 +172,15 @@ pure func clean_manifest() -> ExecutionManifest {
     normalized_configuration: "{}",
     -- WI-B4: `ai_step` LEFT this set at WI-B2b (widened to return AiStepOutcome,
     -- which carries next_state). 3 -> 2, zero member call sites tree-wide.
-    classifier_2_set: ["env_get", "proc_exec"],
+    -- WI-D16: `proc_exec` LEFT IT TOO, on the same criterion and for the same
+    -- reason — widened to return `ExtProcOutcome`, which carries `next_state`.
+    -- 2 -> 1, and `env_get` is now the sole member. It was left un-widened
+    -- deliberately: its problematic callers are in `register_with_config`,
+    -- which runs before a world exists. This list is RE-DERIVED against
+    -- `tools/ext_call_inventory/derive.py` by
+    -- `tools/profile_definition/check_fixtures.py`, which is what turned red on
+    -- the widening rather than a reader noticing.
+    classifier_2_set: ["env_get"],
     -- EMPTY at HEAD, and re-derived rather than transcribed:
     -- `tools/profile_definition/check_fixtures.py` fails if this disagrees with
     -- `tools/ext_call_inventory/derive.py`. It held ["clock_now"] until WI-C5

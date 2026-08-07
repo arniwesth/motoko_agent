@@ -32,7 +32,7 @@ import src/core/phase_vocab (
   ErrorEvent,
   RunSummary
 )
-import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
   ExtRegistry,
   ExtensionHooks,
@@ -238,13 +238,19 @@ func fixed_file(state: WorldState, path: string) -> FileRead ! {FS} {
 func fixed_ext_env(_key: string, fallback: string) -> string ! {Env} { fallback }
 -- WI-A12 widened `Ports.tool_exec` to the typed contract. This fixture served
 -- an empty string; the typed equivalent is an empty completion for the id that
--- was actually asked about, with the world unchanged. `fixed_ext_exec` is the
--- un-widened `ExtPorts.proc_exec` shape (WI-C5's).
+-- was actually asked about, with the world unchanged. `fixed_ext_exec` was the
+-- un-widened `ExtPorts.proc_exec` shape until WI-D16 widened that row; it now
+-- threads the token and returns it UNCHANGED, which is S12's identity
+-- transition and correct here because this fixture executes nothing.
 func fixed_exec(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
   { outcome: ToolCompleted({ tool_call_id: inv.call.id, content: "" }), next_state: state }
 }
 
-func fixed_ext_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
+func fixed_ext_exec(world: ExtWorld, _name: string, _args: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", next_state: world } }
+
+-- WI-D16's file read seam. `present: false` rather than an empty-string
+-- content claim — see `ExtFileRead`. This fixture has no filesystem behind it.
+func fixed_ext_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: world } }
 
 func runtime_hooks() -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   long_runtime()
@@ -843,6 +849,7 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
         }
       },
       proc_exec: fixed_ext_exec,
+      file_read: fixed_ext_file_read,
       clock_now: fixed_ext_clock,
       env_get: fixed_ext_env
     },
