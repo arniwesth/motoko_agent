@@ -356,6 +356,21 @@ from the registry entirely reddened only the ONE arm that names it by id. Three 
 therefore establish "the fold ran and performed nothing", not "the subject ran and performed
 nothing", and the two are joined by a separate structural row rather than conflated.
 
+**AND WI-D15 FOUND TWO MORE DOORS, one of them live in the SHIPPED tool.** **Door 3: a
+NON-underscore language builtin.** `show` needs no import, is declared nowhere, and is not
+`_`-prefixed — so classifier 3 *neither resolves nor rejects it; it does not look at it.* Verified at
+review: **five `show(` calls in `compaction_structural.ail`**, none imported, none declared. That is
+the extension `driver_plus_no_ops` rests on, and sixteen of its criterion-2 entries trace to
+classifier 3 clearing it. Under the import-granular unit it costs nothing; **under any call-granular
+unit it is the dominant term.** No producer at HEAD can classify it — every `show(` in the 46-module
+stdlib corpus is inside a comment — and a textual derivation was tried and **discarded** because it
+could not distinguish a language builtin from a higher-order parameter, resolving `f`, `p` and `pred`
+as builtins. **A rule that invents evidence is worse than one that reports its absence.**
+
+**Door 4: a call site inside a STRING INTERPOLATION**, which the noise-stripper blanked. Ten builtin
+and two effectful std-symbol calls exist *only* there. Harmless to an import-granular verdict, and
+invisible to any call-granular reader that inherits the same lid.
+
 **AND WI-D12 ADDS THE DOOR AN INVENTORY DOES NOT WATCH: an instrument scoped to IMPORTS is blind to
 effects that need no import.** AILANG's effects are performed by `_`-prefixed compiler builtins —
 `std/io.println` is literally `_io_println(s)` — **and a builtin requires no import statement.** An
@@ -465,6 +480,24 @@ edits; what broke it was rewriting a historical comment block for tense under S1
 numbers were derived, which moved four `session.ail` line numbers by nine. **S15 and the anchor rule
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
+
+**S24. A FIXTURE SUITE PROVES THE SHAPES IT ENUMERATES; IT DOES NOT PROVE THE WALKER REACHED THE
+CODE.** Earned by WI-D15, which had **four** slips in its own tooling — and **two were FAIL-OPEN, and
+the assertion suite caught neither.** Both were caught by a human reading a verdict that was better
+than the source justified.
+
+The sharper of the two: a brace-delimited **record type in a return signature** —
+`-> Result[{ stdout: string, … }, string] ! {Process} {` — read as a function *body*, so `shell_exec`
+looked effect-free and **`omnigraph` reported HOOK-PORT-MEDIATED while its `on_tool_handle` calls
+`std/process.exec`.** A clean answer for an extension that shells out. Every fixture passed
+throughout, because the fixtures enumerate *shapes a walker must reject* and none of them asserts
+*that the walker arrived*.
+
+**The rule: for any analysis that walks to reach its subject, assert reachability separately from
+verdict.** A suite of rejecting fixtures with resolving controls — this project's standard since C5 —
+establishes the predicate and says nothing about the traversal. **And the practical tell is the one
+that worked twice here: a verdict better than the source justifies is worth reading by hand before it
+is banked.**
 
 **S23. A TRANSCRIBED CONSTANT BECOMES CHECKABLE THE MOMENT A SECOND CONSUMER HAS TO STATE IT — so
 build the second consumer, or guard the first.** Earned by WI-D14, and it is the rule behind **the
@@ -3062,6 +3095,39 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D15, 2026-08-07 (~45 min) — CRITERION 2 QUANTIFIES OVER HOOKS. The closure was never the
+scope.** The reading rests on two sentences already in the ADR: D5 says *"every hook reachable within
+that profile"*, and Amendment A's property 2 **opens by agreeing and derives the unit from it** —
+*"criterion 2 quantifies over every hook … **so** the unit is the extension's transitive module
+closure."* **The `so` is the whole argument**, and the amendment already calls its own unit a
+*coarsening* that *"caps the instrument's reach at four extensions."* **A coarsening is not a
+definition.** So the tree never held a contradiction between classifier 3's verdict and
+`driver_only.ail:597` — it held a conservative instrument and a sharper claim, and nothing compared
+them.
+
+**`driver_only.ail:597` was scoped correctly in KIND and wrongly in EXTENT** — one file is too narrow
+(the hook is bound in `register.ail`), the closure is too wide, and the right unit is neither.
+
+**The obvious sharpening is FAIL-OPEN, and the repository refutes it rather than an argument.**
+Dropping `register.ail` from the closure clears `microrag` of two ambient sources a hook really
+reaches — verified at review: `microrag_tool_handle` is a **named top-level hook function defined in
+`register.ail:160`**, and that file imports `std/process (exec)`. **9 of 15 extensions hold the
+`ExtensionHooks` record in `register.ail`; 6 declare named hook functions there.** The split is
+reachability-granular instead.
+
+**Yield 4 of 15 → 5 of 15, and the sets are NOT nested**: `mcp` and `test_dummy` added — both the D6
+confound exactly, registration reads `Env`/`FS` and the hooks close over the data — and
+**`compaction_structural` DROPPED**, on **door 3**, not on behaviour. See S16's extension.
+
+**The verdict is REPORTED, not promoted, and that is deliberate**: `ext_hook_scope` is a reporting
+target, the barrier derivation still reads `ext_ambient_inventory`'s closure verdict, and the selftest
+asserts the shipped verdict has **not** moved so a future edit cannot promote it quietly.
+
+**Route B's cost, re-derived: cheaper to SCOPE, not much cheaper to DO.** For `compose` the surface
+falls from **17 modules to 6** while the source count barely moves (**28 → 23**); `context_mode`
+roughly halves on both. **And a prerequisite appears that D9 did not price:** `compose` and
+`context_mode` are HOOK-UNRESOLVED on door 3 **regardless of Route B**.
 
 **WI-D14, 2026-08-07 (~50 min) — THE SECOND PROFILE EXISTS, AND ALL FOUR OF ROW 3'S
 INSTALLED-EXTENSION CLAUSES BOUND AND HELD.** `driver_plus_no_ops/1`: four extensions installed, **32
