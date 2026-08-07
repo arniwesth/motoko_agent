@@ -755,3 +755,35 @@ can ever achieve.** D12 recorded "an import alone is a rejection" as a conservat
 and in the open. Three items later it is the reason no mediating extension can ever be cleared. **When
 an item records a deliberate coarsening, the next item to depend on that instrument should re-ask what
 the coarsening now costs** — it is S21's shape applied to a design decision rather than to a vacuity.
+
+
+## Cluster 33 outcome, and cluster 34 = ROUTE B STARTS
+
+**WI-D15: criterion 2 quantifies over HOOKS.** The reading rests on two sentences already in the ADR,
+and Amendment A's own property 2 opens by agreeing before deriving the closure from it — *"criterion 2
+quantifies over every hook … **so** the unit is the closure."* **A coarsening is not a definition.**
+Yield 4 → 5, sets not nested; found **door 3** (`show`, a non-underscore language builtin, live in the
+extension `driver_plus_no_ops` rests on) and earned **S24** after two of its own four slips were
+fail-open and its fixture suite caught neither.
+
+**Cluster 34 = WI-D16, Route B part 1: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d16-route-b-the-extports-surface.md`. **Route B was named and deferred in NINE
+consecutive reports. This starts it.**
+
+**The fork was resolved by measurement rather than by preference.** Compose's one registration-only
+ambient source is `register.ail:3 — `import std/env (getEnvOr)`, and **registration runs before the
+world exists**, so no amount of routing clears compose under the closure unit. The promotion is
+genuinely required — **but it blocks the VERDICT, not the BUILD.** Every line of Route B is needed
+under either unit, so the review can run in parallel and does not gate the work.
+
+**Clustering note, and it is the one to carry: a blocked verdict is not a blocked build, and this
+project conflated them for nine items.** Each deferral had a real reason — D9's was outright
+vindicated — but the reasons were about whether the work would *count*, not about whether it could
+*start*. **When an item is deferred on a decision, ask which half the decision actually gates.** Here
+it gates the last step of three.
+
+**And the build is CUT, because "Route B" was never one item.** D9 called it larger than D6 and D7
+combined; D15 priced compose at 6 modules holding ~23 hook-reachable sources, a lower bound. Part 1 is
+the `ExtPorts` surface — world-thread `proc_exec`, add a file seam — which discharges the long-owed
+classifier-2 widening and is the precondition for routing anything. Part 2 routes compose. Part 3
+removes the imports.
