@@ -589,7 +589,62 @@ def main():
         print("  i src/core/dst_driver_only.ail not present yet (machinery commit); profile check skipped")
 
     check_recognised_producers()
+    check_abi_version()
     print("  ✓ no fact in the fixtures is a stale transcription of the tool's output")
+
+
+ABI_TOML = REPO / "packages/motoko-ext-abi/ailang.toml"
+
+
+def check_abi_version():
+    """WI-D14. The ABI version, re-derived from the package that declares it.
+
+    ADDED BECAUSE IT HAD ALREADY GONE STALE AND NOTHING NOTICED. `driver_only`'s
+    `extension.abi` adapter boundary and `driver_only_dst`'s manifest argument
+    both said `4.0` from WI-A10 until 2026-08-07; the ABI moved to 5.0 at WI-B2b,
+    which added the world token and the four hook outcome records. So a manifest
+    whose whole job is exact reproducibility pinned a contract this tree has not
+    had for eleven items, and both readings type-check — the manifest's
+    `abi_version` is a free string argument.
+
+    That is the composition defect this script exists for, found in the one
+    artifact class it had not been pointed at. The version is a fact declared in
+    `packages/motoko-ext-abi/ailang.toml`, so it is read from there.
+    """
+    m = re.search(r'^version\s*=\s*"([^"]+)"', ABI_TOML.read_text(), re.M)
+    if not m:
+        fail(f"could not read the ABI version from {ABI_TOML.relative_to(REPO)}; a profile's "
+             "recorded abi_version cannot be checked against the package that declares it")
+    live = m.group(1)
+
+    # EVERY profile, not only `driver_only`. One fact deserves one guard, and a
+    # second profile is exactly how the first one's transcription went unnoticed
+    # for eleven items — nothing was comparing it to anything.
+    subjects = [PROFILE,
+                REPO / "scripts/dst/driver_only_dst.ail",
+                REPO / "src/core/dst_driver_plus_no_ops.ail",
+                REPO / "scripts/dst/driver_plus_no_ops_dst.ail"]
+    seen = 0
+    for path in subjects:
+        if not path.exists():
+            continue
+        text = path.read_text()
+        for stale in re.findall(r"ABI (\d+\.\d+)[.,) ]", text):
+            seen += 1
+            if stale != live:
+                fail(f"{path.relative_to(REPO)} names 'ABI {stale}' and "
+                     f"{ABI_TOML.relative_to(REPO)} declares {live}. A profile record or manifest "
+                     "that pins the wrong ABI pins nothing.")
+        for arg in re.findall(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S):
+            seen += 1
+            if arg != live:
+                fail(f"{path.relative_to(REPO)} builds a manifest with abi_version '{arg}' and the "
+                     f"ABI package declares {live}")
+    if seen == 0:
+        fail("no profile record names an ABI version at all, so this guard re-derived nothing. "
+             "An assertion with no subject cannot be told from one that does not run.")
+    print(f"  ✓ the ABI version every profile record names is the one the package declares: {live} "
+          f"({seen} site(s) across {len([p for p in subjects if p.exists()])} file(s))")
 
 
 if __name__ == "__main__":

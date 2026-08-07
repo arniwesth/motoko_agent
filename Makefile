@@ -196,7 +196,7 @@ hook_guard:
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only driver_plus_no_ops fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -723,6 +723,41 @@ driver_only:
 	ailang run --caps IO --entry main scripts/dst/driver_only_dst.ail < /dev/null; \
 	python3 tools/profile_definition/check_fixtures.py; \
 	ailang test src/core/dst_driver_only.ail > /dev/null && echo "  ✓ src/core/dst_driver_only.ail"
+
+# `driver_plus_no_ops` v1 — the SECOND conformant profile (WI-D14), and the
+# first that installs anything. Separate from `driver_only` for the same reason
+# `driver_only` is separate from `profile_definition`: each profile earns its
+# own coverage, and per D10 nothing transfers between them.
+#
+#   1. The load-time acceptance, plus ADR-001 row 3's four installed-extension
+#      clauses. Each is asserted twice — as it stands, and against a MUTATION of
+#      this same definition that the clause must reject — because a clause that
+#      only ever passes cannot be told from one that does not run, and all four
+#      of these have quantified over the empty set for the whole project.
+#
+#   2. The guard, which is what stops the profile agreeing with itself. It reads
+#      the script's OUTPUT rather than its source (the classification entries are
+#      computed, so the source does not contain them) and re-derives, from
+#      producers the profile does not control: the zero-barrier install set, the
+#      rowed/rowless split each classification rests on, every criterion-2
+#      clause's vacuity, and the three CLAIM lines rows 4, 5 and 7 stand on.
+#
+#      The output is captured to a file so the run happens ONCE — piping it to
+#      the guard would hide the script's own exit status behind the pipeline's.
+#
+#   3. The module's inline tests, which assert the shape no profile in this tree
+#      has had before: a non-empty install list, stated three ways and agreeing.
+.PHONY: driver_plus_no_ops
+driver_plus_no_ops:
+	@set -eu; \
+	out=$$(mktemp); \
+	if ! ailang run --caps IO --entry main scripts/dst/driver_plus_no_ops_dst.ail < /dev/null > $$out 2>&1; then \
+		cat $$out; rm -f $$out; exit 1; \
+	fi; \
+	grep -v '^CLASSIFICATION \|^INSTALLED \|^OMITTED \|^DISCLOSURE \|^CLAIM \|^STATEMENT ' $$out; \
+	python3 tools/profile_definition/check_no_op_profile.py $$out; \
+	rm -f $$out; \
+	ailang test src/core/dst_driver_plus_no_ops.ail > /dev/null && echo "  ✓ src/core/dst_driver_plus_no_ops.ail"
 
 # D3's fault catalogue (WI-A7). Three checks:
 #

@@ -395,6 +395,17 @@ export type ExtensionHooks = {
   -- `driver_only` still installs nothing, and the axis's extension-model
   -- coverage is still ZERO. This row removed the blocker; spending it is
   -- WI-C5's `compose`-bearing profile.
+  --
+  -- QUALIFIED AT WI-D14 (2026-08-07), NOT REWRITTEN, per plan rule S15. The
+  -- two sentences above were true from WI-D6 until that date. A SECOND profile
+  -- now exists — `src/core/dst_driver_plus_no_ops.ail` — which installs four
+  -- extensions and covers THIS SLOT for each of them, under criterion 1, on
+  -- exactly the rowless declaration this edit produced. So the row was spent,
+  -- and not by the profile the last sentence predicted: it was spent by a
+  -- profile whose coverage is entirely of hooks that perform nothing.
+  -- `driver_only` still installs nothing and its own coverage is still zero.
+  -- WI-C5's `compose`-bearing profile is NOT discharged by this — compose
+  -- stands at three barriers and needs Route B.
   on_budget_plan: (ExtCtx, BudgetPlan) -> BudgetPatch,
   -- WI-B2a: `+ Trace`, and it is the SECOND and last row this item changed.
   -- It is a CONSEQUENCE of `ExtPorts.ai_step` above, not an independent finding:
