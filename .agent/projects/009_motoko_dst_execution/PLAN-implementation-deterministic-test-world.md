@@ -481,6 +481,23 @@ numbers were derived, which moved four `session.ail` line numbers by nine. **S15
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
 
+**EXTENDED BY WI-D16 TO A PIN THAT ITERATES ITSELF, and it is the same defect one level above the
+tool.** Classifier 2's membership self-test loops over `expected.json`'s pinned block, **so adding a
+NEW `ExtPorts` field produced four green pinned rows and total silence on the fifth.** The `fixtures`
+block already carried a `missing` check; membership had no counterpart. **A pin that enumerates from
+itself cannot report an absence** — which is `derive.py`'s own documented fail-open shape, reappearing
+in the harness that guards it. Closed with a **two-directional reachability assertion**, and both
+directions mutation-tested: dropping `file_read` from the pin and pinning a `http_get` that does not
+exist each produce a named failure.
+
+**AND `make anchors` IS NECESSARY AND NOT SUFFICIENT — it checks the anchors, not the set of profiles
+that recorded the table's hash.** WI-D16's widening pushed five `session.ail` anchors down;
+`make anchors` and `make attribution_table` both went green with only `driver_only` re-issued, and the
+**sweep then failed `driver_plus_no_ops`** — *"the attribution table was corrected and this profile was
+not re-issued (D4)"*. **The second profile binds the same table at the same identity**, so the D4
+cascade now has two consumers and the anchors target names one. **A third profile extends the list
+again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
+
 **S24. A FIXTURE SUITE PROVES THE SHAPES IT ENUMERATES; IT DOES NOT PROVE THE WALKER REACHED THE
 CODE.** Earned by WI-D15, which had **four** slips in its own tooling — and **two were FAIL-OPEN, and
 the assertion suite caught neither.** Both were caught by a human reading a verdict that was better
@@ -966,6 +983,16 @@ entirely: **flip the literal and ask the compiler whether that site's error move
 to label order, it converged in 60 edits, and the one site it could not satisfy turned out to be a
 genuine implicit crossing rather than a shape problem — which is information the label-reading loop
 could never have produced.
+
+**AND THE SWEEP MUST COVER THE DEPENDENTS OF AN EDITED INTERFACE, NOT JUST THE EDITED MODULE.**
+Earned by WI-D16, which lost ~25 minutes to a record-field error **whose subject was wrong in two ways
+at once**. `long_qwen_compaction_dst.ail` reported *"expected 5 fields, got 4 … missing fields:
+file_read"* **pointing at a literal that had all five**, because `expected` is the LITERAL and `actual`
+is the ANNOTATION's type — the reverse of the message's natural reading and of its own `Hint:`, which
+tells you to add a field that is already there. **And the stale 4-field `ExtPorts` was not in the ABI's
+own cache**: it reached the failing module **structurally embedded inside `compaction_ai`'s cached
+interface**, so deleting the ABI's cache entry in all 29 directories did not fix it and only a sweep of
+the *dependents'* caches did. **A session that trusted the message would have edited correct source.**
 
 **S9. Clear EVERY live `.ailang/cache` before believing any check whose input you just mutated —
 they are per-directory, and `rm -rf .ailang/cache` clears one of them.** Four phantoms now, and B2a's
@@ -3095,6 +3122,42 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D16, 2026-08-07 (~1h25m) — ROUTE B PART 1. `ExtPorts` 4 fields → 5, classifier-2 members 2 → 1.**
+Verified at review: `proc_exec` now `(ExtWorld, string, string) -> ExtProcOutcome`, a new
+`file_read: (ExtWorld, string) -> ExtFileRead`, and **`CLASSIFIER-2 SET (1): env_get`**. The pin went
+red on the widening and was moved deliberately, read as *membership* rather than as an exit code —
+`returns-it`, not `derive.py`'s fail-open `unrouted`. **Nothing was routed**; both new seams have zero
+callers, which is D3's "first exercise of a seam with no callers" state, reported rather than presented
+as coverage.
+
+**THE WRITE/PRINT DECISION, AND THIS HANDOFF'S FRAMING LED TO THE WRONG ANSWER.** I framed it as *"a
+file write is not an observation and neither is `println`"* — true, and **the wrong question.** The
+decision is **writes IN the world (option 2), `println` OUT (option 3)**, and what splits them is
+whether the session ever observes the result.
+
+**Measured in compose rather than argued from D1's sentence, and verified at review**
+(`compose.ail:502-521`): `writeFile(snippet_path, …)` → `check_snippet(snippet_path)`, which **shells
+out to that path** → `if not checked.ok` → `fileExists`/`removeFile` → `run_snippet` reads it again.
+**The write is never observed by a `readFile`; it is observed by a `proc_exec` and a `fileExists`, and
+session control flow branches on the result twice.** So if `proc_exec` and `file_read` are mediated and
+`writeFile` is not, a deterministic run mutates the real filesystem, then asks the world what that path
+contains, and gets an answer the disk contradicts — **two homes for one fact, which is `ADR:340-341`'s
+"exactly one home, visibly threaded" and F6's shape exactly.** `println` has no second reader, so the
+argument does not carry: nothing in a session can observe stdout.
+
+**Half the decision is OWED and named as its own item: `Ports` has no `file_write` core class.** A
+`ExtPorts.file_write` fronting nothing would derive `unrouted` — a field that looks like mediation and
+is reported as a bypass — so **the core class must exist before the extension seam can front it**, and
+that is WI-D3's shape, which was a whole item for the READ half alone.
+
+**Two findings for the next item, both measured:** eight fixtures carry the stale
+`["ai_step", "env_get", "proc_exec"]` set at `abi_version "4.0"` — **stale since B2b and C5, four items
+passed over them, and nothing guards them** (confirmed at review: exactly 8 files). And **part 2 is
+blocked on more than it looks**: routing compose needs the write class **and** a directory seam
+(`Ports` has none, and compose calls `listDir`/`isDir` at three sites) **and** door 3's producer.
+
+**ABI rows now TEN**, plus two added types. Still not cut; a lockstep re-release is a release act.
 
 **WI-D15, 2026-08-07 (~45 min) — CRITERION 2 QUANTIFIES OVER HOOKS. The closure was never the
 scope.** The reading rests on two sentences already in the ADR: D5 says *"every hook reachable within
