@@ -1,0 +1,24 @@
+-- REJECTION: `applied-local`.  A hook APPLIES a value it closed over at
+-- registration.  A local can hold a function, so its effects are whatever the
+-- caller put there -- classifier 2's discipline: an unresolvable receiver is a
+-- rejection, not a pass.  This is door 6's dangerous corner: registration
+-- usually hands a hook DATA, and this fixture is the case where it does not.
+module fixture/reject_applied_local
+
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtCtx)
+
+export func register_with_config(cfg: a) -> ExtensionHooks {
+  let injected = cfg.callback;
+  {
+    id: "reject_applied_local",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None },
+    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { injected(msgs) }, next_state: ctx.world } },
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
+  }
+}

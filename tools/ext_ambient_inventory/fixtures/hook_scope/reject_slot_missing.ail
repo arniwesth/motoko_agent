@@ -1,0 +1,21 @@
+-- REJECTION: `hook-slot-missing`.  Seven slots bound, `on_solver_candidate`
+-- absent.  The bindings must TILE the record: ADR:1317-1337 records that this
+-- tree has already shipped a "six unconditional slots" count when the
+-- enumeration said seven, and that both readings type-checked.
+module fixture/reject_slot_missing
+
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtCtx)
+
+export func register_with_config(_cfg: a) -> ExtensionHooks {
+  {
+    id: "reject_slot_missing",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None },
+    on_pre_step: func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } }
+  }
+}

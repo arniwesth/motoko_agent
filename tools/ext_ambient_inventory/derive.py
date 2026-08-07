@@ -837,6 +837,57 @@ def self_test(repo: Path) -> int:
     return 1 if fails else 0
 
 
+def _hook_scope(repo: Path, do_provision: bool, selftest: bool = False) -> int:
+    """WI-D15's second answer: criterion 2 quantified over HOOKS.
+
+    Loaded by explicit path under a distinct name, for the reason recorded at
+    `_load_classifier_2`: this directory already contains one `derive.py` that
+    resolves to itself under a name-based import, and a tool that fails closed on
+    unresolved receivers must not be the thing importing the wrong module.
+
+    This mode REPORTS.  It does not change the verdict `derive.py` returns, and
+    the shipped closure verdict is what a profile may rely on -- promoting the
+    hook-scope answer is an ADR-scope decision, not an instrument's.
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parent / "hook_scope.py"
+    spec = importlib.util.spec_from_file_location("motoko_hook_scope", path)
+    if spec is None or spec.loader is None:          # pragma: no cover - harness
+        raise SystemExit(f"harness: cannot load hook_scope from {path}")
+    hs = importlib.util.module_from_spec(spec)
+    sys.modules["motoko_hook_scope"] = hs
+    spec.loader.exec_module(hs)
+
+    closure = derive(repo, do_provision=do_provision)
+    if closure["provision_failures"]:
+        print("CACHE PRECONDITION NOT ESTABLISHED -- fail closed:")
+        for f in closure["provision_failures"]:
+            print(f"  {f}")
+        return 1
+
+    producer = Producer()
+    producer.load([repo / "src", repo / "packages", repo / "scripts"])
+    stdlib = Path(os.environ.get(STDLIB_ENV) or DEFAULT_STDLIB)
+    builtins = builtin_effects(stdlib, producer) if stdlib.is_dir() else {}
+    abi_types = c2.record_types(c2.strip_noise((repo / c2.ABI_TYPES).read_text()))
+    core_types = c2.record_types(c2.strip_noise((repo / c2.CORE_PORTS).read_text()))
+    c2.ALL_TYPES.clear()
+    c2.ALL_TYPES.update(core_types)
+    c2.ALL_TYPES.update(abi_types)
+    ext_fields = tuple(abi_types.get("ExtPorts", {}))
+    if not ext_fields:
+        print("harness: ExtPorts has no fields in the ABI -- property 1's positive half "
+              "cannot be measured, so every mediated call would read as unresolvable")
+        return 2
+
+    if selftest:
+        return hs.self_test(repo, sys.modules[__name__], producer, builtins, ext_fields)
+
+    res = hs.derive_hook_scope(repo, sys.modules[__name__], producer, builtins, ext_fields)
+    closure_verdicts = {e: r["verdict"] for e, r in closure["extensions"].items()}
+    return hs.emit_hook_scope(res, closure_verdicts)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -846,6 +897,12 @@ def main() -> int:
                     help="do not establish the cache precondition; report what the "
                          "producer can reach as found (used to measure a cold tree)")
     ap.add_argument("--self-test", action="store_true", help="run the fixture suite")
+    ap.add_argument("--hook-scope-selftest", action="store_true",
+                    help="run the hook-scope fixture suite and pin BOTH yields")
+    ap.add_argument("--hook-scope", action="store_true",
+                    help="also derive criterion 2 over HOOK-reachable text (WI-D15) and print "
+                         "it beside the shipped closure verdict. Reports only; the closure "
+                         "verdict is what this tool returns and what a profile may rely on")
     args = ap.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -859,6 +916,10 @@ def main() -> int:
 
     if args.self_test:
         return self_test(repo)
+
+    if args.hook_scope or args.hook_scope_selftest:
+        return _hook_scope(repo, do_provision=not args.no_provision,
+                           selftest=args.hook_scope_selftest)
 
     res = derive(repo, do_provision=not args.no_provision)
     if args.json:

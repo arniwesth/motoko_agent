@@ -1,0 +1,32 @@
+-- THE MICRORAG SHAPE, and the reason the split is not file-scoped.  The hook is
+-- a NAMED top-level function in the registration module and it reaches
+-- std/fs.writeFile.  A sharpening that drops `register.ail` clears this; a
+-- reachability one must report it AMBIENT.
+module fixture/control_named_hook_in_register
+
+import std/fs (writeFile)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtCtx)
+
+func do_write(path: string, content: string) -> ToolHandleDecision ! {FS} {
+  let _ = writeFile(path, content);
+  Delegate
+}
+
+func fixture_tool_handle(ctx: ExtCtx, _call) -> ToolHandleOutcome ! {IO, Process, FS} {
+  { decision: { do_write("out.txt", "x") }, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtensionHooks {
+  {
+    id: "control_named_hook_in_register",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None },
+    on_pre_step: func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: fixture_tool_handle,
+    on_response_intercept: func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
+  }
+}

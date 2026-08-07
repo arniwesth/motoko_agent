@@ -196,7 +196,7 @@ hook_guard:
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only driver_plus_no_ops fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only driver_plus_no_ops fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest ext_hook_scope_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -2071,6 +2071,37 @@ ext_ambient_inventory:
 
 ext_ambient_inventory_selftest:
 	@python3 tools/ext_ambient_inventory/derive.py --self-test
+
+# ---------------------------------------------------------------------------
+# WI-D15: the same criterion, quantified over HOOKS instead of over the whole
+# closure. D5 (`ADR:1295-1300`) says "every hook reachable within that profile";
+# Amendment A's property 2 says so too and then picks the transitive CLOSURE as
+# the unit that makes the measurement total over hooks. The closure is a sound
+# OVER-approximation, not an enlargement of the quantifier -- so registration's
+# `std/env` and `std/fs` are inside the UNIT and outside the SCOPE.
+#
+# This REPORTS a second answer. It does not change `ext_ambient_inventory`'s
+# verdict and no profile may rely on it: promoting it is an ADR-scope decision,
+# drafted at WI-D15 and not applied.
+#
+# The split is REACHABILITY-granular, never file-granular, and the tree holds the
+# proof that the difference matters: `microrag/register.ail` binds
+# `on_tool_handle` to a named function that reaches `std/fs.writeFile` and
+# `std/process.exec`, so dropping "the registration module" is FAIL-OPEN.
+#
+# The selftest pins BOTH yields in both directions -- 4 of 15 closure, 5 of 15
+# hook scope -- and the two sets are NOT nested: hook scope adds `mcp` and
+# `test_dummy` and DROPS `compaction_structural`, on a door (`show`, a language
+# builtin no producer at HEAD can classify) that the closure tool does not watch.
+# It also asserts the twin fixtures DISAGREE: same import, same call, different
+# position. If they ever agree, the tool is measuring the file again.
+# ---------------------------------------------------------------------------
+.PHONY: ext_hook_scope ext_hook_scope_selftest
+ext_hook_scope:
+	@python3 tools/ext_ambient_inventory/derive.py --hook-scope
+
+ext_hook_scope_selftest:
+	@python3 tools/ext_ambient_inventory/derive.py --hook-scope-selftest
 
 # ---------------------------------------------------------------------------
 # WI-A17: the `ailang test` coverage axis.

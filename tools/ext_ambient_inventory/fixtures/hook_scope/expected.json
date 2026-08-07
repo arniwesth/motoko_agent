@@ -1,0 +1,101 @@
+{
+  "_comment": [
+    "WI-D15. One fixture per rejection shape the hook-scope split adds, each",
+    "PAIRED with a resolving control. A rejection-only suite is passed by a",
+    "classifier that resolves nothing -- the `agree=0 disagree=0` shape that has",
+    "cost this project two items -- so `verdict: HOOK-PORT-MEDIATED` entries are",
+    "load-bearing, not filler.",
+    "",
+    "The pair that carries the READING is control_registration_only /",
+    "control_hook_reaches_env: same import, same call, different position. If",
+    "they ever agree, the tool has stopped measuring the reading."
+  ],
+  "fixtures": {
+    "control_registration_only": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": ["std/env.getEnvOr"],
+      "form": "registration reads Env; no hook reaches it (the WI-D6 shape)"
+    },
+    "control_hook_reaches_env": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "form": "TWO-SIDED twin of the above: the same call, moved into a hook body"
+    },
+    "control_named_hook_in_register": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "form": "the microrag shape -- hook logic in register.ail reaching std/fs"
+    },
+    "control_ext_ports_call": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "form": "property 1's positive half: ExtPorts.ai_step is admitted, not rejected"
+    },
+    "control_interpolated_call": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "form": "door 4: the effectful call exists only inside a string interpolation"
+    },
+    "reject_record_unresolvable": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": ["hook-record-unresolvable"],
+      "registration_only": [],
+      "form": "the hooks record comes from a function this closure does not hold"
+    },
+    "reject_slot_missing": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": ["hook-slot-missing"],
+      "registration_only": [],
+      "form": "seven of eight slots bound -- the bindings do not tile the record"
+    },
+    "reject_binding_unresolvable": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": ["hook-binding-unresolvable"],
+      "registration_only": [],
+      "form": "a slot bound to a bare name that resolves nowhere"
+    },
+    "reject_unknown_callee": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": ["unknown-callee"],
+      "registration_only": [],
+      "form": "door 3: `show` -- a language builtin no producer at HEAD can classify"
+    },
+    "reject_applied_local": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": ["applied-local"],
+      "registration_only": [],
+      "form": "a hook APPLIES a value closed over at registration (door 6's corner)"
+    }
+  },
+  "yield": {
+    "_comment": [
+      "Pinned in BOTH directions over the real fifteen, so a drift in either is a",
+      "failure. `closure` is derive.py's shipped answer and must not move: this",
+      "item reports a second reading, it does not promote one.",
+      "",
+      "The two sets are NOT nested. Hook scope adds mcp and test_dummy (both the",
+      "WI-D6 shape) and DROPS compaction_structural -- not because a hook of it",
+      "reaches an effect, but because `show` is a door the shipped tool does not",
+      "watch. That drop is the finding, and pinning it here is what keeps it from",
+      "being quietly re-admitted."
+    ],
+    "extensions": 15,
+    "closure_port_mediated": [
+      "compaction_structural", "decision_framework", "empty_stop_guard", "progress_contract_guard"
+    ],
+    "hook_port_mediated": [
+      "decision_framework", "empty_stop_guard", "mcp", "progress_contract_guard", "test_dummy"
+    ],
+    "hook_ambient": ["a2a", "scratchpad"],
+    "door_3_residue": ["intToFloat", "show"],
+    "counterfactual_if_residue_resolved": [
+      "compaction_ai", "compaction_structural", "decision_framework", "empty_stop_guard",
+      "mcp", "progress_contract_guard", "test_dummy"
+    ]
+  }
+}
