@@ -137,21 +137,52 @@ func scenario_attribution_ref_is_current() -> bool ! {IO} {
   ok
 }
 
--- 2. The omission.
+-- 2. The omissions.
+--
+-- WENT FROM ONE ENTRY TO FIVE AT WI-D13, AND THE ASSERTION HAD TO CHANGE SHAPE
+-- RATHER THAN JUST ITS COUNT. Through v12 this scenario asserted the list was
+-- EXACTLY the single `compaction_ai` entry, which was right while every other
+-- extension was un-installable for a reason no profile could restate. WI-D13
+-- re-shaped the barrier derivation to the (extension, slot) pair and four
+-- extensions reached ZERO barriers, so each of them is now a decision this
+-- profile takes rather than a consequence it inherits, and D5 field 10 is where
+-- a taken decision is recorded.
+--
+-- WHAT IS ASSERTED HERE, AND WHAT DELIBERATELY IS NOT. This asserts the
+-- STRUCTURAL property — `compaction_ai` is still named, and every entry carries
+-- a non-empty reason, so an omission cannot be added as a bare id. It does NOT
+-- assert which extensions are at zero barriers: that set is derived from the
+-- SOURCE by `tools/profile_definition/check_fixtures.py`, which fails if this
+-- list does not name every one of them. Restating it here would be plan rule
+-- P3's defect exactly — a constant that makes the profile agree with itself.
 func scenario_names_its_omission() -> bool ! {IO} {
-  match driver_only().omitted_extensions {
-    [] => {
-      let _ = println("  ✗ driver_only omits nothing; P4 requires the compaction_ai omission to be NAMED");
-      false
-    },
-    o :: rest => {
-      let ok = o.extension_id == "compaction_ai" && o.reason != "" && List.length(rest) == 0;
-      let _ = if ok then {
-                let _ = println("  ✓ names its omission: '${o.extension_id}'");
-                println("      reason: ${o.reason}")
-              } else println("  ✗ the omission list is not the single named compaction_ai entry");
-      ok
-    }
+  let os = driver_only().omitted_extensions;
+  let n = List.length(os);
+  let named = omission_ids(os);
+  let ok = n > 0 && contains(named, "compaction_ai") && all_reasoned(os);
+  let _ = if ok then {
+            let _ = println("  ✓ names ${show(n)} omission(s), each with a reason: ${join_ids(named)}");
+            println("      (which of these are at ZERO barriers is derived by make profile_definition, not restated here — P3)")
+          } else println("  ✗ the omission list is empty, has lost compaction_ai, or carries a reason-less entry");
+  ok
+}
+
+pure func omission_ids(os: [OmittedExtension]) -> [string] {
+  match os { [] => [], o :: rest => o.extension_id :: omission_ids(rest) }
+}
+
+pure func all_reasoned(os: [OmittedExtension]) -> bool {
+  match os { [] => true, o :: rest => o.reason != "" && all_reasoned(rest) }
+}
+
+pure func contains(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains(rest, t) }
+}
+
+pure func join_ids(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => match rest { [] => x, _ => "${x}, ${join_ids(rest)}" }
   }
 }
 

@@ -461,7 +461,33 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- Install list, coverage claim, waived set, hook classifications, catalogue and
 -- attribution ref are all UNCHANGED. v12 installs exactly what v11 installed,
 -- which is nothing, and covers exactly what v11 covered, which is nothing.
-export pure func driver_only_version() -> string { "12" }
+--
+-- v12 → v13 AT WI-D13, AND IT IS THE SAME KIND OF BUMP AGAIN: a CLAIM changed,
+-- no anchor moved, nothing new is installed and nothing new is covered.
+--
+-- WHAT CHANGED: **for four of the fifteen extensions the empty install list
+-- stopped being FORCED and became CHOSEN**, and this file has now said "forced"
+-- for two versions running. `omitted_extensions` below names all four with
+-- their measured basis. The v12 header's sentence — "three of the four
+-- unconditionally-dispatched slots still refuse coverage" — is still true of
+-- the SLOTS and is no longer true of those four EXTENSIONS, which is exactly
+-- the distinction WI-D13 put into the derivation.
+--
+-- WHY IT MOVED WITHOUT AN ABI EDIT. WI-D12 built classifier 3
+-- (`make ext_ambient_inventory`), the first producer in this tree that can
+-- supply D5 criterion 2's evidence — criterion 2 is a claim about the CALL
+-- PATH, and every row-reading instrument is blind to provenance by
+-- construction (`ADR:1449`). WI-D13 re-shaped the barrier derivation to the
+-- (extension, slot) pair on the strength of it, which Amendment A named as one
+-- of the three things that change when classifier 3 exists (`ADR:1580`). The
+-- ABI rows are untouched and the SLOT-level barrier count is still THREE.
+--
+-- WHAT DID *NOT* CHANGE, AND IT IS AGAIN THE PART THAT MATTERS FOR THIS FILE:
+-- **driver_only still installs nothing and still covers nothing.** Every
+-- vacuity this profile's acceptance table rests on is unchanged in extent.
+-- Naming an extension in `omitted_extensions` is not a coverage claim;
+-- installing one is, and it is WI-C5's.
+export pure func driver_only_version() -> string { "13" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -594,7 +620,85 @@ export pure func driver_only() -> ProfileDefinition {
     -- same check and it is named rather than quietly substituted.
     omitted_extensions: [
       { extension_id: "compaction_ai",
-        reason: "OMITTED, AND FROM WI-D6 (2026-08-06) THE OMISSION IS A CHOICE RATHER THAN A CONSEQUENCE. THE PREVIOUS REASON IS RESTATED IN THE PAST TENSE BELOW RATHER THAN DELETED, per plan rule S15: it was true from WI-B4 until this date and re-dating it in place would make it a false claim about history. WHAT IT SAID, and it was correct: on_budget_plan declared the ABI's closed row ! {Env, FS} and returns BudgetPatch, which has no successor field — so criterion 1 failed on the declared row and criterion 2 failed for want of returned world state, and no binding of that slot by ANY extension could do better while the ABI row stood. Combined with D5's refusal to install an extension with an unconditionally-dispatched hook excluded, that made EVERY extension in the tree un-installable, and this profile's empty install list FORCED. WHAT CHANGED: WI-D6 narrowed that ABI row to no row at all. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE, so this one names it — the barrier was the DECLARATION, and the declaration moved. It was not relaxed: all fifteen on_budget_plan bindings in the tree were measured against two producers independent of the declaration, and not one performs Env or FS. MEASURED, per D1's rule that a reason should record a measurement rather than a diagnosis: the runtime capability trap, out of process, witnessed 7 of 15 directly, and the effect checker covers all 15 total over inputs — the other 8 are unreachable by the runtime instrument because their own register_with_config reads Env or FS BEFORE any hook is dispatched, which is a fact about registration and not about the hook. WHAT DID NOT CHANGE, AND IT IS WHY THIS EXTENSION IS STILL OMITTED: nothing about this profile. driver_only installs no extension, so it covers no extension, and every clause of its acceptance table that quantifies over installed extensions is still vacuous to exactly the same extent. Installing compaction_ai here would be a coverage claim and a profile version bump, and it belongs to WI-C5's compose-bearing profile rather than to an ABI edit. The three other former barriers stand and are unaffected. WI-D6 SAID THE EMPTY INSTALL LIST HAD BECOME CHOSEN RATHER THAN FORCED, AND WI-D7 WITHDREW THAT: it is still FORCED, because three of the four unconditionally-dispatched slots still refuse coverage and D5 forbids installing an extension with any of them excluded. MEASURED AT WI-D7, per D1's rule that a reason records a measurement rather than a diagnosis. Each of the three slots had its row narrowed to nothing tree-wide and every one of the 71 files of the fifteen packages derived from registry_generated.ail re-checked; fourteen of fifteen bindings accept the empty row in every slot, and each slot is refused by exactly ONE binding that the compiler names — on_pre_step by compaction_ai (incompatible closed rows: r1 has extra labels [AI Clock Env FS IO Net Process SharedMem Stream Trace], at register.ail:93), on_response_intercept by compose (extra labels [Clock FS IO Process], at compose.ail:816), on_solver_candidate by context_mode (extra labels [Process], at register.ail:56). Each was confirmed a second time from the BODY rather than from the annotation, by narrowing the refusing helper's own row and reading the effect checker: Effect checking failed for function 'fresh_compaction', for 'on_response_intercept', and for 'finalize_with_index' respectively. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE, so this one names it for each: on_response_intercept and on_solver_candidate NARROWED to what is performed (nine effects to four, and nine to one) and are still barriers, because a non-empty row fails criterion 1 at any width and none of Process, FS, IO or Clock is a world-mediated port — what would have to change is world-MEDIATION of those effects, which is Route B and a port-surface change; on_pre_step did NOT narrow, and the thing that would have to change there is ExtPorts.ai_step's own port row, since compaction_ai reaches all ten of its effects through that single call. The last one is the sharpest, because ai_step IS already a D1 world-mediated port returning AiStepOutcome.next_state and compact_with_ai returns it rather than ctx.world, so criterion 2's SUBSTANCE is satisfied and what refuses the slot is that a declared row has no vocabulary for saying that these arrive through a world-mediated port. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR AND NOT THE ROW'S WIDTH. CARRIED FORWARD, still true and still the reason this entry names compaction_ai specifically: compaction_ai in FACT reaches effects only through ExtPorts.ai_step — compaction_ai.ail imports std/ai (a type only), std/crypto, std/json, std/list, std/option, std/result and std/string, every one of which classifier 1 derives as proven effect-free, and calls no ambient builtin." }
+        reason: "OMITTED, AND FROM WI-D6 (2026-08-06) THE OMISSION IS A CHOICE RATHER THAN A CONSEQUENCE. THE PREVIOUS REASON IS RESTATED IN THE PAST TENSE BELOW RATHER THAN DELETED, per plan rule S15: it was true from WI-B4 until this date and re-dating it in place would make it a false claim about history. WHAT IT SAID, and it was correct: on_budget_plan declared the ABI's closed row ! {Env, FS} and returns BudgetPatch, which has no successor field — so criterion 1 failed on the declared row and criterion 2 failed for want of returned world state, and no binding of that slot by ANY extension could do better while the ABI row stood. Combined with D5's refusal to install an extension with an unconditionally-dispatched hook excluded, that made EVERY extension in the tree un-installable, and this profile's empty install list FORCED. WHAT CHANGED: WI-D6 narrowed that ABI row to no row at all. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE, so this one names it — the barrier was the DECLARATION, and the declaration moved. It was not relaxed: all fifteen on_budget_plan bindings in the tree were measured against two producers independent of the declaration, and not one performs Env or FS. MEASURED, per D1's rule that a reason should record a measurement rather than a diagnosis: the runtime capability trap, out of process, witnessed 7 of 15 directly, and the effect checker covers all 15 total over inputs — the other 8 are unreachable by the runtime instrument because their own register_with_config reads Env or FS BEFORE any hook is dispatched, which is a fact about registration and not about the hook. WHAT DID NOT CHANGE, AND IT IS WHY THIS EXTENSION IS STILL OMITTED: nothing about this profile. driver_only installs no extension, so it covers no extension, and every clause of its acceptance table that quantifies over installed extensions is still vacuous to exactly the same extent. Installing compaction_ai here would be a coverage claim and a profile version bump, and it belongs to WI-C5's compose-bearing profile rather than to an ABI edit. The three other former barriers stand and are unaffected. WI-D6 SAID THE EMPTY INSTALL LIST HAD BECOME CHOSEN RATHER THAN FORCED, AND WI-D7 WITHDREW THAT: it is still FORCED, because three of the four unconditionally-dispatched slots still refuse coverage and D5 forbids installing an extension with any of them excluded. MEASURED AT WI-D7, per D1's rule that a reason records a measurement rather than a diagnosis. Each of the three slots had its row narrowed to nothing tree-wide and every one of the 71 files of the fifteen packages derived from registry_generated.ail re-checked; fourteen of fifteen bindings accept the empty row in every slot, and each slot is refused by exactly ONE binding that the compiler names — on_pre_step by compaction_ai (incompatible closed rows: r1 has extra labels [AI Clock Env FS IO Net Process SharedMem Stream Trace], at register.ail:93), on_response_intercept by compose (extra labels [Clock FS IO Process], at compose.ail:816), on_solver_candidate by context_mode (extra labels [Process], at register.ail:56). Each was confirmed a second time from the BODY rather than from the annotation, by narrowing the refusing helper's own row and reading the effect checker: Effect checking failed for function 'fresh_compaction', for 'on_response_intercept', and for 'finalize_with_index' respectively. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE, so this one names it for each: on_response_intercept and on_solver_candidate NARROWED to what is performed (nine effects to four, and nine to one) and are still barriers, because a non-empty row fails criterion 1 at any width and none of Process, FS, IO or Clock is a world-mediated port — what would have to change is world-MEDIATION of those effects, which is Route B and a port-surface change; on_pre_step did NOT narrow, and the thing that would have to change there is ExtPorts.ai_step's own port row, since compaction_ai reaches all ten of its effects through that single call. The last one is the sharpest, because ai_step IS already a D1 world-mediated port returning AiStepOutcome.next_state and compact_with_ai returns it rather than ctx.world, so criterion 2's SUBSTANCE is satisfied and what refuses the slot is that a declared row has no vocabulary for saying that these arrive through a world-mediated port. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR AND NOT THE ROW'S WIDTH. CARRIED FORWARD, still true and still the reason this entry names compaction_ai specifically: compaction_ai in FACT reaches effects only through ExtPorts.ai_step — compaction_ai.ail imports std/ai (a type only), std/crypto, std/json, std/list, std/option, std/result and std/string, every one of which classifier 1 derives as proven effect-free, and calls no ambient builtin." },
+
+      -- ======================================================================
+      -- WI-D13 (2026-08-07). FOUR NEW ENTRIES, AND THEY ARE A DIFFERENT KIND
+      -- OF OMISSION FROM THE ONE ABOVE.
+      -- ======================================================================
+      --
+      -- `compaction_ai` is omitted because it CANNOT be installed conformantly.
+      -- These four are omitted because this profile DECLINES to install them,
+      -- and that is a choice it did not have until today. WI-D13 re-shaped the
+      -- barrier derivation from the SLOT to the (extension, slot) pair on the
+      -- strength of classifier 3, and for these four the count reached ZERO.
+      --
+      -- WHY THEY ARE NAMED HERE RATHER THAN LEFT SILENT. An extension at zero
+      -- barriers is installable, and an installable extension left unmentioned
+      -- is a decision INHERITED rather than taken — which is precisely what
+      -- WI-D7's trigger exists to refuse. `make profile_definition` now goes
+      -- RED for any zero-barrier extension this list does not name, so the
+      -- silence is not available. Naming one is not a coverage claim.
+      -- Installing one is, and it is WI-C5's.
+      --
+      -- THE CRITERION, DECIDED EXPLICITLY AGAINST BOTH RATHER THAN INHERITED,
+      -- because these hooks read most naturally as criterion 1 and criterion 1
+      -- is not available:
+      --
+      --   CRITERION 1 — "deterministic and effect-free for its explicit
+      --   inputs". TRUE IN SUBSTANCE and NOT AVAILABLE AS A BASIS. Measured at
+      --   WI-D13 with a two-sided control over all twelve barrier-slot hook
+      --   bodies of these four extensions: each body verbatim, declared with NO
+      --   effect row outside the ABI record, is ACCEPTED; each body plus one
+      --   `println`, same shape, is REJECTED with "Missing effects: IO", so the
+      --   effect checker was running on all twelve and is sensitive. But
+      --   criterion 1's BASIS in this tree is the DECLARED ROW — ADR:1415
+      --   records that as an interim rule and an assumption, and WI-B4 settled
+      --   that its scope is classification generally rather than criterion 1
+      --   alone. These slots' declared rows are ! {AI, IO, Trace},
+      --   ! {IO, Process, FS, Clock} and ! {Process}, and a named binding
+      --   cannot declare narrower than a closed ABI slot. So on its own basis
+      --   criterion 1 FAILS, and admitting a measurement into that basis is an
+      --   ADR-scope act which ADR-001 Amendment A deliberately WITHHELD.
+      --
+      --   CRITERION 2 — "effectful only through D1 world-mediated ports, with
+      --   origin tagged by extension id and explicit world state returned to
+      --   the host". SATISFIED, and it is the basis recorded. Read as WI-B4
+      --   read it, as a conjunction of three clauses:
+      --     (1) classifier 3 reports all four PORT-MEDIATED, with 0 ambient
+      --         sources and 0 ExtPorts field calls in the closure. The set of
+      --         effects performed is EMPTY, so the quantifier holds VACUOUSLY.
+      --     (2) nothing is performed, so there is no origin to tag. VACUOUS.
+      --         (WI-B4 established that PreStepStage = { ext_id, outcome } tags
+      --         on_pre_step's dispatch, so the clause is satisfiable
+      --         non-vacuously — just not by an extension that performs
+      --         nothing.)
+      --     (3) every one of the twelve bodies returns `next_state: ctx.world`,
+      --         and the outcome types carry the field, derived from the ABI
+      --         rather than assumed. SATISFIED NON-VACUOUSLY, and it is the
+      --         only clause here that is a substantive fact about these
+      --         bindings.
+      --
+      -- **THE VACUITY IS NAMED RATHER THAN BANKED.** Two of criterion 2's three
+      -- clauses hold because nothing happens. Amendment A predicted exactly
+      -- this and said so in advance (ADR:1611): "the first hook classifier 3
+      -- clears will be one that performs nothing, not one that mediates." So
+      -- the coverage these four would buy is coverage of no-ops. That is a true
+      -- measurement and a real number, and it is NOT evidence that the
+      -- world-mediation machinery works, because installing them exercises none
+      -- of it. This profile's acceptance table already leans on an empty
+      -- install list in four places; installing these would make a fifth
+      -- vacuity that is HARDER to see, because it would arrive with a non-zero
+      -- coverage number attached. That is the reason to decline, and it is a
+      -- reason about evidence rather than about correctness.
+      { extension_id: "compaction_structural",
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07); until today it was omitted by consequence like every other extension. ZERO barriers remain for it: classifier 3 (make ext_ambient_inventory) reports PORT-MEDIATED over its 4-module transitive closure — 0 ambient sources, 0 ExtPorts field calls — and all three barrier slots' outcome types return explicit world state. So D5 criterion 2 is satisfied, on the basis recorded above, with clauses 1 and 2 VACUOUS and clause 3 substantive. It is the sharpest of the four: it is the ONE extension of fifteen that binds on_pre_step as a named top-level function rather than an inline record-field expression, which is the form the effect checker actually reads, so its declared row constrains its binding where the other fourteen's do not. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: nothing about this extension would — what would have to change is this profile's willingness to bank coverage of hooks that perform nothing. Installing it is a coverage claim and a profile version bump and it is WI-C5's, not an instrument's side effect. THE MEASUREMENT, per D1's rule that a reason records a measurement rather than a diagnosis: its pre_step body verbatim, declared with no effect row outside the ABI record, is ACCEPTED (its only call is compact_for_pre_step, an export pure func); the same body plus one println is REJECTED with 'Missing effects: IO'. Two-sided, on all three barrier-slot bodies." },
+      { extension_id: "decision_framework",
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above and for the same reason. Classifier 3 reports PORT-MEDIATED over its 2-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Its three barrier-slot hooks are inline record-field expressions returning { PassThrough }, { NoIntercept } and { NoDecision } with next_state: ctx.world; on the shipped ABI an inline binding's declared row is INERT (ADR:1415's amended record-field passage), so the row was never the operative constraint for it and the measurement is the only thing that ever spoke. Two-sided control at WI-D13: each body rowless is ACCEPTED, each plus one println REJECTED 'Missing effects: IO'. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing — not anything about the extension." },
+      { extension_id: "empty_stop_guard",
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above. Classifier 3 reports PORT-MEDIATED over its 3-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Its on_solver_candidate is the only one of the four's twelve barrier-slot bodies that calls a helper rather than returning a literal (decide, from empty_stop_guard.ail), and it measures identically: rowless ACCEPTED, plus one println REJECTED 'Missing effects: IO'. That helper is inside the closure classifier 3 measured, which is why a closure-scoped instrument is the right unit and a module-scoped one would not have settled it. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing." },
+      { extension_id: "progress_contract_guard",
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above. Classifier 3 reports PORT-MEDIATED over its 3-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Same shape as empty_stop_guard: on_solver_candidate calls decide from its own package and the other two barrier-slot hooks return literals, and the two-sided control gives the same answer on all three — rowless ACCEPTED, plus one println REJECTED 'Missing effects: IO'. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing." }
     ],
 
     -- A10 decision 1, in force. Exactly the reachable-and-unrouted set; the

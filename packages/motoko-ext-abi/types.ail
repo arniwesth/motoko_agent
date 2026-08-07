@@ -484,6 +484,40 @@ export type ExtensionHooks = {
   -- seven bindings written as top-level functions. It does not move the
   -- barrier count, and `make profile_definition` derives that count rather
   -- than being told it.
+  --
+  -- =========================================================================
+  -- QUALIFIED AT WI-D13 (2026-08-07), AND THE SAME QUALIFICATION APPLIES TO
+  -- `on_response_intercept` AND `on_solver_candidate` BELOW. Kept in place
+  -- rather than rewritten, per plan rule S15: every sentence above was true
+  -- when written and re-dating it here would make it a false claim about
+  -- history.
+  --
+  -- "STILL A BARRIER" IS A CLAIM ABOUT THE SLOT, AND UNTIL WI-D13 THE
+  -- DERIVATION HAD NO OTHER UNIT, so it read as a claim about all fifteen
+  -- extensions. It is not one any more. `check_barrier_count` now derives
+  -- barriers per **(extension, slot)** pair — ADR-001 Amendment A named that
+  -- re-shape as one of the three things that change once classifier 3 exists
+  -- (`ADR:1580`) — and for FOUR of the fifteen extensions all three of these
+  -- slots are CLEARED.
+  --
+  -- WHAT CLEARS THEM IS NOT THE ROW. The rows below are untouched, the
+  -- SLOT-level barrier count is still THREE, and everything the passages above
+  -- say about the vocabulary of a declared row is unchanged and still the
+  -- reason no ROW can clear anything. What clears them is a producer that does
+  -- not read declarations at all: classifier 3
+  -- (`make ext_ambient_inventory`, WI-D12) measures each extension's
+  -- transitive closure and reports `compaction_structural`,
+  -- `decision_framework`, `empty_stop_guard` and `progress_contract_guard`
+  -- PORT-MEDIATED with zero ambient sources and zero `ExtPorts` field calls.
+  --
+  -- AND THE CLEARANCE IS VACUOUS, WHICH IS WHY IT COST NO ABI EDIT. Those four
+  -- perform nothing at these slots, so criterion 2's first two clauses hold
+  -- over an empty set. Amendment A predicted exactly that in advance
+  -- (`ADR:1611`). The four are named in `src/core/dst_driver_only.ail`'s
+  -- `omitted_extensions`, which records the reading and declines to install
+  -- them; `make profile_definition` goes red if a zero-barrier extension is
+  -- left unnamed there.
+  -- =========================================================================
   on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
   on_tool_handle: (ExtCtx, ToolCallEnvelope)
@@ -524,6 +558,11 @@ export type ExtensionHooks = {
   -- A BARRIER. What the narrowing buys is the compiler: a binding that starts
   -- reading `Env` in this slot now fails to build, where at nine effects it
   -- would have compiled silently.
+  --
+  -- QUALIFIED AT WI-D13: still a barrier for the SLOT and for eleven of the
+  -- fifteen extensions, and CLEARED for four of them on classifier 3's
+  -- measurement. See the block above `on_pre_step`, which carries the whole
+  -- qualification and applies verbatim here.
   on_response_intercept: (ExtCtx, string)
     -> ResponseInterceptOutcome ! {IO, Process, FS, Clock},
   -- WI-D7 NARROWED THIS ROW from nine effects to one, on the same method.
@@ -549,6 +588,10 @@ export type ExtensionHooks = {
   -- `! {Process}` is non-empty, so criterion 1 fails, and `Process` is not a
   -- world-mediated port, so criterion 2 fails despite `FinalizeOutcome`
   -- carrying `next_state`.
+  --
+  -- QUALIFIED AT WI-D13, on the same terms as `on_response_intercept`: still a
+  -- barrier for the SLOT and for eleven of the fifteen extensions, cleared for
+  -- four. See the block above `on_pre_step`.
   on_solver_candidate: (ExtCtx, string)
     -> FinalizeOutcome ! {Process}
 }

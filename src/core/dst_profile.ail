@@ -204,10 +204,114 @@ export pure func classification_id(c: HookClassification) -> string {
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- WI-D13: the EVIDENTIARY BASIS of a classification
+-- ---------------------------------------------------------------------------
+--
+-- ADR-001 Amendment A closes with a fail-closed default: *"until classifier 3
+-- exists and reports clean for an extension, criterion 2 is evaluated on
+-- declared rows and no profile may record `WorldMediated` on any other basis"*
+-- (`ADR:1548`). WI-D11 measured that the default was UNENFORCED, and the
+-- amendment says so itself: `classification_agrees` below validates a
+-- `WorldMediated` entry against the disclosure's excluded-id list and against
+-- NOTHING ELSE. A profile author could write `WorldMediated` and pass the gate.
+-- What kept that unreachable was the barrier count, not the rule.
+--
+-- So the basis is a FIELD and not prose, and it is checked. Two facts, because
+-- a claim that names a producer without naming when it ran is a claim about a
+-- tree that may no longer exist:
+--
+--   `producer`   the artifact that ESTABLISHED the classification
+--   `revision`   the artifact revision that producer ran at
+--
+-- The acceptance reviewers made this the condition of classifier 3's admission
+-- to the deferred-gate table: due "with or before any change that lowers the
+-- barrier count, whichever comes first". WI-D13 is that change — the barrier
+-- derivation below moves from the slot to the (extension, slot) pair — so the
+-- field lands here first.
+export type ClassificationBasis = {
+  producer: string,
+  revision: string
+}
+
+-- WHY THE KIND IS SEPARATE FROM THE PRODUCER ID, and it is the finding this
+-- field exists to answer: **a MEASURED `WorldMediated` and a READ one are
+-- different claims, and before this field the record could not tell them
+-- apart.** The producer id alone does not say which, so the catalogue says it.
+--
+--   `Measured`  an instrument looked at the source and answered. Its answer can
+--               go stale, and `revision` is what makes that visible.
+--   `Assumed`   the classification was READ off a declaration. ADR:1415 records
+--               the declared-row reading as an interim rule and an ASSUMPTION,
+--               not a measurement, and this vocabulary keeps that visible in
+--               the record rather than only in the prose that justified it.
+export type BasisKind = Measured | Assumed
+
+export pure func basis_kind_id(k: BasisKind) -> string {
+  match k { Measured => "measured", Assumed => "assumed" }
+}
+
+export type ClassificationProducer = {
+  producer_id: string,
+  kind: BasisKind,
+  note: string
+}
+
+-- THE CLOSED SET OF PRODUCERS THIS TREE HAS. An id outside it is a rejection,
+-- on classifier 2's fail-closed discipline: a basis naming an instrument that
+-- does not exist is worse than no basis, because it reads as evidence.
+--
+-- This list is a transcription of facts that live outside AILANG — three Python
+-- tools and one ADR rule — so it is GUARDED rather than trusted:
+-- `tools/profile_definition/check_fixtures.py` re-derives each measured
+-- producer's id from the Makefile and fails if a producer named here has no
+-- target behind it.
+export pure func recognised_producers() -> [ClassificationProducer] {
+  [
+    { producer_id: "ext_ambient_inventory",
+      kind: Measured,
+      note: "classifier 3 (ADR-001 Amendment A). Per registrable extension, decides whether every effect it can perform arrives through an ExtPorts field call, over the extension's transitive module closure, symbol-granular, fail-closed on the unresolvable. This is the ONLY producer in the tree that can establish criterion 2's substance, because criterion 2 is a claim about the CALL PATH and every row-reading instrument is blind to provenance by construction (ADR:1449)." },
+    { producer_id: "ext_call_inventory",
+      kind: Measured,
+      note: "classifier 2. Derives the set of ExtPorts fields whose seam cannot thread successor world state, and every member call site in the tree. It answers 'which extension must be OMITTED', not 'which hook is covered', so it is an admissible basis for ExplicitlyExcluded and for an omission, and never on its own for WorldMediated." },
+    { producer_id: "effect_inventory",
+      kind: Measured,
+      note: "classifier 1. Partitions std modules into effect-bearing and proven effect-free. Module-granular, and at HEAD passing a criterion that no longer certifies what it was written to certify (the acceptance reviewers' reading, ADR gate table) — recognised because it is a real producer, NOT because its answer is currently load-bearing for anything here." },
+    { producer_id: "declared_row",
+      kind: Assumed,
+      note: "the ABI's declared effect row, read from source. This is criterion 1's basis and Amendment A's INTERIM rule for criterion 2 (ADR:1415, ADR:1548). It is an ASSUMPTION and the ADR calls it one: a declared row bounds performed effects in one direction only and cannot distinguish mediation from ambience at any width." },
+    { producer_id: "disclosure",
+      kind: Assumed,
+      note: "the profile's own D5 field 9 excluded-id list. The only admissible basis for ExplicitlyExcluded, which is a DECISION the profile takes rather than a fact about source — and `classification_agrees` below checks the two fields against each other, so this basis is not self-certifying." }
+  ]
+}
+
+pure func producer_recognised(ps: [ClassificationProducer], id: string) -> bool {
+  match ps {
+    [] => false,
+    p :: rest => if p.producer_id == id then true else producer_recognised(rest, id)
+  }
+}
+
+-- The kind of a recognised producer, for a consumer asking the question this
+-- field exists to make askable: was this classification MEASURED or READ?
+-- `None` for an unrecognised id, which `validate_classifications` rejects.
+export pure func producer_kind(id: string) -> Option[BasisKind] {
+  kind_of(recognised_producers(), id)
+}
+
+pure func kind_of(ps: [ClassificationProducer], id: string) -> Option[BasisKind] {
+  match ps {
+    [] => None,
+    p :: rest => if p.producer_id == id then Some(p.kind) else kind_of(rest, id)
+  }
+}
+
 export type HookClassificationEntry = {
   extension_id: string,
   hook_id: string,
-  classification: HookClassification
+  classification: HookClassification,
+  basis: ClassificationBasis
 }
 
 -- An installed extension, with the resolved path of its AILANG source. The path
@@ -380,6 +484,8 @@ export type ProfileRejection
   | WaivedClassNotConditional(string)
   | ClassificationDisagreesWithDisclosure(string, string)
   | ExtensionSetDisagrees(string, string)
+  | ClassificationBasisNotRecorded(string, string, string)
+  | ClassificationBasisUnrecognised(string, string, string)
 
 export pure func rejection_rule(r: ProfileRejection) -> string {
   match r {
@@ -396,7 +502,9 @@ export pure func rejection_rule(r: ProfileRejection) -> string {
     WaiverConditionDrifted(_) => "waiver-condition-drifted",
     WaivedClassNotConditional(_) => "waived-class-not-conditional",
     ClassificationDisagreesWithDisclosure(_, _) => "classification-disagrees-with-disclosure",
-    ExtensionSetDisagrees(_, _) => "extension-set-disagrees"
+    ExtensionSetDisagrees(_, _) => "extension-set-disagrees",
+    ClassificationBasisNotRecorded(_, _, _) => "classification-basis-not-recorded",
+    ClassificationBasisUnrecognised(_, _, _) => "classification-basis-unrecognised"
   }
 }
 
@@ -427,7 +535,11 @@ export pure func rejection_message(r: ProfileRejection) -> string {
     ClassificationDisagreesWithDisclosure(e, h) =>
       "[classification-disagrees-with-disclosure] extension '${e}' classifies hook '${h}' as explicitly-excluded in one D5 field and not in the other; the two fields are separate and must agree",
     ExtensionSetDisagrees(f, e) =>
-      "[extension-set-disagrees] '${f}' names extension '${e}', which the other install-list fields do not; the installed set must be one set stated three ways"
+      "[extension-set-disagrees] '${f}' names extension '${e}', which the other install-list fields do not; the installed set must be one set stated three ways",
+    ClassificationBasisNotRecorded(e, h, field) =>
+      "[classification-basis-not-recorded] extension '${e}' classifies hook '${h}' and records no '${field}' for it; a classification with no evidentiary basis is indistinguishable from one that was measured, which is the fail-open ADR-001 Amendment A's default was written to close (ADR:1548) and which nothing enforced before WI-D13",
+    ClassificationBasisUnrecognised(e, h, p) =>
+      "[classification-basis-unrecognised] extension '${e}' classifies hook '${h}' on the basis of producer '${p}', which is not a producer this tree has; see `recognised_producers`. A basis naming an instrument that does not exist is worse than no basis, because it reads as evidence — fail-closed, on classifier 2's discipline"
   }
 }
 
@@ -910,8 +1022,49 @@ pure func classification_agrees(
   }
 }
 
+-- WI-D13. THE FAIL-CLOSED DEFAULT, ENFORCED RATHER THAN STATED.
+--
+-- `classification_agrees` above is the whole of what validated a classification
+-- before this function existed, and it checks ONE thing: that
+-- `ExplicitlyExcluded` in D5 field 2 agrees with the excluded-id list in field
+-- 9. It says nothing at all about `WorldMediated` or `EffectFree`, so a profile
+-- could assert either on no evidence whatever and load clean. Amendment A
+-- forbids exactly that in prose (`ADR:1548`) and WI-D11 measured that nothing
+-- carried the prohibition.
+--
+-- The rule, applied to EVERY entry rather than only to `WorldMediated`. The
+-- reviewers' condition names `WorldMediated`, and it is the entry that can
+-- launder an unmeasured claim into coverage — but `EffectFree` is criterion 1
+-- and criterion 1's basis is an ASSUMPTION the ADR names as one, and
+-- `ExplicitlyExcluded` is a decision. Each of the three is a different claim
+-- resting on a different kind of evidence, and none of them is self-evident.
+-- Uniform is also strictly stronger, and it costs nothing: `basis` is a record
+-- field, so every entry already has one and the only question is whether
+-- anything reads it.
+--
+-- BOTH HALVES, because either alone is defeated by a one-word entry. A blank
+-- producer is an unstated basis; a recognised producer with a blank revision is
+-- a claim about a tree that may no longer exist, and a stale measurement that
+-- cannot be dated is the failure mode this project has hit twice.
+pure func basis_recorded(cs: [HookClassificationEntry]) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let here =
+        if blank(c.basis.producer) then
+          [ClassificationBasisNotRecorded(c.extension_id, c.hook_id, "basis.producer")]
+        else if blank(c.basis.revision) then
+          [ClassificationBasisNotRecorded(c.extension_id, c.hook_id, "basis.revision")]
+        else if producer_recognised(recognised_producers(), c.basis.producer) then []
+        else [ClassificationBasisUnrecognised(c.extension_id, c.hook_id, c.basis.producer)];
+      here ++ basis_recorded(rest)
+    }
+  }
+}
+
 export pure func validate_classifications(d: ProfileDefinition) -> [ProfileRejection] {
   classification_agrees(d.hook_classifications, d.disclosures)
+    ++ basis_recorded(d.hook_classifications)
 }
 
 -- ---------------------------------------------------------------------------
@@ -1356,9 +1509,95 @@ pure func test_classification_must_agree_with_disclosure() -> bool
   {
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "c", package_id: "p", version: "1", source_path: "packages/c/c.ail" }],
-      hook_classifications: [{ extension_id: "c", hook_id: "on_tool_handle", classification: ExplicitlyExcluded }],
+      hook_classifications: [{ extension_id: "c", hook_id: "on_tool_handle", classification: ExplicitlyExcluded,
+                               basis: { producer: "disclosure", revision: "HEAD" } }],
       disclosures: [{ extension_id: "c", covered: ["on_tool_handle"], excluded: [] }] };
     has_rule(validate_classifications(d), "classification-disagrees-with-disclosure")
+  }
+
+-- ---------------------------------------------------------------------------
+-- WI-D13: the basis check, BOTH SIDES.
+--
+-- A validation that only ever accepts cannot be told from one that does not
+-- run, and this project has shipped that shape twice — classifier 1's
+-- `agree=0 disagree=0`, and this very rule's absence, which read as enforcement
+-- for eleven items because nothing ever tried to write an unbased claim. So
+-- there is a rejecting fixture per arm AND a control that resolves.
+--
+-- The control is the load-bearing one: it is the entry the whole condition was
+-- written about — a `WorldMediated` classification — and it passes only because
+-- it names classifier 3 and the revision it ran at.
+-- ---------------------------------------------------------------------------
+
+-- One entry, well-formed but for the field under test. Every mutation below is
+-- one field from clean, so an unrelated rule firing means the mutation did
+-- something other than what it says.
+pure func based(p: string, rev: string) -> [HookClassificationEntry] {
+  [{ extension_id: "c", hook_id: "on_pre_step", classification: WorldMediated,
+     basis: { producer: p, revision: rev } }]
+}
+
+pure func with_classifications(cs: [HookClassificationEntry]) -> ProfileDefinition {
+  { fixture_base() |
+    installed_packages: [{ extension_id: "c", package_id: "p", version: "1", source_path: "packages/c/c.ail" }],
+    hook_classifications: cs,
+    disclosures: [{ extension_id: "c", covered: ["on_pre_step"], excluded: [] }] }
+}
+
+-- ARM 1. `WorldMediated` on no producer at all — precisely the entry a profile
+-- author could write before WI-D13 and pass the gate.
+pure func test_world_mediated_without_a_producer_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_classifications(with_classifications(based("", "c3de56f"))),
+             "classification-basis-not-recorded")
+  }
+
+-- ARM 2. A real producer, undated. A measurement that cannot be dated cannot be
+-- told from a stale one.
+pure func test_basis_without_a_revision_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_classifications(with_classifications(based("ext_ambient_inventory", ""))),
+             "classification-basis-not-recorded")
+  }
+
+-- ARM 3. A producer this tree does not have. Fail-closed: an id that names no
+-- instrument reads as evidence and is worse than a blank.
+pure func test_unrecognised_producer_is_rejected() -> bool
+  tests [((), true)]
+  {
+    has_rule(validate_classifications(with_classifications(based("successor_detector", "c3de56f"))),
+             "classification-basis-unrecognised")
+  }
+
+-- THE CONTROL. Classifier 3, dated: accepted, and by BOTH basis rules — the
+-- assertion is on the rejection count and not merely on the absence of one
+-- rule, so a check that stopped running would fail here rather than pass.
+pure func test_measured_world_mediated_basis_resolves() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(based("ext_ambient_inventory", "c3de56f"));
+    List.length(validate_classifications(d)) == 0
+  }
+
+-- The record can now tell a MEASURED claim from a READ one, which is the whole
+-- finding: before this field both wrote the same three characters into the same
+-- record. `declared_row` is recognised — Amendment A's interim rule permits it
+-- — and it is recognised as an ASSUMPTION.
+pure func test_the_record_distinguishes_measured_from_read() -> bool
+  tests [((), true)]
+  {
+    let measured = match producer_kind("ext_ambient_inventory") {
+      Some(k) => basis_kind_id(k),
+      None => "unrecognised"
+    };
+    let read = match producer_kind("declared_row") {
+      Some(k) => basis_kind_id(k),
+      None => "unrecognised"
+    };
+    let absent = match producer_kind("successor_detector") { Some(_) => false, None => true };
+    measured == "measured" && read == "assumed" && absent
   }
 
 -- The attribution reference is compared against the LIVE table identity, so a
