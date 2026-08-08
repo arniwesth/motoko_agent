@@ -165,6 +165,7 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity,
   CausalIdentity,
   StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -409,7 +410,9 @@ pure func identity_slots(b: IdentityBody) -> { a: string, b: string, c: string }
     ExtensionEffectIdentity(ext, class_id, call_id) => { a: ext, b: class_id, c: call_id },
     EnvironmentReadIdentity(key) => { a: key, b: "", c: "" },
     RandomDrawIdentity(bounds) => { a: bounds, b: "", c: "" },
-    ClockAdvanceIdentity => { a: "", b: "", c: "" }
+    ClockAdvanceIdentity => { a: "", b: "", c: "" },
+    FileWriteIdentity(path) => { a: path, b: "", c: "" },
+    FileRemoveIdentity(path) => { a: path, b: "", c: "" }
   }
 }
 
@@ -771,6 +774,12 @@ pure func body_of(kind: string, no: int, a: string, b: string, c: string)
   else if kind == "environment_read" then { body: [EnvironmentReadIdentity(a)], refusals: [] }
   else if kind == "runtime_random_draw" then { body: [RandomDrawIdentity(a)], refusals: [] }
   else if kind == "advance_clock" then { body: [ClockAdvanceIdentity], refusals: [] }
+  -- WI-D17. Two more kinds, and the `else` below is what makes this codec the
+  -- LOUD one: an older build handed a program containing these refuses it by
+  -- name rather than reinterpreting it. `ext_world.identity_body_of`'s default
+  -- arm does the opposite by design — see `dst_interaction.identity_kind`.
+  else if kind == "file_write" then { body: [FileWriteIdentity(a)], refusals: [] }
+  else if kind == "file_remove" then { body: [FileRemoveIdentity(a)], refusals: [] }
   else { body: [], refusals: [UnknownInteractionKind(no, kind)] }
 }
 

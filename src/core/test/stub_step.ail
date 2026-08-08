@@ -27,8 +27,8 @@ import src/core/config (VerificationConfig)
 import src/core/ports (
   Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
   ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
-  ambient_env, ambient_file,
-  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
+  ambient_env, ambient_file, ambient_file_write, ambient_file_remove,
+  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, recording_file_write, recording_file_remove, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
 )
 import src/core/dst_interaction (
   Interaction, StreamChunkRecord, TimedOutcome,
@@ -226,7 +226,15 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
     -- surface that performs a filesystem read, which is what the host-env poison
     -- pair points at: withhold `FS` and this dies, withhold it from a
     -- deterministic run bound to `scripted_file` and nothing notices.
-    file_read: ambient_file }
+    file_read: ambient_file,
+    -- WI-D17's write class, live half. These are the only bindings in the Ports
+    -- surface that MUTATE a filesystem, and they do it through
+    -- `writeFileResult`/`removeFileResult` rather than the unit-returning forms,
+    -- so a live failure arrives at the port instead of being discarded one layer
+    -- below it. They return the world UNCHANGED, which is correct here and wrong
+    -- in `scripted_file_write` — see that function.
+    file_write: ambient_file_write,
+    file_remove: ambient_file_remove }
 }
 
 -- The scripted adapter, WI-A2's fix for F6.
@@ -417,27 +425,72 @@ pure func provider_calls_in(log: [Interaction], acc: int) -> int {
 -- recording counterpart. Built by record update over `ports_shape_probe` for
 -- the reason `live_ports` is — a second function-typed constructor parameter
 -- does not compile on this pin.
--- WI-D3's file class is deliberately absent from this list, so it INHERITS
+-- WI-D3's file READ class is deliberately absent from this list, so it INHERITS
 -- `scripted_file` from `ports_shape_probe`: a recording run serves file reads
 -- from the world's table, like every other deterministic seam, and does not log
--- them as interactions.
+-- them as interactions. WI-D17's two file MUTATORS are present. That asymmetry
+-- is this item's durable decision and the argument for it is below.
 --
--- The reason is a measurement and not a diagnosis (S15). Recorded runs read
--- three paths per `resolve_context_limit` call against a table that every
--- fixture in this tree leaves EMPTY, so every read is `exists: false` and
+-- =========================================================================
+-- WHY THE WRITE IS RECORDED AND THE READ IS NOT
+-- =========================================================================
+--
+-- WI-D3's original reason was a measurement (S15): recorded runs read three
+-- paths per `resolve_context_limit` call against a table that every fixture in
+-- this tree leaves EMPTY, so every read is `present: false`, and
 -- `dst_replay.world_state_of` reconstitutes `files: []` — which is the world
--- those runs actually had. Logging them would change nothing that any replay
--- observes today.
+-- those runs actually had. It also named its own expiry: "until a fixture seeds
+-- `WorldState.files`, a replay cannot lose what no run put there."
 --
--- What would have to CHANGE for that to stop being true, named rather than
--- located: `dst_interaction.IdentityBody` would need a file-read variant and
--- `world_state_of` would need to derive `files` from it. Until a fixture seeds
--- `WorldState.files`, a replay cannot lose what no run put there.
+-- WI-D17 IS WHAT MAKES A RUN SEED `WorldState.files`, so that expiry had to be
+-- re-examined rather than inherited. It was, and the answer is that the reason
+-- SURVIVES but the reason given for it was the wrong one. The right one:
+--
+--   `InitialWorld` CARRIES `synthetic_environment` AND HAS NO `files`
+--   COUNTERPART. So an env read is a read of a value the PROGRAM supplies, and
+--   a file read is a read of a value the program does not. That is the whole
+--   difference between the two classes, and it is why the log records one and
+--   not the other.
+--
+-- Follow it through and the write lands on the recorded side of the same line.
+-- `world_state_of` derives `script`, `approvals` and `tools` from the log
+-- because those are the world's SUPPLY: values the driver cannot compute and a
+-- replay therefore has to be handed. A write is not supply — it is the driver's
+-- own act, and a REPLAYED DRIVER PERFORMS IT AGAIN through this same adapter.
+-- So `files` is rebuilt by the run rather than restored from the artifact, and
+-- `world_state_of` correctly continues to reconstitute `files: []`.
+--
+-- Which means the write is recorded for GRADING and not for reconstitution, and
+-- that is a real difference in kind from the other four recorded classes. It is
+-- stated here rather than left to be inferred from the adapter list.
+--
+-- WHAT RECORDING THE READ WOULD ACTUALLY COST, MEASURED, since "close D3's
+-- asymmetry" is the obvious alternative and it is the wrong move:
+--
+--   1. It would not close it. The gap is that a SEEDED read table cannot
+--      survive a round trip, and it cannot survive one whether or not the reads
+--      are logged, because there is no `InitialWorld.files` to put it in.
+--      Logging the reads would produce a log describing observations whose
+--      source the artifact still cannot rebuild — the two-homes shape one level
+--      up, which is the thing this whole class exists to remove.
+--   2. It would re-baseline every recorded corpus in the tree. Three reads per
+--      `resolve_context_limit` call at eight driver call sites is a log that
+--      grows on every profile at once, and WI-D4 measured what a changed driver
+--      read count does to a fixed seed bank. Recording the write changes NO
+--      existing log, because nothing in the tree writes a file yet.
+--
+-- WHAT IS THEREFORE OWED, named rather than located: `InitialWorld.files`, a
+-- `world_state_of` that reads it, and `program_schema_version`
+-- "execution-program/1" -> "/2" with the old decode path kept. That is a
+-- program-schema change and a re-attestation, which is a broader act than a
+-- world class, so it is not taken here.
 export func recording_ports(rt: ExtRuntime) -> Ports ! {Clock, Env, FS, IO, Process, Trace} {
   { ports_shape_probe(recording_model_step(rt)) |
     clock_now: recording_clock,
     approval_read: recording_approval,
     env_get: recording_env,
+    file_write: recording_file_write,
+    file_remove: recording_file_remove,
     tool_exec: recording_tool }
 }
 
@@ -503,11 +556,21 @@ func generating_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (
 --          by `dst_generator.choose_environment`, which D2 permits explicitly:
 --          "Generation may also choose ordinary configuration and message
 --          inputs."
+--   files  WI-D17's mutators are the RECORDING adapters, for the env row's
+--          reason with the direction reversed: a generator that chose whether a
+--          write landed would be choosing an outcome no `world_state_of` can
+--          restore, since the file table is rebuilt by the replayed run rather
+--          than read out of the program. There is nothing to generate here —
+--          the path and the body come from the caller — so a generating
+--          variant would be a second place a write is decided and the two could
+--          disagree, which is exactly the clock row's objection.
 export func generating_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO, Process, Trace} {
   { ports_shape_probe(generating_model_step(rt)) |
     clock_now: recording_clock,
     approval_read: generating_approval,
     env_get: recording_env,
+    file_write: recording_file_write,
+    file_remove: recording_file_remove,
     tool_exec: generating_tool }
 }
 

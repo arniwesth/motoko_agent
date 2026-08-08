@@ -143,6 +143,7 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity,
   TimedOutcome,
   ok_outcome,
   identity_kind,
@@ -383,11 +384,31 @@ pure func dense(xs: [Interaction], expected: int) -> [DiscoveryFinding] {
 -- BOTH directions. This is not filler: `driver_only` installs no extensions and
 -- the randomness guard asserts no `src/core` module reaches `std/rand`, so a
 -- non-zero count here is a recorder inventing a class that cannot have run.
+--
+-- WI-D17 ADDED THE TWO FILESYSTEM MUTATORS HERE, AND THAT IS THE POINT OF
+-- ADDING THEM. `census` iterates `all_interaction_kinds()`, so a new class
+-- appears in the report automatically — but NOTHING in this tree asserted that
+-- a census count was non-zero, and nothing asserted it was zero either. A class
+-- with a recording adapter and no call site would therefore have printed
+-- `file_write=0` forever and read exactly like a class that was being counted:
+-- absent reading identically to unchanged, in the instrument this time. Pinning
+-- it at zero converts that silence into a claim.
+--
+-- SO THIS IS A TRIPWIRE FOR ROUTE B PART 2, DELIBERATELY. The moment a compose
+-- write is routed through `Ports.file_write` on a profile this gate grades,
+-- `check_discovery` goes red with `file_write over-recorded: expected 0, got n`
+-- — and the item that routes it must either give the class a real witness or
+-- move it out of this list, in both cases having stated which. That is strictly
+-- better than the alternative on offer, which is a count nobody reads.
 pure func absent_classes(log: [Interaction]) -> [DiscoveryFinding] {
   class_balance(identity_kind(ExtensionEffectIdentity("", "", "")), 0,
                 count_kind(log, identity_kind(ExtensionEffectIdentity("", "", ""))))
     ++ class_balance(identity_kind(RandomDrawIdentity("")), 0,
                      count_kind(log, identity_kind(RandomDrawIdentity(""))))
+    ++ class_balance(identity_kind(FileWriteIdentity("")), 0,
+                     count_kind(log, identity_kind(FileWriteIdentity(""))))
+    ++ class_balance(identity_kind(FileRemoveIdentity("")), 0,
+                     count_kind(log, identity_kind(FileRemoveIdentity(""))))
 }
 
 -- The whole discovery gate, in one call.
@@ -603,4 +624,27 @@ pure func test_a_class_that_cannot_have_run_is_over_recorded() -> bool
     let bad = balanced_log() ++ [mk(RandomDrawIdentity("0..10"), 4, 0)];
     has_discovery_rule(check_discovery(bad, balanced_witness()),
                        "discovery-over-recorded")
+  }
+
+-- WI-D17. The same rule for the two filesystem mutators, and it is worth its own
+-- row rather than folding into the one above.
+--
+-- The class above is unreachable because nothing in `src/core` can draw a random
+-- number. THESE two are unreachable for a different and weaker reason — nothing
+-- CALLS them yet — so this assertion is the one that changes meaning at Route B
+-- part 2, and it should fail there by name rather than by an argument about
+-- randomness that does not apply to it.
+pure func test_an_unrouted_filesystem_mutation_is_over_recorded() -> bool
+  tests [((), true)]
+  {
+    let wrote = balanced_log() ++ [mk(FileWriteIdentity("/w/tmp/x.ail"), 4, 0)];
+    let removed = balanced_log() ++ [mk(FileRemoveIdentity("/w/tmp/x.ail"), 4, 0)];
+    has_discovery_rule(check_discovery(wrote, balanced_witness()),
+                       "discovery-over-recorded")
+      && has_discovery_rule(check_discovery(removed, balanced_witness()),
+                            "discovery-over-recorded")
+      -- And the negative control it needs: the balanced log, which contains
+      -- NEITHER, must still produce no findings. Without this the assertion
+      -- above is satisfied by a pin that fires on every log.
+      && List.length(check_discovery(balanced_log(), balanced_witness())) == 0
   }

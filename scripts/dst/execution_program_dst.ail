@@ -47,6 +47,7 @@ import src/core/dst_interaction (
   ExtensionEffectIdentity,
   EnvironmentReadIdentity,
   RandomDrawIdentity,
+  FileWriteIdentity, FileRemoveIdentity,
   ClockAdvanceIdentity,
   StreamChunkRecord,
   TimedOutcome,
@@ -308,6 +309,19 @@ pure func mutants() -> [Mutant] {
    { name: "provider interaction with a 'missing' status",
      rule: "program-outcome-status-disagrees-with-fault",
      program: with_interaction(0, { base(0) | outcome: { base(0).outcome | status: OutcomeMissing, chunks: [] } }) },
+
+   -- 12d. WI-D17 widened the 'missing' rule to `file_remove` and to NOTHING
+   --      ELSE. This is the row that says "and to nothing else": a file_WRITE
+   --      with a missing status must still be rejected. Without it, the widening
+   --      is indistinguishable from opening the rule to both mutators, and the
+   --      surviving-fixture row below (which now carries a legitimate
+   --      file_remove/missing) would be the only evidence either way.
+   { name: "file_write interaction with a 'missing' status",
+     rule: "program-outcome-status-disagrees-with-fault",
+     program: with_interaction(0, { base(0) |
+                identity: { ordinal: 0, body: FileWriteIdentity("/w/tmp/x.ail") },
+                deadline_ms: -1,
+                outcome: { base(0).outcome | status: OutcomeMissing, chunks: [], fault_class_id: "" } }) },
 
    -- 13. A program that recorded nothing.
    { name: "no interactions at all",

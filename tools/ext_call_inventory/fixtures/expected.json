@@ -49,12 +49,27 @@
     "`file_read` is NEW at WI-D16 and derives `returns-it` off Ports.file_read. It",
     "has ZERO call sites: the item shipped the seam and routed no extension.",
     "",
+    "`file_write` and `file_remove` are NEW at WI-D17 and derive `returns-it` off",
+    "Ports.file_write and Ports.file_remove. Zero call sites, same as file_read --",
+    "part 2 is what routes compose. The ORDER matters and is the reason WI-D16 did",
+    "not add them: a field fronting no core seam derives `unrouted`, which is",
+    "derive.py's fail-open answer and looks like a cleaner result than it is. The",
+    "core world class landed first, so these two derive `returns-it` instead.",
+    "",
     "AND THE SUITE COULD NOT HAVE CAUGHT THE ADDITION. The membership loop iterates",
     "THIS BLOCK, so a field added to ExtPorts and not added here was simply never",
     "asked about -- four green pinned rows and total silence on the fifth. WI-D16",
     "added a REACHABILITY assertion in derive.py that compares the derived field set",
     "against this block in both directions, on plan rule S24: reachability is a",
-    "separate question from any verdict and has to be asserted separately."
+    "separate question from any verdict and has to be asserted separately.",
+    "",
+    "THAT ASSERTION EARNED ITSELF AT WI-D17, ON THE FIRST ADDITION AFTER IT LANDED.",
+    "Adding file_write and file_remove produced, before this block was edited:",
+    "  FAIL REACHABILITY: ExtPorts.file_remove derives 'returns-it' but is not",
+    "  pinned in expected.json. A new ABI row is not covered by a pin that does",
+    "  not name it.",
+    "-- two named failures where the pre-D16 suite would have printed five green",
+    "membership rows and said nothing at all about the two new fields."
   ],
   "fixtures": {
     "control_resolved.ail": {
@@ -95,6 +110,14 @@
     "file_read": {
       "state": "returns-it",
       "seam": "file_read"
+    },
+    "file_write": {
+      "state": "returns-it",
+      "seam": "file_write"
+    },
+    "file_remove": {
+      "state": "returns-it",
+      "seam": "file_remove"
     },
     "env_get": {
       "state": "member",

@@ -70,7 +70,12 @@ import src/core/phase_vocab (
   LedgerTrace
 )
 import src/core/test/stub_step (Scripted, ScriptedWorld, tool_step, prose_step)
-import src/core/ports (ScriptedStep, WorldState, empty_world_state)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state,
+  -- WI-D17's write class, exercised at the ADAPTER rather than through the
+  -- driver, because nothing routes it yet — see `assert_file_write_class`.
+  scripted_file, scripted_file_write, scripted_file_remove,
+  recording_file_write, recording_file_remove)
+import src/core/dst_interaction (Interaction, interaction_kind, count_kind)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
@@ -287,6 +292,108 @@ pure func last_of(xs: [string]) -> string {
 func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
   let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
   ok
+}
+
+-- WI-D17's write class, asserted at the ADAPTER and not through the driver.
+--
+-- WHY THIS SHAPE AND NOT THE PROVENANCE SHAPE THE FILE READ GOT. The `files:`
+-- block below is a provenance assertion: it seeds the world, runs the driver,
+-- and shows the run's terminal outcome branching on what the world supplied.
+-- That is available for the read because the driver READS files. It is not
+-- available for the write, because nothing in the driver's call graph writes
+-- one — Route B part 2 is what routes compose's eighteen write-side sites, and
+-- until it lands there is no run whose behaviour can branch on a write.
+--
+-- So this asserts the class against the only thing that exists: the adapters.
+-- That is a weaker instrument than the provenance pair and it is named as such
+-- rather than presented as coverage.
+--
+-- WHAT IT MUST CATCH, because this is the one defect the class is shaped around:
+-- `scripted_file_write` returning `next_state: state`. Every other deterministic
+-- adapter in `ports.ail` legitimately does exactly that, and so does
+-- `ambient_file_write` one screen away, so it is a copy-paste away at all times.
+-- It type-checks. And the observation it produces — a later `file_read`
+-- reporting `present: false` — is BYTE-IDENTICAL to the observation produced if
+-- the write was never routed at all.
+--
+-- Which is why every row below asserts the CONTENT and not the presence, and
+-- why row 1 has a control asserting the path is absent BEFORE the write: an
+-- assertion that only reads `present: true` after a write is satisfied by a
+-- world that was seeded with the path and never written to.
+func assert_file_write_class() -> bool ! {FS, IO} {
+  let p = "/w/tmp/snippet.ail";
+  let w0 = empty_world_state();
+
+  -- 1. THE MUTANT ROW. Absent before, content-identical after.
+  let before = scripted_file(w0, p);
+  let wrote = scripted_file_write(before.next_state, p, "ALPHA");
+  let after = scripted_file(wrote.next_state, p);
+  let r1 = check("file_write: the path is absent before the write",
+                 not before.present,
+                 "the control failed, so the row below proves nothing");
+  let r2 = check("file_write: a write is read back BY CONTENT through file_read",
+                 after.present && after.content == "ALPHA",
+                 "present=${show(after.present)} content='${after.content}' — a `next_state: state` adapter produces exactly present=false, which is also what an unrouted write produces");
+
+  -- 2. THE ORDERING ROW. `lookup_file` is first-match, so an adapter that
+  --    APPENDED would serve the stale entry here and pass row 1 unchanged.
+  let over = scripted_file_write(wrote.next_state, p, "BRAVO");
+  let re_read = scripted_file(over.next_state, p);
+  let r3 = check("file_write: an overwrite serves the NEW content, not the first-written one",
+                 re_read.content == "BRAVO",
+                 "content='${re_read.content}' — appending to `files` instead of prepending gives stale-read-wins, which is a one-token difference with the opposite semantics");
+
+  -- 3. THE MAP ROW. Two writes to one path leave one entry. This is what pins
+  --    the `remove_path` call inside the write, which rows 1 and 2 do not: with
+  --    the prepend alone they both still pass and the table grows forever.
+  let r4 = check("file_write: the table stays a map — two writes to one path leave one entry",
+                 List.length(over.next_state.files) == 1,
+                 "files holds ${show(List.length(over.next_state.files))} entries after two writes to one path");
+
+  -- 4. THE SEEDED ROW. A write over a path the world was SEEDED with replaces
+  --    the seeded value. Seeded input and produced output share one table, so
+  --    an adapter that only prepended to a table it thought was empty is wrong
+  --    here and nowhere else.
+  let seeded = { empty_world_state() | files: [{ path: p, content: "SEEDED" }] };
+  let over_seed = scripted_file_write(seeded, p, "CHARLIE");
+  let seed_read = scripted_file(over_seed.next_state, p);
+  let r5 = check("file_write: a write over a SEEDED path replaces the seeded content",
+                 seed_read.content == "CHARLIE" && List.length(over_seed.next_state.files) == 1,
+                 "content='${seed_read.content}' entries=${show(List.length(over_seed.next_state.files))}");
+
+  -- 5. THE REMOVE ROWS. Remove makes the read absent, and removing a path that
+  --    is not there reports `ok: false` — which is what makes the deterministic
+  --    adapter agree with `removeFileResult`'s `Err` rather than inventing a
+  --    success the live half does not have.
+  let removed = scripted_file_remove(over.next_state, p);
+  let gone = scripted_file(removed.next_state, p);
+  let r6 = check("file_remove: the path is absent after the remove and the world reports ok",
+                 removed.ok && not gone.present && List.length(removed.next_state.files) == 0,
+                 "ok=${show(removed.ok)} present=${show(gone.present)}");
+  let absent = scripted_file_remove(empty_world_state(), p);
+  let r7 = check("file_remove: removing an absent path is NOT reported as a success",
+                 not absent.ok,
+                 "ok=true for a path the world does not hold — the live adapter's removeFileResult returns Err here, so the two would disagree");
+
+  -- 6. THE RECORDING ROW. `recording_file_write` must do BOTH jobs: append the
+  --    interaction AND perform the same state update. A recorder that logged the
+  --    write and forgot to wrap `scripted_file_write` would produce a log that
+  --    looks complete over a world that never changed — the two-homes failure
+  --    with the homes swapped, and the census would report it as covered.
+  let rec_w = recording_file_write(empty_world_state(), p, "DELTA");
+  let rec_read = scripted_file(rec_w.next_state, p);
+  let r8 = check("recording_file_write: the interaction is logged AND the table grew",
+                 List.length(rec_w.next_state.log) == 1
+                   && count_kind(rec_w.next_state.log, "file_write") == 1
+                   && rec_read.content == "DELTA",
+                 "log=${show(List.length(rec_w.next_state.log))} content='${rec_read.content}'");
+  let rec_r = recording_file_remove(rec_w.next_state, p);
+  let r9 = check("recording_file_remove: the second interaction takes ordinal 1 from the global counter",
+                 List.length(rec_r.next_state.log) == 2
+                   && count_kind(rec_r.next_state.log, "file_remove") == 1,
+                 "log=${show(List.length(rec_r.next_state.log))}");
+
+  r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9
 }
 
 -- Axis A + B for one run. `expect_served` is the served sequence an advancing
@@ -636,12 +743,15 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
                          reasons_in_order(["OK-ALPHA", "boom-bravo", "WRONG-ID", "ToolDeadlineExceeded"], tool_msgs),
                          "fourth tool result did not report a deadline fault — the run took 999ms against a 50ms timeout");
 
+  -- file_write / file_remove: WI-D17's class, at the adapter.
+  let ok_write = assert_file_write_class();
+
   -- determinism: same world twice.
   let again = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
   let ok_det = assert_deterministic("repeat", advance, again);
 
   if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
-     && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_files && ok_files_ctl
+     && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_files && ok_files_ctl && ok_write
      && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det then
     println("world_state_probe PASS")
   else {

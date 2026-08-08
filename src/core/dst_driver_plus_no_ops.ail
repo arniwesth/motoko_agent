@@ -162,6 +162,20 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 
+-- v3 (2026-08-08, WI-D17). RE-ISSUED for the same reason as v2 and by the same
+-- mechanism: the two new `ExtPorts.file_write`/`file_remove` bridges pushed 25
+-- more lines into `ext_ports_of` above the same five anchors, which moved
+-- 911/1160/1266/2711/2821 -> 931/1185/1291/2736/2846. Character-identical at all
+-- five; nothing about which sites are attributed or routed changed.
+-- `driver_only` went 15 -> 16 in the same change.
+--
+-- TWO ITEMS IN A ROW MAKES THIS A PATTERN AND NOT AN INCIDENT: every seam added
+-- to `ExtPorts` lands inside `ext_ports_of`, above all five anchors, so every
+-- Route B surface item re-issues both profiles. `make anchors` does not say so
+-- — it checks the anchors, not the set of profiles that recorded the table's
+-- hash — and the only thing that catches the second profile is this rejection,
+-- deep in the sweep.
+--
 -- v2 (2026-08-07, WI-D16). RE-ISSUED, not corrected: the attribution table's
 -- five `session.ail` anchors moved when `ExtPorts.proc_exec` was widened and
 -- `ExtPorts.file_read` was added, which pushed 30 lines into `ext_ports_of`
@@ -174,7 +188,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- there is it goes at the TOP of this block with its date, per plan rule S15 —
 -- re-dating a claim in place is how a sentence becomes a false statement about
 -- history, and this file will carry claims that move.
-export pure func no_ops_version() -> string { "2" }
+export pure func no_ops_version() -> string { "3" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -182,10 +196,12 @@ export pure func no_ops_version() -> string { "2" }
 -- can be re-issued silently by the other's edit.
 export pure func no_ops_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
-    -- WI-D16: re-recorded with `driver_only`'s, from
+    -- WI-D17: re-recorded with `driver_only`'s, from
+    -- sha256:d3bf3ae5ae6a7612744b8a266febcb2e1ec17450b5a72215a9ee1f16fa7eb685.
+    -- WI-D16 recorded that one, from
     -- sha256:ccfc1e3401635ae59326da4052621d934875bdedd0a05552dd7dc1e41a64b210.
     -- An anchor re-measurement, not a table correction — see `no_ops_version`.
-    content_hash: "sha256:d3bf3ae5ae6a7612744b8a266febcb2e1ec17450b5a72215a9ee1f16fa7eb685" }
+    content_hash: "sha256:4e532c81e5b37538db280e1345b4d6a13dd12c8b61309bd39f73e123e36edbb7" }
 }
 
 -- ---------------------------------------------------------------------------

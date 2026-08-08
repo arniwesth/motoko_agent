@@ -41,7 +41,13 @@ import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
-  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity,
+  -- WI-D17. The identity round trip is asserted with the sum's OWN equality
+  -- rather than by re-matching each variant at the assertion site, because a
+  -- comparison written here is a second notion of "same identity" that can
+  -- disagree with strict replay's — the drift `dst_interaction`'s header rejects.
+  identity_body_eq, identity_kind, all_interaction_kinds
 )
 import src/core/dst_generator (GeneratorState, GeneratorBounds, BoundFailure)
 import pkg/sunholo/motoko_ext_abi/types (ExtWorld)
@@ -258,7 +264,11 @@ pure func identity_body_json(b: IdentityBody) -> Json {
     RandomDrawIdentity(label) =>
       jo([kv("t", js("random_draw")), kv("a", js(label))]),
     ClockAdvanceIdentity =>
-      jo([kv("t", js("clock_advance"))])
+      jo([kv("t", js("clock_advance"))]),
+    FileWriteIdentity(path) =>
+      jo([kv("t", js("file_write")), kv("a", js(path))]),
+    FileRemoveIdentity(path) =>
+      jo([kv("t", js("file_remove")), kv("a", js(path))])
   }
 }
 
@@ -276,6 +286,10 @@ pure func identity_body_of(j: Json) -> IdentityBody {
     EnvironmentReadIdentity(str_field(j, "a", ""))
   else if t == "random_draw" then
     RandomDrawIdentity(str_field(j, "a", ""))
+  else if t == "file_write" then
+    FileWriteIdentity(str_field(j, "a", ""))
+  else if t == "file_remove" then
+    FileRemoveIdentity(str_field(j, "a", ""))
   else
     ClockAdvanceIdentity
 }
@@ -653,6 +667,81 @@ pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
       _ => false
     };
     approvals_ok && env_ok && tools_ok && files_ok
+  }
+
+-- WI-D17. EVERY identity variant, through the transport and back, compared with
+-- `identity_body_eq`.
+--
+-- This exists because `identity_body_of` is a TOTAL decoder whose default arm is
+-- `ClockAdvanceIdentity` — its own header says so and gives the reason. That
+-- makes a forgotten encoder arm fail SILENTLY and in the most legible-looking
+-- way available: the interaction decodes, the log has the right length, the
+-- ordinals stay dense, and one entry has quietly become a clock advance. Nothing
+-- else in this module could see it, because every other round-trip assertion
+-- reads a variant it named itself.
+--
+-- The list is checked against `all_interaction_kinds()` for length, so a tenth
+-- constructor that is added to the sum and forgotten HERE fails on the count
+-- rather than passing on the nine it does cover. That is the same discipline
+-- `all_interaction_kinds` itself exists for, applied one level up.
+pure func every_identity_body() -> [IdentityBody] {
+  [ProviderIdentity("origin-a", 7, "model-z"),
+   ToolIdentity("loop_v2", "c-11", "BashExec"),
+   ApprovalIdentity("loop_v2", "c-11", "BashExec"),
+   ExtensionEffectIdentity("ext-a", "class-b", "c-11"),
+   EnvironmentReadIdentity("MOTOKO_MODE"),
+   RandomDrawIdentity("int[0,100)"),
+   ClockAdvanceIdentity,
+   FileWriteIdentity("/w/tmp/snippet.ail"),
+   FileRemoveIdentity("/w/tmp/snippet.ail")]
+}
+
+pure func log_of_bodies(bs: [IdentityBody], ord: int) -> [Interaction] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      ({ identity: { ordinal: ord, body: b },
+         request_projection: "p${ord}",
+         deadline_ms: -1,
+         outcome: { advance_ms: 0, chunks: [], payload: "",
+                    status: OutcomeOk, fault_class_id: "" } })
+        :: log_of_bodies(rest, ord + 1)
+  }
+}
+
+pure func bodies_match(expected: [IdentityBody], got: [Interaction]) -> bool {
+  match expected {
+    [] => match got { [] => true, _ => false },
+    e :: erest =>
+      match got {
+        [] => false,
+        g :: grest => identity_body_eq(e, g.identity.body) && bodies_match(erest, grest)
+      }
+  }
+}
+
+pure func test_every_identity_variant_round_trips_through_the_token() -> bool
+  tests [((), true)]
+  {
+    let bodies = every_identity_body();
+    let w = { empty_world_state() | log: log_of_bodies(bodies, 0) };
+    let back = token_to_world(world_to_token(w));
+    List.length(bodies) == List.length(all_interaction_kinds())
+      && bodies_match(bodies, back.log)
+  }
+
+-- The negative control for the test above, and it is not redundant: the default
+-- arm makes "decoded as something else" the DEFAULT outcome, so an assertion
+-- that only ever compares matching pairs cannot show that the comparison
+-- discriminates at all. A `file_write` body compared against the tag the default
+-- arm would have produced must be unequal.
+pure func test_the_identity_round_trip_comparison_discriminates() -> bool
+  tests [((), true)]
+  {
+    not identity_body_eq(FileWriteIdentity("/w/p"), ClockAdvanceIdentity)
+      && not identity_body_eq(FileWriteIdentity("/w/p"), FileRemoveIdentity("/w/p"))
+      && identity_kind(FileWriteIdentity("/w/p")) == "file_write"
+      && identity_kind(FileRemoveIdentity("/w/p")) == "file_remove"
   }
 
 -- ---------------------------------------------------------------------------

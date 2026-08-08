@@ -180,6 +180,21 @@ export type ExtFileRead = {
   next_state: ExtWorld
 }
 
+-- One extension-side filesystem MUTATION and its successor world. WI-D17.
+--
+-- `Ports.FileMutation`'s shape field for field, and shared by BOTH mutator
+-- seams, because their answers have identical shape. See that type for why
+-- `error` is carried at all: std/fs offers `writeFileResult` beside the
+-- unit-returning `writeFile`, compose's seven `writeFile` sites are all
+-- `let _ = writeFile(…)`, and a port that also discarded the failure would carry
+-- the drop across the boundary instead of closing it — WI-A1's ordering rule,
+-- applied before the routing item rather than after it.
+export type ExtFileMutation = {
+  ok: bool,
+  error: string,
+  next_state: ExtWorld
+}
+
 export type ExtPorts = {
   -- WI-B2b: takes and returns the world token. This is the widening that lifts
   -- D1's extension-model-path exclusion — `session.ext_ai_step` handed
@@ -270,6 +285,38 @@ export type ExtPorts = {
   -- ordering WI-D3 followed for this seam and the one a directory class needs
   -- too. Priced for WI-D16 part 2, which is where it will bite.
   file_read: (ExtWorld, string) -> ExtFileRead ! {FS},
+  -- WI-D17's filesystem WRITE seam, fronting `Ports.file_write`.
+  --
+  -- IT IS HERE BECAUSE THE CORE CLASS IS, AND IN THAT ORDER. WI-D16 declined to
+  -- add this field in advance of the core seam and stated the reason as a
+  -- measurement rather than a preference: a field fronting no core seam derives
+  -- `unrouted` in `tools/ext_call_inventory/derive.py`, which means the ABI would
+  -- have grown a row that looks like mediation while mediating nothing. That is
+  -- the same objection D16 made against an `ExtPorts.print`, and it is still the
+  -- reason there is no `list_dir` here. `Ports.file_write` exists as of WI-D17,
+  -- so this field derives `returns-it` off it.
+  --
+  -- NOTHING CALLS IT. Route B part 2 routes compose's eighteen write-side sites;
+  -- this item ships the surface and routes nothing, which is the same state
+  -- `file_read` and the widened `proc_exec` were left in at WI-D16 and is
+  -- reported rather than presented as coverage.
+  file_write: (ExtWorld, string, string) -> ExtFileMutation ! {FS},
+  -- WI-D17's filesystem REMOVE seam, fronting `Ports.file_remove`.
+  --
+  -- A separate row and not a mode flag, for `ToolOutcome`'s reason: a boolean
+  -- discriminator in the request would make "remove with a body" representable.
+  -- It is in the ABI on D16's own two-homes argument rather than a new one —
+  -- `removeFile` changes what `fileExists` returns and compose branches on
+  -- exactly that, at the same `if not checked.ok then if fileExists(p) then
+  -- removeFile(p)` arm D16 cited for the write. Five of compose's eighteen
+  -- write-side sites are removes, so shipping the write alone would leave the
+  -- defect standing on all five.
+  --
+  -- `mkdirAll` is NOT here and that is a different answer on a different ground:
+  -- directory existence is observed only through `isDir`/`listDir`, neither of
+  -- which has a core seam, so a mediated `mkdirAll` would mutate a table nothing
+  -- can read. It belongs with the directory seam this file already prices above.
+  file_remove: (ExtWorld, string) -> ExtFileMutation ! {FS},
   -- WI-C5: takes and returns the world token, exactly as `ai_step` does.
   --
   -- WHAT THIS WIDENING BOUGHT, precisely, because the shape and the coverage are

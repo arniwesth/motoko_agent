@@ -37,6 +37,7 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity,
   CausalIdentity,
   StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -286,7 +287,14 @@ pure func validate_identity(id: CausalIdentity) -> [ProgramRejection] {
       if blank(key) then [IdentityComponentMissing(o, "environment_read key")] else [],
     RandomDrawIdentity(bounds) =>
       if blank(bounds) then [IdentityComponentMissing(o, "random_draw bounds")] else [],
-    ClockAdvanceIdentity => []
+    ClockAdvanceIdentity => [],
+    -- WI-D17. The path is the class's ONLY component, so a blank one leaves an
+    -- interaction that names no file — the shape this rule rejects for every
+    -- other single-component class.
+    FileWriteIdentity(path) =>
+      if blank(path) then [IdentityComponentMissing(o, "file_write path")] else [],
+    FileRemoveIdentity(path) =>
+      if blank(path) then [IdentityComponentMissing(o, "file_remove path")] else []
   }
 }
 
@@ -364,7 +372,34 @@ pure func validate_outcome(i: Interaction, known_class_ids: [string]) -> [Progra
                     -- those has a "the world declined to answer" state that is
                     -- not already a fault class in A7's catalogue.
                     ApprovalIdentity(_, _, _) => [],
-                    _ => [OutcomeStatusDisagreesWithFault(o, "is a ${interaction_kind(i)} with a 'missing' status, which D2 defines only for an environment read and (WI-A13) an approval whose queue is exhausted")]
+                    -- WI-D17 WIDENED IT A SECOND TIME, to `file_remove` ONLY,
+                    -- and reading B is what decides it rather than a preference
+                    -- for a smaller diff. A remove of a path the world does not
+                    -- hold is "the world had no value to serve" in exactly the
+                    -- sense an absent env key and a drained approval queue are,
+                    -- and the two alternatives are the two reading A already
+                    -- lost to:
+                    --
+                    --   OutcomeOk  — indistinguishable from a remove that
+                    --     actually deleted something. `FileMutation.ok` exists
+                    --     to keep those apart at the seam (`removeFileResult`
+                    --     returns Err for an absent path, measured), so
+                    --     collapsing them in the log makes a class of run
+                    --     unreplayable in precisely the way `ApprovalInput.eof`
+                    --     was created to prevent.
+                    --   OutcomeFault — would require a fault_class_id, and A7's
+                    --     catalogue declares no filesystem class. Recording one
+                    --     would either manufacture a class the catalogue does
+                    --     not contain, or leave a fault uncountable by D11's
+                    --     class-reached counter, which the arm above rejects.
+                    --
+                    -- `file_write` is NOT admitted. A write has no "the world
+                    -- had nothing to give" state — there is always something to
+                    -- write — so its only non-ok outcome is a genuine failure,
+                    -- and that belongs to the fault arm whenever the catalogue
+                    -- grows a class for it.
+                    FileRemoveIdentity(_) => [],
+                    _ => [OutcomeStatusDisagreesWithFault(o, "is a ${interaction_kind(i)} with a 'missing' status, which D2 defines only for an environment read, (WI-A13) an approval whose queue is exhausted, and (WI-D17) a file_remove of a path the world does not hold")]
                   })
         })
 }
