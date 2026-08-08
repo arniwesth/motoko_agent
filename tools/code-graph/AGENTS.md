@@ -82,6 +82,23 @@ it from the current `extraction_status` and prints a `STALE:` banner when a
 query touches `layout`/`edges_agg` and the keys disagree. Rebuild rather than
 trust a bannered layout.
 
+### The interactive map
+
+`tools/code-graph/viewer/map_view.py` renders these tables as a zoomable map.
+**It runs on the host, never in the devcontainer** (no GPU here, by decision):
+`viewer/install_host.sh` builds the pinned environment and prints the launch
+command. Container-side you can still check the geometry with
+`python3 tools/code-graph/viewer/map_view.py --dry-run`, which imports nothing
+GPU-bound.
+
+Edges are bundled along the containment tree and every polyline is precomputed
+at load — nothing is aggregated at render time, so what the canvas draws is what
+`edges_agg` says. Edge appearance comes from one tested function
+(`viewer/styles.py:style_for`): `imports` solid, `invokes` dashed and
+desaturated, unknown dotted, and a stale snapshot restyles everything plus pins
+a banner. If the map ever draws an approximate edge like an exact one, that is a
+test failure, not a preference.
+
 ## DST trace overlay (`activity`, `tool_modules`, traces, heat)
 
 The overlay attributes DST ledger-trace records to subject modules so dynamic

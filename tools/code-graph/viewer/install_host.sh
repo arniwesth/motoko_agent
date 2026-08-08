@@ -242,6 +242,19 @@ and only an interactive session can grade the click/hover round trip.
   # 4. combine every run into one gate verdict (script-produced, not eyeballed)
   uv run --frozen python spike_l0l2.py --summarize
 
+The gate has since PASSED (NOTE-d7-spike-verdict.md), so the map proper is what
+you actually want day to day. The spike above is kept only to re-grade D7 after
+a dependency bump:
+
+  # the L0-L2 map: bundled edges, LOD, hover counts, double-click to editor
+  uv run --frozen python map_view.py
+
+  # straighten the edge bundling (1 hugs the hierarchy, 0 is straight lines)
+  uv run --frozen python map_view.py --beta 0.5
+
+Set EDITOR (e.g. 'code -g') or MOTOKO_MAP_EDITOR_URL to control click-through;
+without either it falls back to a vscode:// URL.
+
 One report per run shape lands in $PROJECT_DIR/,
 plus host-spike-verdict.json from step 4. The workspace mount is shared, so the
 agent can read them directly — nothing needs pasting.
