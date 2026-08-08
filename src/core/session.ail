@@ -2534,8 +2534,8 @@ func c2_loop(
                   let trace_after_model = c2_trace_wire_events(ledger_append(trace_after_call, WireRecord(end_event)), phase.events);
                   -- WI-B2b. Bound rather than matched inline, because the
                   -- successor has to outlive the match: `intercepted.next_state`
-                  -- is what the loop carries forward, and `exchange.next_state`
-                  -- is now stale by exactly the effects the hook performed.
+                  -- is what the loop carries forward on EVERY arm, and
+                  -- `exchange.next_state` is stale by what the hook performed.
                   let intercepted = dispatch_response_intercept(rt, post_ctx, result.message.content);
                   match intercepted.decision {
                     InterceptHandled(envelope) => {
@@ -2592,7 +2592,7 @@ func c2_loop(
 	                          ext_artifacts: chain.artifacts,
 	                          telemetry: applied.telemetry,
 	                          provider: st.provider,
-	                          world_state: exchange.next_state,
+	                          world_state: token_to_world(intercepted.next_state), -- WI-D19
                           pending_tool_calls: applied.pending_tool_calls,
                           pending_tool_context: msgs_with_assistant,
                           pending_tool_prefix: msgs_with_assistant,
@@ -2629,7 +2629,7 @@ func c2_loop(
 	                              ext_artifacts: chain.artifacts,
 	                              telemetry: applied.telemetry,
 	                              provider: st.provider,
-	                              world_state: exchange.next_state,
+	                              world_state: token_to_world(intercepted.next_state), -- WI-D19
                               pending_tool_calls: [synth_call],
                               pending_tool_context: msgs_with_assistant,
                               pending_tool_prefix: st.msgs ++ [augmented_assistant_msg],
@@ -2651,7 +2651,7 @@ func c2_loop(
                             -- above is: every branch below carries the world
                             -- forward, and the solver hook's successor is the
                             -- current one from here on.
-                            let finalized = dispatch_solver_candidate(rt, post_ctx, result.message.content);
+                            let finalized = dispatch_solver_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content); -- WI-D19
                             match finalized.decision {
                               Accept(output) =>
 	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, output, "ext_solver_accept"),
@@ -2714,7 +2714,7 @@ func c2_loop(
                                   };
                                   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                                 } else
-	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, exchange.next_state, st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, result.message.content, "")
+	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, st.provider, token_to_world(finalized.next_state), st.prior_counts, session_id, started_at_ms, trace_after_model, emissions_after_call, step_idx + 1, step_idx, result.message.content, "") -- WI-D19
                               }
                             }
                           }

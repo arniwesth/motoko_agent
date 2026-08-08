@@ -224,11 +224,13 @@ check_subject compose_intercept_noninline "dvp-intercept-witness" \
 # Without it, an edit could point one arm at a compose-free registry and only a
 # reader would notice.
 arms_using_shared_ctor=$(grep -c 'compose_then_witness(' "$PROBE" || true)
-# 1 definition + 5 call sites (four subjects and the inline limit arm).
-if [ "$arms_using_shared_ctor" -eq 6 ]; then
-  ok "all five dispatching arms build their registry from compose_then_witness — the join holds"
+# 1 definition + 6 call sites: four subjects, the inline limit arm, and WI-D19's
+# reachability arm. It went from 5 to 6 when D19 added `compose_intercept_threading`,
+# which is the guard doing its job — a new arm has to be admitted here on purpose.
+if [ "$arms_using_shared_ctor" -eq 7 ]; then
+  ok "all six dispatching arms build their registry from compose_then_witness — the join holds"
 else
-  bad "expected 6 mentions of compose_then_witness (1 definition + 5 arms), found $arms_using_shared_ctor — an arm may be pointed at a registry compose_pre_step does not certify"
+  bad "expected 7 mentions of compose_then_witness (1 definition + 6 arms), found $arms_using_shared_ctor — an arm may be pointed at a registry compose_pre_step does not certify"
 fi
 
 echo ""
@@ -333,12 +335,72 @@ echo "-- the limit, made executable: performed is a property of a hook AND ITS I
 
 # The SAME hook and the SAME declared row as compose_intercept_noninline above,
 # differing only in `mode` and in the response carrying an AILANG fence. It
-# reaches mkdirAll/writeFile and dies. Asserting this is what stops the
-# non-inline row's green from being read as "on_response_intercept performs no
-# FS", which is false.
-must_die_on compose_intercept_inline FS \
-  "the inline branch no longer reaches the filesystem — then the non-inline row above is a claim about the HOOK rather than about the hook and its input, and this gate is overstating what it measured" \
-  "the SAME hook that completed above dies on a different input; performed is a property of a hook AND ITS INPUTS"
+# reaches a capability the other input never asks for, and dies. Asserting this
+# is what stops the non-inline row's green from being read as a claim about the
+# HOOK rather than about the hook AND ITS INPUT.
+#
+# THE CAPABILITY MOVED AT WI-D19, FROM FS TO Process, AND THE MOVE IS THE RESULT
+# RATHER THAN A WEAKENING. Through WI-D18 this arm died on FS because the inline
+# branch called `mkdirAll` ambiently. WI-D19 routed that call — and `writeFile`,
+# both `fileExists` and both `removeFile` — through `ctx.ports`, whose bindings
+# here are the constant `probe_*` stubs, so the branch performs no ambient FS any
+# more. That is exactly what mediation is, measured from the outside: the arm
+# stopped needing a capability because the effect now leaves through a seam.
+#
+# It dies on Process instead, and that names the ONE thing WI-D19 could not
+# route. `check_snippet`/`run_snippet` call `exec("ailang", …)`, and
+# `ExtPorts.proc_exec` does not front a subprocess — it fronts `Ports.tool_exec`,
+# whose live adapter dispatches MOTOKO'S OWN tool names and answers "ailang
+# requires extension capability and is not available in native runtime". So this
+# row is now also the standing witness for that unrouted seam: the day
+# `proc_exec` grows an exit code and compose routes through it, this arm stops
+# dying and says so.
+#
+# The lesson the row exists for is unchanged — same hook, same declared row, two
+# different performed answers selected by an argument. Only the effect class it
+# is demonstrated on has moved, because the FS half is no longer performed here
+# at all.
+must_die_on compose_intercept_inline Process \
+  "the inline branch no longer reaches a subprocess — then the non-inline row above is a claim about the HOOK rather than about the hook and its input, and this gate is overstating what it measured" \
+  "the SAME hook that completed above dies on a different input; performed is a property of a hook AND ITS INPUTS — and Process is what WI-D19 could not route"
+
+# WI-D19's OTHER HALF OF THE SAME MEASUREMENT, and it is not redundant with the
+# row above. "Dies on Process" is consistent with a hook that still performs FS
+# and merely reaches the subprocess first, so the FS claim needs its own arm:
+# the same inline input, with FS ALONE withheld and Process granted, must now
+# COMPLETE. Before WI-D19 it died. This is the routed half stated positively,
+# and it is the row that goes red if any of the five routed sites is put back.
+if out=$(run_arm compose_intercept_inline "$WITHHELD_CAPS,Process"); then
+  ok "compose_intercept_inline COMPLETES with FS withheld and Process granted — the five FS sites WI-D19 routed perform no ambient FS; before D19 this arm died on FS"
+elif echo "$out" | grep -q "effect 'FS' requires capability"; then
+  bad "compose_intercept_inline still dies on FS — a site WI-D19 claims to have routed is still ambient, and the routing is partial in a way the compiler will not report"
+else
+  bad "compose_intercept_inline died, but not on FS — the row establishes nothing: $(echo "$out" | grep -E '^Error' | head -1)"
+fi
+
+echo ""
+echo "-- WI-D19: reachability, asserted separately from every verdict above (S24) --"
+
+# THE EXPECTED SEQUENCE IS WRITTEN OUT LITERALLY AND NOT DERIVED FROM THE RUN.
+# A witness computed from the run is satisfied by a run that did nothing; this
+# one is satisfied only by the five seams being called, in this order, on these
+# path keys. See `compose_intercept_threading` for what each part pins.
+#
+# The clock is granted here and FS is not withheld, because this arm is not
+# measuring a capability — it is measuring a VALUE, which is the one question
+# `must_die_on` cannot ask.
+D19_EXPECT='clock_now;dir_make(tmp);file_write(tmp/inline_7.ail);path_stat(tmp/inline_7.ail);file_remove(tmp/inline_7.ail);'
+d19_out=$(run_arm compose_intercept_threading "IO,AI,Net,SharedMem,Clock,Stream,Trace,Rand,Env,FS,Process" || true)
+d19_got=$(printf '%s\n' "$d19_out" | sed -n 's/^declared_vs_performed\[compose_intercept_threading\] REACHED COMPLETION witness=//p')
+if [ "$d19_got" = "$D19_EXPECT" ]; then
+  ok "on_response_intercept CALLED five ExtPorts seams in order and threaded every successor out: $d19_got"
+elif [ -z "$d19_got" ]; then
+  bad "the reachability arm produced no witness at all — the hook did not complete, so nothing above about routing is established: $(printf '%s\n' "$d19_out" | grep -E '^Error' | head -1)"
+elif [ "$d19_got" = "" ] || [ "$d19_got" = ";" ]; then
+  bad "the hook returned an EMPTY world token — either no seam was called, or the successor was dropped (\`next_state: ctx.world\`), and both compile clean"
+else
+  bad "the routed sequence changed: expected '$D19_EXPECT' got '$d19_got' — check the path keys (one spelling per path, WI-D18 §5), the clock source, and whether the fileExists guard still takes its removing arm"
+fi
 
 echo ""
 echo "-- producer 3: PERFORMED, inferred by the compiler (total over inputs) --"

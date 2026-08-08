@@ -256,6 +256,30 @@ export type DiscoveryWitness = {
   -- second, independent statement about the same class.
   approvals_consumed: int,
   clock_delta_ms: int,
+  -- WI-D19's THREE FILESYSTEM MUTATION CLASSES, and they are witness fields now
+  -- because a routed extension exists. Through WI-D18 all three were PINNED AT
+  -- ZERO in `absent_classes` below, deliberately, so that "the census printed 0"
+  -- was a claim rather than silence and Route B's first routing would have to
+  -- answer for them by name. WI-D19 is that routing and this is the answer: the
+  -- classes are WITNESSED rather than moved out of the list, so the pin survives
+  -- for every run that routes nothing (all of them but one) and becomes a real
+  -- balance for the run that does.
+  --
+  -- THE COUNTS ARE NOT READ OFF THE LOG, which would make the balance vacuous —
+  -- the whole failure mode `class_balance` exists to catch is a recorder that
+  -- logs the wrong number, and a witness derived from the recorder agrees with it
+  -- by construction. They come from the SCENARIO's control flow: the routed hook
+  -- performs exactly one `dir_make`, one `file_write` and one `file_remove` per
+  -- dispatch, and the dispatch count is anchored to the independently-witnessed
+  -- provider-call count. That is `MOTOKO_TOOL_TIMEOUT_MS`'s discipline in
+  -- `expected_env_reads`, applied one class over.
+  --
+  -- The two READS stay absent and could not be witnessed here: `path_stat` and
+  -- `dir_list` write no interaction at all (WI-D18 §6), so there is no kind to
+  -- balance. That asymmetry is the recording decision showing through the census.
+  file_writes: int,
+  file_removes: int,
+  dir_makes: int,
   expected_env_reads: [EnvExpectation]
 }
 
@@ -394,20 +418,44 @@ pure func dense(xs: [Interaction], expected: int) -> [DiscoveryFinding] {
 -- absent reading identically to unchanged, in the instrument this time. Pinning
 -- it at zero converts that silence into a claim.
 --
--- SO THIS IS A TRIPWIRE FOR ROUTE B PART 2, DELIBERATELY. The moment a compose
--- write is routed through `Ports.file_write` on a profile this gate grades,
--- `check_discovery` goes red with `file_write over-recorded: expected 0, got n`
--- — and the item that routes it must either give the class a real witness or
--- move it out of this list, in both cases having stated which. That is strictly
--- better than the alternative on offer, which is a count nobody reads.
-pure func absent_classes(log: [Interaction]) -> [DiscoveryFinding] {
+-- SO THIS WAS A TRIPWIRE FOR ROUTE B PART 2, DELIBERATELY, AND IT FIRED. Kept in
+-- the past tense per plan rule S15, because the prediction is the evidence that
+-- the mechanism worked rather than a note that has expired.
+--
+--   The prediction: "the moment a compose write is routed through
+--   `Ports.file_write` on a profile this gate grades, `check_discovery` goes red
+--   with `file_write over-recorded: expected 0, got n` — and the item that
+--   routes it must either give the class a real witness or move it out of this
+--   list, in both cases having stated which."
+--
+-- WI-D19 ROUTED IT AND CHOSE THE WITNESS, and the reason is that removal would
+-- have thrown away the pin for the fourteen graded runs that route nothing.
+-- Three of the five classes here now balance against `DiscoveryWitness`
+-- fields — see that type for where the counts come from and why they are not
+-- read off the log — and the two that remain pinned at literal zero
+-- (`ExtensionEffect`, `RandomDraw`) are the ones whose unreachability is
+-- STRUCTURAL rather than merely "nothing calls them yet", which is the
+-- distinction `test_an_unrouted_filesystem_mutation_is_over_recorded` below was
+-- already written to keep.
+--
+-- ONE THING DID NOT CHANGE AND IT IS WORTH SAYING: a caller that passes 0 gets
+-- exactly the assertion WI-D17 and WI-D18 wrote here. Every graded run in the
+-- tree except WI-D19's routed scenario passes 0, so the tripwire is still armed
+-- for part 2b — an `on_tool_handle` write that reaches a graded profile will
+-- reopen this conversation by name.
+pure func absent_classes(log: [Interaction], w: DiscoveryWitness) -> [DiscoveryFinding] {
   class_balance(identity_kind(ExtensionEffectIdentity("", "", "")), 0,
                 count_kind(log, identity_kind(ExtensionEffectIdentity("", "", ""))))
     ++ class_balance(identity_kind(RandomDrawIdentity("")), 0,
                      count_kind(log, identity_kind(RandomDrawIdentity(""))))
-    ++ class_balance(identity_kind(FileWriteIdentity("")), 0,
+    -- WI-D19 TOOK THE PIN OFF THESE THREE AND PUT A WITNESS UNDER IT. See
+    -- `DiscoveryWitness.file_writes` for why witnessing beat removal. The
+    -- function keeps its name and its place: every caller that routes nothing
+    -- passes 0 and gets exactly the assertion WI-D17 and WI-D18 wrote here, so
+    -- the classes are still pinned at zero for all but one run in the tree.
+    ++ class_balance(identity_kind(FileWriteIdentity("")), w.file_writes,
                      count_kind(log, identity_kind(FileWriteIdentity(""))))
-    ++ class_balance(identity_kind(FileRemoveIdentity("")), 0,
+    ++ class_balance(identity_kind(FileRemoveIdentity("")), w.file_removes,
                      count_kind(log, identity_kind(FileRemoveIdentity(""))))
     -- WI-D18's `dir_make` JOINS THEM, on WI-D17's reason and with WI-D17's
     -- consequence. It is recorded and unrouted, which is the same state
@@ -420,7 +468,7 @@ pure func absent_classes(log: [Interaction]) -> [DiscoveryFinding] {
     -- no interaction, so there is no kind to balance. That asymmetry is the
     -- recording decision showing through the census, which is where it should be
     -- visible.
-    ++ class_balance(identity_kind(DirMakeIdentity("")), 0,
+    ++ class_balance(identity_kind(DirMakeIdentity("")), w.dir_makes,
                      count_kind(log, identity_kind(DirMakeIdentity(""))))
 }
 
@@ -446,7 +494,7 @@ export pure func check_discovery(log: [Interaction], w: DiscoveryWitness) -> [Di
         else [ClockUnaccounted(w.clock_delta_ms, total_advance_ms(log))])
     ++ env_keys_not_in_source(env_keys_read(log), driver_env_keys())
     ++ env_balance(w.expected_env_reads, env_keys_read(log))
-    ++ absent_classes(log)
+    ++ absent_classes(log, w)
 }
 
 export pure func discovery_ok(log: [Interaction], w: DiscoveryWitness) -> bool {
@@ -533,6 +581,9 @@ pure func balanced_witness() -> DiscoveryWitness {
     approval_reads: 1,
     approvals_consumed: 1,
     clock_delta_ms: 4,
+    file_writes: 0,
+    file_removes: 0,
+    dir_makes: 0,
     expected_env_reads: [] }
 }
 
@@ -666,4 +717,44 @@ pure func test_an_unrouted_filesystem_mutation_is_over_recorded() -> bool
       -- NEITHER, must still produce no findings. Without this the assertion
       -- above is satisfied by a pin that fires on every log.
       && List.length(check_discovery(balanced_log(), balanced_witness())) == 0
+  }
+
+-- WI-D19. THE OTHER DIRECTION, which did not exist while the three classes were
+-- pinned and which is the half a witness can get wrong.
+--
+-- `class_balance` emits both `UnderRecorded` and `OverRecorded` from one
+-- arithmetic site, so the row above already covers over-recording for all three.
+-- What it CANNOT cover, because the expectation was a literal 0, is a witness
+-- that says a mutation happened and a recorder that did not log it — which is
+-- exactly the shape WI-D17's mutant found on the adapter side ("a recorder that
+-- logs and does not act", and its twin). With the expectation now coming from a
+-- field, that failure is representable and must be asserted.
+--
+-- THREE ROWS AND NOT ONE, because a checker that read `file_writes` for all
+-- three classes passes a single-class test. Each is stated against a log that
+-- contains the OTHER two, so a balance wired to the wrong kind counts the wrong
+-- entries and comes out right for the wrong reason.
+pure func test_a_witnessed_filesystem_mutation_must_be_recorded() -> bool
+  tests [((), true)]
+  {
+    let all_three = balanced_log()
+      ++ [mk(DirMakeIdentity("/w/tmp"), 4, 0),
+          mk(FileWriteIdentity("/w/tmp/x.ail"), 5, 0),
+          mk(FileRemoveIdentity("/w/tmp/x.ail"), 6, 0)];
+    let w = { balanced_witness() | file_writes: 1, file_removes: 1, dir_makes: 1 };
+    -- The routed run's shape: one of each, witnessed and logged, no findings.
+    List.length(check_discovery(all_three, w)) == 0
+      -- A witness that expects a write the recorder dropped.
+      && has_discovery_rule(check_discovery(all_three, { w | file_writes: 2 }),
+                            "discovery-under-recorded")
+      && has_discovery_rule(check_discovery(all_three, { w | file_removes: 2 }),
+                            "discovery-under-recorded")
+      && has_discovery_rule(check_discovery(all_three, { w | dir_makes: 2 }),
+                            "discovery-under-recorded")
+      -- And the control that keeps the three rows above from being one row: the
+      -- classes must not share a counter. Zeroing ONE witness must produce
+      -- over-recording for THAT class while the other two stay balanced.
+      && List.length(check_discovery(all_three, { w | file_writes: 0 })) == 1
+      && List.length(check_discovery(all_three, { w | file_removes: 0 })) == 1
+      && List.length(check_discovery(all_three, { w | dir_makes: 0 })) == 1
   }
