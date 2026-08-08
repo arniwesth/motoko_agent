@@ -293,6 +293,11 @@ class Measurements:
         self.lod_crossings: list[dict] = []
         self.pick_ms: list[float] = []
         self.pick_source: str | None = None
+        # Counted before any resolution is attempted, so "the handler never
+        # fired" and "the handler fired but resolved nothing" are distinguishable
+        # in the report. Host run 3 could not tell those apart, and that cost a
+        # whole round-trip.
+        self.pointer_events: int = 0
         self.hover_ms: list[float] = []
         self.hover_sample: str | None = None
         self.errors: list[dict] = []
@@ -333,6 +338,23 @@ def grade(scene: Scene, m: Measurements, windowed: bool, stress_stats: dict | No
     def verdict(ok: bool | None) -> str:
         return "pass" if ok is True else ("fail" if ok is False else "not-measured")
 
+    # Distinguishing WHY criterion 3 is ungraded is the difference between "run
+    # it interactively" and "fix the wiring first" — host run 3 reported the same
+    # empty result for both and cost a round-trip to tell apart.
+    synthetic_only = bool(m.pick_source and "synthetic" in m.pick_source)
+    if real_pick is not None:
+        pick_note = None
+    elif synthetic_only:
+        pick_note = ("lower bound only (identity resolution, no event round trip); "
+                     "run interactively and click/hover a few modules to grade this")
+    elif m.pointer_events == 0:
+        pick_note = ("NO POINTER EVENTS REACHED THE HANDLER — the graphic is not pick-writable, "
+                     "or the pick target is not where the user sees the node. This is a wiring "
+                     "bug, not a missing interaction")
+    else:
+        pick_note = (f"{m.pointer_events} pointer event(s) arrived but resolved to no node — "
+                     "check the vertex_index mapping")
+
     criteria = {
         "1_full_l0_l2_scene": {
             "verdict": verdict(all(scene.node_count(l) > 0 for l in (0, 1, 2))
@@ -368,10 +390,9 @@ def grade(scene: Scene, m: Measurements, windowed: bool, stress_stats: dict | No
             "samples": len(m.pick_ms),
             "measured": m.pick_source,
             "is_real_event_round_trip": real_pick is not None,
+            "pointer_events_received": m.pointer_events,
             "hover_tooltip_sample": m.hover_sample,
-            "note": None if real_pick is not None else
-            "lower bound only (identity resolution, no event round trip); "
-            "run interactively and click/hover a few modules to grade this",
+            "note": pick_note,
         },
         "4_lod_switch_no_stall": {
             "verdict": verdict(None if not m.lod_crossings else m.hitches() <= 1),
@@ -434,8 +455,29 @@ def run_window(scene: Scene, auto: bool, m: Measurements, duration: float,
             colour = (0.55, 0.58, 0.66, 0.85) if level < 2 else (0.80, 0.83, 0.90, 0.95)
             graphics[level].append(subplot.add_line_collection(rings, colors=colour, thickness=1.0))
         if data.centers:
-            pts = np.array([(x, y, -0.01) for x, y in data.centers], dtype=np.float32)
-            scatter = subplot.add_scatter(pts, colors=(0.35, 0.40, 0.50, 0.9), sizes=6)
+            # Depth by level so a zoomed-in module wins the pick over the giant
+            # container circle it sits inside.
+            z = 0.01 * level
+            pts = np.array([(x, y, z) for x, y in data.centers], dtype=np.float32)
+            # WORLD-space sizes equal to each node's diameter, so the pickable
+            # target IS the visible circle. The previous 6-screen-pixel markers
+            # sat at circle centres while the eye saw only the ring: a user
+            # clicking a module hit nothing, which is half of why host run 3
+            # recorded zero pointer events.
+            sizes = np.array([2.0 * r for r in data.radii], dtype=np.float32)
+            alpha = 0.55 if level == 2 else 0.10
+            scatter = subplot.add_scatter(
+                pts, colors=(0.35, 0.40, 0.50, alpha), sizes=sizes, size_space="world"
+            )
+            # The other half: pygfx materials default to pick_write=False
+            # (pygfx/materials/_base.py:161) and fastplotlib sets it for line,
+            # text and image graphics but NOT for scatter — so the handlers
+            # attached fine and were never called. Nothing in the report said so,
+            # which is why pointer_events_received now exists.
+            try:
+                scatter.world_object.material.pick_write = True
+            except Exception:
+                m.note_error(f"enable pick_write(level={level})")
             graphics[level].append(scatter)
             pick_targets[level] = scatter
 
@@ -477,6 +519,7 @@ def run_window(scene: Scene, auto: bool, m: Measurements, duration: float,
         return node, (time.perf_counter() - started) * 1000.0
 
     def on_pointer(event) -> None:
+        m.pointer_events += 1
         try:
             started = time.perf_counter()
             info = getattr(event, "pick_info", None) or {}
@@ -630,7 +673,7 @@ def summarize(report_dir: Path = REPORT_DIR) -> dict:
                                      **{k: v for k, v in criterion.items()
                                         if k in ("median_fps", "p5_fps", "max_ms", "labels_rendered",
                                                  "hitches_over_two_frames", "is_real_event_round_trip",
-                                                 "hover_tooltip_sample")}})
+                                                 "pointer_events_received", "hover_tooltip_sample")}})
             if criterion.get("verdict") == "fail":
                 slot["verdict"] = "fail"
             elif criterion.get("verdict") == "pass" and slot["verdict"] != "fail":

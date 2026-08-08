@@ -1,7 +1,137 @@
 {
-  "criteria": {},
+  "criteria": {
+    "1_full_l0_l2_scene": {
+      "evidence": [
+        {
+          "run": "host-spike-report-auto-real.json",
+          "verdict": "pass"
+        },
+        {
+          "run": "host-spike-report-auto-stress1000.json",
+          "verdict": "pass"
+        },
+        {
+          "run": "host-spike-report-interactive-real.json",
+          "verdict": "pass"
+        }
+      ],
+      "verdict": "pass"
+    },
+    "2_pan_zoom_fps": {
+      "evidence": [
+        {
+          "median_fps": 56.29,
+          "p5_fps": 50.79,
+          "run": "host-spike-report-auto-real.json",
+          "verdict": "pass"
+        },
+        {
+          "median_fps": 57.73,
+          "p5_fps": 55.64,
+          "run": "host-spike-report-auto-stress1000.json",
+          "verdict": "pass"
+        },
+        {
+          "median_fps": 56.66,
+          "p5_fps": 50.23,
+          "run": "host-spike-report-interactive-real.json",
+          "verdict": "not-measured"
+        }
+      ],
+      "verdict": "pass"
+    },
+    "3_picking_latency": {
+      "evidence": [
+        {
+          "hover_tooltip_sample": null,
+          "is_real_event_round_trip": false,
+          "max_ms": 0.08,
+          "run": "host-spike-report-auto-real.json",
+          "verdict": "not-measured"
+        },
+        {
+          "hover_tooltip_sample": null,
+          "is_real_event_round_trip": false,
+          "max_ms": 0.353,
+          "run": "host-spike-report-auto-stress1000.json",
+          "verdict": "not-measured"
+        },
+        {
+          "hover_tooltip_sample": null,
+          "is_real_event_round_trip": false,
+          "max_ms": null,
+          "run": "host-spike-report-interactive-real.json",
+          "verdict": "not-measured"
+        }
+      ],
+      "verdict": "not-measured"
+    },
+    "4_lod_switch_no_stall": {
+      "evidence": [
+        {
+          "hitches_over_two_frames": 0,
+          "run": "host-spike-report-auto-real.json",
+          "verdict": "pass"
+        },
+        {
+          "hitches_over_two_frames": 1,
+          "run": "host-spike-report-auto-stress1000.json",
+          "verdict": "pass"
+        },
+        {
+          "hitches_over_two_frames": null,
+          "run": "host-spike-report-interactive-real.json",
+          "verdict": "not-measured"
+        }
+      ],
+      "verdict": "pass"
+    },
+    "5_l2_labels": {
+      "evidence": [
+        {
+          "labels_rendered": 232,
+          "run": "host-spike-report-auto-real.json",
+          "verdict": "pass"
+        },
+        {
+          "labels_rendered": 1160,
+          "run": "host-spike-report-auto-stress1000.json",
+          "verdict": "pass"
+        },
+        {
+          "labels_rendered": 232,
+          "run": "host-spike-report-interactive-real.json",
+          "verdict": "not-measured"
+        }
+      ],
+      "verdict": "pass"
+    },
+    "6_standalone_window_from_store": {
+      "evidence": [
+        {
+          "run": "host-spike-report-auto-real.json",
+          "verdict": "pass"
+        },
+        {
+          "run": "host-spike-report-auto-stress1000.json",
+          "verdict": "pass"
+        },
+        {
+          "run": "host-spike-report-interactive-real.json",
+          "verdict": "pass"
+        }
+      ],
+      "verdict": "pass"
+    }
+  },
   "overall": "incomplete",
-  "runs": [],
+  "runs": [
+    "host-spike-report-auto-real.json",
+    "host-spike-report-auto-stress1000.json",
+    "host-spike-report-interactive-real.json"
+  ],
   "stage": "d7-gate-verdict",
-  "still_unmeasured": []
+  "still_unmeasured": [
+    "3_picking_latency"
+  ]
 }

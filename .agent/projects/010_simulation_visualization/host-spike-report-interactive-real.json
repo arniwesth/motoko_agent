@@ -1,0 +1,133 @@
+{
+  "gate": {
+    "criteria": {
+      "1_full_l0_l2_scene": {
+        "detail": {
+          "0": 4,
+          "1": 61,
+          "2": 232
+        },
+        "kinds_visually_distinct": true,
+        "verdict": "pass"
+      },
+      "2_pan_zoom_fps": {
+        "frames": 2404,
+        "median_fps": 56.66,
+        "note": "not graded in interactive mode; idle frames are not stalls",
+        "p5_fps": 50.23,
+        "target": 30.0,
+        "verdict": "not-measured"
+      },
+      "3_picking_latency": {
+        "hover_tooltip_sample": null,
+        "is_real_event_round_trip": false,
+        "max_ms": null,
+        "measured": null,
+        "median_ms": null,
+        "note": "lower bound only (identity resolution, no event round trip); run interactively and click/hover a few modules to grade this",
+        "samples": 0,
+        "verdict": "not-measured"
+      },
+      "4_lod_switch_no_stall": {
+        "crossings": 0,
+        "hitches_over_two_frames": null,
+        "verdict": "not-measured",
+        "worst_crossing_ms": null
+      },
+      "5_l2_labels": {
+        "labels_rendered": 232,
+        "minimum": 200,
+        "note": null,
+        "verdict": "not-measured"
+      },
+      "6_standalone_window_from_store": {
+        "detail": "native glfw window rendering the shared-mount .out/ tables",
+        "verdict": "pass"
+      }
+    },
+    "errors": [],
+    "overall": "fail",
+    "stress_run": null,
+    "unmeasured": [
+      "2_pan_zoom_fps",
+      "3_picking_latency",
+      "4_lod_switch_no_stall",
+      "5_l2_labels"
+    ]
+  },
+  "launched_via": "install_host.sh printed command (assert this yourself \u2014 a verdict from a hand-built env is invalid, ADR D10)",
+  "mode": "interactive",
+  "scene": {
+    "edge_groups": [
+      {
+        "exactness": "exact",
+        "kind": "imports",
+        "legend": "imports: exact",
+        "level": 0,
+        "segments": 3,
+        "self_loops": 1,
+        "solid": true,
+        "unresolved_endpoints": 0
+      },
+      {
+        "exactness": "approximate",
+        "kind": "invokes",
+        "legend": "invokes: approximate (source-parsed, not compiler-derived)",
+        "level": 0,
+        "segments": 5,
+        "self_loops": 3,
+        "solid": false,
+        "unresolved_endpoints": 0
+      },
+      {
+        "exactness": "exact",
+        "kind": "imports",
+        "legend": "imports: exact",
+        "level": 1,
+        "segments": 37,
+        "self_loops": 1,
+        "solid": true,
+        "unresolved_endpoints": 0
+      },
+      {
+        "exactness": "approximate",
+        "kind": "invokes",
+        "legend": "invokes: approximate (source-parsed, not compiler-derived)",
+        "level": 1,
+        "segments": 72,
+        "self_loops": 40,
+        "solid": false,
+        "unresolved_endpoints": 0
+      },
+      {
+        "exactness": "exact",
+        "kind": "imports",
+        "legend": "imports: exact",
+        "level": 2,
+        "segments": 531,
+        "self_loops": 0,
+        "solid": true,
+        "unresolved_endpoints": 0
+      },
+      {
+        "exactness": "approximate",
+        "kind": "invokes",
+        "legend": "invokes: approximate (source-parsed, not compiler-derived)",
+        "level": 2,
+        "segments": 502,
+        "self_loops": 162,
+        "solid": false,
+        "unresolved_endpoints": 0
+      }
+    ],
+    "labels": 232,
+    "nodes_per_level": {
+      "0": 4,
+      "1": 61,
+      "2": 232
+    },
+    "snapshot": "4a37475eece21eed08fb0d9b59a8d7fc6ae885085fcbf09d60f879824e98e051",
+    "stress_factor": 1
+  },
+  "stage": "d7-spike"
+}
