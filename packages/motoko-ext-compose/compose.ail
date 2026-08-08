@@ -861,7 +861,7 @@ export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: stri
       --
       -- SCOPED TO THIS HOOK. `one_attempt:501` has the same defect and is Route B
       -- part 2b's, not this item's.
-      let made = p.dir_make(reading.next_state, "${ctx.workdir}/tmp");
+      let made = p.dir_make(reading.next_state, "tmp");
       let clean = compose_file_body(snippet);
       let written = p.file_write(made.next_state, path, "${compose_module_header(name)}\n\n${clean}");
       let checked = check_snippet(path);
