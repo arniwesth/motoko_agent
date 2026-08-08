@@ -26,14 +26,27 @@ the row compares two things that can disagree.
 
 ## 1. The git wall-clock window
 
-Handoff commit `a816bcd` at `2026-08-08T14:32:09Z`; commit closing the item at ~`16:20Z`. **The window
-is ~1h48m**, against D21's ~1h05m, D20's ~1h13m and D19's ~52m.
+Handoff commit `a816bcd` at `2026-08-08T14:32:09Z`; commit closing the item `ba272ab` at
+`2026-08-08T15:57Z`. **The window is ~1h25m**, against D21's ~1h05m, D20's ~1h13m and D19's ~52m.
+
+**A CONCURRENT SESSION IS WORKING IN THIS REPOSITORY AND ITS COMMIT `b23a44e` SWEPT UP TWO OF THIS
+ITEM'S FILES.** `src/core/fs_node.ail` and `scripts/dst/fixtures/execution-program-v2.artifact` had
+been `git add`ed before the mutant runs (which need a `git stash push`/`pop` to take a HEAD baseline),
+and a `git commit -a`-shaped commit from the other session, titled "Addded handoff, plan, note and
+updated ADR", carried them. **The content is correct and intact in HEAD; only the attribution is
+wrong**, and it is recorded here rather than repaired, because rewriting another session's commit is
+the more expensive mistake. The practical lesson for the next item: `git stash` is not safe to use for
+a HEAD baseline while another agent shares the worktree.
 
 **It is the longest of the four and the comparison is not like-for-like.** D19–D21 were measurement
 items that routed nothing; this one edited **22 files** and produced **+995/−130 lines**. The time
-divides roughly: ~35m grounding and design (the `FsNode` location and the two-codec question are both
+divides roughly: ~30m grounding and design (the `FsNode` location and the two-codec question are both
 decisions with a wrong cheap answer), ~50m edits and the type-error cascade from two record widenings,
 ~15m mutants, ~10m lost to an environment problem reported in §9.
+
+**Longer than D21 and shorter than the line count suggests**, because the two design questions the
+handoff flagged (§3, §4) were the only places the work stalled; the two record widenings produced a
+type-error cascade across 15 files that was mechanical once the first one was resolved.
 
 ---
 
