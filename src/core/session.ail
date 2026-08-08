@@ -45,7 +45,7 @@ import src/core/types (Msg)
 import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
 import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
 import src/core/context_usage (resolve_context_limit)
@@ -147,7 +147,7 @@ import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of)
+import src/core/ports (ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir) -- WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -920,6 +920,40 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
     let done = p.file_remove(w0, path);
     { ok: done.ok, error: done.error, next_state: world_to_token(done.next_state) }
   };
+  -- WI-D18's three DIRECTORY seams. Same `let w0` shape and the same S3 tool
+  -- reason as every seam above.
+  --
+  -- THE KIND IS TRANSLATED BY AN EXHAUSTIVE MATCH AND NOT BY A STRING. `PathKind`
+  -- and `ExtPathKind` are two three-valued sums, and this is the one place they
+  -- meet; a `path_kind_label` round trip through a string would type-check, would
+  -- collapse an unrecognised label onto some default, and would put the
+  -- vocabulary in two homes on either side of the boundary. The match is what
+  -- makes a fourth constructor on either sum a compile error here.
+  let path_stat = func(w: ExtWorld, path: string) -> ExtPathStat ! {FS} {
+    let w0 = token_to_world(w);
+    let stat = p.path_stat(w0, path);
+    let k = match stat.kind {
+      PathMissing => ExtPathMissing,
+      PathFile => ExtPathFile,
+      PathDir => ExtPathDir
+    };
+    { kind: k, next_state: world_to_token(stat.next_state) }
+  };
+  -- `present` and `entries` are FORWARDED rather than re-derived. Deriving
+  -- `present: List.length(entries) > 0` here would type-check and would erase the
+  -- empty-directory-versus-absent-path distinction that the core class was built
+  -- to carry — one expression away from a silent wrong answer, at the boundary
+  -- rather than in the world.
+  let dir_list = func(w: ExtWorld, path: string) -> ExtDirListing ! {FS} {
+    let w0 = token_to_world(w);
+    let listing = p.dir_list(w0, path);
+    { present: listing.present, entries: listing.entries, next_state: world_to_token(listing.next_state) }
+  };
+  let dir_make = func(w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+    let w0 = token_to_world(w);
+    let done = p.dir_make(w0, path);
+    { ok: done.ok, error: done.error, next_state: world_to_token(done.next_state) }
+  };
   -- WI-C5 routes the clock. It is written with the SAME `let w0` shape as
   -- `ai_step` above and for the same tool reason, not for symmetry: the
   -- inventory's call matcher cannot follow an argument list with nested
@@ -943,6 +977,11 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
     -- `returns-it` rather than `unrouted`.
     file_write: file_write,
     file_remove: file_remove,
+    -- WI-D18. Nothing calls these three either; they are here because the core
+    -- classes exist, which is what makes them derive `returns-it`.
+    path_stat: path_stat,
+    dir_list: dir_list,
+    dir_make: dir_make,
     -- WI-C5. Was `ext_unrouted_clock` — an ambient `now()` that plan rule S2
     -- chose deliberately, because `ExtPorts.clock_now`'s `() -> int` shape
     -- admitted no world capture and the alternative was a frozen snapshot that

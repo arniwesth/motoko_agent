@@ -37,7 +37,7 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   CausalIdentity,
   StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -294,7 +294,9 @@ pure func validate_identity(id: CausalIdentity) -> [ProgramRejection] {
     FileWriteIdentity(path) =>
       if blank(path) then [IdentityComponentMissing(o, "file_write path")] else [],
     FileRemoveIdentity(path) =>
-      if blank(path) then [IdentityComponentMissing(o, "file_remove path")] else []
+      if blank(path) then [IdentityComponentMissing(o, "file_remove path")] else [],
+    DirMakeIdentity(path) =>
+      if blank(path) then [IdentityComponentMissing(o, "dir_make path")] else []
   }
 }
 
@@ -398,6 +400,16 @@ pure func validate_outcome(i: Interaction, known_class_ids: [string]) -> [Progra
                     -- write — so its only non-ok outcome is a genuine failure,
                     -- and that belongs to the fault arm whenever the catalogue
                     -- grows a class for it.
+                    --
+                    -- WI-D18's `dir_make` IS NOT ADMITTED EITHER, and it reaches
+                    -- the rejecting arm below by falling through rather than by
+                    -- being named — which is why it is stated here. `mkdirAll`
+                    -- is IDEMPOTENT: creating a directory that already exists
+                    -- succeeds, so "it was already there" is an ordinary `ok`
+                    -- and not a missing answer. The class therefore has no
+                    -- reading-B state at all, and the widening stays at exactly
+                    -- one mutator. `execution_program_dst` mutant 12e is what
+                    -- says so rather than this sentence.
                     FileRemoveIdentity(_) => [],
                     _ => [OutcomeStatusDisagreesWithFault(o, "is a ${interaction_kind(i)} with a 'missing' status, which D2 defines only for an environment read, (WI-A13) an approval whose queue is exhausted, and (WI-D17) a file_remove of a path the world does not hold")]
                   })

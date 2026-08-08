@@ -165,7 +165,7 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   CausalIdentity,
   StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -412,7 +412,8 @@ pure func identity_slots(b: IdentityBody) -> { a: string, b: string, c: string }
     RandomDrawIdentity(bounds) => { a: bounds, b: "", c: "" },
     ClockAdvanceIdentity => { a: "", b: "", c: "" },
     FileWriteIdentity(path) => { a: path, b: "", c: "" },
-    FileRemoveIdentity(path) => { a: path, b: "", c: "" }
+    FileRemoveIdentity(path) => { a: path, b: "", c: "" },
+    DirMakeIdentity(path) => { a: path, b: "", c: "" }
   }
 }
 
@@ -780,6 +781,7 @@ pure func body_of(kind: string, no: int, a: string, b: string, c: string)
   -- arm does the opposite by design — see `dst_interaction.identity_kind`.
   else if kind == "file_write" then { body: [FileWriteIdentity(a)], refusals: [] }
   else if kind == "file_remove" then { body: [FileRemoveIdentity(a)], refusals: [] }
+  else if kind == "dir_make" then { body: [DirMakeIdentity(a)], refusals: [] }
   else { body: [], refusals: [UnknownInteractionKind(no, kind)] }
 }
 

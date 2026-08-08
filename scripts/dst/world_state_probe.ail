@@ -74,7 +74,11 @@ import src/core/ports (ScriptedStep, WorldState, empty_world_state,
   -- WI-D17's write class, exercised at the ADAPTER rather than through the
   -- driver, because nothing routes it yet — see `assert_file_write_class`.
   scripted_file, scripted_file_write, scripted_file_remove,
-  recording_file_write, recording_file_remove)
+  recording_file_write, recording_file_remove,
+  -- WI-D18's directory class, same reason and the same shape of instrument.
+  FsNode, FsFile, FsDir,
+  PathKind, PathMissing, PathFile, PathDir, path_kind_label,
+  scripted_path_stat, scripted_dir_list, scripted_dir_make, recording_dir_make)
 import src/core/dst_interaction (Interaction, interaction_kind, count_kind)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
@@ -354,7 +358,7 @@ func assert_file_write_class() -> bool ! {FS, IO} {
   --    the seeded value. Seeded input and produced output share one table, so
   --    an adapter that only prepended to a table it thought was empty is wrong
   --    here and nowhere else.
-  let seeded = { empty_world_state() | files: [{ path: p, content: "SEEDED" }] };
+  let seeded = { empty_world_state() | files: [{ path: p, node: FsFile("SEEDED") }] };
   let over_seed = scripted_file_write(seeded, p, "CHARLIE");
   let seed_read = scripted_file(over_seed.next_state, p);
   let r5 = check("file_write: a write over a SEEDED path replaces the seeded content",
@@ -394,6 +398,151 @@ func assert_file_write_class() -> bool ! {FS, IO} {
                  "log=${show(List.length(rec_r.next_state.log))}");
 
   r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9
+}
+
+-- WI-D18's DIRECTORY class, asserted at the ADAPTER for `assert_file_write_class`'s
+-- reason unchanged: nothing routes it, so there is no run whose behaviour can
+-- branch on a directory. Weaker than the file read's provenance pair, and named
+-- as such rather than presented as coverage.
+--
+-- ROW 3 IS WHY THE ITEM EXISTS. An empty directory and an absent path must be
+-- DISTINGUISHABLE. Every other row here passes under the prefix-derived
+-- representation that was rejected; row 3 is the only one that does not, because
+-- under that design an empty directory has no entries and therefore no evidence.
+-- If a future change makes `WorldState.files` unable to hold a childless
+-- directory, this is the row that says so.
+--
+-- Per S24 reachability is asserted separately from verdict throughout: every
+-- "after" row has a "before" control, because "present after mkdir" is satisfied
+-- by a world that always said present.
+func assert_directory_class() -> bool ! {FS, IO} {
+  let d = "/w/tmp";
+  let f = "/w/tmp/snippet.ail";
+  let w0 = empty_world_state();
+
+  -- 1. THE DERIVATION ROW. A directory exists because something is under it,
+  --    with no `mkdirAll` anywhere. This is what keeps the deterministic adapter
+  --    agreeing with the ambient one for a fixture that seeds a file directly:
+  --    a host has no way to hold `/w/tmp/snippet.ail` without `/w/tmp` being a
+  --    directory.
+  let before_d = scripted_path_stat(w0, d);
+  let wrote = scripted_file_write(w0, f, "ALPHA");
+  let after_d = scripted_path_stat(wrote.next_state, d);
+  let after_f = scripted_path_stat(wrote.next_state, f);
+  let r1a = check("path_stat: the parent is MISSING before anything is written under it",
+                  path_kind_label(before_d.kind) == "missing",
+                  "kind=${path_kind_label(before_d.kind)} — the control failed, so the row below proves nothing");
+  let r1 = check("path_stat: a write under a path makes that path a DIRECTORY, with no mkdir",
+                 path_kind_label(after_d.kind) == "dir" && path_kind_label(after_f.kind) == "file",
+                 "parent=${path_kind_label(after_d.kind)} child=${path_kind_label(after_f.kind)}");
+
+  -- 2. THE THREE-VALUED ROW. `normalize_type` needs dir / file / missing, and
+  --    `FileRead.present` has two values. This is the assertion that the third
+  --    value exists and is reachable.
+  let missing = scripted_path_stat(wrote.next_state, "/w/nope");
+  let r2 = check("path_stat: the class is genuinely THREE-valued — dir, file and missing all occur in one world",
+                 path_kind_label(after_d.kind) == "dir"
+                   && path_kind_label(after_f.kind) == "file"
+                   && path_kind_label(missing.kind) == "missing",
+                 "dir=${path_kind_label(after_d.kind)} file=${path_kind_label(after_f.kind)} missing=${path_kind_label(missing.kind)}");
+
+  -- 3. THE ROW THE ITEM IS SHAPED AROUND. An EMPTY directory is distinguishable
+  --    from an ABSENT one. `dir_list` answers `present: true, entries: []` for
+  --    the first and `present: false, entries: []` for the second, and
+  --    `list_dir_impl` turns that difference into `entries: []` against a
+  --    `not_found` error — two different tool results a session can branch on.
+  --
+  --    An adapter deriving `present` from `List.length(entries) > 0` type-checks
+  --    and passes every other row in this function.
+  let made = scripted_dir_make(w0, "/w/empty");
+  let empty_listing = scripted_dir_list(made.next_state, "/w/empty");
+  let absent_listing = scripted_dir_list(made.next_state, "/w/never-made");
+  let r3 = check("dir_list: an EMPTY directory is distinguishable from an ABSENT path",
+                 made.ok
+                   && empty_listing.present && List.length(empty_listing.entries) == 0
+                   && not absent_listing.present && List.length(absent_listing.entries) == 0,
+                 "empty: present=${show(empty_listing.present)} n=${show(List.length(empty_listing.entries))}; absent: present=${show(absent_listing.present)} — if these two agree the world cannot hold a childless directory and `list_dir` on one replies not_found");
+
+  -- 4. THE LISTING ROW. Immediate children only, as NAMES, deduped and sorted.
+  --    Two files in one subdirectory both yield that subdirectory's name, and a
+  --    real directory holds it once; the sort is what makes the listing a
+  --    function of the SET rather than of the write order, which matters because
+  --    `scripted_file_write` prepends.
+  --    THE WRITE ORDER HERE IS CHOSEN AND NOT INCIDENTAL, and a mutant is what
+  --    said so: written the other way round (`b/x`, `b/y`, then `a.ail`) the
+  --    prepend leaves `a.ail` at the head and the derived names come out
+  --    ALREADY SORTED, so dropping the sort passed this row and the claim in the
+  --    label was pinned by nothing. `a.ail` is written FIRST so that the
+  --    unsorted answer is `[b, a.ail]` and the sort has something to do.
+  let many = scripted_file_write(
+               scripted_file_write(
+                 scripted_file_write(w0, "/w/p/a.ail", "3").next_state,
+                 "/w/p/b/x.ail", "1").next_state,
+               "/w/p/b/y.ail", "2");
+  let listing = scripted_dir_list(many.next_state, "/w/p");
+  let r4 = check("dir_list: immediate children only, deduped and SORTED — not grandchildren, not write order",
+                 listing.present && show(listing.entries) == show(["a.ail", "b"]),
+                 "entries=${show(listing.entries)} — expected [a.ail, b]; two files under b must yield b once, and the order must not depend on which was written first");
+
+  -- 5. THE MKDIR ROWS. Idempotent over an existing directory, refused over an
+  --    existing FILE — both of which the host does, and the second of which is
+  --    the one input where a bare table insertion would have invented a state
+  --    the live world cannot reach.
+  let again = scripted_dir_make(made.next_state, "/w/empty");
+  let over_file = scripted_dir_make(wrote.next_state, f);
+  let r5 = check("dir_make: creating an existing directory succeeds and does not grow the table",
+                 again.ok && List.length(again.next_state.files) == List.length(made.next_state.files),
+                 "ok=${show(again.ok)} entries ${show(List.length(made.next_state.files))} -> ${show(List.length(again.next_state.files))}");
+  let r6 = check("dir_make: creating a directory over an existing FILE is refused",
+                 not over_file.ok,
+                 "ok=true — a table insertion here would put a directory and a file at one key, which no host can produce");
+
+  -- 6. THE KIND-EXCLUSION ROW. A path is a file or a directory and never both,
+  --    which the ONE KINDED TABLE gets by construction and a `dirs`-beside-`files`
+  --    design would have had to police. `file_read` on a directory is absent, and
+  --    `file_write` over one is refused.
+  let read_dir = scripted_file(made.next_state, "/w/empty");
+  let write_over_dir = scripted_file_write(made.next_state, "/w/empty", "X");
+  let r7 = check("the table is kinded: a directory is not a readable file and cannot be overwritten by one",
+                 not read_dir.present && not write_over_dir.ok,
+                 "present=${show(read_dir.present)} write_ok=${show(write_over_dir.ok)}");
+
+  -- 7. THE PATH-KEY ROW. WI-D18 keys the world on RAW STRINGS and does not
+  --    normalise; `WorldState.files` states the rule and the reason. This
+  --    reproduces compose's own live shape — `compose.ail:769` creates
+  --    `"${ctx.workdir}/tmp"` and `:771` writes `"tmp/${name}.ail"` — and pins
+  --    what the world does with it.
+  --
+  --    IT IS NOT A BUG ROW. It asserts the decided behaviour, and the point is
+  --    the SECOND clause: the aliased directory is left EMPTY rather than absent,
+  --    so a routed run's `list_dir` reports `entries: []` where a correct run
+  --    reports the file. Under the prefix-derived representation this state would
+  --    have read as "the mkdir never happened", which is indistinguishable from
+  --    the effect not having been routed at all. Representing the empty directory
+  --    is what makes the key rule's consequence observable, and that is the
+  --    finding the two decisions produce together.
+  let aliased = scripted_file_write(scripted_dir_make(w0, "/w/tmp").next_state,
+                                    "tmp/x.ail", "BODY");
+  let abs_listing = scripted_dir_list(aliased.next_state, "/w/tmp");
+  let rel_listing = scripted_dir_list(aliased.next_state, "tmp");
+  let r8 = check("path key: an absolute mkdir and a relative write are TWO directories, and the created one is observably empty",
+                 abs_listing.present && List.length(abs_listing.entries) == 0
+                   && rel_listing.present && show(rel_listing.entries) == show(["x.ail"]),
+                 "abs: present=${show(abs_listing.present)} n=${show(List.length(abs_listing.entries))}; rel entries=${show(rel_listing.entries)} — the world compares path keys, it does not resolve them, and Route B part 2 must supply one spelling per path");
+
+  -- 8. THE RECORDING ROW. `recording_dir_make` must do BOTH jobs — append the
+  --    interaction AND perform the state update — for `recording_file_write`'s
+  --    reason: a recorder that logged and did not act produces a log that looks
+  --    complete over a world that never changed.
+  let rec = recording_dir_make(empty_world_state(), d);
+  let rec_stat = scripted_path_stat(rec.next_state, d);
+  let r9 = check("recording_dir_make: the interaction is logged AND the directory exists",
+                 List.length(rec.next_state.log) == 1
+                   && count_kind(rec.next_state.log, "dir_make") == 1
+                   && path_kind_label(rec_stat.kind) == "dir",
+                 "log=${show(List.length(rec.next_state.log))} kind=${path_kind_label(rec_stat.kind)}");
+
+  r1a && r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9
 }
 
 -- Axis A + B for one run. `expect_served` is the served sequence an advancing
@@ -686,7 +835,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     empty_world_state() |
     script: [prose_step("done")],
     files: [{ path: ".motoko/config/default/config.json",
-              content: "{\"agent\":{\"context_limit\":1}}" }]
+              node: FsFile("{\"agent\":{\"context_limit\":1}}") }]
   };
   let no_files_world: WorldState = { empty_world_state() | script: [prose_step("done")] };
   let with_files = run_world(approval_rt("probe_files_s"), 4, files_world);
@@ -746,12 +895,15 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- file_write / file_remove: WI-D17's class, at the adapter.
   let ok_write = assert_file_write_class();
 
+  -- path_stat / dir_list / dir_make: WI-D18's class, at the adapter.
+  let ok_dir = assert_directory_class();
+
   -- determinism: same world twice.
   let again = run_with(rt_with(passthrough_pre_step, "probe_advance"), 12, script());
   let ok_det = assert_deterministic("repeat", advance, again);
 
   if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
-     && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_files && ok_files_ctl && ok_write
+     && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_files && ok_files_ctl && ok_write && ok_dir
      && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det then
     println("world_state_probe PASS")
   else {

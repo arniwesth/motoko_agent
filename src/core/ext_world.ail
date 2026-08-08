@@ -36,13 +36,15 @@ import std/option (Option, Some, None)
 import std/list as List (length)
 import std/result (Ok, Err)
 import std/ai (ToolCall)
-import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
+-- WI-D18: `FsNode` is the kinded `WorldState.files` entry — see that field for
+-- the representation argument. The token has to carry the kind explicitly.
+import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state, FsNode, FsFile, FsDir)
 import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   -- WI-D17. The identity round trip is asserted with the sum's OWN equality
   -- rather than by re-matching each variant at the assertion site, because a
   -- comparison written here is a second notion of "same identity" that can
@@ -225,18 +227,43 @@ pure func env_of(xs: [Json]) -> [{ key: string, value: string }] {
 -- full record and AILANG demands every label — but the ENCODER omitting a key is
 -- the half nothing forces, and `codec_fixture_world` carries a distinct `files`
 -- entry so the round trip fails rather than the run.
-pure func files_json(xs: [{ path: string, content: string }]) -> [Json] {
-  match xs {
-    [] => [],
-    x :: rest => jo([kv("path", js(x.path)), kv("content", js(x.content))]) :: files_json(rest)
+--
+-- WI-D18 MADE THE ENTRY KINDED and the codec carries the kind EXPLICITLY, in its
+-- own key, rather than inferring it. Inference was available and is exactly the
+-- defect this codec's own header warns about: "a directory is an entry with no
+-- content" would read every present-but-EMPTY FILE back as a directory, and the
+-- present-but-empty file is the case the fixture below already exists to pin.
+-- One key, two states, no derivation.
+--
+-- The decoder's fallback is `FsFile` rather than `FsDir`, and the choice matters
+-- because `str_field` is total: a token written by an older build carries no
+-- `kind` key at all, and every entry such a build could have written WAS a file.
+-- Falling back to `FsDir` would silently turn an old world's whole file table
+-- into directories.
+pure func file_entry_json(x: { path: string, node: FsNode }) -> Json {
+  match x.node {
+    FsFile(c) => jo([kv("path", js(x.path)), kv("kind", js("file")), kv("content", js(c))]),
+    FsDir => jo([kv("path", js(x.path)), kv("kind", js("dir")), kv("content", js(""))])
   }
 }
 
-pure func files_of(xs: [Json]) -> [{ path: string, content: string }] {
+pure func fs_node_of(j: Json) -> FsNode {
+  if str_field(j, "kind", "file") == "dir" then FsDir
+  else FsFile(str_field(j, "content", ""))
+}
+
+pure func files_json(xs: [{ path: string, node: FsNode }]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => file_entry_json(x) :: files_json(rest)
+  }
+}
+
+pure func files_of(xs: [Json]) -> [{ path: string, node: FsNode }] {
   match xs {
     [] => [],
     x :: rest =>
-      ({ path: str_field(x, "path", ""), content: str_field(x, "content", "") }) :: files_of(rest)
+      ({ path: str_field(x, "path", ""), node: fs_node_of(x) }) :: files_of(rest)
   }
 }
 
@@ -268,7 +295,9 @@ pure func identity_body_json(b: IdentityBody) -> Json {
     FileWriteIdentity(path) =>
       jo([kv("t", js("file_write")), kv("a", js(path))]),
     FileRemoveIdentity(path) =>
-      jo([kv("t", js("file_remove")), kv("a", js(path))])
+      jo([kv("t", js("file_remove")), kv("a", js(path))]),
+    DirMakeIdentity(path) =>
+      jo([kv("t", js("dir_make")), kv("a", js(path))])
   }
 }
 
@@ -290,6 +319,8 @@ pure func identity_body_of(j: Json) -> IdentityBody {
     FileWriteIdentity(str_field(j, "a", ""))
   else if t == "file_remove" then
     FileRemoveIdentity(str_field(j, "a", ""))
+  else if t == "dir_make" then
+    DirMakeIdentity(str_field(j, "a", ""))
   else
     ClockAdvanceIdentity
 }
@@ -523,8 +554,15 @@ pure func codec_fixture_world() -> WorldState {
     -- WI-D3's file table. TWO entries so a decoder that collapses the list is
     -- visible, and the second holds "" content at a path that EXISTS — the one
     -- state `FileRead.exists` carries that content alone cannot express.
-    files: [{ path: "/w/catalog.json", content: "{\"context_limits\":{\"m\":71}}" },
-            { path: "/w/present-but-empty.json", content: "" }],
+    -- WI-D18 kinded the entries and added a THIRD: an explicit EMPTY DIRECTORY.
+    -- It is the entry whose whole purpose is to be indistinguishable from an
+    -- absent path under a codec that drops the kind — the transport analogue of
+    -- the representation argument at `WorldState.files`. Note that it and the
+    -- present-but-empty FILE serialise to the same `content: ""`, so `kind` is
+    -- the only thing keeping them apart on the wire.
+    files: [{ path: "/w/catalog.json", node: FsFile("{\"context_limits\":{\"m\":71}}") },
+            { path: "/w/present-but-empty.json", node: FsFile("") },
+            { path: "/w/empty-dir", node: FsDir }],
     tools: [{ tool_call_id: "t-17", duration_ms: 199, code: "E_TOOL",
               message: "tool said no", content: "the content" }],
     log: [
@@ -639,6 +677,14 @@ pure func test_the_world_token_round_trips_the_log_and_the_generator() -> bool
 -- The remaining scalars, asserted by value rather than by count: the approvals
 -- queue's ORDER (a cursor consumed head-first, so a reversed list replays
 -- different answers), the env pair, and the scripted tool's five fields.
+pure func node_is_file(n: FsNode, content: string) -> bool {
+  match n { FsFile(c) => c == content, FsDir => false }
+}
+
+pure func node_is_dir(n: FsNode) -> bool {
+  match n { FsDir => true, FsFile(_) => false }
+}
+
 pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
   tests [((), true)]
   {
@@ -661,9 +707,18 @@ pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
     -- an empty table reads exactly like a world whose files were never seeded.
     -- The second entry pins the present-but-empty path, which is the case a
     -- decoder inferring existence from content gets wrong.
+    --
+    -- WI-D18 added the third entry and the KIND assertions. The pair that
+    -- matters is `g` against `h`: a present-but-empty FILE and an empty
+    -- DIRECTORY encode to the same `content` and differ only in `kind`, so an
+    -- encoder that dropped the kind key would round-trip the directory back as
+    -- an empty file and every length, path and content check here would still
+    -- pass.
     let files_ok = match back.files {
-      f :: g :: [] => f.path == "/w/catalog.json" && f.content == "{\"context_limits\":{\"m\":71}}"
-                        && g.path == "/w/present-but-empty.json" && g.content == "",
+      f :: g :: h :: [] =>
+        f.path == "/w/catalog.json" && node_is_file(f.node, "{\"context_limits\":{\"m\":71}}")
+          && g.path == "/w/present-but-empty.json" && node_is_file(g.node, "")
+          && h.path == "/w/empty-dir" && node_is_dir(h.node),
       _ => false
     };
     approvals_ok && env_ok && tools_ok && files_ok
@@ -693,7 +748,8 @@ pure func every_identity_body() -> [IdentityBody] {
    RandomDrawIdentity("int[0,100)"),
    ClockAdvanceIdentity,
    FileWriteIdentity("/w/tmp/snippet.ail"),
-   FileRemoveIdentity("/w/tmp/snippet.ail")]
+   FileRemoveIdentity("/w/tmp/snippet.ail"),
+   DirMakeIdentity("/w/tmp")]
 }
 
 pure func log_of_bodies(bs: [IdentityBody], ord: int) -> [Interaction] {
@@ -742,6 +798,13 @@ pure func test_the_identity_round_trip_comparison_discriminates() -> bool
       && not identity_body_eq(FileWriteIdentity("/w/p"), FileRemoveIdentity("/w/p"))
       && identity_kind(FileWriteIdentity("/w/p")) == "file_write"
       && identity_kind(FileRemoveIdentity("/w/p")) == "file_remove"
+      -- WI-D18. The tenth constructor, and it earned this row: the length check
+      -- in the test above went red the moment `DirMakeIdentity` was added and
+      -- `every_identity_body()` was not, which is what that check was written
+      -- for one item earlier.
+      && not identity_body_eq(DirMakeIdentity("/w/p"), ClockAdvanceIdentity)
+      && not identity_body_eq(DirMakeIdentity("/w/p"), FileWriteIdentity("/w/p"))
+      && identity_kind(DirMakeIdentity("/w/p")) == "dir_make"
   }
 
 -- ---------------------------------------------------------------------------

@@ -7,7 +7,9 @@
 module src/core/ports
 
 import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
-import std/list as List (length)
+-- WI-D18 added `sortBy`/`dedup`: a directory listing is a SET of names in a
+-- stable order, and both halves are asserted — see `scripted_dir_list`.
+import std/list as List (length, sortBy, dedup)
 import std/result (Result)
 import std/trace as Trace
 -- WI-A13 stage 3 needs `decode` and the accessors as well: the recorded
@@ -23,12 +25,22 @@ import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, 
 -- happened while these codecs were being written, and the round-trip tests
 -- below are what caught it; nothing else could have.
 import std/option (Option, Some, None)
-import std/fs (fileExists, readFile, writeFileResult, removeFileResult)
+-- WI-D18 added `isDir`/`isFile`/`listDir`/`mkdirAllResult`: the ambient half of
+-- the directory class. `mkdirAllResult` and not `mkdirAll` for `FileMutation`'s
+-- stated reason — the unit-returning form is where the failure is thrown away,
+-- and this is the layer that must not throw it away.
+import std/fs (fileExists, readFile, writeFileResult, removeFileResult,
+  isDir, isFile, listDir, mkdirAllResult)
 import std/env (getEnvOr)
 -- WI-D17. `Str.length` is the write class's CONTENT WITNESS and the only thing
 -- the recorder learns about a written body — see `recording_file_write` for why
 -- the content itself must not enter the log.
-import std/string as Str (length)
+--
+-- WI-D18 added the three path-key primitives. `startsWith` is how a child is
+-- recognised, `split` is how the next segment is taken, and `compare` is what
+-- orders a listing — see `scripted_dir_list` for why the ordering is imposed at
+-- BOTH adapters rather than left to whichever filesystem answered.
+import std/string as Str (length, startsWith, split, compare, substring)
 import src/core/phase_vocab (ApprovalRequest)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/tool_dispatch_adapter (dispatch_one)
@@ -42,7 +54,7 @@ import src/core/tool_dispatch_adapter (dispatch_one)
 import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing, generator_authored_count
 )
 -- WI-A13 stage 4. The GENERATOR STATE rides in `WorldState` for exactly the
@@ -237,7 +249,93 @@ export type WorldState = {
   -- the checkout happened to carry. That read was the defect; a fixture that
   -- wants a context limit now declares one, and `long_qwen_compaction_dst`
   -- always did.
-  files: [{ path: string, content: string }],
+  --
+  -- =========================================================================
+  -- WI-D18: THE REPRESENTATION DECISION, AND IT IS THIS FIELD'S ELEMENT TYPE.
+  -- =========================================================================
+  --
+  -- The entry was `{ path, content }` until WI-D18 and is now `{ path, node }`,
+  -- where `node` is `FsFile(content)` or `FsDir`. ONE TABLE holds both files and
+  -- directories. Three candidate representations were on the table and the two
+  -- that lost are named here, because the loser's failure mode is the reason the
+  -- winner looks like extra machinery:
+  --
+  --   PREFIX-DERIVED (no new shape at all). `is_dir(p)` is true iff some entry's
+  --     path is under `p/`; `list_dir(p)` is the distinct next segments. It is
+  --     the cheapest answer and it has exactly one defect: AN EMPTY DIRECTORY IS
+  --     UNREPRESENTABLE, so it reads identically to an absent one. That is this
+  --     project's counted failure mode — absent reading identically to unchanged,
+  --     at C1, D6, D12, D13, D16, D17 — appearing IN THE WORLD MODEL rather than
+  --     in an adapter, and `list_dir_impl` (compose `author_tools.ail:190`) turns
+  --     the difference into two different tool results: `entries: []` for an
+  --     empty directory against `not_found` for an absent one. A session can
+  --     branch on it, so the world must be able to say it.
+  --
+  --   A SECOND TABLE (`dirs: [string]` beside `files`). It represents an empty
+  --     directory, and it buys that by making `files` and `dirs` two homes for
+  --     one fact: nothing structural stops `"a/b"` appearing in both, and then
+  --     `path_stat` has to pick. That is `ADR:340-341`'s "exactly one home,
+  --     visibly threaded" broken inside the world itself — the shape D16 and D17
+  --     each argued FROM. It is refused for the reason they were argued.
+  --
+  --   ONE KINDED TABLE — what is here. A path has at most one entry (the map
+  --     invariant `remove_path` already enforced), and an entry is a file or a
+  --     directory and cannot be both. So "this path is a file AND a directory"
+  --     is not representable, rather than representable and forbidden by a rule
+  --     somebody has to remember to write. Design note 1's rule — "a kind that
+  --     disagrees with its own payload cannot be written down" — applied to the
+  --     world's own table instead of to an identity.
+  --
+  -- AN EMPTY DIRECTORY IS THEREFORE DISTINGUISHABLE FROM AN ABSENT ONE, and that
+  -- is asserted rather than described: `dir_list` returns `present: true,
+  -- entries: []` for the first and `present: false, entries: []` for the second,
+  -- and `world_state_probe`'s `assert_directory_class` is the row that separates
+  -- them.
+  --
+  -- IMPLICIT PARENTS ARE STILL DERIVED, and that is not a leftover of the losing
+  -- design. A real filesystem has no way to hold `a/b/c.txt` without `a/b` being
+  -- a directory, so `is_dir` is "an explicit `FsDir` entry OR any entry under
+  -- `p/`". Requiring `mkdirAll` to have run first would make the deterministic
+  -- world disagree with the ambient one on a path a fixture seeded directly.
+  --
+  -- =========================================================================
+  -- WI-D18: THE PATH KEY. RAW STRINGS. THE WORLD DOES NOT NORMALISE.
+  -- =========================================================================
+  --
+  -- `lookup_file`, `remove_path` and every derivation below compare paths with
+  -- `==`. So `tmp/x.ail`, `./tmp/x.ail` and `/w/tmp/x.ail` are THREE keys here
+  -- and one file on a real disk. That is a decision and not an oversight, and
+  -- the alternative was measured rather than dismissed:
+  --
+  --   NORMALISING ON THE WAY IN would fix `./tmp/x` and `tmp//x` — those are
+  --   LEXICAL and need no cwd — and would NOT fix `/w/tmp/x` against `tmp/x`,
+  --   which is the spelling pair that actually occurs (below). Relating an
+  --   absolute path to a relative one requires a working directory, and
+  --   `WorldState` has none; giving it one is a world-shape change that reaches
+  --   replay. A key that normalises the harmless half while leaving the harmful
+  --   half alone is WORSE than one that normalises nothing, because it invites
+  --   the belief that the world canonicalises paths.
+  --
+  -- SO THE RULE IS: THE CALLER SUPPLIES ONE SPELLING PER PATH. It is written
+  -- here because Route B part 2 is the item that must obey it, and because the
+  -- symptom of disobeying it is a read returning `present: false` for a path
+  -- that was just written — indistinguishable from the write never having been
+  -- routed at all.
+  --
+  -- IT IS ALREADY REACHABLE IN COMPOSE AND THE SITE IS NAMED: `compose.ail:769`
+  -- creates `"${ctx.workdir}/tmp"` and `:771` writes `"tmp/${name}.ail"` —
+  -- absolute mkdir, relative write. On disk those agree whenever the process
+  -- runs in `workdir`. In a world keyed on strings they never agree.
+  --
+  -- AND THIS IS WHERE THE TWO DECISIONS MEET, WHICH IS THE FINDING WI-D18
+  -- ACTUALLY BOUGHT. Under the prefix-derived representation the aliased
+  -- directory would be INVISIBLE: `"/w/tmp"` has no children, so it would read as
+  -- absent — exactly as if the `mkdirAll` had never run. Under the kinded table
+  -- it reads as an EMPTY DIRECTORY, which is a state no correct sequence
+  -- produces and which `assert_directory_class`'s alias row pins. Representing
+  -- the empty directory is what makes the path-key defect observable instead of
+  -- silent.
+  files: [{ path: string, node: FsNode }],
 
   -- The tool-execution cursor: the remaining queue of scripted tool outcomes,
   -- consumed head-first like `script` and `approvals`.
@@ -407,6 +505,58 @@ export type FileMutation = {
   next_state: WorldState
 }
 
+-- What `WorldState.files` holds at a path. WI-D18, and the reason it is a SUM
+-- and not a `kind` field beside `content` is design note 1's rule: a
+-- `{ path, kind: "dir", content: "hello" }` would be representable and would be
+-- a directory carrying a file body, so something would have to forbid what the
+-- type should never have allowed. Here the content lives inside the constructor
+-- that has one.
+--
+-- See `WorldState.files` for the full representation argument and for the two
+-- designs this beat.
+export type FsNode = FsFile(string) | FsDir
+
+-- What a path IS. WI-D18, and it is THREE-VALUED because the thing it has to
+-- answer is: compose's `normalize_type` (`author_tools.ail:139-142`) returns
+-- `"dir"` / `"file"` / `"missing"`, and `list_dir_impl` guards `fileExists(path)`
+-- and then `isDir(path)` — so it asks an existence question ABOUT A DIRECTORY.
+--
+-- WHY THIS IS A NEW CLASS AND NOT A WIDENING OF `FileRead`. `FileRead.present`
+-- has two values, and routing a directory through it makes the two adapters give
+-- two DIFFERENT WRONG ANSWERS, one screen apart: `scripted_file` finds no flat
+-- entry for a directory and says `present: false`, while `ambient_file` finds
+-- `fileExists(dir)` true and proceeds to `readFile(dir)`. Neither is the answer
+-- `list_dir_impl` needs. Widening `FileRead` to three values was the other
+-- candidate and it was declined without being attempted: D3's class is settled,
+-- it has eight construction sites and a live consumer in `context_usage`, and
+-- the question "does this path hold bytes I can read" is a genuinely different
+-- question from "what kind of thing is at this path". Two narrow classes, on
+-- WI-D3's own "narrow by construction" ground.
+export type PathKind = PathMissing | PathFile | PathDir
+
+export type PathStat = {
+  kind: PathKind,
+  next_state: WorldState
+}
+
+-- One directory listing and its successor world. WI-D18.
+--
+-- `present` is carried EXPLICITLY and is the whole reason this type exists
+-- rather than a bare `[string]`. It is `FileRead.present`'s argument on a
+-- different pair of states: an empty directory and an absent one BOTH have no
+-- entries, and `list_dir_impl` turns the difference into `entries: []` against a
+-- `not_found` error — two different tool results a session can branch on. A
+-- caller that inferred absence from an empty list would collapse them.
+--
+-- `entries` are the immediate children's NAMES, not paths — `listDir`'s own
+-- shape, which is what compose renders. See `scripted_dir_list` for why they are
+-- sorted in both adapters.
+export type DirListing = {
+  present: bool,
+  entries: [string],
+  next_state: WorldState
+}
+
 -- One approval read and its successor world. `eof` is carried explicitly rather
 -- than inferred from `raw == ""`: a recorded world must be able to replay an
 -- empty line that the operator actually typed as distinct from a closed
@@ -557,7 +707,58 @@ export type Ports = {
   -- neither of which has a core seam (`Ports` has no directory class at all), so
   -- a mediated `mkdirAll` would mutate a table nothing can read. It belongs with
   -- the directory seam WI-D16 §6 priced, not here.
+  --
+  -- WI-D18 IS THAT SEAM AND IT EXPIRED THAT REASON, exactly the way WI-D17
+  -- expired D3's stated reason for leaving reads unrecorded. `dir_make` is three
+  -- fields below.
   file_remove: (WorldState, string) -> FileMutation ! {FS},
+  -- WI-D18's PATH KIND class: three-valued, because the two questions compose
+  -- asks about a path have three answers between them. See `PathStat`.
+  --
+  -- THIS IS THE FIELD THAT CLOSES THE DIRECTORY-VS-FILE EXISTENCE GAP, and the
+  -- gap is a defect that exists today rather than a shape part 2 might want:
+  -- `list_dir_impl` guards `fileExists(path)` and then `isDir(path)`, so routing
+  -- that guard through `file_read` asks a two-valued read about a directory and
+  -- gets a different wrong answer from each adapter. Part 2 routes
+  -- `author_tools.ail:139-142`, `:189-190` and `:250` here instead, and gets one
+  -- answer that both adapters agree on.
+  path_stat: (WorldState, string) -> PathStat ! {FS},
+  -- WI-D18's DIRECTORY LISTING class. Separate from `path_stat` and not folded
+  -- into it: `normalize_type` needs the kind and no entries, and a combined seam
+  -- would make every kind question pay for a listing — and, on the ambient side,
+  -- would have to call `listDir` on paths that are not directories.
+  dir_list: (WorldState, string) -> DirListing ! {FS},
+  -- WI-D18's DIRECTORY CREATE class. MEDIATED, not declined, and the reason is
+  -- that WI-D17's ground for declining it was conditional on there being no
+  -- directory seam — which the two fields above now are.
+  --
+  -- The remaining argument for declining was an OBSERVABILITY MEASUREMENT: all
+  -- six of compose's `mkdirAll` sites (`store.ail:21,39,48`,
+  -- `compose.ail:502,769`, `authoring/dispatcher.ail:216`) are immediately
+  -- followed by a `writeFile` into that directory with no intervening read, so no
+  -- compose session TODAY can observe a created-but-empty directory. That is
+  -- true, and it is not a reason to leave the effect ambient, for two reasons
+  -- that are both about what the measurement is conditional on:
+  --
+  --   1. It is a claim about compose's CURRENT text, falsified by any future site
+  --      that creates a directory and lists it before writing. Mediating the
+  --      effect costs one adapter; the alternative is a guard that has to keep
+  --      being true.
+  --   2. It is false the moment the path key bites. `compose.ail:769` creates
+  --      `"${ctx.workdir}/tmp"` and `:771` writes `"tmp/${name}.ail"`, and in a
+  --      world keyed on raw strings those are two different directories — so the
+  --      created one IS observed empty, by the very next `list_dir`. The
+  --      measurement holds on a real filesystem and fails in the world, and the
+  --      world is what this seam is for.
+  --
+  -- Leaving it ambient while `file_write` and `file_remove` are mediated would
+  -- also put one fact in two homes on all six sites: the directory the run
+  -- created would live on the host and the file written into it would live in
+  -- the world.
+  --
+  -- It returns `FileMutation`, shared with the two mutators above for that
+  -- type's own stated reason — the answers have identical shape.
+  dir_make: (WorldState, string) -> FileMutation ! {FS},
   -- WI-A12's typed tool contract. State-threaded, typed request, typed result.
   -- No `{Clock}` in the row: the adapter ADVANCES the virtual clock
   -- arithmetically from the scripted duration, it never reads one. That keeps
@@ -665,10 +866,37 @@ export func scripted_file(state: WorldState, path: string) -> FileRead ! {FS} {
   }
 }
 
-pure func lookup_file(entries: [{ path: string, content: string }], path: string) -> Option[string] {
+-- The world's answer to "does this path hold BYTES". WI-D18 made it kind-aware,
+-- and that is a behaviour change with a name: a path holding a DIRECTORY is not
+-- a readable file, so `scripted_file` reports it absent rather than serving "".
+--
+-- THE PAIR WAS REPAIRED HERE RATHER THAN EXTENDED, and this is the adapter
+-- disagreement WI-D18 went looking for first. Before this item `ambient_file`
+-- guarded on `fileExists(path)`, which is TRUE for a directory, and then called
+-- `readFile` on it; `scripted_file` had no directories to find and said absent.
+-- Two adapters, one screen apart, giving two different answers to the same
+-- question about the same input — the shape D1's stop condition forbids, and it
+-- was live before this item rather than introduced by it. Both now answer
+-- `present: false` for a directory, and a caller that needs to know WHICH of
+-- "absent" and "is a directory" it is asks `path_stat`, which is the class that
+-- exists to say so.
+pure func lookup_file(entries: [{ path: string, node: FsNode }], path: string) -> Option[string] {
   match entries {
     [] => None,
-    e :: rest => if e.path == path then Some(e.content) else lookup_file(rest, path)
+    e :: rest =>
+      if e.path == path then
+        match e.node { FsFile(c) => Some(c), FsDir => None }
+      else lookup_file(rest, path)
+  }
+}
+
+-- Does the table hold ANY node at this exact key, of either kind? Distinct from
+-- `lookup_file`, which answers only for files, and needed by `remove_path`'s
+-- callers and by `scripted_dir_make`'s "already there" check.
+pure func lookup_node(entries: [{ path: string, node: FsNode }], path: string) -> Option[FsNode] {
+  match entries {
+    [] => None,
+    e :: rest => if e.path == path then Some(e.node) else lookup_node(rest, path)
   }
 }
 
@@ -680,8 +908,17 @@ pure func lookup_file(entries: [{ path: string, content: string }], path: string
 -- `readFile` is called only under `fileExists`, which is the guard every call
 -- site in `context_usage` already carried; hoisting it here means a caller
 -- cannot forget it.
+-- WI-D18 CHANGED THE GUARD from `fileExists` to `isFile`, and it is a repair
+-- rather than a narrowing. `fileExists` is true for a DIRECTORY, so this adapter
+-- used to call `readFile` on one while `scripted_file` reported it absent — the
+-- two halves of the pair disagreeing on a reachable input, which is exactly what
+-- D1's stop condition forbids and what `lookup_file`'s note above describes. The
+-- callers this can affect all pass paths they believe are files
+-- (`context_usage`'s catalogue and config reads), so nothing in the tree changes
+-- behaviour; what changes is that a caller who is wrong about that now gets
+-- `present: false` instead of whatever `readFile` does to a directory.
 export func ambient_file(state: WorldState, path: string) -> FileRead ! {FS} {
-  let here = fileExists(path);
+  let here = isFile(path);
   let content = if here then readFile(path) else "";
   { present: here, content: content, next_state: state }
 }
@@ -718,10 +955,20 @@ export func ambient_file(state: WorldState, path: string) -> FileRead ! {FS} {
 -- disagree only where the host itself fails; the deterministic world has no
 -- permissions and no full disk to model, and modelling them would be inventing
 -- world shape that no gate keeps honest (`WorldState.files`' own rule).
+-- WI-D18 made the entry kinded, so the write now states `FsFile(content)`
+-- explicitly. That is what makes "write a file over a path the world holds as a
+-- DIRECTORY" a representable request with a decided answer, and the answer is
+-- `ok: false`: a real filesystem refuses it (`open …: is a directory`), and an
+-- adapter that silently replaced the directory with a file would let a
+-- deterministic run reach a state the live run cannot.
 export func scripted_file_write(state: WorldState, path: string, content: string) -> FileMutation ! {FS} {
-  { ok: true,
-    error: "",
-    next_state: { state | files: ({ path: path, content: content }) :: remove_path(state.files, path) } }
+  match lookup_node(state.files, path) {
+    Some(FsDir) => { ok: false, error: "is a directory: ${path}", next_state: state },
+    _ =>
+      { ok: true,
+        error: "",
+        next_state: { state | files: ({ path: path, node: FsFile(content) }) :: remove_path(state.files, path) } }
+  }
 }
 
 -- The deterministic filesystem REMOVE. WI-D17.
@@ -744,6 +991,11 @@ export func scripted_file_write(state: WorldState, path: string, content: string
 --
 -- compose guards its removes with `fileExists`, and a guard is only interesting
 -- because the unguarded case exists.
+-- WI-D18: it matches on `lookup_file` and NOT on `lookup_node`, so a
+-- `removeFile` aimed at a directory reports `ok: false` and leaves the world
+-- alone. That is what the host does — `removeFileResult` on a directory returns
+-- `Err` — and it keeps `file_remove` a FILE remove, which is what its name and
+-- its only caller shape (`if fileExists(p) then removeFile(p)`) say it is.
 export func scripted_file_remove(state: WorldState, path: string) -> FileMutation ! {FS} {
   match lookup_file(state.files, path) {
     Some(_) => { ok: true, error: "", next_state: { state | files: remove_path(state.files, path) } },
@@ -754,10 +1006,202 @@ export func scripted_file_remove(state: WorldState, path: string) -> FileMutatio
 -- Every entry for `path`, dropped. Shared by both mutators so that "what it
 -- means to no longer hold this path" has one definition — the same reason
 -- `virtual_clock` is shared rather than reimplemented per adapter.
-pure func remove_path(entries: [{ path: string, content: string }], path: string) -> [{ path: string, content: string }] {
+pure func remove_path(entries: [{ path: string, node: FsNode }], path: string) -> [{ path: string, node: FsNode }] {
   match entries {
     [] => [],
     e :: rest => if e.path == path then remove_path(rest, path) else e :: remove_path(rest, path)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D18: the DIRECTORY class — the derivations, then the six adapters
+-- ---------------------------------------------------------------------------
+
+-- Is `child` strictly beneath `dir`? The whole path-key decision is in this one
+-- function: it is a STRING PREFIX TEST and nothing else. `dir` is a directory of
+-- `child` only when `child` begins with `dir ++ "/"`, so `"/w/tmp"` is not a
+-- parent of `"tmp/x.ail"` no matter what the process's working directory is.
+-- See `WorldState.files`' path-key block for why the world refuses to
+-- canonicalise that away.
+--
+-- The root is special-cased: `""` and `"."` are the spellings compose's
+-- `list_dir_impl` defaults to (`json_string_field(args, "path", ".")`), and
+-- every relative key is beneath them.
+pure func is_beneath(dir: string, child: string) -> bool {
+  if dir == "" || dir == "." then not Str.startsWith(child, "/")
+  else Str.startsWith(child, "${dir}/")
+}
+
+-- The first segment of `child` below `dir`. For `dir="a"` and
+-- `child="a/b/c.txt"` this is `"b"` — a NAME, not a path, because that is what
+-- `listDir` returns and what compose renders.
+pure func segment_below(dir: string, child: string) -> string {
+  let rest =
+    if dir == "" || dir == "." then child
+    else Str.substring(child, Str.length(dir) + 1, Str.length(child));
+  match Str.split(rest, "/") { [] => rest, s :: _ => s }
+}
+
+pure func names_below(entries: [{ path: string, node: FsNode }], dir: string) -> [string] {
+  match entries {
+    [] => [],
+    e :: rest =>
+      if is_beneath(dir, e.path) then segment_below(dir, e.path) :: names_below(rest, dir)
+      else names_below(rest, dir)
+  }
+}
+
+pure func has_children(entries: [{ path: string, node: FsNode }], dir: string) -> bool {
+  match entries {
+    [] => false,
+    e :: rest => if is_beneath(dir, e.path) then true else has_children(rest, dir)
+  }
+}
+
+-- What the world says is at `path`. AN EXPLICIT `FsDir` ENTRY **OR** ANY ENTRY
+-- BENEATH IT, and the disjunction is load-bearing in both directions:
+--
+--   * without the explicit half, an empty directory is unrepresentable and reads
+--     as absent — the losing design `WorldState.files` describes;
+--   * without the derived half, a fixture that seeds `a/b/c.txt` alone would
+--     report `a/b` MISSING, where the ambient adapter reports a directory. That
+--     is the adapter disagreement this class exists to remove, so it cannot be
+--     reintroduced by the class itself.
+--
+-- The root always exists, exactly as `/` and `.` always exist on a host.
+pure func world_path_kind(entries: [{ path: string, node: FsNode }], path: string) -> PathKind {
+  if path == "" || path == "." then PathDir
+  else match lookup_node(entries, path) {
+    Some(FsFile(_)) => PathFile,
+    Some(FsDir) => PathDir,
+    None => if has_children(entries, path) then PathDir else PathMissing
+  }
+}
+
+-- The stable wire/report spelling, and it is deliberately the three strings
+-- compose's own `normalize_type` returns (`author_tools.ail:139-142`). Part 2
+-- routes that function through this class, and a fourth spelling here would mean
+-- the routing item had to write a mapping — a second representation of one fact,
+-- which is what this module's header refuses.
+export pure func path_kind_label(k: PathKind) -> string {
+  match k { PathMissing => "missing", PathFile => "file", PathDir => "dir" }
+}
+
+pure func sort_names(xs: [string]) -> [string] {
+  List.sortBy(Str.compare, List.dedup(xs))
+}
+
+-- The deterministic path kind: ask the world's own table.
+export func scripted_path_stat(state: WorldState, path: string) -> PathStat ! {FS} {
+  { kind: world_path_kind(state.files, path), next_state: state }
+}
+
+-- The ambient path kind: ask the host. `isDir` FIRST, because `isFile` and
+-- `isDir` are the host's two independent questions and a path is at most one of
+-- them; ordering them the other way would be equally correct today and would
+-- read as though the order did not matter.
+--
+-- It matches `normalize_type`'s own order for exactly that reason — part 2
+-- replaces that function's body with a call to this seam, and an adapter that
+-- disagreed with the code it replaces would move a behaviour under cover of
+-- moving an effect.
+export func ambient_path_stat(state: WorldState, path: string) -> PathStat ! {FS} {
+  let k = if isDir(path) then PathDir else if isFile(path) then PathFile else PathMissing;
+  { kind: k, next_state: state }
+}
+
+-- The deterministic directory listing.
+--
+-- `present` IS THE KIND CHECK AND NOT AN EMPTINESS CHECK. `entries: []` with
+-- `present: true` is an EMPTY DIRECTORY and `entries: []` with `present: false`
+-- is an absent path or a file, and keeping those apart is the reason
+-- `WorldState.files` holds kinded nodes at all. An adapter that returned
+-- `present: List.length(entries) > 0` would type-check, pass any fixture that
+-- lists a populated directory, and collapse the distinction this whole item was
+-- built to preserve.
+--
+-- THE NAMES ARE DEDUPED AND SORTED, and both halves are needed:
+--
+--   * DEDUPE, because two files in one subdirectory (`a/b/x`, `a/b/y`) both
+--     yield the segment `b` when listing `a`, and a real directory holds `b`
+--     once;
+--   * SORT, because `scripted_file_write` PREPENDS, so insertion order here is
+--     reverse-chronological — a meaningless order to expose, and one that makes
+--     a listing depend on the sequence of writes rather than on the set of
+--     files. `ambient_dir_list` sorts too, which is what makes the two adapters
+--     agree on a listing rather than agree only on its membership.
+export func scripted_dir_list(state: WorldState, path: string) -> DirListing ! {FS} {
+  match world_path_kind(state.files, path) {
+    PathDir => { present: true,
+                 entries: sort_names(names_below(state.files, path)),
+                 next_state: state },
+    _ => { present: false, entries: [], next_state: state }
+  }
+}
+
+-- The ambient directory listing. `listDir` is called only under `isDir`, which
+-- is the guard `list_dir_impl` already carried; hoisting it here means a caller
+-- cannot forget it — `ambient_file`'s argument for its own guard, one class over.
+--
+-- THE SORT IS THE POINT OF THIS FUNCTION BEING MORE THAN ONE LINE. The host
+-- returns directory entries in whatever order it returns them, and the
+-- deterministic world returns them in write order; leaving both alone would give
+-- a pair that agrees on WHAT is in a directory and disagrees on the string
+-- compose actually renders (`show(entries)`). Sorting both is not a semantic
+-- change — no call site in this tree depends on host order — and it is the
+-- cheapest way to make the pair's answers equal rather than merely equivalent.
+export func ambient_dir_list(state: WorldState, path: string) -> DirListing ! {FS} {
+  let here = isDir(path);
+  let entries = if here then sort_names(listDir(path)) else [];
+  { present: here, entries: entries, next_state: state }
+}
+
+-- The deterministic directory create. WI-D18, and MEDIATED rather than declined
+-- — see `Ports.dir_make` for the argument and for what expired WI-D17's.
+--
+-- `mkdirAll` SEMANTICS, NOT `mkdir`: creating a path whose parents do not exist
+-- succeeds, and creating one that already exists as a directory succeeds. Both
+-- are what `std/fs.mkdirAll` does, and both matter to the six compose sites,
+-- every one of which calls it unconditionally on a path that usually already
+-- exists.
+--
+-- ONLY THE LEAF IS RECORDED, and that is a deliberate consequence of the
+-- representation rather than a shortcut: `world_path_kind` derives a directory
+-- from any entry beneath it, so writing `a/b/c` makes `a` and `a/b` directories
+-- without entries of their own. Materialising the ancestors would put the same
+-- fact in two places — an explicit entry and a derivation — which is the
+-- two-homes shape in miniature.
+--
+-- Creating a directory over an existing FILE fails, as the host fails it. That
+-- is the one input where a table insertion could have invented a state the live
+-- world cannot reach.
+export func scripted_dir_make(state: WorldState, path: string) -> FileMutation ! {FS} {
+  match world_path_kind(state.files, path) {
+    PathFile => { ok: false, error: "not a directory: ${path}", next_state: state },
+    -- Already a directory — explicitly or by derivation. Idempotent, and the
+    -- table is left ALONE rather than re-stamped, so `mkdirAll` over a populated
+    -- directory cannot change what a listing of its parent says.
+    PathDir => { ok: true, error: "", next_state: state },
+    PathMissing =>
+      { ok: true,
+        error: "",
+        next_state: { state | files: ({ path: path, node: FsDir }) :: state.files } }
+  }
+}
+
+-- The ambient directory create. `mkdirAllResult` and not `mkdirAll`, for
+-- `FileMutation`'s stated reason: the unit-returning form is where the failure
+-- is thrown away, and compose's six sites are all `let _ = mkdirAll(…)`, so a
+-- port that also discarded it would carry the drop across the boundary instead
+-- of closing it.
+--
+-- The world is returned UNCHANGED, which is right here and wrong in
+-- `scripted_dir_make` — `ambient_file_write`'s note says why, and it says it at
+-- the site because that is where a reader wonders.
+export func ambient_dir_make(state: WorldState, path: string) -> FileMutation ! {FS} {
+  match mkdirAllResult(path) {
+    Ok(_) => { ok: true, error: "", next_state: state },
+    Err(e) => { ok: false, error: e, next_state: state }
   }
 }
 
@@ -986,6 +1430,42 @@ export func recording_file_remove(state: WorldState, path: string) -> FileMutati
       { advance_ms: 0, chunks: [],
         payload: "",
         status: if done.ok then OutcomeOk else OutcomeMissing,
+        fault_class_id: "" }
+    )
+  }
+}
+
+-- The recording directory create. WI-D18.
+--
+-- IT IS RECORDED AND THE TWO READS ABOVE IT ARE NOT, and the line between them
+-- is the one WI-D17 §3 drew rather than a new judgement. `world_state_of`
+-- reconstitutes the world's SUPPLY from the log — script, approvals, tools —
+-- because a replay cannot compute those. A directory create is not supply, it is
+-- the driver's own act, and a replayed driver performs it again through this
+-- same adapter; a `path_stat` or a `dir_list` is a read of a table the program
+-- schema has nowhere to carry (`InitialWorld` has no `files` counterpart), so
+-- logging it would describe an observation the artifact still cannot rebuild.
+-- Recorded for GRADING, not for reconstitution — the third class in that
+-- category, after the two WI-D17 added.
+--
+-- `OutcomeOk` UNLESS THE HOST REFUSED. There is no `OutcomeMissing` arm here and
+-- that is the same asymmetry `dst_program.validate_outcome` pins for
+-- `file_write`: creating a directory has no "the world had nothing to give"
+-- state. A create over an existing directory SUCCEEDS — `mkdirAll` is idempotent
+-- — so "already there" is not a missing answer, it is an ordinary one.
+export func recording_dir_make(state: WorldState, path: string) -> FileMutation ! {FS} {
+  let done = scripted_dir_make(state, path);
+  {
+    ok: done.ok,
+    error: done.error,
+    next_state: record_interaction(
+      done.next_state,
+      DirMakeIdentity(path),
+      "dir_make path=${path}",
+      -1,
+      { advance_ms: 0, chunks: [],
+        payload: "",
+        status: if done.ok then OutcomeOk else OutcomeFault,
         fault_class_id: "" }
     )
   }
@@ -1672,6 +2152,9 @@ export func ports_shape_probe(
     file_read: scripted_file,
     file_write: scripted_file_write,
     file_remove: scripted_file_remove,
+    path_stat: scripted_path_stat,
+    dir_list: scripted_dir_list,
+    dir_make: scripted_dir_make,
     tool_exec: world_tool
   }
 }

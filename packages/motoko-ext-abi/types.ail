@@ -195,6 +195,32 @@ export type ExtFileMutation = {
   next_state: ExtWorld
 }
 
+-- WI-D18's extension-side PATH KIND, three-valued. `Ports.PathKind`'s shape,
+-- carried as a SUM across the ABI rather than rendered to a string.
+--
+-- The string was the cheaper option and it loses on `ExtFileRead`'s own decided
+-- ground (WI-D16): compose branches on this distinction three ways at
+-- `author_tools.ail:139-142`, `:190` and `:227`, and a `kind: string` admits a
+-- fourth value that no arm handles. `ExtProcOutcome.output` is a rendered string
+-- because nothing downstream matches on it; this is matched on, so it is typed.
+export type ExtPathKind = ExtPathMissing | ExtPathFile | ExtPathDir
+
+export type ExtPathStat = {
+  kind: ExtPathKind,
+  next_state: ExtWorld
+}
+
+-- WI-D18's extension-side DIRECTORY LISTING. `present` is explicit for
+-- `ExtFileRead.present`'s reason applied one class over: an EMPTY directory and
+-- an ABSENT one both have no entries, and `list_dir_impl` turns the difference
+-- into `entries: []` against a `not_found` error. Inferring presence from a
+-- non-empty list would collapse them at the boundary.
+export type ExtDirListing = {
+  present: bool,
+  entries: [string],
+  next_state: ExtWorld
+}
+
 export type ExtPorts = {
   -- WI-B2b: takes and returns the world token. This is the widening that lifts
   -- D1's extension-model-path exclusion — `session.ext_ai_step` handed
@@ -317,6 +343,23 @@ export type ExtPorts = {
   -- which has a core seam, so a mediated `mkdirAll` would mutate a table nothing
   -- can read. It belongs with the directory seam this file already prices above.
   file_remove: (ExtWorld, string) -> ExtFileMutation ! {FS},
+  -- WI-D18's DIRECTORY seams, fronting `Ports.path_stat`, `Ports.dir_list` and
+  -- `Ports.dir_make`. Three rows, and the ordering rule this file states twice
+  -- above is why they are here now and were not at WI-D16: the core classes
+  -- landed first, so all three derive `returns-it` rather than `unrouted`.
+  --
+  -- `path_stat` IS THE ROW THAT CLOSES A GAP RATHER THAN ADDING A CAPABILITY.
+  -- compose's `list_dir_impl` guards `fileExists(path)` and then `isDir(path)`,
+  -- so routing that guard through `file_read` asks a two-valued read about a
+  -- DIRECTORY — and the two adapters behind it answer differently. Part 2 routes
+  -- the guard here instead.
+  path_stat: (ExtWorld, string) -> ExtPathStat ! {FS},
+  dir_list: (ExtWorld, string) -> ExtDirListing ! {FS},
+  -- `dir_make` completes the write-side surface. WI-D17 left `mkdirAll` ambient
+  -- on the ground that no core seam observed a directory; `path_stat` and
+  -- `dir_list` are that seam, so the ground expired and the effect is mediated.
+  -- Six of compose's eighteen write-side sites are `mkdirAll`.
+  dir_make: (ExtWorld, string) -> ExtFileMutation ! {FS},
   -- WI-C5: takes and returns the world token, exactly as `ai_step` does.
   --
   -- WHAT THIS WIDENING BOUGHT, precisely, because the shape and the coverage are
