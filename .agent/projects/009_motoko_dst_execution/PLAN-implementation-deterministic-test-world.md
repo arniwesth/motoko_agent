@@ -498,6 +498,46 @@ not re-issued (D4)"*. **The second profile binds the same table at the same iden
 cascade now has two consumers and the anchors target names one. **A third profile extends the list
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
+**S31. "STRUCTURALLY UNREACHABLE" MUST NAME THE SHAPE FACTS THAT MAKE IT SO — AND WHEN THEY ARE
+FINALLY NAMED, CHECK EACH ONE.** Earned by WI-D21, whose own re-derivation produced two and only one
+holds.
+
+WI-D19 pinned `ExtensionEffect` at zero in `absent_classes` calling its unreachability **structural**
+rather than "nothing calls it yet", and used that distinction to justify **witnessing** the three
+filesystem classes instead of removing them. **The word was load-bearing for a decision and the ground
+was never written down**, so D21 had to re-derive it before it could decide whether to move a pin.
+
+**It named two grounds. Measured at review, one is structural and one is not.** `ExtCtx` carries no
+`ext_id` and `ext_ports_of` hands one `ExtPorts` to every extension, so the bridge cannot name its
+caller and `validate_identity` rejects a blank — **structural, verified.** But *"the catalogue has no
+class to name"* is false: `dst_fault_catalogue` holds **20 `class_id:` rows and 11 distinct ids**, and
+**`extension_effect_fault` exists** with `boundary: ExtensionEffectBoundary`. That is a **content**
+question about one row — whose `delivery_constructor` names `ExtPorts.ai_step` — and WI-B4 already set
+the precedent for changing a row's content behind the catalogue's own version.
+
+**So the price is lower than reported and the rule is the general one: an unreachability claim is a
+conjunction, and a conjunction is only as strong as its weakest term.** "Either alone is insufficient"
+survives only if both terms are real.
+
+**S30. ADDING A FIELD TO A PERSISTED PAYLOAD WITHOUT MOVING THE SCHEMA VERSION MAKES A RECORDED FAILURE
+REPLAY AS A SUCCESS.** Earned by WI-D21 as the reason a "one field" widening is a whole item.
+
+`decode_tool_outcome` reads with `str_field(root, "<name>", <default>)`. **A field added to the encoder
+is absent from every artifact already recorded, and absent decodes to the default.** For an exit code
+every candidate default means success, so:
+
+> **a recorded run in which `ailang check` failed replays as a run in which it passed, and every count
+> balances.**
+
+**And the loud guard does not fire.** `dst_persistence` refuses an unknown schema version by design —
+but the version would be **unchanged**, so it refuses nothing. **The instrument that exists for exactly
+this is silent precisely when the defect is introduced**, which is D8's prohibition on silent
+reinterpretation.
+
+**The rule: a persisted payload's field set is versioned data, not a record's shape.** The escape hatch
+— encode only when known, decode absence as a sentinel — buys a **third state** in every consumer, which
+is manufacturing a state to avoid versioning. Name it; do not take it.
+
 **S29. A HOOK SLOT'S DRIVER ARMS MUST BE AUDITED BEFORE THE SLOT IS ROUTED — AND THE DROP IS USUALLY
 ONE FRAME ABOVE THE DISPATCHER.** Earned by WI-D19 and WI-D20. **Two slots audited, two drops found, and
 the second was worse than the first.**
@@ -3227,6 +3267,71 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D21, 2026-08-08 (~1h05m) — THE SUBPROCESS DISCRIMINATION: DECISION TAKEN, BUILD DRAFTED AND
+STOPPED, AND THE SEAM ALREADY EMITS A REJECTED PROGRAM.**
+**NOTE: this item's implementation is UNCOMMITTED at review** — `types.ail`, `session.ail`,
+`dst_program.ail`, `compose.ail`, `author_tools.ail`, the three no-op packages and `ailang.lock` are
+modified in the working tree, and the report itself is untracked. Gates verified green in that state:
+`execution_program`, `discovery`, `declared_vs_performed` (40 passed, 0 failed).
+
+**THE FINDING THE HANDOFF DID NOT HAVE, AND IT IS THE ITEM'S BEST OUTPUT.** Verified end to end: the
+bridge sets `call: { id: "", … }` (`session.ail:961`); `recording_tool` records
+`ToolIdentity("loop_v2", inv.call.id, inv.call.tool)` (`ports.ail:1540`); `dst_program.ail:277` emits
+`IdentityComponentMissing(o, "tool call_id")` for a blank. **So the first extension to call `proc_exec`
+in a recorded run makes the recorder emit a program its own validator refuses.** Latent because nothing
+calls it — which is why it earned an assertion rather than a sentence, with a real-call-id control so
+the row fails for the blank and not for the fixture.
+
+**THE IDENTITY CLASS IS `ExtensionEffectIdentity`, on two of D2's rules that `ToolIdentity` breaks
+here**, both verified: `ExtensionEffectIdentity(ext_id, class_id, _call_id)` is the only class where a
+blank call id is legitimate (`dst_program.ail:283-285` exempts it and requires the other two), and
+`recording_tool` hardcodes origin `"loop_v2"`, which names the driver's loop as the producer of an
+extension-initiated dispatch. **The first-order problem is that the interaction is INVALID**, not that
+a compiler invocation lands in the tool census.
+
+**MY HANDOFF INVOKED D1's STOP CONDITION AND SHOULD NOT HAVE, AND THE ITEM IS RIGHT.** I wrote that the
+two adapters *"cannot agree on a widened `ExtProcOutcome`, which is D1's stop condition."* **They agree
+today, on a string** — `ToolCompleted.content` and `ScriptedTool.content` are both `string` and a
+scripted entry can carry the identical JSON. **The disagreement appears only once the discrimination is
+TYPED, which is a design cost rather than a falsification.** I escalated a price into a stop condition.
+**The conclusion survives**: it is a core class change, and the item priced it at **seven links** —
+adding `dispatch_one`'s `(ToolCall) -> string` contract, which my chain missed.
+
+**THE PIN STAYS, AND I CORRECT THE GROUND IT NOW STANDS ON — see S31.** D21 re-asked D19's "structural"
+as the handoff required and kept the pin, which is right. **But of its two structural grounds only one
+holds.** `ExtCtx` has no `ext_id` (verified, and `ext_ports_of` hands one `ExtPorts` to every
+extension) — structural. *"The catalogue has no class to name"* is **false**: 20 `class_id:` rows, 11
+distinct ids, and **`extension_effect_fault` exists** at `dst_fault_catalogue.ail:405` with
+`boundary: ExtensionEffectBoundary`. It is a **content** question on one row — its
+`delivery_constructor` names `ExtPorts.ai_step` — and B4 set the precedent for that. **So "either alone
+is insufficient" is too strong and the price of reaching this class is lower than reported.**
+
+**THE PARAMETER RENAME SHIPPED AND THE MISREADING WAS WIDER THAN I SAID.** `proc_exec` is now
+`(w, tool: string, args_json: string)`, verified. I said two items misread it; measured, **five
+bindings read the two positional strings two incompatible ways** — the bridge as `(name, args)`, three
+no-op packages as `(_cmd, _cwd)`, and the ABI row documenting neither. **A conformance harness is a
+template**, so an implementation written from `(cmd, cwd)` shells out the tool name in a directory named
+by a JSON blob, compiles, and is wired backwards. **Counted: 75 across forty-three runs.** The field
+NAME `proc_exec` is itself the cause, is priced, and is correctly deferred to the schema-bump item —
+splitting them spends a published-ABI break twice.
+
+**THE SCHEMA BUMP IS SCHEDULED, WITH TWO CONSUMERS.** `InitialWorld.files` (owed since D17, grown a
+field by D18) and `ScriptedTool.exit_code`. S23's threshold, and S30 is why it cannot be a widening
+that "just adds a field".
+
+**A SECOND COUNTER OPENED, AND IT IS THE RIGHT CALL.** *"A row that measures less than its label"* is an
+**instrument weaker than its claim** — nothing ships wrong, the evidence is thinner than advertised —
+against the 75 counter's **production sites where the wrong answer ships silently**. Same cause, different
+consequence. **Opened at six** (D18 §5, D19 §11, D20 §8 ×3, and D21's own control clause written to avoid
+becoming one). Four consecutive items hit it before anyone counted it.
+
+**Also discovered and recorded at the site:** the bridge hardcodes `workdir: "."` and `timeout_ms: 0`,
+so a routed subprocess runs where the process started and **this seam can never produce
+`ToolDeadlineExceeded`**. And `run_process_result` wraps in `bash -lc`, so the seam reaches **arbitrary
+command lines** — it is not narrow, it is untyped.
+
+**Nothing routed; yields unmoved at 4 of 15 and 5 of 15**, compose still at 11 ambient sources.
 
 **WI-D19 + WI-D20, 2026-08-08 (~52m and ~1h13m) — THE FIRST TWO ROUTINGS. Compose's hook-reachable
 filesystem and clock effects are now fully mediated.**
