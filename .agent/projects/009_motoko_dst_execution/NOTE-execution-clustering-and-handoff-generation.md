@@ -933,3 +933,39 @@ this — **and D19 pinned `ExtensionEffect` at literal zero in `absent_classes` 
 unreachability is STRUCTURAL**, which is the distinction it used to justify witnessing the three
 filesystem classes rather than removing them. **If this is that class's home, "structural" is the wrong
 word and the pin has to move.**
+
+**Cluster 39 = WI-D22, the program schema bump: HANDED OFF 2026-08-08**,
+`HANDOFF-execute-d22-the-program-schema-bump.md`. **The change three items have owed and one has
+scheduled** — WI-D21 ended by naming it and by handing it the `proc_exec` rename so a published-ABI
+break is spent once rather than twice.
+
+**The clustering finding is that the bump carries THREE payloads, not the two S23's threshold counted.**
+`InitialWorld.files` (owed since D17, and D18 grew it a field before it was taken) and
+`ScriptedTool.exit_code` (D21) are the two consumers that scheduled it. The third is free with them and
+nobody has to be told twice: **D17's two-tier compatibility surface.** `post_v1_interactions()` holds
+exactly `FileWriteIdentity`, `FileRemoveIdentity` and `DirMakeIdentity` — verified — and D17 recorded
+that nothing in the tree can freeze them *"because there are no historical bytes containing them; the
+only fix is a future freeze at a future schema version."* **This is that version, and skipping it grows
+the surface a fourth class next time.**
+
+**And grounding it turned up a trap that is live now.** `decodable_schema_versions()` is
+`[program_schema_version()]` — a one-element list **derived from the current version** — so bumping the
+producer alone makes the build unable to decode the frozen v1 artifact it is required to keep decoding.
+The module's own comment already states the rule (*"a migration extends this list and keeps the old
+decode path… there is no third option"*), which makes this a case of a guard that will fire correctly
+if the item reads it and will look like a regression if it does not.
+
+**Clustering note to carry: a version constant has a producer and its transcribers, and the
+transcribers are where the bump goes wrong.** Measured: `dst_replay.ail:999`'s `fixture_program()` is
+**the only live transcription of `"execution-program/1"` outside the producer** — the other two
+occurrences are comments. **S23 was promoted for exactly this shape and D14 paid for it live**, so the
+handoff asks the item to decide whether that literal is deliberately pinned at v1 or is the current
+version transcribed, rather than to update it reflexively.
+
+**The design question is where `FsNode` lives, and the cheap answer is a trap.** `FsNode` is
+`ports.ail:517`; `dst_program` does not import `ports` and `ports` does not import `dst_program`, so
+there is **no cycle** and three options are open — import, move the type down to `dst_interaction`
+which both already import, or give `InitialWorld` a structurally-identical anonymous
+`[{path, kind, content}]`. **The third reintroduces exactly what D18's sum was chosen to prevent —
+a directory carrying a file body — at the persistence boundary, which is where hand-written and
+corrupted artifacts enter.**
