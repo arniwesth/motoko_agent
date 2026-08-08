@@ -876,10 +876,106 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
   -- `ExtProcOutcome.output` shape and its own comment says why the fault typing
   -- is a separate widening on a separate ground. Faults stay RENDERED rather
   -- than dropped, so an extension is not handed "" when a tool actually failed.
-  let proc_exec = func(w: ExtWorld, name: string, args: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  --
+  -- =========================================================================
+  -- WI-D21: WHAT THIS SEAM ACTUALLY DOES, MEASURED END TO END AT THE SEAM.
+  -- =========================================================================
+  --
+  -- WI-D19 and WI-D20 both concluded "the seam does not front subprocesses; it
+  -- fronts Motoko's own tool names". That is TRUE ABOUT WHAT IT FRONTS and it
+  -- produced the wrong menu for both of them, so the capability is recorded
+  -- here — at the seam — rather than in two extension packages' comments.
+  --
+  -- The two strings are a MOTOKO TOOL NAME and that tool's JSON ARGUMENTS. The
+  -- parameters were called `name` and `args`, which is why three `noop_proc_exec`
+  -- bindings in the tree call them `_cmd` and `_cwd` instead: the field is named
+  -- `proc_exec`, the ABI row types them `(ExtWorld, string, string)` and
+  -- documented neither, so five sites in the tree read two positional strings two
+  -- INCOMPATIBLE ways and nothing type-checks the difference. Renamed at WI-D21.
+  --
+  -- AND `BashExec` REACHES A REAL SUBPROCESS WITH A REAL EXIT CODE. Followed
+  -- down rather than grepped:
+  --
+  --   `p.tool_exec` -> `world_tool` (`ports.ail:1264`), which on an empty
+  --   `state.tools` delegates to `dispatch_one` -> `run_native_batch` ->
+  --   `run_native_call` (`tool_runtime.ail:165`). That if-chain's `BashExec` arm
+  --   calls `run_process_result`, which `exec`s the command and builds
+  --   `BashExecResult { cmd, stdout, stderr, exit_code, meta }`
+  --   (`tool_runtime.ail:842`). `dispatch_one` then encodes that record to JSON
+  --   (`tool_dispatch_adapter.ail:178`) and it arrives here as
+  --   `ToolCompleted.content`.
+  --
+  -- SO THE EXIT CODE IS NOT LOST. THE TYPE IS. A caller wanting to branch on it
+  -- must decode a string and pull `exit_code` — the string-parsing path WI-D19
+  -- correctly refused, which would also put a tool-error blob and a genuine
+  -- compiler failure on one code path. That is the whole of the remaining gap,
+  -- and it is a RENDERING gap rather than a dispatch one. WI-D21 §3 prices
+  -- closing it; the short version is that it cannot reach `ScriptedTool` without
+  -- a program-schema version bump, so it is scheduled rather than absorbed.
+  --
+  -- TWO FIELDS ARE CONSTANTS AND BOTH ARE CLAIMS. `workdir` is "." and not
+  -- `ctx.workdir` — this bridge is built by `ext_ports_of`, which takes no
+  -- workdir — so a routed subprocess runs where the process was started, not
+  -- where the extension thinks it is. `timeout_ms` is 0, which
+  -- `ToolInvocation.timeout_ms` defines as "no deadline", so this seam can never
+  -- produce `ToolDeadlineExceeded`. Both are stated rather than left for the
+  -- first caller.
+  --
+  -- THE CALL ID IS BLANK AND THAT IS A REJECTED PROGRAM, NOT A COSMETIC GAP.
+  -- `recording_tool` records `ToolIdentity("loop_v2", inv.call.id, inv.call.tool)`
+  -- (`ports.ail:1540`), and `dst_program.validate_identity:277` rejects a blank
+  -- `ToolIdentity` call id with `IdentityComponentMissing(o, "tool call_id")`.
+  -- So the FIRST extension to call this seam in a recorded run makes the recorder
+  -- emit a program its own validator refuses. Asserted rather than described:
+  -- `dst_program.test_the_ext_proc_exec_invocation_shape_records_a_rejected_tool_identity`.
+  --
+  -- The blank is not a slip that a better `id` would fix. This seam has no call
+  -- id BECAUSE THE EFFECT HAS NONE — the extension is not answering a model tool
+  -- call — and D2 names exactly one class where that is legitimate:
+  -- `ExtensionEffectIdentity`, whose own comment says the call id is "" "where
+  -- the effect has none — the only place a blank component is legitimate rather
+  -- than a missing required value". The origin agrees: `recording_tool` hardcodes
+  -- "loop_v2", which names the driver's loop as the producer, and for an
+  -- extension-initiated dispatch that is false.
+  --
+  -- SO THE IDENTITY-CLASS ANSWER IS `ExtensionEffectIdentity`, AND WHAT STANDS
+  -- BETWEEN THE SEAM AND IT IS PLUMBING RATHER THAN SHAPE. Both halves the class
+  -- needs already exist:
+  --
+  --   THE CLASS ID EXISTS. `validate_static_references:426` requires a non-blank
+  --   `class_id` to be a catalogue row, and A7 declares ELEVEN — five provider,
+  --   three tool, two approval, and `extension_effect_fault`
+  --   (`dst_fault_catalogue.ail:405`, in `required_class_ids()`). That row's own
+  --   coverage-gap entry (`:442`) already names THIS SEAM: "ExtPorts.proc_exec IS
+  --   routed but projects the typed tool outcome back down to a string, so an
+  --   extension can observe that a tool failed and not which fault class it was".
+  --
+  --   THE EXT ID EXISTS AT THE DISPATCH SITE. `ExtensionHooks.id` is on every
+  --   entry of the registry the dispatcher folds over. What is missing is the
+  --   THREADING: `ext_ports_of` builds ONE `ExtPorts` per step and hands the same
+  --   record to every extension, and `ExtCtx` carries no `ext_id`, so this
+  --   closure cannot name its caller and `validate_identity:284` rejects a blank
+  --   one. Per-extension ports, or an `ext_id` on `ExtCtx`, closes it.
+  --
+  -- AND THE ACTUAL REASON THE CLASS READS ZERO IS THAT NO ADAPTER RECORDS IT.
+  -- All seven `record_interaction` call sites are in `ports.ail` and not one
+  -- constructs `ExtensionEffectIdentity` — the same is true of
+  -- `RandomDrawIdentity`. Routing this seam to the class means building an
+  -- eighth recording adapter, not relabelling a seventh.
+  --
+  -- WHICH IS WHY WI-D19'S PIN IN `dst_discovery.absent_classes` IS LEFT UNTOUCHED
+  -- AND ITS STATED GROUND IS NOT. D19 pinned this class at literal zero calling
+  -- its unreachability STRUCTURAL, and used that word to distinguish it from the
+  -- three filesystem classes it chose to witness instead. Measured here, the
+  -- distinction does not hold: nothing about the bridge or the catalogue makes
+  -- the class unreachable, and "no adapter records it" is nearer to "nothing
+  -- routes it yet" than to the contrast D19 drew. Zero is still the correct
+  -- expectation — nothing records the class — so the pin is right and the reason
+  -- on record is wrong. Reported rather than re-worded in place; see WI-D21 §5.
+  let proc_exec = func(w: ExtWorld, tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
     let w0 = token_to_world(w);
     let inv: ToolInvocation = {
-      call: { id: "", tool: name, arguments: decode_or_empty(args) },
+      call: { id: "", tool: tool, arguments: decode_or_empty(args_json) },
       workdir: ".",
       timeout_ms: 0,
       started_at_ms: 0

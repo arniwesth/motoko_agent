@@ -157,6 +157,26 @@ export type ExtClockReading = {
 -- ground moved the pin. The fault text is rendered rather than dropped, so
 -- nothing is silently lost in the interim; what is lost is the ability to MATCH
 -- on it, and that is stated rather than left for a reader to find.
+--
+-- WI-D21 MEASURED WHAT `output` ACTUALLY CARRIES, because "a rendered string"
+-- reads as though the information is gone and it is not. On the `BashExec` and
+-- `RunTests` arms the string is the JSON encoding of a
+-- `BashExecResult { cmd, stdout, stderr, exit_code, meta }`
+-- (`tool_runtime.ail:842` -> `tool_dispatch_adapter.ail:178`), so the exit code
+-- and both streams SURVIVE — as text. What the caller lacks is a typed field to
+-- branch on, and recovering one by parsing this string is the silent-wrong shape
+-- the project exists to remove. The gap is the RENDERING, not the dispatch.
+--
+-- WHICH IS WHY THE SECOND WIDENING IS STILL NOT TAKEN HERE, and now for a
+-- measured reason rather than a scoping one. A typed `exit_code` on this record
+-- has to be produced on BOTH sides of `Ports.tool_exec`, and the deterministic
+-- side cannot supply it: `ScriptedTool` (`ports.ail:418`) carries
+-- `{ tool_call_id, duration_ms, code, message, content }` and no exit code, and
+-- it is reconstituted from the persisted interaction payload by
+-- `decode_tool_outcome`, so a new field is a persisted-codec change. An old
+-- artifact would decode a missing `exit_code` as 0 — success — which turns a
+-- recorded failing run into a passing replay. That requires a
+-- `program_schema_version` bump. See WI-D21 §3 for the link-by-link price.
 export type ExtProcOutcome = {
   output: string,
   next_state: ExtWorld
@@ -289,6 +309,38 @@ export type ExtPorts = {
   -- membership and goes red on this edit. THAT IS THE PIN WORKING. Editing it
   -- to restore green without reading the derived membership destroys the one
   -- signal it exists to give.
+  --
+  -- =========================================================================
+  -- WI-D21: WHAT THE TWO STRINGS ARE. THIS ROW NEVER SAID, AND IT COST TWO ITEMS.
+  -- =========================================================================
+  --
+  --   proc_exec(world, tool, args_json)
+  --
+  -- `tool` is a MOTOKO TOOL NAME — one of `ReadFile`, `Search`, `WriteFile`,
+  -- `EditFile`, `BashExec`, `RunTests` (`tool_runtime.run_native_call:165`) — and
+  -- `args_json` is that tool's arguments as an encoded JSON object. It is NOT a
+  -- binary and a working directory. Nothing in the tree type-checks the
+  -- difference: both are `string`, and at WI-D20 the tree held FIVE bindings
+  -- reading them TWO ways — `session.ail`'s bridge as `(name, args)` and three
+  -- `noop_proc_exec`s as `(_cmd, _cwd)`. A conformance harness whose signature
+  -- says `(cmd, cwd)` is a template for an implementation that shells out the
+  -- first argument in the second; it compiles, and it is wired backwards.
+  -- Renamed at every site at WI-D21; the row is documented here because the row
+  -- is where the reading is decided and positional strings cannot carry it.
+  --
+  -- THE NAME `proc_exec` IS ITSELF THE MISLEADING PART and is NOT changed here.
+  -- It says "execute a process" and the seam dispatches a tool; that is what sent
+  -- WI-D19 and WI-D20 looking for a subprocess seam. Renaming the FIELD is a
+  -- four-site edit (this row and the three noops — no extension consumes it yet),
+  -- so it is cheap in the tree and it is a breaking change to a PUBLISHED ABI at
+  -- `5.0`. It is priced and left, beside the typed-discrimination widening, for
+  -- the item that takes the schema bump: those two are the same conversation and
+  -- splitting them spends the break twice.
+  --
+  -- WHAT IT REACHES, so the next reader does not re-derive it: `BashExec` and
+  -- `RunTests` run a REAL subprocess and return a real exit code, rendered into
+  -- `ExtProcOutcome.output` as JSON. See that type's note above and
+  -- `session.ail`'s `proc_exec` closure for the measured chain.
   proc_exec: (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS},
   -- WI-D16's filesystem read seam. It is a POINT READ — a path in, existence
   -- and contents out — because it fronts `Ports.file_read` and that seam is

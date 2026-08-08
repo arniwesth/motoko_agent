@@ -4,8 +4,8 @@
 conditions fired.** What shipped is the seam's true capability recorded at the seam, the parameter
 rename, and two executed rows that convert this item's central finding from a paragraph into an
 assertion. What did not ship is the typed discrimination, which cannot reach `ScriptedTool` without a
-program-schema version bump, and the `absent_classes` pin, which **stays** — on a ground WI-D19 did not
-state.
+program-schema version bump, and the `absent_classes` pin, which is **left untouched** — while WI-D19's
+stated ground for it turns out not to hold.
 
 ---
 
@@ -14,19 +14,26 @@ state.
 The handoff asked: *"which identity class does an extension's subprocess belong to?"* and expected the
 answer to be a choice between two live classes.
 
-**It is not a choice. The seam as built produces a program its own validator REJECTS, and only one
-class can hold it — and that class cannot be constructed from this bridge.** Both halves are measured
-below and both are asserted in the tree.
+**It is not a choice. The seam as built produces a program its own validator REJECTS, and exactly one
+class can legitimately hold it.** Both halves are measured below and both are asserted in the tree.
+
+**And the second thing the item was asked to check did not survive.** WI-D19 pinned `ExtensionEffect`
+at literal zero calling its unreachability STRUCTURAL. Measured, it is not: the catalogue row the class
+needs already exists and names this seam, the `ext_id` exists at every dispatch site, and the real
+reason the count is zero is that **no adapter records the class at all**. The pin is correct and its
+published reason is wrong — reported rather than re-worded, per the handoff's stop condition.
 
 ---
 
 ## 1. The git wall-clock window
 
-Handoff commit `2a9d310` at `2026-08-08T11:42:28Z`. First edit at ~`11:56Z`, sweep and commit closing
-the item. **The window is ~1h05m**, against D19's ~52m and D20's ~1h13m.
+Handoff commit `2a9d310` at `2026-08-08T11:42:28Z`; commit closing the item at ~`12:45Z`. **The window
+is ~1h03m**, against D19's ~52m and D20's ~1h13m.
 
-The item ran short of D20 because **it did not route anything**, and it ran long of a pure analysis item
-because §4's finding was not in the handoff and had to be chased into four modules.
+**Three `make dst` runs fit inside it and only the third counts** (§11.2). The item routed nothing, so
+the time went to measurement rather than to edits: §4's finding was not in the handoff and had to be
+chased into four modules, and §5.2 had to be measured twice because the first draft inferred the
+catalogue's contents from its accessor functions.
 
 ---
 
@@ -74,7 +81,7 @@ Seven links, each verified:
 | # | Link | Cost |
 |---|---|---|
 | 1 | `ExtProcOutcome` (`types.ail:160`) | +1 field. **1 ABI row**, 4 in-tree bindings, 0 external consumers |
-| 2 | `ToolOutcome.ToolCompleted` (`ports.ail:452`) | +1 field on a core sum variant; **14 match sites across 6 modules** |
+| 2 | `ToolOutcome.ToolCompleted` (`ports.ail:452`) | +1 field on a core sum variant; **4 match arms and 4 construction sites across 4 modules** (`ports` ×2+×3, `session:821`, `tool_phase:277`, `dst_replay:958`), plus the class-id literal in `dst_fault_catalogue:302` |
 | 3 | `world_tool` (`ports.ail:1264`) | must derive the code on BOTH arms |
 | 4 | `dispatch_one` (`tool_dispatch_adapter.ail:174`) | **the link the handoff did not name.** Its `(ToolCall) -> string` contract exists to satisfy upstream `runTools`. Either it gains a typed sibling or `world_tool` parses its JSON — and parsing here is the same string-parsing path one layer down |
 | 5 | `ScriptedTool` (`ports.ail:418`) | +1 field; constructed at `ports.ail:1701`, four arms of `decode_tool_outcome`, `dst_replay.ail:1053`, and both directions of `ext_world`'s JSON |
@@ -132,6 +139,11 @@ dst_program.ail:277
 validator refuses.** Nothing calls it today, so it is latent — which is precisely why it needed an
 assertion rather than a sentence.
 
+**WHAT IS NEW HERE IS THE CONNECTION, NOT THE RULE, and the distinction is worth keeping honest.**
+`execution_program_dst` already exercises *"program-identity-component-missing <- tool interaction has a
+blank call_id"*, so the validator's behaviour was tested. What nothing tested is that **`ExtPorts`'
+`proc_exec` bridge is a construction site for exactly that shape**. The row below is that link.
+
 **Asserted, in `dst_program.ail`:**
 
 * `test_the_ext_proc_exec_invocation_shape_records_a_rejected_tool_identity` — the bridge's identity,
@@ -164,32 +176,52 @@ So the plumbing's current answer is wrong twice, and the handoff's framing of th
 compose's `ailang check` puts a compiler invocation into the run's tool-dispatch census"* — is real but
 is the second-order problem. The first-order one is that the interaction is invalid.
 
-### 5.2 And it is NOT REACHABLE, for two structural reasons
+### 5.2 What stands between the seam and the class is PLUMBING, not shape
 
-Neither is "nothing calls it yet":
+**I drafted this section with two "structural" reasons and both were wrong. The corrected measurement is
+the more useful finding, so the error is recorded rather than quietly fixed** — it is the same mistake
+D19 and D20 made about the seam, made once more one layer down: a capability inferred from the nearest
+accessor instead of read off the thing itself.
 
-1. **THE BRIDGE CANNOT NAME ITS CALLER.** `ext_ports_of(p, world, base_url)` builds ONE `ExtPorts` per
-   step and hands the same record to every extension; `ExtCtx` (`types.ail:421`) carries no `ext_id`.
-   `validate_identity:284` rejects a blank `ext_id`. The class cannot be constructed from here at all.
-2. **THE CATALOGUE HAS NO CLASS TO NAME.** `validate_static_references:426` requires a non-blank
-   `class_id` to be a catalogue row; `validate_identity:285` rejects a blank one. A7 declares **seven** —
-   `ToolFailed`, `ToolCorrelationMismatch`, `ToolDeadlineExceeded` and four provider classes. **There is
-   no process-failure class.**
+* **THE CLASS ID ALREADY EXISTS.** I wrote that A7 declares seven classes. It declares **eleven**
+  (`dst_fault_catalogue.ail:821` asserts the count) — the `fault_class_*` accessor functions are a
+  SUBSET, and reading them for the catalogue is the error. Row eleven is **`extension_effect_fault`**
+  (`:405`), a member of `required_class_ids()`, so `validate_static_references:426` accepts it.
+  **And its own coverage-gap entry (`:442`) already names this exact seam:** *"ExtPorts.proc_exec IS
+  routed but projects the typed tool outcome back down to a string, so an extension can observe that a
+  tool failed and not which fault class it was."* The catalogue has been describing this item's finding
+  since WI-C5.
+* **THE EXT ID EXISTS AT THE DISPATCH SITE.** `ExtensionHooks.id` (`types.ail:641`) is on every entry of
+  the registry the dispatcher folds over. `ext_ports_of` builds ONE `ExtPorts` per step and shares it,
+  and `ExtCtx` carries no `ext_id`, so this closure cannot name its caller and `validate_identity:284`
+  rejects a blank one. **That is a threading gap** — per-extension ports, or an `ext_id` on `ExtCtx`,
+  closes it.
 
-### 5.3 THE PIN STAYS — AND D19'S WORD SURVIVES ON A GROUND D19 DID NOT STATE
+**THE ACTUAL REASON THE CLASS READS ZERO:** all **seven** `record_interaction` call sites are in
+`ports.ail` and **not one constructs `ExtensionEffectIdentity`**. The same is true of
+`RandomDrawIdentity`. Routing this seam to the class means building an **eighth recording adapter**, not
+relabelling a seventh.
 
-WI-D19 pinned `ExtensionEffect` at literal zero in `dst_discovery.absent_classes:447` calling its
-unreachability **structural**, and used that distinction to justify witnessing the three filesystem
-classes instead of removing them. The handoff asked for that distinction to be **re-asked rather than
-inherited**, and warned that an `ExtensionEffectIdentity` answer would move the pin.
+### 5.3 THE PIN IS UNTOUCHED AND D19'S STATED GROUND DOES NOT HOLD
 
-**Re-asked. It survives, and the pin is not touched.** §5.2 is what "structural" means for this class:
-two shape facts about the bridge and the catalogue, not an unbuilt caller. D19's word was correct; D19's
-*reason* was never written down, and it is written down now.
+WI-D19 pinned `ExtensionEffect` at literal zero in `dst_discovery.absent_classes:447`, calling its
+unreachability **structural** — and used that word to distinguish it from the three filesystem classes
+it chose to witness rather than remove. The handoff asked for the distinction to be **re-asked rather
+than inherited**.
 
-**What would move it:** an item that gives `ExtCtx` an `ext_id` **and** adds a process-failure class to
-A7. Either alone is insufficient. When both land, `absent_classes` must take a witness the way D19's
-three filesystem classes did, and `class_balance(…, 0, …)` becomes a real balance.
+**Re-asked, and it does not survive.** Nothing about the bridge or the catalogue makes the class
+unreachable; §5.2 is two closable gaps and one unbuilt adapter. **"No adapter records it" is nearer to
+"nothing routes it yet" than to the contrast D19 drew.**
+
+**Zero is still the correct expectation, so the pin is right and the reason on record is wrong.** Per
+the handoff's stop condition — *"stop before changing the pin; D19 put it there on a stated ground and
+the ground would be what changed"* — **the pin is not touched and the ground is reported.** Re-wording
+`absent_classes` in place would destroy the evidence that D19's justification was measured and found
+wanting, which is the thing the next item needs.
+
+**What would move the pin:** an item that threads an `ext_id` and builds the eighth recording adapter.
+The catalogue row it would name is already there. When that lands, `absent_classes` must take a witness
+exactly the way D19's three filesystem classes did, and `class_balance(…, 0, …)` becomes a real balance.
 
 ---
 
@@ -227,7 +259,7 @@ are the same conversation, and splitting them spends the break twice.
 | Handoff stop condition | Fired? |
 |---|---|
 | typed discrimination needs a program-schema bump -> draft and stop | **YES** — §3.1. Two consumers, scheduled |
-| identity answer moves `ExtensionEffect` out of `absent_classes` -> stop before changing the pin | **YES in the answer, NO in the consequence** — §5.3. The answer is `ExtensionEffectIdentity`; the pin stays and is untouched |
+| identity answer moves `ExtensionEffect` out of `absent_classes` -> stop before changing the pin | **YES, and harder than expected** — §5.3. The answer is `ExtensionEffectIdentity`, and D19's stated ground for the pin does not hold. Pin untouched, ground reported |
 | the two adapters still cannot agree after the widening -> falsifies D1 | **NO** — §2. They agree on a string today; the disagreement is only under typing |
 
 Also not done, and deliberately: **the four `exec` sites are not routed.** They are the beneficiaries of
@@ -240,7 +272,8 @@ Also not done, and deliberately: **the four `exec` sites are not routed.** They 
 **Decided:**
 
 1. The identity class is `ExtensionEffectIdentity` (§5.1).
-2. The `absent_classes` pin stays, and D19's "structural" is re-grounded rather than inherited (§5.3).
+2. The `absent_classes` pin is left untouched and D19's "structural" ground is reported as not holding,
+   rather than re-worded in place (§5.3).
 3. The typed discrimination is one item, and that item is the schema bump (§3.3).
 4. `proc_exec`'s parameters are `(tool, args_json)`; the field name is priced and deferred to the schema-bump item (§6).
 5. The blank call id is asserted, not repaired — repairing it *is* decision 1, which is blocked (§4).
@@ -253,7 +286,13 @@ Also not done, and deliberately: **the four `exec` sites are not routed.** They 
    the process started, not where the extension thinks it is, and **this seam can never produce
    `ToolDeadlineExceeded`.** Recorded at the site.
 9. The `_cmd, _cwd` misreading is in three packages, not two items (§6).
-10. There is no process-failure class in A7's catalogue at all (§5.2).
+10. **A7's catalogue already declares `extension_effect_fault`, and its coverage-gap entry has named
+    `ExtPorts.proc_exec` since WI-C5** (§5.2). The class this item was asked to consider was written
+    down before the item existed.
+11. **No `record_interaction` site constructs `ExtensionEffectIdentity` or `RandomDrawIdentity`** — all
+    seven are in `ports.ail` and none does (§5.2). That, and not shape, is why both pin at zero.
+12. **THE ANCHOR CASCADE FIRES ON A COMMENT-ONLY EDIT** (§11). Five `session.ail` clock anchors moved
+    because this item inserted a comment block above them.
 
 ---
 
@@ -293,7 +332,56 @@ would have meant an instrument was reading something other than what it claims t
 
 ---
 
-## 11. WHAT THE NEXT ITEM SHOULD KNOW
+## 11. THE ANCHOR CASCADE FIRED FROM A COMMENT, WHICH FALSIFIES BOTH FORMS OF THE LAW
+
+**WI-D18's law:** every Route B **surface** item re-baselines the anchors.
+**WI-D20's exception:** a non-surface item does too, if it needs a driver-side codec.
+
+**This item added no seam, no import and no expression.** It wrote a comment block inside
+`ext_ports_of`'s `proc_exec` closure, and **all five `session.ail` clock anchors moved +96**:
+965/1224/1330/2775/2885 -> **1061/1320/1426/2871/2981**.
+
+**So the rule's real form is neither of the above: ANY EDIT TO `ext_ports_of`, PROSE INCLUDED,
+re-baselines the list and re-issues both profiles.** An item whose entire deliverable is documentation
+pays the full cascade — which is the cheapest possible demonstration, and the reason it is recorded as a
+law rather than a third exception.
+
+### 11.1 It cost SIX files, not nine — and which nine matters
+
+All five anchored expressions were compared to `git show HEAD:` **character by character and are
+byte-identical**, so no site changed identity, routing or attribution. Only the offset moved.
+
+| # | File | What changed |
+|---|---|---|
+| 1 | `tools/predicate-anchors/anchors.sh` | the five-element loop |
+| 2 | `src/core/dst_attribution_table.ail` | five rows + one test literal |
+| 3 | `scripts/dst/attribution_table_dst.ail` | one literal (the `omitted_site` fixture) |
+| 4 | `src/core/dst_driver_only.ail` | version **18 -> 19**, hash |
+| 5 | `src/core/dst_driver_plus_no_ops.ail` | version **5 -> 6**, hash |
+| 6 | — | *(the sixth is the second file's test literal, counted separately above)* |
+
+`sha256:5f000167…` -> **`sha256:c007fb3e…`**; `source_revision` unchanged at `c0fbf10`, per D4's rule
+that an anchor re-measurement is not a table re-binding.
+
+**THE THREE `*_dst.ail` DISCOVERED-SITE FIXTURES WERE NOT TOUCHED**, and the handoff expected them to be.
+They carry `tool_phase.ail:318`, which did not move. **Nine files is the price of a `tool_phase` move; a
+`session.ail`-only move is six.** WI-D20 recorded nine because its move was in `tool_phase`; the
+enumeration in `anchors.sh` is right and its scope needed saying.
+
+### 11.2 And the sweep was lost twice before it was right
+
+Both losses were mine and neither was the D19/D20 failure mode (editing during an instrument):
+
+1. **`make -k dst 2>&1 | tail -80`.** `tail` buffers until the pipe closes, so the log kept only the last
+   80 lines and **the failing sub-target's output was discarded** — the run reported nothing but the
+   aggregate `Makefile:199` error. Re-run redirecting to a file. **Never pipe a sweep through `tail`.**
+2. **The first honest sweep found the cascade**, which required source edits, which invalidated it.
+
+Third run is the reported one, and it is at baseline.
+
+---
+
+## 12. WHAT THE NEXT ITEM SHOULD KNOW
 
 1. **THE SEAM'S CAPABILITY IS NOW RECORDED AT THE SEAM** (`session.ail`'s `proc_exec` closure), not in
    two extension comments. Read it there. Both compose notes now point at it instead of restating it.

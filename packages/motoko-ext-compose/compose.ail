@@ -899,13 +899,29 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
 -- so routing here would not run the compiler at all; it would return a
 -- tool-error blob that `check_snippet` has no way to tell from a check failure.
 --
--- The shape fails independently of the semantics: `ExtProcOutcome` carries
--- `output: string` and nothing else, and BOTH callers branch on `out.exitCode`
--- (`:260`, `:275`) and read `out.stdout` and `out.stderr` separately. There is no
--- exit code to read. Recovering one would mean parsing the rendered string, which
--- is the silent-wrong shape this project exists to remove, or widening
--- `ExtProcOutcome` — an ABI change, and the handoff scoped this item on it not
--- needing one. Reported rather than patched; see the WI-D19 note.
+-- WI-D21 CORRECTS THE SECOND HALF OF THAT PARAGRAPH, and the correction changes
+-- what is owed here. What is above is accurate about `proc_exec(w, "ailang", …)`.
+-- What followed it — "there is no exit code to read" — was wrong, and it was
+-- wrong because it inferred the seam's capability from the ONE tool name compose
+-- tried instead of reading the dispatcher. `proc_exec(w, "BashExec", …)` DOES run
+-- a real subprocess and DOES produce a real exit code: `run_native_call`'s
+-- `BashExec` arm builds `BashExecResult { …, exit_code, … }` and `dispatch_one`
+-- encodes it to JSON, which arrives as `ExtProcOutcome.output`. The exit code is
+-- there. It is TEXT.
+--
+-- So the obstacle is not a missing effect and not a missing ABI row. It is that
+-- reading `out.exitCode` from here would mean decoding `output` and pulling a
+-- field — the string-parsing path, which would also put a tool-error blob and a
+-- genuine compiler failure on one code path, exactly the confusion the paragraph
+-- above objects to. Typing it instead requires the exit code on BOTH sides of
+-- `Ports.tool_exec`, and the deterministic side has none: `ScriptedTool` carries
+-- no exit code and is rebuilt from the persisted payload, so the field is a
+-- program-schema version bump. That is scheduled as its own item rather than
+-- absorbed here — see WI-D21 §3.
+--
+-- The residue is unchanged and the reason for it is now the measured one: these
+-- two sites stay ambient because the seam renders where they need to match, not
+-- because the seam cannot reach a subprocess.
 export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   if mode != "inline" then { decision: NoIntercept, next_state: ctx.world }
   else {

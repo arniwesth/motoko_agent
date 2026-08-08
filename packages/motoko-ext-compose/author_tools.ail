@@ -394,6 +394,25 @@ func join_lines(xs: [string]) -> string {
 -- value, and the fallback would fire on a successful search that matched
 -- nothing.
 --
+-- WI-D21: THE FIRST PARAGRAPH IS RIGHT ABOUT `"rg"` AND WRONG ABOUT THE SEAM,
+-- and this site is where the difference bites hardest. `proc_exec(w, "rg", …)`
+-- does hit the final `else`; `proc_exec(w, "BashExec", …)` does not — it runs a
+-- real subprocess through `run_process_result` and returns
+-- `BashExecResult { stdout, stderr, exit_code, meta }` encoded as JSON in
+-- `output`. So ripgrep IS reachable through this seam, and both of the things
+-- this site needs — the output and a status — are in that string.
+--
+-- WHICH MAKES THE REAL OBSTACLE VISIBLE, and it is sharper here than at
+-- `ailang`: RIPGREP EXITS 1 WHEN IT MATCHES NOTHING. That is a normal answer,
+-- and it is the exact answer this function branches on to decide whether to run
+-- `grep_fallback_scan`. Under the seam it would have to come out of a decoded
+-- JSON field, and the two representations a typed seam could offer today are
+-- both wrong for it: `ToolFailed` would make "no matches" a fault the catalogue
+-- declares no class for, and `ToolCompleted` with a JSON blob is the
+-- string-parsing path. The exit code has to become a TYPED field, which is a
+-- program-schema bump — WI-D21 §3. Until then this site stays ambient because
+-- the seam renders where it needs to match, not because the seam cannot run it.
+--
 -- WHAT DID ROUTE HERE: both `grep_fallback_scan` calls, which are the FS half of
 -- this function, and `mk_ok`'s clock. The world therefore records the fallback
 -- reads and not the subprocess, which is an honest partial rather than a

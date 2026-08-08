@@ -575,3 +575,72 @@ pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
     contains_str(decodable_schema_versions(), program_schema_version())
       && not contains_str(decodable_schema_versions(), "execution-program/0")
   }
+
+-- WI-D21. THE `ExtPorts.proc_exec` BRIDGE BUILDS AN INVOCATION THIS VALIDATOR
+-- REJECTS, and this row is that sentence executed rather than written down.
+--
+-- `session.ail`'s `proc_exec` closure constructs
+-- `{ call: { id: "", tool: <tool>, … } }` — a BLANK call id, because an
+-- extension calling this seam is not answering a model tool call and has none to
+-- supply. `ports.recording_tool` then records
+-- `ToolIdentity("loop_v2", inv.call.id, inv.call.tool)`. The first argument
+-- below is that identity, verbatim.
+--
+-- Nothing calls the seam today, so the defect is LATENT and this row is what
+-- keeps it from being discovered by whoever routes the first caller. It is
+-- deliberately NOT repaired here: the repair is the identity-class decision, and
+-- both roads out of it are blocked on work this item is scoped to price rather
+-- than take —
+--
+--   * supplying a call id would invent an identity the effect does not have,
+--     which is the shape D2's `ExtensionEffectIdentity` exemption exists to
+--     avoid; and
+--   * moving the class to `ExtensionEffectIdentity` needs an `ext_id` the
+--     `ExtPorts` bridge cannot name (one record serves every extension, and
+--     `ExtCtx` carries no id), plus an eighth `record_interaction` adapter —
+--     no existing one constructs that class.
+--
+-- So the assertion states the current answer and its cost. The SECOND clause is
+-- the control: an ordinary driver-issued dispatch carries a real call id and
+-- passes, so this row fails for the blank and not for the shape of the fixture.
+pure func test_the_ext_proc_exec_invocation_shape_records_a_rejected_tool_identity() -> bool
+  tests [((), true)]
+  {
+    let from_the_bridge = validate_identity({
+      ordinal: 1,
+      body: ToolIdentity("loop_v2", "", "BashExec")
+    });
+    let from_the_driver = validate_identity({
+      ordinal: 1,
+      body: ToolIdentity("loop_v2", "call_1", "BashExec")
+    });
+    has_program_rule(from_the_bridge, "program-identity-component-missing")
+      && List.length(from_the_bridge) == 1
+      && List.length(from_the_driver) == 0
+  }
+
+-- The other half of the same finding: `ExtensionEffectIdentity` IS the class
+-- whose call id may be blank, so the shape the bridge produces is legitimate
+-- there and rejected under `ToolIdentity`. Asserted so that the identity-class
+-- decision rests on a measured rule rather than on a reading of D2's prose.
+--
+-- THE FIRST CLAUSE USES `extension_effect_fault` DELIBERATELY. A7 declares that
+-- class (`dst_fault_catalogue.ail:405`) and its coverage-gap entry names
+-- `ExtPorts.proc_exec` by name, so the `class_id` this seam would need is not a
+-- gap — it is already written. What the bridge lacks is ONE component, the
+-- `ext_id`, and the second clause pins that: blank everything is exactly two
+-- rejections, and the call id is not one of them.
+pure func test_the_extension_effect_class_exempts_the_call_id_and_lacks_only_the_ext_id() -> bool
+  tests [((), true)]
+  {
+    let what_the_seam_would_record = validate_identity({
+      ordinal: 1,
+      body: ExtensionEffectIdentity("compose", "extension_effect_fault", "")
+    });
+    let what_the_bridge_could_supply_today = validate_identity({
+      ordinal: 1,
+      body: ExtensionEffectIdentity("", "", "")
+    });
+    List.length(what_the_seam_would_record) == 0
+      && List.length(what_the_bridge_could_supply_today) == 2
+  }

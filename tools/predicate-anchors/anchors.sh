@@ -108,12 +108,31 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 #   grep -rn 'tool_phase.ail", line: [0-9]' --include=*.ail .
 # and it is written here because the cost of missing one is a full sweep.
 #
+# WI-D21 RE-BASELINED THE FIVE session.ail ANCHORS A FOURTH TIME,
+# 965/1224/1330/2775/2885 -> 1061/1320/1426/2871/2981, ALL +96 — AND IT IS THE
+# CHEAPEST EDIT THAT CAN CAUSE THIS. WI-D18's law was "every Route B SURFACE item
+# re-baselines". WI-D20 found the first exception: a non-surface item does too if
+# it needs a driver-side codec. THIS ITEM ADDED NO SEAM, NO IMPORT AND NO CODE AT
+# ALL — it wrote a comment block inside `ext_ports_of`'s `proc_exec` closure,
+# which sits above all five anchors, and that moved every one of them.
+#
+# So the law's real form is not about surfaces or codecs: ANY EDIT TO
+# `ext_ports_of`, INCLUDING PROSE, RE-BASELINES THIS LIST AND RE-ISSUES BOTH
+# PROFILES. An item whose whole deliverable is documentation must price the
+# cascade exactly as a routing item does, and this one is the proof.
+#
+# All five were compared to `git show HEAD:` character by character and are
+# byte-identical, so no site changed identity, routing or attribution — only its
+# offset. The three `*_dst.ail` discovered-site fixtures are NOT touched by this
+# one: they carry `tool_phase.ail:318`, which did not move. The nine-file set
+# below is the cost of a tool_phase move; a session.ail-only move touches six.
+#
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 965 1224 1330 2775 2885; do
+for l in 1061 1320 1426 2871 2981; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
