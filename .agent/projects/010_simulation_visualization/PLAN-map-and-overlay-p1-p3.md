@@ -756,6 +756,25 @@ viewer is a **host-side program**. Consequences the plan enforces:
     expensive boundary, reading the pinned dependency's source is cheaper than a round-trip, and
     it should be done *before* the first ask, not after the first failure.
 
+18. **The D7 gate passed on host run 4 — and runs 1–3 are the more useful record.** Verdict,
+    measurements and the wiring facts 2.2 must inherit are in `NOTE-d7-spike-verdict.md`; D7 is
+    closed in the ADR. Two process rules were earned and are recorded here because they
+    generalise beyond this project:
+    - **Read the pinned dependency's source before the first ask across an expensive boundary,
+      not after the first failure.** Runs 1 and 3 both failed on facts sitting in the wheels
+      (`Figure.show()` does not draw on an offscreen canvas; `pygfx` materials default to
+      `pick_write=False` and fastplotlib does not set it for scatter). Both were diagnosable
+      offline in minutes; each cost a host round-trip instead.
+    - **A detector that cannot say *why* it is empty is half a detector.** Run 3 reported
+      `samples: 0` for picking, which is the same output for "the handler never fired" and "it
+      fired and resolved nothing" — two bugs with completely different fixes. Distinguishing
+      them cost a whole round-trip; `pointer_events_received` now separates them.
+    - And the one that nearly mattered most: **run 2 reported `overall: pass` and was wrong.**
+      Criterion 3 was graded from a synthetic measurement that does not measure the criterion,
+      with `hover_tooltip_sample: null`. A gate can fail by passing, and the existing guard
+      covered only the empty case, not the plausible-but-hollow one. Synthetic measurements now
+      grade `not-measured`, never `pass`.
+
 ## Suggested implementation order
 
 1. **P1 sequence**: fresh `--profile=all` extraction → 1.1 + 1.2 (one builder) → 1.3 validator →

@@ -116,7 +116,20 @@ Four views, in build order, each a deterministic function over store tables — 
 3. **Divergence view** — anti-join of two runs' activity (same seed across two code versions — the primary case — or two seeds); divergence index from `ReplayMismatch`.
 4. **Corpus aggregation** — coverage dead zones (`dst_profile_coverage` spatially), fault blast radius per fault class, and **declared-vs-performed**: performed flow edges with no declared import edge (hidden coupling) and declared edges never lit (dead/untested), rendered as first-class defect classes.
 
-### D7. Renderer: fastplotlib *(open — leading candidate, not committed)*
+### D7. Renderer: fastplotlib *(decided 2026-08-08 — gate passed)*
+
+**Committed.** The P2 spike passed all six written criteria on the host, in the
+environment `install_host.sh` produced and nothing else: 56.3 fps median / 50.8
+p5 on the real scene and 57.7 / 55.6 at 5× synthetic density (floor: 30), click →
+identity in 0.005 ms over real pointer events with the tooltip returning a module
+path (budget: 100 ms), 0–1 LOD hitches, 232–1160 simultaneous labels, standalone
+glfw window reading the shared-mount store. Measurements, the scale caveat, and
+the four-run history — including one run that reported a **false pass** and how
+the grading was tightened — are in `NOTE-d7-spike-verdict.md`. The datashader →
+web-stack fallback ladder is retired to a contingency and is not engaged.
+
+The original argument is kept below, unedited, because the "against" column is
+what the gate was testing.
 
 For: Python-native (matches extractor/query/notebooks), pan/zoom/picking free, instanced rendering headroom for corpus-scale overlays. Against: young library; no UI chrome beyond its imgui integration (which Q5's answer adopts: standalone app, imgui for GUI inputs); weak large-volume text (mitigated by D3's L4 punt). Decision gate: a P2 spike rendering the full L0–L2 map with pan/zoom + picking — run **on the host via D10's install script**, since the devcontainer cannot execute it. Fallback candidates: datashader + panel (CPU-only — would also dissolve most of the D10 constraint), or a web stack (deck.gl/sigma.js) at the cost of leaving Python.
 
