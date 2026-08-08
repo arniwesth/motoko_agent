@@ -24,7 +24,7 @@ Default: run the full extractor for the core profile, including iface typed data
 and effects. Core excludes smoke scripts, examples, *_test.ail, and src/core/test.
 
 --profile=core     Core source only (default).
---profile=all      Old broad graph: src, scripts, and examples.
+--profile=all      Broad graph: src, scripts, examples, and packages.
 --profile=smoke    Smoke/example entry points only.
 --include-tests    Include core test modules in the core profile.
 --structural-only  Diagnostic mode. Skips iface and overwrites typed/effect CSVs.
@@ -55,3 +55,8 @@ else
 fi
 
 python3 tools/code-graph/viz/visualize.py --module-deps || true
+
+# Layout projections (project 010, P1 / Q7). Deliberately NOT `|| true`: the map
+# is a coordinate system other tables are joined against, and a stale or missing
+# layout is worse than a failed refresh. A broken layout fails the extraction.
+python3 tools/code-graph/layout/build_layout.py

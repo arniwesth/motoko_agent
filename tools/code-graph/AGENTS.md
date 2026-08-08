@@ -46,6 +46,42 @@ must treat `incomplete=true` as "unknown", not "no".
 The `unimported` query means "not reachable via static imports from declared roots";
 it never means dead or safe to delete.
 
+## Layout projections (`layout`, `edges_agg`)
+
+`tools/code-graph/layout/build_layout.py` generates two further tables into
+`.out/`, and `extract.sh` runs it as its last step (deliberately without
+`|| true` — a broken layout fails the refresh):
+
+```
+layout(node_id, level, x, y, radius, snapshot)
+edges_agg(level, src_agg, dst_agg, kind, weight, exactness)
+```
+
+They are a deterministic containment layout of the **all** profile: nested
+circle packing over the directory tree, area = `modules.n_funcs`, sibling order
+by `sha256(node_path)`, coordinates quantized to 9 decimals against a unit root
+circle. Same tree ⇒ byte-identical tables.
+
+LOD levels are **path-prefix classes**: L0 is the first path segment, L1 the
+two-segment prefix, L2 the module. A module shallower than a level's prefix
+depth is its own aggregate at that level. Directories deeper than two segments
+are packing containers: they get `layout` rows at level 2 and never appear in
+`edges_agg`. Edge weights roll up exactly — `weight(n, A→B)` equals the sum of
+its level `n+1` children, checked by the validator, never aggregated at render
+time. `exactness` is `exact` for `imports` and `approximate` for `invokes`; a
+consumer that draws them alike is lying at a glance.
+
+```bash
+python3 tools/code-graph/layout/build_layout.py          # rebuild (self-validating)
+python3 tools/code-graph/layout/validate_layout.py       # 5 named rules over .out/
+python3 tools/code-graph/layout/stability_probe.py --check
+```
+
+Freshness is keyed by the `snapshot` column, not by mtime: `cgq.py` recomputes
+it from the current `extraction_status` and prints a `STALE:` banner when a
+query touches `layout`/`edges_agg` and the keys disagree. Rebuild rather than
+trust a bannered layout.
+
 ## Project-memory concept edges (`concept_edges`)
 
 `concept_edges` is a directed relation graph between `.agent` Markdown sections,

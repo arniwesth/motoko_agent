@@ -6,7 +6,7 @@ contingent on that ADR graduating to Proposed/Accepted**; if a Dn changes at gra
 citing it are re-planned, not silently adjusted.
 **Branch**: `arniwesth/mot-84-wi-d22-execution-program2-and-the-freeze-it-finally-makes`
 **Grounded at**: HEAD `a816bcd` (every `file:line` anchor below re-verified at this commit — the
-handoff's anchors were checked, not inherited; one was corrected, see Gaps §7.4).
+handoff's anchors were checked, not inherited; one was corrected, see Gap 4).
 **Normative sources**: the ADR (D1–D10, acceptance sketch; D10 added 2026-08-08 by user input
 during planning — the devcontainer has no GPU access, so the viewer is host-side with a committed
 install script), `NOTE-q1-event-subject-pass.md` (30-key table, rule kinds, Q3 probe). The
@@ -29,8 +29,9 @@ D6 view 1), and the `cgq.py` query extensions (D8).
 Decisions the ADR left open are decided here with rationale: **Q4** area = function count
 (`modules.n_funcs`, already extracted); **D2 sub-choice** = circle packing (the D1 schema is
 circle-native: `layout.radius`); **Q7** = layout generation appended to `extract.sh` *and*
-standalone, with a `snapshot` staleness key banner-checked by `cgq.py`; **Q5** = Jupyter-first for
-the fastplotlib canvas (marimo is not a Jupyter host; it keeps the analysis notebooks); **P1
+standalone, with a `snapshot` staleness key banner-checked by `cgq.py`; **Q5** = a **standalone
+fastplotlib app** (native window on the host, imgui for GUI inputs where needed — user decision
+2026-08-08; marimo keeps the analysis notebooks, nothing notebook-hosts the canvas); **P1
 stability metric** = normalized displacement outside the changed subtree, threshold calibrated by
 a named probe; **D7 gate** = six concrete criteria plus a timebox, with the fallback procedure
 written before the spike runs.
@@ -63,7 +64,7 @@ All deliverables are new files except two well-bounded edits (`extract.sh` +1 in
 | `tools/code-graph/layout/stability_probe.py` | 1 | **new** | The stability probe: builds layouts for mutated trees, reports the displacement metric |
 | `tools/code-graph/extract.sh` | 1 | edit | +1 line invoking `build_layout.py` after `visualize.py` (same pattern, `|| true` **not** used — layout failure must fail the extraction, see Q7) |
 | `tools/code-graph/query/cgq.py` | 1,3 | edit | `SCHEMAS` entries for `layout`/`edges_agg`/`activity`; layout-staleness banner; `q touched <seed>`, `q divergence <seedA> <seedB>` in `named_query` (`cgq.py:223`) |
-| `tools/code-graph/viewer/pyproject.toml` | 2 | **new** | uv-managed, **pinned** dependency set for fastplotlib/wgpu/jupyter — the single source of truth both the host install and any container-side extras install from |
+| `tools/code-graph/viewer/pyproject.toml` | 2 | **new** | uv-managed, **pinned** dependency set for fastplotlib/wgpu/glfw/imgui — the single source of truth both the host install and any container-side extras install from |
 | `tools/code-graph/viewer/install_host.sh` | 2 | **new** | **ADR D10's install script.** Run on the *host* from a checkout: installs uv if absent, builds the pinned venv from `pyproject.toml`, runs a wgpu adapter probe (fails loudly with diagnosis if the host GPU stack is unusable), prints the launch command. Idempotent; re-run after dependency bumps |
 | `tools/code-graph/viewer/spike_l0l2.py` | 2 | **new** | The D7 spike scene (disposable by design; findings outlive it) |
 | `tools/code-graph/viewer/map_view.py` (+ helpers) | 2 | **new** | The L0–L2 map proper, if the gate passes |
@@ -76,7 +77,7 @@ All deliverables are new files except two well-bounded edits (`extract.sh` +1 in
 | `tools/code-graph/overlay/data/native_tool_modules.csv` | 3 | **new, committed** | Curated seed map: native tool name → handler module (small; see task 3.3) |
 | `tools/code-graph/overlay/data/error_sources.csv` | 3 | **new, committed** | Curated `ErrorEvent.source` → module map (2 known values today; see task 3.3) |
 | `tools/code-graph/overlay/build_activity.py` | 3 | **new** | Traces × rules → `activity.csv`; multi-subject fan-out; `unattributed` preserved |
-| `tools/code-graph/overlay/render_heat.py` | 3 | **new** | Static heat SVG over `layout` — matplotlib/svgwrite, **no fastplotlib dependency** |
+| `tools/code-graph/overlay/render_heat.py` | 3 | **new** | Static heat SVG over `layout` — matplotlib (verified installed), **no fastplotlib dependency** |
 | `tools/code-graph/overlay/validate_overlay.py` | 3 | **new** | Coverage-vs-vocabulary check, heat-vs-SQL agreement check |
 | `tools/code-graph/.out/…` | 1,3 | generated | `layout.csv`, `edges_agg.csv`, `activity.csv`, `tool_modules.csv`, `vocabulary.json`, `traces/<profile>/<seed>.jsonl`, `heat/<profile>/<seed>.svg` — generated, not committed (D1) |
 
@@ -93,7 +94,7 @@ exporter is one-profile-one-seed (D9), and the 30-key table is taken from the NO
 - `phase_vocab.ail`: `checkpoint` seam `:263`, `StepDecision` `:448`, `LedgerRecord` `:594`,
   `ledger_append` `:604`, `to_schema_v1_kvs` `:778`, `to_schema_v1` `:817`. All exported.
 - `event_variant_id` is exported from **`dst_event_vocabulary.ail:142`**, *not* `phase_vocab`
-  (handoff imprecision, corrected — see Gaps §7.4).
+  (handoff imprecision, corrected — see Gap 4).
 - `dst_result.ail`: `SystemRun.ledger_trace` `:95`, `HarnessFailure.partial_ledger_trace` `:110`,
   `DstResult = RunCompleted | RunFailed` `:114`, `completed_run` `:130`.
 - Vocabulary counts: 28 LOGICAL + 6 DISPLAY-ONLY real rows; exactly **8** real
@@ -125,19 +126,23 @@ exporter is one-profile-one-seed (D9), and the 30-key table is taken from the NO
 - Environment: **no `/dev/dri`, no `nvidia-smi`, no Vulkan ICDs, no `wgpu`/`fastplotlib`/
   `marimo`/`datashader` installed**; Python 3.12.3 system-wide with `chdb 4.2.1`, `numpy`,
   `pandas`; `uv` available. CI workflows: `dst-corpora.yml`, `verify-extensions.yml` — **no
-  code-graph CI exists today** (see Gaps §7.1).
+  code-graph CI exists today** (see Gap 1).
 
 **Assumed (flagged, each with its resolution point):**
 
-- fastplotlib's in-notebook rendering path is `jupyter_rfb` (a Jupyter widget), which marimo does
-  not host — from model knowledge, not verified against installed code. Resolved at spike step 0
-  (task 2.0).
+- fastplotlib ships a built-in imgui integration (via `imgui-bundle`, installable as
+  `fastplotlib[imgui]`) suitable for the standalone-app GUI inputs Q5's answer calls for — from
+  model knowledge, not verified against installed code. Resolved at task 2.0's environment
+  bring-up; if the integration is absent or unusable at the pinned version, plain glfw callbacks
+  cover P2's minimal input needs and the finding goes to the spike NOTE.
 - wgpu-py can render offscreen on a software Vulkan adapter (mesa lavapipe,
   `mesa-vulkan-drivers`) in a GPU-less container — plausible and standard, unverified here.
   Resolved at task 2.0; the spike design does not depend on it succeeding (host path exists).
 - The exporter can mirror `corpus_pr_dst`'s `run_generated` shape for an arbitrary
-  profile-at-a-seed. The functions exist and are exported (verified above); the exact
-  profile-selection wiring is implementation detail resolved in task 3.1.
+  profile-at-a-seed. Precision matters here: `run_v2_session_traced` and the `dst_generator`
+  primitives are exported, but `generated_world`/`generated_world_at` are **script-local**
+  funcs in `corpus_pr_dst.ail` — the exporter **replicates** that wiring, it cannot import it.
+  The exact profile-selection wiring is implementation detail resolved in task 3.1.
 
 ---
 
@@ -151,9 +156,20 @@ exporter is one-profile-one-seed (D9), and the 30-key table is taken from the NO
 Q4 (decided below).
 
 - **Input**: `modules.csv` + `extraction_status.csv` from a **`--profile=all`** extraction (D1:
-  the map is the repo-wide picture). The hierarchy is derived from module path segments:
-  L0 = top-level dirs (`src`, `packages`, `scripts`, `examples`, `tools` if present), L1 =
-  subpackage dirs, L2 = modules. L3/L4 are out of P1–P3 scope (ADR phasing).
+  the map is the repo-wide picture; the profile's roots are `src`, `scripts`, `examples`,
+  `packages` — `extractor/config.py:15`; note `tools/**` is *not* extracted, so the map does not
+  show its own tooling). L3/L4 are out of P1–P3 scope (ADR phasing).
+- **Level mapping, pinned** (the tree has variable depth — `scripts/foo` is a depth-2 module,
+  `src/core/ext/registry_generated` is depth-4 — so "L1 = subpackages" needs a rule an
+  implementer can't get wrong): **packing runs over the full directory tree** (every dir is a
+  containment circle); **LOD levels are path-prefix classes**: a node's L0 aggregate is its
+  first path segment, its L1 aggregate its two-segment prefix, and L2 is the module itself. A
+  module shallower than a level's prefix depth (e.g. a depth-2 module at L1) **is its own
+  aggregate at that level**. Dirs deeper than two segments (`src/core/ext`) are packing
+  containers only — they get `layout` rows (the containment picture needs them) but **no
+  `edges_agg` rows**; edges aggregate over the three prefix classes exactly. `layout.level` for
+  such containers is 2 (they surface at module zoom); L0/L1 rows exist only for prefix-class
+  nodes.
 - **Q4 decided: area = function count.** `modules.n_funcs` is already extracted (verified column),
   is stable under reformatting (LOC is not), and is the ADR-leading option. Zero-func modules get
   `area = max(n_funcs, 1)` so they remain visible. The stability probe (1.4) includes a
@@ -185,9 +201,10 @@ stability probe (1.4). **Size**: 2–3 days.
 - **Base levels defined exactly** (the invariant needs a defined floor):
   - `kind=imports`, `exactness=exact`: base is L2 — one edge per distinct
     (`from_module`, `to_module`) pair in `imports.csv`, `weight=1`. L1 and L0 rows are sums of
-    child-pair weights (a pair of L1 nodes aggregates all L2 edges whose endpoints map into
-    them; intra-node edges collapse to self-loops and are kept — the viewer decides whether to
-    draw them, the table does not lie by omission).
+    child-pair weights under the **prefix-class mapping pinned in 1.1** (a pair of L1 nodes
+    aggregates all L2 edges whose endpoints map into them; intra-node edges collapse to
+    self-loops and are kept — the viewer decides whether to draw them, the table does not lie
+    by omission).
   - `kind=invokes`, `exactness=approximate`: base is L2 — function-level `invokes.csv` rows
     rolled up to (from-module, to-module), `weight` = count of function-pair edges. Aggregated
     identically to L0/L1. This exists in P1 deliberately so **D4 has a real target in P2**: the
@@ -213,12 +230,13 @@ Checks, each a named rule (ADR-002 oracle style — enumerated findings, not a b
    quantization-aware epsilon).
 3. **sibling-overlap** — no two siblings overlap.
 4. **coverage** — every `modules.csv` module has exactly one L2 layout row; every `edges_agg`
-   endpoint exists in `layout` at its level; every L2 node's ancestors exist at L1/L0.
+   endpoint exists in `layout` at its level; every L2 node's L0/L1 **prefix-class aggregates**
+   (which, for a depth-2 module, is the module itself — the 1.1 rule) exist as layout rows.
 5. **determinism** — rebuild in a temp dir from the same `.out` inputs; byte-compare
    `layout.csv`/`edges_agg.csv`. (This is the *sameness* direction; the probe (1.4) supplies the
    *movement* direction — a mutated tree must move the metric. Two-sided per the meta-decision.)
 
-**Where "CI" is**: there is no code-graph CI today (Gaps §7.1). The validator runs (a) inside
+**Where "CI" is**: there is no code-graph CI today (Gap 1). The validator runs (a) inside
 every build — generation-time gating covers every path that produces the artifact — and (b) as a
 standalone target for whatever workflow later adopts it. Proposal recorded, not implemented here:
 a fixture mini-tree under `tools/code-graph/tests/` so a workflow can run builder+validator
@@ -230,9 +248,14 @@ hermetically in seconds without a full extraction. **Size**: 1 day.
 **Implements**: the ADR acceptance sketch's "threshold calibrated by a P1 probe".
 
 - **Metric (decided)**: for a snapshot pair (A, B), over nodes present in both and **outside the
-  changed subtree** (changed subtree = the set of ancestors of any added/removed/re-areaed node),
-  report `d_i = ‖pos_B(i) − pos_A(i)‖` in unit-root coordinates; the probe records **max** and
-  **mean** `d_i`, plus the same for radius change.
+  expected-motion zone**, report `d_i = ‖pos_B(i) − pos_A(i)‖` in unit-root coordinates; the
+  probe records **max** and **mean** `d_i`, plus the same for radius change. The
+  expected-motion zone is defined operationally (an ambiguity found in review — "outside the
+  changed subtree" alone doesn't say whether repacked *siblings* count): it is the **subtree
+  rooted at the immediate parent of each added/removed/re-areaed node** (that container must
+  repack — sibling motion there is legitimate) **plus the ancestor-chain nodes themselves**
+  (their radii legitimately grow/shrink). Every node outside that zone measures *ripple*, which
+  is what the threshold bounds.
 - **Probe fixtures**: synthetic mutations of the real all-profile tree — add 1 module to a deep
   dir; add 10 modules to one package; delete a mid-size dir; grow one module's n_funcs by 5× —
   plus one historical pair (re-extract at an older commit if cheap; skip if not, recorded).
@@ -254,9 +277,10 @@ and layout — exactly the Sourcetrail failure mode; the integrated call costs s
 standalone entry keeps layout iteration cheap during development without re-extracting.
 
 **Deliverable**: the `extract.sh` edit; `cgq.py` staleness banner — when any query touches
-`layout`/`edges_agg`/`activity` and the stored `snapshot` inputs disagree with the current
+`layout`/`edges_agg` and the stored `snapshot` inputs disagree with the current
 `extraction_status.built_at` set, print the existing-style `STALE:` banner (mirrors
-`cgq.py`'s current stale/source_stale banners). **Size**: 0.5 day.
+`cgq.py`'s current stale/source_stale banners). (`activity` has a different freshness story —
+it is keyed to trace files, not to extractions; task 3.4 defines it.) **Size**: 0.5 day.
 
 ---
 
@@ -267,9 +291,10 @@ standalone entry keeps layout iteration cheap during development without re-extr
 **Implements**: **D10** (host-side viewer; the devcontainer stays headless — user-confirmed
 permanent, now an ADR decision, not an environment accident).
 
-- **Deliverable 1 — `viewer/pyproject.toml`**: the pinned dependency set (`fastplotlib`, `glfw`,
-  `jupyter_rfb`, `jupyterlab`), uv-managed. Single source of truth for every environment that
-  runs viewer code.
+- **Deliverable 1 — `viewer/pyproject.toml`**: the pinned dependency set —
+  `fastplotlib[imgui]` (pulls `imgui-bundle` for GUI inputs) + `glfw` for the native window —
+  uv-managed. No Jupyter dependencies: the canvas is not notebook-hosted (Q5). Single source of
+  truth for every environment that runs viewer code.
 - **Deliverable 2 — `viewer/install_host.sh`** (D10's install script, the load-bearing piece):
   run **on the host** from a checkout, it (a) installs uv if absent, (b) creates/updates the
   pinned venv from `pyproject.toml`, (c) runs a **wgpu adapter probe** — enumerate adapters,
@@ -287,15 +312,16 @@ permanent, now an ADR decision, not an environment accident).
   (`mesa-vulkan-drivers`) software rendering in-container for CI golden images. Works → golden
   images join Validation §5.4. Doesn't → container tests stay style-table-only. Either outcome
   is fine; the container is not the execution environment (D10).
-- **Q5 decided: Jupyter-first for the canvas, on the host.** fastplotlib's notebook path is
-  `jupyter_rfb` (verify on install — flagged assumption); marimo is not a Jupyter widget host,
-  so the ADR's "marimo/Jupyter first" resolves to **Jupyter for the fastplotlib canvas**; the
-  existing marimo notebooks keep their analysis role; Qt is deferred until P4 needs chrome.
-  The host-side glfw native window is the recorded alternative if Jupyter adds untenable
-  latency — measured at the spike, not debated.
+- **Q5 decided (user, 2026-08-08): a standalone fastplotlib app.** Native glfw window on the
+  host; **imgui** (fastplotlib's built-in integration, `fastplotlib[imgui]`) for GUI inputs
+  where needed — P2 needs almost none (hover/click are native fastplotlib events; a search box
+  can wait), so keep the imgui surface minimal until P4's scrubber demands real chrome. Not
+  notebook-hosted, not Qt; the existing marimo notebooks keep their analysis role untouched.
+  This also simplifies D10's story: one process, one window, no widget-transport layer between
+  container and host to reason about.
 
-**Size**: 1 day. **This task can start the moment P1's schema exists (even before the probe
-NOTE lands).**
+**Size**: 1 day. **This task needs nothing from P1 and can start immediately; only 2.1 (the
+spike itself) waits on P1's landed tables.**
 
 ### Task 2.1 — the D7 spike, with the gate written down first
 
@@ -314,8 +340,8 @@ a verdict from a hand-built env is invalid):
    hitch at threshold crossing fails).
 5. Text: ≥ 200 simultaneous L2 labels without dropping below criterion 2 (labels may be
    decimated by zoom, but the L2 view must be labelable).
-6. Runs end-to-end on the host from `.out/` tables through the shared mount, launched exactly as
-   `install_host.sh` printed it (Jupyter canvas or host glfw).
+6. Runs end-to-end on the host from `.out/` tables through the shared mount as a **standalone
+   app window** (glfw), launched exactly as `install_host.sh` printed it.
 
 **Timebox**: 3 working days. Timebox exhausted without all six = **fail** (the meta-decision's
 convergence rule applied to spikes: a spike that keeps almost-passing is a fail signal).
@@ -349,8 +375,8 @@ through the same chdb access layer `cgq.py` uses (no parallel store surface — 
 - Hover → module path + counts tooltip; click → open in real editor via `$EDITOR`/IDE URL
   (D3: L4 preview and anything in-canvas beyond it is out of scope).
 
-**Verified by**: style-table unit tests (container-runnable); golden images if 2.0 Outcome A;
-manual acceptance walk on the host against the acceptance sketch. **Size**: ~1 week.
+**Verified by**: style-table unit tests (container-runnable); golden images if 2.0's lavapipe
+extra landed; manual acceptance walk on the host against the acceptance sketch. **Size**: ~1 week.
 
 ---
 
@@ -364,13 +390,20 @@ manual acceptance walk on the host against the acceptance sketch. **Size**: ~1 w
 - **One profile + one seed per invocation** (Q3 probe finding — hard requirement). Profile and
   seed arrive as arguments; the script builds the seeded world and runs the driver **exactly as
   `corpus_pr_dst.ail` does** (`generated_world(seed)` → `Session.run_v2_session_traced`,
-  verified shape), then serializes the **returned** trace from the result — `ledger_trace` on
-  `RunCompleted`, `partial_ledger_trace` on `RunFailed` (`dst_result.ail:95,:110`), with the
-  failure case marked in the header. **Never the stdout `^{` stream** (emission-witness side —
+  verified shape — note `generated_world` is script-local there, so the exporter *replicates*
+  the wiring from `dst_generator` exports rather than importing it), then serializes the
+  **returned** trace from the result — `ledger_trace` on `RunCompleted`,
+  `partial_ledger_trace` on `RunFailed` (`dst_result.ail:95,:110`), with the failure case
+  marked in the header. **Never the stdout `^{` stream** (emission-witness side —
   rejected in D9 with reasons; known trap).
 - **Output**: `tools/code-graph/.out/traces/<profile>/<seed>.jsonl`, written **via the FS
   effect** — not stdout, which the wire `Trace` stream already pollutes during runs (Q3 probe:
   364 `^{` lines in a baseline run; a stdout-JSONL exporter would need fragile grep hygiene).
+  Mechanisms verified at HEAD, pinned so they aren't re-derived: line serialization is
+  `std/json.encode` — used exactly as `encode(to_schema_v1(e))` in phase_vocab's own golden
+  tests (`phase_vocab.ail:1202`); file writes are `std/fs.writeFileResult` + `mkdirAllResult`
+  (the Result-returning variants — see `scripts/smoke_v2_writefile_missing_parent.ail:26` for
+  the post-M-AILANG-FS-RESULT idiom).
   One header line (seed, profile id + version — `driver_only_id`/`driver_only_version`-style
   exported accessors; generator version; program schema; AILANG version and motoko commit
   injected by the wrapper via `Env`), then one line per `LedgerRecord` with envelope fields
@@ -387,8 +420,9 @@ manual acceptance walk on the host against the acceptance sketch. **Size**: ~1 w
 - **StreamDelta hazard**: keyed on the *variant* (`event_variant_id`), never on wire names, so
   the two-wire-name variant (`reasoning_delta`/`thinking_delta`) is a non-issue by construction.
 
-**Verified by**: run it at 2–3 seeds; assert (a) exactly one final `RunSummary` per D6.1 via the
-file (parity with `has_exactly_one_final_run_summary` semantics), (b) every line's payload for
+**Verified by**: run it at 2–3 seeds; assert (a) for **completed** runs, exactly one final
+`RunSummary` per D6.1 via the file (parity with `has_exactly_one_final_run_summary` semantics —
+a `RunFailed` export legitimately lacks it and is exempt), (b) every line's payload for
 `WireRecord`s round-trips against the wire projection (the existing
 `event_vocabulary_dst.ail` round-trip already guards projection drift upstream — the exporter
 test only checks *its own* envelope), (c) re-running the same seed is byte-identical
@@ -400,7 +434,9 @@ test only checks *its own* envelope), (c) re-running the same seed is byte-ident
 `variant`, `wire_names`, `classification`, `reaches_trace_today`).
 **Why**: the P3 validators need the vocabulary machine-readably without parsing AILANG source
 with regexes (the grep pitfall found during grounding — a test fixture row shadows naive
-counting). Same posture as D9: a new script over the exported pure `event_vocabulary()`.
+counting). Same posture as D9: a new script over the exported pure `event_vocabulary()`
+(`dst_event_vocabulary.ail:238`, export verified), serialized with the same `std/json.encode` +
+`std/fs.writeFileResult` pair as 3.1.
 **Verified by**: row count 34; the 8 known `reaches_trace_today:false` rows present.
 **Size**: 0.5 day.
 
@@ -443,17 +479,23 @@ emitter ≠ subject, the table is the answer).
 ### Task 3.4 — `activity` table build
 
 **Deliverable**: `overlay/build_activity.py` → `.out/activity.csv` with the D1 schema
-`activity(seed, event_idx, record_key, subject_id, rule_kind)`, rebuilt from all files under
-`.out/traces/`.
+`activity(seed, event_idx, record_key, subject_id, rule_kind)`.
 **Implements**: D1 (schema, record-kind-aware `record_key`), D5 (rule_kind provenance in-band).
 
+- **Built per profile, not across profiles** (review round 2 finding — same root cause as Gap
+  10, but this one bites in P3): the schema has no profile column, so the same seed exported
+  under two profiles would collide on every key. `build_activity.py` takes a `--profile`
+  argument, reads only `.out/traces/<profile>/`, and records the profile in the build report.
+  One `activity.csv` covers one profile's traces; cross-profile aggregation waits on Gap 10's
+  resolution (a run/profile identity column is one D1 amendment, not two).
 - Fixture note for its tests (known trap, planned around): DISPLAY-ONLY variants and the two gap
   variants **cannot appear in real traces** — test fixtures use reachable variants only; a
   synthetic-trace unit test may use gap variants precisely to assert they'd be handled if 009
   closes the gaps.
-- `cgq.py` gets the `activity` schema entry + staleness story: activity is keyed to trace files,
-  not to `extraction_status` — its banner compares against `layout.snapshot` only where joined
-  (heat); raw activity queries carry a trace-file-count line in `meta` instead.
+- `cgq.py` gets the `activity` schema entry + freshness story: activity is keyed to trace
+  files, not to `extraction_status` — raw activity queries carry a trace-file-count line in
+  `meta` rather than the extraction-staleness banner; the heat renderer (3.5) checks `layout`
+  freshness itself before drawing over it.
 
 **Verified by**: `unattributed` rows present-not-dropped (ADR acceptance: "unattributed records
 render as unattributed, never dropped"); multi-subject fan-out counts match rule arity on a
@@ -462,9 +504,10 @@ hand-checked fixture trace. **Size**: 1 day.
 ### Task 3.5 — static heat overlay (the only P3 task needing P1)
 
 **Deliverable**: `overlay/render_heat.py` → `.out/heat/<profile>/<seed>.svg` — a static render of
-`layout` circles colored by `groupby(subject)` counts over one trace. Matplotlib/svgwrite;
-**deliberately no fastplotlib dependency**, which is what makes P3 ∥ P2 real (D6 view 1: "needs
-no interactive viewer").
+`layout` circles colored by `groupby(subject)` counts over one trace. Matplotlib (3.6.3 verified
+installed in the container's system Python — no new dependency); **deliberately no fastplotlib
+dependency**, which is what makes P3 ∥ P2 real (D6 view 1: "needs no interactive viewer") and
+keeps all of P3 container-side (D10).
 **Implements**: D6 view 1; D4 for the overlay (unattributed rendered as a distinct "unknown"
 style, never omitted; modules with zero activity visually distinct from unattributed).
 
@@ -480,8 +523,13 @@ that ignores its input). **Size**: 1 day.
 **Deliverable**: `q touched <seed>` (subjects + counts for one seed) and
 `q divergence <seedA> <seedB>` (anti-join over `activity` — first index where the subject
 sequences diverge + per-subject count diff), added to `named_query` (`cgq.py:223`). No new CLI
-(D8 hard rule). `q coverage-gaps <corpus>` is **deferred to P6** with the corpus views — it
-needs corpus-scale trace inventories that don't exist until P4–P6.
+(D8 hard rule). **Scope limit, stated deliberately**: this covers the *two-seed* divergence
+case only. The D1 `activity` schema has no run-identity column, so it cannot hold two runs of
+the **same seed** from two code versions simultaneously — which ADR D6 view 3 names as the
+*primary* divergence case. That is a genuine schema limitation flagged in Gap 10 and
+resolved at P5, not silently papered over here. `q coverage-gaps <corpus>` is **deferred to
+P6** with the corpus views — it needs corpus-scale trace inventories that don't exist until
+P4–P6.
 **Verified by**: `q touched` against the same fixture trace as 3.5's agreement check.
 **Size**: 0.5–1 day.
 
@@ -495,7 +543,7 @@ needs corpus-scale trace inventories that don't exist until P4–P6.
 | D2 sub | Circle packing vs treemap | **Now: circle packing** (D1 schema is circle-native) | Task 1.1; flips to treemap only if the 1.4 probe cannot calibrate a sane threshold — evidence recorded in the probe NOTE |
 | P1 stability metric | Metric + threshold | **Metric now** (normalized displacement outside changed subtree, max+mean); **threshold by probe** | Task 1.4 → `NOTE-p1-stability-probe.md` |
 | Q7 | Refresh coupling | **Now: in `extract.sh` + standalone**, snapshot-keyed staleness banner | Task 1.5; rationale: never-stale-map lesson |
-| Q5 | Viewer host | **Now: Jupyter-first for the canvas, running on the host machine per ADR D10** (marimo isn't a Jupyter host — flagged assumption), Qt deferred to P4 | Task 2.0 verifies the jupyter_rfb assumption via the install script |
+| Q5 | Viewer host | **Answered by user 2026-08-08: standalone fastplotlib app** (native glfw window on the host per ADR D10; imgui for GUI inputs; not notebook-hosted, not Qt) | Task 2.0 verifies the `fastplotlib[imgui]` integration via the install script |
 | D7 | Spike gate | **Criteria + timebox + fallback now** (six criteria, 3 days, datashader→web-stack ladder) | Task 2.1 → `NOTE-d7-spike-verdict.md` |
 
 ---
@@ -510,9 +558,9 @@ needs corpus-scale trace inventories that don't exist until P4–P6.
    NOTE — a bound established, not asserted (the ADR's own framing).
 4. **D4 honesty**: a single `style_for(kind, exactness, stale, incomplete)` function with unit
    tests asserting pairwise-distinct styles for exact/approximate/unknown — checkable without a
-   GPU (this is the code-review-rule form); golden images added only if 2.0 lands software
-   rendering (Outcome A). A task drawing `invokes` like `imports` fails a unit test, not a
-   review comment.
+   GPU (this is the code-review-rule form); golden images added only if 2.0's opportunistic
+   container-side lavapipe extra lands (never a gate — D10). A task drawing `invokes` like
+   `imports` fails a unit test, not a review comment.
 5. **Attribution coverage**: rule coverage validated against the exported vocabulary
    (3.2 + 3.3) — 26 reachable LOGICAL + 2 record kinds have rules; the 2 gap rows exist;
    DISPLAY-ONLY rows don't; unknown `ErrorEvent.source`s counted, never dropped.
@@ -544,12 +592,16 @@ viewer is a **host-side program**. Consequences the plan enforces:
 
 - **P4 replay scrubber**: needs P2 (interactive canvas) + P3 (`activity`). First real consumer of
   windowed aggregation / glow decay; also where the multi-subject *rendering* choice (split vs
-  duplicate glow — a design choice the NOTE explicitly parked for P4) gets made, and where Qt
-  chrome gets re-evaluated (Q5's deferred half).
-- **P5 divergence view**: needs P4 + two exported runs of the same seed across code versions;
-  `q divergence` (3.6) already gives the data answer; `ReplayMismatch` supplies the divergence
-  index. Prerequisite: exporting the *same seed at two commits* — a small orchestration wrapper
-  over 3.1, not new machinery.
+  duplicate glow — a design choice the NOTE explicitly parked for P4) gets made, and where the
+  imgui chrome surface grows to real controls (scrubber slider, seed selector, search) — the
+  toolkit is settled by Q5; P4 only decides how much of it to build.
+- **P5 divergence view**: needs P4 + two exported runs of the same seed across code versions.
+  `q divergence` (3.6) covers the two-seed case; the same-seed-two-versions case — the primary
+  one — is blocked on the run-identity limitation in the D1 `activity` schema (Gap 10):
+  P5 either adds a run/snapshot column to `activity` (an ADR D1 amendment, argued then) or
+  anti-joins two trace stores directly without materializing both into one table. Exporting
+  the same seed at two commits is a small orchestration wrapper over 3.1 either way.
+  `ReplayMismatch` supplies the divergence index.
 - **P6 corpus views**: needs many-seed export orchestration (a loop over 3.1's
   one-seed-per-process invocations — the topology decision makes this embarrassingly parallel),
   `dst_profile_coverage` outputs, and the fault catalogue. This is where `q coverage-gaps`
@@ -576,10 +628,14 @@ viewer is a **host-side program**. Consequences the plan enforces:
    (`install_host.sh`, task 2.0) as a first-class deliverable and an acceptance criterion.
    Residual unknown: whether the *host's* wgpu stack renders acceptably — detected by the
    install script's adapter probe before the spike, not during it.
-3. **Q5 as posed ("marimo/Jupyter first") conflates two hosts.** fastplotlib's notebook path is
-   a Jupyter widget (`jupyter_rfb`); marimo is not a Jupyter host, and marimo isn't even
-   installed in this container despite the notebooks directory. Decided: Jupyter for the canvas,
-   marimo keeps analysis notebooks. The jupyter_rfb claim is model-knowledge — verified at 2.0.
+3. **Q5 as posed ("marimo/Jupyter first") conflated two hosts — and was then superseded.**
+   Found in planning: fastplotlib's notebook path is a Jupyter widget (`jupyter_rfb`); marimo is
+   not a Jupyter host, and marimo isn't even installed in this container despite the notebooks
+   directory. The plan initially resolved this as Jupyter-for-the-canvas; the **user then
+   decided Q5 outright (2026-08-08): a standalone fastplotlib app with imgui for GUI inputs**,
+   which moots the notebook-host question entirely. marimo keeps analysis notebooks. Residual
+   assumption: the `fastplotlib[imgui]` integration works as documented — verified at 2.0, with
+   plain glfw callbacks as the recorded fallback for P2's minimal inputs.
 4. **Handoff anchor correction**: `event_variant_id` is exported from
    `dst_event_vocabulary.ail:142`, not `phase_vocab.ail` (the handoff/ADR list it among the
    exporter's imports without a module; the D9 task above imports it from the right place).
@@ -608,6 +664,45 @@ viewer is a **host-side program**. Consequences the plan enforces:
    read-only consumer of trace semantics; the ADR says 009 "should be informed". Concrete form:
    one line in 010's first PR description cross-referencing 009's ADR, plus a NOTE pointer —
    assigned to task 3.1's landing, so it doesn't evaporate.
+10. **The D1 `activity` schema cannot hold the primary divergence case** (found in review round
+   1). `activity(seed, event_idx, record_key, subject_id, rule_kind)` has no run-identity
+   column, but ADR D6 view 3's primary case is *the same seed across two code versions* — two
+   such runs collide on every key. The D9 header line carries run identity (motoko commit), so
+   the information exists at the trace layer; it is lost at the activity projection. Not
+   re-decided here (D1 is the ADR's to amend): task 3.6 is scoped to the two-seed case, and P5
+   carries the decision point — add a run/snapshot column to `activity` (D1 amendment) or
+   anti-join two trace stores directly. Evidence and options recorded in the P5 outlook.
+
+### Gaps found during execution (appended by the implementing session)
+
+11. **Two files were touched that the blast-radius table does not list**, both recorded here
+    rather than absorbed silently, per the table's own "a file not on it is a scope question"
+    rule:
+    - `tools/code-graph/tests/test_layout_validator.py` + `test_cgq_layout_staleness.py` — the
+      "fixture mini-tree under `tools/code-graph/tests/`" that task 1.3 recorded as a *proposal,
+      not implemented here*. It was implemented, because rules 1–4 otherwise had no **negative**
+      direction: a validator that has only ever been run against a correct table is not known to
+      be a detector. 15 + 4 hermetic tests, milliseconds, no extraction needed.
+    - `tools/code-graph/AGENTS.md` — the store contract doc. Two new generated tables landing in
+      `.out/` with a freshness key of their own, undocumented in the file agents read to learn
+      what the store contains, would have been a silent gap in exactly the surface D1 says the
+      viewer and the agent share.
+12. **`imports.csv`/`invokes.csv` endpoints are already restricted to extracted modules** at the
+    all profile (verified: 0 of 531 import pairs and 0 of 502 invoke module-pairs point outside
+    `modules.csv`), so the coverage rule's "every `edges_agg` endpoint exists in `layout`" needs
+    no external-endpoint policy today. The builder still filters defensively and **reports the
+    dropped count** (`dropped_edge_endpoints` in the build report) rather than assuming closure —
+    if a future profile or extractor change admits `std/*` endpoints, the counter is the detector
+    and the policy decision (drop vs render as an off-map node) gets made then, with evidence.
+13. **The stability probe's threshold is partial, and deliberately so.** Circle packing bounds
+    *insertion* tightly (mean 0.0045 for one module) but does not bound *deletion* or
+    *re-areaing* at any useful level (mean 0.059 / 0.110). The D2 sub-choice does **not** flip —
+    the plan's flip condition is "every candidate threshold vacuous or unmeetable", and two of
+    four classes carry real thresholds — but the acceptance criterion now distinguishes
+    *thresholds* (a stability claim) from *regression ceilings* (a guard that asserts nothing
+    about stability). Two candidate stabilizations were measured and rejected. Numbers, the
+    rigid-vs-residual decomposition that explains them, and the rejected alternatives are in
+    `NOTE-p1-stability-probe.md`.
 
 ## Suggested implementation order
 
@@ -615,8 +710,8 @@ viewer is a **host-side program**. Consequences the plan enforces:
    1.5 coupling/banners → 1.4 probe + NOTE. P1 sign-off = validator green + probe NOTE's
    threshold recorded.
 2. **Fork into two tracks** (explicitly parallel, per the ADR's P3-depends-on-P1-only):
-   - **Track A (WS2)**: 2.0 toolchain probe → 2.1 spike (timeboxed, verdict NOTE) → gate →
-     2.2 map or fallback ladder.
+   - **Track A (WS2)**: 2.0 host install script + toolchain (can start even before P1 lands) →
+     2.1 spike (timeboxed, verdict NOTE) → gate → 2.2 map or fallback ladder.
    - **Track B (WS3)**: 3.2 vocabulary export → 3.1 exporter → 3.3 subject table + aux maps →
      3.4 activity → 3.5 heat (first P1-dependent step) → 3.6 cgq queries.
 3. Tracks re-join at P4 (scrubber = viewer + activity), which is outlook-only here.

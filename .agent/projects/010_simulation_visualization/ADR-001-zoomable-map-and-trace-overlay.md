@@ -71,7 +71,11 @@ The viewer is a second client of the existing store. Agent access extends `cgq.p
 
 ### D2. Deterministic containment layout *(proposed)*
 
-Nested circle packing (or squarified treemap — *open sub-choice*) over the directory tree. Sibling order fixed by name hash; area by function count (*open sub-choice*, Q4). No force-directed layout anywhere: containment and cross-session stability are hard requirements — the map must build spatial memory, and overlay recordings from different days must share coordinates. Layout is a pure function of the snapshot; same tree ⇒ same picture.
+Nested circle packing over the directory tree. Sibling order fixed by name hash; area by function count. No force-directed layout anywhere: containment and cross-session stability are hard requirements — the map must build spatial memory, and overlay recordings from different days must share coordinates. Layout is a pure function of the snapshot; same tree ⇒ same picture.
+
+**Both sub-choices closed in P1 (2026-08-08), on measurement — see `NOTE-p1-stability-probe.md`.** Circle packing stands: the squarified-treemap flip condition was "every candidate stability threshold vacuous or unmeetable", and single-module insertion is bounded tightly (mean outside-zone displacement 0.0045 of the unit root radius). Q4 stands at `modules.n_funcs`: an 11× radius spread over 225 modules shows no degeneracy, with `source_files.n_lines` recorded as the one-line alternative. Two candidate stabilizations (descending-radius sibling order; area-weighted centroid frame) were measured and rejected.
+
+**Honest limit, recorded rather than smoothed over:** circle packing bounds *insertion* but not *deletion* or *re-areaing* (outside-zone mean 0.059 and 0.110 respectively). The acceptance criterion therefore distinguishes a **threshold** (a stability claim) from a **regression ceiling** (a guard that asserts nothing about stability). This costs less than it appears: the `snapshot` key means every overlay renders two runs over **one** layout, never two, so stability protects human spatial memory, not data correctness.
 
 ### D3. LOD contract: aggregation is precomputed and conservative *(proposed)*
 
@@ -114,7 +118,7 @@ Four views, in build order, each a deterministic function over store tables — 
 
 ### D7. Renderer: fastplotlib *(open — leading candidate, not committed)*
 
-For: Python-native (matches extractor/query/notebooks), pan/zoom/picking free, instanced rendering headroom for corpus-scale overlays. Against: young library; no UI chrome (needs Qt/imgui or notebook host); weak large-volume text (mitigated by D3's L4 punt). Decision gate: a P2 spike rendering the full L0–L2 map with pan/zoom + picking — run **on the host via D10's install script**, since the devcontainer cannot execute it. Fallback candidates: datashader + panel (CPU-only — would also dissolve most of the D10 constraint), or a web stack (deck.gl/sigma.js) at the cost of leaving Python.
+For: Python-native (matches extractor/query/notebooks), pan/zoom/picking free, instanced rendering headroom for corpus-scale overlays. Against: young library; no UI chrome beyond its imgui integration (which Q5's answer adopts: standalone app, imgui for GUI inputs); weak large-volume text (mitigated by D3's L4 punt). Decision gate: a P2 spike rendering the full L0–L2 map with pan/zoom + picking — run **on the host via D10's install script**, since the devcontainer cannot execute it. Fallback candidates: datashader + panel (CPU-only — would also dissolve most of the D10 constraint), or a web stack (deck.gl/sigma.js) at the cost of leaving Python.
 
 ### D8. Agent surface: extend `cgq.py` *(proposed)*
 
@@ -164,10 +168,10 @@ adds a serving layer for no gain over the shared-mount split.
 1. ~~Multi-subject events~~ — **answered 2026-08-08** by the Q1 pass (`NOTE-q1-event-subject-pass.md`): yes — 14 of 30 record keys are multi-subject; rules produce subject sets under three rule kinds; the table has 30 keys (28 LOGICAL variants + 2 non-wire record kinds); a tool→module auxiliary map is required. Folded into D5. Residue: 8 probe-flagged rows refining which slug fills a cell.
 2. ~~Ledger-trace export~~ — **answered 2026-08-08**: resolved as **D9** — a DST-side export script writing an overlay-owned JSONL format that reuses the wire projection unmodified for `WireRecord`s and defines minimal encodings for the two non-wire record kinds. Residue: 009 should be informed it has a new read-only consumer.
 3. ~~Trace-run topology~~ — **answered 2026-08-08** by probe (Q3 section of the NOTE): one process = one semantic trace, but existing DST scripts run many driver runs per process under a shared `session_id`, and semantic tracing OOM-kills a full script at either tier (buffered-until-exit export). Resolution: one-profile-one-seed-per-process for both D9 and the future semantic-trace path; upstream ask filed in the NOTE: streaming/incremental trace export. Folded into D5 and D9.
-4. **Layout area metric** — function count (leading) vs LOC vs exports. *(decide in P1)*
-5. **Viewer host** — marimo/Jupyter first vs Qt; marimo already in use under `tools/code-graph/notebooks/`. Whichever wins runs **on the host machine** (D10), not in the container. *(decide at D7 spike)*
+4. ~~Layout area metric~~ — **answered 2026-08-08 in P1**: `modules.n_funcs`, already extracted and stable under reformatting. The probe's degeneracy eyeball found a healthy 11× radius spread (min 0.0058, median 0.0174, max 0.0656) over 225 modules, so no switch to `source_files.n_lines`; the alternative stays recorded as a one-line change plus a probe re-run. Folded into D2.
+5. ~~Viewer host~~ — **answered 2026-08-08** (user decision during planning): a **standalone fastplotlib app** on the host machine (D10) — native window, not notebook-hosted, not Qt. GUI inputs, where needed, use **imgui** (fastplotlib's built-in imgui integration). marimo keeps its existing analysis-notebook role; it never hosts the canvas. Residue: how much chrome P2 actually needs is minimal (hover/click are native fastplotlib events); the imgui surface grows only when P4's scrubber demands it.
 6. **Fidelity-ladder rendering** — how the map shows *disagreement* between approximate static calls, compiler-exact calls (future), and observed dynamic calls. *(design sketch needed; can trail P7)*
-7. **Refresh coupling** — does `extract.sh` grow layout generation, or is layout a separate step keyed to `extraction_status.built_at`? *(decide in P1)*
+7. ~~Refresh coupling~~ — **answered 2026-08-08 in P1**: both. `extract.sh` runs `build_layout.py` as its last step, deliberately *without* `|| true` (a broken layout fails the refresh — the two-step variant invites exactly the silent graph/layout lag that makes a map distrusted), and the builder stays runnable standalone so layout iteration costs no re-extraction. Freshness is keyed by a `snapshot` column — sha256 over the sorted `extraction_status.built_at` set, the profile, and a `LAYOUT_VERSION` constant — which `cgq.py` recomputes and banners on mismatch. Bumping `LAYOUT_VERSION` is how a deliberate algorithm change declares itself stale.
 
 ## Phasing
 
