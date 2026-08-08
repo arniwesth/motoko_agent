@@ -99,7 +99,9 @@ import src/core/dst_interaction (
   count_kind,
   approvals_served
 )
-import src/core/dst_program (ExecutionProgram, validate_program, program_rule)
+import src/core/dst_program (ExecutionProgram, validate_program, program_rule, program_schema_version)
+-- WI-D22: `InitialWorld.files` is kinded, so the fixtures here construct nodes.
+import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_result (
   DstResult, RunFailed,
   HarnessFailure,
@@ -512,13 +514,20 @@ export type ReconstitutionFinding
   | QueueOverfilled(string, int, int)
   | EpochNotCarried(int, int)            -- program's clock epoch, world's clock
   | EnvironmentNotCarried(int, int)      -- program's env size, world's env size
+  -- WI-D22, and it is the environment's rule rather than a queue rule. The two
+  -- tables the program carries DIRECTLY are the ones a projection can drop
+  -- without any count going out of balance, because nothing derives them from
+  -- the interaction list; the three queues are graded against the classes they
+  -- come from and this pair has to be graded against the program.
+  | FilesNotCarried(int, int)            -- program's file count, world's file count
 
 export pure func reconstitution_rule(f: ReconstitutionFinding) -> string {
   match f {
     QueueUnderfilled(_, _, _) => "reconstitution-queue-underfilled",
     QueueOverfilled(_, _, _) => "reconstitution-queue-overfilled",
     EpochNotCarried(_, _) => "reconstitution-epoch-not-carried",
-    EnvironmentNotCarried(_, _) => "reconstitution-environment-not-carried"
+    EnvironmentNotCarried(_, _) => "reconstitution-environment-not-carried",
+    FilesNotCarried(_, _) => "reconstitution-files-not-carried"
   }
 }
 
@@ -531,7 +540,9 @@ export pure func reconstitution_message(f: ReconstitutionFinding) -> string {
     EpochNotCarried(epoch, clock) =>
       "[reconstitution-epoch-not-carried] the program's initial world declares clock epoch ${epoch} and the reconstituted world starts at ${clock}; D4 makes the explicit clock the only clock, so a replay starting at a different epoch stamps every recorded offset against a different origin",
     EnvironmentNotCarried(from_program, in_world) =>
-      "[reconstitution-environment-not-carried] the program's initial world declares ${from_program} synthetic environment entr(ies) and the reconstituted world holds ${in_world}; the environment is the ONE queue the program carries directly (design note 3), so losing it is a copy that failed rather than a projection that was lossy"
+      "[reconstitution-environment-not-carried] the program's initial world declares ${from_program} synthetic environment entr(ies) and the reconstituted world holds ${in_world}; the environment is the ONE queue the program carries directly (design note 3), so losing it is a copy that failed rather than a projection that was lossy",
+    FilesNotCarried(from_program, in_world) =>
+      "[reconstitution-files-not-carried] the program's initial world seeds ${from_program} file table entr(ies) and the reconstituted world holds ${in_world}; WI-D22 added this field at execution-program/2 precisely because world_state_of reconstituted an empty table, so a projection that drops it again puts the replay back in the state the schema bump was cut to leave — every read of a seeded path answers 'absent' and the run diverges at the first branch that guards on it"
   }
 }
 
@@ -575,6 +586,8 @@ export pure func reconstitution_balance(p: ExecutionProgram, w: WorldState) -> [
         else [EpochNotCarried(p.initial_world.clock_epoch, w.clock_ms)])
     ++ (if List.length(w.env) == List.length(p.initial_world.synthetic_environment) then []
         else [EnvironmentNotCarried(List.length(p.initial_world.synthetic_environment), List.length(w.env))])
+    ++ (if List.length(w.files) == List.length(p.initial_world.files) then []
+        else [FilesNotCarried(List.length(p.initial_world.files), List.length(w.files))])
 }
 
 export pure func reconstitution_ok(p: ExecutionProgram, w: WorldState) -> bool {
@@ -751,6 +764,17 @@ export pure func world_state_of(
                    clock_ms: p.initial_world.clock_epoch,
                    approvals: approvals_of(p.interactions),
                    env: p.initial_world.synthetic_environment,
+                   -- WI-D22. This read `files: []` by omission through WI-D21 —
+                   -- `empty_world_state()`'s table, because `InitialWorld` had
+                   -- no counterpart to copy. `execution-program/2` gives it one,
+                   -- and it comes from the program DIRECTLY for the environment's
+                   -- reason: a seeded filesystem is an INPUT to the run, not a
+                   -- projection of what the run requested. The `file_write`,
+                   -- `file_remove` and `dir_make` interactions remain the record
+                   -- of the run's own mutations and are still not the source of
+                   -- this table — a replayed driver performs those again through
+                   -- the same adapters, on top of this seed.
+                   files: p.initial_world.files,
                    tools: tools })
           }
       }
@@ -955,7 +979,10 @@ pure func exhausted_i(ord: int) -> Interaction {
 
 pure func tool_i(ord: int, call_id: string) -> Interaction {
   mk(ToolIdentity("loop_v2", call_id, "T"), ord,
-     ok_out(3, encode_tool_outcome(ToolCompleted({ tool_call_id: call_id, content: "OUT" }))))
+     -- WI-D22: `exit_code: -1`, matching `fixture_tool()` below. The fixture is
+     -- machinery rather than a subprocess, and a value here would assert a
+     -- process ran.
+     ok_out(3, encode_tool_outcome(ToolCompleted({ tool_call_id: call_id, content: "OUT", exit_code: -1 }))))
 }
 
 pure func approval_i(ord: int, call_id: string, served: bool) -> Interaction {
@@ -995,17 +1022,47 @@ pure func fixture_manifest() -> ExecutionManifest {
     fault_catalogue_version: "1" }
 }
 
+-- WI-D22 DERIVED THE SCHEMA VERSION HERE, and the site is S23's own shape: the
+-- literal `"execution-program/1"` sat in this record and was, when measured, the
+-- ONLY live transcription of the version outside its producer — the two other
+-- occurrences in the tree are comments. WI-D14 paid for exactly this pattern.
+--
+-- It is DERIVED and not pinned, because the question a transcribed constant
+-- forces is "is this a value deliberately held at v1, or the current value
+-- copied?", and here it is the second: this is the machinery's own fixture, it
+-- exercises no compatibility path, and nothing about it is v1-specific. The
+-- fixtures that ARE deliberately pinned live in
+-- `scripts/dst/program_persistence_dst.ail`, say so at the site, and are
+-- compared against frozen bytes.
 pure func fixture_program() -> ExecutionProgram {
-  { schema_version: "execution-program/1",
+  { schema_version: program_schema_version(),
     generator_id: "g", generator_version: "1", seed: 0,
     initial_world: { messages_and_policy: "{}",
                      synthetic_environment: [{ key: "K1", value: "v" }, { key: "K2", value: "w" }],
+                     -- WI-D22. TWO entries and one of them a directory, so the
+                     -- balance rule below is graded against a table that a
+                     -- projection returning `[]` cannot accidentally match, and
+                     -- so the kinded seed is exercised by the machinery's own
+                     -- fixture rather than only by the persistence specimen.
+                     files: [{ path: "/w/seed.json", node: FsFile("{\"seeded\":true}") },
+                             { path: "/w/seed-dir", node: FsDir }],
                      clock_epoch: 5,
                      extension_profile: "driver_only/1" },
     bounds: { max_interactions: 64, max_chunks_per_interaction: 4, max_payload_bytes: 4096,
               max_resource_size: 4096, max_clock_advance_ms: 1000 },
     manifest: fixture_manifest(),
     interactions: fixture_interactions() }
+}
+
+-- One reconstituted tool queue entry. WI-D22 factored this out of the four
+-- copies below rather than adding `exit_code` to each: four literals of one
+-- record is where the next field addition edits three of them.
+--
+-- `exit_code: -1` matches what `tool_i`'s `encode_tool_outcome(ToolCompleted{…})`
+-- above records, so the queue this fixture builds is the queue `world_state_of`
+-- actually derives from the same program.
+pure func fixture_tool() -> ScriptedTool {
+  { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT", exit_code: -1 }
 }
 
 -- THE SURVIVE FIXTURE (S7). The three queues, the epoch and the environment all
@@ -1023,14 +1080,16 @@ pure func test_a_faithful_reconstitution_produces_no_findings() -> bool
               clock_ms: 5,
               approvals: ["yes"],
               env: p.initial_world.synthetic_environment,
-              tools: [{ tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" },
-                      { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" },
-                      { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" },
-                      { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" }] };
+              files: p.initial_world.files,
+              tools: [fixture_tool(), fixture_tool(), fixture_tool(), fixture_tool()] };
     reconstitution_ok(p, w)
       -- The three quantities are pairwise distinct, which is what makes the row
-      -- above able to tell WHICH queue each balance is reading.
+      -- above able to tell WHICH queue each balance is reading. WI-D22's file
+      -- table is 2, which collides with the script's 2 — so it is asserted by
+      -- IDENTITY with the program's own table rather than by count, which is
+      -- what `FilesNotCarried` compares anyway.
       && List.length(w.script) == 2 && List.length(w.approvals) == 1 && List.length(w.tools) == 4
+      && List.length(w.files) == List.length(p.initial_world.files)
   }
 
 -- The exhausted provider interaction must contribute NO script entry. A
@@ -1050,10 +1109,11 @@ pure func test_every_queue_is_balanced_in_both_directions() -> bool
   {
     let p = fixture_program();
     let good: ScriptedStep = { prose: "s", tool_calls: [], input_tokens: 0, output_tokens: 0, finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 };
-    let tool: ScriptedTool = { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" };
+    let tool: ScriptedTool = fixture_tool();
     let base = { empty_world_state() |
                  script: [good, good], clock_ms: 5, approvals: ["yes"],
                  env: p.initial_world.synthetic_environment,
+                 files: p.initial_world.files,
                  tools: [tool, tool, tool, tool] };
     has_reconstitution_rule(reconstitution_balance(p, { base | script: [good] }), "reconstitution-queue-underfilled")
       && has_reconstitution_rule(reconstitution_balance(p, { base | script: [good, good, good] }), "reconstitution-queue-overfilled")
@@ -1063,6 +1123,14 @@ pure func test_every_queue_is_balanced_in_both_directions() -> bool
       && has_reconstitution_rule(reconstitution_balance(p, { base | tools: [tool, tool, tool, tool, tool] }), "reconstitution-queue-overfilled")
       && has_reconstitution_rule(reconstitution_balance(p, { base | clock_ms: 0 }), "reconstitution-epoch-not-carried")
       && has_reconstitution_rule(reconstitution_balance(p, { base | env: [] }), "reconstitution-environment-not-carried")
+      -- WI-D22, in BOTH directions like the queues rather than only the dropping
+      -- one. A projection that seeded a file the program does not carry serves
+      -- the replay a path the discovery run never had, which is design note 3's
+      -- objection to carrying the queues, one table over.
+      && has_reconstitution_rule(reconstitution_balance(p, { base | files: [] }), "reconstitution-files-not-carried")
+      && has_reconstitution_rule(
+           reconstitution_balance(p, { base | files: [{ path: "/w/extra", node: FsDir }] ++ p.initial_world.files }),
+           "reconstitution-files-not-carried")
   }
 
 -- `world_state_of` against the same fixture: the projection and its own balance

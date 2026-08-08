@@ -44,6 +44,12 @@ import std/string as Str (length, startsWith, split, compare, substring)
 import src/core/phase_vocab (ApprovalRequest)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/tool_dispatch_adapter (dispatch_one)
+-- WI-D22. `FsNode` lived here through WI-D21 and moved down for the same reason
+-- `Interaction` did: a module ABOVE this one in the layering — `dst_program`, the
+-- pure program schema — has to name it, and it cannot import the port layer. See
+-- `src/core/fs_node`'s header for the decision and for the two codecs that now
+-- share its kind vocabulary.
+import src/core/fs_node (FsNode, FsFile, FsDir)
 -- WI-A13 stage 2. The interaction log rides in `WorldState`, so this module has
 -- to name D2's `Interaction`. `src/core/dst_interaction` was split out of
 -- `src/core/dst_program` for exactly this: it imports nothing but std, so the
@@ -415,12 +421,53 @@ export type WorldState = {
 --                 property rather than a race.
 --   code          non-empty is a typed EXECUTION fault (D3's tool fault class).
 --   content       the tool's own output, on the success path.
+--   exit_code     WI-D22. What the SUBPROCESS behind the tool exited with, when
+--                 the tool ran one. See below.
+--
+-- WI-D22 ADDED `exit_code`, AND IT IS THE FIELD THIS WHOLE SCHEMA BUMP EXISTS
+-- FOR. WI-D21 measured the chain: `ExtPorts.proc_exec` dispatches a Motoko tool
+-- name, `BashExec` and `RunTests` reach `tool_runtime.run_process_result`, and
+-- that runs a REAL subprocess and builds a `BashExecResult` carrying a real
+-- `exit_code` — which then survives to the caller only as JSON text inside an
+-- opaque `content` string. The data was never lost; the TYPE was. Without this
+-- field the deterministic half of the world cannot state whether a subprocess
+-- succeeded, so a scripted `ailang check` that failed is indistinguishable from
+-- one that passed.
+--
+-- ITS DOMAIN IS THREE-PART AND `-1` IS NOT "SUCCESS":
+--
+--   >= 0   the process exited with this status. 0 is success and only 0 is.
+--   -1     THE PRODUCER OF THIS OUTCOME CANNOT STATE ONE. Either no subprocess
+--          ran (an ordinary in-process tool), or the seam that produced it has
+--          not been routed to carry the code yet.
+--   < -1   unused; reserved rather than defined, so a reader is not invited to
+--          invent a second absent value.
+--
+-- `-1` for "absent" is this tree's existing convention rather than a new one:
+-- `record_interaction`'s `deadline_ms` uses exactly it for "this class has no
+-- deadline", and `Interaction.deadline_ms >= 0` is how `any_deadline` reads it.
+--
+-- WHY A SENTINEL AND NOT `Option[int]`. The field crosses two codecs and a
+-- persisted artifact, and both of those flatten an option back to a pair of
+-- (present, value) on the wire — so the option would buy a compile-time
+-- reminder at the four in-tree construction sites and cost a representation
+-- decision at each of the two codecs. It is priced and declined, and the reason
+-- it is safe to decline is the row below: the persistence codec REFUSES an
+-- absent field rather than defaulting it, so absence never silently becomes -1
+-- either.
+--
+-- WHAT DOES NOT SET IT TODAY, stated rather than implied — nothing. This item
+-- ships the capability and routes no producer, which is the same state WI-D17
+-- left `ExtPorts.file_write` in. Routing the four `exec` sites so a live
+-- subprocess's real code reaches here is the next item's, and until it lands
+-- every outcome this tree produces carries -1 unless a test writes one.
 export type ScriptedTool = {
   tool_call_id: string,
   duration_ms: int,
   code: string,
   message: string,
-  content: string
+  content: string,
+  exit_code: int
 }
 
 -- D1's typed tool request: parts 1 and 2 of the three the decision requires —
@@ -448,8 +495,22 @@ export type ToolInvocation = {
 -- string because at this layer it genuinely is opaque: the typing that matters
 -- is the DISCRIMINATION between completed, failed, misaddressed and late, none
 -- of which a string return can express.
+--
+-- WI-D22 GAVE `ToolCompleted` AN `exit_code` AND GAVE THE OTHER THREE NONE, and
+-- the asymmetry is the point rather than an omission. "Completed" is the variant
+-- that today conflates a subprocess that exited 0 with one that exited 1: both
+-- are a dispatch that returned, and the discrimination between them is exactly
+-- what WI-D21 found this type could not express. The other three are already
+-- discriminated — a `ToolFailed` carries D3's fault CODE, a mismatch carries two
+-- ids, a deadline carries two times — and none of them is the answer to "what
+-- did the process exit with". Adding the field there would make one quantity
+-- representable in four places and readable in one, which is the two-homes shape
+-- this project keeps arguing against.
+--
+-- See `ScriptedTool.exit_code` for the domain; `-1` is "no subprocess, or a seam
+-- that cannot say", and it is NOT success.
 export type ToolOutcome
-  = ToolCompleted({ tool_call_id: string, content: string })
+  = ToolCompleted({ tool_call_id: string, content: string, exit_code: int })
   | ToolFailed({ tool_call_id: string, code: string, message: string })
   | ToolCorrelationMismatch({ expected_id: string, got_id: string })
   | ToolDeadlineExceeded({ tool_call_id: string, elapsed_ms: int, timeout_ms: int })
@@ -514,7 +575,14 @@ export type FileMutation = {
 --
 -- See `WorldState.files` for the full representation argument and for the two
 -- designs this beat.
-export type FsNode = FsFile(string) | FsDir
+--
+-- WI-D22 MOVED THE DECLARATION to `src/core/fs_node`, which imports std and
+-- nothing else, and it is imported back here (line 47). The reason is the
+-- direction of the dependency and not tidiness: `execution-program/2` gives
+-- `dst_program.InitialWorld` a `files` field, and `dst_program` is the pure
+-- structural validator that must stay readable without a world in scope — so it
+-- cannot import this module. That module's header records the three
+-- arrangements and why the other two were declined.
 
 -- What a path IS. WI-D18, and it is THREE-VALUED because the thing it has to
 -- answer is: compose's `normalize_type` (`author_tools.ail:139-142`) returns
@@ -1264,8 +1332,22 @@ export func ambient_env(state: WorldState, key: string, fallback: string) -> Env
 export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
   match state.tools {
     -- No world opinion: perform the real effect, exactly as before A12.
+    --
+    -- `exit_code: -1`, AND THIS ARM IS WHY THE FIELD HAS AN ABSENT VALUE AT ALL.
+    -- `dispatch_one`'s contract is `(workdir, ToolCall) -> string`; it exists in
+    -- that shape to satisfy upstream `runTools`, and the exit code a `BashExec`
+    -- really produced is inside the string it returns, as JSON. WI-D21 named this
+    -- as link 4 and it is OUT OF THIS ITEM'S SCOPE: closing it means either a
+    -- typed sibling for `dispatch_one` or parsing its JSON here, and parsing here
+    -- is the same string-parsing defect one layer down.
+    --
+    -- Writing `0` here instead would be the S30 failure in its purest form — the
+    -- live arm asserting that every dispatched tool succeeded, in a field whose
+    -- whole purpose is to say when one did not.
     [] => {
-      outcome: ToolCompleted({ tool_call_id: inv.call.id, content: dispatch_one(inv.workdir, envelope_to_call(inv.call)) }),
+      outcome: ToolCompleted({ tool_call_id: inv.call.id,
+                               content: dispatch_one(inv.workdir, envelope_to_call(inv.call)),
+                               exit_code: -1 }),
       next_state: state
     },
     t :: rest => {
@@ -1278,7 +1360,11 @@ export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution 
         else if t.code != "" then
           ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message })
         else
-          ToolCompleted({ tool_call_id: inv.call.id, content: t.content });
+          -- The scripted arm is the one that CAN say. This is the whole of what
+          -- WI-D22 buys: a deterministic world whose script states an exit code
+          -- now produces an outcome that carries it, so a recorded run in which
+          -- a subprocess failed replays as a run in which it failed.
+          ToolCompleted({ tool_call_id: inv.call.id, content: t.content, exit_code: t.exit_code });
       { outcome: outcome, next_state: advanced }
     }
   }
@@ -1708,7 +1794,16 @@ export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecu
       -- class would be unreachable by a generated program.
       code: match d.fault { ToolChoiceFailed => d.code, _ => "" },
       message: match d.fault { ToolChoiceFailed => d.message, _ => "" },
-      content: d.content
+      content: d.content,
+      -- `-1` AND NOT A DRAW. The generator has no exit-code axis and giving it
+      -- one is not a widening: `dst_generator`'s stream is consumed in a fixed
+      -- order, so an extra draw here remaps every subsequent choice and moves
+      -- stage 4's pinned seeds 9, 13 and 94, each of which has an asserted
+      -- reason. Deriving one instead (`if d.code == "" then 0 else 1`) draws
+      -- nothing and is worse: it would manufacture the claim that every
+      -- generated tool ran a process, which is the fabrication the sentinel
+      -- exists to avoid. A generated program says it does not know.
+      exit_code: -1
     };
     recording_tool({ state | gen: choice.state, tools: [entry] }, inv)
   }
@@ -1853,6 +1948,18 @@ pure func int_field(obj: Json, key: string, fallback: int) -> int {
   }
 }
 
+-- `int_field` with the fallback removed. WI-D22 needs the DISTINCTION between a
+-- field that is absent and a field that holds a value, and a total reader with a
+-- default cannot express it: whatever default is passed comes back for both.
+-- Every other field in these codecs is legitimately total; `exit_code` is the
+-- one where absence has to be a refusal, so it is the one that needs this.
+pure func opt_int_field(obj: Json, key: string) -> Option[int] {
+  match get(obj, key) {
+    None => None,
+    Some(j) => match asNumber(j) { None => None, Some(v) => Some(_float_to_int(v)) }
+  }
+}
+
 pure func bool_field(obj: Json, key: string, fallback: bool) -> bool {
   match get(obj, key) {
     None => fallback,
@@ -1969,8 +2076,15 @@ export type ToolOutcomeRecord
 
 export pure func encode_tool_outcome(o: ToolOutcome) -> string {
   match o {
+    -- WI-D22: `exit_code` is written UNCONDITIONALLY, including when it is -1.
+    -- Writing it only when known was the other arrangement and it is the one
+    -- that cannot be decoded: an absent field would then mean either "this
+    -- artifact predates the field" or "this build knew nothing", and the
+    -- decoder below distinguishes exactly those two by presence. One meaning
+    -- per absence.
     ToolCompleted(c) =>
-      encode(jo([kv("result", js("completed")), kv("content", js(c.content))])),
+      encode(jo([kv("result", js("completed")), kv("content", js(c.content)),
+                 kv("exit_code", jnum(_int_to_float(c.exit_code)))])),
     ToolFailed(f) =>
       encode(jo([kv("result", js("failed")), kv("code", js(f.code)), kv("message", js(f.message))])),
     -- `got_id` is the SCRIPT's id, which is what the world must be re-seeded
@@ -1997,18 +2111,54 @@ export pure func decode_tool_outcome(payload: string, advance_ms: int) -> ToolOu
     Ok(root) => {
       let result = str_field(root, "result", "");
       if result == "completed" then
-        ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
-                            message: "", content: str_field(root, "content", "") })
+        -- WI-D22, AND THIS IS THE ROW `execution-program/2` WAS CUT FOR.
+        --
+        -- `exit_code` is read by PRESENCE and not with a default. Every other
+        -- field in this decoder uses `str_field(root, k, <default>)`, and doing
+        -- that here produces S30's failure at the exact site S30 was written
+        -- about: a payload recorded before this field existed carries no
+        -- `exit_code`, absence would decode to whatever default is chosen, and
+        -- every candidate default that is a valid exit status means SUCCESS. A
+        -- recorded run in which `ailang check` failed would replay as a run in
+        -- which it passed, and every count would still balance.
+        --
+        -- A pre-v2 payload is therefore UNDECODABLE, not defaulted. That is the
+        -- whole difference between a migration and a silent reinterpretation:
+        -- `program_schema_version()` moved in the same commit, so an artifact
+        -- carrying such a payload is at `execution-program/1` and this build
+        -- knows what it is looking at. `dst_replay.tools_of` turns this into a
+        -- named `ToolOutcomeUndecodable(ordinal, why)` refusal, which is a
+        -- replay that stops rather than a replay that lies.
+        --
+        -- The v1 half of that policy is NOT "v1 artifacts are unreadable":
+        -- `decodable_schema_versions()` still holds `execution-program/1` and
+        -- `scenario_the_frozen_v1_specimen_still_decodes` still passes. A v1
+        -- PROGRAM decodes; a v1 TOOL OUTCOME cannot reconstitute a world,
+        -- because the one thing the world needs from it is the thing it does
+        -- not contain.
+        match opt_int_field(root, "exit_code") {
+          None =>
+            ToolRecordUndecodable("the payload records a completed tool with no 'exit_code' field; it was written at execution-program/1, before WI-D22 gave ScriptedTool an exit code, and there is no default for it — every value that is a valid exit status asserts an outcome the recorder never observed, and 0 would replay a failed subprocess as a successful one. Replay this artifact with the pinned runner for schema 'execution-program/1'"),
+          Some(x) =>
+            ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
+                                message: "", content: str_field(root, "content", ""),
+                                exit_code: x })
+        }
+      -- The other three arms carry `-1` rather than reading a field, because
+      -- none of them is a process that exited: a typed tool fault has D3's
+      -- CODE, a mismatch has two ids, a deadline has two times. See
+      -- `ToolOutcome` for why only `ToolCompleted` carries the quantity.
       else if result == "failed" then
         ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms,
                             code: str_field(root, "code", ""),
-                            message: str_field(root, "message", ""), content: "" })
+                            message: str_field(root, "message", ""), content: "",
+                            exit_code: -1 })
       else if result == "correlation_mismatch" then
         ToolRecordDecoded({ tool_call_id: str_field(root, "got_id", ""), duration_ms: advance_ms,
-                            code: "", message: "", content: "" })
+                            code: "", message: "", content: "", exit_code: -1 })
       else if result == "deadline_exceeded" then
         ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
-                            message: "", content: "" })
+                            message: "", content: "", exit_code: -1 })
       else
         ToolRecordUndecodable("the payload carries no recognised 'result' discriminator (saw '${result}'); a tool outcome recorded before WI-A13 stage 3 held the content or the message alone and cannot reconstitute the failure code")
     }
@@ -2108,30 +2258,77 @@ pure func test_the_three_provider_cases_are_distinguished() -> bool
 pure func test_each_tool_outcome_round_trips_to_a_world_input_that_reproduces_it() -> bool
   tests [((), true)]
   {
-    let completed = decode_tool_outcome(encode_tool_outcome(ToolCompleted({ tool_call_id: "c1", content: "OUT" })), 7);
+    -- 137 rather than 0 or 1: WI-D22's field must be shown to survive as a
+    -- VALUE, and a fixture holding 0 cannot distinguish "the code round-tripped"
+    -- from "the decoder supplied its default". 137 is also distinct from every
+    -- other quantity in this row (7, 11, 13, 900, 50), per S7.
+    let completed = decode_tool_outcome(encode_tool_outcome(ToolCompleted({ tool_call_id: "c1", content: "OUT", exit_code: 137 })), 7);
     let failed = decode_tool_outcome(encode_tool_outcome(ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom" })), 11);
     let mismatch = decode_tool_outcome(encode_tool_outcome(ToolCorrelationMismatch({ expected_id: "c1", got_id: "c9" })), 13);
     let late = decode_tool_outcome(encode_tool_outcome(ToolDeadlineExceeded({ tool_call_id: "c1", elapsed_ms: 900, timeout_ms: 50 })), 900);
     (match completed {
-       ToolRecordDecoded(t) => t.content == "OUT" && t.code == "" && t.tool_call_id == "" && t.duration_ms == 7,
+       ToolRecordDecoded(t) => t.content == "OUT" && t.code == "" && t.tool_call_id == "" && t.duration_ms == 7
+                                 && t.exit_code == 137,
        ToolRecordUndecodable(_) => false
      })
       && (match failed {
             -- The CODE is the field stage 2's flat payload lost.
-            ToolRecordDecoded(t) => t.code == "E42" && t.message == "boom" && t.duration_ms == 11,
+            ToolRecordDecoded(t) => t.code == "E42" && t.message == "boom" && t.duration_ms == 11
+                                      && t.exit_code == -1,
             ToolRecordUndecodable(_) => false
           })
       && (match mismatch {
             -- `got_id`, not `expected_id`: re-seeding the world with the id the
             -- driver asked for replays as an ordinary success.
-            ToolRecordDecoded(t) => t.tool_call_id == "c9" && t.duration_ms == 13,
+            ToolRecordDecoded(t) => t.tool_call_id == "c9" && t.duration_ms == 13 && t.exit_code == -1,
             ToolRecordUndecodable(_) => false
           })
       && (match late {
             -- Nothing but the duration, which is what re-derives the branch.
-            ToolRecordDecoded(t) => t.duration_ms == 900 && t.code == "" && t.tool_call_id == "",
+            ToolRecordDecoded(t) => t.duration_ms == 900 && t.code == "" && t.tool_call_id == ""
+                                      && t.exit_code == -1,
             ToolRecordUndecodable(_) => false
           })
+  }
+
+-- WI-D22. THE ROW THE SCHEMA BUMP EXISTS TO MAKE TRUE, and it is stated as the
+-- failure it prevents rather than as a property.
+--
+-- The literal below is a completed tool outcome AS `execution-program/1` WROTE
+-- ONE — this is exactly what `encode_tool_outcome` emitted at HEAD~1, byte for
+-- byte. Under a decoder that read `exit_code` with a default, it would decode
+-- clean, `world_state_of` would reconstitute a tool queue from it, and a
+-- recorded run in which a subprocess exited non-zero would replay as one in
+-- which it exited 0 with every count balancing. That is S30's failure, and this
+-- is the place S30 was written about.
+--
+-- Both halves are asserted, because either alone is passed by a broken decoder:
+-- the v1 shape must REFUSE, and the v2 shape carrying an explicit `0` must
+-- DECODE TO 0. A decoder that refused everything would pass the first.
+pure func v1_completed_tool_payload() -> string {
+  "{\"result\":\"completed\",\"content\":\"OUT\"}"
+}
+
+pure func test_a_v1_tool_payload_refuses_rather_than_decoding_to_a_default_exit_code() -> bool
+  tests [((), true)]
+  {
+    let v1 = match decode_tool_outcome(v1_completed_tool_payload(), 7) {
+      ToolRecordUndecodable(_) => true,
+      ToolRecordDecoded(_) => false
+    };
+    -- The negative control: an explicit zero is a REAL exit code and must
+    -- survive, so the row above cannot be satisfied by a decoder that treats
+    -- every zero as absent.
+    let explicit_zero = match decode_tool_outcome("{\"result\":\"completed\",\"content\":\"OUT\",\"exit_code\":0}", 7) {
+      ToolRecordDecoded(t) => t.exit_code == 0,
+      ToolRecordUndecodable(_) => false
+    };
+    -- And the encoder's own output at this version always carries the field, so
+    -- nothing this build writes can trip the refusal above.
+    let current_build_writes_it =
+      Str.contains(encode_tool_outcome(ToolCompleted({ tool_call_id: "c", content: "OUT", exit_code: -1 })),
+                   "exit_code");
+    v1 && explicit_zero && current_build_writes_it
   }
 
 pure func test_a_stage_two_tool_payload_is_undecodable_rather_than_a_silent_success() -> bool

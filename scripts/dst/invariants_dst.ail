@@ -201,7 +201,7 @@ pure func fixture_log() -> [Interaction] {
       "approval_read call_id=call-1 tool=BashExec", 0, ok_out(0, "approve")),
    mk(3, ToolIdentity("loop_v2", "call-1", "BashExec"),
       "tool_exec call_id=call-1 tool=BashExec timeout_ms=1000", 1000,
-      ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "OUT" })))),
+      ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "OUT", exit_code: -1 })))),
    mk(4, ClockAdvanceIdentity, "clock_now at=47", -1, ok_out(1, "47")),
    mk(5, ApprovalIdentity("loop_v2", "call-2", "Read"),
       "approval_read call_id=call-2 tool=Read", 0, ok_out(0, "approve")),
@@ -854,7 +854,7 @@ func scenario_mutants_family_1_to_4() -> bool ! {IO} {
   let m8 = mutant("a denied call dispatched anyway",
                   with_log(f, fixture_log() ++ [mk(16, ToolIdentity("loop_v2", "call-9", "BashExec"),
                     "tool_exec call_id=call-9", 1000,
-                    ok_out(0, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-9", content: "X" }))))]),
+                    ok_out(0, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-9", content: "X", exit_code: -1 }))))]),
                   "denied-call-dispatched");
   m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8
 }
@@ -976,7 +976,7 @@ func scenario_mutants_family_9_to_12() -> bool ! {IO} {
   -- the mutation row can still name what broke.
   let m2 = mutant("a replayed outcome that differs",
                   { f | replay: StrictAgainst(replace_at(log, 3,
-                    { at_ord(log, 3) | outcome: ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "DIFFERENT" }))) })) },
+                    { at_ord(log, 3) | outcome: ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "DIFFERENT", exit_code: -1 }))) })) },
                   "replay-rule-violated");
 
   -- F10. A fault with a blank class id: uncountable by D11's class counter.
@@ -990,7 +990,7 @@ func scenario_mutants_family_9_to_12() -> bool ! {IO} {
   -- F10. A fault whose payload nonetheless carries a completed result: the
   -- world both faulted and committed, which is the ambiguity D3 forbids.
   let m5 = mutant("a completed payload under a fault status",
-                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-2", content: "COMMITTED" })), fault_class_tool_failed())),
+                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-2", content: "COMMITTED", exit_code: -1 })), fault_class_tool_failed())),
                   "commit-under-fault");
 
   -- F11. Time running backwards.
@@ -1081,7 +1081,7 @@ func scenario_discovery_contract() -> bool ! {IO} {
   -- Same length, same identities, DIFFERENT served outcome. An identity-only
   -- comparison key is green here, which is why the key carries the outcome.
   let served_differently = with_log(a, replace_at(fixture_log(), 3,
-    { at_ord(fixture_log(), 3) | outcome: ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "OTHER" }))) }));
+    { at_ord(fixture_log(), 3) | outcome: ok_out(40, encode_tool_outcome(ToolCompleted({ tool_call_id: "call-1", content: "OTHER", exit_code: -1 }))) }));
   let fs = discovery_contract_findings(a, served_differently);
   let c2 = report("a different SERVED outcome at one position is caught",
                   has_determinism_rule(fs, "determinism-log-position"),

@@ -76,9 +76,10 @@ import src/core/ports (ScriptedStep, WorldState, empty_world_state,
   scripted_file, scripted_file_write, scripted_file_remove,
   recording_file_write, recording_file_remove,
   -- WI-D18's directory class, same reason and the same shape of instrument.
-  FsNode, FsFile, FsDir,
+  -- WI-D22 moved these to src/core/fs_node; see the import below.
   PathKind, PathMissing, PathFile, PathDir, path_kind_label,
   scripted_path_stat, scripted_dir_list, scripted_dir_make, recording_dir_make)
+import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_interaction (Interaction, interaction_kind, count_kind)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
@@ -870,10 +871,14 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     script: [step_named("t0"), step_named("t1"), step_named("t2"), step_named("t3"), prose_step("done")],
     env: [{ key: "MOTOKO_TOOL_TIMEOUT_MS", value: "50" }],
     tools: [
-      { tool_call_id: "", duration_ms: 1,  code: "",         message: "",             content: "OK-ALPHA" },
-      { tool_call_id: "", duration_ms: 1,  code: "ExitCode", message: "boom-bravo",   content: "" },
-      { tool_call_id: "WRONG-ID", duration_ms: 1, code: "",  message: "",             content: "" },
-      { tool_call_id: "", duration_ms: 999, code: "",        message: "",             content: "OK-DELTA" }
+      -- WI-D22's `exit_code`, all -1 ("nothing said"). Note the SECOND entry's
+      -- `code: "ExitCode"` is D3's typed tool fault class id and is a different
+      -- quantity from this field: the fault class says which failure, the exit
+      -- code says what a process returned, and this world runs no process.
+      { tool_call_id: "", duration_ms: 1,  code: "",         message: "",             content: "OK-ALPHA", exit_code: -1 },
+      { tool_call_id: "", duration_ms: 1,  code: "ExitCode", message: "boom-bravo",   content: "",         exit_code: -1 },
+      { tool_call_id: "WRONG-ID", duration_ms: 1, code: "",  message: "",             content: "",         exit_code: -1 },
+      { tool_call_id: "", duration_ms: 999, code: "",        message: "",             content: "OK-DELTA", exit_code: -1 }
     ]
   };
   let tools_run = run_world(allow_rt("probe_tools"), 12, tool_world);

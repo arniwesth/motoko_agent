@@ -33,6 +33,10 @@ import std/string as Str (length)
 import std/option (Option, Some, None)
 import src/core/dst_profile (ExecutionManifest)
 import src/core/dst_generator (GeneratorBounds)
+-- WI-D22. `InitialWorld.files` is kinded, and `FsNode` lives in a module that
+-- imports std and nothing else precisely so that THIS module can name it without
+-- importing the port layer. See `src/core/fs_node`'s header.
+import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
@@ -56,13 +60,63 @@ import src/core/dst_interaction (
 -- The program schema this build writes and can decode. D8 forbids silently
 -- reinterpreting an old program: a version this build does not know is a
 -- REJECTION carrying a pinned-runner pointer, never a best-effort decode.
-export pure func program_schema_version() -> string { "execution-program/1" }
+-- WI-D22 MOVED THIS TO `execution-program/2`. Three payloads travel with the
+-- move and each of them, added WITHOUT moving the version, would have been a
+-- silent reinterpretation rather than a migration:
+--
+--   `InitialWorld.files`      owed since WI-D17 and grown a field by WI-D18. Its
+--                             absence is why `world_state_of` reconstitutes
+--                             `files: []` and a deterministic run's filesystem
+--                             cannot be seeded at all.
+--   `ScriptedTool.exit_code`  owed since WI-D21. Its absence is why the
+--                             deterministic half cannot say whether a subprocess
+--                             succeeded. See `ports.decode_tool_outcome` for the
+--                             exact failure a version-less addition produces.
+--   a FROZEN v2 SPECIMEN      owed since WI-D17 §7b. Three identity classes were
+--                             round-tripped and frozen by nothing, because there
+--                             were no historical bytes containing them. There
+--                             are now: `scripts/dst/fixtures/execution-program-v2.artifact`.
+--
+-- WHAT AN ARTIFACT THAT PREDATES EACH FIELD DECODES TO, stated per field because
+-- that is the question a migration has to answer and a widening never asks:
+--
+--   `world.file` lines        ABSENT in v1, and absence decodes to `files: []`.
+--                             That is a DEFAULT and it is the correct one, for a
+--                             reason that does not generalise: at v1 the field
+--                             did not exist anywhere, so `world_state_of`
+--                             unconditionally reconstituted `[]` and an empty
+--                             table is what a v1 program MEANT. The decoder
+--                             reproduces v1's semantics rather than guessing.
+--   `exit_code`               ABSENT in v1, and absence is a REFUSAL, because
+--                             here the two differ: v1 tool outcomes were
+--                             produced by runs where a subprocess really did
+--                             exit with something, and every default that is a
+--                             valid status claims to know what. The rule is
+--                             not "old fields default" or "old fields refuse" —
+--                             it is that a default is admissible exactly when
+--                             the old version's own semantics fixed the value,
+--                             and refusal is required when they did not.
+export pure func program_schema_version() -> string { "execution-program/2" }
 
 -- Every schema version this build can decode. A migration extends this list
 -- and keeps the old decode path, or it does not extend it and old programs
 -- fail closed. There is no third option in which the program is read anyway.
+--
+-- THIS LIST WAS A ONE-ELEMENT LIST DERIVED FROM `program_schema_version()` AND
+-- THAT WAS A TRAP, sprung by the first bump: moving the version alone silently
+-- removed `execution-program/1` from the decodable set, and the build instantly
+-- could not read `scripts/dst/fixtures/execution-program-v1.artifact` — the one
+-- artifact in this project that predates the current encoder and the only thing
+-- the compatibility policy is made of. `scenario_the_frozen_v1_specimen_still_decodes`
+-- is the row that catches it.
+--
+-- Written out oldest-first rather than derived, so that a future bump has to
+-- make the same decision explicitly instead of inheriting it. The versions this
+-- build DECODES and the version it WRITES are two different facts and this list
+-- is the first; `test_current_schema_is_decodable_and_an_unknown_one_is_not`
+-- pins the relationship between them.
 export pure func decodable_schema_versions() -> [string] {
-  [program_schema_version()]
+  ["execution-program/1", program_schema_version()]
 }
 
 -- ---------------------------------------------------------------------------
@@ -73,9 +127,29 @@ export pure func decodable_schema_versions() -> [string] {
 -- provider script, approval queue and tool queue are ABSENT: they are
 -- projections of the interaction list, so a response the program serves is
 -- necessarily a response the program records.
+-- WI-D22 ADDED `files`, AND IT IS NOT A COUNTEREXAMPLE TO DESIGN NOTE 3. The
+-- note keeps the provider script, the approval queue and the tool queue OFF the
+-- program because they are projections of the interaction list — a program
+-- carrying both could serve a response no interaction records. The file table is
+-- the opposite kind of thing, and it is the same kind as
+-- `synthetic_environment`, which has always been here: it is an INPUT the run
+-- reads and does not produce. WI-D17 recorded the consequence of its absence
+-- explicitly — `world_state_of` reconstitutes `files: []`, so the two filesystem
+-- classes are "recorded for grading and not for reconstitution" and a
+-- deterministic run's filesystem cannot be seeded at all.
+--
+-- IT IS KINDED, and that is forced rather than chosen: WI-D18 made
+-- `WorldState.files` a `[{ path, node: FsNode }]` so that an empty directory is
+-- representable, and a seed that cannot express a directory cannot seed the
+-- world WI-D18 built. The alternative — a structurally identical
+-- `[{ path, kind: string, content }]` here, converted at the boundary — was
+-- available and is declined at `src/core/fs_node`'s header: it makes
+-- `{ path, kind: "dir", content: "hello" }` representable at the PERSISTENCE
+-- boundary, which is the one place hand-written and corrupted inputs enter.
 export type InitialWorld = {
   messages_and_policy: string,
   synthetic_environment: [{ key: string, value: string }],
+  files: [{ path: string, node: FsNode }],
   clock_epoch: int,
   extension_profile: string
 }
@@ -569,11 +643,28 @@ export pure func first_program_message(rs: [ProgramRejection]) -> Option[string]
 -- fixture: an unknown schema is undecodable, and the CURRENT schema is
 -- decodable. The second half is the one that matters — a decodable list that
 -- omitted the version this build writes would reject every program it produced.
+--
+-- WI-D22 ADDED THE THIRD AND FOURTH CLAUSES, and the third is the one the first
+-- bump needed. Through WI-D21 this list was `[program_schema_version()]`, so the
+-- first two clauses were satisfied by CONSTRUCTION and neither could see a bump
+-- that dropped the predecessor. The list now has to be two long and has to hold
+-- `execution-program/1` by name, which is the migration D8 requires stated as an
+-- assertion rather than as a comment in the list's own body.
+--
+-- The length is pinned as well as the membership. A third version added without
+-- a decode path in `dst_persistence` would satisfy "contains v1 and contains the
+-- current one" while leaving the new one undecodable in fact, and only the count
+-- says so.
 pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
   tests [((), true)]
   {
     contains_str(decodable_schema_versions(), program_schema_version())
       && not contains_str(decodable_schema_versions(), "execution-program/0")
+      -- WI-D22: the predecessor stays decodable across the bump.
+      && contains_str(decodable_schema_versions(), "execution-program/1")
+      && List.length(decodable_schema_versions()) == 2
+      -- And the bump actually happened: this build does not WRITE v1.
+      && program_schema_version() == "execution-program/2"
   }
 
 -- WI-D21. THE `ExtPorts.proc_exec` BRIDGE BUILDS AN INVOCATION THIS VALIDATOR

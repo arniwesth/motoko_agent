@@ -22,6 +22,8 @@ module scripts/dst/execution_program_dst
 import std/io (println, exit)
 import std/list as List (length)
 
+-- WI-D22: `InitialWorld.files` is kinded.
+import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_program (
   ExecutionProgram,
   InitialWorld,
@@ -83,6 +85,10 @@ pure func fixture_manifest() -> ExecutionManifest {
 pure func fixture_world() -> InitialWorld {
   { messages_and_policy: "{\"messages\":[],\"policy\":\"default\"}",
     synthetic_environment: [{ key: "MOTOKO_FIXTURE", value: "1" }],
+    -- WI-D22's seeded file table. ONE entry rather than none, so this module's
+    -- program fixtures carry the field through the validator with a value
+    -- instead of only through its empty case.
+    files: [{ path: "/w/fixture.json", node: FsFile("{}") }],
     clock_epoch: 0,
     extension_profile: "driver_only/1" }
 }

@@ -337,6 +337,48 @@ export type ExtPorts = {
   -- the item that takes the schema bump: those two are the same conversation and
   -- splitting them spends the break twice.
   --
+  -- =========================================================================
+  -- WI-D22 TOOK THE SCHEMA BUMP AND DID NOT TAKE THE RENAME. THE RELEASE
+  -- QUESTION IS ANSWERED HERE RATHER THAN DEFERRED AGAIN.
+  -- =========================================================================
+  --
+  -- WI-D21 handed the rename to whichever item took `execution-program/2`, on the
+  -- ground that the two are one conversation. That ground held for the SCHEMA and
+  -- does not hold for the ABI: the persisted program schema and this package's
+  -- version are two independent compatibility surfaces with two independent
+  -- consumers, and `execution-program/2` shipped without touching this file's
+  -- types. Coupling them would have made a release decision a side effect of a
+  -- codec change.
+  --
+  -- WHAT THE RENAME DOES TO A CONSUMER THAT HAS NOT RE-RELEASED, which is the
+  -- question the deferral kept not answering:
+  --
+  --   `ExtensionHooks`/`ExtPorts` are RECORDS, and every extension constructs an
+  --   `ExtPorts` by writing every label. A renamed label is therefore not a
+  --   soft break that a consumer notices at a call site — it is a construction
+  --   that no longer type-checks, at the one function every extension package is
+  --   required to export (`register_with_config`). The consumer does not get a
+  --   deprecation window, a shim, or a runtime error it can catch: it gets a
+  --   package that will not compile against the new ABI at all, and it cannot
+  --   satisfy both the old and the new ABI from one source.
+  --
+  --   That is categorically different from the fifteen rows and five added types
+  --   deferred through WI-D21. Every one of those is a WIDENING or an ADDITION:
+  --   an unchanged consumer keeps compiling, and A12's P1 argument (records take
+  --   additive fields) is exactly why. This would be the FIRST genuinely
+  --   breaking one.
+  --
+  -- SO: IT FORCES THE MAJOR. Under this package's own rule — line 7, "bumping
+  -- `ExtensionHooks` is a major version of motoko-ext-abi" — a rename that
+  -- invalidates every existing `ExtPorts` literal is a `6.0`, not a row that can
+  -- ride along with the accumulated widenings whenever they are cut. Seven items
+  -- deferred cutting the release on the correct ground that cutting it is a
+  -- release act with consumers outside this project; WI-D22's stop condition was
+  -- to say so rather than to cut it, and this is that report. The rename is
+  -- NOT applied, `proc_exec` still says the wrong thing, and the parameter names
+  -- (`tool`, `args_json`) plus the paragraph above are what stand between a
+  -- reader and the misreading until the major is cut.
+  --
   -- WHAT IT REACHES, so the next reader does not re-derive it: `BashExec` and
   -- `RunTests` run a REAL subprocess and return a real exit code, rendered into
   -- `ExtProcOutcome.output` as JSON. See that type's note above and

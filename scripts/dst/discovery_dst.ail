@@ -237,10 +237,17 @@ func world_env() -> [{ key: string, value: string }] {
    { key: "MOTOKO_HEADLESS", value: "1" }]
 }
 
-func scripted_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string }] {
-  [{ tool_call_id: "", duration_ms: 7,  code: "", message: "", content: "OK-ALPHA" },
-   { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "OK-BRAVO" },
-   { tool_call_id: "", duration_ms: 13, code: "", message: "", content: "OK-CHARLIE" }]
+-- WI-D22 added `exit_code`. The return type is written out structurally rather
+-- than as `[ScriptedTool]`, so a field added to the record is a compile error
+-- HERE rather than a silent shape mismatch at the call site — which is the
+-- property that made this signature worth keeping when the field landed.
+--
+-- All three are -1 ("nothing said"): these tools do not run a process, and a 0
+-- would assert that they did and succeeded.
+func scripted_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+  [{ tool_call_id: "", duration_ms: 7,  code: "", message: "", content: "OK-ALPHA",   exit_code: -1 },
+   { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "OK-BRAVO",   exit_code: -1 },
+   { tool_call_id: "", duration_ms: 13, code: "", message: "", content: "OK-CHARLIE", exit_code: -1 }]
 }
 
 func base_world(answers: [string]) -> WorldState {
@@ -756,6 +763,11 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     initial_world: {
       messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
       synthetic_environment: initial.env,
+      -- WI-D22: `execution-program/2` seeds the world's file table from the
+      -- program. This fixture seeds nothing, which is what it did before the
+      -- field existed; the seeded case is exercised in dst_replay and in the
+      -- persistence specimen.
+      files: [],
       clock_epoch: initial.clock_ms,
       extension_profile: "driver_only/1"
     },

@@ -38,7 +38,14 @@ import std/result (Ok, Err)
 import std/ai (ToolCall)
 -- WI-D18: `FsNode` is the kinded `WorldState.files` entry — see that field for
 -- the representation argument. The token has to carry the kind explicitly.
-import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state, FsNode, FsFile, FsDir)
+import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
+-- WI-D22 moved `FsNode` out of `ports` into a std-only module so that
+-- `dst_program` could name it without importing the port layer, and exported the
+-- KIND VOCABULARY with it. This codec and `dst_persistence`'s are deliberately
+-- separate — different formats, different lifetimes, opposite and both-correct
+-- answers on an entry they cannot read — and they now share exactly the two
+-- functions that decide what "file" and "dir" are called on a wire.
+import src/core/fs_node (FsNode, FsFile, FsDir, fs_kind_id, fs_content_of, fs_node_of_kind)
 import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -181,7 +188,13 @@ pure func scripted_tool_json(t: ScriptedTool) -> Json {
     kv("duration_ms", jint(t.duration_ms)),
     kv("code", js(t.code)),
     kv("message", js(t.message)),
-    kv("content", js(t.content))
+    kv("content", js(t.content)),
+    -- WI-D22. The world token must carry it or every hook that adopts the world
+    -- back silently zeroes the exit codes of the whole tool queue — the failure
+    -- this codec's own header describes for `files`, one field over. Its
+    -- decoder's fallback is `-1` ("nothing said"), not 0, for
+    -- `ScriptedTool.exit_code`'s stated reason: 0 is a claim of success.
+    kv("exit_code", jint(t.exit_code))
   ])
 }
 
@@ -197,7 +210,8 @@ pure func scripted_tools_of(xs: [Json]) -> [ScriptedTool] {
          duration_ms: int_field(x, "duration_ms", 0),
          code: str_field(x, "code", ""),
          message: str_field(x, "message", ""),
-         content: str_field(x, "content", "") }) :: scripted_tools_of(rest)
+         content: str_field(x, "content", ""),
+         exit_code: int_field(x, "exit_code", -1) }) :: scripted_tools_of(rest)
   }
 }
 
@@ -240,16 +254,31 @@ pure func env_of(xs: [Json]) -> [{ key: string, value: string }] {
 -- `kind` key at all, and every entry such a build could have written WAS a file.
 -- Falling back to `FsDir` would silently turn an old world's whole file table
 -- into directories.
+--
+-- WI-D22 REPLACED THE LITERALS `"file"` AND `"dir"` HERE WITH `fs_kind_id`, and
+-- the reason is that `dst_persistence` now writes the same two tokens into a
+-- FROZEN ARTIFACT. Two encodings of one structure is the two-homes shape WI-D16
+-- and WI-D17 both argued from, and this time both homes are in this tree. The
+-- codecs stay separate on purpose — see `src/core/fs_node`'s header for the
+-- three ways they legitimately differ, of which the fallback below is one — but
+-- the token vocabulary is now written in exactly one place and read in two,
+-- rather than spelled out in two and compared by nobody.
 pure func file_entry_json(x: { path: string, node: FsNode }) -> Json {
-  match x.node {
-    FsFile(c) => jo([kv("path", js(x.path)), kv("kind", js("file")), kv("content", js(c))]),
-    FsDir => jo([kv("path", js(x.path)), kv("kind", js("dir")), kv("content", js(""))])
-  }
+  jo([kv("path", js(x.path)),
+      kv("kind", js(fs_kind_id(x.node))),
+      kv("content", js(fs_content_of(x.node)))])
 }
 
+-- The fallback stated above, unchanged and now explicit about which case it is
+-- catching: an OLD TOKEN with no `kind` key at all, whose every entry was a
+-- file. `fs_node_of_kind` returns `None` for the empty string, so the default
+-- and the unknown-kind case land on the same arm here — which is correct for a
+-- token and is exactly what `dst_persistence` refuses to do for an artifact.
 pure func fs_node_of(j: Json) -> FsNode {
-  if str_field(j, "kind", "file") == "dir" then FsDir
-  else FsFile(str_field(j, "content", ""))
+  match fs_node_of_kind(str_field(j, "kind", ""), str_field(j, "content", "")) {
+    Some(n) => n,
+    None => FsFile(str_field(j, "content", ""))
+  }
 }
 
 pure func files_json(xs: [{ path: string, node: FsNode }]) -> [Json] {
@@ -563,8 +592,12 @@ pure func codec_fixture_world() -> WorldState {
     files: [{ path: "/w/catalog.json", node: FsFile("{\"context_limits\":{\"m\":71}}") },
             { path: "/w/present-but-empty.json", node: FsFile("") },
             { path: "/w/empty-dir", node: FsDir }],
+    -- WI-D22: `exit_code: 211`, distinct from every other quantity in this
+    -- fixture (199, 1213, 107, 109, 457, 5, 7, 311, 617, 23, 29, 31, 37), per
+    -- S7 — a fixture holding -1 or 0 here could not distinguish a field that
+    -- round-tripped from one the decoder defaulted.
     tools: [{ tool_call_id: "t-17", duration_ms: 199, code: "E_TOOL",
-              message: "tool said no", content: "the content" }],
+              message: "tool said no", content: "the content", exit_code: 211 }],
     log: [
       { identity: { ordinal: 5, body: ProviderIdentity("origin-a", 7, "model-z") },
         request_projection: "proj-1",
@@ -699,7 +732,11 @@ pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
     };
     let tools_ok = match back.tools {
       t :: [] => t.tool_call_id == "t-17" && t.duration_ms == 199 && t.code == "E_TOOL"
-                   && t.message == "tool said no" && t.content == "the content",
+                   && t.message == "tool said no" && t.content == "the content"
+                   -- WI-D22. An encoder that omitted this key leaves the
+                   -- decoder's -1 behind, and every hook that adopts the world
+                   -- back would erase the tool queue's exit codes mid-run.
+                   && t.exit_code == 211,
       _ => false
     };
     -- WI-D3. Asserted by VALUE and in order, for the reason the approvals queue

@@ -632,6 +632,11 @@ pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgra
     initial_world: {
       messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
       synthetic_environment: initial.env,
+      -- WI-D22: `execution-program/2` seeds the world's file table from the
+      -- program. This fixture seeds nothing, which is what it did before the
+      -- field existed; the seeded case is exercised in dst_replay and in the
+      -- persistence specimen.
+      files: [],
       clock_epoch: initial.clock_ms,
       extension_profile: "driver_only/${driver_only_version()}"
     },
@@ -1091,9 +1096,11 @@ func rich_answers() -> [string] { [approve_line(), deny_line("bravo"), approve_l
 -- recorded tool interactions and is exactly supplied, which is correct — a
 -- reconstituted world holds what the program records and nothing else.
 func rich_tools() -> [ScriptedTool] {
-  [{ tool_call_id: "", duration_ms: 7,  code: "",       message: "",     content: "OK-ALPHA" },
-   { tool_call_id: "", duration_ms: 11, code: "E_BOOM", message: "boom", content: "" },
-   { tool_call_id: "", duration_ms: 13, code: "",       message: "",     content: "OK-CHARLIE" }]
+  -- WI-D22's `exit_code`. All three are -1 ("nothing said"): these are scripted
+  -- answers for a tool named "T", not process runs.
+  [{ tool_call_id: "", duration_ms: 7,  code: "",       message: "",     content: "OK-ALPHA",   exit_code: -1 },
+   { tool_call_id: "", duration_ms: 11, code: "E_BOOM", message: "boom", content: "",           exit_code: -1 },
+   { tool_call_id: "", duration_ms: 13, code: "",       message: "",     content: "OK-CHARLIE", exit_code: -1 }]
 }
 
 -- THE FAILURE-PATH SCENARIO. A step budget of 1 against a script of three

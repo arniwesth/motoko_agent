@@ -183,6 +183,10 @@ import src/core/dst_program (
   decodable_schema_versions
 )
 import src/core/dst_generator (GeneratorBounds)
+-- WI-D22. The `world.file` lines and the kind vocabulary `ext_world`'s JSON
+-- codec shares with this one — see `src/core/fs_node`'s header for why the two
+-- codecs stay separate and share only this.
+import src/core/fs_node (FsNode, FsFile, FsDir, fs_kind_id, fs_content_of, fs_node_of_kind, all_fs_kinds)
 import src/core/dst_profile (ExecutionManifest, PackageVersion)
 import src/core/dst_secrets (
   SecretFinding,
@@ -254,6 +258,13 @@ export type DecodeRefusal
   | UnknownInteractionKind(int, string) -- line, kind
   | UnknownOutcomeStatus(int, string)   -- line, status
   | IncompleteInteraction(int, string)  -- ordinal, what is missing
+  -- WI-D22's two initial-world file rules. Both are the DECODER refusing to
+  -- build an `FsNode` it cannot build, which is the whole point of keeping the
+  -- entry a sum rather than a `{ path, kind, content }` triple: the triple would
+  -- have made both of these representable and something would then have had to
+  -- forbid them at every consumer instead of once, here.
+  | UnknownFileKind(int, string)        -- line, kind
+  | DirectoryCarriesContent(int, string) -- line, path
 
 export pure func decode_rule(r: DecodeRefusal) -> string {
   match r {
@@ -268,7 +279,9 @@ export pure func decode_rule(r: DecodeRefusal) -> string {
     RepeatedSection(_) => "artifact-repeated-section",
     UnknownInteractionKind(_, _) => "artifact-unknown-interaction-kind",
     UnknownOutcomeStatus(_, _) => "artifact-unknown-outcome-status",
-    IncompleteInteraction(_, _) => "artifact-incomplete-interaction"
+    IncompleteInteraction(_, _) => "artifact-incomplete-interaction",
+    UnknownFileKind(_, _) => "artifact-unknown-file-kind",
+    DirectoryCarriesContent(_, _) => "artifact-directory-carries-content"
   }
 }
 
@@ -297,7 +310,19 @@ export pure func decode_message(r: DecodeRefusal) -> string {
     UnknownOutcomeStatus(n, s) =>
       "[artifact-unknown-outcome-status] line ${n} names outcome status '${s}'; D2 defines ok, fault and missing, and the three branch differently on replay",
     IncompleteInteraction(ord, what) =>
-      "[artifact-incomplete-interaction] interaction #${ord} has no ${what} line; every interaction records an identity, an outcome, a request projection and a payload, and an absent one is not an empty one"
+      "[artifact-incomplete-interaction] interaction #${ord} has no ${what} line; every interaction records an identity, an outcome, a request projection and a payload, and an absent one is not an empty one",
+    UnknownFileKind(n, k) =>
+      "[artifact-unknown-file-kind] line ${n} declares initial-world file kind '${k}', and this build defines ${join_kinds(all_fs_kinds())}. There is NO FALLBACK here and that is a different answer from the one ext_world's world-token codec gives on the same question: a token written by an older build carries no kind at all and every entry it could have written was a file, so that codec falls back to a file. No artifact predates 'world.file' — it arrived with execution-program/2 — so a kind this build does not know is a newer schema or a corrupted file, and inventing a node for it would be a decoder supplying a value the encoder never wrote",
+    DirectoryCarriesContent(n, p) =>
+      "[artifact-directory-carries-content] line ${n} declares '${p}' a directory AND carries a non-empty content field; nothing can have written it, because a directory has no body to write. WI-D18 made the world's file entry a SUM precisely so that '{path, kind: \"dir\", content: \"hello\"}' would be unrepresentable in the type; the artifact format is flat and cannot enforce that structurally, so it is enforced here rather than dropped silently on the way into the sum"
+  }
+}
+
+pure func join_kinds(ks: [string]) -> string {
+  match ks {
+    [] => "(none)",
+    k :: [] => "'${k}'",
+    k :: rest => "'${k}', ${join_kinds(rest)}"
   }
 }
 
@@ -340,8 +365,15 @@ export pure func required_header_tags() -> [{ tag: string, arity: int }] {
 
 -- Header tags that may appear any number of times, in order. These are the
 -- manifest's four list fields plus the environment map.
+-- WI-D22 added `world.file`, at arity 3 (path, kind, content) and NOT at two
+-- arities. A dir entry carries an empty third field rather than omitting it,
+-- because `WrongArity` is what a short line already means in this schema and a
+-- tag whose arity depended on its own second field would make that check
+-- undecidable from the tag table. The empty-content-for-a-dir invariant is
+-- checked by `check_file_entries` instead, which is a rule with a name.
 export pure func repeatable_header_tags() -> [{ tag: string, arity: int }] {
   [{ tag: "world.env", arity: 2 },
+   { tag: "world.file", arity: 3 },
    { tag: "manifest.package", arity: 2 },
    { tag: "manifest.classifier_2", arity: 1 },
    { tag: "manifest.unrouted_field", arity: 1 },
@@ -377,10 +409,27 @@ pure func line2(tag: string, a: string, b: string) -> string {
   "${tag}\t${escape_field(a)}\t${escape_field(b)}"
 }
 
+pure func line3(tag: string, a: string, b: string, c: string) -> string {
+  "${tag}\t${escape_field(a)}\t${escape_field(b)}\t${escape_field(c)}"
+}
+
 pure func env_lines(es: [{ key: string, value: string }]) -> [string] {
   match es {
     [] => [],
     e :: rest => [line2("world.env", e.key, e.value)] ++ env_lines(rest)
+  }
+}
+
+-- WI-D22's initial file table. The kind token comes from `fs_kind_id` and the
+-- content from `fs_content_of`, neither written as a literal here: `ext_world`'s
+-- JSON codec derives its own `kind` from the same two functions, so the two
+-- formats stay separate (they are, deliberately — see `src/core/fs_node`) while
+-- the VOCABULARY cannot drift between them.
+pure func file_lines(fs: [{ path: string, node: FsNode }]) -> [string] {
+  match fs {
+    [] => [],
+    f :: rest => [line3("world.file", f.path, fs_kind_id(f.node), fs_content_of(f.node))]
+                   ++ file_lines(rest)
   }
 }
 
@@ -455,6 +504,12 @@ export pure func encode_body(p: ExecutionProgram) -> string {
      "world.clock_epoch\t${w.clock_epoch}",
      line1("world.extension_profile", w.extension_profile)]
       ++ env_lines(w.synthetic_environment)
+      -- WI-D22, AFTER the env lines and BEFORE `bounds`. Position is part of the
+      -- schema — the header comment above says a reordering is a schema change —
+      -- and this is the schema change, so the position is chosen once here: the
+      -- two repeatable initial-world sections sit together, so a reader diffing
+      -- an artifact finds the whole world in one block.
+      ++ file_lines(w.files)
       ++ ["bounds\t${b.max_interactions}\t${b.max_chunks_per_interaction}\t${b.max_payload_bytes}\t${b.max_resource_size}\t${b.max_clock_advance_ms}",
           line1("manifest.source_revision", m.source_revision),
           line1("manifest.toolchain", m.toolchain),
@@ -505,10 +560,36 @@ export pure func scan_program(p: ExecutionProgram) -> [SecretFinding] {
   scan_env_map(w.synthetic_environment)
     ++ scan_text(InitialWorldSite("messages_and_policy"), w.messages_and_policy)
     ++ scan_text(InitialWorldSite("extension_profile"), w.extension_profile)
+    -- WI-D22: THE SEEDED FILE BODIES ARE SCANNED, and this was not optional.
+    -- `ports.recording_file_write` deliberately keeps file CONTENT out of the
+    -- interaction log — "a file body is the single most likely place in this
+    -- whole surface for a credential to appear, and the right answer to 'will
+    -- the scanner catch it' is to not put it there" — and this item then put
+    -- file bodies into the program's initial world, where they must be
+    -- persisted verbatim because a seed that is redacted is a seed that no
+    -- longer reproduces the run. So the other half of that sentence applies
+    -- instead: the scanner has to catch it, and `encode_artifact` refuses the
+    -- whole program rather than writing bytes. Adding the field without adding
+    -- this would have opened the one path into an artifact that D8's redact
+    -- gate does not cover.
+    ++ scan_file_table(w.files)
     ++ scan_text(ManifestSite("normalized_configuration"), m.normalized_configuration)
     ++ scan_text(ManifestSite("source_revision"), m.source_revision)
     ++ scan_text(ManifestSite("toolchain"), m.toolchain)
     ++ scan_interactions(p.interactions)
+}
+
+-- Both the path and the body. A credential in a PATH is not hypothetical —
+-- `/w/.config/token-sk-…` is a path — and the scanner's site label names the
+-- entry so a finding points at a file rather than at "the initial world".
+pure func scan_file_table(fs: [{ path: string, node: FsNode }]) -> [SecretFinding] {
+  match fs {
+    [] => [],
+    f :: rest =>
+      scan_text(InitialWorldSite("file.path"), f.path)
+        ++ scan_text(InitialWorldSite("file:${f.path}"), fs_content_of(f.node))
+        ++ scan_file_table(rest)
+  }
 }
 
 export type EncodeOutcome
@@ -703,6 +784,48 @@ pure func pairs_of(ls: [Line], t: string) -> [{ key: string, value: string }] {
     l :: rest =>
       (if l.tag == t then [{ key: nth_str(l.fields, 0), value: nth_str(l.fields, 1) }] else [])
         ++ pairs_of(rest, t)
+  }
+}
+
+-- WI-D22. The structural check on the initial file table, run in `decode_body`'s
+-- `structural` phase beside `check_required` and `check_integers` — which is
+-- where it has to be, because `project` below returns a program rather than a
+-- Result and has nowhere to put a refusal. A check that lives in the projection
+-- is a check that has already decided to build something.
+pure func check_file_entries(ls: [Line]) -> [DecodeRefusal] {
+  match ls {
+    [] => [],
+    l :: rest =>
+      (if l.tag == "world.file" then {
+         let path = nth_str(l.fields, 0);
+         let kind = nth_str(l.fields, 1);
+         let content = nth_str(l.fields, 2);
+         match fs_node_of_kind(kind, content) {
+           None => [UnknownFileKind(l.no, kind)],
+           Some(FsDir) => if content == "" then [] else [DirectoryCarriesContent(l.no, path)],
+           Some(FsFile(_)) => []
+         }
+       } else [])
+        ++ check_file_entries(rest)
+  }
+}
+
+-- The projection, run only after `check_file_entries` has passed. `FsFile("")`
+-- is the arm this cannot reach — an unknown kind is refused above — and it is
+-- written as a fallback rather than as a crash because the projection must be
+-- total, exactly as `int_at`'s `None => 0` is.
+pure func files_of(ls: [Line]) -> [{ path: string, node: FsNode }] {
+  match ls {
+    [] => [],
+    l :: rest =>
+      (if l.tag == "world.file" then
+         [{ path: nth_str(l.fields, 0),
+            node: match fs_node_of_kind(nth_str(l.fields, 1), nth_str(l.fields, 2)) {
+                    Some(n) => n,
+                    None => FsFile(nth_str(l.fields, 2))
+                  } }]
+       else [])
+        ++ files_of(rest)
   }
 }
 
@@ -917,7 +1040,7 @@ export pure func decode_artifact(bytes: string) -> ProgramDecode {
         let computed = program_digest(body);
         if recorded != computed then
           ProgramDecodeRefused([DigestMismatch(recorded, computed)])
-        else decode_body(body)
+        else decode_body(version, body)
       }
     }
   }
@@ -929,7 +1052,15 @@ pure func contains_str(xs: [string], t: string) -> bool {
   match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
 }
 
-pure func decode_body(body: string) -> ProgramDecode {
+-- WI-D22 GAVE THIS THE VERSION IT WAS READING, and until the bump nobody could
+-- see that it did not have one. `project` stamped `program_schema_version()` on
+-- every decoded program, so a decoded artifact came back claiming to be at the
+-- version this build WRITES rather than the one the bytes carried. With one
+-- decodable version that was invisible and harmless; with two it is a decoder
+-- rewriting a fact it was handed, and it would make
+-- `program_diff`'s `schema_version` comparison — which
+-- `scenario_the_frozen_v1_specimen_still_decodes` runs — vacuously true forever.
+pure func decode_body(version: string, body: string) -> ProgramDecode {
   -- Line numbers start at 3 so a refusal points at the line a reader will find
   -- in the file: 1 is the schema version, 2 is the digest.
   let parsed = parse_lines(3, Str.split(body, "\n"));
@@ -940,14 +1071,15 @@ pure func decode_body(body: string) -> ProgramDecode {
       let bs = body_lines(parsed.lines);
       let structural = check_required(hs, required_header_tags())
                          ++ check_integers(hs, integer_header_tags())
-                         ++ check_bounds_line(hs);
+                         ++ check_bounds_line(hs)
+                         ++ check_file_entries(hs);
       match structural {
         r :: rs => ProgramDecodeRefused([r] ++ rs),
         [] => {
           let blocks = decode_blocks(bs);
           match blocks.refusals {
             r :: rs => ProgramDecodeRefused([r] ++ rs),
-            [] => ProgramDecoded(project(hs, blocks.interactions))
+            [] => ProgramDecoded(project(version, hs, blocks.interactions))
           }
         }
       }
@@ -955,14 +1087,25 @@ pure func decode_body(body: string) -> ProgramDecode {
   }
 }
 
-pure func project(hs: [Line], xs: [Interaction]) -> ExecutionProgram {
-  { schema_version: program_schema_version(),
+pure func project(version: string, hs: [Line], xs: [Interaction]) -> ExecutionProgram {
+  -- The version the BYTES carried, not the one this build writes. See
+  -- `decode_body`.
+  { schema_version: version,
     generator_id: str_at(hs, "generator_id", 0),
     generator_version: str_at(hs, "generator_version", 0),
     seed: int_at(hs, "seed", 0),
     initial_world: {
       messages_and_policy: str_at(hs, "world.messages_and_policy", 0),
       synthetic_environment: pairs_of(hs, "world.env"),
+      -- WI-D22: NO `world.file` line means `files: []`, and this is the one
+      -- place in the migration where absence legitimately takes a default. At
+      -- execution-program/1 the field did not exist anywhere in the tree and
+      -- `world_state_of` unconditionally reconstituted an empty table, so an
+      -- empty table is what a v1 program MEANT — the decoder is reproducing v1's
+      -- own semantics, not guessing at them. Contrast
+      -- `ports.decode_tool_outcome`, where absence is a refusal because v1's
+      -- semantics fixed no value there.
+      files: files_of(hs),
       clock_epoch: int_at(hs, "world.clock_epoch", 0),
       extension_profile: str_at(hs, "world.extension_profile", 0)
     },
@@ -1257,7 +1400,7 @@ pure func test_the_path_is_the_triple_and_the_identity_is_the_bytes() -> bool
 pure func stub_program(id: string, version: string, seed: int) -> ExecutionProgram {
   { schema_version: program_schema_version(),
     generator_id: id, generator_version: version, seed: seed,
-    initial_world: { messages_and_policy: "", synthetic_environment: [],
+    initial_world: { messages_and_policy: "", synthetic_environment: [], files: [],
                      clock_epoch: 0, extension_profile: "" },
     bounds: { max_interactions: 0, max_chunks_per_interaction: 0,
               max_payload_bytes: 0, max_resource_size: 0, max_clock_advance_ms: 0 },

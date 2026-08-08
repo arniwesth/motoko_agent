@@ -228,6 +228,11 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     initial_world: {
       messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
       synthetic_environment: initial.env,
+      -- WI-D22: `execution-program/2` seeds the world's file table from the
+      -- program. This fixture seeds nothing, which is what it did before the
+      -- field existed; the seeded case is exercised in dst_replay and in the
+      -- persistence specimen.
+      files: [],
       clock_epoch: initial.clock_ms,
       extension_profile: "driver_only/1"
     },
