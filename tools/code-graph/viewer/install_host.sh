@@ -221,16 +221,28 @@ say "5/5  ready"
 # --------------------------------------------------------------------------
 cat <<EOF
 Launch the D7 spike exactly as printed — a verdict obtained any other way does
-not count (ADR D10):
+not count (ADR D10). The gate spans two run SHAPES on purpose: the scripted sweep
+grades throughput (a human's idle gaps would read as stalls that never happened),
+and only an interactive session can grade the click/hover round trip.
 
-  # scripted measurement run (writes the verdict JSON, no human needed)
-  cd $VIEWER && uv run --frozen python spike_l0l2.py --auto
+  cd $VIEWER
 
-  # same scene, interactive, for the manual acceptance walk
-  cd $VIEWER && uv run --frozen python spike_l0l2.py
+  # 1. scripted sweep, real scene — grades criteria 1, 2, 4, 5, 6
+  uv run --frozen python spike_l0l2.py --auto
 
-  # criterion 2 names ~1k L2 nodes; this repo's all profile has ~225, so also run
-  cd $VIEWER && uv run --frozen python spike_l0l2.py --auto --stress 1000
+  # 2. same sweep at the density criterion 2 actually names (~1k L2 nodes;
+  #    this repo's all profile has ~225, so the extra copies are synthetic)
+  uv run --frozen python spike_l0l2.py --auto --stress 1000
 
-Reports land in $PROJECT_DIR/ — paste them back.
+  # 3. interactive — CLICK AND HOVER a few module circles, then close the
+  #    window. Criterion 3 cannot be graded without this; the scripted runs
+  #    record a lower bound and deliberately refuse to call it a pass.
+  uv run --frozen python spike_l0l2.py
+
+  # 4. combine every run into one gate verdict (script-produced, not eyeballed)
+  uv run --frozen python spike_l0l2.py --summarize
+
+One report per run shape lands in $PROJECT_DIR/,
+plus host-spike-verdict.json from step 4. The workspace mount is shared, so the
+agent can read them directly — nothing needs pasting.
 EOF

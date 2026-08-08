@@ -14,14 +14,27 @@
     }
   ],
   "chdb_installed": true,
-  "diagnosis": "\noffscreen fastplotlib frame raised:\nTraceback (most recent call last):\n  File \"<stdin>\", line 42, in <module>\n  File \"/Users/arniwesthhansen/Projects2/private/motoko_agent/tools/code-graph/viewer/.venv/lib/python3.13/site-packages/fastplotlib/layouts/_figure.py\", line 824, in export_numpy\n    snapshot = self.renderer.snapshot()\n  File \"/Users/arniwesthhansen/Projects2/private/motoko_agent/tools/code-graph/viewer/.venv/lib/python3.13/site-packages/pygfx/renderers/wgpu/engine/renderer.py\", line 1011, in snapshot\n    size = texture.size\n           ^^^^^^^^^^^^\nAttributeError: 'NoneType' object has no attribute 'size'\n",
+  "diagnosis": null,
   "offscreen_frame": {
-    "ok": false
+    "attempts": [
+      {
+        "call": "canvas.draw()",
+        "ok": true
+      }
+    ],
+    "nonzero_pixels": 145563,
+    "ok": true,
+    "shape": [
+      240,
+      320,
+      4
+    ],
+    "via": "canvas.draw()"
   },
   "platform": "Darwin arm64 25.5.0",
   "python": "3.13.12",
   "stage": "adapter-probe",
-  "verdict": "fail",
+  "verdict": "pass",
   "versions": {
     "fastplotlib": "0.6.1",
     "glfw": "2.10.2",

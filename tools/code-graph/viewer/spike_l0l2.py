@@ -56,7 +56,15 @@ VIEWER_DIR = Path(__file__).resolve().parent
 TOOL_ROOT = VIEWER_DIR.parent
 REPO_ROOT = TOOL_ROOT.parents[1]
 DEFAULT_OUT = TOOL_ROOT / ".out"
-DEFAULT_REPORT = REPO_ROOT / ".agent" / "projects" / "010_simulation_visualization" / "host-spike-report.json"
+REPORT_DIR = REPO_ROOT / ".agent" / "projects" / "010_simulation_visualization"
+
+
+def default_report_path(mode: str, stress: int) -> Path:
+    """One file per run shape. A single shared path let the --stress run
+    overwrite the real-scene run on host run 2, destroying the very numbers the
+    plan says must never be substituted for each other."""
+    suffix = f"-stress{stress}" if stress else "-real"
+    return REPORT_DIR / f"host-spike-report-{mode}{suffix}.json"
 
 # Camera width at which each LOD level takes over. The scene is a unit-radius
 # circle, so width 2.0 is "whole map". Precomputed buffers are swapped by
@@ -312,9 +320,11 @@ class Measurements:
         return sum(1 for c in self.lod_crossings if c["frame_dt"] > budget_s)
 
 
-def grade(scene: Scene, m: Measurements, windowed: bool, stress_stats: dict | None) -> dict:
+def grade(scene: Scene, m: Measurements, windowed: bool, stress_stats: dict | None,
+          auto: bool = True) -> dict:
     fps = m.fps()
     fps_p5 = m.fps_p5()
+    real_pick = m.pick_source if (m.pick_source and "synthetic" not in m.pick_source) else None
     labels = len(scene.labels)
     edge_solid = {(g.kind, g.style.is_solid) for g in scene.edge_groups}
     kinds_distinct = len({(g.kind, g.style.color, g.style.dash) for g in scene.edge_groups
@@ -331,19 +341,37 @@ def grade(scene: Scene, m: Measurements, windowed: bool, stress_stats: dict | No
             "kinds_visually_distinct": kinds_distinct,
         },
         "2_pan_zoom_fps": {
-            "verdict": verdict(None if fps is None else (fps >= TARGET_FPS and (fps_p5 or 0) >= TARGET_FPS)),
+            # Only the scripted sweep grades this. In an interactive session the
+            # canvas draws on demand, so idle gaps between a human's inputs land
+            # in frame_dt and read as stalls that never happened.
+            "verdict": ("not-measured" if not auto else
+                        verdict(None if fps is None else (fps >= TARGET_FPS and (fps_p5 or 0) >= TARGET_FPS))),
             "median_fps": fps,
             "p5_fps": fps_p5,
             "target": TARGET_FPS,
             "frames": len(m.frame_dt),
+            "note": None if auto else "not graded in interactive mode; idle frames are not stalls",
         },
         "3_picking_latency": {
-            "verdict": verdict(None if not m.pick_ms else max(m.pick_ms) < PICK_BUDGET_MS),
+            # The criterion is a click -> identity ROUND TRIP plus a hover
+            # tooltip showing the module path. The synthetic fallback times only
+            # our own lookup, with no event involved and no tooltip — so it is a
+            # lower bound, never a pass. Grading it as one would let the gate
+            # clear criterion 3 without ever proving picking works, which is the
+            # pass-by-default failure this whole file exists to avoid.
+            "verdict": verdict(
+                None if (not m.pick_ms or real_pick is None)
+                else (max(m.pick_ms) < PICK_BUDGET_MS and m.hover_sample is not None)
+            ),
             "max_ms": round(max(m.pick_ms), 3) if m.pick_ms else None,
             "median_ms": round(statistics.median(m.pick_ms), 3) if m.pick_ms else None,
             "samples": len(m.pick_ms),
             "measured": m.pick_source,
+            "is_real_event_round_trip": real_pick is not None,
             "hover_tooltip_sample": m.hover_sample,
+            "note": None if real_pick is not None else
+            "lower bound only (identity resolution, no event round trip); "
+            "run interactively and click/hover a few modules to grade this",
         },
         "4_lod_switch_no_stall": {
             "verdict": verdict(None if not m.lod_crossings else m.hitches() <= 1),
@@ -353,7 +381,9 @@ def grade(scene: Scene, m: Measurements, windowed: bool, stress_stats: dict | No
             if m.lod_crossings else None,
         },
         "5_l2_labels": {
-            "verdict": verdict(None if fps is None else (labels >= MIN_LABELS and fps >= TARGET_FPS)),
+            # Depends on the fps number, so it inherits criterion 2's mode limit.
+            "verdict": ("not-measured" if not auto else
+                        verdict(None if fps is None else (labels >= MIN_LABELS and fps >= TARGET_FPS))),
             "labels_rendered": labels,
             "minimum": MIN_LABELS,
             "note": None if labels >= MIN_LABELS else
@@ -569,16 +599,74 @@ def load_scene(out_dir: Path, stress: int) -> Scene:
     return build_scene(_read(layout_path), _read(edges_path), stress=stress)
 
 
+SUMMARY_PATH = REPORT_DIR / "host-spike-verdict.json"
+
+
+def summarize(report_dir: Path = REPORT_DIR) -> dict:
+    """Combine every run's report into ONE gate verdict.
+
+    The D7 gate spans two run shapes by construction — the scripted sweep grades
+    throughput, an interactive session grades the click/hover round trip — so the
+    combination has to be script-produced too. Eyeballing two JSON files and
+    declaring a pass is exactly the vibes-grading the criteria were written down
+    to prevent.
+
+    A criterion passes iff at least one run graded it `pass` and none graded it
+    `fail`. Anything still `not-measured` everywhere keeps the gate open.
+    """
+    reports = sorted(report_dir.glob("host-spike-report-*.json"))
+    runs = []
+    for path in reports:
+        try:
+            runs.append((path.name, json.loads(path.read_text(encoding="utf-8"))))
+        except Exception as exc:
+            runs.append((path.name, {"error": str(exc)}))
+
+    combined: dict[str, dict] = {}
+    for name, report in runs:
+        for key, criterion in (report.get("gate", {}).get("criteria", {}) or {}).items():
+            slot = combined.setdefault(key, {"verdict": "not-measured", "evidence": []})
+            slot["evidence"].append({"run": name, "verdict": criterion.get("verdict"),
+                                     **{k: v for k, v in criterion.items()
+                                        if k in ("median_fps", "p5_fps", "max_ms", "labels_rendered",
+                                                 "hitches_over_two_frames", "is_real_event_round_trip",
+                                                 "hover_tooltip_sample")}})
+            if criterion.get("verdict") == "fail":
+                slot["verdict"] = "fail"
+            elif criterion.get("verdict") == "pass" and slot["verdict"] != "fail":
+                slot["verdict"] = "pass"
+
+    verdicts = {k: v["verdict"] for k, v in combined.items()}
+    overall = ("pass" if verdicts and all(v == "pass" for v in verdicts.values())
+               else ("fail" if "fail" in verdicts.values() else "incomplete"))
+    return {
+        "stage": "d7-gate-verdict",
+        "runs": [name for name, _ in runs],
+        "criteria": combined,
+        "overall": overall,
+        "still_unmeasured": sorted(k for k, v in verdicts.items() if v == "not-measured"),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    ap.add_argument("--report", type=Path, default=DEFAULT_REPORT)
+    ap.add_argument("--report", type=Path, default=None)
     ap.add_argument("--auto", action="store_true", help="scripted measurement run; writes the verdict JSON and exits")
     ap.add_argument("--dry-run", action="store_true", help="build the scene and print stats; imports nothing GPU-bound")
+    ap.add_argument("--summarize", action="store_true",
+                    help="combine every host-spike-report-*.json into one gate verdict and exit")
     ap.add_argument("--stress", type=int, default=0, help="replicate the scene to reach N L2 nodes (synthetic)")
     ap.add_argument("--duration", type=float, default=20.0, help="--auto sweep length in seconds")
     ns = ap.parse_args(argv)
 
+    if ns.summarize:
+        verdict = summarize()
+        SUMMARY_PATH.write_text(json.dumps(verdict, indent=2, sort_keys=True))
+        print(json.dumps(verdict, indent=2, sort_keys=True))
+        return 0 if verdict["overall"] == "pass" else 1
+
+    ns.report = ns.report or default_report_path("auto" if ns.auto else "interactive", ns.stress)
     scene = load_scene(ns.out, ns.stress)
 
     if ns.dry_run:
@@ -593,7 +681,7 @@ def main(argv: list[str] | None = None) -> int:
             "stage": "d7-spike",
             "mode": "auto" if ns.auto else "interactive",
             "scene": scene.stats(),
-            "gate": grade(scene, m, is_windowed, None),
+            "gate": grade(scene, m, is_windowed, None, auto=ns.auto),
             "launched_via": "install_host.sh printed command (assert this yourself — "
                             "a verdict from a hand-built env is invalid, ADR D10)",
         }

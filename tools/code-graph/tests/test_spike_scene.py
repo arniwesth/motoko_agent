@@ -186,16 +186,63 @@ def test_a_median_that_hides_hitches_still_fails_on_p5() -> None:
     assert criterion["verdict"] == "fail", "sustained fps must be graded on the tail, not the median"
 
 
+def _real_picks(samples: list[float], hover: str | None = "src/core/alpha") -> spike.Measurements:
+    m = spike.Measurements()
+    m.frame_dt = [1 / 60] * 60
+    m.pick_ms = samples
+    m.pick_source = "real pointer event (pick_info vertex_index)"
+    m.hover_sample = hover
+    return m
+
+
 def test_slow_picking_fails_and_fast_picking_passes() -> None:
     scene = _scene()
-    slow = spike.Measurements()
-    slow.frame_dt = [1 / 60] * 60
-    slow.pick_ms = [12.0, 350.0]
-    assert spike.grade(scene, slow, True, None)["criteria"]["3_picking_latency"]["verdict"] == "fail"
-    fast = spike.Measurements()
-    fast.frame_dt = [1 / 60] * 60
-    fast.pick_ms = [1.2, 3.4]
-    assert spike.grade(scene, fast, True, None)["criteria"]["3_picking_latency"]["verdict"] == "pass"
+    assert spike.grade(scene, _real_picks([12.0, 350.0]), True, None)["criteria"]["3_picking_latency"]["verdict"] == "fail"
+    assert spike.grade(scene, _real_picks([1.2, 3.4]), True, None)["criteria"]["3_picking_latency"]["verdict"] == "pass"
+
+
+def test_synthetic_picking_never_passes_the_criterion() -> None:
+    # The criterion is a click -> identity ROUND TRIP. The synthetic fallback
+    # times only our own lookup, with no event and no tooltip. Grading it as a
+    # pass would clear criterion 3 without ever proving picking works — the
+    # pass-by-default failure the whole gate exists to prevent.
+    scene = _scene()
+    m = spike.Measurements()
+    m.frame_dt = [1 / 60] * 60
+    m.pick_ms = [0.1] * 50  # dazzlingly fast, and meaningless
+    m.pick_source = "synthetic: identity resolution only (no event round-trip)"
+    criterion = spike.grade(scene, m, True, None)["criteria"]["3_picking_latency"]
+    assert criterion["verdict"] == "not-measured"
+    assert criterion["is_real_event_round_trip"] is False
+    assert "lower bound" in criterion["note"]
+
+
+def test_real_picks_without_a_hover_sample_do_not_pass() -> None:
+    # "hover tooltip shows module path" is half of criterion 3; latency alone
+    # does not satisfy it.
+    scene = _scene()
+    criterion = spike.grade(scene, _real_picks([1.0], hover=None), True, None)["criteria"]["3_picking_latency"]
+    assert criterion["verdict"] == "fail"
+
+
+def test_interactive_mode_does_not_grade_throughput() -> None:
+    # A human's idle gaps land in frame_dt and would read as stalls that never
+    # happened, so the scripted sweep owns criteria 2 and 5.
+    scene = _scene()
+    m = _real_picks([1.0])
+    report = spike.grade(scene, m, True, None, auto=False)
+    assert report["criteria"]["2_pan_zoom_fps"]["verdict"] == "not-measured"
+    assert report["criteria"]["5_l2_labels"]["verdict"] == "not-measured"
+    assert report["criteria"]["3_picking_latency"]["verdict"] == "pass"
+
+
+def test_report_paths_do_not_collide_across_run_shapes() -> None:
+    paths = {
+        spike.default_report_path("auto", 0),
+        spike.default_report_path("auto", 1000),
+        spike.default_report_path("interactive", 0),
+    }
+    assert len(paths) == 3, "a shared path let the stress run overwrite the real-scene run"
 
 
 def test_more_than_one_lod_hitch_fails() -> None:
@@ -221,6 +268,47 @@ def test_label_criterion_flags_a_scene_too_small_to_grade_it() -> None:
     criterion = report["criteria"]["5_l2_labels"]
     assert criterion["verdict"] == "fail"
     assert "stress" in (criterion["note"] or "")
+
+
+def test_summarize_combines_runs_and_keeps_the_gate_open_on_gaps(tmp_path) -> None:
+    import json
+
+    def write(name: str, criteria: dict) -> None:
+        (tmp_path / name).write_text(json.dumps({"gate": {"criteria": criteria}}))
+
+    write("host-spike-report-auto-stress1000.json", {
+        "2_pan_zoom_fps": {"verdict": "pass", "median_fps": 57.7},
+        "3_picking_latency": {"verdict": "not-measured"},
+    })
+    write("host-spike-report-interactive-real.json", {
+        "2_pan_zoom_fps": {"verdict": "not-measured"},
+        "3_picking_latency": {"verdict": "pass", "max_ms": 0.4},
+    })
+    combined = spike.summarize(tmp_path)
+    assert combined["criteria"]["2_pan_zoom_fps"]["verdict"] == "pass"
+    assert combined["criteria"]["3_picking_latency"]["verdict"] == "pass"
+    assert combined["overall"] == "pass"
+    assert combined["still_unmeasured"] == []
+
+
+def test_summarize_reports_incomplete_when_a_criterion_was_never_graded(tmp_path) -> None:
+    import json
+
+    (tmp_path / "host-spike-report-auto-real.json").write_text(json.dumps(
+        {"gate": {"criteria": {"3_picking_latency": {"verdict": "not-measured"}}}}))
+    combined = spike.summarize(tmp_path)
+    assert combined["overall"] == "incomplete"
+    assert combined["still_unmeasured"] == ["3_picking_latency"]
+
+
+def test_summarize_lets_one_failure_outweigh_a_pass(tmp_path) -> None:
+    import json
+
+    for name, verdict in (("host-spike-report-auto-real.json", "pass"),
+                          ("host-spike-report-auto-stress1000.json", "fail")):
+        (tmp_path / name).write_text(json.dumps(
+            {"gate": {"criteria": {"2_pan_zoom_fps": {"verdict": verdict}}}}))
+    assert spike.summarize(tmp_path)["overall"] == "fail"
 
 
 def test_style_table_is_the_only_source_of_edge_appearance() -> None:
