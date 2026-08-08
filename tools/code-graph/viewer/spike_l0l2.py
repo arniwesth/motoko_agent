@@ -244,6 +244,25 @@ def lod_for_camera_width(width: float) -> int:
     return level
 
 
+def resolve_pick(scene: Scene, level: int, pick_info: dict) -> str | None:
+    """Node identity from a pygfx pick_info dict.
+
+    Points and Line pick_info carry ``vertex_index`` (pygfx/objects/_more.py:148)
+    and **not** a world position — so an index lookup is both the correct path
+    and an exact O(1) one, since the scatter's vertex order is exactly
+    ``scene.levels[level].node_ids``. The world-position branch is a fallback for
+    renderer-level events that do carry one.
+    """
+    index = pick_info.get("vertex_index")
+    node_ids = scene.levels[level].node_ids
+    if isinstance(index, int) and 0 <= index < len(node_ids):
+        return node_ids[index]
+    pos = pick_info.get("world_position") or pick_info.get("position")
+    if pos is not None and len(pos) >= 2:
+        return resolve_node(scene, level, float(pos[0]), float(pos[1]))
+    return None
+
+
 def resolve_node(scene: Scene, level: int, x: float, y: float) -> str | None:
     """Point -> node identity. The smallest circle containing the point wins, so
     a click inside a module resolves to the module and not to its container."""
@@ -362,7 +381,8 @@ def grade(scene: Scene, m: Measurements, windowed: bool, stress_stats: dict | No
 # --------------------------------------------------------------------------
 
 
-def run_window(scene: Scene, auto: bool, m: Measurements, duration: float) -> bool:
+def run_window(scene: Scene, auto: bool, m: Measurements, duration: float,
+               on_complete=None) -> bool:
     """Build the fastplotlib scene and drive it. Every optional feature is
     guarded: a missing API records an error and keeps going, because a report
     that says exactly which call failed is worth far more than a traceback."""
@@ -372,6 +392,10 @@ def run_window(scene: Scene, auto: bool, m: Measurements, duration: float) -> bo
     fig = fpl.Figure(size=(1600, 1000))
     subplot = fig[0, 0]
     graphics: dict[int, list] = {0: [], 1: [], 2: []}
+    # Pick targets are the scatters only: their vertex order is exactly
+    # scene.levels[level].node_ids, which is what makes pick_info["vertex_index"]
+    # an exact identity lookup rather than a hit test.
+    pick_targets: dict[int, object] = {}
 
     for level in (0, 1, 2):
         data = scene.levels[level]
@@ -381,7 +405,9 @@ def run_window(scene: Scene, auto: bool, m: Measurements, duration: float) -> bo
             graphics[level].append(subplot.add_line_collection(rings, colors=colour, thickness=1.0))
         if data.centers:
             pts = np.array([(x, y, -0.01) for x, y in data.centers], dtype=np.float32)
-            graphics[level].append(subplot.add_scatter(pts, colors=(0.35, 0.40, 0.50, 0.9), sizes=6))
+            scatter = subplot.add_scatter(pts, colors=(0.35, 0.40, 0.50, 0.9), sizes=6)
+            graphics[level].append(scatter)
+            pick_targets[level] = scatter
 
     for group in scene.edge_groups:
         if not group.segments:
@@ -405,7 +431,7 @@ def run_window(scene: Scene, auto: bool, m: Measurements, duration: float) -> bo
             break
     graphics[2].extend(label_graphics)
 
-    state = {"level": None, "last": None, "start": None, "frames": 0}
+    state = {"level": None, "last": None, "start": None, "frames": 0, "finished": False}
 
     def apply_lod(level: int) -> None:
         for lvl, items in graphics.items():
@@ -422,24 +448,26 @@ def run_window(scene: Scene, auto: bool, m: Measurements, duration: float) -> bo
 
     def on_pointer(event) -> None:
         try:
-            info = getattr(event, "pick_info", {}) or {}
-            pos = info.get("world_position") or info.get("position")
-            if pos is None:
+            started = time.perf_counter()
+            info = getattr(event, "pick_info", None) or {}
+            node = resolve_pick(scene, state["level"] or 2, dict(info))
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            if node is None:
                 return
-            node, ms = pick_at(float(pos[0]), float(pos[1]))
-            m.pick_ms.append(ms)
-            m.pick_source = "real pointer event"
-            if node:
-                m.hover_sample = node
+            m.pick_ms.append(elapsed_ms)
+            m.pick_source = "real pointer event (pick_info vertex_index)"
+            # Criterion 3's second half: the hover tooltip must show the module
+            # PATH, not an index — so the recorded sample is the full slug.
+            m.hover_sample = node
         except Exception:
             m.note_error("pointer handler")
 
-    for gfx in graphics[2]:
+    for level, target in sorted(pick_targets.items()):
         try:
-            gfx.add_event_handler(on_pointer, "pointer_down")
-            gfx.add_event_handler(on_pointer, "pointer_move")
+            target.add_event_handler(on_pointer, "pointer_down")
+            target.add_event_handler(on_pointer, "pointer_move")
         except Exception:
-            m.note_error("add_event_handler")
+            m.note_error(f"add_event_handler(level={level})")
             break
 
     def animate(_fig=None) -> None:
@@ -479,19 +507,35 @@ def run_window(scene: Scene, auto: bool, m: Measurements, duration: float) -> bo
             apply_lod(level)
 
         if auto and elapsed >= duration:
-            if not m.pick_ms:
-                # No human to click. Measure the half we own — identity
-                # resolution — and label it so nobody reads it as an event
-                # round-trip. The interactive run supplies the real number.
-                for i in range(50):
-                    ang = 2 * math.pi * i / 50
-                    _, ms = pick_at(0.4 * math.cos(ang), 0.4 * math.sin(ang))
-                    m.pick_ms.append(ms)
-                m.pick_source = "synthetic: identity resolution only (no event round-trip)"
-            try:
-                fig.close()
-            except Exception:
-                m.note_error("figure close")
+            if not state["finished"]:
+                state["finished"] = True
+                if not m.pick_ms:
+                    # No human to click. Measure the half we own — identity
+                    # resolution — and label it so nobody reads it as an event
+                    # round-trip. The interactive run supplies the real number.
+                    for i in range(50):
+                        ang = 2 * math.pi * i / 50
+                        _, ms = pick_at(0.4 * math.cos(ang), 0.4 * math.sin(ang))
+                        m.pick_ms.append(ms)
+                    m.pick_source = "synthetic: identity resolution only (no event round-trip)"
+                # WRITE THE REPORT BEFORE ATTEMPTING SHUTDOWN. Closing a figure
+                # is not guaranteed to stop the event loop, and a hang after a
+                # complete measurement would throw away the whole run — the one
+                # outcome an expensive host round-trip cannot afford.
+                if on_complete is not None:
+                    try:
+                        on_complete()
+                    except Exception:
+                        m.note_error("on_complete report write")
+            # Belt and braces, retried each frame: close the window, then stop
+            # the loop. Either alone has been known to leave the other running.
+            for label, closer in (("figure close", fig.close),
+                                  ("canvas close", getattr(fig.canvas, "close", lambda: None)),
+                                  ("loop stop", getattr(fpl.loop, "stop", lambda: None))):
+                try:
+                    closer()
+                except Exception:
+                    m.note_error(label)
 
     apply_lod(0)
     try:
@@ -543,21 +587,28 @@ def main(argv: list[str] | None = None) -> int:
 
     m = Measurements()
     windowed = False
+
+    def write_report(is_windowed: bool) -> dict:
+        report = {
+            "stage": "d7-spike",
+            "mode": "auto" if ns.auto else "interactive",
+            "scene": scene.stats(),
+            "gate": grade(scene, m, is_windowed, None),
+            "launched_via": "install_host.sh printed command (assert this yourself — "
+                            "a verdict from a hand-built env is invalid, ADR D10)",
+        }
+        ns.report.parent.mkdir(parents=True, exist_ok=True)
+        ns.report.write_text(json.dumps(report, indent=2, sort_keys=True))
+        return report
+
     try:
-        windowed = run_window(scene, ns.auto, m, ns.duration)
+        # The in-loop callback writes a complete report the moment measurement
+        # finishes, so a shutdown that hangs costs a Ctrl-C rather than the run.
+        windowed = run_window(scene, ns.auto, m, ns.duration, on_complete=lambda: write_report(True))
     except Exception:
         m.note_error("run_window")
 
-    report = {
-        "stage": "d7-spike",
-        "mode": "auto" if ns.auto else "interactive",
-        "scene": scene.stats(),
-        "gate": grade(scene, m, windowed, None),
-        "launched_via": "install_host.sh printed command (assert this yourself — "
-                        "a verdict from a hand-built env is invalid, ADR D10)",
-    }
-    ns.report.parent.mkdir(parents=True, exist_ok=True)
-    ns.report.write_text(json.dumps(report, indent=2, sort_keys=True))
+    report = write_report(windowed)
     print(json.dumps(report["gate"], indent=2, sort_keys=True))
     print(f"\nfull report: {ns.report}", file=sys.stderr)
     return 0 if report["gate"]["overall"] == "pass" else 1

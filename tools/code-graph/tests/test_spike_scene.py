@@ -112,6 +112,27 @@ def test_resolve_node_returns_none_outside_every_circle() -> None:
     assert spike.resolve_node(_scene(), 2, 5.0, 5.0) is None
 
 
+def test_resolve_pick_uses_vertex_index() -> None:
+    # pygfx Points/Line pick_info carries `vertex_index` and NOT a world
+    # position (pygfx/objects/_more.py:148). A handler that only looked for a
+    # world position would silently never fire, leaving criterion 3 unmeasurable
+    # on an otherwise perfect run.
+    scene = _scene()
+    for index, expected in enumerate(scene.levels[2].node_ids):
+        assert spike.resolve_pick(scene, 2, {"vertex_index": index}) == expected
+
+
+def test_resolve_pick_falls_back_to_world_position() -> None:
+    scene = _scene()
+    assert spike.resolve_pick(scene, 2, {"world_position": (-0.2, 0.0, 0.0)}) == "src/core/beta"
+
+
+def test_resolve_pick_rejects_an_out_of_range_index_instead_of_crashing() -> None:
+    scene = _scene()
+    assert spike.resolve_pick(scene, 2, {"vertex_index": 9999}) is None
+    assert spike.resolve_pick(scene, 2, {}) is None
+
+
 def test_stress_replication_reaches_the_requested_density() -> None:
     scene = _scene(stress=30)
     assert scene.stress_factor == 10  # 3 L2 nodes per copy

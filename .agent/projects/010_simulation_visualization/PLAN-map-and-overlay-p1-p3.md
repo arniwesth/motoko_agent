@@ -733,6 +733,29 @@ viewer is a **host-side program**. Consequences the plan enforces:
     out of the file agents read to learn what the store holds would defeat D8's "the viewer and
     the agent consume the same tables".
 
+17. **Host probe run 1 (2026-08-08): the host GPU stack is good; the probe was broken.** This
+    retires ADR Gap 2's residual unknown ("whether the *host's* wgpu stack renders acceptably")
+    at the adapter level: `Darwin arm64`, one **Metal** adapter, `Apple M1 Pro`, every pin
+    resolved as locked (fastplotlib 0.6.1 / pygfx 0.15.3 / wgpu 0.29.0 / rendercanvas 2.7.2 /
+    glfw 2.10.2), and chdb installed cleanly on macOS so D8's shared access layer is available
+    to the viewer. The `fail` verdict was three bugs in **our** code, all found by reading the
+    pinned packages' source rather than by spending another round-trip:
+    - `Figure.show()` does not render on an offscreen canvas — it registers `_render` as the
+      draw function and returns without drawing unless `RTD_BUILD=1`
+      (`fastplotlib/layouts/_figure.py:679-693`), so `renderer.snapshot()` hit a `None` target
+      texture. Fixed by forcing `canvas.draw()`, which is also a *better* probe: it returns the
+      frame, so "blank frame" is now distinguishable from "exception".
+    - `--auto` wrote its report only *after* the event loop returned, so a shutdown that failed
+      to stop the loop would have thrown away a complete measurement. The report is now written
+      the moment measurement finishes, before shutdown is attempted.
+    - the pick handler looked for `world_position` in `pick_info`, but pygfx Points/Line
+      pick_info carries `vertex_index` (`pygfx/objects/_more.py:148`). The handler would have
+      silently never fired, leaving **criterion 3 unmeasurable on an otherwise passing run** —
+      the worst kind of failure for a gate, because it looks like a clean partial result.
+    Lesson worth keeping: for a deliverable that can only execute on the other side of an
+    expensive boundary, reading the pinned dependency's source is cheaper than a round-trip, and
+    it should be done *before* the first ask, not after the first failure.
+
 ## Suggested implementation order
 
 1. **P1 sequence**: fresh `--profile=all` extraction → 1.1 + 1.2 (one builder) → 1.3 validator →

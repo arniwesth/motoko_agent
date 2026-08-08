@@ -137,15 +137,45 @@ try:
     fig = fpl.Figure(size=(320, 240), canvas="offscreen")
     fig[0, 0].add_scatter(np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]], dtype=np.float32))
     fig.show()
-    frame = fig.export_numpy()
+
+    # `Figure.show()` does NOT render on an offscreen canvas — it only registers
+    # `_render` as the draw function and then, unless RTD_BUILD=1 is set, returns
+    # without drawing (fastplotlib/layouts/_figure.py:679-693). Snapshotting at
+    # that point hits a renderer whose target texture is still None. So force a
+    # real draw first: `canvas.draw()` calls `force_draw()` and returns the frame
+    # (rendercanvas/offscreen.py:121), which is the end-to-end test we actually
+    # want — pixels out of the Metal/Vulkan pipeline, not just a live adapter.
+    frame = None
+    attempts = []
+    for label, call in (
+        ("canvas.draw()", lambda: fig.canvas.draw()),
+        ("_render() + export_numpy()", lambda: (fig._render(draw=False), fig.export_numpy())[-1]),
+        ("export_numpy()", lambda: fig.export_numpy()),
+    ):
+        try:
+            frame = np.asarray(call())
+            attempts.append({"call": label, "ok": True})
+            break
+        except Exception as exc:
+            attempts.append({"call": label, "ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    if frame is None:
+        raise RuntimeError(f"no offscreen draw path succeeded: {attempts}")
+
     report["offscreen_frame"] = {
         "ok": True,
-        "shape": list(getattr(frame, "shape", [])),
-        "nonzero_pixels": int((frame > 0).sum()) if hasattr(frame, "sum") else None,
+        "via": next(a["call"] for a in attempts if a["ok"]),
+        "attempts": attempts,
+        "shape": list(frame.shape),
+        # A frame of pure zeros means the pipeline ran but drew nothing, which is
+        # a different failure from an exception and must not read as success.
+        "nonzero_pixels": int((frame > 0).sum()),
     }
+    if int((frame > 0).sum()) == 0:
+        raise RuntimeError("offscreen frame rendered but is entirely blank")
     report["verdict"] = "pass"
 except Exception:
-    report["offscreen_frame"] = {"ok": False}
+    report["offscreen_frame"] = report.get("offscreen_frame") or {"ok": False}
+    report["offscreen_frame"]["ok"] = False
     report["diagnosis"] = (report["diagnosis"] or "") + \
         "\noffscreen fastplotlib frame raised:\n" + traceback.format_exc()
 
