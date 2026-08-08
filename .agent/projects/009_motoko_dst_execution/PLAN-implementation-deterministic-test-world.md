@@ -498,6 +498,27 @@ not re-issued (D4)"*. **The second profile binds the same table at the same iden
 cascade now has two consumers and the anchors target names one. **A third profile extends the list
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
+**S27. TWO DECISIONS TAKEN IN ONE ITEM CAN PRODUCE A FINDING NEITHER PRODUCES ALONE — so when an
+item owns more than one decision, ask what the pair implies before reporting them separately.** Earned
+by WI-D18, and it is the first rule here about an interaction rather than a defect.
+
+The item owned two independent questions: **how the world represents a directory**, and **what the
+world uses as a path key**. Answered separately they are unremarkable — a kinded table, and raw strings
+with no normalisation. **Together they turn a silent state into an observable one.**
+
+`compose.ail:769` creates `"${ctx.workdir}/tmp"` and `:771` writes `"tmp/${name}.ail"` — absolute
+mkdir, relative write, which agree on disk whenever cwd is workdir and **never agree in a world keyed
+on strings.** Under the prefix-derived representation the created directory has no children, so it
+reads as **absent — indistinguishable from the `mkdirAll` never having been routed.** Under the kinded
+table it reads as an **empty directory**, which is a state no correct sequence produces. **Representing
+the empty directory is what makes the path-key defect visible.**
+
+**The handoff supplied both facts and did not put them together** — it measured the aliasing at
+`:769`/`:771` and it framed the empty directory as the thing prefix-derivation loses, in two different
+sections, each correct. **The rule is that a handoff or a report which enumerates decisions must also
+ask what they imply jointly**, because the joint implication is where a design either closes a failure
+mode or merely relocates it.
+
 **S26. AN ASSERTION THAT NAMES ITS SUBJECT POSITIONALLY CAN PASS WHILE READING THE WRONG SUBJECT —
 so EXTEND a shared fixture by APPENDING, never by inserting.** Earned by WI-D17, and it is a failure
 shape distinct from every other rule here.
@@ -3162,6 +3183,60 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D18, 2026-08-08 (~1h03m) — THE DIRECTORY SEAM, AND THE WORLD'S PATH KEY.**
+Verified at review: `Ports` **8 fields → 11** (`path_stat -> PathStat`, `dir_list -> DirListing`,
+`dir_make -> FileMutation`, all `! {FS}`), `IdentityBody` **9 constructors → 10**, `ExtPorts` **10
+fields, 10 pinned, sets identical**, classifier-2 set unchanged at `{env_get}`. **Nothing routed.**
+Green at review: `invariants`, `program_persistence`, `discovery`, `execution_program`,
+`world_state_probe`.
+
+**THE REPRESENTATION IS NEITHER DESIGN THE HANDOFF OFFERED, AND THE THIRD ONE REMOVES A FAILURE MODE
+RATHER THAN TRADING ONE.** `WorldState.files` is now **one kinded table** — `[{ path, node }]` with
+`FsNode = FsFile(string) | FsDir` (`ports.ail:338`, `:517`), verified. Prefix-derivation makes an empty
+directory unrepresentable (this project's counted shape, in the world model); a second `dirs` table
+lets `"a/b"` appear in both, which is `ADR:340-341` broken *inside* the world and the handoff's own
+third stop condition. **One table makes "this path is a file AND a directory" unrepresentable rather
+than forbidden by a rule someone must remember** — design note 1's discipline applied to the world's
+table. **Implicit parents are still derived**: `world_path_kind` is an explicit `FsDir` entry **OR** any
+entry beneath, and both halves are mutant-pinned.
+
+**`mkdirAll` MEDIATED, and D17's ground for deferring it expired the way D3's recording ground expired
+at D17.** D17 said a mediated `mkdirAll` *"would mutate a table nothing can read"*; `path_stat` and
+`dir_list` are that reader. **Only the leaf is recorded** — materialising ancestors would put one fact
+in an explicit entry and a derivation.
+
+**THE FINDING IS THE INTERACTION OF THE TWO DECISIONS, AND IT EARNED S27.** The path key is **raw
+strings, no normalisation**, written at `WorldState.files` (`ports.ail:326`) rather than in a report —
+lexical normalisation would fix `./tmp/x` and **not** `/w/tmp/x` against `tmp/x`, which is the pair
+that actually occurs, and relating those needs a cwd the world does not have. **Combined with the
+kinded table, `compose.ail:769`/`:771`'s absolute-mkdir/relative-write produces an observably EMPTY
+directory where prefix-derivation would have produced an absent one** — indistinguishable from the
+effect never having been routed. Verified: `world_state_probe.ail:510-531` reproduces it and pins both
+halves. **So my own observability measurement — "no compose session can observe a created-but-empty
+directory" — was already false, and the falsifier was the other fact my handoff supplied.**
+
+**THE ADAPTER PAIR ALREADY DISAGREED, AND MY HANDOFF FRAMED IT AS PROSPECTIVE.** `ambient_file` guarded
+on `fileExists`, **true for a directory**, then called `readFile` on it; `scripted_file` reported
+absent. **Two adapters one screen apart, two answers to one question about one input — D1's stop
+condition, present at HEAD.** Guard now `isFile` (`ports.ail:921`), verified. **Present but not
+reachable** — every caller passes a path it believes is a file — which is why nothing changed
+behaviour, and is the precise sense in which it was live.
+
+**Two gaps I take at face value only because they are named as gaps:** `ambient_dir_list` without the
+sort and the `session.ail` bridge's `present` derivation have **no site that exercises them**, so both
+are covered by comment alone — the state D16 left `ExtPorts.file_read`'s bridge in.
+
+**Counter at 74; the second is a green row measuring less than its own label.** Mutant 5 PASSED because
+the fixture's write order accidentally produced the sorted answer, so the row labelled SORTED pinned
+nothing — **S26's shape with the subject correct and the property wrong.** And **S17 was violated by
+this item**: `git checkout src/core/dst_interaction.ail` reverted its own work; caught, re-applied, and
+I verified the file is complete (10 constructors, `all_interaction_kinds` at 10, `DirMakeIdentity`
+present at all nine dependent sites).
+
+**ABI rows now FIFTEEN** (9 changed + 6 added) plus five added types. **Additions were a tenth of the
+tally at D16 and are 40% now** — Route B's surface work is additive. Still not cut; `ailang.toml`
+unchanged at 5.0 and `scripts/dst/fixtures/` untouched, both verified.
 
 **WI-D17, 2026-08-08 (~1h05m) — THE FILESYSTEM WRITE CLASS, AND THE REMOVE CLASS WITH IT.**
 Verified at review: `Ports` **6 fields → 8** (`file_write: (WorldState, string, string) -> FileMutation
