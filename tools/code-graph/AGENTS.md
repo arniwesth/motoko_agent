@@ -82,6 +82,51 @@ it from the current `extraction_status` and prints a `STALE:` banner when a
 query touches `layout`/`edges_agg` and the keys disagree. Rebuild rather than
 trust a bannered layout.
 
+## DST trace overlay (`activity`, `tool_modules`, traces, heat)
+
+The overlay attributes DST ledger-trace records to subject modules so dynamic
+questions ("which modules does DST actually exercise?") become answerable
+against the same store. Three generated artifacts, none committed:
+
+```
+.out/vocabulary.json              34 event-vocabulary rows, exported from AILANG
+.out/traces/<profile>/<seed>.jsonl  one run's returned ledger trace (overlay format v1)
+activity(seed, event_idx, record_key, subject_id, rule_kind)
+tool_modules(key, kind, module)   tool/extension -> module map
+```
+
+```bash
+# 1. export the vocabulary (needed by the validators; never grep the source for
+#    these counts — a test fixture at dst_event_vocabulary.ail:807 makes them wrong)
+ailang run --caps IO,FS --entry main scripts/dst/export_vocabulary.ail
+# 2. export one trace per seed (one profile + one seed per invocation, always)
+scripts/dst/run_export_trace.sh --seed 7
+# 3. build activity for ONE profile, then render and validate
+python3 tools/code-graph/overlay/build_activity.py --profile driver_only
+python3 tools/code-graph/overlay/render_heat.py --seed 7
+python3 tools/code-graph/overlay/validate_overlay.py
+python3 tools/code-graph/query/cgq.py q touched 7
+python3 tools/code-graph/query/cgq.py q divergence 7 11
+```
+
+`activity` is **per profile**: the schema has no profile or run column, so the
+same seed under two profiles collides on every key. One `activity.csv` covers one
+profile, and `build_activity.py --profile` is required, not optional. For the
+same reason `q divergence` answers the **two-seed** case only — the same seed
+across two code versions is the primary case and cannot be held by this schema.
+
+`rule_kind ∈ {fixed, payload_routed, correlated, unattributed}` records *how* a
+subject was derived, so views can weight by attribution quality without a fuzzy
+confidence number. Records are never dropped: an unmapped tool, extension or
+`ErrorEvent.source` yields an explicit `unattributed` row **and** a counted token
+in the build report. Treat a rising unattributed count as a curated map falling
+behind, not as noise.
+
+Freshness for `activity` is keyed to trace files, not to `extraction_status`, so
+queries touching it report a trace-file count in `meta` rather than an
+extraction-staleness banner. The heat renderer checks `layout` freshness itself
+and banners the canvas.
+
 ## Project-memory concept edges (`concept_edges`)
 
 `concept_edges` is a directed relation graph between `.agent` Markdown sections,

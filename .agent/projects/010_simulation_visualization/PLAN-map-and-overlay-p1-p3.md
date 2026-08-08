@@ -704,6 +704,35 @@ viewer is a **host-side program**. Consequences the plan enforces:
     rigid-vs-residual decomposition that explains them, and the rejected alternatives are in
     `NOTE-p1-stability-probe.md`.
 
+14. **The plan's "extension tools mechanically: registry name → module" resolves *ext ids*, not
+    *tool names*.** Found at 3.3 implementation. Extension-provided tool names are computed at
+    runtime — from config, from MCP discovery, from `all_tool_names(mappings)` — and only two
+    packages declare any statically (`motoko-ext-microrag` declares `["WriteFile"]`). So there is
+    no static tool-name → extension map to build, and none is built. What *is* mechanical is
+    `CompactionStageRecord.ext_id` → package node, which works (15/15 registry names resolve).
+    Two consequences, both handled rather than deferred: extension subjects resolve to the
+    **package node** (`packages/motoko-ext-mcp`, a real L1 `layout` row) rather than to one
+    arbitrary module inside it — we know *which extension* served, not which of its files; and
+    the mechanical spelling rule is checked against `layout`/`modules` rather than trusted,
+    because it is wrong for one package (`motoko_ext_scratchpad` → `packages/motoko_scratchpad`,
+    not `packages/motoko-ext-scratchpad`). An unresolvable registry name is reported, never
+    guessed.
+15. **Under the generated-corpus rig, ~18% of `activity` rows are legitimately unattributed —
+    and that is a property of the rig, not a defect in the table.** The DST generator invents
+    tool names (`T`, `Read`) and the exporter's harness extension has a synthetic id
+    (`ext_export`); no curated map can or should resolve those. The fixed half of each subject
+    set still attributes correctly, the unresolved half becomes an explicit `unattributed` row,
+    and every token is counted in the build report — which is exactly the fail-open design
+    working. Recorded here so a future reader does not read the number as rot in the curated
+    seed maps. The real-tool-name path is exercised by the unit tests; it will be exercised by
+    real traces when a profile that uses the native catalogue is wired up (Gap 7).
+16. **One more file beyond the blast-radius table**, on the same "record it, don't absorb it"
+    rule as Gap 11: `tools/code-graph/AGENTS.md` gained an overlay section. `activity`,
+    `tool_modules`, `vocabulary.json`, `traces/` and `heat/` are new generated artifacts in the
+    store with freshness semantics of their own (trace-keyed, not extraction-keyed); leaving them
+    out of the file agents read to learn what the store holds would defeat D8's "the viewer and
+    the agent consume the same tables".
+
 ## Suggested implementation order
 
 1. **P1 sequence**: fresh `--profile=all` extraction → 1.1 + 1.2 (one builder) → 1.3 validator →

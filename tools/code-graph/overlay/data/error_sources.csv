@@ -1,0 +1,17 @@
+# Curated map: ErrorEvent.source -> subject module slug (project 010, task 3.3).
+#
+# `ErrorEvent` is the one variant whose subject is ENTIRELY payload-determined
+# (NOTE row 26), so it needs this map and has no fixed fallback subject.
+#
+# WHY THIS IS A SEED AND NOT A CLOSED SET (plan Gap 6). Nothing in the repo
+# enumerates the legal values of `ErrorEvent.source`; a construction-site grep at
+# HEAD finds exactly two, and nothing guarantees that stays true. Unknown sources
+# fail open to `unattributed` and are COUNTED in the build report — if a third
+# value appears, the counter says so rather than the overlay quietly attributing
+# it to nobody. Asking 009 for a closed set is a vocabulary-side conversation
+# this project does not start: it is a read-only consumer.
+#
+# Verified by construction-site grep at HEAD (2026-08-08).
+source,module,evidence
+system_prompt,src/core/session,session.ail:2496 construction site
+agent_loop_v2,src/core/agent_loop_v2,phase_vocab.ail:1241 golden test names this source

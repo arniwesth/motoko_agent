@@ -406,6 +406,60 @@ FROM concept_edges
 WHERE relation = 'prerequisite' AND to_path LIKE {like}
 ORDER BY confidence DESC, prerequisite
 """, QueryFlags(concept_query=True)
+    if name == "touched":
+        seed = int(args[0])
+        # THE shared subject-total query. `overlay/render_heat.py` renders from
+        # this exact function rather than its own SQL, which is what makes the
+        # picture and the query incapable of disagreeing (ADR acceptance);
+        # `validate_overlay.py` then recomputes the totals independently and
+        # asserts equality. Shared source, independent check.
+        return f"""
+SELECT subject_id,
+       count() AS records,
+       countIf(rule_kind = 'fixed') AS fixed,
+       countIf(rule_kind = 'payload_routed') AS payload_routed,
+       countIf(rule_kind = 'correlated') AS correlated,
+       countIf(rule_kind = 'unattributed') AS unattributed
+FROM activity
+WHERE seed = {seed}
+GROUP BY subject_id
+ORDER BY records DESC, subject_id
+""", QueryFlags(activity_query=True)
+    if name == "divergence":
+        # SCOPE LIMIT, STATED DELIBERATELY: this answers the TWO-SEED case only.
+        # ADR D6 view 3 names the *same seed across two code versions* as the
+        # primary divergence case, and the D1 `activity` schema cannot hold it —
+        # it has no run-identity column, so two such runs collide on every key.
+        # The information exists at the trace layer (the D9 header carries the
+        # motoko commit) and is lost at this projection. That is plan Gap 10,
+        # resolved at P5 by either a run column on `activity` (a D1 amendment,
+        # argued then) or an anti-join over two trace stores — not papered over
+        # here.
+        a, b = int(args[0]), int(args[1])
+        return f"""
+SELECT 'first_divergence' AS kind,
+       concat('idx ', toString(idx), ': ', if(ark = '', '(absent)', ark),
+              ' vs ', if(brk = '', '(absent)', brk)) AS subject_id,
+       toInt64(0) AS a_count, toInt64(0) AS b_count, toInt64(idx) AS delta
+FROM (
+  SELECT event_idx AS idx,
+         anyIf(record_key, seed = {a}) AS ark,
+         anyIf(record_key, seed = {b}) AS brk
+  FROM activity WHERE seed IN ({a}, {b}) GROUP BY event_idx
+)
+WHERE ark != brk
+ORDER BY idx
+LIMIT 1
+UNION ALL
+SELECT 'subject_delta' AS kind, subject_id,
+       toInt64(countIf(seed = {a})) AS a_count,
+       toInt64(countIf(seed = {b})) AS b_count,
+       toInt64(countIf(seed = {a}) - countIf(seed = {b})) AS delta
+FROM activity WHERE seed IN ({a}, {b})
+GROUP BY subject_id
+HAVING a_count != b_count
+ORDER BY kind, abs(delta) DESC, subject_id
+""", QueryFlags(activity_query=True)
     if name in {"implements", "supersedes"}:
         like = sql_lit("%" + args[0] + "%")
         return f"""
