@@ -1,9 +1,14 @@
 module sunholo/motoko_ext_compose/author_tools
 
-import std/clock (now)
 import std/crypto (sha256Hex)
 import std/bytes (toString)
-import std/fs (readFile, listDir, fileExists, isFile, isDir)
+-- WI-D20. `std/fs` AND `std/clock` ARE GONE; `std/process` REMAINS, and the
+-- asymmetry is the finding rather than an unfinished edit. Every read here now
+-- leaves through `ExtPorts` — `path_stat` for the three kind guards, `file_read`
+-- for content, `dir_list` for entries, `clock_now` for the ledger stamp. The one
+-- effect that stayed ambient is `grep_impl`'s `exec("rg", …)`, for the reason
+-- given at that function: `ExtPorts.proc_exec` fronts a dispatcher over MOTOKO'S
+-- OWN tool names and `rg` is not one of them, exactly as `ailang` is not.
 import std/json (Json, decode, get, asString, asNumber, encode, jo, kv, js, jb, jnum)
 import std/process (exec)
 import std/result (Ok, Err)
@@ -11,6 +16,11 @@ import std/option (Option, Some, None)
 import std/string (trim, split, contains, startsWith, substring, find)
 
 import pkg/sunholo/motoko_ext_compose/ledger (LedgerEntry)
+-- `ExtPathKind`'s three constructors are imported by name because every guard
+-- below matches them EXHAUSTIVELY rather than defaulting — `session.ext_ports_of`'s
+-- reason at the other end of the same seam: a fourth constructor must be a
+-- compile error here, not an arm that silently absorbs it.
+import pkg/sunholo/motoko_ext_abi/types (ExtPorts, ExtWorld, ExtPathFile, ExtPathDir, ExtPathMissing)
 
 export type AuthorToolResult = {
   ok: bool,
@@ -21,7 +31,13 @@ export type AuthorToolResult = {
   excerpt: string,
   payload_json: string,
   error: string,
-  ledger_entry: Option[LedgerEntry]
+  ledger_entry: Option[LedgerEntry],
+  -- WI-D20. The successor rides on the RESULT rather than on a wrapper record,
+  -- because every one of the five `*_impl` functions has an error path built by
+  -- `mk_err` and a success path built by `mk_ok`, and a wrapper would let one of
+  -- those ten returns forget the world while the other nine carried it. Here the
+  -- constructor cannot be called without supplying one.
+  next_state: ExtWorld
 }
 
 func cap_text(s: string, max_bytes: int) -> { text: string, truncated: bool } {
@@ -85,24 +101,28 @@ func first_matching_deny(path: string, globs: [string]) -> string {
   }
 }
 
-func mk_err(tool: string, path: string, err: string) -> AuthorToolResult {
+-- `w` rather than nothing: an error path still has to return the world it was
+-- handed. Several of these are reached AFTER a `path_stat` has already run, so
+-- the world at the error is not the world at entry.
+func mk_err(w: ExtWorld, tool: string, path: string, err: string) -> AuthorToolResult {
   let payload = encode(jo([kv("tool", js(tool)), kv("ok", jb(false)), kv("error", js(err))]));
-  { ok: false, tool: tool, path: path, bytes: 0, truncated: false, excerpt: "", payload_json: payload, error: err, ledger_entry: None }
+  { ok: false, tool: tool, path: path, bytes: 0, truncated: false, excerpt: "", payload_json: payload, error: err, ledger_entry: None, next_state: w }
 }
 
-func mk_ok(tool: string, path: string, raw_content: string, payload: Json, max_bytes: int) -> AuthorToolResult ! {Clock} {
+func mk_ok(p: ExtPorts, w: ExtWorld, tool: string, path: string, raw_content: string, payload: Json, max_bytes: int) -> AuthorToolResult ! {Clock} {
   let capped = cap_text(raw_content, max_bytes);
   let payload_json = encode(payload);
+  let reading = p.clock_now(w);
   let entry: LedgerEntry = {
     tool: tool,
     path: path,
     args_hash: sha256Hex("${tool}|${path}"),
     content_excerpt: capped.text,
-    ts: now(),
+    ts: reading.now_ms,
     truncated: capped.truncated,
     bytes: _str_len(raw_content)
   };
-  { ok: true, tool: tool, path: path, bytes: _str_len(raw_content), truncated: capped.truncated, excerpt: capped.text, payload_json: payload_json, error: "", ledger_entry: Some(entry) }
+  { ok: true, tool: tool, path: path, bytes: _str_len(raw_content), truncated: capped.truncated, excerpt: capped.text, payload_json: payload_json, error: "", ledger_entry: Some(entry), next_state: reading.next_state }
 }
 
 func path_guard(path: string, globs: [string]) -> string {
@@ -136,10 +156,23 @@ func json_int_field(obj: Json, key: string, fallback: int) -> int {
   }
 }
 
-func normalize_type(path: string) -> string ! {FS} {
-  if isDir(path) then "dir"
-  else if isFile(path) then "file"
-  else "missing"
+-- WI-D20. TWO AMBIENT CALLS COLLAPSE TO ONE `path_stat`, and the labels are
+-- unchanged: this read `isDir(path) ? "dir" : isFile(path) ? "file" : "missing"`,
+-- which is `ports.ambient_path_stat`'s body and `path_kind_label`'s vocabulary
+-- arrived at independently. The seam already answers exactly this question.
+--
+-- IT IS ALSO A REPAIR, not only a mediation. Two syscalls can disagree — a path
+-- that is a directory at `isDir` and gone by `isFile` reports "missing" — where
+-- one `path_stat` is a single observation. The world has no races, so this is
+-- invisible in a deterministic run and real on a live filesystem.
+func normalize_type(p: ExtPorts, w: ExtWorld, path: string) -> { kind: string, next_state: ExtWorld } ! {FS} {
+  let stat = p.path_stat(w, path);
+  let k = match stat.kind {
+    ExtPathDir     => "dir",
+    ExtPathFile    => "file",
+    ExtPathMissing => "missing"
+  };
+  { kind: k, next_state: stat.next_state }
 }
 
 func list_dir_payload(path: string, entries: [string]) -> Json {
@@ -153,16 +186,31 @@ func list_dir_payload(path: string, entries: [string]) -> Json {
   ])
 }
 
-func read_file_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+-- WI-D20. `path_stat` FOR THE GUARD, `file_read` FOR THE CONTENT, and the split
+-- is forced by what this function distinguishes. It answers "not_found" and
+-- "not_a_file" DIFFERENTLY, which is three-valued, and `ExtFileRead.present` is
+-- two-valued — routing the guard through `file_read` alone would collapse a
+-- directory onto "not_found" and make the second arm dead code. That is
+-- WI-D19 §4's argument reaching a site that already branches three ways, so it
+-- is measured here rather than assumed: `fileExists` is TRUE for a directory
+-- (verified against std/fs), so today's "not_a_file" arm is live and the routed
+-- version keeps it live.
+func read_file_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
   let path = json_string_field(args, "path", "");
   let guard_err = path_guard(path, globs);
-  if guard_err != "" then mk_err("read_file", path, guard_err)
-  else if not fileExists(path) then mk_err("read_file", path, "not_found")
-  else if not isFile(path) then mk_err("read_file", path, "not_a_file")
+  if guard_err != "" then mk_err(w, "read_file", path, guard_err)
   else {
-    let content = readFile(path);
+    let stat = p.path_stat(w, path);
+    match stat.kind {
+      ExtPathMissing => mk_err(stat.next_state, "read_file", path, "not_found"),
+      ExtPathDir     => mk_err(stat.next_state, "read_file", path, "not_a_file"),
+      ExtPathFile    => {
+    let read = p.file_read(stat.next_state, path);
+    let content = read.content;
     let capped = cap_text(content, max_bytes);
     mk_ok(
+      p,
+      read.next_state,
       "read_file",
       path,
       content,
@@ -178,31 +226,63 @@ func read_file_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolRe
       ]),
       max_bytes
     )
+      }
+    }
   }
 }
 
-func list_dir_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+-- `path_stat` guards, `dir_list` lists — the same two-seam split `read_file_impl`
+-- needs, and for the same three-valued reason: "not_found" and "not_a_directory"
+-- are different answers and `ExtDirListing.present` is one bit.
+--
+-- `listing.entries` IS TAKEN FROM THE SEAM AND NOT RE-DERIVED. `present` is
+-- forwarded by `ext_ports_of` rather than computed from the entry count, for the
+-- reason stated there — an EXISTING EMPTY directory and an ABSENT one both list
+-- nothing — and this is the caller that would have made the difference visible.
+func list_dir_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
   let path0 = json_string_field(args, "path", ".");
   let path = if trim(path0) == "" then "." else path0;
   let guard_err = path_guard(path, globs);
-  if guard_err != "" then mk_err("list_dir", path, guard_err)
-  else if not fileExists(path) then mk_err("list_dir", path, "not_found")
-  else if not isDir(path) then mk_err("list_dir", path, "not_a_directory")
+  if guard_err != "" then mk_err(w, "list_dir", path, guard_err)
   else {
-    let entries = listDir(path);
-    let text = show(entries);
-    mk_ok("list_dir", path, text, list_dir_payload(path, entries), max_bytes)
+    let stat = p.path_stat(w, path);
+    match stat.kind {
+      ExtPathMissing => mk_err(stat.next_state, "list_dir", path, "not_found"),
+      ExtPathFile    => mk_err(stat.next_state, "list_dir", path, "not_a_directory"),
+      ExtPathDir     => {
+        let listing = p.dir_list(stat.next_state, path);
+        let text = show(listing.entries);
+        mk_ok(p, listing.next_state, "list_dir", path, text, list_dir_payload(path, listing.entries), max_bytes)
+      }
+    }
   }
 }
 
-func file_exists_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+-- WI-D20. `fileExists` AND `normalize_type` WERE TWO SEPARATE OBSERVATIONS AND
+-- ARE NOW ONE, and the equivalence is MEASURED rather than assumed because this
+-- is the site where getting it wrong is silent. `found` was `fileExists(path)`;
+-- it is now `kind != "missing"`. Those agree only if `fileExists` is true for a
+-- DIRECTORY, which was checked against std/fs directly:
+--
+--   dir : exists=true  isDir=true  isFile=false
+--   file: exists=true  isDir=false isFile=true
+--   gone: exists=false isDir=false isFile=false
+--
+-- so `exists` is exactly `not missing` on all three inputs and the payload this
+-- tool emits is byte-identical. Had `fileExists` been false for a directory the
+-- old code would have reported `exists=false type=dir` — self-contradictory, and
+-- the collapse would have been a behaviour change wearing a refactor's clothes.
+func file_exists_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
   let path = json_string_field(args, "path", "");
   let guard_err = path_guard(path, globs);
-  if guard_err != "" then mk_err("file_exists", path, guard_err)
+  if guard_err != "" then mk_err(w, "file_exists", path, guard_err)
   else {
-    let found = fileExists(path);
-    let kind = normalize_type(path);
+    let typed = normalize_type(p, w, path);
+    let kind = typed.kind;
+    let found = kind != "missing";
     mk_ok(
+      p,
+      typed.next_state,
       "file_exists",
       path,
       "exists=${show(found)} type=${kind}",
@@ -220,14 +300,26 @@ func file_exists_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorTool
   }
 }
 
-func stat_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
+-- The size read is CONDITIONAL on the kind and stays that way. `p.file_read`
+-- lifted out of the `if` would type-check and would issue a read against every
+-- directory and every missing path this tool is asked about — an interaction the
+-- recorder would log for a site that previously performed nothing.
+func stat_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Clock} {
   let path = json_string_field(args, "path", "");
   let guard_err = path_guard(path, globs);
-  if guard_err != "" then mk_err("stat", path, guard_err)
+  if guard_err != "" then mk_err(w, "stat", path, guard_err)
   else {
-    let kind = normalize_type(path);
-    let size = if kind == "file" then _str_len(readFile(path)) else 0;
+    let typed = normalize_type(p, w, path);
+    let kind = typed.kind;
+    let sized =
+      if kind == "file" then {
+        let read = p.file_read(typed.next_state, path);
+        { size: _str_len(read.content), next_state: read.next_state }
+      } else { size: 0, next_state: typed.next_state };
+    let size = sized.size;
     mk_ok(
+      p,
+      sized.next_state,
       "stat",
       path,
       "size=${show(size)} type=${kind}",
@@ -246,11 +338,20 @@ func stat_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult 
   }
 }
 
-func grep_fallback_scan(path: string, pattern: string, max_matches: int) -> [string] ! {FS} {
-  if not fileExists(path) || not isFile(path) then []
-  else {
-    let lines = split(readFile(path), "\n");
-    grep_scan_lines(path, pattern, lines, 1, max_matches)
+-- The guard was `not fileExists(path) || not isFile(path)`, which is exactly
+-- "is this a file" written twice; one `path_stat` answers it once. The two
+-- non-file arms return `[]` AND the stat's successor — returning `w` there
+-- type-checks and silently discards the observation.
+func grep_fallback_scan(p: ExtPorts, w: ExtWorld, path: string, pattern: string, max_matches: int) -> { lines: [string], next_state: ExtWorld } ! {FS} {
+  let stat = p.path_stat(w, path);
+  match stat.kind {
+    ExtPathMissing => { lines: [], next_state: stat.next_state },
+    ExtPathDir     => { lines: [], next_state: stat.next_state },
+    ExtPathFile    => {
+      let read = p.file_read(stat.next_state, path);
+      let lines = split(read.content, "\n");
+      { lines: grep_scan_lines(path, pattern, lines, 1, max_matches), next_state: read.next_state }
+    }
   }
 }
 
@@ -273,22 +374,54 @@ func join_lines(xs: [string]) -> string {
   }
 }
 
-func grep_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Process, Clock} {
+-- WI-D20. THE ONE FUNCTION IN THIS MODULE THAT STAYS PARTLY AMBIENT, and the
+-- part that stays is `exec("rg", …)`. THIS IS THE SAME SEAM DEFECT WI-D19 §2
+-- FOUND AT `ailang`, AND FINDING IT AT A SECOND, UNRELATED BINARY IS WHAT MAKES
+-- IT A PROPERTY OF THE SEAM RATHER THAN A PROPERTY OF COMPOSE.
+--
+-- `ExtPorts.proc_exec` fronts `Ports.tool_exec`, whose live adapter is
+-- `tool_runtime.run_native_call` — an if-chain over `ReadFile`, `Search`,
+-- `WriteFile`, `EditFile`, `BashExec`, `RunTests` and a final `else` that
+-- returns "<tool> requires extension capability and is not available in native
+-- runtime". `rg` is not in that list, so `proc_exec(w, "rg", …)` would not run
+-- ripgrep; it would return a tool-error blob. Re-verified at HEAD for this item
+-- rather than taken from WI-D19's note.
+--
+-- The shape fails independently, as it does at `ailang`: this site needs
+-- `out.stdout` as BYTES (`toString(out.stdout)`) and branches on `Ok`/`Err` to
+-- pick the fallback scan, where `ExtProcOutcome` carries one rendered `output`
+-- string and no status. An `Err` and an empty result would become the same
+-- value, and the fallback would fire on a successful search that matched
+-- nothing.
+--
+-- WHAT DID ROUTE HERE: both `grep_fallback_scan` calls, which are the FS half of
+-- this function, and `mk_ok`'s clock. The world therefore records the fallback
+-- reads and not the subprocess, which is an honest partial rather than a
+-- silently complete one.
+func grep_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Process, Clock} {
   let pattern = json_string_field(args, "pattern", "");
   let path_glob0 = json_string_field(args, "path_glob", ".");
   let path_glob = if trim(path_glob0) == "" then "." else path_glob0;
   let max_matches = json_int_field(args, "max_matches", 100);
-  if trim(pattern) == "" then mk_err("grep", path_glob, "missing_pattern")
+  if trim(pattern) == "" then mk_err(w, "grep", path_glob, "missing_pattern")
   else {
     let guard_err = path_guard(path_glob, globs);
-    if guard_err != "" then mk_err("grep", path_glob, guard_err)
+    if guard_err != "" then mk_err(w, "grep", path_glob, guard_err)
     else {
       match exec("rg", ["-n", "--no-heading", "-F", pattern, path_glob]) {
         Ok(out) => {
           let text = toString(out.stdout);
           let limited = cap_text(text, max_bytes);
-          let raw = if text == "" then join_lines(grep_fallback_scan(path_glob, pattern, max_matches)) else text;
+          -- The scan runs ONLY when ripgrep returned nothing, and the world it
+          -- returns is carried either way — `w` on the non-scanning branch is the
+          -- world unchanged, which is true, because nothing was observed.
+          let scanned =
+            if text == "" then grep_fallback_scan(p, w, path_glob, pattern, max_matches)
+            else { lines: [], next_state: w };
+          let raw = if text == "" then join_lines(scanned.lines) else text;
           mk_ok(
+            p,
+            scanned.next_state,
             "grep",
             path_glob,
             raw,
@@ -305,8 +438,11 @@ func grep_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult 
           )
         },
         Err(_) => {
-          let fallback = join_lines(grep_fallback_scan(path_glob, pattern, max_matches));
+          let scanned = grep_fallback_scan(p, w, path_glob, pattern, max_matches);
+          let fallback = join_lines(scanned.lines);
           mk_ok(
+            p,
+            scanned.next_state,
             "grep",
             path_glob,
             fallback,
@@ -327,23 +463,23 @@ func grep_impl(args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult 
   }
 }
 
-export func dispatch_author_tool_with_globs(raw_tool_call_json: string, max_bytes: int, deny_globs: [string]) -> AuthorToolResult ! {FS, Process, Clock} {
+export func dispatch_author_tool_with_globs(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, max_bytes: int, deny_globs: [string]) -> AuthorToolResult ! {FS, Process, Clock} {
   let globs = configured_deny_globs(deny_globs);
   match decode(raw_tool_call_json) {
-    Err(_) => mk_err("", "", "malformed_tool_call"),
+    Err(_) => mk_err(w, "", "", "malformed_tool_call"),
     Ok(obj) => {
       let tool = json_string_field(obj, "tool", "");
       let args = match get(obj, "args") { Some(v) => v, None => jo([]) };
-      if tool == "read_file" then read_file_impl(args, max_bytes, globs)
-      else if tool == "grep" then grep_impl(args, max_bytes, globs)
-      else if tool == "list_dir" then list_dir_impl(args, max_bytes, globs)
-      else if tool == "file_exists" then file_exists_impl(args, max_bytes, globs)
-      else if tool == "stat" then stat_impl(args, max_bytes, globs)
-      else mk_err(tool, "", "unsupported_tool")
+      if tool == "read_file" then read_file_impl(p, w, args, max_bytes, globs)
+      else if tool == "grep" then grep_impl(p, w, args, max_bytes, globs)
+      else if tool == "list_dir" then list_dir_impl(p, w, args, max_bytes, globs)
+      else if tool == "file_exists" then file_exists_impl(p, w, args, max_bytes, globs)
+      else if tool == "stat" then stat_impl(p, w, args, max_bytes, globs)
+      else mk_err(w, tool, "", "unsupported_tool")
     }
   }
 }
 
-export func dispatch_author_tool(raw_tool_call_json: string, max_bytes: int) -> AuthorToolResult ! {FS, Process, Clock} {
-  dispatch_author_tool_with_globs(raw_tool_call_json, max_bytes, [])
+export func dispatch_author_tool(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, max_bytes: int) -> AuthorToolResult ! {FS, Process, Clock} {
+  dispatch_author_tool_with_globs(p, w, raw_tool_call_json, max_bytes, [])
 }

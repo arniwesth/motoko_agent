@@ -732,24 +732,38 @@ export type Ports = {
   -- that WI-D17's ground for declining it was conditional on there being no
   -- directory seam — which the two fields above now are.
   --
-  -- The remaining argument for declining was an OBSERVABILITY MEASUREMENT: all
-  -- six of compose's `mkdirAll` sites (`store.ail:21,39,48`,
-  -- `compose.ail:502,769`, `authoring/dispatcher.ail:216`) are immediately
-  -- followed by a `writeFile` into that directory with no intervening read, so no
-  -- compose session TODAY can observe a created-but-empty directory. That is
-  -- true, and it is not a reason to leave the effect ambient, for two reasons
+  -- The remaining argument for declining was an OBSERVABILITY MEASUREMENT, and
+  -- IT IS NOW HISTORY RATHER THAN A DESCRIPTION OF HEAD — kept in the past tense
+  -- rather than deleted, per plan rule S15, because it is the argument that
+  -- decided this field. WI-D19 routed one of the six sites and WI-D20 routed the
+  -- other five, so **compose has no ambient `mkdirAll` site left at all** and a
+  -- reader who went looking for the six would find none.
+  --
+  -- WHAT IT SAID, and it was correct when written at WI-D18: all six of compose's
+  -- `mkdirAll` sites (`store.ail:21,39,48`, `compose.ail:502,769`,
+  -- `authoring/dispatcher.ail:216`) were immediately followed by a `writeFile`
+  -- into that directory with no intervening read, so no compose session then
+  -- could observe a created-but-empty directory. That was true, and it was not a
+  -- reason to leave the effect ambient, for two reasons
   -- that are both about what the measurement is conditional on:
   --
-  --   1. It is a claim about compose's CURRENT text, falsified by any future site
-  --      that creates a directory and lists it before writing. Mediating the
+  --   1. It was a claim about compose's CURRENT text, falsifiable by any future
+  --      site that creates a directory and lists it before writing. Mediating the
   --      effect costs one adapter; the alternative is a guard that has to keep
-  --      being true.
-  --   2. It is false the moment the path key bites. `compose.ail:769` creates
-  --      `"${ctx.workdir}/tmp"` and `:771` writes `"tmp/${name}.ail"`, and in a
-  --      world keyed on raw strings those are two different directories — so the
-  --      created one IS observed empty, by the very next `list_dir`. The
-  --      measurement holds on a real filesystem and fails in the world, and the
-  --      world is what this seam is for.
+  --      being true. **BOTH HALVES OF THIS WERE BORNE OUT.** `discovery_dst`'s
+  --      WI-D19 routed hook creates `probe_empty` and lists it without writing
+  --      into it, which is exactly the future site named here; and WI-D20's
+  --      `routing_tool_handle` lists a directory to DERIVE the name it then
+  --      writes, so the listing is load-bearing rather than incidental.
+  --   2. It was false the moment the path key bit, and it bit twice.
+  --      `compose.ail:769` created `"${ctx.workdir}/tmp"` while `:771` wrote
+  --      `"tmp/${name}.ail"`, and in a world keyed on raw strings those are two
+  --      different directories — so the created one IS observed empty, by the very
+  --      next `list_dir`. The measurement held on a real filesystem and failed in
+  --      the world, and the world is what this seam is for. WI-D19 fixed that
+  --      site and WI-D20 fixed the identical one at `one_attempt`; the create is
+  --      what moved, in both cases because `compose_module_header` pins the
+  --      write's spelling.
   --
   -- Leaving it ambient while `file_write` and `file_remove` are mediated would
   -- also put one fact in two homes on all six sites: the directory the run

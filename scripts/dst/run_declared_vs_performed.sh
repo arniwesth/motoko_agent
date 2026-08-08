@@ -224,11 +224,13 @@ check_subject compose_intercept_noninline "dvp-intercept-witness" \
 # Without it, an edit could point one arm at a compose-free registry and only a
 # reader would notice.
 arms_using_shared_ctor=$(grep -c 'compose_then_witness(' "$PROBE" || true)
-# 1 definition + 6 call sites: four subjects, the inline limit arm, and WI-D19's
-# reachability arm. It went from 5 to 6 when D19 added `compose_intercept_threading`,
-# which is the guard doing its job — a new arm has to be admitted here on purpose.
-if [ "$arms_using_shared_ctor" -eq 7 ]; then
-  ok "all six dispatching arms build their registry from compose_then_witness — the join holds"
+# 1 definition + 7 call sites: four subjects, the inline limit arm, WI-D19's
+# reachability arm and WI-D20's. It went 5 -> 6 when D19 added
+# `compose_intercept_threading` and 6 -> 7 when D20 added
+# `compose_tool_handle_threading`, which is the guard doing its job — a new arm
+# has to be admitted here on purpose.
+if [ "$arms_using_shared_ctor" -eq 8 ]; then
+  ok "all seven dispatching arms build their registry from compose_then_witness — the join holds"
 else
   bad "expected 7 mentions of compose_then_witness (1 definition + 6 arms), found $arms_using_shared_ctor — an arm may be pointed at a registry compose_pre_step does not certify"
 fi
@@ -376,6 +378,40 @@ elif echo "$out" | grep -q "effect 'FS' requires capability"; then
   bad "compose_intercept_inline still dies on FS — a site WI-D19 claims to have routed is still ambient, and the routing is partial in a way the compiler will not report"
 else
   bad "compose_intercept_inline died, but not on FS — the row establishes nothing: $(echo "$out" | grep -E '^Error' | head -1)"
+fi
+
+echo ""
+echo "-- WI-D20: the on_tool_handle spine, asserted separately (S24) --"
+
+# WHY THIS EXPECTS TWO CLOCKS AND NOT SEVENTEEN SEAMS. `on_tool_handle` reaches
+# its filesystem sites only THROUGH A MODEL CALL — `one_attempt` calls
+# `callStreamResult`, which is ambient AI from `ai_compat` and not
+# `ExtPorts.ai_step`, so `trace_ports` cannot stub it and the author returns
+# nothing. What remains reachable in-process is the THREADING SPINE, and that is
+# what this row pins: one `clock_now` at `handle_compose_tool`'s entry and one at
+# the exhausted `run_attempts` (compose_cfg sets max_attempts: 1).
+#
+# IT PINS TWO LINKS AND NOT THREE, and the difference was MEASURED rather than
+# assumed. `on_tool_handle` reverting to `next_state: ctx.world` empties this
+# string; `handle_compose_tool` passing its own `w` instead of
+# `started.next_state` shortens it to one clock. But `run_attempts` recursing on
+# `w` rather than `w2` leaves it UNCHANGED — without a model `one_attempt` never
+# reaches a routed seam, so the two worlds are identical and the row cannot tell
+# them apart. See the probe for why no in-process fixture separates them.
+#
+# The full seventeen-site chain is graded where a model exists; what grades the
+# DRIVER's half is discovery_dst's batch_handle_scenario.
+D20_EXPECT='clock_now;clock_now;'
+d20_out=$(run_arm compose_tool_handle_threading "IO,AI,Net,SharedMem,Clock,Stream,Trace,Rand,Env,FS,Process" || true)
+d20_got=$(printf '%s\n' "$d20_out" | sed -n 's/^declared_vs_performed\[compose_tool_handle_threading\] REACHED COMPLETION witness=//p')
+if [ "$d20_got" = "$D20_EXPECT" ]; then
+  ok "on_tool_handle threaded its successor out of handle_compose_tool and back through the hook — two links, and the probe names the third one it CANNOT pin: $d20_got"
+elif [ -z "$d20_got" ]; then
+  bad "the on_tool_handle reachability arm produced no witness at all — the hook did not complete: $(printf '%s\n' "$d20_out" | grep -E '^Error' | head -1)"
+elif [ "$d20_got" = ";" ]; then
+  bad "the hook returned an EMPTY world token — the successor was dropped somewhere between handle_compose_tool and on_tool_handle (\`next_state: ctx.world\`), and it compiles clean"
+else
+  bad "the on_tool_handle spine changed: expected '$D20_EXPECT' got '$d20_got' — a SHORTER string means a wrapper record or the run_attempts recursion returned the world it was handed instead of the one it produced"
 fi
 
 echo ""

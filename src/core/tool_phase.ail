@@ -37,6 +37,10 @@ import src/core/dst_fault_catalogue (
   fault_class_tool_deadline_exceeded
 )
 import src/core/tool_contract (ToolResultEnvelope)
+-- WI-D20. The world token's codec, imported HERE because `on_tool_handle` is the
+-- second hook slot to perform world-threading effects and this is the site that
+-- both feeds it a world and receives its successor. See `execute_allowed_tool_call`.
+import src/core/ext_world (world_to_token, token_to_world)
 import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
 import src/core/tool_runtime (backend_for_v2)
 import src/core/types (ToolBackend)
@@ -331,8 +335,36 @@ export func execute_allowed_tool_call(
     let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
     { msg: handled_tool_message(call.id, result_env), next_state: world, emitted: handled_event :: scratch }
   } else {
-    let handle_decision = dispatch_tool_handle(rt, ctx, envelope).decision;
-    match handle_decision {
+    -- WI-D20. THE `on_tool_handle` SUCCESSOR, IN BOTH DIRECTIONS, AND THE TWO
+    -- HALVES ARE INDEPENDENT DEFECTS THAT ONLY BECOME VISIBLE TOGETHER.
+    --
+    -- WRITE SIDE: this line read `dispatch_tool_handle(rt, ctx, envelope).decision`
+    -- and every arm below returned `next_state: world`. The `.decision`
+    -- projection discarded the successor at the point of use, so unlike WI-D19's
+    -- intercept — which carried it on one arm of four — this slot carried it on
+    -- NONE. `first_handle` in `ext/runtime.ail` threads correctly and has since
+    -- WI-B2b; the drop was entirely here, one call frame above it.
+    --
+    -- READ SIDE, AND THIS IS THE HALF THAT MAKES THE OBVIOUS FIX WRONG: `ctx` is
+    -- built ONCE per batch at `session.ail:2307` and passed unchanged through
+    -- `dispatch_tool_entries_with_builtin`'s fold, while `world` advances per
+    -- entry. From the second tool call in a batch onward `ctx.world` is the
+    -- BATCH-START world. Writing `token_to_world(handled.next_state)` back
+    -- without re-seating would therefore hand the loop a world rewound past
+    -- everything the earlier entries did — a REGRESSION written by the very edit
+    -- that repairs the drop, and it type-checks exactly as readily.
+    --
+    -- So the world is re-seated from the live `world` on the way in. `world` is
+    -- this function's parameter and the fold's accumulator; `ctx.world` is a
+    -- snapshot. Where they disagree the parameter is right by construction.
+    --
+    -- WHY NOTHING SAW EITHER HALF: no `on_tool_handle` binding in this tree
+    -- performed a world-threading effect until WI-D20 routed compose's, and
+    -- under that condition all three answers — drop, re-seat, rewind — produce
+    -- identical worlds. WI-D19 §3.2's argument, one slot over.
+    let handled = dispatch_tool_handle(rt, { ctx | world: world_to_token(world) }, envelope);
+    let handle_world = token_to_world(handled.next_state);
+    match handled.decision {
       Handled(result_env) => {
         let handled_event = ExtToolHandled({
           step: step_idx,
@@ -343,7 +375,7 @@ export func execute_allowed_tool_call(
         });
         let _ = emit(handled_event);
         let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
-        { msg: handled_tool_message(call.id, result_env), next_state: world, emitted: handled_event :: scratch }
+        { msg: handled_tool_message(call.id, result_env), next_state: handle_world, emitted: handled_event :: scratch }
       },
       Delegate => {
         let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
@@ -356,7 +388,12 @@ export func execute_allowed_tool_call(
               id: call.id
             });
             let _ = emit(deferred_event);
-            { msg: delegated_deferred_message(call), next_state: world, emitted: [deferred_event] }
+            -- `handle_world`, not `world`. A DELEGATING hook still ran — it may
+            -- have performed effects before deciding it had nothing to offer, and
+            -- `first_handle`'s own WI-B2b comment says so at the other end of the
+            -- same seam. Only a hook that was never invoked passes the world
+            -- through untouched, and `first_handle` already handles that case.
+            { msg: delegated_deferred_message(call), next_state: handle_world, emitted: [deferred_event] }
           },
           Native => {
             let start_event = V2ToolDispatchStart({
@@ -370,7 +407,10 @@ export func execute_allowed_tool_call(
             -- typed contract now carries the request, the deadline and a
             -- discriminated result. The deadline budget is read through the ENV
             -- class, so the world configures it rather than a constant.
-            let started = ports.clock_now(world);
+            -- `handle_world`, not `world`: the delegating hook ran before this
+            -- native dispatch, so starting the clock from `world` would discard
+            -- whatever it did and then overwrite it with this call's successor.
+            let started = ports.clock_now(handle_world);
             let budget = ports.env_get(started.next_state, "MOTOKO_TOOL_TIMEOUT_MS", "0");
             let invocation: ToolInvocation = {
               call: tool_call_to_envelope(call),

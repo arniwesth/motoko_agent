@@ -41,8 +41,8 @@ check() {
 
 echo "attribution anchors:"
 check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"
-check src/core/tool_phase.ail 313 'is_scratchpad_tool_name' "the mixed guard"
-check src/core/tool_phase.ail 314 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
+check src/core/tool_phase.ail 317 'is_scratchpad_tool_name' "the mixed guard"
+check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
 # WI-D16 RE-BASELINED the five session.ail anchors 881/1126/1232/2677/2787 ->
 # 911/1160/1266/2711/2821, WI-D17 RE-BASELINED THEM AGAIN to
 # 931/1185/1291/2736/2846, and WI-D18 A THIRD TIME to 965/1224/1330/2775/2885 —
@@ -64,6 +64,50 @@ check src/core/tool_phase.ail 314 'exec_scratchpad_cell_ws' "the call attributed
 # drift visible at all — but an item that plans for Route B should price it, and
 # from WI-D17 onward the handoffs do.
 #
+# WI-D20 RE-BASELINED THE THREE tool_phase.ail ANCHORS, 313/314/373 ->
+# 317/318/413, AND IT IS THE FIRST RE-BASELINE THAT IS NOT A ROUTE B SURFACE
+# ITEM — so it is the exception the law above did not predict rather than another
+# instance of it. WI-D19 showed a routing item can touch a driver file and NOT
+# cascade, by making every edit line-count-neutral. This item could not: the
+# `on_tool_handle` successor fix needs `src/core/ext_world`'s codec inside
+# `tool_phase.ail`, and an IMPORT can only go above the anchors. Holding them
+# would have meant compressing an unrelated import block to buy back four lines,
+# which is the cosmetic edit `ext/runtime.ail:24` already had to make once; twice
+# is a habit, and the anchors are an instrument while the dropped successor is a
+# defect. Re-baselined deliberately, with the reason here.
+#
+# TWO OF THE THREE ARE PURE OFFSET DRIFT and were compared to `git show HEAD:`
+# character by character: `is_scratchpad_tool_name` (313->317) and
+# `exec_scratchpad_cell_ws` (314->318) are byte-identical, so no site changed
+# identity, routing or attribution.
+#
+# THE THIRD CHANGED, AND IT IS RECORDED AS A CHANGE RATHER THAN AS DRIFT.
+# `tool_phase.ail:373` read `ports.clock_now(world)`; :413 reads
+# `ports.clock_now(handle_world)`. It is the same site, the same effect and the
+# same routing — what moved is WHICH world it starts from, because a delegating
+# `on_tool_handle` may now have advanced it. The anchor still checks `clock_now`
+# and the attribution row's note says so.
+#
+# AND THE RE-BASELINE HAS NINE CONSUMER SITES, NOT SIX. WI-D20 updated six,
+# believed it was done, and `make dst` found the other three — the "discovered
+# site" fixtures in `scripts/dst/driver_only_dst.ail:75`,
+# `driver_plus_no_ops_dst.ail:110` and `profile_definition_dst.ail:111`, which
+# each carry their own literal copy of the attributed Process site so that the
+# unaccounted-site rule has something to reject. They are invisible to a grep of
+# `src/core/` and to a grep of the attribution table, which is how they were
+# missed. The full set a moved anchor touches:
+#
+#   1. this file                                   (the check itself)
+#   2. src/core/dst_attribution_table.ail          (the row + 3 test literals)
+#   3. scripts/dst/attribution_table_dst.ail       (2 literals)
+#   4. src/core/dst_driver_only.ail                (version + content hash)
+#   5. src/core/dst_driver_plus_no_ops.ail         (version + content hash)
+#   6-9. the three *_dst.ail discovered-site fixtures above
+#
+# The grep that finds all of them is
+#   grep -rn 'tool_phase.ail", line: [0-9]' --include=*.ail .
+# and it is written here because the cost of missing one is a full sweep.
+#
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
@@ -72,7 +116,7 @@ check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (
 for l in 965 1224 1330 2775 2885; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
-check src/core/tool_phase.ail 373 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
+check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
 
 if [ "$fail" -ne 0 ]; then
   echo
