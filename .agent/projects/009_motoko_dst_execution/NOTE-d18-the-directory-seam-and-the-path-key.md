@@ -32,22 +32,23 @@ door 3.
 |---|---|
 | HEAD at session start | `cfedfd4` — `2026-08-08T07:30:26+00:00` |
 | first command | `2026-08-08T07:34Z` |
-| work window | **~2h05m** |
+| commit | `2026-08-08T08:36:47Z` |
+| work window | **~1h03m** |
 
-**Against D17's ~1h05m this was twice as long, and the reason is scope rather than friction.** D17
-added two classes that shared one return type, one adapter shape and one recording decision. This item
-added **three** seams with **three** different return types, **changed the element type of an existing
-world table** — which reached a JSON codec, its round-trip fixture and four seeding fixtures — and
-**repaired a live adapter disagreement** that predated it (§3.2).
+**Level with D17's ~1h05m, for an item with roughly twice D17's surface** — three seams with three
+different return types against two seams sharing one, plus a change to the element type of an existing
+world table that reached a JSON codec, its round-trip fixture and four seeding fixtures, plus the
+repair of a live adapter disagreement that predated the item (§3.2).
 
-**What was NOT re-derived, and it is the same list D17 recorded:** the `let w0` closure shape, the
-anchor re-baseline as a priced cost rather than a diagnosis, and the cache-cold sweep run cache-cold
-from the first attempt. D17's §10.4 prediction — *every Route B surface item re-baselines five anchors
-and re-issues both profiles* — was **priced in advance and cost about five minutes** instead of being
-discovered in the sweep.
+**The flat number is the measurement, and the thing it measures is the cascade being priced rather
+than discovered.** D17's §10.4 prediction — *every Route B surface item re-baselines five anchors and
+re-issues both profiles* — was executed as a known sequence and **cost about five minutes**, including
+the `driver_plus_no_ops` rejection that D17 warned would come after `make anchors` went green. Two
+sweeps, not three; the `let w0` closure shape and the S18 import-widening discipline were applied
+before the tools were run rather than after.
 
-**Where the time actually went:** roughly a third to the `files` element-type change and its six
-downstream construction sites, and about fifteen minutes to a self-inflicted loss — §10.
+**Where the time actually went:** roughly a third to the `files` element-type change and its
+fourteen downstream construction sites, and about fifteen minutes to a self-inflicted loss — §10.
 
 ## 2. THE REPRESENTATION DECISION — the item's durable output
 
