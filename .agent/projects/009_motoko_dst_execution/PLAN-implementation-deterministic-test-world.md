@@ -499,25 +499,42 @@ cascade now has two consumers and the anchors target names one. **A third profil
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
 **S31. "STRUCTURALLY UNREACHABLE" MUST NAME THE SHAPE FACTS THAT MAKE IT SO — AND WHEN THEY ARE
-FINALLY NAMED, CHECK EACH ONE.** Earned by WI-D21, whose own re-derivation produced two and only one
-holds.
+FINALLY NAMED, CHECK EACH ONE.** Earned by WI-D21, whose own re-derivation produced two grounds and
+**both fell** — the second on a re-measurement that also defeated my correction of the first.
 
 WI-D19 pinned `ExtensionEffect` at zero in `absent_classes` calling its unreachability **structural**
 rather than "nothing calls it yet", and used that distinction to justify **witnessing** the three
 filesystem classes instead of removing them. **The word was load-bearing for a decision and the ground
 was never written down**, so D21 had to re-derive it before it could decide whether to move a pin.
 
-**It named two grounds. Measured at review, one is structural and one is not.** `ExtCtx` carries no
-`ext_id` and `ext_ports_of` hands one `ExtPorts` to every extension, so the bridge cannot name its
-caller and `validate_identity` rejects a blank — **structural, verified.** But *"the catalogue has no
-class to name"* is false: `dst_fault_catalogue` holds **20 `class_id:` rows and 11 distinct ids**, and
-**`extension_effect_fault` exists** with `boundary: ExtensionEffectBoundary`. That is a **content**
-question about one row — whose `delivery_constructor` names `ExtPorts.ai_step` — and WI-B4 already set
-the precedent for changing a row's content behind the catalogue's own version.
+**It named two grounds. BOTH FELL, and the second round of measurement defeated my own correction of
+the first.** I recorded that one of them held; it does not.
 
-**So the price is lower than reported and the rule is the general one: an unreachability claim is a
-conjunction, and a conjunction is only as strong as its weakest term.** "Either alone is insufficient"
-survives only if both terms are real.
+- *"The catalogue has no class to name"* is **false**. `required_class_ids()` is asserted at **11**
+  (`dst_fault_catalogue.ail:821`, verified); the "seven" came from reading the `fault_class_*`
+  accessors, which are a **subset**. `extension_effect_fault` is row eleven and is in
+  `required_class_ids()`, so `validate_static_references` accepts it — **and its coverage-gap entry
+  (`:442`) has named this exact seam since WI-C5**: *"ExtPorts.proc_exec IS routed but projects the
+  typed tool outcome back down to a string, so an extension can observe that a tool failed and not
+  which fault class it was."*
+- *"The bridge cannot name its caller"* is **not structural either**, which is where I went wrong.
+  `ExtensionHooks.id` (`types.ail:641`) is on every registry entry the dispatcher folds over. **The id
+  exists at the dispatch site and merely fails to reach the closure**, because `ext_ports_of` builds one
+  `ExtPorts` per step and shares it. **A threading gap** — per-extension ports, or an `ext_id` on
+  `ExtCtx`, closes it.
+
+**The honest ground is neither: all SEVEN `record_interaction` call sites live in `ports.ail` and NOT
+ONE constructs `ExtensionEffectIdentity`** — verified, zero constructions, and `RandomDrawIdentity` is
+in the same position. **Routing this seam to the class means building an EIGHTH recording adapter, not
+relabelling a seventh**, which is nearer to *"nothing routes it yet"* than to the contrast D19 drew.
+
+**So the rule: an unreachability claim is a CONJUNCTION, only as strong as its weakest term — and each
+term must be read off the thing itself, not off the nearest accessor.** Both failures here are that one
+mistake at different layers: the seam's capability inferred from `ExtProcOutcome` instead of followed
+to `run_process_result`, and the catalogue's contents inferred from its accessors instead of from
+`required_class_ids()`. **Zero remains the right expectation, so the pin is correct and its recorded
+reason is not** — and it was left untouched deliberately, because re-wording it in place would destroy
+the evidence that D19's justification was measured and found wanting.
 
 **S30. ADDING A FIELD TO A PERSISTED PAYLOAD WITHOUT MOVING THE SCHEMA VERSION MAKES A RECORDED FAILURE
 REPLAY AS A SUCCESS.** Earned by WI-D21 as the reason a "one field" widening is a whole item.
@@ -3298,14 +3315,33 @@ TYPED, which is a design cost rather than a falsification.** I escalated a price
 **The conclusion survives**: it is a core class change, and the item priced it at **seven links** —
 adding `dispatch_one`'s `(ToolCall) -> string` contract, which my chain missed.
 
-**THE PIN STAYS, AND I CORRECT THE GROUND IT NOW STANDS ON — see S31.** D21 re-asked D19's "structural"
-as the handoff required and kept the pin, which is right. **But of its two structural grounds only one
-holds.** `ExtCtx` has no `ext_id` (verified, and `ext_ports_of` hands one `ExtPorts` to every
-extension) — structural. *"The catalogue has no class to name"* is **false**: 20 `class_id:` rows, 11
-distinct ids, and **`extension_effect_fault` exists** at `dst_fault_catalogue.ail:405` with
-`boundary: ExtensionEffectBoundary`. It is a **content** question on one row — its
-`delivery_constructor` names `ExtPorts.ai_step` — and B4 set the precedent for that. **So "either alone
-is insufficient" is too strong and the price of reaching this class is lower than reported.**
+**THE PIN IS UNTOUCHED, D19'S STATED GROUND DOES NOT HOLD, AND MY FIRST CORRECTION OF THIS WAS ITSELF
+TOO WEAK — see S31.** D21 re-asked D19's "structural" as the handoff required and kept the pin, which
+is right. I corrected its first draft's catalogue claim and then wrote that its OTHER ground still
+held. **It does not.** `ExtensionHooks.id` (`types.ail:641`) is on every registry entry; the id exists
+at the dispatch site and merely fails to reach the closure, because `ext_ports_of` builds one
+`ExtPorts` per step and shares it — **a threading gap, not a shape fact.** The honest ground is the one
+neither of us had: **all seven `record_interaction` call sites are in `ports.ail` and none constructs
+`ExtensionEffectIdentity`**, verified, so this needs an **eighth recording adapter**. **Zero is still
+the right expectation; the pin is correct and its recorded reason is wrong, and it was left in place so
+that stays visible.**
+
+**AND MY HANDOFF PROPAGATED D20'S ANCHOR NUMBER WITHOUT ITS SCOPE.** I wrote *"a moved anchor touches
+NINE files"*. Measured here: **six**, because the three `*_dst.ail` discovered-site fixtures carry
+`tool_phase.ail:318` — verified at `driver_only_dst.ail:75` and `profile_definition_dst.ail:111` — and
+this item moved only `session.ail`. **Nine is the price of a `tool_phase` move; a `session.ail`-only
+move is six.**
+
+**AND THE ANCHOR LAW REACHED ITS FINAL FORM ON THE CHEAPEST POSSIBLE DEMONSTRATION.** D18's law was
+"every Route B *surface* item"; D20's exception was "a non-surface item too, if it needs a driver-side
+codec". **This item added no seam, no import and no expression — it wrote a COMMENT BLOCK inside
+`ext_ports_of` — and all five `session.ail` anchors moved +96.** So the rule is **any edit to
+`ext_ports_of`, prose included**, re-baselines the list and re-issues both profiles. Verified: anchors
+green, `driver_only_version` **19**, `no_ops_version` **6**.
+
+**One internal inconsistency, flagged rather than edited:** the report's §12.5 still reads *"D19's word
+was right and its ground was never stated"*, which its own §5.3 now contradicts. §5.3 is the measured
+one.
 
 **THE PARAMETER RENAME SHIPPED AND THE MISREADING WAS WIDER THAN I SAID.** `proc_exec` is now
 `(w, tool: string, args_json: string)`, verified. I said two items misread it; measured, **five
