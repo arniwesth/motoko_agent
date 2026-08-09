@@ -101,7 +101,7 @@ handoff, because three or four will apply to any item.
 
 Route B is built and compose is mediated: **11 ambient sources, 32 `ExtPorts` field calls** — the
 remainder are four `println` (disclosed by decision), three `exec` import sites carrying four call
-sites (typed now, but routing them waits on identity), registration's three (structurally unroutable)
+sites (typed and identity-ready since D24; routing is item 2 of the critical path, behind the audits), registration's three (structurally unroutable)
 and one ambient AI. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
 closed at zero classes, and **the typed subprocess discrimination is complete end to end** (D23):
 script → codec → `world_tool` → bridge → `ExtProcOutcome.exit_code`, witnessed at every joint, at
