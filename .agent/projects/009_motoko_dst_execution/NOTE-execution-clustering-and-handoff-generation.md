@@ -1074,3 +1074,36 @@ are disclosure-table rows for the goal line's clause 2, produced by the effect c
 the plan's underused-producer rule applied to the audit itself. The thread audit answers "is the
 world carried"; the bounds answer "what could this slot ever do to it", and the second question is
 the one the demonstration and the disclosure table actually consume.
+
+**Cluster 43 = WI-D26, route the exec sites: HANDED OFF 2026-08-09**,
+`HANDOFF-execute-d26-route-the-exec-sites.md`. **The change every item since D16 prepared, and the
+grounding's finding is how little is left to do:** all four `exec` call sites already have `ExtPorts`
+and `ExtWorld` in scope or one signature away — `authoring/dispatcher.check_snippet` already takes
+`(p, w, snippet)` and routes its filesystem and clock, with the `exec` line the only ambient call
+left in the function. Ten items of seam work reduced the routing item to four local edits, two helper
+signature widenings, three import removals and a witness.
+
+**The sharpest trap is semantic, not mechanical: `rg` exits 1 on NO MATCHES.** `grep_impl` today
+branches on `text == ""` and never reads the exit code — correct, and invisible to any fixture with
+matches (S33: the divergent input is a quiet search). A routed form that adopts exit-code gating
+because the typed code is newly available would break the fallback scan on every miss. **The typed
+discrimination is load-bearing at the `ailang check`/`run` sites and must stay decorative at the rg
+site**, and the handoff builds the no-matches mutant to pin that.
+
+**The quoting boundary is safe by measurement of the generators, and only that.** The seam's one
+subprocess door is `bash -lc`, so argv arrays become shell strings; the snippet paths are digits,
+hex and underscores by construction (`compose.ail:556`, `dispatcher.ail:241`) and `caps` is a
+config-joined capability list. The safety is conditional (S25) and each converted site says so; any
+future user-text argument is a stop condition, not a quoting exercise.
+
+**First expected yield-adjacent movement since D15**: compose 11 → 8 ambient sources, field calls
+32 → 36+, with the verdicts that must NOT move enumerated (hook-scope, PORT-MEDIATED,
+declared_vs_performed) — a moved verdict would mean an instrument reading something other than its
+claim. The witness is the first deterministic compose authoring loop: a scripted `ailang check`
+failure served from `ext_effects` to the real `handle_compose_tool`, retry branch on the typed code,
+program validates and replays.
+
+**Also this cluster: the D25 implementation was committed as review housekeeping (`600f0f2`)** —
+eight files sat uncommitted in the shared worktree, D21's shape, and `b23a44e` is what happens next
+if nobody acts. Committing another session's finished, gate-verified work with attribution beats
+leaving it to be swept.
