@@ -39,6 +39,7 @@ away. Budget five to fifteen tool calls per apply. **Run the gates the report sa
 | D20 | a moved anchor touches **nine** files | Nine is a `tool_phase` move; a `session.ail`-only move is **six** |
 | D21 draft | A7 declares **seven** fault classes, so the class has none to name | `required_class_ids()` is asserted at **11**, and `extension_effect_fault` exists — the seven came from reading the `fault_class_*` **accessors**, a subset |
 | D22 | the quiet anchor run is *"a data point against D21's finding"* | Outside its scope, not against it — D21's law names `ext_ports_of`, in `session.ail`; D22 edited prose in `types.ail` |
+| D24 | silent-wrong goes to **76** (the host-side token rewrite) | Stays **75** — the wrong form never shipped and was not silent (two reachability rows went red), so it is authored-and-closed under D22's rule. Promoted to **S34** instead |
 
 **And the corrections themselves get corrected.** I corrected D21's catalogue claim and then wrote that
 its *other* ground held; the revised report showed it did not. **Verify your own corrections at the
@@ -67,7 +68,7 @@ program its own validator rejects — came from following `session.ail` → `por
 
 ## Two counters, and they are deliberately separate
 
-- **Silent-wrong: 75 across 45 runs.** *Production sites where two answers type-check and the wrong one
+- **Silent-wrong: 75 across 46 runs.** *Production sites where two answers type-check and the wrong one
   ships silently.*
 - **Instrument-weaker-than-its-claim: 7.** *A row that passes while measuring less than its label.*
   Opened at D21.
@@ -92,11 +93,11 @@ commit; D22 declined to and was right.
 
 ## Standing rules
 
-**S1–S33, and they are promoted from execution, never written in advance.** A rule with no item that
+**S1–S34, and they are promoted from execution, never written in advance.** A rule with no item that
 paid for it does not belong there. They live at the top of the plan; skim the block before writing a
 handoff, because three or four will apply to any item.
 
-## Where the work stands (2026-08-09, after WI-D23)
+## Where the work stands (2026-08-09, after WI-D24)
 
 Route B is built and compose is mediated: **11 ambient sources, 32 `ExtPorts` field calls** — the
 remainder are four `println` (disclosed by decision), three `exec` import sites carrying four call
@@ -104,27 +105,30 @@ sites (typed now, but routing them waits on identity), registration's three (str
 and one ambient AI. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
 closed at zero classes, and **the typed subprocess discrimination is complete end to end** (D23):
 script → codec → `world_tool` → bridge → `ExtProcOutcome.exit_code`, witnessed at every joint, at
-ABI `5.0`.
+ABI `5.0`. **The identity work is done** (D24): eight recording adapters, a separate
+`WorldState.ext_effects` queue, the ext id on the world token (`holder_ext_id` — no ABI change), and
+D21 §4's rejected-program defect closed by a measured record → validate → replay round trip.
+`RandomDraw` is now the only class pinned at literal zero.
 
 Yields **4 of 15** and **5 of 15**, unmoved since D15 — door 3 (`show`) keeps compose HOOK-UNRESOLVED.
 ABI at **15 rows + 5 added types**, still `5.0`; **the `proc_exec` rename forces `6.0`** and is a
-release decision with consumers outside this project. Profiles at `driver_only` **20**,
-`driver_plus_no_ops` **7**.
+release decision with consumers outside this project. Profiles at `driver_only` **21**,
+`driver_plus_no_ops` **8**.
 
 **The project now has a committed goal line — read the plan's "The goal line" section (decided
 2026-08-09) before choosing any item.** Done = a compose-bearing profile records and replays a
 session with non-vacuous criterion-2 evidence, plus all fifteen extensions mediated-or-disclosed.
 The remaining critical path, in order:
 
-1. **The identity work** — `ExtCtx.ext_id` + the eighth recording adapter (D21 §5's plan). Also the
-   only thing between compose's `exec` sites and the routed seam: D23 left no type work, only
-   identity. `absent_classes` stays untouched until it lands.
-2. **The successor audits** — `on_pre_step`, `on_solver_candidate`. Compose binds both; base rate
-   **2 of 2** (S29). Before routing, because the demonstration is the first performing run.
-3. **Routing compose's `exec` sites** — three import sites, four call sites; edges named at their
+1. **The successor audits** — `on_pre_step`, `on_solver_candidate`. Compose binds both; base rate
+   **2 of 2** (S29). Before routing, because the demonstration is the first performing run. D24's
+   scoping gift: `on_pre_step` declares no `Process` and cannot reach the effect seam;
+   `on_solver_candidate` declares `! {Process}` and can. Any fold the audits add must stamp/clear
+   the holder by key-set, never by world round trip (**S34**).
+2. **Routing compose's `exec` sites** — three import sites, four call sites; edges named at their
    sites.
-4. **C5's compose-bearing profile** — the demonstration vehicle.
-5. **The final acceptance rerun** — the closing note; vacuity register and classification table as
+3. **C5's compose-bearing profile** — the demonstration vehicle.
+4. **The final acceptance rerun** — the closing note; vacuity register and classification table as
    computed outputs.
 
 **The endgame scope rule: a finding joins the queue only if it blocks the goal line's two clauses;
@@ -135,5 +139,5 @@ repair, the stdlib cache's producer, the gate-table State column, F3 — all reg
 ## Read order for a cold start
 
 `ADR-001` §Context and the eleven-row table → the plan's **"The goal line"** section → the plan's
-**S1–S33** block → the last three milestone entries → this note. **Then measure something before you
+**S1–S34** block → the last three milestone entries → this note. **Then measure something before you
 write anything.**

@@ -572,6 +572,30 @@ not re-issued (D4)"*. **The second profile binds the same table at the same iden
 cascade now has two consumers and the anchors target names one. **A third profile extends the list
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
+**S34. WHERE A DECODER IS TOTAL, DECODE–EDIT–REENCODE IS SILENTLY DESTRUCTIVE — THE HOST MUST NOT
+REWRITE A TOKEN IT DID NOT BUILD.** Earned by WI-D24 on the first host-side write to `ExtWorld` in
+the project's history, and caught before commit by two `declared_vs_performed` reachability rows.
+
+`token_to_world` is TOTAL (WI-B2b's design): a token this module did not write decodes to
+`empty_world_state()`, and a re-encode **replaces** it. The natural stamp —
+`world_to_token({ token_to_world(t) | holder_ext_id: id })` — is shorter, type-checks, and passed
+every codec and world-state row, because every fixture token was one the codec itself had written.
+`declared_vs_performed`'s trace ports hand the fold a **fabricated** token whose whole job is to
+record which seams a hook called, and the round-trip form silently erased it.
+
+**The rule: opacity runs both ways.** `ExtWorld` is documented opaque to extensions; if the host
+edits it by decode–edit–reencode, "opaque" means "the host may reinterpret it". Mutate opaque state
+only through operations that **preserve what they do not understand** — `stamp_holder`/`clear_holder`
+are a key-set over the token's own JSON object and the identity on anything that is not an object —
+and assert the preservation with a **foreign-input fixture**
+(`ext_world.test_the_holder_stamp_preserves_a_token_the_host_did_not_build`, both clauses). A suite
+whose every input was produced by the codec under test cannot see this defect (S33's mechanism: the
+proxy and the truth agree on almost every input by construction).
+
+**And the hazard was REPORTED, not new** — `dst_interaction.ail`'s header has named the total
+decoder's fall-through since WI-D17. A reported hazard is not a closed one; it closed when its first
+caller arrived with a fixture that a foreign token turns red.
+
 **S33. INFERRING A PROPERTY FROM A PROXY THAT USUALLY AGREES WITH IT IS ONE DEFECT CLASS, NOT EIGHT —
 AND THE DISTINGUISHING INPUT IS THE THING TO BUILD.** Consolidating rule, promoted 2026-08-08 from the
 whole D16–D22 cluster rather than from one item. **S28 and S31 are each one face of it, and about half
@@ -3417,6 +3441,66 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D24, 2026-08-09 (~1h50m) — THE EIGHTH RECORDING ADAPTER. D21 §4's DEFECT IS CLOSED BY
+MEASUREMENT, AND THE TRANSPORT IS NEITHER OF THE TWO THE HANDOFF OFFERED.**
+Verified at review by running the gate: `make discovery`'s `effect_scenario` prints **"the recorded
+program VALIDATES — WI-D21 §4's rejected program is closed by measurement"** green, against a real
+recorded session in which a real hook (`ext_delta_24`, not compose, per S33) called
+`ctx.ports.proc_exec` — 4 extension effects and 3 driver dispatches recorded, 0 rejections, 0 replay
+mismatches, both queues reconstituted (`tools=3, ext_effects=4`). **Eight `record_interaction` sites**
+(counted), `Ports.ext_effect_exec` (`ports.ail:938`) served by `world_ext_effect` from a **separate
+`WorldState.ext_effects` cursor** — separate because `world_tool`'s correlation guard passes blank
+ids, so a shared queue lets a driver dispatch consume an extension's entry with no mismatch; two
+cursors make that unrepresentable rather than forbidden. Profiles **21 / 8**, `predicate_anchors`
+green, yields and inventory re-run and unmoved (4/15, 5/15, compose 11/32).
+
+**THE TRANSPORT IS THE WORLD TOKEN, AND BOTH HANDOFF DESIGNS WERE MEASURED AND REJECTED** —
+per-extension ports on the effect row it would union onto every dispatcher (the surface criterion 1
+measures), the `ToolInvocation` originator on `tool_phase.ail:419` forcing the nine-file cascade
+anyway plus S16's shared producer. The fold is the one place that knows which extension runs next
+and already re-seats the token per hook, so the id rides the channel that exists
+(`WorldState.holder_ext_id`, stamped/cleared in `ext/runtime`). **No ABI shape changed —
+`ExtCtx.ext_id`, which D21 §5.2 and the handoff both expected, was never needed.** D10's rule
+confirmed again: the proposed routes were the first ones thought of, not the best available.
+
+**TWO OF MY HANDOFF'S CLAIMS CORRECTED BY THE ITEM, both recorded against this role:** (1) finding
+2's mechanism was wrong — a dropped reconstitution surfaces as `OutcomeDiffers`, not
+`UnusedInteraction`, because a **delegating** adapter answers the same number of requests from a live
+dispatch; the refusal I named needs the replay to make *fewer* requests. The conclusion (loud, but
+after a real subprocess ran) survives; the item added `reconstitution_balance`'s queue check, which
+fires first and without a run. (2) The six-file cascade price was wrong — **nine files, with
+`tool_phase.ail` untouched**: the discovered-site fixtures carry `ext/runtime.ail:190` as well as
+`tool_phase.ail:318`, so nine is the price of moving **either** fixture-carried anchor, which also
+corrects D21 §11.1's law. The corrected enumeration and a widened grep (the string-form
+`classify_site` anchors the record-form grep misses) are in `anchors.sh`.
+
+**COUNTER RULING, AND IT GOES THE OTHER WAY FROM THE REPORT: silent-wrong stays 75, across
+forty-six runs.** The report counted the host-side token rewrite as site 76 and invited review to
+subtract. Subtracted, on the counter's own definition: the wrong `stamp_holder` **never shipped**
+(caught in-item) and **was not silent** — two existing reachability rows went red, which is the
+definitional disqualifier. Under D22's authored-and-closed rule it counts nothing; the pre-existing
+totality is a hazard, and hazards are not what this counter counts. **The finding is promoted to S34
+instead**, which is worth more than a count: it binds item 3's audits directly (stamp/clear by
+key-set, never by world round trip). Instrument-weaker: **7, unchanged**.
+
+**The pin moved the way D19's did and the ground is finally re-worded** — `ExtensionEffect` out of
+the literal-zero pin and under a `DiscoveryWitness` field; the re-wording quotes D21 §5.3's
+refutation rather than deleting it; **`RandomDraw` is now the only class pinned at literal zero**,
+with its ground stated ("nothing routes it yet, and no consumer asks for one") rather than inherited.
+D23's adoption row moved cursors (`tools` → `ext_effects`) and went red in between, which is the
+queue split observed from the outside.
+
+**What item 3 (the successor audits) inherits, measured:** `on_pre_step` declares `! {AI, IO,
+Trace}` — **no `Process`, so it cannot reach this seam** — and `on_solver_candidate` declares
+`! {Process}` and can (both verified at the ABI rows). All four folds stamp and clear the holder
+regardless, so a future row widening cannot record effects attributed to nobody. The seam is done:
+routing a compose `exec` site now needs no type work and no identity work — what remains at
+compose's sites is compose's own shape (the `"ailang"` tool-name question and `grep_impl`'s
+byte-stdout), named at the sites. `DiscoveryWitness.extension_effects` is hand-maintained by design;
+the sweep's two red targets are the same pre-existing `test_coverage` pair, pinned to HEAD by D22's
+stash-run; the item disclosed one discipline break (an `expected.json` edit during sweep 1) and
+correctly re-ran a clean sweep 2 as the reported one.
 
 **WI-D23, 2026-08-09 (~42m) — THE TYPED EXIT CODE REACHES THE CALLER. ALL FOUR REMAINING LINKS
 SHIPPED, THE ADOPTION ROW DROVE THE CLOSURE, AND NO STOP CONDITION FIRED.**
