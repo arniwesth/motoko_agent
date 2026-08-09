@@ -196,7 +196,7 @@ hook_guard:
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only driver_plus_no_ops fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery compose_live_exec strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest ext_hook_scope_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only driver_plus_no_ops driver_plus_compose fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery compose_live_exec strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest ext_hook_scope_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -788,6 +788,55 @@ driver_plus_no_ops:
 	python3 tools/profile_definition/check_no_op_profile.py $$out; \
 	rm -f $$out; \
 	ailang test src/core/dst_driver_plus_no_ops.ail > /dev/null && echo "  ✓ src/core/dst_driver_plus_no_ops.ail"
+
+# `driver_plus_compose` v1 — the THIRD conformant profile (WI-D27), and the
+# GOAL LINE'S CLAUSE 1. Separate from the other two for the same reason they are
+# separate from each other: each profile earns its own coverage and per D10
+# nothing transfers between them.
+#
+# WHAT IS DIFFERENT ABOUT THIS TARGET, AND IT IS NOT THE PROFILE — IT IS THE RUN.
+# The other two acceptance scripts READ a record. This one reads a record AND
+# RUNS THE SUBJECT: a full graded session through the real traced driver with
+# compose installed through `register_with_config`, recorded, validated,
+# reconstituted and strictly replayed. That is why it needs the whole capability
+# set and `--ai-stub` where `driver_only` and `driver_plus_no_ops` need only IO.
+#
+# **THE CAPABILITIES ARE THE PROFILE'S OWN DISCLOSURE, NOT A CONVENIENCE.**
+# compose's `register_with_config` reads Env and then FS before any hook is
+# dispatched, and AILANG capabilities are per PROCESS — so this target cannot
+# withhold them and the profile says so in D5 field 6. What carries the
+# determinism claim instead is the record → strict-replay identity the script
+# asserts.
+#
+#   1. The load-time acceptance, ADR-001 row 3's clauses (each asserted against a
+#      MUTATION of this same definition that the clause must reject), and THE
+#      DEMONSTRATION.
+#
+#   2. The guard, which is what stops the profile agreeing with itself. It reads
+#      the script's OUTPUT rather than its source — the classification entries
+#      are computed — and re-derives, from producers the profile does not
+#      control: the install partition, classifier 3's still-AMBIENT verdict for
+#      compose, the ABI's rowed/rowless split, the dispatch table's gated slot,
+#      registration's disclosed sources, and the demonstration's own CLAIM line.
+#
+#      The output is captured to a file so the run happens ONCE — piping it to
+#      the guard would hide the script's exit status behind the pipeline's.
+#
+#   3. The module's inline tests, which assert what no profile record in this
+#      tree has carried before: a non-empty exclusion, and a non-zero
+#      `world_mediating_hooks`.
+.PHONY: driver_plus_compose
+driver_plus_compose:
+	@set -eu; \
+	out=$$(mktemp); \
+	if ! ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	     --ai-stub --entry main scripts/dst/driver_plus_compose_dst.ail < /dev/null > $$out 2>&1; then \
+		cat $$out; rm -f $$out; exit 1; \
+	fi; \
+	grep -v '^CLASSIFICATION \|^INSTALLED \|^OMITTED \|^DISCLOSURE \|^DISCLOSED \|^CLAIM \|^STATEMENT \|^{"schema_version"' $$out; \
+	python3 tools/profile_definition/check_compose_profile.py $$out; \
+	rm -f $$out; \
+	ailang test src/core/dst_driver_plus_compose.ail > /dev/null && echo "  ✓ src/core/dst_driver_plus_compose.ail"
 
 # D3's fault catalogue (WI-A7). Three checks:
 #

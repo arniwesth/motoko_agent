@@ -195,7 +195,13 @@ pure func clean_manifest() -> ExecutionManifest {
     -- point — `validate_manifest` compares it against the live function, so a
     -- rules change that forgot the version bump is a rejection here rather than
     -- a manifest that pins a vocabulary this tree no longer has.
-    profile_rules_version: "profile-rules/2",
+    --
+    -- MOVED AGAIN AT WI-D27, to /3: `recognised_producers` gained `discovery`,
+    -- the first DYNAMIC measured producer, so `WorldMediated` may now rest on a
+    -- witness over a recorded run. This literal is what made the bump
+    -- non-optional — the widening was written first and this fixture went red on
+    -- the version before any profile consumed the new basis.
+    profile_rules_version: "profile-rules/3",
     coverage_rules_version: "coverage-rules/1",
     attribution_rules_version: "attribution-rules/1",
     fault_catalogue_version: "fault-catalogue/2"
