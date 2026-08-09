@@ -764,6 +764,84 @@ control_pair "on_solver_candidate" "int" " ! {Process}" " ! {Process, Env}" \
   "import std/env (getEnvOr)" 'let _ = getEnvOr("PATH", ""); 0'
 control_pair "on_response_intercept" "int" " ! {IO, Process, FS, Clock}" " ! {IO, Process, FS, Clock, Env}" \
   "import std/env (getEnvOr)" 'let _ = getEnvOr("PATH", ""); 0'
+
+# ============================================================================
+# WI-D25: THE TWO AUDITED SLOTS' CAPABILITY BOUNDS, AS COMPILER VERDICTS
+# ============================================================================
+#
+# The goal line's disclosure table needs each slot's REACHABLE SURFACE stated
+# with a measured reason, and the effect checker answers it totally: a port call
+# type-checks in a hook body exactly when the port's row is INCLUDED in the
+# slot's row. That is a different question from "does the slot's row contain the
+# effect", and WI-D24 answered the second while writing the first —
+# `on_solver_candidate` declares `! {Process}` and WI-D24 concluded it "reaches
+# the seam", which is S33's shape: a proxy (the effect is present) standing in
+# for the truth (the whole row is admitted). `proc_exec` demands
+# `{IO, Process, FS}` and gets one of three.
+#
+# So the bound is asserted the only way that cannot be inferred wrong: a probe
+# the compiler REJECTS beside one it ACCEPTS, per slot, plus the widened control
+# that attributes each rejection to the row rather than to a malformed call.
+#
+#   on_pre_step        ! {AI, IO, Trace}  ai_step   ACCEPT   (the one field)
+#                                         clock_now REJECT   (needs Clock)
+#   on_solver_candidate ! {Process}       proc_exec REJECT   (needs IO, FS too)
+#                                         std/process.exec ACCEPT (AMBIENT)
+#
+# The last row is the one that says what the slot CAN do, and it is why the
+# narrowed claim in `ext/runtime.decide_one_finalize` is "ambient subprocess
+# only" rather than "no subprocess": `context_mode`'s binding spawns a `node`
+# bridge through `std/process.exec` today, unmediated, and no ExtPorts widening
+# is involved.
+#
+# THE SIGNATURE IS `(ExtCtx, string) -> int` ON EVERY PROBE and the slots' real
+# arities are not reproduced, for the same reason `control_pair` above does not:
+# effect checking is a property of the BODY against the ROW, and the parameter
+# list and return type take no part in it. What is faithful here is the row and
+# the port call.
+write_port_probe() {  # $1 = row, $2 = extra import lines, $3 = body
+  cat > "$MUTANT" <<EOF
+module scripts/dst/dvp_mutant_probe
+$2
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx)
+export func mutant_hook(ctx: ExtCtx, _s: string) -> int$1 {
+  $3
+}
+EOF
+}
+
+port_accepts() {  # $1 = label, $2 = row, $3 = imports, $4 = body
+  write_port_probe "$2" "$3" "$4"
+  if AILANG_RELAX_MODULES=1 ailang check "$MUTANT" >/dev/null 2>&1; then
+    ok "$1: ACCEPTED under$2 — the call is within the slot's declared surface"
+  else
+    bad "$1: REJECTED under$2, and this handoff's row algebra says it must be accepted. The disclosure table's clause-2 entry for this slot rests on this verdict: $(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1 | grep -E '^Error|Missing effects' | head -1)"
+  fi
+}
+
+port_rejects() {  # $1 = label, $2 = narrow row, $3 = wide row, $4 = imports, $5 = body
+  write_port_probe "$2" "$4" "$5"
+  if pout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
+    bad "$1: ACCEPTED under$2 — the slot reaches this port after all, and the disclosure table's entry for it is wrong"
+  else
+    ok "$1: REJECTED under$2 — the port's own row is not included in the slot's ($(echo "$pout" | grep -oE 'Missing effects: .*' | head -1))"
+  fi
+  write_port_probe "$3" "$4" "$5"
+  if AILANG_RELAX_MODULES=1 ailang check "$MUTANT" >/dev/null 2>&1; then
+    ok "$1: the SAME call with the row WIDENED to$3 is accepted — the rejection is caused by the row, not by the call being malformed"
+  else
+    bad "$1: the widened probe is also rejected, so the negative result above is not attributable to the effect row and states nothing about the slot"
+  fi
+}
+
+port_accepts "on_pre_step -> ports.ai_step" " ! {AI, IO, Trace}" "" \
+  'let o = ctx.ports.ai_step(ctx.world, "m", []); 0'
+port_rejects "on_pre_step -> ports.clock_now" " ! {AI, IO, Trace}" " ! {AI, IO, Trace, Clock}" "" \
+  'let o = ctx.ports.clock_now(ctx.world); 0'
+port_rejects "on_solver_candidate -> ports.proc_exec" " ! {Process}" " ! {Process, IO, FS}" "" \
+  'let o = ctx.ports.proc_exec(ctx.world, "BashExec", "{}"); 0'
+port_accepts "on_solver_candidate -> AMBIENT std/process.exec" " ! {Process}" "import std/process (exec)" \
+  'let _ = exec("true", []); 0'
 cleanup
 
 echo ""

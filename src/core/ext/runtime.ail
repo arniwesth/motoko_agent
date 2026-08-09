@@ -269,11 +269,23 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
       -- THIS SLOT CANNOT ACTUALLY REACH THE SEAM AND IS STAMPED ANYWAY, measured
       -- rather than assumed: `on_pre_step`'s ABI row is `! {AI, IO, Trace}`,
       -- which has no `Process`, so a hook here cannot call `proc_exec` at all.
-      -- Three of the seven slots can — `on_tool_handle`, `on_response_intercept`
-      -- and `on_solver_candidate` — and the other three (`on_build_system_prompt`,
-      -- `on_budget_plan`, `on_tool_policy`) do not thread the world and are not
-      -- stamped. Stamping this one costs one call and means a future widening of
-      -- the row cannot silently start recording effects attributed to nobody.
+      --
+      -- CORRECTED AT WI-D25, two-part per S15 because the wrong count is the
+      -- reason the right one is stated as row algebra rather than as a fact
+      -- about which effects appear. WI-D24 wrote here: "Three of the seven
+      -- slots can — `on_tool_handle`, `on_response_intercept` and
+      -- `on_solver_candidate`". TWO can. `proc_exec` demands the whole row
+      -- `{IO, Process, FS}` and `on_solver_candidate` declares `! {Process}`
+      -- alone, so the call does not type — the slot CONTAINS the effect and
+      -- cannot reach the seam that needs it. "Can" was inferred from the
+      -- presence of `Process`, not from row INCLUSION, which is S33's shape.
+      -- The four compiler verdicts that settle both slots are in
+      -- `run_declared_vs_performed.sh`'s `port_accepts`/`port_rejects` rows.
+      --
+      -- The other three (`on_build_system_prompt`, `on_budget_plan`,
+      -- `on_tool_policy`) do not thread the world and are not stamped. Stamping
+      -- this one costs one call and means a future widening of the row cannot
+      -- silently start recording effects attributed to nobody.
       let outcome = (h.on_pre_step)({ ctx | world: stamp_holder(world, h.id) }, msgs);
       let decision = outcome.decision;
       let world1 = outcome.next_state;
@@ -392,7 +404,9 @@ func first_handle(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope, 
       if contains_tool(h.provided_tools, name) then {
         -- WI-D24. The holder stamp; see `fold_pre_step_chain_rec` for the
         -- decision. This slot's row is the widest of the seven, so it is one of
-        -- the three that can actually reach `ExtPorts.proc_exec`.
+        -- the TWO that can actually reach `ExtPorts.proc_exec` — WI-D24 wrote
+        -- "the three" here and WI-D25's row algebra corrected it; see
+        -- `fold_pre_step_chain_rec`.
         let outcome = (h.on_tool_handle)({ ctx | world: stamp_holder(world, h.id) }, call);
         match outcome.decision {
           Delegate => first_handle(rest, ctx, call, name, outcome.next_state),
@@ -439,8 +453,14 @@ export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_te
 -- comparing this row against the ABI's would otherwise read the difference as
 -- a stale row rather than as a host effect the slot never had.
 func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string, world: ExtWorld) -> FinalizeOutcome ! {Process, IO, Clock} {
-  -- WI-D24's holder stamp; `! {Process}`, so this slot reaches the seam too.
-  -- See `fold_pre_step_chain_rec`.
+  -- WI-D24's holder stamp. WI-D24 wrote "`! {Process}`, so this slot reaches
+  -- the seam too", and WI-D25 measured it FALSE: `! {Process}` admits no
+  -- `ExtPorts` field at all — `proc_exec` needs `{IO, Process, FS}` and every
+  -- other field needs `AI`, `FS`, `Clock` or `Env` — so the ONLY subprocess a
+  -- binding in this slot can run is AMBIENT `std/process.exec`, which is
+  -- precisely what `context_mode`'s binding does. The stamp is kept for
+  -- `fold_pre_step_chain_rec`'s reason: a future widening must not start
+  -- recording effects attributed to nobody.
   let outcome = (h.on_solver_candidate)({ ctx | world: stamp_holder(world, h.id) }, candidate);
   let decision = outcome.decision;
   let _ = if is_test_dummy(h.id) then {

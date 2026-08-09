@@ -202,7 +202,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- there is it goes at the TOP of this block with its date, per plan rule S15 —
 -- re-dating a claim in place is how a sentence becomes a false statement about
 -- history, and this file will carry claims that move.
-export pure func no_ops_version() -> string { "8" }
+export pure func no_ops_version() -> string { "9" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -210,6 +210,14 @@ export pure func no_ops_version() -> string { "8" }
 -- can be re-issued silently by the other's edit.
 export pure func no_ops_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- WI-D25: re-recorded with `driver_only`'s, from
+    -- sha256:4339fef00fff65bcbdaa42374424ec375b4f4329d2f85db5ebaee41b23d44572.
+    -- TWO anchors, the narrowest re-issue this pair has taken: `session.ail:2921`
+    -- -> `:2942` and `:3031` -> `:3052`, both +21, from a comment re-tense and
+    -- two argument swaps inside `c2_loop`'s `CallModel` arm. `ext_ports_of` was
+    -- not touched, so three of the five session anchors held and the
+    -- fixture-carried pair (`ext/runtime.ail:199`, `tool_phase.ail:318`) did too
+    -- — the six-file form, not WI-D24's nine. See `driver_only_attribution_ref`.
     -- WI-D24: re-recorded with `driver_only`'s, from
     -- sha256:4339fef00fff65bcbdaa42374424ec375b4f4329d2f85db5ebaee41b23d44572.
     -- SIX anchors moved, not five: the five `session.ail` clock sites +15 for the
@@ -242,7 +250,7 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- WI-D16 recorded that one, from
     -- sha256:ccfc1e3401635ae59326da4052621d934875bdedd0a05552dd7dc1e41a64b210.
     -- An anchor re-measurement, not a table correction — see `no_ops_version`.
-    content_hash: "sha256:4339fef00fff65bcbdaa42374424ec375b4f4329d2f85db5ebaee41b23d44572" }
+    content_hash: "sha256:753839ba98b85c64d55fe18dc6062aaf2b8dbc541e58fbae8de77ba4122a34bc" }
 }
 
 -- ---------------------------------------------------------------------------

@@ -87,7 +87,11 @@ import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_interaction (Interaction, interaction_kind, count_kind)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
-import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  -- WI-D25: the ONE `ExtPorts` field `on_pre_step`'s row admits. See
+  -- `consume_steps` below.
+  ExtPorts,
+  ExtWorld,
   BudgetPlan,
   BudgetPatch,
   Compacted,
@@ -183,6 +187,49 @@ func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
 
 func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
+
+-- ---------------------------------------------------------------------------
+-- WI-D25: THE FIRST `on_pre_step` BINDING IN THE TREE THAT PERFORMS
+-- ---------------------------------------------------------------------------
+--
+-- S29 says a dropped hook successor is invisible until a hook actually does
+-- something, because every binding in this tree returns `ctx.world` unchanged
+-- and a drop then produces a world byte-identical to a thread. The two hooks
+-- above are exactly that shape, and so are the fifteen extensions'. This one is
+-- not: it CONSUMES scripted provider steps, so the world it hands back differs
+-- from the world it was given by a countable amount, and a caller that discards
+-- it un-counts them.
+--
+-- `ai_step` IS THE ONLY SEAM AVAILABLE HERE, and that is a measurement rather
+-- than a choice of instrument. `on_pre_step` declares `! {AI, IO, Trace}`
+-- (`motoko-ext-abi/types.ail:882`) and `ExtPorts.ai_step`'s row is identical
+-- (`:293`); every other field of `ExtPorts` demands `FS`, `Env`, `Clock` or
+-- `Process`, none of which this row admits, so no other port call type-checks
+-- in this position at all. The four compiler verdicts that state this — and the
+-- companion bound for `on_solver_candidate`, which admits NO field — are
+-- `run_declared_vs_performed.sh`'s `port_accepts`/`port_rejects` rows.
+--
+-- IT CONSUMES RATHER THAN OBSERVES ON PURPOSE. `ai_step` threads the provider
+-- seam (`session.ext_ports_of` -> `ext_ai_step` -> `Ports.model_step`), so under
+-- a scripted world each call takes the head of `WorldState.script`. The count of
+-- what is LEFT in the terminal world is therefore a quantity the driver's own
+-- bookkeeping never writes, which is what makes the seal-terminal rows below
+-- evidence and not an identity.
+func consume_steps(n: int, w: ExtWorld, p: ExtPorts) -> ExtWorld ! {AI, IO, Trace} {
+  if n <= 0 then w
+  else consume_steps(n - 1, p.ai_step(w, "phase-c-model", []).next_state, p)
+}
+
+-- TWO BINDINGS AND NOT ONE PARAMETERISED BY THE SCENARIO: the two seal
+-- terminals are two independent arguments at two call sites, and a single hook
+-- reused across both would let one crossed wire satisfy the pair. The counts (2
+-- and 3) are distinct from each other and from both scripts' lengths (6 and 5)
+-- and from both remainders (4 and 2), per S7.
+func consuming_pre_step_2(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: consume_steps(2, ctx.world, ctx.ports) } }
+
+func consuming_pre_step_3(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: consume_steps(3, ctx.world, ctx.ports) } }
 
 func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtensionHooks {
   {
@@ -855,6 +902,75 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
                            fin_n == "stop",
                            "finish_reason=${fin_n}, expected stop — if this also fails the assertion above proves nothing");
 
+  -- =========================================================================
+  -- WI-D25: THE TWO SEAL-TERMINAL SUCCESSOR ROWS
+  -- =========================================================================
+  --
+  -- WHAT THEY ASSERT. `c2_loop`'s `CallModel` arm dispatches the pre-step chain
+  -- and then seals. The seal has three arms; the `Ok` arm has carried
+  -- `chain.next_state` into `dispatch_step` since WI-B2b, and the two `Err`
+  -- arms — `SealSystemPromptEmpty` and `SealExhausted` — passed `st.world_state`
+  -- to `c2_finalize` instead, which is the chain's successor dropped one frame
+  -- above the dispatcher exactly as S29 describes. WI-D4 named the drop in a
+  -- comment and deferred it on stated scope; WI-D25 is the item whose scope it
+  -- is, and these are the rows that make the difference observable.
+  --
+  -- WHY THE COUNTS ARE THE ASSERTION AND NOT A finish_reason. Both terminals
+  -- were ALREADY reachable in this file — the env row above drives
+  -- `SealSystemPromptEmpty` and the files row drives `SealExhausted` — and both
+  -- were green across the drop, because a non-performing hook makes the two
+  -- worlds identical. The quantity that separates them is what the hook
+  -- CONSUMED: 6 scripted steps minus 2 leaves 4, and 5 minus 3 leaves 2. Under
+  -- the drop the terminal world is the STEP-START world and both remainders are
+  -- the full script.
+  --
+  -- THE REACHABILITY CLAUSE IS ASSERTED SEPARATELY (S24). A run that never
+  -- reached its seal terminal would leave the script untouched too, which is
+  -- byte-identical to the drop — so each row states the terminal it took.
+  let seal_sp_script: [ScriptedStep] =
+    [step_named("p0"), step_named("p1"), step_named("p2"),
+     step_named("p3"), step_named("p4"), step_named("p5")];
+  let seal_sp_world: WorldState = { empty_world_state() | script: seal_sp_script };
+  let seal_sp = run_world_history(rt_with(consuming_pre_step_2, "probe_seal_sp"), 4, seal_sp_world, no_system);
+  let seal_sp_ctl = run_world_history(rt_with(passthrough_pre_step, "probe_seal_sp_c"), 4, seal_sp_world, no_system);
+  let fin_sp = finish_from_trace(seal_sp.trace.records);
+  let left_sp = List.length(seal_sp.world.script);
+  let left_sp_ctl = List.length(seal_sp_ctl.world.script);
+  let _ = println("seal: SystemPromptEmpty finish=${fin_sp} script left=${show(left_sp)} of 6 (control ${show(left_sp_ctl)})");
+  let ok_sp_reached = check("seal(SystemPromptEmpty): the run took the seal terminal",
+                            fin_sp == "error",
+                            "finish_reason=${fin_sp}, expected error — a run that sealed successfully never reaches the dropped argument, and the count below would prove nothing");
+  let ok_sp_thread = check("seal(SystemPromptEmpty): the terminal world carries the pre-step chain's successor",
+                           left_sp == 4,
+                           "the hook consumed 2 of 6 scripted steps, so the terminal world must hold 4 — got ${show(left_sp)}. 6 means c2_finalize was handed st.world_state and the consumption un-happened");
+  let ok_sp_ctl = check("seal(SystemPromptEmpty): a NON-performing hook leaves the script whole",
+                        left_sp_ctl == 6,
+                        "control left ${show(left_sp_ctl)} of 6 — if the driver consumes steps on this path the row above is not attributable to the hook");
+
+  let seal_ex_script: [ScriptedStep] =
+    [step_named("q0"), step_named("q1"), step_named("q2"), step_named("q3"), step_named("q4")];
+  let seal_ex_world: WorldState = {
+    empty_world_state() |
+    script: seal_ex_script,
+    files: [{ path: ".motoko/config/default/config.json",
+              node: FsFile("{\"agent\":{\"context_limit\":1}}") }]
+  };
+  let seal_ex = run_world_history(rt_with(consuming_pre_step_3, "probe_seal_ex"), 4, seal_ex_world, history());
+  let seal_ex_ctl = run_world_history(rt_with(passthrough_pre_step, "probe_seal_ex_c"), 4, seal_ex_world, history());
+  let fin_ex = finish_from_trace(seal_ex.trace.records);
+  let left_ex = List.length(seal_ex.world.script);
+  let left_ex_ctl = List.length(seal_ex_ctl.world.script);
+  let _ = println("seal: CompactionExhausted finish=${fin_ex} script left=${show(left_ex)} of 5 (control ${show(left_ex_ctl)})");
+  let ok_ex_reached = check("seal(CompactionExhausted): the run took the seal terminal",
+                            fin_ex == "compaction_exhausted",
+                            "finish_reason=${fin_ex}, expected compaction_exhausted — the world seeds agent.context_limit 1 so any history exhausts");
+  let ok_ex_thread = check("seal(CompactionExhausted): the terminal world carries the pre-step chain's successor",
+                           left_ex == 2,
+                           "the hook consumed 3 of 5 scripted steps, so the terminal world must hold 2 — got ${show(left_ex)}. 5 means the successor was dropped");
+  let ok_ex_ctl = check("seal(CompactionExhausted): a NON-performing hook leaves the script whole",
+                        left_ex_ctl == 5,
+                        "control left ${show(left_ex_ctl)} of 5 — the row above would not be attributable to the hook");
+
   -- tools: THE TYPED TOOL CONTRACT'S ASSERTION.
   --
   -- All four behaviours the plan names, through one production adapter
@@ -913,6 +1029,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
 
   if ok_advance && ok_fold && ok_ex_cursor && ok_ex_outcome && ok_ex_decision && ok_ex_summary
      && ok_appr && ok_appr_det && ok_env && ok_env_ctl && ok_files && ok_files_ctl && ok_write && ok_dir
+     && ok_sp_reached && ok_sp_thread && ok_sp_ctl && ok_ex_reached && ok_ex_thread && ok_ex_ctl
      && ok_tool_ok && ok_tool_err && ok_tool_corr && ok_tool_dl && ok_det then
     println("world_state_probe PASS")
   else {

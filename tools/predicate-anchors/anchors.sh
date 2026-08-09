@@ -157,12 +157,37 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # The anchored expressions were compared to `git show HEAD:` character by
 # character — all six byte-identical, pure offset drift.
 #
+# WI-D25 MOVED TWO ANCHORS AND PAID FIVE FILES, WHICH NARROWS THE SIX-FILE FORM
+# THE SAME WAY WI-D24 NARROWED THE NINE. `session.ail:2921 -> :2942` and
+# `:3031 -> :3052`, both +21, from a comment re-tense and two `c2_finalize`
+# argument swaps inside `c2_loop`'s `CallModel` arm. `ext_ports_of` was NOT
+# edited, so `:1111`, `:1370` and `:1476` did not move — the first re-issue in
+# this file's history where the five session anchors moved as a PROPER SUBSET.
+#
+# AND `scripts/dst/attribution_table_dst.ail` NEEDED NO EDIT, which is the part
+# worth recording. Its only session anchor is `:1476` (in `omitted_site`), and
+# its HEAD inventory is DERIVED — `head_inventory()` calls
+# `unconditional_core_sites()` rather than copying it. So the six-file form is
+# the price of moving an anchor that fixture PINS, not the price of moving a
+# `session.ail` anchor at all. Moving only the two `provider.ports.clock_now`
+# sites costs five: this file, `src/core/dst_attribution_table.ail`, both
+# profiles (version + `content_hash`), and `src/core/session.ail` itself.
+#
+# THE RULE, STATED ONCE FOR ALL THREE MEASUREMENTS: the cascade's width is the
+# set of files that PIN the anchors that moved, and it is derived by the widened
+# grep above rather than by which source file was edited. D21 read it off the
+# edited file and was wrong twice — nine when `tool_phase` was untouched (D24),
+# six when `attribution_table_dst` was untouched (here).
+#
+# Both anchored expressions were compared to `git show HEAD:` character by
+# character and are byte-identical: pure offset drift.
+#
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1111 1370 1476 2921 3031; do
+for l in 1111 1370 1476 2942 3052; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
