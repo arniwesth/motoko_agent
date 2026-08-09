@@ -4,6 +4,13 @@ Every other artifact in this directory is written for the session that **impleme
 is written for the session that **hands off and applies** — the other half of the loop, whose method
 has until now lived only in a conversation.
 
+> **THE GOAL LINE WAS REACHED 2026-08-09 (WI-D28) AND THE LOOP IS IN ITS SOFT TAPER.** The closing
+> note is `NOTE-d28-the-final-acceptance-rerun.md` — read its §9 before choosing any item. The
+> maintenance register (its §9.1, nineteen entries) is the queue's ONLY source, ordered by measured
+> value, at reduced cadence; continuation is maintenance, not pursuit. Standing rules by exception;
+> counters continue as fix-or-file. Everything below still governs HOW an item runs; §9.1 governs
+> WHICH items exist.
+
 ## The loop
 
 Two instructions alternate, and nothing else happens:
@@ -73,7 +80,7 @@ survived from D21 to the D26 handoff — where it nearly became a prescribed inj
 
 ## Two counters, and they are deliberately separate
 
-- **Silent-wrong: 76 across 49 runs.** *Production sites where two answers type-check and the wrong one
+- **Silent-wrong: 76 across 50 runs.** *Production sites where two answers type-check and the wrong one
   ships silently.*
 - **Instrument-weaker-than-its-claim: 7.** *A row that passes while measuring less than its label.*
   Opened at D21.
@@ -102,48 +109,26 @@ commit; D22 declined to and was right.
 paid for it does not belong there. They live at the top of the plan; skim the block before writing a
 handoff, because three or four will apply to any item.
 
-## Where the work stands (2026-08-09, after WI-D27)
+## Where the work stands (2026-08-09, after WI-D28 — CLOSED, in taper)
 
 Route B is COMPLETE and compose's mediation is done: **8 ambient sources, 36 `ExtPorts` field
 calls** (D26 routed the four `exec` call sites and removed the three `std/process` imports — the
 first yield-adjacent movement since D15). The remainder is exactly the three disclosed classes:
 four `println` (by decision), registration's three (structurally unroutable), one ambient AI.
-**Goal-line clause 1 is ACHIEVED (D27):** `driver_plus_compose` v1 records a real traced session
-with compose installed, replays it strictly, and asserts the origin-tagged world-mediated effect —
-under `profile-rules/3`, which admits `discovery` as the first dynamic, EXISTENTIAL producer (it
-witnesses what ran; it does not bound what could). First non-empty `excluded` list
-(`on_tool_handle`, the gated slot, on ambient-AI grounds); `world_mediating_hooks = 1`, the first
-non-zero. Profiles now THREE: driver_only v22, driver_plus_no_ops v9, driver_plus_compose v1. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
-closed at zero classes, and **the typed subprocess discrimination is complete end to end** (D23):
-script → codec → `world_tool` → bridge → `ExtProcOutcome.exit_code`, witnessed at every joint, at
-ABI `5.0`. **The identity work is done** (D24): eight recording adapters, a separate
-`WorldState.ext_effects` queue, the ext id on the world token (`holder_ext_id` — no ABI change), and
-D21 §4's rejected-program defect closed by a measured record → validate → replay round trip.
-`RandomDraw` is now the only class pinned at literal zero. **The successor audits are complete**
-(D25): four slots audited, no unknown drop, WI-D4's documented seal-terminal deferral threaded with
-the first performing `on_pre_step` witness behind it, and both slots' capability bounds executable
-as compiler verdicts — `on_pre_step` reaches 1 of 10 ports (`ai_step`), `on_solver_candidate` 0 of
-10 (ambient `std/process.exec` only).
+**BOTH GOAL-LINE CLAUSES HOLD (D27, D28).** `driver_plus_compose` v1 records and strictly replays
+a real graded session with compose installed — `extension_effects=1 origins=[compose] replayed=1
+mismatches=0` — under `profile-rules/3` and the first dynamic, EXISTENTIAL producer. All fifteen
+extensions are mediated or disclosed with a measured reason; door 3 is disclosed and filed
+(`fb_0f70d66af0fddb2c`). The vacuity register is computed: **forty classification entries, exactly
+one measured-and-substantive** — the honest size of what has been demonstrated, stated so nothing
+overclaims from it. Profiles: driver_only v22 · driver_plus_no_ops v9 · driver_plus_compose v1.
+Three standing reds (`test_coverage` pair since D22; `effect_inventory_selftest` since D25), all
+disclosed, all on the register.
 
-Yields **4 of 15** and **5 of 15**, unmoved since D15 — door 3 (`show`) keeps compose HOOK-UNRESOLVED.
-ABI at **15 rows + 5 added types**, still `5.0`; **the `proc_exec` rename forces `6.0`** and is a
-release decision with consumers outside this project. Profiles at `driver_only` **22**,
-`driver_plus_no_ops` **9**. **Three standing reds**, all pinned to HEAD by measurement: the
-`test_coverage` pair (since D22) and `effect_inventory_selftest` (disclosed at D25 — `ailang iface`
-yields nothing in this checkout; the gate refuses a pass-shaped absence, correctly). All register,
-none queue.
-
-**The project now has a committed goal line — read the plan's "The goal line" section (decided
-2026-08-09) before choosing any item.** Done = a compose-bearing profile records and replays a
-session with non-vacuous criterion-2 evidence, plus all fifteen extensions mediated-or-disclosed.
-The remaining critical path, in order:
-
-1. **The final acceptance rerun** — the closing note, and the only item left. D5's shape; the
-   vacuity register and the 15-row classification table as COMPUTED outputs, read from the
-   machine-readable places `NOTE-d27` §10 enumerates (`CLAIM`/`CLASSIFICATION`/`STATEMENT`/
-   `DISCLOSED`/`OMITTED` lines, `derive.py --json`). Its discipline is §10.2: the register does not
-   shrink to zero and was never meant to; `discovery` is existential and every cell citing it says
-   so; twelve extensions close by disclosure and measurement, not by rescue.
+**There is no critical path. The maintenance register (`NOTE-d28` §9.1, nineteen entries numbered continuously) is the
+queue.** The one instrument worth building first, per the closing note: `driver_only`'s missing
+coverage `STATEMENT` line, which makes the register fold computable from three profiles instead of
+two.
 
 **The endgame scope rule: a finding joins the queue only if it blocks the goal line's two clauses;
 everything else goes to the plan's maintenance register.** (Door 3's producer, the hook-scope

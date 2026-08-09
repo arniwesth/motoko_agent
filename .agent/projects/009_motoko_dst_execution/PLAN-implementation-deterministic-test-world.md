@@ -114,7 +114,15 @@ answers, so the demonstration (not the limit, which stays stated in
 `run_declared_vs_performed.sh`'s header) needs a new subject someday. And the bridge's
 `workdir`/`timeout_ms` entry now carries D26's measurement: **inert for `BashExec`** —
 `run_process_result` never receives `workdir`, so a routed call runs where the process started,
-exactly as ambient `exec` did.
+exactly as ambient `exec` did. **Added at WI-D28 (the register's closing state is §9.1 of
+`NOTE-d28`, nineteen entries numbered continuously):** the producer-owned vacuity of row 3's clause 3 (classifier 2's
+member set empty since B2b — the first leaning no install list can buy); `driver_only`'s missing
+coverage statement (D5's correction 4, the one instrument worth building in the taper); compose's
+`applied-local` door (`ai_compat.ail:6`, not covered by the door-3 filing); the catalogue's
+verbatim-`driver_only` waiver condition (three profiles now, two recording a sentence about a
+different profile); `extension_effect_fault` waived by every profile (fix priced: a
+`compaction_ai`-bearing profile, D27 §10.3); and no run reaching an excluded hook dispatch
+(fixture evidence only).
 
 ## Survey: executed at HEAD, 2026-08-02
 
@@ -3472,6 +3480,63 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D28, 2026-08-09 (~30m) — THE FINAL ACCEPTANCE RERUN. THE GOAL LINE IS REACHED, THE NAME
+STANDS ON A DEMONSTRATION, AND THE LOOP INVERTS TO THE TAPER.**
+The closing note is `NOTE-d28-the-final-acceptance-rerun.md`, and it is what this project's whole
+discipline was for: **eleven of eleven acceptance rows green by run, the vacuity register computed
+for the first time, all fifteen extensions mediated or disclosed with a measured reason, zero bare
+UNRESOLVED cells, and door 3 filed upstream** (`fb_0f70d66af0fddb2c`, with D15's discarded-route
+measurement inside it so the upstream reader knows what was tried).
+
+**VERIFIED AT REVIEW, per the note's own three-item verification list plus the fold:** the §2.1
+fold re-run independently reproduces **20 / 16 / 2 / 1 / 1 exactly** — forty classification
+entries, of which **exactly ONE rests on a basis both measured and substantive**
+(`compose · on_response_intercept · discovery`, under `driver_plus_compose` v1); all three profile
+scripts exit with zero `✗` rows; `driver_only_dst.ail` contains zero `STATEMENT` occurrences
+against two in each successor (finding §4.3 confirmed statically and by run); the full `make dst`
+sweep re-run at review — exit and red-set verified against the note's claim (exactly the two
+standing `test_coverage` targets). **The one-of-forty number is the computed answer to S21's
+founding question — *what does this green table actually rest on* — and stating it is the
+difference between reporting the demonstration and overclaiming from it.**
+
+**THE VERDICT ON THE VERDICT: RATIFIED.** The name decision's structure survives adversarial
+reading: it rests on rows run this session, a demonstration that cannot pass vacuously (D27's
+mutant A is the falsifier), per-extension disclosures each carrying file/line/symbol/effects, and
+the computed register — and it explicitly does NOT rest on an empty register, a closed door 3, a
+classifier-clean compose, or any universal claim about what compose could do. **D5's mandatory
+zero-coverage sentence is replaced by a successor that is quantitative rather than categorical**
+(one hook deep; ten extensions installed in no profile; fourteen with no dynamic evidence), and
+row 7's stated reading remains the single interpretive dependency, reported rather than absorbed.
+
+**Six findings reported, none fixed, all registered** — the closing note's integrity held: the
+fifth vacuity leaning is the first that belongs to a PRODUCER rather than a profile (classifier
+2's member set empty since B2b, so row 3's clause 3 is vacuous for any install list); `driver_only`
+never got the coverage statement D5's correction 4 demanded (named as the one instrument worth
+building in the taper); compose's UNRESOLVED rests on three doors, one of which
+(`applied-local`) the filing does not cover; two D27 §10 figures corrected by re-derivation (ten
+with no profile, fourteen with no dynamic evidence — S22's shape in inherited prose); the
+catalogue's verbatim-`driver_only` waiver condition escalated with a count; and no run in the tree
+reaches an excluded hook dispatch (fixture evidence only). **Counters: silent-wrong 76,
+instrument-weaker 7, both unmoved — the item wrote no production code, so neither had a candidate.
+One review ruling: the run denominator increments with the item per the standing convention, so
+76 across 50.**
+
+**Two concurrency facts, disclosed on both sides.** The implementing session, still alive after
+writing, ran S9 a second time AFTER the fact and recorded that this apply's plan edit (18:08:59Z)
+and background `make dst` began well after its last measurement (18:01Z) — sequence checked
+against mtimes, the first item where the end-of-run check mattered. On this side: the apply's
+documentation edits were made while its own verification sweep ran (no gate reads `.agent` files,
+stated rather than assumed), and that sweep's `sync_packages` regenerated `ailang.lock` downstream
+of a concurrent, uncommitted user edit to `.motoko/config/default/config.json` (the `motoko_core`
+content hash covers it) — **the lock was restored to HEAD rather than committed**, because derived
+state of an uncommitted edit belongs to the edit's author.
+
+**Fifty-one calibration runs built and measured this axis. The fifty-second said what it rests on,
+in a number, and stopped. The taper is active as of this entry: the maintenance register (nineteen
+entries, numbered continuously, §9.1 of the note) is the queue's only source, at reduced cadence,
+continuation labelled maintenance — the goal-line section records the decision and this entry
+records its execution.**
 
 **WI-D27, 2026-08-09 — THE COMPOSE-BEARING PROFILE. GOAL-LINE CLAUSE 1 IS ACHIEVED, AND THE ITEM'S
 CENTRAL ACT WAS A RULES CHANGE THE GOAL LINE HAD ALREADY DECIDED.**
