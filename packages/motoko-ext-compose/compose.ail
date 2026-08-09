@@ -913,15 +913,26 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
 -- reading `out.exitCode` from here would mean decoding `output` and pulling a
 -- field — the string-parsing path, which would also put a tool-error blob and a
 -- genuine compiler failure on one code path, exactly the confusion the paragraph
--- above objects to. Typing it instead requires the exit code on BOTH sides of
--- `Ports.tool_exec`, and the deterministic side has none: `ScriptedTool` carries
--- no exit code and is rebuilt from the persisted payload, so the field is a
--- program-schema version bump. That is scheduled as its own item rather than
--- absorbed here — see WI-D21 §3.
+-- above objects to.
 --
--- The residue is unchanged and the reason for it is now the measured one: these
--- two sites stay ambient because the seam renders where they need to match, not
--- because the seam cannot reach a subprocess.
+-- THE TYPED FIELD NOW EXISTS AND THESE SITES STILL DO NOT ROUTE, and the two
+-- halves of that sentence have different vintages — kept two-part per S15. The
+-- paragraph above used to continue: "Typing it instead requires the exit code
+-- on BOTH sides of `Ports.tool_exec`, and the deterministic side has none:
+-- `ScriptedTool` carries no exit code... the field is a program-schema version
+-- bump, scheduled as its own item." WI-D22 shipped the bump and WI-D23 the
+-- rest: `ExtProcOutcome.exit_code` is real, filled by the bridge from the
+-- typed outcome, so `out.exitCode`'s replacement is a typed read, not a parse.
+-- What still blocks routing is IDENTITY, not typing: `recording_tool` records
+-- every `tool_exec` invocation as `ToolIdentity("loop_v2", inv.call.id, ...)`
+-- and the bridge's call id is blank, so the first `proc_exec` call in a
+-- recorded run emits a program the validator rejects
+-- (`IdentityComponentMissing`, asserted in `dst_program` since WI-D21).
+-- Routing these sites waits on the eighth recording adapter and
+-- `ExtCtx.ext_id` — WI-D21 §5's plan. Until that lands the residue stands for
+-- the measured reason: the seam renders where these sites need to match, and
+-- an extension-initiated dispatch through it records an identity that is
+-- false twice over.
 export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   if mode != "inline" then { decision: NoIntercept, next_state: ctx.world }
   else {

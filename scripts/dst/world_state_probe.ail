@@ -52,7 +52,7 @@ import std/io (println, exit)
 import std/list as List (length)
 import std/string (contains)
 import std/ai (Message, ToolCall)
-import std/json (Json, jo)
+import std/json (Json, jo, kv, js)
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
 import src/core/config (CostRates, VerificationConfig)
@@ -69,7 +69,7 @@ import src/core/phase_vocab (
   ErrorEvent,
   LedgerTrace
 )
-import src/core/test/stub_step (Scripted, ScriptedWorld, tool_step, prose_step)
+import src/core/test/stub_step (Scripted, ScriptedWorld, tool_step, prose_step, scripted_ports)
 import src/core/ports (ScriptedStep, WorldState, empty_world_state,
   -- WI-D17's write class, exercised at the ADAPTER rather than through the
   -- driver, because nothing routes it yet — see `assert_file_write_class`.
@@ -78,7 +78,11 @@ import src/core/ports (ScriptedStep, WorldState, empty_world_state,
   -- WI-D18's directory class, same reason and the same shape of instrument.
   -- WI-D22 moved these to src/core/fs_node; see the import below.
   PathKind, PathMissing, PathFile, PathDir, path_kind_label,
-  scripted_path_stat, scripted_dir_list, scripted_dir_make, recording_dir_make)
+  scripted_path_stat, scripted_dir_list, scripted_dir_make, recording_dir_make,
+  -- WI-D23's exit-code witness — see `exit_code_witness` at the bottom.
+  world_tool, ToolInvocation, ToolCompleted, ScriptedTool)
+import src/core/ext_world (world_to_token)
+import src/core/tool_dispatch_adapter (dispatch_one, dispatch_one_typed)
 import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_interaction (Interaction, interaction_kind, count_kind)
 import src/core/types (Msg)
@@ -913,6 +917,76 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     println("world_state_probe PASS")
   else {
     let _ = println("world_state_probe FAIL");
+    exit(1)
+  }
+}
+
+-- =============================================================================
+-- WI-D23: THE EXIT-CODE WITNESS. Its own entry point, deliberately NOT part of
+-- `main`: the Makefile's typed-tool poison pair requires `main` to COMPLETE
+-- with Process withheld ("fully-seeded world completes with Process withheld"),
+-- and two of these three rows drive a REAL subprocess to a chosen exit code —
+-- which is the only kind of row that can see the live arm's binding at all.
+-- Every in-process fixture stays green when that arm stamps -1, because the
+-- scripted arm already worked and the fixtures exercise it.
+--
+-- The three rows and the mutant each exists to kill (restore by file copy, S17):
+--
+--   live       `world_tool`'s [] arm on a command that exits 7. RED when the
+--              arm's binding is reverted to `exit_code: -1`.
+--   adoption   `session.ext_ports_of`'s OWN `proc_exec` closure — not a
+--              substrate probe, per S14's two-subjects rule — against a
+--              scripted world whose `ScriptedTool` carries 5. RED when the
+--              bridge's projection is dropped or wired to the wrong variant.
+--   projection `dispatch_one` and `dispatch_one_typed` on one call that exits
+--              3: byte-identical content, and the code is 3. RED when the
+--              sibling's exit code is hardwired to 0 (the arm the other two
+--              rows cannot pin alone) or the projection stops being one.
+--
+-- 7, 5 and 3 are pairwise distinct, distinct from each other's duration (11)
+-- and from the semantically loaded -1/0/1; 137 is WI-D22's round-trip row. Per
+-- S7, no two quantities here are equal, so a crossed wire cannot cancel out.
+export func exit_code_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let _ = println("exit_code_witness: WI-D23 — the typed exit code reaches the caller");
+
+  -- live: a real subprocess, driven to a code no default can imitate.
+  let live_inv: ToolInvocation = {
+    call: { id: "d23-live", tool: "BashExec", arguments: jo([kv("cmd", js("exit 7"))]) },
+    workdir: ".",
+    timeout_ms: 0,
+    started_at_ms: 0
+  };
+  let live = world_tool(empty_world_state(), live_inv);
+  let ok_live = check("live arm: a real BashExec exiting 7 carries typed exit_code 7",
+                      match live.outcome { ToolCompleted(c) => c.exit_code == 7, _ => false },
+                      "expected ToolCompleted with exit_code 7 — not -1 (the pre-D23 stamp), not 0, not 1");
+
+  -- adoption: the bridge itself, fed a scripted world. This is the row that
+  -- catches the `ExtProcOutcome` projection being dropped, because the seam
+  -- was built across four items with no caller at all and this is its first.
+  let scripted_tool: ScriptedTool =
+    { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "d23-scripted", exit_code: 5 };
+  let w5 = { empty_world_state() | tools: [scripted_tool] };
+  let eports = Session.ext_ports_of(scripted_ports(), w5, "");
+  let adopted = eports.proc_exec(world_to_token(w5), "BashExec", "{}");
+  let ok_adopt = check("adoption: ext_ports_of's proc_exec closure hands the scripted exit code 5 through ExtProcOutcome",
+                       adopted.exit_code == 5 && adopted.output == "d23-scripted",
+                       "expected exit_code 5 with output 'd23-scripted' — got exit_code ${show(adopted.exit_code)}");
+
+  -- projection: one call, both faces. The content must be byte-identical and
+  -- the code must be the subprocess's own, so a sibling hardwired to 0 — the
+  -- one mutant the 7-row and 5-row cannot pin alone — goes red here.
+  let proj_call: ToolCall = { id: "d23-proj", name: "BashExec", arguments: "{\"cmd\":\"echo proj-out; exit 3\"}" };
+  let typed = dispatch_one_typed(".", proj_call);
+  let plain = dispatch_one(".", proj_call);
+  let ok_proj = check("projection: dispatch_one is byte-identical to the sibling's content, and the code is 3",
+                      plain == typed.content && typed.exit_code == 3,
+                      "expected byte-identical content and exit_code 3 — got ${show(typed.exit_code)}");
+
+  if ok_live && ok_adopt && ok_proj then
+    println("exit_code_witness PASS")
+  else {
+    let _ = println("exit_code_witness FAIL");
     exit(1)
   }
 }

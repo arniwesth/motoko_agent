@@ -247,7 +247,10 @@ func fixed_exec(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, 
   { outcome: ToolCompleted({ tool_call_id: inv.call.id, content: "", exit_code: -1 }), next_state: state }
 }
 
-func fixed_ext_exec(world: ExtWorld, _name: string, _args: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", next_state: world } }
+-- `_tool, _args_json` per the ABI row (WI-D23 renamed this fixture's `_name,
+-- _args` with the census's other stragglers); `exit_code: -1` because a fixed
+-- stub executes nothing and 0 would assert a success no process produced.
+func fixed_ext_exec(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", exit_code: -1, next_state: world } }
 
 -- WI-D16's file read seam. `present: false` rather than an empty-string
 -- content claim — see `ExtFileRead`. This fixture has no filesystem behind it.

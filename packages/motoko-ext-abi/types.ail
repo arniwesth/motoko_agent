@@ -167,18 +167,29 @@ export type ExtClockReading = {
 -- branch on, and recovering one by parsing this string is the silent-wrong shape
 -- the project exists to remove. The gap is the RENDERING, not the dispatch.
 --
--- WHICH IS WHY THE SECOND WIDENING IS STILL NOT TAKEN HERE, and now for a
--- measured reason rather than a scoping one. A typed `exit_code` on this record
--- has to be produced on BOTH sides of `Ports.tool_exec`, and the deterministic
--- side cannot supply it: `ScriptedTool` (`ports.ail:418`) carries
--- `{ tool_call_id, duration_ms, code, message, content }` and no exit code, and
--- it is reconstituted from the persisted interaction payload by
--- `decode_tool_outcome`, so a new field is a persisted-codec change. An old
--- artifact would decode a missing `exit_code` as 0 — success — which turns a
--- recorded failing run into a passing replay. That requires a
--- `program_schema_version` bump. See WI-D21 §3 for the link-by-link price.
+-- THE SECOND WIDENING WAS TAKEN AT WI-D23, and the paragraph that stood here is
+-- kept two-part per S15. Through WI-D22 it read: "the second widening is still
+-- not taken here — a typed `exit_code` has to be produced on BOTH sides of
+-- `Ports.tool_exec`, and the deterministic side cannot supply it: `ScriptedTool`
+-- carries no exit code and is reconstituted from the persisted interaction
+-- payload, so a new field is a persisted-codec change. An old artifact would
+-- decode a missing `exit_code` as 0 — success — which turns a recorded failing
+-- run into a passing replay. That requires a `program_schema_version` bump."
+-- WI-D22 shipped the bump: `ScriptedTool.exit_code` exists at
+-- `execution-program/2` and a v1 tool payload REFUSES rather than defaulting,
+-- so the reason expired and this item widened the record.
+--
+-- `exit_code`'s domain is `ScriptedTool.exit_code`'s, stated there in full:
+-- >= 0 is what the subprocess exited with and only 0 is success; -1 is "no
+-- subprocess ran, or the producer cannot state one" — the value every in-tree
+-- noop writes, because a port that executes nothing has no code to report and
+-- 0 would assert a success no process produced. The bridge fills it from the
+-- typed outcome: `ToolCompleted` carries the dispatcher's real code, and the
+-- three fault variants project to -1 — they are already discriminated in
+-- `output`'s rendered fault text, and none of them is a process that exited.
 export type ExtProcOutcome = {
   output: string,
+  exit_code: int,
   next_state: ExtWorld
 }
 
@@ -381,8 +392,9 @@ export type ExtPorts = {
   --
   -- WHAT IT REACHES, so the next reader does not re-derive it: `BashExec` and
   -- `RunTests` run a REAL subprocess and return a real exit code, rendered into
-  -- `ExtProcOutcome.output` as JSON. See that type's note above and
-  -- `session.ail`'s `proc_exec` closure for the measured chain.
+  -- `ExtProcOutcome.output` as JSON and — since WI-D23 — typed into
+  -- `ExtProcOutcome.exit_code`. See that type's note above and `session.ail`'s
+  -- `proc_exec` closure for the measured chain.
   proc_exec: (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS},
   -- WI-D16's filesystem read seam. It is a POINT READ — a path in, existence
   -- and contents out — because it fronts `Ports.file_read` and that seam is

@@ -127,12 +127,24 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # one: they carry `tool_phase.ail:318`, which did not move. The nine-file set
 # below is the cost of a tool_phase move; a session.ail-only move touches six.
 #
+# WI-D23 RE-BASELINED THE FIVE session.ail ANCHORS A FIFTH TIME,
+# 1061/1320/1426/2871/2981 -> 1096/1355/1461/2906/3016, ALL +35 — the law above
+# firing exactly as priced. The item put the typed exit code through the bridge:
+# `tool_outcome_exit_code` (a new projection beside `tool_outcome_text`), the
+# S15 re-tensing of the seam comment's expired scope clause, and the `proc_exec`
+# closure's second output field all land at or above `ext_ports_of`, which sits
+# above all five anchors. All five were compared to `git show HEAD:` character
+# by character and are byte-identical — pure offset drift, no site changed
+# identity, routing or attribution. The three `*_dst.ail` discovered-site
+# fixtures carry `tool_phase.ail:318`, which did not move, so this is the
+# six-file session.ail-only form, not the nine-file tool_phase form.
+#
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1061 1320 1426 2871 2981; do
+for l in 1096 1355 1461 2906 3016; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

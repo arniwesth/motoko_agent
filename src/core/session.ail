@@ -825,11 +825,36 @@ pure func tool_outcome_text(o: ToolOutcome) -> string {
   }
 }
 
+-- The exit-code projection beside the text one (WI-D23), deliberately NOT
+-- folded into `tool_outcome_text`: the string is the model-facing message and
+-- is unchanged; this is the typed half `ExtProcOutcome.exit_code` carries.
+-- `ToolCompleted` hands through the code the dispatcher stated — since WI-D23
+-- that is the real subprocess code on the live arm and the script's on the
+-- scripted one — and the three fault variants project to -1, because none of
+-- them is a process that exited and their discrimination already travels,
+-- rendered, in the text projection above. Without this function the field
+-- WI-D22 put on `ToolCompleted` would die one seam short of the only caller
+-- the seam exists for.
+pure func tool_outcome_exit_code(o: ToolOutcome) -> int {
+  match o {
+    ToolCompleted(c) => c.exit_code,
+    ToolFailed(_) => -1,
+    ToolCorrelationMismatch(_) => -1,
+    ToolDeadlineExceeded(_) => -1
+  }
+}
+
 pure func decode_or_empty(raw: string) -> Json {
   match decode(raw) { Ok(j) => j, Err(_) => jo([]) }
 }
 
-func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+-- EXPORTED AT WI-D23, for one consumer: `world_state_probe`'s adoption row,
+-- which per S14 must exercise THIS bridge's `proc_exec` closure against a
+-- scripted world — a substrate probe that rebuilds the closure's shape would
+-- measure its own fidelity, not the bridge. Production still has exactly the
+-- four `mk_v2_ext_ctx` call sites below; nothing else should construct an
+-- `ExtPorts` from a driver world.
+export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   -- WI-B2b. The bridge takes the token IN and returns the successor OUT, so
   -- this closure captures no world at all — which is the point.
   --
@@ -872,10 +897,14 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
   -- Written with the SAME `let w0` shape as `ai_step` and `clock_now`, and for
   -- the same tool reason rather than for symmetry — see `ai_step`'s note above.
   --
-  -- The typed outcome is still PROJECTED onto a string. That is the ABI's
-  -- `ExtProcOutcome.output` shape and its own comment says why the fault typing
-  -- is a separate widening on a separate ground. Faults stay RENDERED rather
-  -- than dropped, so an extension is not handed "" when a tool actually failed.
+  -- The typed outcome is PROJECTED TWICE (WI-D23): `tool_outcome_text` renders
+  -- it onto `output` — the model-facing string, unchanged since WI-D16 — and
+  -- `tool_outcome_exit_code` carries the one quantity a caller branches on
+  -- into the typed field WI-D23 added to `ExtProcOutcome`. The four-variant
+  -- fault DISCRIMINATION still does not cross the ABI; faults stay RENDERED
+  -- rather than dropped, so an extension is not handed "" when a tool actually
+  -- failed, and which fault class it was is still a string fact — that residue
+  -- is the catalogue's `extension_effect_fault` coverage-gap entry.
   --
   -- =========================================================================
   -- WI-D21: WHAT THIS SEAM ACTUALLY DOES, MEASURED END TO END AT THE SEAM.
@@ -905,13 +934,17 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
   --   (`tool_dispatch_adapter.ail:178`) and it arrives here as
   --   `ToolCompleted.content`.
   --
-  -- SO THE EXIT CODE IS NOT LOST. THE TYPE IS. A caller wanting to branch on it
-  -- must decode a string and pull `exit_code` — the string-parsing path WI-D19
-  -- correctly refused, which would also put a tool-error blob and a genuine
-  -- compiler failure on one code path. That is the whole of the remaining gap,
-  -- and it is a RENDERING gap rather than a dispatch one. WI-D21 §3 prices
-  -- closing it; the short version is that it cannot reach `ScriptedTool` without
-  -- a program-schema version bump, so it is scheduled rather than absorbed.
+  -- SO THE EXIT CODE WAS NEVER LOST; THE TYPE WAS — AND WI-D23 CLOSED THAT,
+  -- with the history kept two-part per S15. Through WI-D22 this paragraph
+  -- read: "a caller wanting to branch on it must decode a string and pull
+  -- `exit_code` — the string-parsing path WI-D19 correctly refused... it
+  -- cannot reach `ScriptedTool` without a program-schema version bump, so it
+  -- is scheduled rather than absorbed." WI-D22 shipped the bump and WI-D23
+  -- shipped the remaining live-side links: `dispatch_one_typed` returns the
+  -- code beside the content, `world_tool`'s live arm binds both, and this
+  -- closure projects `ToolCompleted.exit_code` into
+  -- `ExtProcOutcome.exit_code`. A caller branches on a typed field; nothing
+  -- on this path parses `content`'s JSON.
   --
   -- TWO FIELDS ARE CONSTANTS AND BOTH ARE CLAIMS. `workdir` is "." and not
   -- `ctx.workdir` — this bridge is built by `ext_ports_of`, which takes no
@@ -981,7 +1014,9 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
       started_at_ms: 0
     };
     let execution = p.tool_exec(w0, inv);
-    { output: tool_outcome_text(execution.outcome), next_state: world_to_token(execution.next_state) }
+    { output: tool_outcome_text(execution.outcome),
+      exit_code: tool_outcome_exit_code(execution.outcome),
+      next_state: world_to_token(execution.next_state) }
   };
   -- WI-D16's file read seam, bridged to WI-D3's `Ports.file_read`. Same `let w0`
   -- shape, same tool reason.

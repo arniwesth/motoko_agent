@@ -46,8 +46,12 @@ export type Scenario = {
 -- from a `(cmd, cwd)` signature would shell out the tool name in a directory
 -- named by a JSON blob. That is why the rename reached bindings that use
 -- neither argument.
+--
+-- `exit_code: -1` (WI-D23), NOT 0: a no-op executes nothing, and -1 is
+-- exactly the "no subprocess ran" value the ABI row's domain names. Writing
+-- 0 here would assert a success no process produced.
 func noop_proc_exec(world: ExtWorld, _tool: string, _args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
-  { output: "", next_state: world }
+  { output: "", exit_code: -1, next_state: world }
 }
 
 -- WI-D16's file read seam. `present: false` is the honest answer for a port

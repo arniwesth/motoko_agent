@@ -43,7 +43,7 @@ import std/env (getEnvOr)
 import std/string as Str (length, startsWith, split, compare, substring)
 import src/core/phase_vocab (ApprovalRequest)
 import src/core/tool_contract (ToolCallEnvelope)
-import src/core/tool_dispatch_adapter (dispatch_one)
+import src/core/tool_dispatch_adapter (dispatch_one_typed)
 -- WI-D22. `FsNode` lived here through WI-D21 and moved down for the same reason
 -- `Interaction` did: a module ABOVE this one in the layering — `dst_program`, the
 -- pure program schema — has to name it, and it cannot import the port layer. See
@@ -456,11 +456,17 @@ export type WorldState = {
 -- absent field rather than defaulting it, so absence never silently becomes -1
 -- either.
 --
--- WHAT DOES NOT SET IT TODAY, stated rather than implied — nothing. This item
--- ships the capability and routes no producer, which is the same state WI-D17
--- left `ExtPorts.file_write` in. Routing the four `exec` sites so a live
--- subprocess's real code reaches here is the next item's, and until it lands
--- every outcome this tree produces carries -1 unless a test writes one.
+-- WHAT SETS IT — SUPERSEDED AT WI-D23, kept two-part per S15. WI-D22 wrote
+-- here: "nothing sets it today; this item ships the capability and routes no
+-- producer, and until the next item lands every outcome this tree produces
+-- carries -1 unless a test writes one." That was true for one item. WI-D23
+-- routed the producer: `world_tool`'s live arm binds `dispatch_one_typed`'s
+-- exit code, so a real `BashExec`/`RunTests` outcome now carries the code the
+-- subprocess actually exited with, and the scripted arm has carried
+-- `t.exit_code` since WI-D22. What still writes -1: the three non-completed
+-- decode arms, the generating adapter (which draws nothing, by WI-D22's
+-- decision 6), and every in-process noop — all producers that genuinely
+-- cannot state a code.
 export type ScriptedTool = {
   tool_call_id: string,
   duration_ms: int,
@@ -1333,22 +1339,31 @@ export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution 
   match state.tools {
     -- No world opinion: perform the real effect, exactly as before A12.
     --
-    -- `exit_code: -1`, AND THIS ARM IS WHY THE FIELD HAS AN ABSENT VALUE AT ALL.
-    -- `dispatch_one`'s contract is `(workdir, ToolCall) -> string`; it exists in
-    -- that shape to satisfy upstream `runTools`, and the exit code a `BashExec`
-    -- really produced is inside the string it returns, as JSON. WI-D21 named this
-    -- as link 4 and it is OUT OF THIS ITEM'S SCOPE: closing it means either a
-    -- typed sibling for `dispatch_one` or parsing its JSON here, and parsing here
-    -- is the same string-parsing defect one layer down.
+    -- THE LIVE ARM CARRIES THE REAL CODE (WI-D23). Through WI-D22 this arm
+    -- wrote `exit_code: -1`, because `dispatch_one`'s `(workdir, ToolCall) ->
+    -- string` contract — which exists in that shape to satisfy upstream
+    -- `runTools` — buried the exit code a `BashExec` really produced inside
+    -- the string it returns, as JSON, and parsing it back out here would have
+    -- been the same string-parsing defect one layer down. That was WI-D21's
+    -- link 4. WI-D23 closed it the other way: `dispatch_one_typed` returns
+    -- the content and the code as one record from one dispatch, and this arm
+    -- binds BOTH of its fields, so the code a caller branches on and the JSON
+    -- a model reads cannot come from different runs.
     --
-    -- Writing `0` here instead would be the S30 failure in its purest form — the
-    -- live arm asserting that every dispatched tool succeeded, in a field whose
-    -- whole purpose is to say when one did not.
+    -- Writing `0` here instead would be the S30 failure in its purest form —
+    -- the live arm asserting that every dispatched tool succeeded, in a field
+    -- whose whole purpose is to say when one did not. Writing `-1` again is
+    -- the mutant the live-arm witness row in `world_state_probe` exists to
+    -- kill: every in-process fixture stays green under it, because only a row
+    -- that drives a real subprocess to a chosen code can see this binding.
     [] => {
-      outcome: ToolCompleted({ tool_call_id: inv.call.id,
-                               content: dispatch_one(inv.workdir, envelope_to_call(inv.call)),
-                               exit_code: -1 }),
-      next_state: state
+      let d = dispatch_one_typed(inv.workdir, envelope_to_call(inv.call));
+      {
+        outcome: ToolCompleted({ tool_call_id: inv.call.id,
+                                 content: d.content,
+                                 exit_code: d.exit_code }),
+        next_state: state
+      }
     },
     t :: rest => {
       let advanced = { state | tools: rest, clock_ms: state.clock_ms + t.duration_ms };
@@ -2074,6 +2089,18 @@ export type ToolOutcomeRecord
   = ToolRecordDecoded(ScriptedTool)
   | ToolRecordUndecodable(string)
 
+-- THE FIELD IS AUTHORITATIVE AND THE CONTENT IS AN OPAQUE RENDERING (WI-D23).
+-- A recorded `BashExec` interaction carries the exit code twice: typed in
+-- `exit_code`, and as text inside the JSON that `dispatch_one_typed` rendered
+-- into `content`. In every artifact this tree records the two agree by
+-- construction — both derive from one `ToolResultItem` in one dispatch — but a
+-- hand-written artifact can make them disagree, and nothing compares them. That
+-- is decided, not overlooked: the typed field is what replay, validation and
+-- every caller read, and `content` is what a MODEL reads, an opaque string this
+-- schema makes no claims about. Do NOT close the gap by parsing `content`'s
+-- JSON in a validator — recovering typed facts from that string is the defect
+-- class WI-D19 refused and WI-D21..D23 spent three items removing; a validator
+-- that reintroduces it guards the henhouse with the fox.
 export pure func encode_tool_outcome(o: ToolOutcome) -> string {
   match o {
     -- WI-D22: `exit_code` is written UNCONDITIONALLY, including when it is -1.
