@@ -3493,7 +3493,11 @@ queue split observed from the outside.
 
 **What item 3 (the successor audits) inherits, measured:** `on_pre_step` declares `! {AI, IO,
 Trace}` — **no `Process`, so it cannot reach this seam** — and `on_solver_candidate` declares
-`! {Process}` and can (both verified at the ABI rows). All four folds stamp and clear the holder
+`! {Process}`. **CORRECTED AT THE D25 HANDOFF: D24 §12.2's "and can" is false by row algebra** —
+`proc_exec` needs `{IO, Process, FS}` and no `ExtPorts` field is callable under `{Process}` alone,
+so the slot's only subprocess route is **ambient** `std/process.exec`. "Can" was inferred from the
+presence of the effect, not from row inclusion — S33's shape, repeated here at review before the
+D25 grounding caught it. All four folds stamp and clear the holder
 regardless, so a future row widening cannot record effects attributed to nobody. The seam is done:
 routing a compose `exec` site now needs no type work and no identity work — what remains at
 compose's sites is compose's own shape (the `"ailang"` tool-name question and `grep_impl`'s

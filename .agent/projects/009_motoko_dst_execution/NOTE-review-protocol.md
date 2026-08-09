@@ -121,10 +121,12 @@ session with non-vacuous criterion-2 evidence, plus all fifteen extensions media
 The remaining critical path, in order:
 
 1. **The successor audits** — `on_pre_step`, `on_solver_candidate`. Compose binds both; base rate
-   **2 of 2** (S29). Before routing, because the demonstration is the first performing run. D24's
-   scoping gift: `on_pre_step` declares no `Process` and cannot reach the effect seam;
-   `on_solver_candidate` declares `! {Process}` and can. Any fold the audits add must stamp/clear
-   the holder by key-set, never by world round trip (**S34**).
+   **2 of 2** (S29), though the D25 grounding measured both slots mostly threaded already. Bounds by
+   row algebra: `on_pre_step` reaches exactly one port (`ai_step`); `on_solver_candidate` reaches
+   **zero** — its `! {Process}` cannot call any `ExtPorts` field, only ambient `std/process.exec`
+   (this corrects D24 §12.2's "and can"). The known seam is the documented pre-step seal-terminal
+   drop (`session.ail:2522-2530`). Any fold the audits touch must stamp/clear the holder by
+   key-set, never by world round trip (**S34**).
 2. **Routing compose's `exec` sites** — three import sites, four call sites; edges named at their
    sites.
 3. **C5's compose-bearing profile** — the demonstration vehicle.
