@@ -442,6 +442,10 @@ func witness_of(initial: WorldState, run: TracedSessionResult) -> DiscoveryWitne
     file_writes: 0,
     file_removes: 0,
     dir_makes: 0,
+    -- WI-D24 added the extension-effect class on the same terms: this scenario
+    -- installs no extension that reaches `ExtPorts.proc_exec`, so the pin holds
+    -- here and the class is still claimed at zero rather than unmentioned.
+    extension_effects: 0,
     expected_env_reads: if dispatches > 0 then env_reads_with_dispatch(dispatches)
                         else env_reads_always()
   }

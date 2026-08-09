@@ -413,13 +413,19 @@ func join_lines(xs: [string]) -> string {
 -- WI-D21 §3." WI-D22 took the bump and WI-D23 landed the field:
 -- `ExtProcOutcome.exit_code` carries a real subprocess code through
 -- `ToolCompleted`, so "rg exited 1" would arrive typed, not as a fault class
--- and not out of parsed JSON. Two obstacles remain, both measured elsewhere
--- rather than restated: this site reads `out.stdout` as BYTES where the seam
--- renders a JSON string (the shape half, above), and an extension-initiated
--- dispatch through the seam records an identity the validator rejects — the
--- blank call id, `compose.ail`'s `on_response_intercept` note. Routing waits
--- on that identity work (WI-D21 §5); the seam can run ripgrep and can now
--- state its exit, and this site stays ambient for those two named reasons.
+-- and not out of parsed JSON. Two obstacles remained after WI-D23 and WI-D24
+-- closed the second of them — kept two-part, same rule. What was written here:
+-- "this site reads `out.stdout` as BYTES where the seam renders a JSON string
+-- (the shape half, above), and an extension-initiated dispatch through the seam
+-- records an identity the validator rejects — the blank call id... Routing waits
+-- on that identity work (WI-D21 §5)."
+--
+-- WI-D24 closed the identity half: the bridge now dispatches through
+-- `Ports.ext_effect_exec`, the eighth recording adapter records the effect as
+-- `ExtensionEffectIdentity` with the performing extension's own id, and the
+-- program validates and replays. ONE obstacle remains and it is this site's own
+-- shape: `out.stdout` is read as bytes and the seam renders JSON. This site
+-- stays ambient for that one measured reason.
 --
 -- WHAT DID ROUTE HERE: both `grep_fallback_scan` calls, which are the FS half of
 -- this function, and `mk_ok`'s clock. The world therefore records the fallback

@@ -141,6 +141,12 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity,
   EnvironmentReadIdentity, ClockAdvanceIdentity,
+  -- WI-D24. The class the eighth recording adapter writes, plus the two
+  -- projections the round-trip row reads off it: the ORIGIN is the ext id the
+  -- fold stamped (the S33 row's subject) and the DEADLINE distinguishes a class
+  -- that has one from a class that does not.
+  ExtensionEffectIdentity,
+  identity_origin,
   identity_kind,
   identity_projection,
   interaction_kind,
@@ -168,6 +174,7 @@ import src/core/dst_program (
   validate_program,
   program_ok,
   program_message,
+  ProgramRejection,
   program_schema_version,
   validate_bounds
 )
@@ -176,7 +183,20 @@ import src/core/dst_program (
 import src/core/dst_generator (GeneratorBounds)
 import src/core/dst_driver_only (driver_only, driver_only_manifest)
 import src/core/dst_profile (ExecutionManifest)
-import src/core/dst_fault_catalogue (required_class_ids)
+import src/core/dst_fault_catalogue (required_class_ids, fault_class_extension_effect)
+-- WI-D24. The round-trip row below is a RECORD -> VALIDATE -> REPLAY, so this
+-- file needs the replay half. It is the only scenario here that does; the three
+-- older ones stop at the program.
+import src/core/dst_replay (
+  ReplayMismatch,
+  world_state_of,
+  reconstitution_balance,
+  strict_replay_findings,
+  replay_rule,
+  replay_message,
+  refusal_rule,
+  refusal_message
+)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
@@ -595,6 +615,10 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
     file_writes: 0,
     file_removes: 0,
     dir_makes: 0,
+    -- WI-D24 added the extension-effect class on the same terms: this scenario
+    -- installs no extension that reaches `ExtPorts.proc_exec`, so the pin holds
+    -- here and the class is still claimed at zero rather than unmentioned.
+    extension_effects: 0,
     expected_env_reads: expected_env
   }
 }
@@ -1051,6 +1075,272 @@ func routing_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
 }
 
 -- ---------------------------------------------------------------------------
+-- WI-D24: the routed extension EFFECT — record, validate, replay
+-- ---------------------------------------------------------------------------
+--
+-- THIS IS THE ROW THAT CLOSES WI-D21 §4. Through WI-D23 the first extension to
+-- call `ExtPorts.proc_exec` in a recorded run made the recorder emit a program
+-- its own validator refused: `recording_tool` wrote `ToolIdentity("loop_v2", "", tool)`
+-- and a blank tool call id is a rejection. WI-D21 asserted that latent defect
+-- against hand-built identities. This scenario is the executable answer — a real
+-- hook, the real bridge, the real recorder — and it asserts three things the
+-- unit rows cannot:
+--
+--   1. the recorded interaction is `expect_extension_effect` and VALIDATES;
+--   2. the ORIGIN is the extension's own id, taken off the transport;
+--   3. `world_state_of` reconstitutes a queue that SERVES the dispatch, so the
+--      replay performs no subprocess and leaves no interaction unconsumed.
+--
+-- THE EXT ID IS DELIBERATELY NOT COMPOSE'S. `recording_ext_effect` could satisfy
+-- every other row in this file with the string "compose" hardcoded, because
+-- compose is the only extension the project ever talks about at this seam (S33:
+-- the proxy and the truth agree on almost every input by construction). The id
+-- below is one no production registry contains, and the origin row is what makes
+-- the difference observable.
+--
+-- THE DRIVER'S OWN TOOL DISPATCHES INTERLEAVE WITH THE EXTENSION'S, and that is
+-- the scenario's second job. Two classes, two queues, one run: the driver
+-- consumes `WorldState.tools` (durations 7/11/13) and the extension consumes
+-- `WorldState.ext_effects` (durations 17/19/23/29), and no two quantities in
+-- either queue are equal (S7). A world serving one queue from the other shows up
+-- as a content mismatch rather than as a count that still balances.
+func effect_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+  -- SIX entries against the four intercepts the script produces, and the slack
+  -- is load-bearing rather
+  -- than defensive: an empty `ext_effects` queue does not fail, it DELEGATES —
+  -- `world_ext_effect`'s `[]` arm runs a real subprocess. A fixture that seeded
+  -- exactly the expected number would turn any future off-by-one in the dispatch
+  -- count into a live `bash -lc` inside a deterministic gate. The unconsumed tail
+  -- is invisible to every check here: `reconstitution_balance` counts the queue
+  -- the LOG rebuilds, not the one the scenario seeded.
+  --
+  -- The exit codes are real and distinct (41/43/47/53). `-1` would be the honest
+  -- value for a tool that runs no process, and it is exactly wrong here: this
+  -- seam's whole point since WI-D23 is that a subprocess code crosses the ABI,
+  -- so the fixture states codes a replay can be caught losing.
+  [{ tool_call_id: "", duration_ms: 17, code: "", message: "", content: "EXT-EFFECT-1", exit_code: 41 },
+   { tool_call_id: "", duration_ms: 19, code: "", message: "", content: "EXT-EFFECT-2", exit_code: 43 },
+   { tool_call_id: "", duration_ms: 23, code: "", message: "", content: "EXT-EFFECT-3", exit_code: 47 },
+   { tool_call_id: "", duration_ms: 29, code: "", message: "", content: "EXT-EFFECT-4", exit_code: 53 },
+   { tool_call_id: "", duration_ms: 31, code: "", message: "", content: "EXT-EFFECT-5", exit_code: 59 },
+   { tool_call_id: "", duration_ms: 37, code: "", message: "", content: "EXT-EFFECT-6", exit_code: 61 }]
+}
+
+func effect_world(answers: [string]) -> WorldState {
+  { base_world(answers) | ext_effects: effect_tools() }
+}
+
+-- The routed hook. ONE `proc_exec` per intercept, through `ctx.ports` — the
+-- production bridge, not a rebuilt closure (S14's two subjects).
+--
+-- The successor is threaded from the call's own `next_state`, which is what
+-- makes the queue advance visible to the next dispatch. Returning `ctx.world`
+-- here would be S29's dropped successor: every intercept would consume the same
+-- head, the recorder would log three identical outcomes, and every count would
+-- still balance.
+func effect_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let out = p.proc_exec(ctx.world, "BashExec", "{\"cmd\":\"true\"}");
+  { decision: { NoIntercept }, next_state: out.next_state }
+}
+
+func effect_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [{ approval_hooks_of(id) | on_response_intercept: effect_intercept }] },
+    strict_mode: false, verification: v }
+}
+
+func run_effect(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    effect_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+-- Every recorded origin of the extension-effect class, in order. The row that
+-- kills the hardcoded-id mutant reads THIS and not a count.
+pure func effect_origins(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ExtensionEffectIdentity(_, _, _) => identity_origin(i.identity.body) :: effect_origins(rest),
+        _ => effect_origins(rest)
+      }
+  }
+}
+
+pure func effect_class_ids(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ExtensionEffectIdentity(_, c, _) => c :: effect_class_ids(rest),
+        _ => effect_class_ids(rest)
+      }
+  }
+}
+
+pure func all_equal(xs: [string], v: string) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => x == v && all_equal(rest, v)
+  }
+}
+
+func effect_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("-- WI-D24: an extension EFFECT recorded, validated and REPLAYED --");
+  let ext_id = "ext_delta_24";
+  let initial = effect_world([approve_line(), approve_line(), approve_line()]);
+  let run = run_effect(ext_id, initial);
+  let log = run.world.log;
+  -- One `proc_exec` per intercept, and the driver dispatches the intercept once
+  -- per assistant response. `provider_calls_witnessed` reads `ProviderCallPrepared`
+  -- records production driver code writes, so the expectation cannot agree with
+  -- the recorder by construction — WI-D19's argument, one class over.
+  let intercepts = provider_calls_witnessed(run.trace.records);
+  let w = { witness_for(initial, run, env_reads_always(1)) | extension_effects: intercepts };
+  let effects = count_kind(log, identity_kind(ExtensionEffectIdentity("", "", "")));
+  let tools = count_kind(log, identity_kind(ToolIdentity("", "", "")));
+
+  let ok_ran = check("effect: the scenario reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so every witness below is vacuous");
+
+  -- REACHABILITY BEFORE BALANCE (S24). A hook that never ran records nothing and
+  -- balances against zero, which is byte-identical to every run in this tree
+  -- before this item.
+  let ok_reached = check("effect: the routed hook actually RAN — the extension seam reached the recorder",
+                         effects > 0,
+                         "expect_extension_effect count is 0; a routed call that never executes proves nothing");
+
+  -- THE INTERLEAVING, ASSERTED. Both classes in one log, from two queues. A
+  -- single shared queue would still produce these counts, so the row that
+  -- separates them is the CONTENT row below, not this one — this one only says
+  -- the run exercised both.
+  let ok_interleaved = check("effect: the driver's tool dispatches and the extension's effects are both in the log",
+                             tools > 0 && effects > 0,
+                             "expect_tool=${show(tools)} expect_extension_effect=${show(effects)} — a run with only one class cannot exercise the queue discipline");
+
+  let _ = println("  recorded: expect_extension_effect=${show(effects)} expect_tool=${show(tools)} (witness ${show(intercepts)} effects)");
+
+  -- THE ORIGIN. This is the S33 row: the ext id must come off the transport, and
+  -- an adapter that wrote a constant would pass every other row in this file.
+  let origins = effect_origins(log);
+  let ok_origin = check("effect: every recorded effect names the EXTENSION that performed it, not a constant",
+                        List.length(origins) == effects && effects > 0 && all_equal(origins, ext_id),
+                        "origins=[${join(origins)}] — expected ${show(effects)} of \"${ext_id}\"; an adapter that hardcodes an id passes every count-based row here");
+
+  -- The class id, read from the catalogue rather than restated. `validate_static_references`
+  -- would reject a drifted one, so this row is the cheap statement of what that
+  -- rejection would be about.
+  let ok_class = check("effect: every recorded effect names the catalogue's extension-effect row",
+                       all_equal(effect_class_ids(log), fault_class_extension_effect()),
+                       "class ids=[${join(effect_class_ids(log))}] — expected \"${fault_class_extension_effect()}\"");
+
+  let fs = check_discovery(log, w);
+  let _ = if List.length(fs) > 0 then report_findings(fs) else ();
+  let ok_balanced = check("effect: the extension-effect class balances against a witness that is not the log",
+                          List.length(fs) == 0,
+                          "${show(List.length(fs))} finding(s) above");
+
+  -- THE PIN, RUN AGAINST THE ROUTED LOG. WI-D19 pinned this class at literal
+  -- zero and WI-D21 measured that its stated ground did not hold. This is the
+  -- old expectation executed against a run that routes the class: it must be RED,
+  -- and red by the rule the pin named.
+  let _ = println("  the WI-D19 pin, run against the routed log (must go red):");
+  let t_pin = mutant("the pre-WI-D24 pin: extension_effect expected 0", "discovery-over-recorded",
+                     log, { w | extension_effects: 0 });
+
+  -- ---- VALIDATE ---------------------------------------------------------
+  --
+  -- The headline. WI-D21 §4's defect was that this call returned a rejection.
+  let program = program_of(run.world, initial);
+  let rejections = validate_program(program, required_class_ids());
+  let _ = if List.length(rejections) > 0 then println("      ${first_rejection_message(rejections)}") else ();
+  let ok_valid = check("effect: the recorded program VALIDATES — WI-D21 §4's rejected program is closed by measurement",
+                       List.length(rejections) == 0,
+                       "${show(List.length(rejections))} rejection(s); through WI-D23 this call returned program-identity-component-missing for the bridge's blank tool call_id");
+
+  -- ---- REPLAY -----------------------------------------------------------
+  match world_state_of(program, required_class_ids()) {
+    Err(r) => {
+      let _ = println("      ${refusal_message(r)}");
+      let ok_recon = check("effect: the program reconstitutes a world", false,
+                           "refused with ${refusal_rule(r)}");
+      ok_ran && ok_reached && ok_interleaved && ok_origin && ok_class && ok_balanced && t_pin && ok_valid && ok_recon
+    },
+    Ok(replay_world) => {
+      let rec = reconstitution_balance(program, replay_world);
+      let ok_rec = check("effect: the reconstituted world accounts for BOTH dispatch queues",
+                         List.length(rec) == 0,
+                         "${show(List.length(rec))} reconstitution finding(s) — an extension-effect class the projection drops leaves an EMPTY ext_effects queue, and an empty queue delegates to the real dispatcher");
+      let _ = println("  reconstituted: tools=${show(List.length(replay_world.tools))} ext_effects=${show(List.length(replay_world.ext_effects))}");
+
+      -- THE SERVED CONTENT. The reconstituted queue must hold what the recording
+      -- run served — not merely the right NUMBER of entries. This is the row that
+      -- separates the two queues: the driver's tools carry OK-ALPHA and exit_code
+      -- -1, the extension's carry EXT-EFFECT-n and a real code, and a projection
+      -- that collected either class into the other passes the count and fails
+      -- here.
+      let ok_served = match replay_world.ext_effects {
+        e :: _ =>
+          check("effect: the reconstituted queue SERVES the recorded dispatch, content and exit code",
+                e.content == "EXT-EFFECT-1" && e.exit_code == 41,
+                "head is content=\"${e.content}\" exit_code=${show(e.exit_code)} — expected EXT-EFFECT-1/41; a queue holding the DRIVER's entries here means the two classes share a home"),
+        [] =>
+          check("effect: the reconstituted queue SERVES the recorded dispatch, content and exit code",
+                false,
+                "the reconstituted ext_effects queue is EMPTY, so a replay would perform a real subprocess at the first extension effect")
+      };
+
+      -- The replay itself, against the reconstituted world. No live arm is
+      -- reachable for either class: both queues are seeded from the log.
+      -- THE SAME `ext_id`, and this line is where the scenario's first draft was
+      -- wrong in a way worth keeping on the record: it replayed under
+      -- `"${ext_id}_replay"` and strict replay reported `WrongOrigin` at the
+      -- first extension effect. That is the identity doing its job — the origin
+      -- of this class NAMES THE EXTENSION, so a replay by a different extension
+      -- is a different run, and the walk says so. It is also the cheapest
+      -- available proof that the origin is read from the transport rather than
+      -- being decorative.
+      let replay = run_effect(ext_id, replay_world);
+      let actual = replay.world.log;
+      let ms = strict_replay_findings(program.interactions, actual);
+      let _ = if List.length(ms) > 0 then println("      ${replay_message_first(ms)}") else ();
+      let ok_replay = check("effect: the program replays to an identical interaction log, with nothing left unconsumed",
+                            List.length(ms) == 0,
+                            "${show(List.length(ms))} mismatch(es); UnusedInteraction here would mean the replay never asked for an effect the recording run performed");
+
+      let ok_terminal = check("effect: the replay reproduces the terminal outcome",
+                              (match replay.result { Ok(_) => true, Err(_) => false })
+                                == (match run.result { Ok(_) => true, Err(_) => false }),
+                              "the replay ended differently from the recorded run");
+
+      ok_ran && ok_reached && ok_interleaved && ok_origin && ok_class && ok_balanced
+        && t_pin && ok_valid && ok_rec && ok_served && ok_replay && ok_terminal
+    }
+  }
+}
+
+pure func first_rejection_message(rs: [ProgramRejection]) -> string {
+  match rs {
+    [] => "(none)",
+    r :: _ => program_message(r)
+  }
+}
+
+pure func replay_message_first(ms: [ReplayMismatch]) -> string {
+  match ms {
+    [] => "(none)",
+    m :: _ => "[${replay_rule(m)}] ${replay_message(m)}"
+  }
+}
+
+-- ---------------------------------------------------------------------------
 -- WI-D20: the routed `on_tool_handle` scenario
 -- ---------------------------------------------------------------------------
 
@@ -1299,8 +1589,15 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let ok_handle = routing_handle_scenario();
   let ok_batch = batch_handle_scenario();
 
+  -- WI-D24: the first graded run in this tree in which an EXTENSION-INITIATED
+  -- dispatch is recorded under its own identity class, validated, and replayed
+  -- from the world rather than performed again. It is the only scenario in this
+  -- file that carries the round trip through to a replay, which is why it also
+  -- imports `dst_replay`.
+  let ok_effect = effect_scenario();
+
   let _ = println("");
-  if ok_approve && ok_deny && ok_eof && ok_routing && ok_handle && ok_batch then
+  if ok_approve && ok_deny && ok_eof && ok_routing && ok_handle && ok_batch && ok_effect then
     println("discovery_dst PASS")
   else {
     let _ = println("discovery_dst FAIL");

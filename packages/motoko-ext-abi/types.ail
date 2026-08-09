@@ -395,6 +395,14 @@ export type ExtPorts = {
   -- `ExtProcOutcome.output` as JSON and — since WI-D23 — typed into
   -- `ExtProcOutcome.exit_code`. See that type's note above and `session.ail`'s
   -- `proc_exec` closure for the measured chain.
+  --
+  -- WHO IT IS ATTRIBUTED TO, since WI-D24: the calling EXTENSION, by name. A
+  -- dispatch through this seam is recorded as D2's `ExtensionEffectIdentity`
+  -- carrying the caller's registry id — not as the driver's own tool call — and
+  -- it is served from its own cursor on replay. Nothing is required of the
+  -- extension for that to work: the id travels in the world token the host
+  -- re-seats before each hook, which is one more reason to pass `ctx.world`
+  -- through rather than a token kept from somewhere else.
   proc_exec: (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS},
   -- WI-D16's filesystem read seam. It is a POINT READ — a path in, existence
   -- and contents out — because it fronts `Ports.file_read` and that seam is

@@ -40,7 +40,7 @@ check() {
 }
 
 echo "attribution anchors:"
-check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"
+check src/core/ext/runtime.ail 199 'now()' "the ambient clock read attributed to test_dummy"
 check src/core/tool_phase.ail 317 'is_scratchpad_tool_name' "the mixed guard"
 check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
 # WI-D16 RE-BASELINED the five session.ail anchors 881/1126/1232/2677/2787 ->
@@ -139,12 +139,30 @@ check src/core/tool_phase.ail 318 'exec_scratchpad_cell_ws' "the call attributed
 # fixtures carry `tool_phase.ail:318`, which did not move, so this is the
 # six-file session.ail-only form, not the nine-file tool_phase form.
 #
+# WI-D24 RE-BASELINED SIX ANCHORS, NOT FIVE, AND THAT MAKES THE SIX-VERSUS-NINE
+# RULE ABOVE WRONG AS STATED. The five session.ail anchors moved +15
+# (1096/1355/1461/2906/3016 -> 1111/1370/1476/2921/3031) for the usual reason —
+# the item edited `ext_ports_of`. But `src/core/ext/runtime.ail:190` ALSO moved,
+# to 199, because the item added an import and its rationale to that file's
+# header, and the fold is where the extension's identity is stamped.
+#
+# THE THREE DISCOVERED-SITE FIXTURES CARRY THE `ext/runtime.ail` ANCHOR TOO.
+# WI-D21 recorded the nine-file form as "the price of a `tool_phase` move"; the
+# real rule is that it is the price of moving ANY anchor those fixtures carry,
+# and they carry two — `tool_phase.ail:318` AND `ext/runtime.ail:190`. So this
+# item paid nine files with `tool_phase.ail` untouched, which the recorded law
+# said could not happen. The grep that finds them all is the one below, widened:
+#   grep -rn '\(session\|tool_phase\|ext/runtime\).ail", line: [0-9]' --include=*.ail .
+#
+# The anchored expressions were compared to `git show HEAD:` character by
+# character — all six byte-identical, pure offset drift.
+#
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 1096 1355 1461 2906 3016; do
+for l in 1111 1370 1476 2921 3031; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 413 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

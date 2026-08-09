@@ -28,7 +28,7 @@ import src/core/ports (
   Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
   ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
   ambient_env, ambient_file, ambient_file_write, ambient_file_remove, ambient_path_stat, ambient_dir_list, ambient_dir_make, -- WI-D18's directory trio, widened onto THIS line rather than a new one: stub_step.ail:203 is an A5 attribution anchor (S18)
-  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, recording_file_write, recording_file_remove, recording_dir_make, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
+  record_interaction, recording_clock, recording_approval, recording_env, recording_tool, recording_ext_effect, recording_file_write, recording_file_remove, recording_dir_make, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
 )
 import src/core/dst_interaction (
   Interaction, StreamChunkRecord, TimedOutcome,
@@ -511,7 +511,15 @@ export func recording_ports(rt: ExtRuntime) -> Ports ! {Clock, Env, FS, IO, Proc
     -- carry, so a log entry for one describes an observation the artifact still
     -- cannot rebuild. They stay on `ports_shape_probe`'s deterministic defaults.
     dir_make: recording_dir_make,
-    tool_exec: recording_tool }
+    tool_exec: recording_tool,
+    -- WI-D24's EIGHTH RECORDING ADAPTER. It is here and not on
+    -- `ports_shape_probe`'s default for the reason every line above it is: a
+    -- recording run records, and an extension-initiated dispatch that this set
+    -- served but did not log is a `world_state_of` that reconstitutes an empty
+    -- `ext_effects` queue — so the replay's first extension effect performs a
+    -- real subprocess. Recording the class and serving it are one decision
+    -- (S27) and this binding is half of it.
+    ext_effect_exec: recording_ext_effect }
 }
 
 -- WI-A13 stage 4: the generating provider, and the generating adapter set.
@@ -595,7 +603,15 @@ export func generating_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO,
     -- direction reversed: the path comes from the caller, so there is nothing to
     -- generate.
     dir_make: recording_dir_make,
-    tool_exec: generating_tool }
+    tool_exec: generating_tool,
+    -- WI-D24, and the RECORDING adapter rather than a generating one, on the
+    -- `dir_make` row's reasoning: the tool name and the arguments come from the
+    -- extension, so there is nothing for a generator to choose that it does not
+    -- already choose at the tool seam. What matters here is that a GENERATED
+    -- program is still a valid one — an extension effect this set served and
+    -- did not record is an interaction missing from the program, which is the
+    -- density defect `dst_program` rejects.
+    ext_effect_exec: recording_ext_effect }
 }
 
 -- The initial world for a scripted run: the whole script, uncounted, and every

@@ -296,7 +296,11 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
     path_stat: base.path_stat,
     dir_list: base.dir_list,
     dir_make: base.dir_make,
-    tool_exec: fixed_exec
+    tool_exec: fixed_exec,
+    -- WI-D24's extension-effect dispatch, from `base` for the directory class's
+    -- reason: this fixture installs no extension, so no site in it reaches the
+    -- seam, and the deterministic default is the honest binding.
+    ext_effect_exec: base.ext_effect_exec
   }
 }
 
@@ -381,7 +385,11 @@ func strict_ports() -> Ports ! {AI, IO, Trace} {
     path_stat: base.path_stat,
     dir_list: base.dir_list,
     dir_make: base.dir_make,
-    tool_exec: fixed_exec
+    tool_exec: fixed_exec,
+    -- WI-D24's extension-effect dispatch, from `base` for the directory class's
+    -- reason: this fixture installs no extension, so no site in it reaches the
+    -- seam, and the deterministic default is the honest binding.
+    ext_effect_exec: base.ext_effect_exec
   }
 }
 

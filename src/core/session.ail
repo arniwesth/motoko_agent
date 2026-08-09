@@ -954,57 +954,66 @@ export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPo
   -- produce `ToolDeadlineExceeded`. Both are stated rather than left for the
   -- first caller.
   --
-  -- THE CALL ID IS BLANK AND THAT IS A REJECTED PROGRAM, NOT A COSMETIC GAP.
-  -- `recording_tool` records `ToolIdentity("loop_v2", inv.call.id, inv.call.tool)`
-  -- (`ports.ail:1540`), and `dst_program.validate_identity:277` rejects a blank
-  -- `ToolIdentity` call id with `IdentityComponentMissing(o, "tool call_id")`.
-  -- So the FIRST extension to call this seam in a recorded run makes the recorder
-  -- emit a program its own validator refuses. Asserted rather than described:
-  -- `dst_program.test_the_ext_proc_exec_invocation_shape_records_a_rejected_tool_identity`.
+  -- THE CALL ID IS BLANK, AND WI-D24 MADE THAT LEGITIMATE INSTEAD OF FATAL. The
+  -- history is kept two-part per S15 because the defect is what decided the
+  -- design, and the fix is only legible against it.
   --
-  -- The blank is not a slip that a better `id` would fix. This seam has no call
-  -- id BECAUSE THE EFFECT HAS NONE — the extension is not answering a model tool
+  -- WHAT THIS BLOCK SAID THROUGH WI-D23, and it was measured and true: "THE CALL
+  -- ID IS BLANK AND THAT IS A REJECTED PROGRAM, NOT A COSMETIC GAP.
+  -- `recording_tool` records `ToolIdentity("loop_v2", inv.call.id, inv.call.tool)`,
+  -- and `dst_program.validate_identity` rejects a blank `ToolIdentity` call id
+  -- with `IdentityComponentMissing(o, "tool call_id")`. So the FIRST extension to
+  -- call this seam in a recorded run makes the recorder emit a program its own
+  -- validator refuses." Nothing called the seam, so the defect was latent; WI-D21
+  -- asserted it rather than describing it.
+  --
+  -- WHAT IS TRUE AT HEAD: this closure no longer calls `tool_exec` at all. It
+  -- calls `Ports.ext_effect_exec`, whose recording adapter is
+  -- `ports.recording_ext_effect` — the EIGHTH — and which writes
+  -- `ExtensionEffectIdentity(holder, extension_effect_fault, "")`. The blank call
+  -- id is now in the one class D2 exempts, the origin names the EXTENSION rather
+  -- than the driver's loop, and the recorded interaction VALIDATES. The defect
+  -- WI-D21 §4 found is closed by measurement, not by argument: the round-trip row
+  -- in `scripts/dst/ext_effect_dst.ail` records through this closure, validates
+  -- the program with zero rejections, and replays it with the dispatch SERVED
+  -- from the world.
+  --
+  -- The blank was never a slip a better `id` would fix. This seam has no call id
+  -- BECAUSE THE EFFECT HAS NONE — the extension is not answering a model tool
   -- call — and D2 names exactly one class where that is legitimate:
   -- `ExtensionEffectIdentity`, whose own comment says the call id is "" "where
   -- the effect has none — the only place a blank component is legitimate rather
-  -- than a missing required value". The origin agrees: `recording_tool` hardcodes
-  -- "loop_v2", which names the driver's loop as the producer, and for an
-  -- extension-initiated dispatch that is false.
+  -- than a missing required value".
   --
-  -- SO THE IDENTITY-CLASS ANSWER IS `ExtensionEffectIdentity`, AND WHAT STANDS
-  -- BETWEEN THE SEAM AND IT IS PLUMBING RATHER THAN SHAPE. Both halves the class
-  -- needs already exist:
+  -- THE TWO HALVES THE CLASS NEEDED, AND WHERE THEY CAME FROM:
   --
-  --   THE CLASS ID EXISTS. `validate_static_references:426` requires a non-blank
-  --   `class_id` to be a catalogue row, and A7 declares ELEVEN — five provider,
-  --   three tool, two approval, and `extension_effect_fault`
-  --   (`dst_fault_catalogue.ail:405`, in `required_class_ids()`). That row's own
-  --   coverage-gap entry (`:442`) already names THIS SEAM: "ExtPorts.proc_exec IS
-  --   routed but projects the typed tool outcome back down to a string, so an
-  --   extension can observe that a tool failed and not which fault class it was".
+  --   THE CLASS ID ALREADY EXISTED. `validate_static_references` requires a
+  --   non-blank `class_id` to be a catalogue row, and A7 declares ELEVEN — five
+  --   provider, three tool, two approval, and `extension_effect_fault`
+  --   (`dst_fault_catalogue.ail`, in `required_class_ids()`). That row's own
+  --   coverage-gap entry has named THIS SEAM since WI-C5. WI-D24 reads it through
+  --   `fault_class_extension_effect()` rather than copying the literal.
   --
-  --   THE EXT ID EXISTS AT THE DISPATCH SITE. `ExtensionHooks.id` is on every
-  --   entry of the registry the dispatcher folds over. What is missing is the
-  --   THREADING: `ext_ports_of` builds ONE `ExtPorts` per step and hands the same
-  --   record to every extension, and `ExtCtx` carries no `ext_id`, so this
-  --   closure cannot name its caller and `validate_identity:284` rejects a blank
-  --   one. Per-extension ports, or an `ext_id` on `ExtCtx`, closes it.
+  --   THE EXT ID CAME FROM THE FOLD, NOT FROM HERE. WI-D21 wrote that "per-extension
+  --   ports, or an `ext_id` on `ExtCtx`, closes it"; measured, neither did. This
+  --   closure is built once per step from a registry it cannot index, and the ONE
+  --   place that knows which extension is about to run is `ext/runtime`'s fold —
+  --   which cannot call back into this module without closing an import cycle
+  --   (`session.ail:52`). An `ExtCtx.ext_id` would tell the hook something it
+  --   already knows and would still not reach this closure, whose ABI signature
+  --   `(ExtWorld, string, string)` is fixed below 6.0. So the fold stamps the id
+  --   into the world token it ALREADY re-seats per hook, and the adapter reads it
+  --   off `WorldState.holder_ext_id`. See that field for the full argument.
   --
-  -- AND THE ACTUAL REASON THE CLASS READS ZERO IS THAT NO ADAPTER RECORDS IT.
-  -- All seven `record_interaction` call sites are in `ports.ail` and not one
-  -- constructs `ExtensionEffectIdentity` — the same is true of
-  -- `RandomDrawIdentity`. Routing this seam to the class means building an
-  -- eighth recording adapter, not relabelling a seventh.
-  --
-  -- WHICH IS WHY WI-D19'S PIN IN `dst_discovery.absent_classes` IS LEFT UNTOUCHED
-  -- AND ITS STATED GROUND IS NOT. D19 pinned this class at literal zero calling
-  -- its unreachability STRUCTURAL, and used that word to distinguish it from the
-  -- three filesystem classes it chose to witness instead. Measured here, the
-  -- distinction does not hold: nothing about the bridge or the catalogue makes
-  -- the class unreachable, and "no adapter records it" is nearer to "nothing
-  -- routes it yet" than to the contrast D19 drew. Zero is still the correct
-  -- expectation — nothing records the class — so the pin is right and the reason
-  -- on record is wrong. Reported rather than re-worded in place; see WI-D21 §5.
+  -- AND WI-D19'S PIN IN `dst_discovery.absent_classes` MOVED, at last, the way
+  -- D19's three filesystem classes did. Through WI-D23 this block ended: "the pin
+  -- is right and the reason on record is wrong. Reported rather than re-worded in
+  -- place; see WI-D21 §5." WI-D21 declined to re-word it so that the measured
+  -- refutation of D19's "structural" ground stayed visible, and WI-D24 is the item
+  -- that earns the re-wording: the class now has an adapter, so `absent_classes`
+  -- takes a WITNESS instead of a literal zero and the pin survives for every run
+  -- that routes nothing. `RandomDrawIdentity` stays pinned at literal zero — its
+  -- ground is unchanged, and it is still true that no adapter constructs it.
   let proc_exec = func(w: ExtWorld, tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
     let w0 = token_to_world(w);
     let inv: ToolInvocation = {
@@ -1013,7 +1022,13 @@ export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPo
       timeout_ms: 0,
       started_at_ms: 0
     };
-    let execution = p.tool_exec(w0, inv);
+    -- `ext_effect_exec` AND NOT `tool_exec` SINCE WI-D24. Same shape, different
+    -- class: this dispatch is the extension's, it is served from
+    -- `WorldState.ext_effects`, and it is recorded as
+    -- `ExtensionEffectIdentity(w0.holder_ext_id, extension_effect_fault, "")`.
+    -- The id comes off the world because this closure is built once per step and
+    -- cannot name its caller; `ext/runtime`'s fold stamps it on the re-seat.
+    let execution = p.ext_effect_exec(w0, inv);
     { output: tool_outcome_text(execution.outcome),
       exit_code: tool_outcome_exit_code(execution.outcome),
       next_state: world_to_token(execution.next_state) }

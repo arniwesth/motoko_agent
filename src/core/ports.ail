@@ -61,6 +61,8 @@ import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
   FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  -- WI-D24. The eighth recording adapter's class; see `recording_ext_effect`.
+  ExtensionEffectIdentity,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing, generator_authored_count
 )
 -- WI-A13 stage 4. The GENERATOR STATE rides in `WorldState` for exactly the
@@ -87,6 +89,12 @@ import src/core/dst_fault_catalogue (
   fault_class_tool_failed,
   fault_class_tool_correlation_mismatch,
   fault_class_tool_deadline_exceeded,
+  -- WI-D24's extension-effect row, read for the same reason: the eighth
+  -- recording adapter names it in an IDENTITY rather than in an outcome, and
+  -- `validate_static_references` rejects an id no catalogue row defines — so a
+  -- copied literal here would surface as a valid run producing an invalid
+  -- program, which is this import's whole argument one class over.
+  fault_class_extension_effect,
   -- WI-D1's provider half, read for the same reason and on the same line.
   provider_error_is_retryable, provider_fault_class_id
 )
@@ -356,6 +364,59 @@ export type WorldState = {
   -- a fully-seeded run performs no process execution at all, which is exactly
   -- what the Process poison pair measures.
   tools: [ScriptedTool],
+
+  -- WI-D24's EXTENSION-EFFECT cursor: the queue an extension-initiated dispatch
+  -- is served from, consumed head-first exactly like `tools` and holding the
+  -- same element type.
+  --
+  -- IT IS A SECOND QUEUE AND NOT A SECOND READER OF `tools`, and the reason is a
+  -- correlation fact rather than a taste. `world_tool`'s guard fires only when
+  -- BOTH ids are non-blank (`t.tool_call_id != "" && t.tool_call_id != inv.call.id`),
+  -- and an extension effect's recorded call id is blank BY DECISION — D2 gives
+  -- `ExtensionEffectIdentity` no call id because the effect answers no model tool
+  -- call. So an extension-effect entry reconstituted into the shared queue is
+  -- consumable by a DRIVER tool dispatch with no mismatch reported: the world
+  -- serves the wrong answer to the wrong request and every count still balances.
+  -- That is the present-but-wrong shape (S26) inside the world's own supply, and
+  -- a separate cursor makes it unrepresentable rather than forbidden by a rule
+  -- somebody has to remember — `files`' "one kinded table" argument above, one
+  -- field over.
+  --
+  -- An EMPTY queue delegates to the real dispatcher for `tools`' stated reason,
+  -- and the consequence is sharper here: an extension effect that finds this
+  -- queue empty inside a REPLAY performs a real subprocess. The tripwire for
+  -- that is one level out and it is loud — the recorded interaction goes
+  -- unconsumed and `dst_replay.UnusedInteraction` grades it FATAL — but the
+  -- subprocess has already run by then, which is why recording this class and
+  -- serving it are one decision (S27) and were taken in one item.
+  ext_effects: [ScriptedTool],
+
+  -- WI-D24. WHICH EXTENSION CURRENTLY HOLDS THIS WORLD ACROSS THE EXTENSION
+  -- SEAM, blank in the driver's own hands.
+  --
+  -- IT IS TRANSPORT, NOT SUPPLY, and it is on the world because the world token
+  -- is the ONLY per-hook channel that exists. `ExtPorts.proc_exec`'s ABI
+  -- signature is `(ExtWorld, string, string)` and cannot gain an identity
+  -- parameter below `6.0`; `ext_ports_of` builds ONE `ExtPorts` per step from a
+  -- registry it cannot index; and `ext/runtime`'s fold — the one place that knows
+  -- WHICH extension is about to run — cannot call back into `session` to build a
+  -- per-extension port record without closing an import cycle (`session.ail:52`).
+  -- What the fold CAN do is what it already does for the world itself: re-seat
+  -- one `ExtCtx` field per hook. So the id rides in the world it re-seats, and
+  -- the eighth recording adapter reads it there.
+  --
+  -- WHAT MAKES IT SAFE RATHER THAN AMBIENT: nothing but `recording_ext_effect`
+  -- reads it, that adapter is reachable only from the bridge, and a blank value
+  -- is a REJECTED PROGRAM rather than a default — `validate_identity` refuses a
+  -- blank `ExtensionEffectIdentity` ext_id, so a hook that reaches the seam with
+  -- an unstamped world fails loudly at validation instead of recording an
+  -- effect attributed to nobody. The four world-threading dispatchers clear it
+  -- on the way out, so the driver never holds a stale holder.
+  --
+  -- It is NOT persisted: `InitialWorld` has no counterpart and needs none. The
+  -- holder is a property of a call in flight, not of the world a replay is
+  -- seeded from, and `world_state_of` therefore reconstitutes it blank.
+  holder_ext_id: string,
 
   -- WI-A13's interaction log: D2's ordered record of every request the driver
   -- actually made, with causal identities and global encounter ordinals.
@@ -661,7 +722,8 @@ export type PortedProvider = {
 -- The world a stateless provider carries, and the initial world for every
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
-  { script: [], clock_ms: 0, approvals: [], env: [], files: [], tools: [], log: [], gen: no_generator() }
+  { script: [], clock_ms: 0, approvals: [], env: [], files: [], tools: [],
+    ext_effects: [], holder_ext_id: "", log: [], gen: no_generator() }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the
@@ -852,7 +914,28 @@ export type Ports = {
   -- arithmetically from the scripted duration, it never reads one. That keeps
   -- this row identical to `ExtPorts.proc_exec`'s, which is what lets the
   -- extension seam project onto it without widening the ABI.
-  tool_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS}
+  tool_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS},
+  -- WI-D24's EXTENSION-EFFECT dispatch class. Identical in shape to `tool_exec`
+  -- and separate from it on purpose: the shape is the same request, the CLASS is
+  -- not. A driver tool call and an extension-initiated dispatch are two of D2's
+  -- identity classes, they are served from two cursors, and they are recorded by
+  -- two adapters — so they are two fields, and `ext_ports_of`'s bridge calls
+  -- this one.
+  --
+  -- WHY NOT AN `originator` FIELD ON `ToolInvocation` WITH ONE ADAPTER
+  -- BRANCHING ON IT, which is the cheaper design and was measured before this
+  -- one was taken: the branch makes `recording_tool` a producer of two identity
+  -- classes (S16), it leaves both classes sharing `WorldState.tools` where a
+  -- blank-id entry is consumable by a driver dispatch (see `ext_effects`), and
+  -- it is not even cheaper at the construction census — `ToolInvocation` is
+  -- built at three sites and one of them is `tool_phase.ail`, whose anchors turn
+  -- the six-file re-baseline into the nine-file one. A separate field costs one
+  -- line in `ports_shape_probe` and two record updates in `stub_step`.
+  --
+  -- THE EXT ID IS NOT A PARAMETER HERE and could not be: this seam is reached
+  -- from an ABI closure whose signature is fixed below `6.0`. It rides in the
+  -- world — see `WorldState.holder_ext_id`.
+  ext_effect_exec: (WorldState, ToolInvocation) -> ToolExecution ! {IO, Process, FS}
 }
 
 -- WI-D3. The two seams a context-limit resolution needs, and no others.
@@ -1356,31 +1439,68 @@ export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution 
     -- the mutant the live-arm witness row in `world_state_probe` exists to
     -- kill: every in-process fixture stays green under it, because only a row
     -- that drives a real subprocess to a chosen code can see this binding.
-    [] => {
-      let d = dispatch_one_typed(inv.workdir, envelope_to_call(inv.call));
-      {
-        outcome: ToolCompleted({ tool_call_id: inv.call.id,
-                                 content: d.content,
-                                 exit_code: d.exit_code }),
-        next_state: state
-      }
-    },
+    [] => { outcome: live_tool_outcome(inv), next_state: state },
     t :: rest => {
       let advanced = { state | tools: rest, clock_ms: state.clock_ms + t.duration_ms };
-      let outcome =
-        if t.tool_call_id != "" && t.tool_call_id != inv.call.id then
-          ToolCorrelationMismatch({ expected_id: inv.call.id, got_id: t.tool_call_id })
-        else if inv.timeout_ms > 0 && t.duration_ms > inv.timeout_ms then
-          ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: inv.timeout_ms })
-        else if t.code != "" then
-          ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message })
-        else
-          -- The scripted arm is the one that CAN say. This is the whole of what
-          -- WI-D22 buys: a deterministic world whose script states an exit code
-          -- now produces an outcome that carries it, so a recorded run in which
-          -- a subprocess failed replays as a run in which it failed.
-          ToolCompleted({ tool_call_id: inv.call.id, content: t.content, exit_code: t.exit_code });
-      { outcome: outcome, next_state: advanced }
+      { outcome: scripted_tool_outcome(inv, t), next_state: advanced }
+    }
+  }
+}
+
+-- The LIVE arm's outcome, lifted out of `world_tool` at WI-D24 so the
+-- extension-effect adapter beside it dispatches through the same call rather
+-- than through a copy. Two adapters that both "delegate to the real dispatcher"
+-- and each own their own `dispatch_one_typed` call is the two-homes shape in the
+-- one place it would be least visible: both compile, both return a
+-- `ToolCompleted`, and the drift shows up only as one seam binding an exit code
+-- the other does not.
+pure func live_tool_outcome(inv: ToolInvocation) -> ToolOutcome ! {IO, Process, FS} {
+  let d = dispatch_one_typed(inv.workdir, envelope_to_call(inv.call));
+  ToolCompleted({ tool_call_id: inv.call.id, content: d.content, exit_code: d.exit_code })
+}
+
+-- The SCRIPTED arm's outcome, lifted out for `live_tool_outcome`'s reason and
+-- with a sharper one: the fault ORDER below (correlation, then deadline, then
+-- code, then completion) is a contract `ScriptedTool`'s own field ordering
+-- documents, and a second adapter re-deriving it is a second chance to get it
+-- wrong in a way no single-adapter fixture can see.
+--
+-- THE CORRELATION GUARD IS WHY `WorldState.ext_effects` IS A SEPARATE QUEUE.
+-- It fires only when both ids are non-blank, so a blank-id entry answers
+-- whatever was asked — correct for a class whose call id is legitimately blank,
+-- and exactly wrong if that entry is reachable by a driver dispatch. See the
+-- field's own note.
+pure func scripted_tool_outcome(inv: ToolInvocation, t: ScriptedTool) -> ToolOutcome {
+  if t.tool_call_id != "" && t.tool_call_id != inv.call.id then
+    ToolCorrelationMismatch({ expected_id: inv.call.id, got_id: t.tool_call_id })
+  else if inv.timeout_ms > 0 && t.duration_ms > inv.timeout_ms then
+    ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: inv.timeout_ms })
+  else if t.code != "" then
+    ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message })
+  else
+    -- The scripted arm is the one that CAN say. This is the whole of what
+    -- WI-D22 buys: a deterministic world whose script states an exit code
+    -- now produces an outcome that carries it, so a recorded run in which
+    -- a subprocess failed replays as a run in which it failed.
+    ToolCompleted({ tool_call_id: inv.call.id, content: t.content, exit_code: t.exit_code })
+}
+
+-- WI-D24. The extension-effect adapter: `world_tool`'s twin over the OTHER
+-- cursor. One implementation serves both worlds for `world_tool`'s stated
+-- reason, and both arms are the same two functions, so the deterministic and
+-- live answers to an extension's dispatch cannot drift from the driver's.
+--
+-- WHAT DIFFERS FROM `world_tool` IS THE QUEUE AND NOTHING ELSE. The identity
+-- class, the deadline and the origin are decided one layer up, by
+-- `recording_ext_effect`; this function is the SUPPLY half, and keeping the two
+-- halves apart is what lets `live_ports` serve an extension effect for real
+-- while `recording_ports` records it.
+export func world_ext_effect(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  match state.ext_effects {
+    [] => { outcome: live_tool_outcome(inv), next_state: state },
+    t :: rest => {
+      let advanced = { state | ext_effects: rest, clock_ms: state.clock_ms + t.duration_ms };
+      { outcome: scripted_tool_outcome(inv, t), next_state: advanced }
     }
   }
 }
@@ -1640,6 +1760,57 @@ export func recording_tool(state: WorldState, inv: ToolInvocation) -> ToolExecut
       execution.next_state,
       ToolIdentity("loop_v2", inv.call.id, inv.call.tool),
       "tool_exec call_id=${inv.call.id} tool=${inv.call.tool} workdir=${inv.workdir} timeout_ms=${inv.timeout_ms} started_at_ms=${inv.started_at_ms}",
+      inv.timeout_ms,
+      tool_outcome_record(execution.outcome, advanced)
+    )
+  }
+}
+
+-- WI-D24: THE EIGHTH RECORDING ADAPTER, and the first one that is not the
+-- driver's.
+--
+-- Every adapter above records something the DRIVER did. This one records what an
+-- EXTENSION did, and that is the whole reason it exists rather than being a
+-- branch in `recording_tool`: D2 gives the two acts different identity classes,
+-- and one producer emitting two classes is a producer that can emit the wrong
+-- one — the shape S16's C5 extension warns about, in a function whose only
+-- discriminator would be a string field.
+--
+-- THE THREE COMPONENTS, each from the transport rather than from a constant:
+--
+--   ext_id    `state.holder_ext_id`, stamped by `ext/runtime`'s fold at the
+--             moment it chose which hook to call. HARDCODING IT WOULD PASS
+--             EVERY FIXTURE BUILT AROUND COMPOSE (S33: the proxy and the truth
+--             agree on almost every input by construction), which is why the
+--             witness scenario drives an ext id that is not compose's and why
+--             the mutant that writes a literal here has a named row.
+--   class_id  `fault_class_extension_effect()`, READ from A7 and not restated
+--             (A10/S6). It names the catalogue ROW this effect belongs to, not
+--             a claim that it faulted: `validate_static_references` requires the
+--             id to be a real row and `validate_identity` refuses a blank one,
+--             so a successful effect carries it too. The fault, when there is
+--             one, is in the OUTCOME's `fault_class_id`, which is a different
+--             field answering a different question.
+--   call_id   "" — the effect answers no model tool call. This is the ONE class
+--             where D2 makes a blank component legitimate rather than missing,
+--             and it is the entire reason the class is right for this seam
+--             (WI-D21 §5.1).
+--
+-- THE DEADLINE IS `inv.timeout_ms` AND NOT -1. `class_has_deadline` is true for
+-- this class (`dst_interaction.ail:304`) and `dst_program` rejects a -1 on a
+-- class that has one, so copying a no-deadline class's sentinel here would be a
+-- loud rejection — which is the right failure and not one worth taking. The
+-- bridge's 0 is a VALID deadline meaning "none declared", exactly as
+-- `recording_approval` argues one field over.
+export func recording_ext_effect(state: WorldState, inv: ToolInvocation) -> ToolExecution ! {IO, Process, FS} {
+  let execution = world_ext_effect(state, inv);
+  let advanced = execution.next_state.clock_ms - state.clock_ms;
+  {
+    outcome: execution.outcome,
+    next_state: record_interaction(
+      execution.next_state,
+      ExtensionEffectIdentity(state.holder_ext_id, fault_class_extension_effect(), ""),
+      "ext_effect ext=${state.holder_ext_id} tool=${inv.call.tool} workdir=${inv.workdir} timeout_ms=${inv.timeout_ms}",
       inv.timeout_ms,
       tool_outcome_record(execution.outcome, advanced)
     )
@@ -2393,6 +2564,10 @@ export func ports_shape_probe(
     path_stat: scripted_path_stat,
     dir_list: scripted_dir_list,
     dir_make: scripted_dir_make,
-    tool_exec: world_tool
+    tool_exec: world_tool,
+    -- WI-D24. The DETERMINISTIC default, exactly as `tool_exec` takes
+    -- `world_tool`: a live run reaches it through `live_ports`, which overrides
+    -- neither, and a recording run overrides both in `stub_step`.
+    ext_effect_exec: world_ext_effect
   }
 }

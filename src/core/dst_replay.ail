@@ -582,6 +582,16 @@ export pure func reconstitution_balance(p: ExecutionProgram, w: WorldState) -> [
     ++ queue_balance("approvals", approvals_served(p.interactions), List.length(w.approvals))
     ++ queue_balance("tools", count_kind(p.interactions, identity_kind(ToolIdentity("", "", ""))),
                      List.length(w.tools))
+    -- WI-D24. The extension-effect queue, on the tool queue's shape and for a
+    -- sharper reason: a `world_state_of` that dropped this class would leave the
+    -- replay's `ext_effects` empty, and an empty queue is not a quiet failure at
+    -- this seam — the adapter delegates to the real dispatcher, so the replay
+    -- performs a REAL SUBPROCESS. The recorded interaction then goes unconsumed
+    -- and `UnusedInteraction` fires, which is loud, but only after the effect has
+    -- happened. This balance is the check that fires first and without a run.
+    ++ queue_balance("extension_effects",
+                     count_kind(p.interactions, identity_kind(ExtensionEffectIdentity("", "", ""))),
+                     List.length(w.ext_effects))
     ++ (if w.clock_ms == p.initial_world.clock_epoch then []
         else [EpochNotCarried(p.initial_world.clock_epoch, w.clock_ms)])
     ++ (if List.length(w.env) == List.length(p.initial_world.synthetic_environment) then []
@@ -727,6 +737,36 @@ pure func tools_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefusal] {
   }
 }
 
+-- WI-D24. The SAME projection over the OTHER class, and it is a separate
+-- function for the same reason `WorldState.ext_effects` is a separate queue: an
+-- extension effect's call id is legitimately blank, so an entry of this class in
+-- the driver's queue is consumable by a driver dispatch with no correlation
+-- mismatch reported. Collecting both classes into `tools` would reconstitute a
+-- world that answers the wrong request correctly.
+--
+-- THE PAYLOAD CODEC IS SHARED AND MUST BE. `recording_ext_effect` records
+-- through `tool_outcome_record`, exactly as `recording_tool` does, so the bytes
+-- are the same bytes; a second decoder here would be a second reading of one
+-- format, which is the drift `decode_tool_outcome` was centralised to remove.
+pure func ext_effects_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefusal] {
+  match xs {
+    [] => Ok([]),
+    i :: rest =>
+      match i.identity.body {
+        ExtensionEffectIdentity(_, _, _) =>
+          match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
+            ToolRecordUndecodable(why) => Err(ToolOutcomeUndecodable(i.identity.ordinal, why)),
+            ToolRecordDecoded(t) =>
+              match ext_effects_of(rest) {
+                Err(e) => Err(e),
+                Ok(tail) => Ok(t :: tail)
+              }
+          },
+        _ => ext_effects_of(rest)
+      }
+  }
+}
+
 pure func first_structural_rule(p: ExecutionProgram, known_class_ids: [string]) -> Option[string] {
   match validate_program(p, known_class_ids) {
     [] => None,
@@ -759,6 +799,9 @@ export pure func world_state_of(
           match tools_of(p.interactions) {
             Err(e) => Err(e),
             Ok(tools) =>
+              match ext_effects_of(p.interactions) {
+                Err(e) => Err(e),
+                Ok(ext_effects) =>
               Ok({ empty_world_state() |
                    script: script,
                    clock_ms: p.initial_world.clock_epoch,
@@ -775,7 +818,17 @@ export pure func world_state_of(
                    -- this table — a replayed driver performs those again through
                    -- the same adapters, on top of this seed.
                    files: p.initial_world.files,
-                   tools: tools })
+                   tools: tools,
+                   -- WI-D24. The extension-effect queue, derived from the log
+                   -- exactly as `tools` is. `holder_ext_id` is deliberately NOT
+                   -- restored and comes from `empty_world_state()`: the holder is
+                   -- a property of a call in flight, and a replayed run's hooks
+                   -- are stamped by the same fold that stamped the recorded run's.
+                   -- Seeding it here would put one fact in two homes, and the
+                   -- reconstituted one would be whichever extension happened to
+                   -- go last.
+                   ext_effects: ext_effects })
+              }
           }
       }
   }

@@ -24,6 +24,15 @@ import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, FinalizeOutcome,
   ExtRuntime, ExtWorld, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome -- WI-B2b; on one line to hold A5's anchor at :190
 )
 import src/core/types (Msg)
+-- WI-D24. The holder stamp: this fold is the ONE place in the tree that knows
+-- which extension is about to perform an effect, and `ExtPorts.proc_exec`'s ABI
+-- signature has nowhere to carry that. The id therefore rides in the world token
+-- the fold already re-seats per hook — see `WorldState.holder_ext_id` for the
+-- decision and `ports.recording_ext_effect` for the reader.
+--
+-- No cycle: `ext_world` reaches `ports` and `ports` does not reach this module.
+-- Both functions are `pure`, so no dispatcher's declared row moves.
+import src/core/ext_world (stamp_holder, clear_holder)
 import src/core/ext/registry_generated (parse_core_ext_order)
 import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
@@ -245,7 +254,27 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
   match hooks {
     [] => { msgs: msgs, stages: [], artifacts: artifacts, next_state: world },
     h :: rest => {
-      let outcome = (h.on_pre_step)({ ctx | world: world }, msgs);
+      -- WI-D24 STAMPS THE HOLDER HERE, on the re-seat that was already
+      -- happening. This is the canonical site of the four; the other three say
+      -- less and point back at this one.
+      --
+      -- WHY IT IS ON THE WORLD AND NOT ON `ctx`: an `ext_id` field on `ExtCtx`
+      -- would tell the HOOK who it is, and the hook already knows. What needs to
+      -- know is `ext_ports_of`'s `proc_exec` closure, which is built one per
+      -- step from a registry it cannot index and whose ABI signature
+      -- `(ExtWorld, string, string)` cannot gain a parameter below 6.0. The
+      -- world token is the only value that reaches it, and this fold is the only
+      -- place the caller's identity is known.
+      --
+      -- THIS SLOT CANNOT ACTUALLY REACH THE SEAM AND IS STAMPED ANYWAY, measured
+      -- rather than assumed: `on_pre_step`'s ABI row is `! {AI, IO, Trace}`,
+      -- which has no `Process`, so a hook here cannot call `proc_exec` at all.
+      -- Three of the seven slots can — `on_tool_handle`, `on_response_intercept`
+      -- and `on_solver_candidate` — and the other three (`on_build_system_prompt`,
+      -- `on_budget_plan`, `on_tool_policy`) do not thread the world and are not
+      -- stamped. Stamping this one costs one call and means a future widening of
+      -- the row cannot silently start recording effects attributed to nobody.
+      let outcome = (h.on_pre_step)({ ctx | world: stamp_holder(world, h.id) }, msgs);
       let decision = outcome.decision;
       let world1 = outcome.next_state;
       let _ = if is_test_dummy(h.id) then {
@@ -285,8 +314,15 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
   }
 }
 
+-- WI-D24 CLEARS THE HOLDER ON THE WAY OUT, and all four world-threading
+-- dispatchers do. The stamp is a property of a call in flight; leaving it on the
+-- successor would hand the DRIVER a world that names an extension as its holder,
+-- which is a value that is present, wrong and read by nothing — the shape this
+-- project counts. Clearing costs one call and makes "the driver's world has no
+-- holder" true by construction rather than by nobody looking.
 export func dispatch_pre_step_chain(rt: ExtRuntime, ctx: ExtCtx, msgs: [Msg]) -> PreStepChainResult ! {AI, Clock, IO, Trace} {
-  fold_pre_step_chain_rec(rt.registry.hooks, ctx, msgs, ctx.artifacts, ctx.world)
+  let out = fold_pre_step_chain_rec(rt.registry.hooks, ctx, msgs, ctx.artifacts, ctx.world);
+  { msgs: out.msgs, stages: out.stages, artifacts: out.artifacts, next_state: clear_holder(out.next_state) }
 }
 
 func decide_one_policy(h: ExtensionHooks, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
@@ -354,7 +390,10 @@ func first_handle(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope, 
     [] => { decision: Delegate, next_state: world },
     h :: rest => {
       if contains_tool(h.provided_tools, name) then {
-        let outcome = (h.on_tool_handle)({ ctx | world: world }, call);
+        -- WI-D24. The holder stamp; see `fold_pre_step_chain_rec` for the
+        -- decision. This slot's row is the widest of the seven, so it is one of
+        -- the three that can actually reach `ExtPorts.proc_exec`.
+        let outcome = (h.on_tool_handle)({ ctx | world: stamp_holder(world, h.id) }, call);
         match outcome.decision {
           Delegate => first_handle(rest, ctx, call, name, outcome.next_state),
           Handled(r) => { decision: Handled(r), next_state: outcome.next_state }
@@ -365,7 +404,9 @@ func first_handle(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope, 
 }
 
 export func dispatch_tool_handle(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-  first_handle(rt.registry.hooks, ctx, call, tool_name(call), ctx.world)
+  -- WI-D24 clears the holder; see `dispatch_pre_step_chain`.
+  let out = first_handle(rt.registry.hooks, ctx, call, tool_name(call), ctx.world);
+  { decision: out.decision, next_state: clear_holder(out.next_state) }
 }
 
 -- Unlike `first_handle` above, EVERY hook here is invoked until one intercepts,
@@ -374,7 +415,9 @@ func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string
   match hooks {
     [] => { decision: NoIntercept, next_state: world },
     h :: rest => {
-      let outcome = (h.on_response_intercept)({ ctx | world: world }, response_text);
+      -- WI-D24's holder stamp; `! {IO, Process, FS}`, so this slot reaches the
+      -- seam. See `fold_pre_step_chain_rec`.
+      let outcome = (h.on_response_intercept)({ ctx | world: stamp_holder(world, h.id) }, response_text);
       match outcome.decision {
         InterceptHandled(r) => { decision: InterceptHandled(r), next_state: outcome.next_state },
         NoIntercept => first_intercept(rest, ctx, response_text, outcome.next_state)
@@ -384,7 +427,9 @@ func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string
 }
 
 export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
-  first_intercept(rt.registry.hooks, ctx, response_text, ctx.world)
+  -- WI-D24 clears the holder; see `dispatch_pre_step_chain`.
+  let out = first_intercept(rt.registry.hooks, ctx, response_text, ctx.world);
+  { decision: out.decision, next_state: clear_holder(out.next_state) }
 }
 
 -- WI-D7 CASCADE. The `on_solver_candidate` SLOT narrowed to `! {Process}`;
@@ -394,7 +439,9 @@ export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_te
 -- comparing this row against the ABI's would otherwise read the difference as
 -- a stale row rather than as a host effect the slot never had.
 func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string, world: ExtWorld) -> FinalizeOutcome ! {Process, IO, Clock} {
-  let outcome = (h.on_solver_candidate)({ ctx | world: world }, candidate);
+  -- WI-D24's holder stamp; `! {Process}`, so this slot reaches the seam too.
+  -- See `fold_pre_step_chain_rec`.
+  let outcome = (h.on_solver_candidate)({ ctx | world: stamp_holder(world, h.id) }, candidate);
   let decision = outcome.decision;
   let _ = if is_test_dummy(h.id) then {
     let tag = match decision {
@@ -455,7 +502,8 @@ export func dispatch_solver_candidate(rt: ExtRuntime, ctx: ExtCtx, candidate: st
   -- The MERGE is unchanged and stays a pure function of the decision list. Only
   -- the successor is new, and it is the LAST hook's, not the merged winner's:
   -- every hook ran, so every hook's effects happened, whichever decision won.
-  { decision: merge_finalize_decisions(collected.decisions), next_state: collected.next_state }
+  -- WI-D24 clears the holder; see `dispatch_pre_step_chain`.
+  { decision: merge_finalize_decisions(collected.decisions), next_state: clear_holder(collected.next_state) }
 }
 
 func smoke_ctx() -> ExtCtx {
