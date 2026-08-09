@@ -31,6 +31,80 @@ gaps and scheduled them; independent review found nine more. That asymmetry is t
 independent review of a completeness claim, and it is why this pass adds a work item (A15) rather
 than only editing prose.
 
+## The goal line — decided 2026-08-09, after WI-D23
+
+The plan's original finish line is Milestone C: *"its gate is the ADR's acceptance-test table,
+nothing less."* That gate was reached and the table came back **green over vacuities** — S21 counts
+four rows leaning on an empty install list, and the count went UP as the rows got better. The
+D-wave has been one long attempt to make the green mean something, and it has no enumerated end:
+every report yields findings, every finding becomes an item, and the yields have not moved since
+D15 while seven items shipped. A finish line defined as *the absence of vacuity* recedes every time
+the project gets better at finding vacuity — which it does, deliberately, every item.
+
+**So the goal line is redefined as a positive demonstration plus a disclosure table, because a
+demonstration cannot pass vacuously: it either exists or it does not.**
+
+**Project 009 is DONE when both hold:**
+
+1. **The demonstration.** A graded profile that installs compose records a real session and
+   replays it deterministically, and the run's criterion-2 evidence is non-vacuous: extension
+   effects world-mediated, origin-tagged to the performing extension, present in the recorded
+   program and reproduced by its replay. The evidence comes from the discovery and witness
+   instruments over the recorded run — a dynamic fact, not a classifier verdict, so door 3 does
+   not block it.
+2. **The disclosure table.** Every one of the fifteen extensions is classified either
+   **mediated** or **disclosed with a measured reason** — no UNRESOLVED verdicts. Disclosure is a
+   decision plus a measurement, not a build: compose's `show` residue (door 3) closes by
+   disclosure and an upstream filing, registration effects close by the per-process-capability
+   measurement that already exists (S22/D13), the ambient AI and `println` sites are already
+   disclosed by decision.
+
+The closing artifact is **a final acceptance rerun in D5's shape** whose outputs are the table,
+S21's aggregate vacuity register as a computed result rather than prose, and the 15-row
+classification table. That note banks the goal.
+
+### The critical path, six items, one done
+
+| # | Item | Ground |
+|---|---|---|
+| 1 | ✓ **WI-D23** — the typed exit code end to end | shipped 2026-08-09, verified at review |
+| 2 | **The identity work** — `ExtCtx.ext_id` + the eighth recording adapter | D21 §5's plan; the catalogue row has existed since C5; `absent_classes` takes a witness the way D19's three classes did |
+| 3 | **The successor audits** — `on_pre_step`, `on_solver_candidate` | compose binds BOTH (`compose.ail:1034`, `:1041`, measured 2026-08-09); the demonstration is the first run where its hooks PERFORM, which is exactly when S29's dropped successor (base rate 2 of 2) silently swallows the evidence. Audit before routing |
+| 4 | **Routing compose's `exec` sites** — three import sites, four call sites | no type work left after D23; blocked only on item 2; known edges: the fault-class residue (catalogue, "NARROWED A THIRD TIME") and `grep_impl`'s byte-stdout shape, both named at their sites |
+| 5 | **C5's compose-bearing profile** — the demonstration vehicle | the debt every report since D19 names |
+| 6 | **The final acceptance rerun** — the closing note | D5's shape, plus the vacuity register and classification table as computed outputs |
+
+**The endgame scope rule, which is the anti-forever mechanism:** during items 2–6, a finding goes
+on the queue **only if it blocks clause 1 or clause 2**; everything else goes to the maintenance
+register below, priced but not scheduled. The question to ask of every new item is the goal line's
+own: *does this block the demonstration or the disclosure table?*
+
+### Renounced, each with its measured reason
+
+- **15 of 15 mediated.** Registration effects are structurally unroutable — AILANG capabilities
+  are per-process and nine of fifteen `register_with_config` bodies read `Env` before any hook
+  dispatches (measured at D6). Mediated-or-disclosed is the honest ceiling.
+- **A producer for door 3.** No producer at HEAD can classify `show`; the textual route was tried
+  and discarded because it invents evidence (D15). Close by disclosure and an upstream filing.
+- **The `proc_exec` rename / ABI `6.0`.** A release decision with consumers outside this project
+  (D22's stop condition). Leaves the project entirely.
+- **The ADR citation-layer repair.** ~14% already wrong before any edit; D10's rule — correcting a
+  layer of unknown correctness hides the decay. Stays reported and owed.
+- **A fully non-vacuous acceptance table as the definition of done.** The receding line this
+  section replaces. The final rerun REPORTS the vacuity register; it does not require the register
+  to be empty.
+
+### After the line: soft taper, by decision
+
+The loop does not hard-stop at the goal line. It **inverts**: the maintenance register becomes the
+queue's only source, ordered by measured value, at reduced cadence — continuation is explicitly
+maintenance, not pursuit. Standing rules are earned only by exception; the counters continue as
+fix-or-file. **The maintenance register at the time of this decision:** the eight stale
+classifier-2 literals (ten items stale), classifier 1's repair, the gate-table State column, the
+hook-scope promotion, the scratchpad loopback successor (`tool_envelope_dispatch.ail:44`), the
+stdlib cache's producer (open since D14), F3, the bridge's `workdir`/`timeout_ms` hardcoding, and
+the four-variant fault-class discrimination across the ABI.
+
 ## Survey: executed at HEAD, 2026-08-02
 
 The ADR's handoff requires ten re-verifications. All ten were run against HEAD `eabaac8` on the

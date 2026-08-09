@@ -111,23 +111,29 @@ ABI at **15 rows + 5 added types**, still `5.0`; **the `proc_exec` rename forces
 release decision with consumers outside this project. Profiles at `driver_only` **20**,
 `driver_plus_no_ops` **7**.
 
-Open, roughly by readiness:
+**The project now has a committed goal line — read the plan's "The goal line" section (decided
+2026-08-09) before choosing any item.** Done = a compose-bearing profile records and replays a
+session with non-vacuous criterion-2 evidence, plus all fifteen extensions mediated-or-disclosed.
+The remaining critical path, in order:
 
-1. **The eighth recording adapter + `ExtCtx.ext_id`**, which is what `ExtensionEffectIdentity` actually
-   needs — and now also **the only thing between compose's `exec` sites and the routed seam**: D23 left
-   no type work, only identity (`recording_tool`'s blank-call-id `ToolIdentity` makes the first
-   recorded `proc_exec` call a rejected program). `absent_classes` stays untouched until it lands.
-2. **Routing compose's `exec` sites** — immediately behind item 1; the four-variant fault-class
-   discrimination across the ABI (catalogue entry "NARROWED A THIRD TIME") and the rg byte-stdout
-   residue are its known edges.
-3. **`on_pre_step` and `on_solver_candidate` successor audits.** Base rate **2 of 2** (S29).
-4. **C5's compose-bearing profile** — no graded profile installs compose, which is why D19 had to build
-   a scenario to make its own tripwires fire. A growing debt.
-5. Door 3's producer; the hook-scope promotion (needs a review round); the scratchpad loopback
-   successor (`tool_envelope_dispatch.ail:44`); the eight stale classifier-2 literals (**ten items
-   stale**); classifier 1's repair; the stdlib cache's producer; the gate-table State column; F3.
+1. **The identity work** — `ExtCtx.ext_id` + the eighth recording adapter (D21 §5's plan). Also the
+   only thing between compose's `exec` sites and the routed seam: D23 left no type work, only
+   identity. `absent_classes` stays untouched until it lands.
+2. **The successor audits** — `on_pre_step`, `on_solver_candidate`. Compose binds both; base rate
+   **2 of 2** (S29). Before routing, because the demonstration is the first performing run.
+3. **Routing compose's `exec` sites** — three import sites, four call sites; edges named at their
+   sites.
+4. **C5's compose-bearing profile** — the demonstration vehicle.
+5. **The final acceptance rerun** — the closing note; vacuity register and classification table as
+   computed outputs.
+
+**The endgame scope rule: a finding joins the queue only if it blocks the goal line's two clauses;
+everything else goes to the plan's maintenance register.** (Door 3's producer, the hook-scope
+promotion, the scratchpad loopback successor, the stale classifier-2 literals, classifier 1's
+repair, the stdlib cache's producer, the gate-table State column, F3 — all register, none queue.)
 
 ## Read order for a cold start
 
-`ADR-001` §Context and the eleven-row table → the plan's **S1–S33** block → the last three milestone
-entries → this note. **Then measure something before you write anything.**
+`ADR-001` §Context and the eleven-row table → the plan's **"The goal line"** section → the plan's
+**S1–S33** block → the last three milestone entries → this note. **Then measure something before you
+write anything.**
