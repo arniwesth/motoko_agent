@@ -92,7 +92,7 @@ commit; D22 declined to and was right.
 
 ## Standing rules
 
-**S1–S32, and they are promoted from execution, never written in advance.** A rule with no item that
+**S1–S33, and they are promoted from execution, never written in advance.** A rule with no item that
 paid for it does not belong there. They live at the top of the plan; skim the block before writing a
 handoff, because three or four will apply to any item.
 
@@ -123,5 +123,5 @@ Open, roughly by readiness:
 
 ## Read order for a cold start
 
-`ADR-001` §Context and the eleven-row table → the plan's **S1–S32** block → the last three milestone
+`ADR-001` §Context and the eleven-row table → the plan's **S1–S33** block → the last three milestone
 entries → this note. **Then measure something before you write anything.**
