@@ -84,6 +84,11 @@ commit; D22 declined to and was right.
 - **Two homes for one fact** — `ADR:340-341`. Produced by an unmediated effect (D16, D17), by the
   world's **key** (D18), and by two codecs for one structure (D22).
 - **A guard that fails open** — `derive.py`'s exit code; a pin that iterates itself (S24).
+- **A property inferred from a proxy that usually agrees with it** — **S33**, which consolidates eight
+  instances across code, instruments and analysis. **Read S33 before writing a handoff**: three of its
+  eight are analysis errors made in this role, and its one operating question — *what does this
+  actually read, and what input makes that differ from what it means?* — is the cheapest check
+  available on your own output.
 
 ## Standing rules
 

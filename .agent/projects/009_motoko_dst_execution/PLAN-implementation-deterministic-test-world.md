@@ -498,6 +498,41 @@ not re-issued (D4)"*. **The second profile binds the same table at the same iden
 cascade now has two consumers and the anchors target names one. **A third profile extends the list
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
+**S33. INFERRING A PROPERTY FROM A PROXY THAT USUALLY AGREES WITH IT IS ONE DEFECT CLASS, NOT EIGHT —
+AND THE DISTINGUISHING INPUT IS THE THING TO BUILD.** Consolidating rule, promoted 2026-08-08 from the
+whole D16–D22 cluster rather than from one item. **S28 and S31 are each one face of it, and about half
+of the instrument-weaker-than-its-claim counter is the same shape.** They are kept because they were
+earned; this is what they have in common.
+
+**Eight instances, spanning production code, instruments, and the analysis used to plan the work:**
+
+| What was read | What was meant | The input where they diverge |
+|---|---|---|
+| `import` lines (classifier 3) | effects a hook can perform | **a dead import** — D20 removed six |
+| a reference through a **constructor** | a call at registration time | `register_with_config` **building** the hooks record |
+| a **substring** in source | a call site | `contains(s, "readFile(")` in `guard.ail` |
+| the `fault_class_*` **accessors** | the catalogue | a class in `required_class_ids()` and not in the accessors — **11 vs 7** |
+| `List.length(entries) > 0` | `present` | **a directory that exists and is empty** |
+| `provider_calls > 0` | "the hook was dispatched" | a run where the driver called the model and **the hook never ran** |
+| `fileExists` | "is a file" | **a directory** — and the two adapters disagreed on it at HEAD |
+| a value **derived from the same producer** | the artifact's own field | an artifact whose version differs from the build's |
+
+**Why fixtures miss it, stated as the mechanism rather than as bad luck: the proxy and the truth agree
+on almost every input BY CONSTRUCTION.** A suite assembled from realistic cases will not contain the
+divergent one, so the row passes and reads as evidence. **Three separate mutants in this cluster passed
+first time for exactly this reason** (D18 §5, D19 mutant 1, D20 mutant 2), and in all three the repair
+was to the fixture, not the code.
+
+**And several distinguishing inputs did not EXIST until the project built them.** An empty directory was
+unrepresentable before D18; a second decodable schema version before D22. **So a proxy can be sound
+when written and become a defect when the system grows the state that separates it** — which is why
+these surface late and why an old green row is not evidence that the property still holds.
+
+**The operating test, and it is one question: what does this actually read, and what input makes that
+differ from what it means?** If the answer is "nothing realistic", the proxy is fine and say so at the
+site. If you cannot construct the input in-process, **narrow the label and name the gap** — D20 §8.2
+did, and a row that would pass either way is worse than no row.
+
 **S32. A DEFAULT IS ADMISSIBLE EXACTLY WHEN THE OLD VERSION'S OWN SEMANTICS FIXED THE VALUE; REFUSAL IS
 REQUIRED WHEN THEY DID NOT.** Earned by WI-D22, and it is the rule S30 was missing — S30 says a field
 added without a version bump reinterprets silently, and says nothing about what to do *with* the
