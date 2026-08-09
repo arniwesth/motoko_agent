@@ -969,3 +969,39 @@ which both already import, or give `InitialWorld` a structurally-identical anony
 `[{path, kind, content}]`. **The third reintroduces exactly what D18's sum was chosen to prevent —
 a directory carrying a file body — at the persistence boundary, which is where hand-written and
 corrupted artifacts enter.**
+
+**Cluster 40 = WI-D23, the exit code reaches the caller: HANDED OFF 2026-08-09**,
+`HANDOFF-execute-d23-the-exit-code-reaches-the-caller.md`. **The build WI-D21 drafted and stopped,
+resumed now that WI-D22 removed the stop** — links 1, 3 and 4 of D21's seven, plus the link its table
+did not number: `tool_outcome_text`'s `ToolCompleted` arm is `c.content` (`session.ail:819`), so the
+`exit_code` D22 added travels from the script through `world_tool` and **dies one seam short of the
+only caller the seam exists for.** A typed field nothing projects is the counted mode one layer up:
+absent-at-the-bridge reads identically to never-typed.
+
+**Grounding corrected two of D21's numbers, in the direction S22 predicts.** The `ExtProcOutcome`
+construction census is **seven sites, not the four link 1 priced** — the bridge, `ctx_defaults`, three
+packages, and two DST scripts (`declared_vs_performed.ail:162`, `long_qwen_compaction_dst.ail:250`)
+that a package-scoped reading misses. And three of the seven still carry pre-rename parameter names
+(`_cmd, _cwd` at `ctx_defaults.ail:16` among them) — **the rename's census said five bindings and the
+tree holds at least eight sites that state the contract**, so the "complete" rename has a residue
+exactly where the census's unit ended.
+
+**The three-versus-four exec discrepancy dissolves at the producer's unit.** The protocol note says
+compose keeps "three exec"; the tree holds four `exec(` call sites. `ext_ambient_inventory` counts
+**import sites** (`compose.ail:24`, `author_tools.ail:13`, `authoring/dispatcher.ail:6` — three), and
+the four call sites sit behind them. Neither number is wrong; quoting either without its unit makes
+the other read as an error — S15's quoted-forward shape, avoided this time by running the producer.
+
+**The clustering finding that sets the sequence: typing and routing are separable, and the recording
+identity is what separates them.** Routing compose's `exec` sites through `proc_exec` makes every
+recorded compose run emit a program the validator rejects — `recording_tool` (`ports.ail:1619`)
+stamps `ToolIdentity("loop_v2", "", …)` off the bridge's blank call id, D21 §4's asserted row. So the
+discrimination item routes **nothing**, and the routing belongs to the item that threads
+`ExtCtx.ext_id` and builds the eighth recording adapter. Stated with its condition (S25): this holds
+while the recording adapter's identity construction stands.
+
+**Clustering note to carry: a shipped schema field's reasons-not-to are now stale prose, and they are
+in three files.** `types.ail:170-179` ("requires a program_schema_version bump"), `ports.ail`'s live
+arm ("OUT OF THIS ITEM'S SCOPE"), and the catalogue's coverage-gap entry (the class-projection gap
+this item closes). D2's rule applies — the reason expired while some conclusions hold — and the
+handoff routes each to a two-part restatement rather than a deletion.
