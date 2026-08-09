@@ -498,6 +498,30 @@ not re-issued (D4)"*. **The second profile binds the same table at the same iden
 cascade now has two consumers and the anchors target names one. **A third profile extends the list
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
+**S32. A DEFAULT IS ADMISSIBLE EXACTLY WHEN THE OLD VERSION'S OWN SEMANTICS FIXED THE VALUE; REFUSAL IS
+REQUIRED WHEN THEY DID NOT.** Earned by WI-D22, and it is the rule S30 was missing — S30 says a field
+added without a version bump reinterprets silently, and says nothing about what to do *with* the
+version.
+
+**Both "old fields default" and "old fields refuse" are wrong as blanket answers, and the same
+migration needs both.** WI-D22 shipped the pair:
+
+- **`world.file` absent → `files: []`, a DEFAULT and correct.** At v1 the field existed nowhere and
+  `world_state_of` unconditionally reconstituted an empty table, **so an empty table is what a v1
+  program MEANT.** The decoder reproduces v1's semantics rather than guessing at them.
+- **`exit_code` absent → REFUSAL.** v1 runs really did execute subprocesses that exited with something,
+  and **every default that is a valid exit status claims to know what.** Verified at
+  `ports.ail:2139-2141`: `opt_int_field` then `ToolRecordUndecodable`, naming the pinned runner.
+
+**The test is not "is the field new" — it is "did the old version have an answer".** A field whose
+absence the old semantics determined is recoverable; a field whose absence the old semantics merely did
+not record is not, and defaulting it fabricates an observation the recorder never made.
+
+**And the negative controls are what make the refusal mean something**, both required because either
+alone is passed by a broken decoder: an explicit `"exit_code":0` must decode **to 0**, so the refusal
+cannot be satisfied by treating every zero as absent; and the current encoder's own output must contain
+the key, so nothing this build writes can trip it.
+
 **S31. "STRUCTURALLY UNREACHABLE" MUST NAME THE SHAPE FACTS THAT MAKE IT SO — AND WHEN THEY ARE
 FINALLY NAMED, CHECK EACH ONE.** Earned by WI-D21, whose own re-derivation produced two grounds and
 **both fell** — the second on a re-measurement that also defeated my correction of the first.
@@ -3284,6 +3308,93 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D22, 2026-08-08 (~1h25m) — `execution-program/2`. ALL THREE PAYLOADS SHIPPED; THE RENAME DID NOT,
+AND THE STOP CONDITION WAS RIGHT TO FIRE.**
+Verified at review: `program_schema_version()` is **`"execution-program/2"`** and
+`decodable_schema_versions()` is **`["execution-program/1", program_schema_version()]`** — written out
+oldest-first so a future bump must decide rather than inherit. `InitialWorld` carries
+**`files: [{ path, node: FsNode }]`** and `world_state_of` reads it (`dst_replay.ail:777`) instead of
+reconstituting `[]`. `ScriptedTool` and `ToolCompleted` both carry `exit_code`.
+**`execution-program-v2.artifact` exists and the v1 bytes are UNTOUCHED** — last modified at A13,
+verified by log. Green at review: `program_persistence`, `world_state`, `discovery`,
+`execution_program`, `anchors`, `predicate_anchors`.
+
+**D17's TWO-TIER COMPATIBILITY SURFACE IS CLOSED, and the gate says so in its own words:** *"0 identity
+class(es) round-tripped-but-not-frozen — WI-D17's two-tier compatibility surface is CLOSED (all 10
+classes are in frozen bytes)"*. Three classes had no historical bytes since D17; there are none now.
+**The v1 row also reached the ⓘ it was written for and had never printed in the artifact's life** — a
+backward-compatible encoding change is permitted, and v2 asserts byte identity as a **failure** where v1
+only informs, because v1's bytes predate this encoder and v2's were frozen by it.
+
+**THE FOURTH PAYLOAD NOBODY SCOPED: THE DECODER WAS REWRITING THE VERSION IT HAD JUST READ.**
+`dst_persistence.project` stamped `program_schema_version()` onto every decoded program. **At one
+decodable version that is behaviour-preserving and invisible; at two it is a decoder discarding a fact
+it was handed** — and it made `program_diff`'s `schema_version` row, in a scenario whose whole claim is
+*"field by field"*, **structurally incapable of failing on that field.** The bump armed it and exposed
+it in the same change. `frozen_v1_program()` now declares `execution-program/1` (`:836`, verified) so
+the row compares two things that can disagree.
+
+**EARNED S32, AND IT IS THE RULE S30 WAS MISSING.** S30 says a field added without a version bump
+reinterprets silently; it says nothing about what to do *with* the version. This item shipped both
+answers in one migration and the discriminator is right.
+
+**THE `FsNode` LOCATION: a NEW std-only module `src/core/fs_node.ail`**, and both of my three options
+were declined for better reasons than I gave. Importing `ports` upward was declined **on direction** —
+`dst_persistence` imports `dst_program`, so the effectful port layer would enter the pure program
+schema's import graph. Moving it into `dst_interaction` was declined **on honesty**: cheapest, and it
+makes that module's header false, because **an `FsNode` is not an interaction.** Cost measured at five
+import sites; `fs_node` imports `std/option` and `std/list` only.
+
+**THE TWO CODECS ARE SEPARATE AND NOW SHARE THE VOCABULARY RATHER THAN THE CODEC** — the answer my
+handoff asked for and a better one than "share or pin". They differ in **format** (JSON vs
+tab-separated), **lifetime** (one hook call vs outliving the build), and **what an unreadable entry
+means**: `ext_world` falls back to `FsFile` because an old token predates the `kind` key, while the
+artifact **REFUSES**, because no artifact predates `world.file` at all. **Merging them would force one
+of those answers onto the other side.** `fs_kind_id`/`fs_node_of_kind` moved into `fs_node` and
+**neither codec writes the literal `"file"` or `"dir"` any more**, so renaming a kind in only one of
+them is no longer expressible.
+
+**THE RENAME'S STOP CONDITION FIRED AND D21'S COUPLING ARGUMENT DOES NOT SURVIVE.** `execution-program/N`
+and `motoko-ext-abi@X.Y` are independent compatibility surfaces with independent consumers, and the
+bump shipped without touching one type in `types.ail`. **And the half seven deferrals never stated is
+now stated:** `ExtPorts` is a **record**, every extension constructs one by writing every label, so a
+renamed label is **a construction that no longer type-checks at `register_with_config`** — the one
+function every extension package must export. No deprecation window, no shim, no source satisfying both
+ABIs. **That is categorically unlike the fifteen deferred rows, every one of which is a widening or an
+addition an unchanged consumer keeps compiling against.** A rename is a `6.0`. Verified: `proc_exec`
+unchanged, `ailang.toml` still 5.0.
+
+**THE ANCHOR CASCADE DID NOT FIRE, AND THE REPORT'S READING OF THAT IS WRONG.** Zero drift, verified —
+*"6 anchors and 7 references all match"*, `driver_only_version` **19**, `no_ops_version` **6**. The
+report calls this *"a genuine data point against D21's finding that a comment-only edit fires the
+cascade."* **It is not against it; it is outside its scope.** D21's law is *any edit to
+`ext_ports_of`* — a function in `session.ail`. D22 edited prose in `types.ail`, a different file with no
+anchors, and its own preceding sentence says the rename is what would have touched `ext_ports_of`.
+**The observation is real and confirms the law is SCOPED rather than general; it is not evidence
+against it.**
+
+**COUNTERS KEPT APART, AND THE SPLIT PAID FOR ITSELF.** Silent-wrong **75, unchanged**, across
+forty-four runs — and the item correctly declined to inflate it with the version-rewrite (no wrong
+answer at HEAD, since only one version existed) or with the redaction hole it **authored and closed in
+the same commit**. Instrument-weaker-than-its-claim **6 → 7**. **This is the first item to add to the
+second counter without adding to the first**, which is exactly the discrimination D21 opened it for.
+
+**Also discovered, and both are the kind that only appear when a field lands:** `scan_program` did not
+scan the seeded file table and **could not have** — D8's redact gate now has its one path into an
+artifact, and `recording_file_write`'s own comment says a file body is *"the single most likely place in
+this whole surface for a credential to appear"*; its answer was "do not put it there", and a seed must,
+so `scan_file_table` scans **path and body**. And `world.file` is **the first three-field repeatable tag
+in the schema**, hence the first place a mid-field tab can split a record into the wrong arity — fixed
+arity 3 with empty content for directories, rather than an arity that depends on its own second field.
+
+**One process rule earned and it is not in S13/S17/S28:** `make sync_packages` must be re-run **after
+any edit to a type a package's import graph can see**, not only once at the start — a stale
+`ailang.lock` produced *"record field 'exit_code' not found"* against a source line that plainly had it.
+
+**And a concurrent session's commit `b23a44e` swept up two of this item's files** via a `git commit -a`
+shape while a `git stash` was taken for a HEAD baseline. Content intact, attribution wrong, **left
+unrepaired deliberately** — rewriting another session's commit is the more expensive mistake.
 
 **WI-D21, 2026-08-08 (~1h05m) — THE SUBPROCESS DISCRIMINATION: DECISION TAKEN, BUILD DRAFTED AND
 STOPPED, AND THE SEAM ALREADY EMITS A REJECTED PROGRAM.**
