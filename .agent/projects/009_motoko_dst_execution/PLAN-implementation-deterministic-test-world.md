@@ -69,7 +69,7 @@ classification table. That note banks the goal.
 |---|---|---|
 | 1 | ✓ **WI-D23** — the typed exit code end to end | shipped 2026-08-09, verified at review |
 | 2 | **The identity work** — `ExtCtx.ext_id` + the eighth recording adapter | D21 §5's plan; the catalogue row has existed since C5; `absent_classes` takes a witness the way D19's three classes did |
-| 3 | **The successor audits** — `on_pre_step`, `on_solver_candidate` | compose binds BOTH (`compose.ail:1034`, `:1041`, measured 2026-08-09); the demonstration is the first run where its hooks PERFORM, which is exactly when S29's dropped successor (base rate 2 of 2) silently swallows the evidence. Audit before routing |
+| 3 | ✓ **The successor audits** — `on_pre_step`, `on_solver_candidate` | shipped 2026-08-09 (~1h10m). Seven arms enumerated, ONE drop — WI-D4's documented deferral on the two seal terminals — threaded and witnessed; no unknown drop. Four compiler verdicts bound both slots' reachable surface and correct D24's row algebra |
 | 4 | **Routing compose's `exec` sites** — three import sites, four call sites | no type work left after D23; blocked only on item 2; known edges: the fault-class residue (catalogue, "NARROWED A THIRD TIME") and `grep_impl`'s byte-stdout shape, both named at their sites |
 | 5 | **C5's compose-bearing profile** — the demonstration vehicle | the debt every report since D19 names |
 | 6 | **The final acceptance rerun** — the closing note | D5's shape, plus the vacuity register and classification table as computed outputs |
@@ -103,7 +103,12 @@ fix-or-file. **The maintenance register at the time of this decision:** the eigh
 classifier-2 literals (ten items stale), classifier 1's repair, the gate-table State column, the
 hook-scope promotion, the scratchpad loopback successor (`tool_envelope_dispatch.ail:44`), the
 stdlib cache's producer (open since D14), F3, the bridge's `workdir`/`timeout_ms` hardcoding, and
-the four-variant fault-class discrimination across the ABI.
+the four-variant fault-class discrimination across the ABI. **Added at WI-D25:**
+`effect_inventory_selftest`'s *"compared ZERO modules"* red — `ailang iface` yields no parseable
+interface in this checkout, so the textual fallback is the only derivation in play AND is
+unvalidated; the gate is refusing a pass-shaped absence correctly. Pinned to HEAD by measurement
+(red with the item's changes stashed), and it is a **third** standing red beside the
+`test_coverage` pair.
 
 ## Survey: executed at HEAD, 2026-08-02
 
@@ -735,7 +740,27 @@ second tool call onward `ctx.world` is the batch-start world. Writing the succes
 re-seating `ctx` from the live world** rewinds past everything the earlier entries did — and it
 type-checks exactly as readily as the correct version. **Both halves are one decision.**
 
-**Base rate 2 of 2. `on_pre_step` and `on_solver_candidate` are unaudited.**
+**Base rate 2 of 2 on the slots audited LATE. WI-D25 AUDITED THE OTHER TWO BEFORE ROUTING AND THE
+PICTURE INVERTS — the rule's value is in the DISCLOSURE, not in a fresh catch.** Four slots audited
+now. `on_solver_candidate` carries its successor on all FOUR arms (`session.ail:2803`, `:2814`,
+`:2846`, `:2863` — three variants, four endpoints, because `NoDecision` branches on the
+persist-nudge policy) and its read side re-seats per hook; `on_pre_step` carried it on ONE arm of
+three, and the two that dropped it were **WI-D4's documented deferral**, named in a comment at the
+site — *"they still ignore `chain.next_state` … out of this item's scope"*. **No unknown drop was
+found in either path.**
+
+**And the credit is split rather than claimed.** The solver slot came back clean **largely because
+D19's intercept work re-seated it in passing**, not because the rule prevented a fresh drop — the
+one re-seat that matters is D19-tagged. What the rule earned is the `on_pre_step` half: the drop
+was written down at its site by the item that deferred it, so the audit found it by READING rather
+than by discovering a defect. The rule changed the observability; D19 changed the code. Both are
+real and neither is the other.
+
+**THE DEFERRAL'S GROUND DID NOT SURVIVE RE-MEASUREMENT, WHICH IS THE SECOND LESSON.** WI-D4's
+justification was entirely about *its own deleted resolution* and said nothing whatever about the
+chain — the chain is dispatched below that comment and above the match, so a pre-step hook's
+effects have already happened on all three arms when the seal decides. **A deferral's stated scope
+is not a reason; re-derive it when the scope arrives** (S22 applied to prose).
 
 **S28. A TEXTUAL MATCH IS NOT A CALL SITE, AND THIS APPLIES TO THE HANDOFF'S OWN ANALYSIS TOOLS.**
 Earned by WI-D19/D20 against the WI-D19 handoff, which shipped **two** instances of the same defect in
@@ -3441,6 +3466,95 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D25, 2026-08-09 (~1h10m) — THE SUCCESSOR AUDITS. ONE DROP, AND IT IS THE ONE THAT WAS WRITTEN
+DOWN; THE DURABLE OUTPUT IS FOUR COMPILER VERDICTS AND THE FIRST PERFORMING `on_pre_step` BINDING.**
+Report: `NOTE-d25-the-successor-audits.md`. **Seven arms enumerated across two slots.**
+`on_solver_candidate`: four endpoints, all threaded, read side clean (`collect_finalize_decisions`
+threads with an explicit `let` and re-seats per hook). `on_pre_step`: one arm of three, and the two
+`Err` arms of `seal_compacted_payload` are **WI-D4's documented deferral**, now threaded —
+`c2_finalize(st.provider, token_to_world(chain.next_state), …)` at `session.ail:2570` and `:2577`
+(the entry first cited `:2549`/`:2556`, the PRE-edit anchors — corrected at review by measurement,
+S15's own class in the entry describing the fix), with the expired scope clause re-tensed two-part
+per S15. **No unknown drop in either path**; S29's
+record is corrected above, credit split between the rule and D19.
+
+**THE CAPABILITY BOUNDS ARE NOW EXECUTABLE AND THEY CORRECT THIS PLAN'S OWN D24 ENTRY IN SOURCE.**
+Four verdicts in `run_declared_vs_performed.sh` (`port_accepts`/`port_rejects`), each rejection
+paired with a widened control so it is attributable to the row: `on_pre_step` ACCEPTS
+`ports.ai_step` and is REJECTED on `ports.clock_now` (*Missing effects: Clock*);
+`on_solver_candidate` is REJECTED on `ports.proc_exec` (*Missing effects: FS, IO*) and ACCEPTS
+**ambient** `std/process.exec`. So `on_pre_step` reaches **1 of 10** `ExtPorts` fields and
+`on_solver_candidate` **0 of 10** — and the D24 handoff correction was carried into the three
+source sites that still repeated it (`ext/runtime.ail:272`, `:394`, `:442`; "three of the seven"
+is **two**). `first_intercept`'s claim is true and was left alone.
+
+**THE WITNESS IS THE FIRST `on_pre_step` BINDING IN THE TREE THAT PERFORMS**, which is exactly
+S29's invisibility clause met head-on: both seal terminals were ALREADY driven in
+`world_state_probe` and both were green across the drop, because every binding returns `ctx.world`
+unchanged. `consuming_pre_step_2`/`_3` call `ports.ai_step` — the only seam the row admits — and
+consume scripted provider steps, so the terminal world's remaining `script` is a quantity the
+driver never writes: **6−2=4 and 5−3=2** (S7-distinct). Six rows, three per terminal: the threading
+count, a **reachability** row naming the terminal taken, and a **control** with a non-performing
+hook proving the count is the hook's. The revert-mutant kills **exactly the two threading rows**
+and leaves the other four green.
+
+**THE SOLVER SLOT GETS THE NARROWED LABEL AND NO FIXTURE, DELIBERATELY.** With zero reachable
+ports a hook there cannot change world content, and a fabricated token dies at the next
+`token_to_world` (S34's total decoder, met from the other side). Its four arms are verified **by
+reading, source-anchored**, and said so — D20 §8.2's precedent. That is why
+instrument-weaker-than-claim does not move.
+
+**COUNTERS UNCHANGED: silent-wrong 75, instrument-weaker 7.** The seal-terminal drop was
+**disclosed at its site** by the item that deferred it and no performing `on_pre_step` hook exists
+in production at HEAD, so no run ever shipped a wrong answer from it — a documented deferral is
+owed work, not a silent defect. One ruling is left open for review: the three false seam claims
+shipped in source and were contradicted by nothing, but they are prose rather than a value, so
+they were not counted.
+
+**THE CASCADE NARROWS THE SIX-FILE LAW THE WAY D24 NARROWED THE NINE.** `session.ail` +21 inside
+`c2_loop`'s `CallModel` arm, which sits below `:1476` and above the two `provider.ports.clock_now`
+sites: **only two anchors moved** (`2921→2942`, `3031→3052`, byte-identical), the first re-issue
+where the five session anchors move as a proper subset. `ext/runtime.ail` grew entirely **below**
+its `:199` anchor, so the fixture-carried pair is unmoved. **Five files, not six** — and
+`attribution_table_dst.ail` needed no edit, because its only session anchor is `:1476` and its HEAD
+inventory is DERIVED. **The rule, recorded in `anchors.sh`: the cascade's width is the set of files
+that PIN the anchors that moved, derived by the widened grep, not read off which file was edited.**
+D21 read it off the edited file and was wrong twice. Profiles **22 / 9**;
+`sha256:4339fef0… → sha256:753839ba…`.
+
+**Green by run:** `world_state` (incl. all five poison pairs), `discovery`, `execution_program`,
+`program_persistence`, `declared_vs_performed` (**46/0**), `conformance`, `anchors`,
+`predicate_anchors`, `attribution_table`, `profile_definition`, `profile_coverage`; full `make dst`
+red only on the two standing `test_coverage` targets. Yields and inventory unmoved (5/15, 4/15,
+4/15, compose 11/32). **A THIRD standing red is disclosed and pinned to HEAD by measurement**:
+`effect_inventory_selftest` fails with *"compared ZERO modules"* because `ailang iface` yields no
+parseable interface in this checkout — the gate refusing a pass-shaped absence, correctly. It goes
+to the maintenance register; it blocks neither goal-line clause.
+
+**What item 4 (routing compose's `exec` sites) inherits:** **nothing in these two paths constrains
+where the routed calls may land, and that is now a compiler verdict rather than a reading.**
+`on_solver_candidate` cannot host a routed `exec` at all (0 reachable ports) — compose binds it at
+`compose.ail:1041` and any `exec` there stays **ambient** until the row widens, which is the
+barrier question and off the critical path. `on_pre_step` has no `Process` at all. The two slots
+that CAN are `on_tool_handle` and `on_response_intercept`, both already routed and both already
+audited. The one thing to carry forward is the stale `post_ctx.ports` at `session.ail:2679`,
+unreachable today and live the moment anything widens the solver row — D20's read-side defect in a
+second place, waiting for its first caller.
+
+**VERIFIED AT REVIEW, and the open ruling taken.** Run, not read: `world_state` green including all
+six seal rows at the report's exact numbers (`left=4 of 6`, `left=2 of 5`, controls whole);
+`declared_vs_performed` green with the four verdicts printing verbatim; **the third standing red
+reproduced** — `effect_inventory_selftest` exits 1 at HEAD with `agree=0 disagree=0`. The threaded
+arms, the `ext/runtime.ail` two-part corrections, the `anchors.sh` width law, and profiles **22/9**
+all confirmed at source. **The delegated counter ruling: the three false seam claims are NOT
+counted under silent-wrong.** The counter tracks values a program produces; wrong prose in shipped
+source is S15's class, governed by rules, and the precedent is consistent — D2's nine wrong
+structural reasons and D11's three wrong State cells were never counted. **75 across 47 runs
+stands.** Note for the record: this item's implementation was **uncommitted at review** (nine
+modified files plus the report untracked, D21's shape); every gate above was verified green in that
+working-tree state, and the milestone entry itself was written by the implementing session — kept,
+extended here rather than duplicated.
 
 **WI-D24, 2026-08-09 (~1h50m) — THE EIGHTH RECORDING ADAPTER. D21 §4's DEFECT IS CLOSED BY
 MEASUREMENT, AND THE TRANSPORT IS NEITHER OF THE TWO THE HANDOFF OFFERED.**

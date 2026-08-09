@@ -68,7 +68,7 @@ program its own validator rejects — came from following `session.ail` → `por
 
 ## Two counters, and they are deliberately separate
 
-- **Silent-wrong: 75 across 46 runs.** *Production sites where two answers type-check and the wrong one
+- **Silent-wrong: 75 across 47 runs.** *Production sites where two answers type-check and the wrong one
   ships silently.*
 - **Instrument-weaker-than-its-claim: 7.** *A row that passes while measuring less than its label.*
   Opened at D21.
@@ -97,40 +97,44 @@ commit; D22 declined to and was right.
 paid for it does not belong there. They live at the top of the plan; skim the block before writing a
 handoff, because three or four will apply to any item.
 
-## Where the work stands (2026-08-09, after WI-D24)
+## Where the work stands (2026-08-09, after WI-D25)
 
 Route B is built and compose is mediated: **11 ambient sources, 32 `ExtPorts` field calls** — the
 remainder are four `println` (disclosed by decision), three `exec` import sites carrying four call
-sites (typed and identity-ready since D24; routing is item 2 of the critical path, behind the audits), registration's three (structurally unroutable)
+sites (typed, identity-ready, and cleared for routing — item 1 of the critical path since D25), registration's three (structurally unroutable)
 and one ambient AI. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
 closed at zero classes, and **the typed subprocess discrimination is complete end to end** (D23):
 script → codec → `world_tool` → bridge → `ExtProcOutcome.exit_code`, witnessed at every joint, at
 ABI `5.0`. **The identity work is done** (D24): eight recording adapters, a separate
 `WorldState.ext_effects` queue, the ext id on the world token (`holder_ext_id` — no ABI change), and
 D21 §4's rejected-program defect closed by a measured record → validate → replay round trip.
-`RandomDraw` is now the only class pinned at literal zero.
+`RandomDraw` is now the only class pinned at literal zero. **The successor audits are complete**
+(D25): four slots audited, no unknown drop, WI-D4's documented seal-terminal deferral threaded with
+the first performing `on_pre_step` witness behind it, and both slots' capability bounds executable
+as compiler verdicts — `on_pre_step` reaches 1 of 10 ports (`ai_step`), `on_solver_candidate` 0 of
+10 (ambient `std/process.exec` only).
 
 Yields **4 of 15** and **5 of 15**, unmoved since D15 — door 3 (`show`) keeps compose HOOK-UNRESOLVED.
 ABI at **15 rows + 5 added types**, still `5.0`; **the `proc_exec` rename forces `6.0`** and is a
-release decision with consumers outside this project. Profiles at `driver_only` **21**,
-`driver_plus_no_ops` **8**.
+release decision with consumers outside this project. Profiles at `driver_only` **22**,
+`driver_plus_no_ops` **9**. **Three standing reds**, all pinned to HEAD by measurement: the
+`test_coverage` pair (since D22) and `effect_inventory_selftest` (disclosed at D25 — `ailang iface`
+yields nothing in this checkout; the gate refuses a pass-shaped absence, correctly). All register,
+none queue.
 
 **The project now has a committed goal line — read the plan's "The goal line" section (decided
 2026-08-09) before choosing any item.** Done = a compose-bearing profile records and replays a
 session with non-vacuous criterion-2 evidence, plus all fifteen extensions mediated-or-disclosed.
 The remaining critical path, in order:
 
-1. **The successor audits** — `on_pre_step`, `on_solver_candidate`. Compose binds both; base rate
-   **2 of 2** (S29), though the D25 grounding measured both slots mostly threaded already. Bounds by
-   row algebra: `on_pre_step` reaches exactly one port (`ai_step`); `on_solver_candidate` reaches
-   **zero** — its `! {Process}` cannot call any `ExtPorts` field, only ambient `std/process.exec`
-   (this corrects D24 §12.2's "and can"). The known seam is the documented pre-step seal-terminal
-   drop (`session.ail:2522-2530`). Any fold the audits touch must stamp/clear the holder by
-   key-set, never by world round trip (**S34**).
-2. **Routing compose's `exec` sites** — three import sites, four call sites; edges named at their
-   sites.
-3. **C5's compose-bearing profile** — the demonstration vehicle.
-4. **The final acceptance rerun** — the closing note; vacuity register and classification table as
+1. **Routing compose's `exec` sites** — three import sites, four call sites; no type work
+   (D23), no identity work (D24), landing sites confirmed by compiler verdict (D25): only
+   `on_tool_handle` and `on_response_intercept` can host a routed call, and both are routed and
+   audited. Watch-item: the stale `post_ctx.ports` at `session.ail:2679` goes live if anything
+   widens the solver row.
+2. **C5's compose-bearing profile** — the demonstration vehicle; also what ends the solver slot's
+   fixture-less threading label.
+3. **The final acceptance rerun** — the closing note; vacuity register and classification table as
    computed outputs.
 
 **The endgame scope rule: a finding joins the queue only if it blocks the goal line's two clauses;
