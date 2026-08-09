@@ -1107,3 +1107,37 @@ program validates and replays.
 eight files sat uncommitted in the shared worktree, D21's shape, and `b23a44e` is what happens next
 if nobody acts. Committing another session's finished, gate-verified work with attribution beats
 leaving it to be swept.
+
+**Cluster 44 = WI-D27, the compose-bearing profile: HANDED OFF 2026-08-09**,
+`HANDOFF-execute-d27-the-compose-bearing-profile.md`. **Goal-line clause 1's vehicle and the
+second-to-last item.** The grounding settled the item's shape around one fact that has been true
+since D6 and is now load-bearing: **the three barriers stand** (verified at `profile_definition`
+this session), compose is HOOK-UNRESOLVED on door 3, so the profile's honest structure is
+**installed + disclosed, evidenced dynamically** — the recorded run's discovery findings, not a
+classifier verdict. Clause 1 was worded for exactly this split when the goal line was committed,
+and the handoff makes the profile's `coverage_statement` carry it verbatim.
+
+**The capability constraint is the item's hardest honesty test.** Compose's registration reads
+`Env` and `FS` ambiently (`register.ail:9`, `config.ail:39-40`), capabilities are per-process, so
+the profile's runs grant both and the poison discipline does not extend across registration. The
+determinism claim moves to where it actually lives — the record → strict-replay identity — and the
+registration sources ride the existing D5-field-9 disclosure mechanism. The registration-effects
+amendment stays DRAFT on the register; the handoff forbids landing it in passing.
+
+**The owed S22 derivation comes due.** S18's extension recorded that "a third profile extends the
+list again with nothing naming it in advance" — the D4 re-issue check, the anchors width-law grep,
+`check_abi_version`'s site scan, the coverage fixtures and the make aggregate all grew a consumer,
+and the handoff requires the list derived from producers with the D16 caveat attached: the gates
+red-flag zero sites, not a missed file.
+
+**The demonstration's teeth are the un-install mutant.** S21's four vacuity leanings rest on the
+empty install list; the profile's non-vacuity must be an assertion that goes red when compose is
+dropped — D13's number-attached-vacuity lesson inverted. The ext_effects queue carries slack
+because an empty queue delegates (a live `bash -lc` inside the graded gate), and every quantity
+avoids the ten values previous fixtures pinned.
+
+**Clustering note to carry: the last item before a closing document decides how much of that
+document is computed.** The handoff's report-back asks D27 to name the machine-readable places the
+final rerun's vacuity register and classification table should read — the difference between a
+closing note that measures and one that narrates, which is the distinction this whole project
+exists to enforce.
