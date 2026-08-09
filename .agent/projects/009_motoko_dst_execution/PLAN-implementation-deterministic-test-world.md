@@ -3344,6 +3344,74 @@ route.
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
 
+**WI-D23, 2026-08-09 (~42m) — THE TYPED EXIT CODE REACHES THE CALLER. ALL FOUR REMAINING LINKS
+SHIPPED, THE ADOPTION ROW DROVE THE CLOSURE, AND NO STOP CONDITION FIRED.**
+Verified at review by measurement: `dispatch_one_typed` returns `{ content, exit_code }` and
+`dispatch_one` is the one-line projection `.content` (`tool_dispatch_adapter.ail:204`, `:233`);
+**`tool_result_exit_code` is the single home of the per-variant mapping and all seven JSON arms read
+it** (`:104`–`:157`), so the JSON a model sees and the field a caller branches on cannot drift (S23
+satisfied by construction, not by assertion); `world_tool`'s live arm binds both sibling fields;
+`ExtProcOutcome.exit_code` shipped at **ABI `5.0`** (`ailang.toml` verified) on the D16–D18
+additive-widening precedent; the bridge projects through `tool_outcome_exit_code` (`session.ail:838`,
+bound at `:1018`). **Green at review by run, not from the report:** `make world_state` — all three
+witness rows pass (live `BashExec` exiting **7**; adoption **5** with `"d23-scripted"` through
+`ext_ports_of`'s own closure; projection **3** with byte-identical content) and every poison pair
+still holds — and `predicate_anchors` (*"no drift: 6 anchors and 7 references"*).
+
+**THE SEAM BUILT OVER FOUR ITEMS WITH NO CALLER SURVIVED FIRST CONTACT AT THE COST OF ONE `export`.**
+`ext_ports_of` is now exported (`session.ail:857`) because S14's two-subjects rule forbids
+substituting a substrate probe for the real bridge; no signature, no shape change. That is the answer
+to the question D19's report demanded every handoff ask, and it is the first time in this project the
+answer has been "nothing".
+
+**MY HANDOFF'S COUNTER CLAIM WAS TOO STRONG AND THE ITEM'S DEVIATION IS CORRECT: the fault-catalogue
+gap is NARROWED, not closed.** The DoD wrote *"closes the gap the entry has named since C5"*. Measured
+against the entry's own sentence: an extension can now observe THAT a subprocess failed — and with
+what code — typed; **it still cannot observe WHICH fault class a non-completed outcome was** —
+`ToolFailed`'s D3 code, a mismatch's two ids and a deadline's two times cross the ABI rendered into
+`output`, projected to `-1`. The entry now reads **"NARROWED A THIRD TIME AT WI-D23"**
+(`dst_fault_catalogue.ail:442`, verified) with the residue stated precisely. Deleting it on the
+handoff's word would have retired a residue that is still real. The four-variant discrimination is a
+further widening on D1's part-3 ground and is open.
+
+**Two harness facts, both re-verified at review:** `ailang test` grants no capabilities and has **no
+`--caps` flag** (zero mentions in its own help), so any row performing a real effect lives in an
+`ailang run --caps` entry point, never a `tests` block — which is why the three rows live in
+`world_state_probe.exit_code_witness` (`Makefile:1490`). And the probe's `main` must stay
+subprocess-free because it is the SUBJECT of the Process-withheld poison pair; a real dispatch in
+`main` would have turned the pair's subject into its control.
+
+**The report corrected its own first draft in flight, which is S33's operating question applied to
+itself:** the draft claimed `session.ail`'s inline tests run in no target; the sweep falsified it
+(`test_coverage` discovers and runs them capability-less, 23/23). The narrow true form is what
+shipped in the note.
+
+**Cascade: the six-file `session.ail`-only form, +35, exactly as priced** — five anchors
+re-baselined byte-identical, `tool_phase.ail:318` untouched, profiles `driver_only` **19 → 20**
+(`:512`, verified) and `driver_plus_no_ops` **6 → 7** (`:205`, verified), table hash re-derived by
+running the producer. S18 obeyed: every re-tense finished before the anchors were computed, so they
+were computed once.
+
+**The construction census: the handoff's seven sites survived re-derivation exactly** — the first
+handoff census in this run to do so — and the three pre-rename parameter stragglers
+(`ctx_defaults.ail`'s `(_cmd, _cwd)` among them, the sixth binding D21's rename census missed) were
+renamed with the missed-census fact recorded at the site. **Counters kept apart and both unchanged:
+silent-wrong 75 across forty-five runs** (the renames are additional bindings of the site D21 already
+counted, not new sites); **instrument-weaker-than-its-claim 7** (D21's five-vs-eight census miss is a
+defect in a note's claim, not in any instrument's row).
+
+**Yields and inventory asserted rather than assumed, and re-run at review: unmoved** — 4 of 15,
+5 of 15, compose **11 ambient sources / 32 field calls**. Compose's `exec` stays ambient at three
+import sites carrying four call sites for the S27 reason: `recording_tool`'s
+`ToolIdentity("loop_v2", "", …)` still makes the first recorded `proc_exec` call a rejected program,
+so **routing waits on the identity item** — `ExtCtx.ext_id` plus the eighth recording adapter, D21
+§5's plan, with `absent_classes` and its recorded ground untouched.
+
+**What the identity item inherits:** a typed surface complete end to end with a witness at every
+joint, so routing a compose `exec` site needs no type work; the rg byte-stdout residue, separate from
+identity and named at its site; and the bridge's `workdir: "."` / `timeout_ms: 0`, so this seam still
+cannot produce `ToolDeadlineExceeded`.
+
 **WI-D22, 2026-08-08 (~1h25m) — `execution-program/2`. ALL THREE PAYLOADS SHIPPED; THE RENAME DID NOT,
 AND THE STOP CONDITION WAS RIGHT TO FIRE.**
 Verified at review: `program_schema_version()` is **`"execution-program/2"`** and

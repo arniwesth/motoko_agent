@@ -67,7 +67,7 @@ program its own validator rejects — came from following `session.ail` → `por
 
 ## Two counters, and they are deliberately separate
 
-- **Silent-wrong: 75 across 44 runs.** *Production sites where two answers type-check and the wrong one
+- **Silent-wrong: 75 across 45 runs.** *Production sites where two answers type-check and the wrong one
   ships silently.*
 - **Instrument-weaker-than-its-claim: 7.** *A row that passes while measuring less than its label.*
   Opened at D21.
@@ -96,24 +96,30 @@ commit; D22 declined to and was right.
 paid for it does not belong there. They live at the top of the plan; skim the block before writing a
 handoff, because three or four will apply to any item.
 
-## Where the work stands (2026-08-08, after WI-D22)
+## Where the work stands (2026-08-09, after WI-D23)
 
 Route B is built and compose is mediated: **11 ambient sources, 32 `ExtPorts` field calls** — the
-remainder are four `println` (disclosed by decision), three `exec` (the seam cannot type them),
-registration's three (structurally unroutable) and one ambient AI. **`execution-program/2` shipped** and
-D17's two-tier compatibility surface is closed at zero classes.
+remainder are four `println` (disclosed by decision), three `exec` import sites carrying four call
+sites (typed now, but routing them waits on identity), registration's three (structurally unroutable)
+and one ambient AI. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
+closed at zero classes, and **the typed subprocess discrimination is complete end to end** (D23):
+script → codec → `world_tool` → bridge → `ExtProcOutcome.exit_code`, witnessed at every joint, at
+ABI `5.0`.
 
 Yields **4 of 15** and **5 of 15**, unmoved since D15 — door 3 (`show`) keeps compose HOOK-UNRESOLVED.
 ABI at **15 rows + 5 added types**, still `5.0`; **the `proc_exec` rename forces `6.0`** and is a
-release decision with consumers outside this project. Profiles at `driver_only` **19**,
-`driver_plus_no_ops` **6**.
+release decision with consumers outside this project. Profiles at `driver_only` **20**,
+`driver_plus_no_ops` **7**.
 
 Open, roughly by readiness:
 
-1. **The typed subprocess discrimination** — now unblocked by D22's `exit_code`; blocked only on
-   `dispatch_one`'s `(workdir, ToolCall) -> string` contract.
-2. **The eighth recording adapter + `ExtCtx.ext_id`**, which is what `ExtensionEffectIdentity` actually
-   needs. `absent_classes` stays untouched until it lands.
+1. **The eighth recording adapter + `ExtCtx.ext_id`**, which is what `ExtensionEffectIdentity` actually
+   needs — and now also **the only thing between compose's `exec` sites and the routed seam**: D23 left
+   no type work, only identity (`recording_tool`'s blank-call-id `ToolIdentity` makes the first
+   recorded `proc_exec` call a rejected program). `absent_classes` stays untouched until it lands.
+2. **Routing compose's `exec` sites** — immediately behind item 1; the four-variant fault-class
+   discrimination across the ABI (catalogue entry "NARROWED A THIRD TIME") and the rg byte-stdout
+   residue are its known edges.
 3. **`on_pre_step` and `on_solver_candidate` successor audits.** Base rate **2 of 2** (S29).
 4. **C5's compose-bearing profile** — no graded profile installs compose, which is why D19 had to build
    a scenario to make its own tripwires fire. A growing debt.
