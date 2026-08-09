@@ -196,7 +196,7 @@ hook_guard:
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only driver_plus_no_ops fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest ext_hook_scope_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only driver_plus_no_ops fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery compose_live_exec strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest ext_hook_scope_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -386,6 +386,36 @@ execution_program:
 # deriving rather than declaring, made by the derivation. A key literal is
 # required, so session.ail's extension-bridge closure (whose key is a variable
 # supplied by an extension) correctly does not match.
+# WI-D26: the LIVE half of the routed subprocess seam, and it is a SEPARATE
+# target from `discovery` on S14's grounds rather than for convenience.
+#
+# `discovery`'s `compose_check_scenario` drives compose's routed `check_snippet`
+# against a scripted `ext_effects` entry. That establishes the ADOPTION — the
+# branch on the typed code, the identity, the round trip — and establishes
+# nothing about whether the seam can run a compiler at all, because in a
+# scripted world it runs none. WI-D19 shipped exactly that gap in the other
+# direction (its note claimed `proc_exec` could not reach `ailang`, which was
+# true of the tool NAME it tried and false of the seam), and WI-D21 needed a
+# separate measurement to find it.
+#
+# So this target runs one real `ailang check` through the production bridge over
+# `live_ports` and asserts the COMPILER's own wording comes back. It is the row
+# that cannot be satisfied by a stub, by a tool-error blob, or by a seam that
+# returns "requires extension capability".
+#
+# It is NOT under `--ai-stub`: nothing here calls a provider. `--caps AI` is
+# present only because `register_with_config`'s row declares it, and the runtime
+# prints an advisory about the missing model that no code path reaches.
+.PHONY: compose_live_exec
+compose_live_exec:
+	@set -eu; \
+	out=$$(ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	  --entry main scripts/dst/compose_live_exec.ail < /dev/null 2>&1) || { \
+		printf '%s\n' "$$out"; \
+		echo "FAIL: the live routed check did not complete"; exit 1; }; \
+	printf '%s\n' "$$out" | grep -v '^Warning:\|^  No AI model\|^  Fix: ailang\|^  Or for testing:\|^→\|^✓ Running'; \
+	printf '%s\n' "$$out" | grep -q 'compose_live_exec PASS'
+
 .PHONY: discovery
 discovery:
 	@set -eu; \

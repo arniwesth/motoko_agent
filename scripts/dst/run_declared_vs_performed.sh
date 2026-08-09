@@ -333,47 +333,68 @@ must_die_on control_fs FS \
   "the withholding is real and the subjects reached a dispatched hook"
 
 echo ""
-echo "-- the limit, made executable: performed is a property of a hook AND ITS INPUTS --"
+echo "-- WI-D26: the inline branch is FULLY mediated, and the row that used to prove otherwise --"
 
-# The SAME hook and the SAME declared row as compose_intercept_noninline above,
-# differing only in `mode` and in the response carrying an AILANG fence. It
-# reaches a capability the other input never asks for, and dies. Asserting this
-# is what stops the non-inline row's green from being read as a claim about the
-# HOOK rather than about the hook AND ITS INPUT.
+# THIS ROW INVERTED AT WI-D26, AND IT INVERTED ON SCHEDULE. Kept two-part per
+# plan rule S15, because what stood here was a `must_die_on` and it is now a
+# completion — a reader who found the old assertion in a diff and not its reason
+# would be entitled to think the gate had been weakened to make an item pass.
 #
-# THE CAPABILITY MOVED AT WI-D19, FROM FS TO Process, AND THE MOVE IS THE RESULT
-# RATHER THAN A WEAKENING. Through WI-D18 this arm died on FS because the inline
-# branch called `mkdirAll` ambiently. WI-D19 routed that call — and `writeFile`,
-# both `fileExists` and both `removeFile` — through `ctx.ports`, whose bindings
-# here are the constant `probe_*` stubs, so the branch performs no ambient FS any
-# more. That is exactly what mediation is, measured from the outside: the arm
-# stopped needing a capability because the effect now leaves through a seam.
+# WHAT STOOD HERE, and why it stood: "The SAME hook and the SAME declared row as
+# compose_intercept_noninline above, differing only in `mode` and in the response
+# carrying an AILANG fence. It reaches a capability the other input never asks
+# for, and dies. Asserting this is what stops the non-inline row's green from
+# being read as a claim about the HOOK rather than about the hook AND ITS INPUT."
+# The capability had already moved once — WI-D19 routed the five FS sites and the
+# arm stopped dying on FS and started dying on Process. That block ended with a
+# prediction:
 #
-# It dies on Process instead, and that names the ONE thing WI-D19 could not
-# route. `check_snippet`/`run_snippet` call `exec("ailang", …)`, and
-# `ExtPorts.proc_exec` does not front a subprocess — it fronts `Ports.tool_exec`,
-# whose live adapter dispatches MOTOKO'S OWN tool names and answers "ailang
-# requires extension capability and is not available in native runtime". So this
-# row is now also the standing witness for that unrouted seam: the day
-# `proc_exec` grows an exit code and compose routes through it, this arm stops
-# dying and says so.
+#     "So this row is now also the standing witness for that unrouted seam: the
+#      day `proc_exec` grows an exit code and compose routes through it, this arm
+#      stops dying and says so."
 #
-# The lesson the row exists for is unchanged — same hook, same declared row, two
-# different performed answers selected by an argument. Only the effect class it
-# is demonstrated on has moved, because the FS half is no longer performed here
-# at all.
-must_die_on compose_intercept_inline Process \
-  "the inline branch no longer reaches a subprocess — then the non-inline row above is a claim about the HOOK rather than about the hook and its input, and this gate is overstating what it measured" \
-  "the SAME hook that completed above dies on a different input; performed is a property of a hook AND ITS INPUTS — and Process is what WI-D19 could not route"
+# WI-D23 grew the exit code, WI-D26 routed the seam, and the arm stopped dying.
+# The prediction is the reason this is a re-tensing rather than a repair: the row
+# was built to detect exactly this event and it detected it, red, on the first
+# run after the routing landed.
+#
+# WHAT REPLACES IT IS THE STRONGER CLAIM, not a weaker one. The old row asserted
+# that ONE ambient capability was still reachable; this one asserts that NONE is.
+# `compose_intercept_inline` runs under the base withheld set — Env, FS AND
+# Process all withheld — and must COMPLETE. Every effect the inline branch
+# performs now leaves through `ctx.ports`, whose bindings here are the constant
+# `probe_*` stubs. That is what mediation is, measured from the outside, and it
+# is the row that goes red if ANY of the six routed sites is put back.
+#
+# THE LESSON THE OLD ROW CARRIED IS NOW HOMELESS HERE, and that is reported
+# rather than quietly dropped. "Performed is a property of a hook AND ITS INPUTS"
+# needed a hook with two inputs and two different performed answers; compose's
+# intercept no longer has two, because it no longer has one. The limit it made
+# executable — that this detector witnesses exercised paths and not all inputs —
+# is unchanged and is still stated in this file's header; what is gone is the
+# executable demonstration of it. Finding a second home for that demonstration
+# does not block the goal line's clause 1 or clause 2, so per the endgame scope
+# rule it goes on the maintenance register rather than on the queue.
+if out=$(run_arm compose_intercept_inline "$WITHHELD_CAPS"); then
+  ok "compose_intercept_inline COMPLETES with Env, FS AND Process all withheld — the inline branch performs NO ambient effect; through WI-D25 this arm died on Process"
+elif echo "$out" | grep -q "effect 'Process' requires capability"; then
+  bad "compose_intercept_inline still dies on Process — a site WI-D26 claims to have routed is still ambient, and the routing is partial in a way the compiler will not report"
+elif echo "$out" | grep -q "effect 'FS' requires capability"; then
+  bad "compose_intercept_inline dies on FS — a site WI-D19 routed has been put back; the Process half may be fine and this arm cannot tell you, so read the FS-axis row below"
+else
+  bad "compose_intercept_inline died, but not on FS or Process — the row establishes nothing: $(echo "$out" | grep -E '^Error' | head -1)"
+fi
 
-# WI-D19's OTHER HALF OF THE SAME MEASUREMENT, and it is not redundant with the
-# row above. "Dies on Process" is consistent with a hook that still performs FS
-# and merely reaches the subprocess first, so the FS claim needs its own arm:
-# the same inline input, with FS ALONE withheld and Process granted, must now
-# COMPLETE. Before WI-D19 it died. This is the routed half stated positively,
-# and it is the row that goes red if any of the five routed sites is put back.
+# WI-D19's FS AXIS, KEPT AFTER WI-D26 SUBSUMED IT, and the reason is diagnostic
+# rather than logical. The row above is strictly stronger — it withholds Process
+# too — so this one cannot fail while that one passes. What it buys is
+# DISCRIMINATION when both regress: the capability check above reports whichever
+# ambient effect the branch reaches FIRST, so a Process-side regression masks an
+# FS-side one entirely. Granting Process here puts the FS sites back in front of
+# the compiler on their own. A gate that can only say "something went ambient" is
+# a gate that costs an item to act on.
 if out=$(run_arm compose_intercept_inline "$WITHHELD_CAPS,Process"); then
-  ok "compose_intercept_inline COMPLETES with FS withheld and Process granted — the five FS sites WI-D19 routed perform no ambient FS; before D19 this arm died on FS"
+  ok "compose_intercept_inline COMPLETES with FS withheld and Process granted — the FS axis alone, isolated from the routed subprocess; before WI-D19 this arm died on FS"
 elif echo "$out" | grep -q "effect 'FS' requires capability"; then
   bad "compose_intercept_inline still dies on FS — a site WI-D19 claims to have routed is still ambient, and the routing is partial in a way the compiler will not report"
 else

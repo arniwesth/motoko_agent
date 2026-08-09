@@ -108,7 +108,13 @@ the four-variant fault-class discrimination across the ABI. **Added at WI-D25:**
 interface in this checkout, so the textual fallback is the only derivation in play AND is
 unvalidated; the gate is refusing a pass-shaped absence correctly. Pinned to HEAD by measurement
 (red with the item's changes stashed), and it is a **third** standing red beside the
-`test_coverage` pair.
+`test_coverage` pair. **Added at WI-D26:** the lost executable home for *"performed is a property
+of a hook AND its inputs"* — compose's intercept no longer has two inputs with two performed
+answers, so the demonstration (not the limit, which stays stated in
+`run_declared_vs_performed.sh`'s header) needs a new subject someday. And the bridge's
+`workdir`/`timeout_ms` entry now carries D26's measurement: **inert for `BashExec`** —
+`run_process_result` never receives `workdir`, so a routed call runs where the process started,
+exactly as ambient `exec` did.
 
 ## Survey: executed at HEAD, 2026-08-02
 
@@ -3466,6 +3472,64 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D26, 2026-08-09 — ROUTE COMPOSE'S `exec` SITES. THE MEDIATION IS COMPLETE, THE FIRST
+DETERMINISTIC COMPOSE LOOP RUNS, AND THE HANDOFF'S CENTRAL SAFETY PREMISE WAS FALSE.**
+Verified at review by run: `discovery` green with all twelve new rows — the nine-row
+`compose_check_scenario` (compose installed through its own `register_with_config`, the routed
+`ailang check` served from `WorldState.ext_effects`, the FAILURE branch taken **on the typed exit
+code**, program validates, replays to an identical log, replay takes the same branch) and the
+three-row quiet-grep scenario; `compose_live_exec` green with a **real compiler diagnostic**
+(*"undefined variable: undefined_symbol_xyz"* — a string nothing in Motoko generates, so the seam
+provably ran `ailang check`); `ext_ambient_inventory` at **compose 8 ambient / 36 field calls**;
+`declared_vs_performed` **46/0**. Zero `std/process` imports remain in the compose package.
+
+**THE HEADLINE IS A CORRECTION OF THE HANDOFF, AND ITS ROOT IS A D21-ERA RECORD QUOTED FORWARD FOR
+FIVE ITEMS.** The handoff prescribed the shell-string form on the premise *"the seam's only
+subprocess door is `BashExec` → `bash -lc`"* — taken from D21 §8's record (*"`run_process_result`
+wraps in `bash -lc`, so the seam reaches arbitrary command lines"*), stated there unconditionally.
+**Measured at `tool_runtime.ail:888`: the wrap is a FALLBACK** — `shell_tokens_in_process` fires
+only on shell names, spaces, or shell tokens; a bare-`cmd` argv request reaches `exec(cmd, args)`
+directly, the same argv call the ambient sites made. **The prescribed form would have authored a
+shell injection at the one routed argument carrying model-written text** (`grep_impl`'s pattern).
+The item probed the dispatcher before writing a line, took the argv form, and the entire quoting
+question dissolved — there is no shell on the path. The conditionality (a space in `cmd` re-wraps
+everything) is stated at `proc.ail`, whose `decode_bash_result` deliberately **withholds the
+embedded exit code** so the wrong source of truth is structurally unreachable. D21's milestone
+entry is left intact per S15; this entry is the correction's home.
+
+**THE FORCED CHOICE AT `grep_impl` SURFACED A PRE-EXISTING SILENT-WRONG, AND THE COUNT IS
+ACCEPTED: 76 across forty-eight runs.** The old `Ok`-arm answered `matches: ""` beside a populated
+fallback `excerpt` on a quiet search — a consumer reading the structured field was told "no
+results" for a search that had them, in `payload_json` bound for the model. Counted as
+produced-in-principle (this checkout lacks `rg`, so only the `Err` arm ever ran here; any
+rg-equipped machine produces it), consistent with D14's precedent — discovered, not authored,
+closed in the same edit. **Instrument-weaker: 7, unchanged.** The two prose non-counts (the
+handoff's false premise; the round-trip-green-under-mutant observation) follow D25's ruling.
+
+**`declared_vs_performed` MOVED ON SCHEDULE, AND ITS OWN D19-ERA COMMENT PREDICTED IT.** The
+`must_die_on compose_intercept_inline Process` row went red the first run after routing — the
+gate's comment had said *"the day `proc_exec` grows an exit code and compose routes through it,
+this arm stops dying and says so."* Replaced by the strictly stronger pair, verified green: the
+inline branch **COMPLETES with Env, FS and Process all withheld**, plus D19's FS-axis row kept for
+diagnostic separation. A `must_die_on` becoming a COMPLETES in the same diff as the routing is
+re-tensing on schedule, and the block says so two-part.
+
+**Mutant evidence worth keeping: the round trip is not the mutant-killer.** Reading the exit code
+from the rendered output (the pre-D23 shape) left `VALIDATES`, `serves the same TYPED code` and
+`REPLAYS identically` all green — a wrong compose replays as faithfully as a right one. The branch
+rows killed it; a suite carrying only the round trip ships that mutant. The fixture's mechanism is
+S33's constructed divergence: typed exit 71 against embedded 0, a disagreement only a scripted
+world can produce. The quiet-grep mutant (exit-code gating) reddened exactly its one row.
+
+**What item 2 (C5's profile) inherits, and its first obstacle is named:** compose's ambient
+remainder is exactly the three disclosed classes (four `println`, registration's three, one AI —
+enumerated by the inventory); the scenario is the profile's 30-line template; **but
+`handle_compose_tool` is NOT deterministically reachable** — the tool path calls
+`callStreamResult` (the ambient AI) before anything routed, so the profile demonstrates through
+the intercept path or confronts the AI boundary. Door 3 untouched; no anchors moved (package-side
+edits only); the three standing reds unchanged and nothing new. Implementation was uncommitted at
+review and committed as housekeeping, D25's precedent.
 
 **WI-D25, 2026-08-09 (~1h10m) — THE SUCCESSOR AUDITS. ONE DROP, AND IT IS THE ONE THAT WAS WRITTEN
 DOWN; THE DURABLE OUTPUT IS FOUR COMPILER VERDICTS AND THE FIRST PERFORMING `on_pre_step` BINDING.**
