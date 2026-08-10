@@ -194,9 +194,129 @@ hook_guard:
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
 	  --ai-stub --entry main scripts/dst/hook_guard_dst.ail < /dev/null | grep -v 'STRICT_FALLBACK\|^  '
 
+# ---------------------------------------------------------------------------
+# The sweep. Every target below is independent of every other -- the one
+# exception is `phase_c_l1: compaction_dst`, which make resolves once -- so the
+# list runs in parallel.
+#
+# ORDERED LONGEST-FIRST, and the order is load-bearing rather than cosmetic.
+# make hands work out in listed order, so a long target listed late starts late
+# and stretches the makespan past the point where the short ones have drained.
+# Measured serially at v0.33.0 (seconds): test_coverage 214, declared_vs_
+# performed 75, terminal_trace 74, smoke_parity 45, profile_definition 31,
+# smoke_driver 26, corpus_pr 23, strict_replay 21, world_state 19; the remaining
+# 32 are under 16 each and 30 of them are under 10. Four targets are 60% of the
+# sweep. Re-derive after adding a target that lands near the top -- an
+# out-of-place SHORT target costs nothing, an out-of-place LONG one costs its
+# own runtime.
+#
+# THE CACHE LANES BELOW ARE WHAT MAKE THE PARALLELISM PAY. AILANG writes its
+# compile cache to `<dir-of-root-source>/.ailang/cache/compile/`, so without
+# them every `scripts/dst/*.ail` target shares ONE cache directory, and
+# `CacheStore.Save()` (ailang internal/pipeline/cache_store.go) rewrites the
+# WHOLE manifest with a plain os.WriteFile -- no lock, no temp+rename. N
+# concurrent processes therefore erase each other's freshly-cached modules and
+# the cache degrades toward cold as N rises. `AILANG_CACHE_DIR` is AILANG's own
+# documented remedy for exactly this. Measured end to end on 8 cores: 688s
+# serial, 329s at -j8 sharing the cache, 289s at -j8 with lanes, 196s once
+# test_coverage's inner fan-out is unblocked too (3.5x).
+#
+# This is a THROUGHPUT change and never a verdict change: AILANG's cache key is
+# content-addressed over (format version, compiler version, source hash, dep
+# interface digests) with no compile flags, so concurrent writers write
+# byte-identical artifacts and a torn read fails its decode and falls through to
+# a recompile. The race has always cost time and never an answer.
+#
+# The lanes are disk, not memory: ~1.7G under .ailang/lane (gitignored). Delete
+# it freely; it refills.
+# ---------------------------------------------------------------------------
+DST_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
+DST_LOG  ?= .ailang/dst-last.log
+
+DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
+  profile_definition smoke_driver corpus_pr strict_replay world_state \
+  corpus_rotating driver_plus_compose driver_only seeded_generator \
+  event_vocabulary phase_c_l1 recorded_stream driver_plus_no_ops \
+  ext_hook_scope_selftest invariants run_report discovery program_persistence \
+  compaction_dst fault_catalogue ext_ambient_inventory_selftest \
+  ext_ambient_inventory ext_call_inventory ext_call_inventory_selftest \
+  conformance stream_parity latency_pair test_coverage_selftest \
+  execution_program attribution_table profile_coverage compose_live_exec \
+  ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors
+
+# corpus_pr IS NOT PARALLELISABLE, AND THE REASON IS ITS PASS CONDITION.
+#
+# Its final check reads the target's own WALL CLOCK and fails it against
+# `pr_target_ceiling_ms()` (80 s), because D11 delegates seed counts to measured
+# CI cost and the measurement needs a gate rather than a comment. A wall-clock
+# gate measures the MACHINE'S LOAD as much as the target: run it alongside seven
+# other AILANG processes and it reports 96 s, cold-cache 203 s, against a
+# ceiling derived on a quiet machine. Neither number is a fact about the corpus.
+#
+# So it runs ALONE, before the fan-out, and on the DEFAULT cache rather than a
+# lane -- which is exactly the condition the ceiling was measured under, and the
+# only condition under which the check means what it says.
+#
+# Raising the ceiling to accommodate contention would be the wrong repair twice
+# over: the target itself says to re-measure `measured_ms_per_seed()` and move
+# the ceiling WITH it, since the seed minimums are arithmetic over that constant.
+# Any future target that gates on elapsed time belongs on this line, not below.
+DST_TIMED_TARGETS := corpus_pr
+DST_PARALLEL_TARGETS := $(filter-out $(DST_TIMED_TARGETS),$(DST_TARGETS))
+
+# Three targets are deliberately NOT given a lane.
+#
+#   ext_ambient_inventory{,_selftest} READ the compile cache rather than merely
+#   writing it: tools/ext_ambient_inventory/derive.py walks src/, packages/ and
+#   scripts/ for */cache/compile/modules/std__*/iface.json. Redirecting the
+#   cache out of those trees leaves it nothing to read -- it fails loudly rather
+#   than passing vacuously, but it fails. Its own fifteen `ailang check` calls
+#   already write to per-extension directories, so it contends little anyway.
+#
+#   test_coverage runs its OWN per-worker lanes inside derive.py (see
+#   TEST_COVERAGE_JOBS below) and must not also be pinned to one outer lane.
+DST_LANE_TARGETS := $(filter-out ext_ambient_inventory ext_ambient_inventory_selftest test_coverage $(DST_TIMED_TARGETS),$(DST_TARGETS))
+$(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
+
+# Both phases run even if the first reports failures, and the exit status is the
+# worse of the two -- `make dst` must still exit non-zero for CI, and a red
+# target in the fan-out must not hide the timed one behind it.
+# The pair that has been red since D22 (`prompts_test.ail` 0/6 and a
+# `stale_skip_record`). Named here ONLY so the closing summary can say "no new
+# failures" instead of leaving a reader to remember it. It waives nothing: the
+# exit code is propagated untouched and a sweep with only these red still exits
+# 2. scripts/dst/sweep_summary.sh also reports a target on this list that
+# PASSES, so the list cannot outlive the failure it describes.
+DST_KNOWN_RED := test_coverage test_coverage_selftest
+
+# bash for `pipefail` alone: the phases are piped through `tee` so the run is
+# both watchable and logged, and without pipefail the pipeline would report
+# tee's status and every failure would exit 0.
 .PHONY: dst
+dst: SHELL := /bin/bash
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only driver_plus_no_ops driver_plus_compose fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery compose_live_exec strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest ext_ambient_inventory ext_ambient_inventory_selftest ext_hook_scope_selftest test_coverage_selftest test_coverage recorded_stream stream_parity ledger_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
+	+@set -o pipefail; rc=0; start=$$(date +%s); \
+	mkdir -p $$(dirname $(DST_LOG)); : > $(DST_LOG); \
+	timed="$(strip $(DST_TIMED_TARGETS))"; par="$(strip $(DST_PARALLEL_TARGETS))"; \
+	if [ -n "$$timed" ]; then \
+		$(MAKE) --no-print-directory --keep-going $$timed 2>&1 | tee -a $(DST_LOG) || rc=$$?; \
+	fi; \
+	if [ -n "$$par" ]; then \
+		$(MAKE) --no-print-directory -j$(DST_JOBS) --output-sync=target --keep-going $$par 2>&1 | tee -a $(DST_LOG) || rc=$$?; \
+	fi; \
+	DST_KNOWN_RED="$(DST_KNOWN_RED)" DST_REQUESTED="$$timed $$par" \
+	  ./scripts/dst/sweep_summary.sh $(DST_LOG) $$rc $$(( $$(date +%s) - start )) $(DST_JOBS); \
+	exit $$rc
+
+# What `make dst` runs, expanded BY MAKE. tools/test_coverage/derive.py's
+# reachability guard used to regex the `dst:` recipe for literal target names,
+# which reported the target unreachable the moment the list moved into a
+# variable -- blind rather than wrong, the same failure its own
+# `make_invocations()` comment already records once. Asking make removes the
+# guard's dependence on how the list happens to be spelled.
+.PHONY: dst_target_list
+dst_target_list:
+	@echo $(DST_TIMED_TARGETS) $(DST_PARALLEL_TARGETS)
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -2225,9 +2345,15 @@ ext_hook_scope_selftest:
 # at all -- mutation testing proves a guard can fire and cannot see a guard
 # that fires too much.
 # ---------------------------------------------------------------------------
+# The sweep's longest target by a factor of three, and therefore the ceiling on
+# how fast `make dst` can finish however many cores it is given. Its workers
+# each take a private compile-cache lane (see lane_env() in derive.py), which is
+# what makes --jobs pay: 207s at --jobs 1, 93s at --jobs 6, findings identical.
+TEST_COVERAGE_JOBS ?= 6
+
 .PHONY: test_coverage test_coverage_selftest
 test_coverage:
-	@python3 tools/test_coverage/derive.py
+	@python3 tools/test_coverage/derive.py --jobs $(TEST_COVERAGE_JOBS)
 
 test_coverage_selftest:
 	@python3 tools/test_coverage/derive.py --self-test
