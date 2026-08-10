@@ -105,9 +105,11 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import os
 import re
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -196,6 +198,36 @@ def parse_report(stdout: str) -> dict | None:
         return None
 
 
+_LANE_LOCK = threading.Lock()
+_LANE_IDS: dict[int, int] = {}
+
+
+def lane_env() -> dict[str, str]:
+    """A private AILANG compile cache per worker thread.
+
+    Without this, concurrent `ailang test` processes all write
+    `src/core/.ailang/cache/compile/`, and AILANG's `CacheStore.Save()`
+    rewrites the WHOLE manifest with a plain os.WriteFile -- no lock, no
+    temp+rename -- so each worker erases the entries the others just cached and
+    the cache degrades toward cold as worker count rises. That is what made
+    --jobs 4 SLOWER than --jobs 1 when this flag was first measured; the cores
+    were never the problem. `AILANG_CACHE_DIR` is AILANG's own documented
+    remedy for exactly this case.
+
+    Keyed on thread identity and not on an index into `files`, because
+    ThreadPoolExecutor reuses a fixed set of threads: the lanes stay warm across
+    the whole walk and across runs, which is the entire point. Measured over
+    src/core: 207s at --jobs 1, 93s at --jobs 6, byte-identical findings.
+    """
+    tid = threading.get_ident()
+    with _LANE_LOCK:
+        if tid not in _LANE_IDS:
+            _LANE_IDS[tid] = len(_LANE_IDS)
+        lane = _LANE_IDS[tid]
+    return dict(os.environ,
+                AILANG_CACHE_DIR=str(Path.cwd() / ".ailang" / "tclane" / f"w{lane}"))
+
+
 def run_file(path: Path, timeout: int) -> FileResult:
     res = FileResult(path=path)
     try:
@@ -209,7 +241,7 @@ def run_file(path: Path, timeout: int) -> FileResult:
         proc = subprocess.run(
             ["ailang", "test", "--format", "json", str(path)],
             capture_output=True, text=True, stdin=subprocess.DEVNULL,
-            timeout=timeout,
+            timeout=timeout, env=lane_env(),
         )
     except subprocess.TimeoutExpired:
         res.harness_error = f"`ailang test` did not finish within {timeout}s"
@@ -372,12 +404,32 @@ def check_reachability(target: str, workflows: Path, makefile: Path) -> list[Fin
             f"target exists to close -- one level up."))
 
     if makefile.is_file():
-        text = makefile.read_text()
-        m = re.search(r"^dst:\n(?:\t.*\n)+", text, re.M)
-        if m is None:
+        # Asked OF MAKE rather than regexed out of the recipe. The recipe used
+        # to name its targets literally and this read them back; once the list
+        # moved into a variable the literal names were gone and the guard
+        # reported the target unreachable while `make dst` plainly ran it --
+        # blind rather than wrong, which is the failure mode this file's
+        # `make_invocations()` already carries one note about. `make` is the
+        # only thing that can expand `$(filter-out ...)` correctly, so it is
+        # asked instead of imitated.
+        #
+        # MAKEFLAGS is cleared: this runs UNDER `make test_coverage`, and an
+        # inherited jobserver makes a sub-make warn and misbehave.
+        env = {k: v for k, v in os.environ.items() if k != "MAKEFLAGS"}
+        try:
+            proc = subprocess.run(["make", "-s", "-f", str(makefile), "dst_target_list"],
+                                  capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL, timeout=60, env=env)
+        except (OSError, subprocess.TimeoutExpired) as exc:
             out.append(Finding("dst_unreachable", target,
-                               "could not find the `dst:` recipe in the Makefile"))
-        elif target not in make_invocations(m.group(0)):
+                               f"could not ask make what `dst` runs: {exc}"))
+            return out
+        if proc.returncode != 0:
+            out.append(Finding(
+                "dst_unreachable", target,
+                "`make dst_target_list` failed, so what `make dst` runs is "
+                f"unknown: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}"))
+        elif target not in proc.stdout.split():
             out.append(Finding(
                 "dst_unreachable", target,
                 "`make dst` does not invoke it, so the local gate is blind to "
@@ -672,14 +724,25 @@ def main() -> int:
                     help="directory walked recursively for .ail files")
     ap.add_argument("--target", default="test_coverage",
                     help="the make target whose CI reachability is checked")
-    # Serial by default, and measured rather than assumed: over src/core at
-    # HEAD, --jobs 1 takes 3m40 and --jobs 4 takes 4m10 while burning twice the
-    # CPU (4m27 user vs 9m08). Concurrent `ailang test` processes contend on
-    # the shared compile cache and lose more to recompilation than they gain
-    # from the cores. The flag stays because that balance is a property of the
-    # toolchain, not a law.
+    # Serial by DEFAULT, but no longer serial by NECESSITY -- and the
+    # difference is the whole of this comment.
+    #
+    # WAS MEASURED: over src/core, --jobs 1 took 3m40 and --jobs 4 took 4m10
+    # while burning twice the CPU (4m27 user vs 9m08), and this comment
+    # concluded that concurrent `ailang test` processes "lose more to
+    # recompilation than they gain from the cores".
+    #
+    # IS MEASURED: that reading named the symptom and not the cause. Every
+    # worker was pointed at ONE compile cache, and AILANG's whole-manifest
+    # os.WriteFile makes N workers erase each other's entries (see lane_env()).
+    # Give each worker its own AILANG_CACHE_DIR and the balance inverts: 207s
+    # at --jobs 1, 93s at --jobs 6 over the same tree, findings byte-identical.
+    # The loss was a shared-cache artifact, not a property of the toolchain.
+    #
+    # The default stays 1 so that direct callers and the mutation harness keep
+    # a single-process walk; `make test_coverage` passes --jobs explicitly.
     ap.add_argument("--jobs", type=int, default=1,
-                    help="parallel `ailang test` processes (measured slower above 1)")
+                    help="parallel `ailang test` processes, each with its own compile-cache lane")
     ap.add_argument("--timeout", type=int, default=300,
                     help="per-file timeout in seconds")
     ap.add_argument("--self-test", action="store_true",
