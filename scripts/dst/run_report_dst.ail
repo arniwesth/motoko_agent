@@ -180,7 +180,22 @@ pure func env_expectations() -> [EnvExpectation] {
    -- THE MULTIPLICITY ONE. Once per native tool dispatch, so its expected count
    -- is expressed in terms of an independently-witnessed quantity — which is
    -- what stops the whole env expectation from being a source-derived guess.
-   { key: "MOTOKO_TOOL_TIMEOUT_MS", count: 3 }]
+   { key: "MOTOKO_TOOL_TIMEOUT_MS", count: 3 },
+   -- WI-D3's four context-resolution keys. This fixture must carry every key
+   -- `driver_env_keys()` declares, because the assertion below compares its
+   -- total against that list's LENGTH — so a fixture that stops at the WI-A12
+   -- key set stops being a multiplicity fixture the moment the driver reads more
+   -- keys than the fixture has reads. It did: the set went 7 -> 11 and 9 reads
+   -- no longer exceeded 11.
+   --
+   -- MOTOKO_REPO is 4 against the other three's 2 for the same reason
+   -- MOTOKO_TOOL_TIMEOUT_MS is 3: it is read TWICE per resolution, from
+   -- `profile_dir_path` and again from `catalog_path`, so a uniform count here
+   -- would be satisfied by a recorder that lost one of the two.
+   { key: "MOTOKO_PROFILE_DIR", count: 2 },
+   { key: "MOTOKO_CONFIG", count: 2 },
+   { key: "MOTOKO_MODELS_FILE", count: 2 },
+   { key: "MOTOKO_REPO", count: 4 }]
 }
 
 pure func complete_evidence() -> [CompletenessEvidence] {
@@ -191,7 +206,7 @@ pure func complete_evidence() -> [CompletenessEvidence] {
    runtime_evidence("runtime_random_draw", 6, 6),
    runtime_evidence("expect_extension_effect", 0, 0),
    -- The seventh, and the one that is a DIFFERENT KIND.
-   env_evidence(env_expectations(), 9)]
+   env_evidence(env_expectations(), 19)]
 }
 
 pure func complete_replay_ref() -> ReplayReference {
@@ -533,15 +548,17 @@ func scenario_env_evidence_is_a_different_kind() -> bool ! {IO} {
                  is_derived(es, "environment_read"),
                  "environment_read is not reported as source-derived — the weaker evidence would inherit the stronger's standing");
   -- MULTIPLICITY, not presence. The expected total exceeds the key count
-  -- precisely because MOTOKO_TOOL_TIMEOUT_MS is read once per tool dispatch, so
-  -- a recorder logging the first read of each key would report 7 against 9.
-  let ev = env_evidence(env_expectations(), 9);
+  -- precisely because some keys are read more than once: MOTOKO_TOOL_TIMEOUT_MS
+  -- once per tool dispatch, and since WI-D3 MOTOKO_REPO twice per context
+  -- resolution. A recorder logging the first read of each key would report 11
+  -- against 19.
+  let ev = env_evidence(env_expectations(), 19);
   let c = report("the env expectation asserts MULTIPLICITY (${ev.witnessed} reads over ${List.length(driver_env_keys())} keys), not presence",
                  ev.witnessed > List.length(driver_env_keys()),
                  "the expected read total equals the key count — the check is presence, and a recorder that dropped repeats would look complete");
   let d = report("a first-read-only recorder is caught",
                  env_evidence(env_expectations(), List.length(driver_env_keys())).logged
-                   != env_evidence(env_expectations(), 9).witnessed,
+                   != env_evidence(env_expectations(), 19).witnessed,
                  "a recorder logging one read per key matched the expectation");
   a && b && c && d
 }

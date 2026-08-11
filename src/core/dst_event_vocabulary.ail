@@ -51,9 +51,19 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. 14 of the 34 reach the returned trace (13 at WI-A8, plus
--- `DoneEvent` which WI-A14 closed); the other 20 are projected through
--- `ledger_emit` alone. Classifying by current behaviour would declare them
+-- that is deliberate. Of the 28 Logical rows, **26 reach the returned trace now
+-- and 2 do not**; the two are `d64_gap_register`'s remaining entries.
+--
+-- The survey has moved four times and the count is TENSED rather than re-dated,
+-- because a bare number here is the artifact S15 was written about: it was
+-- `13 of 28` at WI-A8, `14` after WI-A14 closed `DoneEvent`, `15` after WI-C3
+-- closed `StreamDelta` — and this comment still said 14 at WI-D2, having gone
+-- stale at C3 exactly as the pinned literal below it did, and for the same
+-- reason. Two copies of one number, reconciled by whichever a reader found
+-- first. The literal is checked; this sentence is not, so it says which item
+-- each value belonged to.
+--
+-- Classifying by current behaviour would declare the remainder
 -- display-only and make D6.4's parity obligation vacuous — it would bless the
 -- exact gap D6.4 exists to close. The artifact says which events BELONG in the
 -- ledger; WI-A14's invariant then measures the distance.
@@ -249,39 +259,39 @@ export pure func event_vocabulary() -> [EventRow] {
     { variant: "NativeToolDenied", wire_names: ["native_tool_denied"],
       payload: [req("step"), req("stream_id"), req("tool"), req("id"), req("reason")],
       -- D3's approval_denied class records its transition here.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "ToolPending", wire_names: ["tool_pending"],
       payload: [req("step"), req("stream_id"), req("tool"), req("id"), req("reason")],
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "ExtToolHandled", wire_names: ["ext_tool_handled"],
       payload: [req("step"), req("stream_id"), req("tool"), req("id"), req("exit_code")],
       -- Which extension served a tool is D5 coverage evidence.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "DelegatedToolDeferred", wire_names: ["delegated_tool_deferred"],
       payload: [req("step"), req("stream_id"), req("tool"), req("id")],
       -- Records that the tool did NOT execute — a logical non-transition.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "V2ToolDispatchStart", wire_names: ["v2_tool_dispatch_start"],
       payload: [req("step"), req("stream_id"), req("tool"), req("id")],
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "V2ToolDispatchComplete", wire_names: ["v2_tool_dispatch_complete"],
       payload: [req("step"), req("stream_id"), req("id")],
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "Dp7VerifierRejected", wire_names: ["dp7_verifier_rejected"],
       payload: [req("step"), req("errors")],
       -- Drives a user-message re-injection, so it changes history.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "CostExhausted", wire_names: ["cost_exhausted"],
       payload: [req("step"), req("total_cost_millicents"), req("total_cost_usd"),
                 req("cap_millicents")],
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "CompactionApplied", wire_names: ["compaction_extension"],
       payload: [req("step"), req("note")],
@@ -317,7 +327,7 @@ export pure func event_vocabulary() -> [EventRow] {
       payload: [req("step"), req("stream_id"), req("status")],
       -- `status` discriminates completed from errored, which D3's provider
       -- classes turn on.
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "StreamErrorRetry", wire_names: ["stream_error_retry"],
       payload: [req("step"), req("error")],
@@ -371,11 +381,11 @@ export pure func event_vocabulary() -> [EventRow] {
 
     { variant: "NativeToolCalls", wire_names: ["native_tool_calls"],
       payload: [req("request_id"), req("step"), req("stream_id"), req("tool_calls")],
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "NativeToolResults", wire_names: ["native_tool_results"],
       payload: [req("request_id"), req("step"), req("stream_id"), req("results")],
-      classification: Logical, reaches_trace_today: false },
+      classification: Logical, reaches_trace_today: true },
 
     { variant: "SessionSuspend", wire_names: ["session_suspend"],
       payload: [req("session_id"), req("target_profile")],
@@ -804,7 +814,8 @@ pure func test_duplicate_row_is_rejected() -> bool
 -- quietly shrinking WI-A14's work list.
 --
 -- FIFTEEN at WI-A8, FOURTEEN after WI-A14 closed `DoneEvent`, THIRTEEN after
--- WI-C3 closed `StreamDelta`. Each closed variant is asserted in the NEGATIVE
+-- WI-C3 closed `StreamDelta`, and **TWO after WI-D2 closed the other eleven**.
+-- Each closed variant is asserted in the NEGATIVE
 -- direction on purpose: the gap may only shrink, and
 -- `dst_invariants.d64_gap_register` carries the remaining thirteen with a
 -- reason each, asserted equal to this list in both directions — so a
@@ -823,12 +834,23 @@ pure func test_duplicate_row_is_rejected() -> bool
 -- file and exited 0 anyway. The recipe now runs it as a checked command. **A
 -- pinned literal is only as good as the propagation of its failure**, which is
 -- S16's shape one level out — the instrument was right and its wiring was not.
+-- WI-D2 TOOK IT TO TWO, and the two remaining are asserted POSITIVELY as
+-- well as by count. A count alone is satisfied by any two, and the identity of
+-- the survivors is the whole claim: neither is emitted by any run in this tree
+-- (measured 0 of 1895 wire events), so a third appearing means the driver
+-- stopped appending something it appends today.
 pure func test_logical_gap_is_recorded() -> bool
   tests [((), true)]
   {
-    List.length(logical_variants_not_in_trace(event_vocabulary())) == 13
+    List.length(logical_variants_not_in_trace(event_vocabulary())) == 2
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "StreamDelta")
       && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "DoneEvent")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "CostExhausted")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "ThinkingStreamEnd")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "NativeToolDenied")
+      && not contains_str(logical_variants_not_in_trace(event_vocabulary()), "ExtToolHandled")
+      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "ScratchpadResult")
+      && contains_str(logical_variants_not_in_trace(event_vocabulary()), "SessionSuspend")
   }
 
 pure func test_findings_reference_real_rows() -> bool

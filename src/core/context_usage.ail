@@ -2,12 +2,11 @@ module src/core/context_usage
 
 import std/string (length, startsWith, substring)
 import std/list (foldl)
-import std/fs (fileExists, readFile)
-import std/env (getEnvOr)
 import std/json (Json, decode, get, getInt)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import src/core/types (Msg)
+import src/core/ports (ContextReader, WorldState)
 
 export pure func estimate_tokens(msgs: [Msg], system: string) -> int =
   let total = length(system) + foldl(\acc m. acc + length(m.content), 0, msgs) in
@@ -21,14 +20,47 @@ pure func est0(system: string) -> int
   ]
   { estimate_tokens([], system) }
 
-func catalog_path() -> string ! {Env, FS} {
-  let explicit = getEnvOr("MOTOKO_MODELS_FILE", "");
-  if explicit != "" then explicit
-  else if fileExists(".motoko/model-catalog.json") then ".motoko/model-catalog.json"
+-- WI-D3. Every function below that observes the world returns its successor,
+-- because each of them performs a request through a port and D1 requires a
+-- request to hand its successor back. `PathRead` exists so the two path
+-- computations can do that: before WI-D3 they returned a bare string, and a
+-- string is exactly the shape that lets a caller drop the world it was handed.
+type PathRead = {
+  path: string,
+  next_state: WorldState
+}
+
+-- The effective context limit and its successor world.
+export type ContextLimitRead = {
+  value: int,
+  next_state: WorldState
+}
+
+-- The model catalogue's path.
+--
+-- BOTH HALVES OF THIS FUNCTION ROUTE, and that is the point of WI-D3 rather than
+-- an implementation detail. Before this item the env reads computed a path that
+-- was then handed to an ambient `fileExists`, so threading the world through the
+-- env half ALONE would have returned a world-supplied path to a HOST file — a run
+-- that passes an Env poison probe while still depending on ambient state. That is
+-- cluster 4's C1b defect: a green check implying absent coverage. `make
+-- world_state` carried the deferral note saying so from WI-A12 until this item
+-- deleted it.
+func catalog_path(r: ContextReader, w: WorldState) -> PathRead ! {Env, FS} {
+  let explicit = r.env_get(w, "MOTOKO_MODELS_FILE", "");
+  if explicit.value != "" then
+    { path: explicit.value, next_state: explicit.next_state }
   else {
-    let repo = getEnvOr("MOTOKO_REPO", "");
-    if repo != "" then "${repo}/.motoko/model-catalog.json"
-    else ".motoko/model-catalog.json"
+    let probe = r.file_read(explicit.next_state, ".motoko/model-catalog.json");
+    if probe.present then
+      { path: ".motoko/model-catalog.json", next_state: probe.next_state }
+    else {
+      let repo = r.env_get(probe.next_state, "MOTOKO_REPO", "");
+      let path =
+        if repo.value != "" then "${repo.value}/.motoko/model-catalog.json"
+        else ".motoko/model-catalog.json";
+      { path: path, next_state: repo.next_state }
+    }
   }
 }
 
@@ -47,11 +79,18 @@ func lookup_context_limit(limits: Json, model: string) -> Option[int] {
   }
 }
 
-export func catalog_context_limit_for(model: string) -> int ! {Env, FS} {
-  let path = catalog_path();
-  if not fileExists(path) then 0
+-- The per-model catalogue lookup.
+--
+-- ONE file request where there used to be two. `fileExists(path)` followed by
+-- `readFile(path)` is two observations of a filesystem that can disagree between
+-- them; `FileRead` answers both questions from one request, which is the shape
+-- the world can serve and the shape a replay can reproduce.
+export func catalog_context_limit_for(r: ContextReader, w: WorldState, model: string) -> ContextLimitRead ! {Env, FS} {
+  let located = catalog_path(r, w);
+  let read = r.file_read(located.next_state, located.path);
+  if not read.present then { value: 0, next_state: read.next_state }
   else {
-    match decode(readFile(path)) {
+    let value = match decode(read.content) {
       Err(_) => 0,
       Ok(root) => match get(root, "context_limits") {
         Some(limits) => match lookup_context_limit(limits, model) {
@@ -60,21 +99,25 @@ export func catalog_context_limit_for(model: string) -> int ! {Env, FS} {
         },
         None => 0
       }
-    }
+    };
+    { value: value, next_state: read.next_state }
   }
 }
 
 -- Active profile directory, mirroring the launcher's convention: an explicit
 -- MOTOKO_PROFILE_DIR wins (set by verify_extensions and the live launcher),
 -- else `.motoko/config/<MOTOKO_CONFIG|default>` under an optional MOTOKO_REPO.
-func profile_dir_path() -> string ! {Env} {
-  let explicit = getEnvOr("MOTOKO_PROFILE_DIR", "");
-  if explicit != "" then explicit
+func profile_dir_path(r: ContextReader, w: WorldState) -> PathRead ! {Env} {
+  let explicit = r.env_get(w, "MOTOKO_PROFILE_DIR", "");
+  if explicit.value != "" then
+    { path: explicit.value, next_state: explicit.next_state }
   else {
-    let profile = getEnvOr("MOTOKO_CONFIG", "default");
-    let repo = getEnvOr("MOTOKO_REPO", "");
-    if repo != "" then "${repo}/.motoko/config/${profile}"
-    else ".motoko/config/${profile}"
+    let profile = r.env_get(explicit.next_state, "MOTOKO_CONFIG", "default");
+    let repo = r.env_get(profile.next_state, "MOTOKO_REPO", "");
+    let path =
+      if repo.value != "" then "${repo.value}/.motoko/config/${profile.value}"
+      else ".motoko/config/${profile.value}";
+    { path: path, next_state: repo.next_state }
   }
 }
 
@@ -83,25 +126,43 @@ func profile_dir_path() -> string ! {Env} {
 -- server may serve 100K while the same model on a cloud provider serves 1M), so
 -- a profile can declare its serving context here instead of overloading the
 -- model identifier in the shared catalog. Returns 0 (no override) when absent.
-func config_context_limit_override() -> int ! {Env, FS} {
-  let path = "${profile_dir_path()}/config.json";
-  if not fileExists(path) then 0
-  else match decode(readFile(path)) {
-    Err(_) => 0,
-    Ok(root) => match get(root, "agent") {
-      Some(agent) => match getInt(agent, "context_limit") {
-        Some(n) => if n > 0 then n else 0,
+func config_context_limit_override(r: ContextReader, w: WorldState) -> ContextLimitRead ! {Env, FS} {
+  let dir = profile_dir_path(r, w);
+  let read = r.file_read(dir.next_state, "${dir.path}/config.json");
+  if not read.present then { value: 0, next_state: read.next_state }
+  else {
+    let value = match decode(read.content) {
+      Err(_) => 0,
+      Ok(root) => match get(root, "agent") {
+        Some(agent) => match getInt(agent, "context_limit") {
+          Some(n) => if n > 0 then n else 0,
+          None => 0
+        },
         None => 0
-      },
-      None => 0
-    }
+      }
+    };
+    { value: value, next_state: read.next_state }
   }
 }
 
 -- Effective context limit for a model in the current deployment: the profile's
 -- `agent.context_limit` override wins, else the per-model catalog value, else 0
 -- ("unknown" — compaction extensions skip context-aware behaviour).
-export func resolve_context_limit(model: string) -> int ! {Env, FS} {
-  let override = config_context_limit_override();
-  if override > 0 then override else catalog_context_limit_for(model)
+--
+-- WI-D3 gave it a reader and a world. The driver passes `context_reader_of` its
+-- own `Ports`, so a deterministic run resolves this from `WorldState.files` and
+-- `WorldState.env` while a live run resolves it from the host — the difference
+-- lives in the port closure and never here, which is D1's prohibition on
+-- production test-mode branching.
+--
+-- MEASURED at WI-D3, per call, against a world whose tables are empty: FIVE env
+-- requests (MOTOKO_PROFILE_DIR, MOTOKO_CONFIG, MOTOKO_REPO twice,
+-- MOTOKO_MODELS_FILE) and THREE file requests. The counts are data-dependent
+-- above that — an explicit MOTOKO_PROFILE_DIR short-circuits two of the env
+-- reads — which is why the discovery witness expresses them against the world a
+-- scenario actually seeds rather than as a bare literal.
+export func resolve_context_limit(r: ContextReader, w: WorldState, model: string) -> ContextLimitRead ! {Env, FS} {
+  let override = config_context_limit_override(r, w);
+  if override.value > 0 then override
+  else catalog_context_limit_for(r, override.next_state, model)
 }

@@ -54,11 +54,18 @@
 --   tool_dispatches   the tool-result messages the driver returned. Written by
 --                     `tool_phase.ail`'s `tool_outcome_message`, downstream of
 --                     the port but in a different module and a different
---                     record. The wire's `v2_tool_dispatch_start`
---                     (tool_phase.ail:332), emitted BEFORE the port calls at
---                     :342-350, is the stronger form of the same witness and is
---                     compared in the `discovery` make target, because it goes
---                     to the wire and is never appended to the returned trace.
+--                     record. The wire's `v2_tool_dispatch_start`, emitted
+--                     BEFORE the port calls that follow it, is the stronger form
+--                     of the same witness and is compared in the `discovery`
+--                     make target — because the wire has a DIFFERENT AUTHOR from
+--                     the census it is compared against.
+--
+--                     TENSED AT WI-D2: this clause used to say "because it goes
+--                     to the wire and is never appended to the returned trace",
+--                     which stopped being true when WI-D2 closed
+--                     `V2ToolDispatchStart` in `d64_gap_register`. Independence
+--                     was always the operative reason and absence was never
+--                     more than the mechanism that guaranteed it.
 --   approval_reads    the tool-role messages the driver returned. Under a
 --                     policy that sends EVERY tool call to the approval channel
 --                     — which both discovery scenarios use — the driver makes
@@ -105,9 +112,17 @@
 -- carry six classes with runtime evidence and one with provenance evidence.
 --
 -- The set is checked against the source by the `discovery` make target, which
--- greps the `ports.env_get(` call sites out of session.ail and tool_phase.ail
--- and diffs the extracted keys against `driver_env_keys()` below. A literal
--- nobody re-derives is a literal that goes stale; the gate is the derivation.
+-- greps the `ports.env_get(` call sites out of session.ail, tool_phase.ail and
+-- context_usage.ail and diffs the extracted keys against `driver_env_keys()`
+-- below. A literal nobody re-derives is a literal that goes stale; the gate is
+-- the derivation.
+--
+-- THE FILE LIST IS ITSELF SUCH A LITERAL, and WI-D3 found it stale within one
+-- edit of routing `context_usage`: the grep read two files, the driver's env
+-- surface had moved into a third, and the derived set came back four keys short
+-- of the declared one. It failed LOUDLY rather than silently, which is the
+-- property worth keeping — a derivation whose input set is wrong disagrees with
+-- the literal it checks instead of agreeing with it.
 --
 -- The two directions land differently for env, and that asymmetry is real:
 --
@@ -161,6 +176,39 @@ import src/core/dst_interaction (
 -- therefore not statically known. `driver_only` installs no extensions, so it
 -- contributes nothing under this profile; a profile that installs one will need
 -- its keys declared by the profile rather than derived from the driver.
+-- WI-D3 ADDED FOUR, and they are the first entries here whose call site is not
+-- in `session.ail` or `tool_phase.ail`. `resolve_context_limit` reads them, and
+-- before WI-D3 they were read AMBIENTLY — which is why this list did not carry
+-- them and why `make world_state` deferred the env poison pair. They are routed
+-- now, so they are the driver's env surface like the other seven:
+--
+--   src/core/context_usage.ail  MOTOKO_PROFILE_DIR   profile_dir_path
+--   src/core/context_usage.ail  MOTOKO_CONFIG        profile_dir_path
+--   src/core/context_usage.ail  MOTOKO_REPO          profile_dir_path AND catalog_path
+--   src/core/context_usage.ail  MOTOKO_MODELS_FILE   catalog_path
+--
+-- MOTOKO_REPO is read TWICE per resolution, from two different functions, and it
+-- appears once here because this list is a set of KEYS. The multiplicity lives
+-- in `EnvExpectation`, which is where a per-key count belongs.
+--
+-- WI-D3 CALLED THESE COUNTS "the first in this list that scale with the RUN",
+-- because the driver resolved once in `session_policy_init` and again on every
+-- loop arm taken. WI-D4 REMOVED THE PER-ARM RESOLUTIONS — four `c2_loop` sites
+-- re-deriving a value `session_policy_init` had already stored in
+-- `policy.step.compaction.context_limit` — so the driver reaches
+-- `resolve_context_limit` exactly ONCE per run and these counts are back to
+-- being a fixed control-flow fact like the other seven.
+--
+-- The eight call sites WI-D3 counted are now FOUR: two in `rpc.ail`, which bind
+-- the ambient reader against an empty world, and two in `session.ail`
+-- (`session_policy_init` and `session_policy_with_model`), which STORE the value
+-- rather than recomputing it. Only the first of those two is on a DST run's path.
+--
+-- The witnesses still express the counts against a measured per-call cost rather
+-- than as a literal — see `env_reads_per_context_resolution`. That indirection is
+-- kept even though the multiplier is now 1: it is what makes the five scenarios
+-- state a quantity instead of restating a total, and it is what would go red
+-- rather than stale if anything re-resolved per arm again.
 export pure func driver_env_keys() -> [string] {
   ["MOTOKO_SESSION_ID",
    "MOTOKO_PERSIST_RETRIES",
@@ -168,7 +216,11 @@ export pure func driver_env_keys() -> [string] {
    "OPENAI_BASE_URL",
    "MOTOKO_HEADLESS",
    "MOTOKO_CAPTURE_FAILED_PAYLOAD",
-   "MOTOKO_TOOL_TIMEOUT_MS"]
+   "MOTOKO_TOOL_TIMEOUT_MS",
+   "MOTOKO_PROFILE_DIR",
+   "MOTOKO_CONFIG",
+   "MOTOKO_REPO",
+   "MOTOKO_MODELS_FILE"]
 }
 
 -- ---------------------------------------------------------------------------

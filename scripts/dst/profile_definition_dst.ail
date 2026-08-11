@@ -102,7 +102,7 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 289 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 314 }, effect: "Process",
           routed: false, note: "" }]
 }
 
@@ -146,7 +146,7 @@ pure func clean() -> ProfileDefinition {
     -- ONE entry since WI-C5 routed `session.ail:878`; the fixture tracks the
     -- measured unrouted set rather than carrying a site the table no longer has.
     unrouted_reachable_sites: [
-      { site_key: "src/core/test/stub_step.ail:202",
+      { site_key: "src/core/test/stub_step.ail:203",
         instrument: "make world_state (Clock poison pair)",
         why_unroutable: "live_ports' clock adapter; a deterministic run uses the scripted adapter" }
     ],
@@ -553,7 +553,7 @@ export func main() -> () ! {IO} {
                                    { clean() | unrouted_reachable_sites: [] });
   let no_instr = assert_rejected("a declared unrouted site with NO INSTRUMENT", "unrouted-site-without-instrument",
                                  { clean() | unrouted_reachable_sites: [
-                                     { site_key: "src/core/test/stub_step.ail:202",
+                                     { site_key: "src/core/test/stub_step.ail:203",
                                        instrument: "", why_unroutable: "live adapter" }] });
   let stale_decl = assert_rejected("a declaration for a site that is no longer reachable-and-unrouted", "declared-site-not-reachable",
                                    { clean() | unrouted_reachable_sites:

@@ -273,6 +273,41 @@ export pure func of_kind(xs: [Interaction], kind: string) -> [Interaction] {
   }
 }
 
+-- WI-D4. How many interactions in this log the GENERATOR authored, as opposed
+-- to how many the log holds.
+--
+-- THE DIFFERENCE IS THE DEFECT WI-D4 EXISTS TO REMOVE. `max_interactions` is a
+-- bound on a generator schema (D2: "Each GENERATOR schema declares hard bounds
+-- for interactions"), and until this function existed both the bound's
+-- enforcement and the request salts read `List.length(state.log)` instead —
+-- the whole log, including every environment read the DRIVER made for its own
+-- configuration. Two consequences, and the second is the one that hid:
+--
+--   * the driver's reads SPENT the generator's budget, truncating trajectories;
+--   * the driver's reads entered the SALT, so they changed which branch every
+--     generated choice took. A generated trajectory was therefore a function of
+--     how many times the driver happened to read its config, and WI-D3 changing
+--     that count silently reshuffled every seed in the fixed bank — which is how
+--     `ToolCorrelationMismatch` stopped being reached by the two seeds pinned as
+--     its witnesses.
+--
+-- The three kinds counted are the three the GENERATING adapters serve: a
+-- provider exchange, a tool execution and an approval read are each a request
+-- the generator answers by CHOOSING. An environment read is answered from a map
+-- chosen up front, a clock advance is read back from the seam that caused it,
+-- and an extension effect comes from an installed hook — none of the three is a
+-- generator choice, and none of them may move one.
+--
+-- DERIVED from `identity_kind` rather than written as three string literals, for
+-- the reason the header of this section gives: a recorder and a checker with two
+-- notions of "how many of this class" is the drift this module exists to
+-- prevent.
+export pure func generator_authored_count(xs: [Interaction]) -> int {
+  count_kind(xs, identity_kind(ProviderIdentity("", 0, "")))
+    + count_kind(xs, identity_kind(ToolIdentity("", "", "")))
+    + count_kind(xs, identity_kind(ApprovalIdentity("", "", "")))
+}
+
 -- The sum of every recorded clock advance. This is the quantity the world's own
 -- `clock_ms` delta is compared against — the cross-check the handoff calls
 -- general across classes, because EVERY class may advance the clock.

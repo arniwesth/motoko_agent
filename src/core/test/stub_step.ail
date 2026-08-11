@@ -27,11 +27,12 @@ import src/core/config (VerificationConfig)
 import src/core/ports (
   Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
   ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
+  ambient_env, ambient_file,
   record_interaction, recording_clock, recording_approval, recording_env, recording_tool, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
 )
 import src/core/dst_interaction (
   Interaction, StreamChunkRecord, TimedOutcome,
-  ProviderIdentity, OutcomeOk
+  ProviderIdentity, OutcomeOk, generator_authored_count
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
@@ -182,7 +183,7 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
 --
 -- It is also stateless, so it returns its input state unchanged. That identity
 -- transition is D1's specified answer, not a decision left to construction sites.
-export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, IO} {
+export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
   let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
     func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
@@ -211,11 +212,21 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, IO} {
       { raw: raw, eof: raw == "", next_state: state }
     };
   -- The live environment: the process environment, world returned unchanged.
-  let env_get: (WorldState, string, string) -> EnvRead ! {Env} =
-    func(state: WorldState, key: string, fallback: string) -> EnvRead ! {Env} {
-      { value: getEnvOr(key, fallback), next_state: state }
-    };
-  { ports_shape_probe(model_step) | clock_now: clock_now, approval_read: approval_read, env_get: env_get }
+  --
+  -- WI-D3 moved the body to `ports.ambient_env` and binds the named function
+  -- here. The closure and the function were identical, and keeping two copies
+  -- meant the seam a host-env poison run exercises and the seam a live session
+  -- exercises could drift — which would make the pair's live half evidence about
+  -- something the driver does not do.
+  { ports_shape_probe(model_step) |
+    clock_now: clock_now,
+    approval_read: approval_read,
+    env_get: ambient_env,
+    -- WI-D3's filesystem class, live half. The ONE binding in the whole Ports
+    -- surface that performs a filesystem read, which is what the host-env poison
+    -- pair points at: withhold `FS` and this dies, withhold it from a
+    -- deterministic run bound to `scripted_file` and nothing notices.
+    file_read: ambient_file }
 }
 
 -- The scripted adapter, WI-A2's fix for F6.
@@ -406,6 +417,22 @@ pure func provider_calls_in(log: [Interaction], acc: int) -> int {
 -- recording counterpart. Built by record update over `ports_shape_probe` for
 -- the reason `live_ports` is — a second function-typed constructor parameter
 -- does not compile on this pin.
+-- WI-D3's file class is deliberately absent from this list, so it INHERITS
+-- `scripted_file` from `ports_shape_probe`: a recording run serves file reads
+-- from the world's table, like every other deterministic seam, and does not log
+-- them as interactions.
+--
+-- The reason is a measurement and not a diagnosis (S15). Recorded runs read
+-- three paths per `resolve_context_limit` call against a table that every
+-- fixture in this tree leaves EMPTY, so every read is `exists: false` and
+-- `dst_replay.world_state_of` reconstitutes `files: []` — which is the world
+-- those runs actually had. Logging them would change nothing that any replay
+-- observes today.
+--
+-- What would have to CHANGE for that to stop being true, named rather than
+-- located: `dst_interaction.IdentityBody` would need a file-read variant and
+-- `world_state_of` would need to derive `files` from it. Until a fixture seeds
+-- `WorldState.files`, a replay cannot lose what no run put there.
 export func recording_ports(rt: ExtRuntime) -> Ports ! {Clock, Env, FS, IO, Process, Trace} {
   { ports_shape_probe(recording_model_step(rt)) |
     clock_now: recording_clock,
@@ -451,7 +478,7 @@ func generating_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (
     let seeded =
       match state.script {
         [] => {
-          let salt = "model_step model=${model} msg_count=${show(List.length(msgs))} at=${state.clock_ms} n=${show(List.length(state.log))}";
+          let salt = "model_step model=${model} msg_count=${show(List.length(msgs))} at=${state.clock_ms} n=${show(generator_authored_count(state.log))}";
           let entry = generated_provider_entry(state, salt);
           { state | script: [entry.step], gen: entry.gen }
         },

@@ -189,6 +189,116 @@ but no event log. **That is `on_chunk` over a pre-A1 `ProviderExchange`** — WI
 second instance. The three-step move is already validated: A1 widened the channel, C1 filled it, C3
 gave it a reader, and `c2_trace_wire_events` already does the appending for stream deltas.
 
+**Cluster 21 outcome: WI-D2 DONE 2026-08-05**, ~46 min, `def464e` — **row 7 CLOSES**, the register
+goes 13 → **2**, and `make ledger_parity` compares 17 variants wire-against-trace. The A1-shaped
+prediction held exactly. **The handoff was wrong about `ExtToolHandled`** — reserved as needing an
+installed extension, it needs neither, and was already on the wire **47 times a run** in a `make dst`
+log captured three items earlier. Found only because S15 forced the survivors' reasons to be
+measurements. **Anchor cascade paid ONCE** — the first item to manage it, by tensing comments before
+deriving anchors.
+
+**Cluster 22 = row 10, the filesystem world class: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-d3-filesystem-world-class-row-10.md`. **The last red row.** Grounding found most of
+the design already written down: `Makefile:1392-1416` records why the env poison pair was deferred and
+why routing the env half alone is refused — *"a world-supplied path to an ambient file … a green check
+implying absent coverage"*, cluster 4's C1b defect. The driver's own env reads are **all routed
+already**; what fails is `context_usage.resolve_context_limit`, which takes only a model, is called at
+eight sites, and reads four env vars **to compute file paths it then reads**.
+
+**Also surfaced and worth carrying: D10 has a SECOND condition nobody has mentioned in a long time** —
+the name needs the acceptance table *and* project-007's taxonomy ADR accepted. **Checked: 007 is
+`Accepted 2026-07-26`**, so the table is the only thing outstanding, and re-running it is its own item
+after this one.
+
+**Cluster 22 outcome: WI-D3 DONE 2026-08-05**, ~2h05m, `14ba6f9` — **row 10 CLOSES and C4's table is
+GREEN, eleven of eleven.** Five two-sided poison pairs, `resolve_context_limit` threaded at eight
+sites (the deferral note said six), and a filesystem POINT READ class. Its central finding extends S16
+a third time: **a poison pair is silent on whether the world is read at all** — reproduced at review,
+with the deterministic runs producing no capability error and failing only the provenance assertion.
+
+**AND THE FIRST REGRESSION IN THE SERIES: `seeded_generator` and `corpus_pr` went red and were
+reported rather than repaired.** One cause — routing `context_usage` put the driver's config reads
+into the recorded interaction log, and `seeded_generator`'s `3 * max_interactions` bound had been
+absorbing driver overhead the generator never authored. **The repair is named and measured (read the
+policy instead of re-resolving; zero mismatches across four suites) and deliberately deferred to the
+next item's first move.**
+
+**Clustering consequence, and it is the first time this has applied: the next item is NOT the obvious
+one.** The acceptance-table re-run is what everything has been pointing at, but it must not run first
+— the deferred repair moves the env census numbers D3 just pinned, and re-running the gate on numbers
+about to change would produce a verdict with a shelf life of one item. **Sequence the repair, then the
+re-run.**
+
+**Verified at review, and it is worse than the report states: `make dst` has FIVE red targets, not
+two.** `smoke_parity` also went red and D3's report does not mention it — zero occurrences. ✓ rows
+fall **831 → 701**, because an aborting target stops *producing* rows rather than reporting failures.
+**And C4's table is not green:** `corpus_pr` aborts before printing the class-coverage rows that are
+rows 4 and 11's evidence, so those rows did not fail — they went missing. Rows 7 and 10 are genuinely
+green; the table was green at D2.
+
+**Cluster 23 = WI-D4, restore the three red targets: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-d4-restore-the-three-red-targets.md`. **Two clustering lessons, both new:**
+
+**A regression's blast radius is not the set the item verified.** D3 ran `world_state`, `discovery`,
+`strict_replay` and `compaction_dst` — all pass, all relevant, and the target that broke is covered by
+none of them. **Only a full `make dst` surfaced the third.** Where an item changes a seam every run
+touches, the verification set is `make dst`, not the targets whose names match the change.
+
+**A deferred repair needs its blast radius re-measured, not inherited.** D3 named a repair and
+measured it at one site. The handoff carries that measurement forward as a *condition* rather than a
+result, because the item that takes it will delete four world-successor threadings — the same
+population D1's production defect came from.
+
+**Cluster 23 outcome: WI-D4 DONE 2026-08-05**, ~3h25m — **all three targets restored**, `make dst`
+back to its two pre-existing reds, ✓ rows 745 → **845**, `corpus_pr`'s class rows green and printed,
+`resolve_context_limit` 8 sites → **1**. Verified at review. Earned **S20**, extended S19 and S9, and
+corrected this reviewer twice: `corpus_pr`'s rows were **red, not missing** (the recipe truncates on
+failure), and the conflation had **three channels** where the handoff named one — the *salt*, not the
+budget, was the deep one.
+
+**Cluster 24 = WI-D5, re-run the acceptance table: HANDED OFF 2026-08-06**, handoff
+`HANDOFF-execute-d5-rerun-the-acceptance-table.md`. **This is the one the project has been walking
+toward**, and grounding made it smaller than expected rather than larger — the first time in
+Milestones C and D that has happened.
+
+**There is no rename cascade.** 007 grandfathers every existing `dst` identifier and says the
+exception *"does not confer the new meaning"*; every target project 009 added already uses a
+non-simulation working name. **D10's adoption permits the label, it does not require renaming
+anything.** The public record is one document —
+`design_docs/implemented/motoko_agent/m-motoko-dst-framework.md`, which states the distinction in
+three places.
+
+**The item's real difficulty is a reading, not a build.** D10 adopts the label **for the axis**, gated
+on **one documented baseline profile** — and `driver_only` passes two of its eleven rows *vacuously*,
+because it installs nothing, which B4 proved is forced rather than chosen. **So the question is
+whether a baseline covering no extension earns an axis-wide name**, and the handoff requires it
+answered out loud with the zero-coverage fact stated either way.
+
+**Cluster 24 outcome: WI-D5 DONE 2026-08-06**, ~25 min — **VERDICT YES. THE NAME IS ADOPTED** for the
+generated axis, on `driver_only/10`, with the zero-extension-coverage caveat made mandatory. Thirteen
+items: twelve declined, the thirteenth adopted. Earned **S21**, and its analytic result was that the
+rows leaning on the empty install list are **four, not two** — row 7's `ScratchpadResult` exemption
+joined them **because D2 succeeded**, leaving a residue in which one of two survivors is purchased by
+that emptiness. **Closing a row can concentrate a vacuity rather than remove it.**
+
+**Cluster 25 = WI-D6, unblock the install: HANDED OFF 2026-08-06**, handoff
+`HANDOFF-execute-d6-unblock-the-install-on-budget-plan.md`. **Grounding found a route that is one ABI
+row rather than an ABI major**, and C5 already measured the evidence for it: the detector's headline
+is `DECLARED on_budget_plan : ! {Env, FS}` against `PERFORMED : ! {}`. Narrowing the declared row
+satisfies D5 criterion 1 outright, needs no successor, and is **structurally safe** — narrowing a
+record field's row is *rejected* by the compiler, so any binding that still performs more fails to
+build. B4's refutation is about function-typed parameters and does not apply.
+
+**Two sequencing facts worth carrying, both new in kind:**
+
+**An item can falsify a caveat written the day before, and must own updating it.** D5 put "the empty
+install list is **forced**" into a design document that outlives this project. D6 makes it false — the
+emptiness becomes *chosen* rather than forced, which is a weaker claim, not an absent one.
+
+**S21's first deliberate application is this item.** Unblocking the install closes none of the four
+leaning rows, because `driver_only` still installs nothing by its own definition. What changes is
+every reason's *content*, and S21 exists because that set grew from two to four unnoticed.
+
 **Worth recording as clustering guidance in its own right: the seven-for-seven grounding record in
 Milestones C and D is not a run of luck, it is a property of this plan.** Items were sized from the
 ADR's decisions, and the ADR describes *what must be true*, not *what the tree currently does*. Every

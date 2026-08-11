@@ -448,20 +448,61 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
 -- exactly once per traced run: `session_policy_init` runs once before the loop
 -- and `derive_session_id` once at its start. A recorder that logged the first
 -- read of a key and dropped later ones would satisfy a presence check.
-func env_reads_always() -> [EnvExpectation] {
+func env_reads_always(resolutions: int) -> [EnvExpectation] {
   [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
    { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
    { key: "OPENAI_BASE_URL",           count: 1 },
    { key: "MOTOKO_HEADLESS",           count: 1 },
    { key: "MOTOKO_SESSION_ID",         count: 1 }]
+    ++ env_reads_per_context_resolution(resolutions)
 }
 
 -- MOTOKO_TOOL_TIMEOUT_MS is read once per NATIVE dispatch (tool_phase.ail:343),
 -- so its expected count is expressed in terms of the independently WITNESSED
 -- dispatch count rather than written as a literal. That anchors the one
 -- repeated env read to a runtime witness, even though the read itself has none.
-func env_reads_with_dispatch(dispatches: int) -> [EnvExpectation] {
-  env_reads_always() ++ [{ key: "MOTOKO_TOOL_TIMEOUT_MS", count: dispatches }]
+
+-- WI-D3's four context-resolution keys, and their MULTIPLICITY.
+--
+-- `resolve_context_limit` performs five env requests per call against a world
+-- whose env table does not carry these keys: MOTOKO_PROFILE_DIR, then
+-- MOTOKO_CONFIG, then MOTOKO_REPO (from `profile_dir_path`), then
+-- MOTOKO_MODELS_FILE, then MOTOKO_REPO again (from `catalog_path`). MOTOKO_REPO
+-- is therefore read TWICE per resolution and the other three once, which is why
+-- the rates below are not uniform — a uniform set would be satisfied by a
+-- recorder that lost one of the two MOTOKO_REPO reads.
+--
+-- MEASURED PER SCENARIO, and the resolution count is a PARAMETER because the
+-- first version of this made it a shared constant and that was wrong. WI-D3 set
+-- it to 12 — correct for discovery's approve, deny and eof, read off
+-- `make discovery`'s own census (environment_read=68/65/66 against 8/5/6
+-- accounted for before this item, 60 = 12 x 5 in every case) — and strict
+-- replay's scenarios reject it immediately: `rich` reaches 19 resolutions and
+-- `maxsteps` 8, so the shared literal was over-recorded on one and
+-- under-recorded on the other. The count tracks the loop arms a scenario takes,
+-- not the run length, and no formula over the witnessed quantities fits the
+-- three data points — 12 at provider=4, 19 at provider=5, 8 at provider=1 — so
+-- each scenario states its own measurement rather than deriving a rule from
+-- three observations.
+--
+-- The count is a literal because there is NO runtime witness to anchor it to:
+-- the env class emits no ledger event, which is the same reason this whole set
+-- exists, and deriving it from the log would put both sides of the check on one
+-- producer — the defect S16 names.
+--
+-- It goes RED rather than stale when the driver's loop structure changes the
+-- number of resolutions, and that is the intended failure: a changed count is a
+-- changed env surface and this set is the env class's only independent evidence.
+func env_reads_per_context_resolution(resolutions: int) -> [EnvExpectation] {
+  [{ key: "MOTOKO_PROFILE_DIR", count: resolutions },
+   { key: "MOTOKO_CONFIG",      count: resolutions },
+   { key: "MOTOKO_MODELS_FILE", count: resolutions },
+   { key: "MOTOKO_REPO",        count: resolutions * 2 }]
+}
+
+
+func env_reads_with_dispatch(dispatches: int, resolutions: int) -> [EnvExpectation] {
+  env_reads_always(resolutions) ++ [{ key: "MOTOKO_TOOL_TIMEOUT_MS", count: dispatches }]
 }
 
 -- ---------------------------------------------------------------------------
@@ -576,7 +617,22 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
 func run_scenario(
   label: string,
   answers: [string],
-  tool_timeout_read_per_dispatch: bool
+  tool_timeout_read_per_dispatch: bool,
+  -- WI-D3 added this as a per-scenario count because `resolve_context_limit` was
+  -- reached once in `session_policy_init` AND again on every loop arm taken, so
+  -- the number genuinely varied with control flow — 12 here, 19 and 8 in strict
+  -- replay. WI-D4 removed the four per-arm resolutions (they re-derived a value
+  -- `session_policy_init` had already stored), so the driver reaches it exactly
+  -- ONCE per run and every scenario's answer is 1.
+  --
+  -- THE PARAMETER STAYS even though every caller now passes the same number, and
+  -- that is deliberate rather than an oversight: what makes the answer 1 is a
+  -- property of the driver's call graph, not of this suite, and the moment
+  -- anything re-resolves per arm the quantity varies again. A parameter that is
+  -- currently constant expresses "this may differ per scenario and today does
+  -- not"; folding it into a shared literal would express "this cannot differ",
+  -- which is the claim WI-D3 measured to be false.
+  context_resolutions: int
 ) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world(answers);
   let run = run_recording("discovery_${label}", initial);
@@ -586,8 +642,8 @@ func run_scenario(
   -- returned messages, never from the log.
   let probe = witness_for(initial, run, []);
   let expected_env =
-    if tool_timeout_read_per_dispatch then env_reads_with_dispatch(probe.tool_dispatches)
-    else env_reads_always();
+    if tool_timeout_read_per_dispatch then env_reads_with_dispatch(probe.tool_dispatches, context_resolutions)
+    else env_reads_always(context_resolutions);
   let w = { probe | expected_env_reads: expected_env };
 
   let _ = println("");
@@ -690,12 +746,20 @@ func run_scenario(
 -- The wire witness, on its own entry point
 -- ---------------------------------------------------------------------------
 --
--- THE STRONGEST WITNESS IN THIS STAGE, and it cannot be consumed from inside
--- AILANG. `V2ToolDispatchStart` (tool_phase.ail:332) is emitted BEFORE the port
--- calls at :342-343, which makes it the one tool witness that exists whether or
--- not the port was ever reached — but it goes to the wire through `ledger_emit`
--- and is never appended to the returned trace, so `run.trace.records` cannot
--- see it. Cluster 4 measured the same emit/append imbalance (37 against 15).
+-- THE STRONGEST WITNESS IN THIS STAGE, and it is strongest because it is
+-- OUT OF PROCESS. `V2ToolDispatchStart` is emitted BEFORE the port calls that
+-- follow it, which makes it the one tool witness that exists whether or not the
+-- port was ever reached.
+--
+--   TENSED AT WI-D2, AND THE CONCLUSION SURVIVED THE REASON. Until WI-D2 the
+--   note read "it goes to the wire through `ledger_emit` and is never appended
+--   to the returned trace, so `run.trace.records` cannot see it" — cluster 4
+--   measured that emit/append imbalance at 37 against 15. WI-D2 appends it, so
+--   `run.trace.records` CAN see it now. This gate still reads the wire, because
+--   what makes it an oracle is that the two records have different AUTHORS, and
+--   a witness read from the returned trace would be produced by the same
+--   process as the census it is compared against. The append made the witness
+--   available in a second place; it did not make the second place independent.
 --
 -- `make discovery` therefore runs THIS entry, captures stdout, and compares the
 -- JSONL the driver emitted against the census this prints. Two authors, two
@@ -719,14 +783,14 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- approve: three approvals granted, three native dispatches follow.
   let ok_approve = run_scenario("approve",
                                 [approve_line(), approve_line(), approve_line()],
-                                true);
+                                true, 1);
 
   -- deny: three approvals refused, ZERO dispatches. This is the scenario in
   -- which a recorder that logged an approval as a tool interaction is visible,
   -- and it is invisible in `approve` where the counts happen to agree.
   let ok_deny = run_scenario("deny",
                              [deny_line("alpha"), deny_line("bravo"), deny_line("charlie")],
-                             false);
+                             false, 1);
 
   -- eof: THREE tool calls and ONE queued answer, so the approval queue runs dry
   -- and the last two reads hit end-of-input.
@@ -750,7 +814,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- default-deny policy, so `tool_dispatches` is 1 while `approval_reads` is 3
   -- and `approvals_consumed` is 1 — three quantities that are pairwise distinct
   -- here and pairwise equal in `approve`.
-  let ok_eof = run_scenario("eof", [approve_line()], true);
+  let ok_eof = run_scenario("eof", [approve_line()], true, 1);
 
   let _ = println("");
   if ok_approve && ok_deny && ok_eof then

@@ -157,6 +157,7 @@ import src/core/dst_interaction (
   ProviderIdentity, ToolIdentity, ApprovalIdentity,
   EnvironmentReadIdentity, ClockAdvanceIdentity,
   identity_kind,
+  generator_authored_count,
   identity_projection,
   interaction_kind,
   outcome_status_id,
@@ -721,27 +722,79 @@ func axis_bounds(honest: [GeneratedRun])
 
   let ok_quiet = all_within_bounds(honest);
 
-  -- The tightened bound. `max_interactions: 6` is below every honest
-  -- trajectory, so the generator must force termination rather than run on.
-  let tight = { bounds() | max_interactions: 6 };
+  -- THE SEED'S NATURAL TRAJECTORY, MEASURED HERE RATHER THAN REMEMBERED.
+  --
+  -- WI-D4's reason, and it is S15's: "6 is below every honest trajectory" was a
+  -- true sentence about a quantity that has since changed meaning. The bound
+  -- used to be charged the whole log — the driver's environment reads included —
+  -- so almost any literal was "below the trajectory", and the row passed for a
+  -- reason that had nothing to do with the generator. Counting only what the
+  -- generator authors makes the honest trajectories SHORT, and a tightening has
+  -- to be tight against the real number.
+  --
+  -- So the same seed is generated twice: once at the declared bounds to measure
+  -- what it reaches on its own, and once tightened. The literal below stays a
+  -- LITERAL — deriving it from the measurement would put the bound and its own
+  -- justification on one producer, which is the S16 defect this file already
+  -- carries a row against — and `ok_is_tightening` is what goes red if the
+  -- generator's trajectories ever move underneath it.
+  let natural = generate("bounded", 77, 77, generator_version(), bounds());
+  let natural_authored = generator_authored_count(natural.run.world.log);
+  let _ = println("      MEASURED: seed 77 authors ${show(natural_authored)} generator interaction(s) at the declared bounds (log total ${show(List.length(natural.run.world.log))})");
+  let tight = { bounds() | max_interactions: 3 };
+  let ok_is_tightening = check("the tightened bound (${show(tight.max_interactions)}) is BELOW this seed's natural trajectory (${show(natural_authored)})",
+                               tight.max_interactions < natural_authored,
+                               "a 'tightened' bound at or above the natural trajectory is not a tightening: the generator would terminate on its own and the rows below would grade a bound that never bound anything");
   let squeezed = generate("bounded", 77, 77, generator_version(), tight);
   let failures = squeezed.run.world.gen.failures;
   let _ = report_bound_failures(failures);
   let ok_fires = check("a tightened max_interactions is reported as a GENERATOR failure",
                        List.length(failures) > 0,
-                       "the generator reported no failure under max_interactions=6, so the bound is declared and unenforced");
+                       "the generator reported no failure under max_interactions=${show(tight.max_interactions)}, so the bound is declared and unenforced");
   -- Both halves of D2's sentence. The failure is reported AND the run stayed
   -- bounded: a generator that reported the failure and then ran on would have
   -- satisfied the first half while producing the unbounded run the sentence
   -- forbids.
-  let ok_bounded = check("...and the run stayed BOUNDED rather than becoming an unbounded test run",
-                         List.length(squeezed.run.world.log) <= 3 * tight.max_interactions,
-                         "the bounded run recorded ${show(List.length(squeezed.run.world.log))} interactions against a declared budget of ${show(tight.max_interactions)}");
+  --
+  -- WI-D4 REMOVED A `3 *` HERE, AND THE MULTIPLIER WAS THE CONFLATION RATHER
+  -- THAN A MARGIN. `max_interactions` bounds what the GENERATOR authors; the
+  -- log also carries every environment read the DRIVER made, so this check was
+  -- comparing a generator budget against a total the driver contributes to, and
+  -- the 3x was absorbing that contribution. It absorbed it until WI-D3 made the
+  -- driver read more, and then it did not — which is a check that fails when the
+  -- driver changes rather than when the generator does. Counting the authored
+  -- interactions makes the comparison exact and the slack unnecessary.
+  --
+  -- AND THE RELATIONSHIP IS EXACT, WHICH THE MULTIPLIER WAS HIDING. Spending the
+  -- budget does not stop the generator mid-request: `choose_provider` answers the
+  -- request that spent it by TERMINATING, and that terminating exchange is itself
+  -- authored and logged. So a run that reaches its budget authors exactly one
+  -- more interaction than the budget allows, and `ok_is_tightening` above is what
+  -- guarantees this run reaches it. `==` rather than `<=` because both directions
+  -- are defects worth a red row: fewer means the trajectory terminated on its own
+  -- and this axis graded a bound that never bound anything, more means the
+  -- generator kept authoring after reporting the failure — which is precisely the
+  -- half of D2's sentence the row below `ok_fires` exists to hold.
+  let authored = generator_authored_count(squeezed.run.world.log);
+  let ok_bounded = check("...and the run stayed BOUNDED: exactly the budget plus the one terminating exchange the bound forces",
+                         authored == tight.max_interactions + 1,
+                         "the bounded run authored ${show(authored)} generator interactions against a declared budget of ${show(tight.max_interactions)} + 1 terminator (log total ${show(List.length(squeezed.run.world.log))})");
+  -- S16, and this row is why the one above may be trusted. `budget_spent` and
+  -- the check now read the SAME function, so a `generator_authored_count` that
+  -- returned 0 would make the bound never fire and the check always pass — two
+  -- sides, one producer, both green. This row is the independent side: the
+  -- quantity must be non-zero, and it must be STRICTLY BELOW the raw log length,
+  -- which is the same as saying the filter both counts something and excludes
+  -- something. A run whose log is all driver reads fails the first clause; a
+  -- count that quietly became `List.length` fails the second.
+  let ok_counted = check("...and the counted quantity is a PROPER subset of the log — the filter counts and excludes",
+                         authored > 0 && authored < List.length(squeezed.run.world.log),
+                         "authored=${show(authored)} of ${show(List.length(squeezed.run.world.log))} logged — at 0 the bound cannot fire and this axis grades itself vacuously; at the full length the driver's reads are still being charged to the generator, which is the defect WI-D4 removed");
   let ok_named = check("...and the failure NAMES max_interactions",
                        names_bound(failures, "max_interactions"),
                        "the reported failures do not name max_interactions, so the message would point a reader at the wrong bound");
 
-  ok_quiet && ok_fires && ok_bounded && ok_named
+  ok_quiet && ok_is_tightening && ok_fires && ok_bounded && ok_counted && ok_named
 }
 
 func all_within_bounds(rs: [GeneratedRun]) -> bool ! {IO} {
@@ -1091,9 +1144,9 @@ func axis_canary() -> bool ! {IO} {
 -- ---------------------------------------------------------------------------
 
 export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let rich = generate("rich", 77, 77, generator_version(), bounds());
+  let rich = generate("rich", 110, 110, generator_version(), bounds());
   let a = generate("pairA", 132, 132, generator_version(), bounds());
-  let b = generate("pairB", 176, 176, generator_version(), bounds());
+  let b = generate("pairB", 12, 12, generator_version(), bounds());
   let _ = emit_rows([rich, a, b]);
   ()
 }
@@ -1104,9 +1157,42 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- The honest row set. `pairA`/`pairB` are the equal-census pair axis A's
   -- anti-count control stands on; `rich` is the S7 surviving fixture; `repeat`
   -- is reproducibility; `versioned` is D8's version axis.
-  let rich = generate("rich", 77, 77, generator_version(), bounds());
+  --
+  -- RE-PINNED AT WI-D4, and the reason is the one this file's own S7 message
+  -- gives — "a fixture's coverage drifts silently as the driver changes.
+  -- Re-sweep the seeds and re-pin; do not relax this". WI-D3 changed how many
+  -- environment reads the driver makes, and until WI-D4 the generator's request
+  -- SALTS carried `n = List.length(world.log)`, so every generated choice moved
+  -- when the driver's read count moved. `rich` at seed 77 stopped carrying a
+  -- tool fault and an end-of-input approval; `pairB` at 176 stopped matching
+  -- `pairA`'s interaction count.
+  --
+  -- THE SWEEP IS THE EVIDENCE, not a guess: all 260 seeds were generated and
+  -- graded against `fixture_carries_every_shape` and `fixture_quantities_distinct`.
+  -- Exactly TWO satisfy both — 1 (45 interactions) and 110 (42) — and 110 is
+  -- taken. Seed 1 was tried FIRST and rejected by the gate, which is the part
+  -- worth recording: `axis_s7` grades distinctness on the witness of the REPLAYED
+  -- run (`witness_of(replay_world, replay)` at axis G), not on the generated
+  -- run's. The two differ in `approvals_consumed` — a generated world starts with
+  -- an EMPTY approval queue, so the generated run's witness reports 0 and the
+  -- replayed one reports what the reconstituted queue served. Seed 1 is distinct
+  -- on the generated witness and COLLIDES on the replayed one at
+  -- served=5/dispatches=5; 110 is distinct on both (provider=9 tool=4 reads=8
+  -- served=7). A sweep graded on the wrong witness is a sweep that recommends a
+  -- seed the gate rejects, which is what happened.
+  --
+  -- `pairB` moves 176 -> 12 because 12 is the lowest seed whose interaction count (23) equals
+  -- `pairA`'s and whose outcomes differ, which is exactly what the anti-count
+  -- control needs and what `generator-seed-evidence-is-count-shaped` reports the
+  -- absence of. `pairA` does not move, and it is still the run that LACKS shapes
+  -- that axis I's `m4` mutation needs.
+  --
+  -- WI-D4 also made the salts count only GENERATOR-authored interactions, so
+  -- this re-pin is the last one a change to the driver's environment surface can
+  -- force: the trajectories are now a function of the seed and nothing else.
+  let rich = generate("rich", 110, 110, generator_version(), bounds());
   let pair_a = generate("pairA", 132, 132, generator_version(), bounds());
-  let pair_b = generate("pairB", 176, 176, generator_version(), bounds());
+  let pair_b = generate("pairB", 12, 12, generator_version(), bounds());
   let repeat = generate("repeat", 132, 132, generator_version(), bounds());
   let versioned = generate("versioned", 132, 132, "2", bounds());
   let honest = [rich, pair_a, pair_b, repeat, versioned];
@@ -1118,8 +1204,8 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
 
   -- The mutant: three DIFFERENT requested seeds, all built with a constant.
   let m1 = generate("mutantA", 132, 0, generator_version(), bounds());
-  let m2 = generate("mutantB", 176, 0, generator_version(), bounds());
-  let m3 = generate("mutantC", 77, 0, generator_version(), bounds());
+  let m2 = generate("mutantB", 12, 0, generator_version(), bounds());
+  let m3 = generate("mutantC", 110, 0, generator_version(), bounds());
   let mutant = [m1, m2, m3];
 
   let ok_a = axis_seed_sensitivity(honest, mutant);

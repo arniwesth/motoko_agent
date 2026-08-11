@@ -143,7 +143,12 @@ export func main_delayed_projection_control() -> () ! {AI, IO} {
 -- `live_ports` or reimplement it. It takes the `Ports` record the driver itself
 -- takes (`session.ail:882` binds exactly this for `LiveAI`) and calls the same
 -- `model_step` field the loop calls.
-export func main_adoption() -> () ! {AI, Clock, Env, IO, Trace} {
+export -- WI-D3 added `FS` to this row. It is a DECLARED effect that this function does
+-- not perform: `live_ports` now binds `ambient_file`, and constructing the record
+-- puts `{FS}` in the constructor's row even though no read happens here. The
+-- same declared-not-performed asymmetry the poison pairs rest on, arriving on
+-- the other side — a row that must widen for a capability the run never uses.
+func main_adoption() -> () ! {AI, Clock, Env, FS, IO, Trace} {
   let _ = emit_evidence("adoption");
   let ports = live_ports(empty_rt());
   let _ = println("CALL begin");

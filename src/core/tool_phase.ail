@@ -151,9 +151,27 @@ export pure func native_plan(calls: [ToolCall]) -> ToolPlan {
   }
 }
 
+-- WI-D2, AND IT IS WI-A1'S LOSS CHANNEL A SECOND TIME.
+--
+-- `emit` is a multi-fire callback returning `()`, so every event this module
+-- projects was thrown away by the caller — the same shape `on_chunk` had before
+-- A1 widened `ProviderExchange`. The result type carried the messages and the
+-- world and everything EXCEPT what was emitted, which is why seven variants sat
+-- in `d64_gap_register` with "inside the tool dispatch fold" as their reason.
+--
+-- `emitted` is that channel. It is the ordered log of what this fold projected,
+-- and the driver appends it to the returned trace.
+--
+-- WHY A LOG AND NOT A `LedgerTrace`. Threading a trace in here type-checks —
+-- `ledger_append` is in `phase_vocab`, which this module already imports — and
+-- it puts a SECOND APPENDER in the tree. Trace order would then be a function of
+-- two writers and their interleaving, and D6.3's agreement is decidable over the
+-- returned trace ALONE only because the driver is the sole appender. So this
+-- module returns events and appends nothing, deliberately, and there is no
+-- `ledger_append` anywhere below this line.
 export type ToolDispatchOutcome
-  = ToolDispatchDone({ msgs: [Message], world: WorldState })
-  | ToolDispatchPending({ request: ApprovalRequest, accumulated: [Message], world: WorldState })
+  = ToolDispatchDone({ msgs: [Message], world: WorldState, emitted: [LedgerEvent] })
+  | ToolDispatchPending({ request: ApprovalRequest, accumulated: [Message], world: WorldState, emitted: [LedgerEvent] })
 
 pure func policy_default_allow(default: PolicyDefault) -> bool {
   match default {
@@ -200,19 +218,26 @@ func delegated_deferred_message(call: ToolCall) -> Message {
   }
 }
 
-func emit_scratchpad_result_if_present(emit: (LedgerEvent) -> () ! {IO, Trace}, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> () ! {IO, Trace} {
+-- Returns what it projected (WI-D2). The event is BOUND before it is emitted so
+-- that the wire and the returned log are one value rather than two
+-- constructions — two constructions is how a payload drifts between the two
+-- channels while both counts stay balanced.
+func emit_scratchpad_result_if_present(emit: (LedgerEvent) -> () ! {IO, Trace}, request_id: string, step_idx: int, tool_call_id: string, result_env: ToolResultEnvelope) -> [LedgerEvent] ! {IO, Trace} {
   if is_scratchpad_tool_name(result_env.tool) then
     match get(result_env.metadata, "cells") {
-      None => (),
-      Some(cells) =>
-        emit(ScratchpadResult({
+      None => [],
+      Some(cells) => {
+        let ev = ScratchpadResult({
           tool_call_id: tool_call_id,
           request_id: request_id,
           step: step_idx,
           cells_json: encode(cells)
-        }))
+        });
+        let _ = emit(ev);
+        [ev]
+      }
     }
-  else ()
+  else []
 }
 
 -- WI-A12's typed tool contract. `ports`/`world` come in and the successor world
@@ -283,7 +308,7 @@ export func execute_allowed_tool_call(
   stream_id: string,
   ohmy_pi: bool,
   emit: (LedgerEvent) -> () ! {IO, Trace}
-) -> { msg: Message, next_state: WorldState } ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+) -> { msg: Message, next_state: WorldState, emitted: [LedgerEvent] } ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let envelope = tool_call_to_envelope(call);
   if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
     let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
@@ -295,48 +320,52 @@ export func execute_allowed_tool_call(
       stderr: result_cell.stderr,
       metadata: result_cell.metadata
     };
-    let _ = emit(ExtToolHandled({
+    let handled_event = ExtToolHandled({
       step: step_idx,
       stream_id: stream_id,
       tool: call.name,
       id: call.id,
       exit_code: result_env.exit_code
-    }));
-    let _ = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
-    { msg: handled_tool_message(call.id, result_env), next_state: world }
+    });
+    let _ = emit(handled_event);
+    let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
+    { msg: handled_tool_message(call.id, result_env), next_state: world, emitted: handled_event :: scratch }
   } else {
     let handle_decision = dispatch_tool_handle(rt, ctx, envelope).decision;
     match handle_decision {
       Handled(result_env) => {
-        let _ = emit(ExtToolHandled({
+        let handled_event = ExtToolHandled({
           step: step_idx,
           stream_id: stream_id,
           tool: call.name,
           id: call.id,
           exit_code: result_env.exit_code
-        }));
-        let _ = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
-        { msg: handled_tool_message(call.id, result_env), next_state: world }
+        });
+        let _ = emit(handled_event);
+        let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
+        { msg: handled_tool_message(call.id, result_env), next_state: world, emitted: handled_event :: scratch }
       },
       Delegate => {
         let backend = if ohmy_pi then backend_for_v2(envelope, true) else Native;
         match backend {
           Delegated => {
-            let _ = emit(DelegatedToolDeferred({
+            let deferred_event = DelegatedToolDeferred({
               step: step_idx,
               stream_id: stream_id,
               tool: call.name,
               id: call.id
-            }));
-            { msg: delegated_deferred_message(call), next_state: world }
+            });
+            let _ = emit(deferred_event);
+            { msg: delegated_deferred_message(call), next_state: world, emitted: [deferred_event] }
           },
           Native => {
-            let _ = emit(V2ToolDispatchStart({
+            let start_event = V2ToolDispatchStart({
               step: step_idx,
               stream_id: stream_id,
               tool: call.name,
               id: call.id
-            }));
+            });
+            let _ = emit(start_event);
             -- THE ROUTED SITE. Before A12 this was a bare `dispatch_one`; the
             -- typed contract now carries the request, the deadline and a
             -- discriminated result. The deadline budget is read through the ENV
@@ -350,14 +379,19 @@ export func execute_allowed_tool_call(
               started_at_ms: started.now_ms
             };
             let execution = ports.tool_exec(budget.next_state, invocation);
-            let _ = emit(V2ToolDispatchComplete({
+            let complete_event = V2ToolDispatchComplete({
               step: step_idx,
               stream_id: stream_id,
               id: call.id
-            }));
+            });
+            let _ = emit(complete_event);
             {
               msg: tool_outcome_message(call, execution.outcome),
-              next_state: execution.next_state
+              next_state: execution.next_state,
+              -- START then COMPLETE, which is the order they happened in. The
+              -- driver appends this log positionally, so a reversal here is a
+              -- reversal in the returned trace.
+              emitted: [start_event, complete_event]
             }
           }
         }
@@ -379,7 +413,7 @@ export func dispatch_tool_entries(
   accumulated: [Message],
   emit: (LedgerEvent) -> () ! {IO, Trace}
 ) -> ToolDispatchOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  dispatch_tool_entries_with_builtin(ports, world, rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, emit, \_ . None)
+  dispatch_tool_entries_with_builtin(ports, world, rt, ctx, entries, workdir, step_idx, stream_id, ohmy_pi, accumulated, [], emit, \_ . None)
 }
 
 export func dispatch_tool_entries_with_builtin(
@@ -393,39 +427,48 @@ export func dispatch_tool_entries_with_builtin(
   stream_id: string,
   ohmy_pi: bool,
   accumulated: [Message],
+  -- WI-D2. The emitted-event log, threaded exactly like `accumulated` and for
+  -- the same reason: it is an ordered record the fold builds across recursions,
+  -- and a branch that forgets to extend it drops what it emitted. Passing
+  -- `emitted` unchanged past a branch that emitted something is the same class
+  -- of defect as passing `world` where `executed.next_state` belongs, one
+  -- channel over — and the wire gate is what sees it.
+  emitted: [LedgerEvent],
   emit: (LedgerEvent) -> () ! {IO, Trace},
   builtin: (ToolCall) -> Option[Message]
 ) -> ToolDispatchOutcome ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match entries {
-    [] => ToolDispatchDone({ msgs: accumulated, world: world }),
+    [] => ToolDispatchDone({ msgs: accumulated, world: world, emitted: emitted }),
     entry :: rest => {
       let call = entry.call;
       match builtin(call) {
         Some(msg) =>
-          dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emit, builtin),
+          dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [msg], emitted, emit, builtin),
         None => {
           let envelope = tool_call_to_envelope(call);
           let policy = dispatch_tool_policy(rt, ctx, envelope);
           match policy {
             Deny(reason) => {
-              let _ = emit(NativeToolDenied({
+              let denied_event = NativeToolDenied({
                 step: step_idx,
                 stream_id: stream_id,
                 tool: call.name,
                 id: call.id,
                 reason: reason
-              }));
+              });
+              let _ = emit(denied_event);
               let denial_msg = denial_message(call, reason);
-              dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emit, builtin)
+              dispatch_tool_entries_with_builtin(ports, world, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [denial_msg], emitted ++ [denied_event], emit, builtin)
             },
             Pending(reason, default) => {
-              let _ = emit(ToolPending({
+              let pending_event = ToolPending({
                 step: step_idx,
                 stream_id: stream_id,
                 tool: call.name,
                 id: call.id,
                 reason: reason
-              }));
+              });
+              let _ = emit(pending_event);
               ToolDispatchPending({
                 request: {
                   call: call,
@@ -435,7 +478,12 @@ export func dispatch_tool_entries_with_builtin(
                   remaining: rest
                 },
                 accumulated: accumulated,
-                world: world
+                world: world,
+                -- The suspension carries the log the same way it carries
+                -- `accumulated` and `world`: the batch resumes after the
+                -- approval, and events emitted before the interrupt are still
+                -- events this fold emitted.
+                emitted: emitted ++ [pending_event]
               })
             },
             _ => {
@@ -445,7 +493,7 @@ export func dispatch_tool_entries_with_builtin(
               -- cursor, one seam over. The probe's four-fault sequence is what
               -- catches it: a frozen queue serves the first outcome four times.
               let executed = execute_allowed_tool_call(ports, world, rt, ctx, call, workdir, step_idx, stream_id, ohmy_pi, emit);
-              dispatch_tool_entries_with_builtin(ports, executed.next_state, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [executed.msg], emit, builtin)
+              dispatch_tool_entries_with_builtin(ports, executed.next_state, rt, ctx, rest, workdir, step_idx, stream_id, ohmy_pi, accumulated ++ [executed.msg], emitted ++ executed.emitted, emit, builtin)
             }
           }
         }

@@ -193,6 +193,17 @@ describes a run rather than a design. **So: when recording why something is unre
 measurement, not the diagnosis.** Fourth consecutive item to carry this class, and the first to say
 how to stop carrying it.
 
+**WI-D2 SHARPENS IT AGAIN, and the failure is narrower than "structural reasons go stale".** Of
+`parity_gap_reasons`' thirteen entries, **eleven named a structural cause and nine were wrong** — and
+seven of those said *"inside the tool dispatch fold"*, which described **where the code lived**, not
+what prevented the append. The obstacle was the fold's RETURN TYPE. A reason naming the location
+cannot go red when the location is fine and the type is not. **So: a structural reason must name the
+thing that would have to CHANGE, not the place the code lives.** The item also found four sites where
+**the REASON expired and the CONCLUSION held** — three justified reading the wire instead of the trace
+on the grounds that the trace did not carry the event, which is no longer true while the conclusion
+still stands on independence of authorship. **Restate those in two parts rather than re-dating them**,
+so the next reader can see which half is load-bearing.
+
 **S14. A direct probe of an upstream API is NOT evidence that OUR adoption of it works — the gate
 must drive our own closure.** Earned by WI-C1, and **measured rather than argued**: the natural wrong
 adoption of `stepWithStreamRecorded` (match on the outcome, `Err` arm drops the chunks) is green under
@@ -243,6 +254,32 @@ from the registry entirely reddened only the ONE arm that names it by id. Three 
 therefore establish "the fold ran and performed nothing", not "the subject ran and performed
 nothing", and the two are joined by a separate structural row rather than conflated.
 
+**GENERALISED AT WI-D2 FROM A PROPERTY'S TWO SIDES TO AN ARTIFACT'S TWO PINS.** C3's form is about a
+check whose two sides share a producer. D2's is about two SEPARATE artifacts pinned against each other
+— `d64_gap_register` and the vocabulary's `reaches_trace_today` survey — which reads like redundancy
+and is not. **Both are hand-written claims, and agreeing with each other is not evidence about the
+code.** Measured: with the driver appending nothing from the tool fold, `make event_vocabulary` and
+`make invariants` are **both exit 0** while the new wire gate reads `projected 1, returned 0`.
+Reproduced independently at review, all three exit codes confirmed. **The register's two-sided pin is
+not a check that the append exists; it is a check that two claims match.** So: **when a pin compares
+two artifacts, ask which one an execution produced. If neither, the pin checks consistency, not
+truth** — and the fix is to drive the requirement off the claim under test, as D2's gate does by
+deriving its required set from `event_vocabulary()` minus the register, so *removing a name from the
+register is what makes the gate demand its append.*
+
+**EXTENDED AGAIN AT WI-D3 TO A CHECK'S COMPLEMENT, and this is the form with no shared producer at
+all.** C3's version is a check whose two sides share a producer; D2's is two artifacts pinned against
+each other. D3's poison pairs have neither problem — the AILANG interpreter kills the run, the exit
+code is the whole observation, and nothing in this tree participates — **and they are still green over
+a world the driver never reads.** Measured: bind the deterministic file seam to ignore
+`WorldState.files` entirely and the Env- and FS-withheld deterministic runs produce **no capability
+error at all**; they complete the session and fail only a separate provenance assertion. Reproduced
+independently at review. **A poison pair is a statement about what a run does NOT read and is silent
+on whether the world is read at all.** So: **a gate establishing what a run does not do says nothing
+about what it does. Poison pairs and provenance assertions are complements, and closing a row on one
+of them closes half of it.** C4 ruled that provenance is not hermeticity; D3 establishes the converse
+just as strictly.
+
 **A further C5 finding, for any future "did X perform effect E" check: prefer the ENFORCEMENT
 mechanism over the RECORD.** The world interaction log looks like a second producer and is not one
 for ambient effects — it records what was requested *through the world*, so absence from it is not
@@ -264,6 +301,17 @@ them — **both sides empty, and two empty sides are green.** Any future item th
 checked over the returned trace" for a registered variant is reading a comparison against an empty
 list.
 
+**EXTENDED BY WI-D4 TO A GATE'S OWN REPORTING PATH: check the ARTIFACT, not the TRANSCRIPT.**
+`corpus_pr` writes its full output to `/tmp/corpus_pr.out` and, **on failure only**, prints
+`grep -v '^{' … | tail -40` (`Makefile:1091`) — while on success it prints the whole file
+(`:1092`). **A recipe that shows LESS on failure than on success has an inventory only on the happy
+path.** The class-coverage rows scrolled off that 40-line window, and **two sessions in a row read the
+make transcript and concluded the rows were absent** — this reviewer among them, having grepped a
+captured `make` log rather than the artifact. They were not absent. They were **RED**, naming a
+required fault class no bank member reached, which is a coverage regression rather than the
+bookkeeping gap "missing" implies. **The correction matters in the direction that costs more:
+"unevidenced" understates "failing".**
+
 **S18. Tensing a comment IS a source edit for anchor-cascade purposes.** Earned by WI-C5, which is
 the SECOND consecutive item to pay the line-number cascade twice, both times for the same reason:
 comment edits landed after the anchors were computed. C3's operational rule ("finish every source
@@ -272,6 +320,48 @@ edits; what broke it was rewriting a historical comment block for tense under S1
 numbers were derived, which moved four `session.ail` line numbers by nine. **S15 and the anchor rule
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
+
+**S21. When a row closes, re-ask of every surviving exemption in every OTHER row why it survives — a
+closure narrows the set of reasons, and a reason that used to be one of many can become the only
+one.** Earned by WI-D5, and it is the only rule here about a defect that gets WORSE as the work gets
+better. This project has tracked which acceptance rows pass vacuously since C4, carefully, row by row.
+**The count still moved from two to four without any item noticing**, because each caveat was recorded
+correctly inside its own row's prose and nothing ever counted them together.
+
+The instance: at C4, `d64_gap_register` held thirteen variants of which **eleven were
+`driver_only`-reachable**, so the profile's empty install list was irrelevant to row 7 — the row failed
+for reasons that had nothing to do with extensions. **WI-D2 closed those eleven.** What remained was a
+residue of two, and **one of them (`ScratchpadResult`) is unreachable precisely because no extension is
+installed to emit it** — its own recorded reason says it needs "a hook returning `Handled` with a
+`cells` key". So the proportion of row 7 purchased by the profile's emptiness went **up** as the row
+got better, and the row's pass became a fourth place the vacuity leans.
+
+**Closing a row can CONCENTRATE a vacuity rather than remove it.** No gate in this project can see
+that: every individual reason stayed true, every row's prose stayed accurate, and the aggregate claim
+— *what does this green table actually rest on* — is not an artifact anything computes. **The
+detection is to enumerate the surviving exemptions across all rows and ask, of each, why it survives;
+the fix is to make the aggregate a checked output rather than prose.**
+
+**S20. For a generator, assert what its output is a function OF — not only that it is a function.**
+Earned by WI-D4, and it is the deepest defect this project has found. All three generating seams
+salted every choice with `n=${List.length(state.log)}` — the RAW log length, which the DRIVER also
+writes into. Verified at review against the pre-D4 tree: `ports.ail:932` (tool), `ports.ail:1025`
+(approval), `stub_step.ail:481` (provider), plus the budget at `ports.ail:982`. **So a generated
+trajectory was a function of how many times the driver happened to read its configuration.**
+
+**Determinism is not merely blind to this — it is actively reassuring.** The same seed gave the same
+trajectory on every run, every time, throughout. *"The same seed gives the same program"* was TRUE
+while *"the program is a function of the seed"* was FALSE. Nothing reveals it until an unrelated change
+moves the driver's read count, and then it presents as **fixture drift**: WI-D3's routing reshuffled
+the entire fixed bank, `ToolCorrelationMismatch` stopped being reached by the two seeds pinned as its
+witnesses, and `seeded_generator` went red on six checks whose symptoms all read like stale pins.
+**Giving `rich` more budget made its trajectory SHORTER**, which is the observation that found it.
+
+The fix is to count only what the generating adapters author — D4's
+`dst_interaction.generator_authored_count`, derived from `identity_kind` rather than three string
+literals. **The rule generalises past generators: where a component's output is salted or bounded by a
+quantity, assert what contributes to that quantity, because a wrong contributor is invisible to every
+determinism check and surfaces later as someone else's regression.**
 
 **S19. A gate's success markers are an INVENTORY, and a missing tick is a failure report.** Earned by
 WI-C4, and it is the first defect in this project that turned *nothing* red — it printed one fewer
@@ -318,6 +408,14 @@ mutant, and recovered only from a `cp` taken seconds earlier in the same command
 item the working tree IS the work and git is the only copy of the state before it**; a path-scoped
 checkout does not distinguish the mutant from the ninety minutes underneath it. S8 already asks items
 to budget mutation loops as the cost of a detector — this is the operational half.
+
+**AND A COUNT COMPARISON NEEDS AN ORDER CLAIM BESIDE IT — measured twice, one item apart.** C3 kept
+`stream-parity-count` and `stream-parity-order` as separate rows and said why: a reordering leaves the
+count identical. WI-D2's first wire gate forgot the lesson one file over, comparing per-variant counts
+alone — and its own M3 mutant, a log appended in the **wrong position**, left **eighteen count rows
+green** with only a pinned order sequence catching it. The order pin was added *after* the mutant was
+written; the first version would have shipped over it. **An aggregate that survives a permutation is
+not a check on a sequence.**
 
 **S13. Sweep the whole tree before believing a gate — `check_core` is a SUBSET gate, and the sweep is
 the step every item under budget pressure drops.** Milestone B found five frontiers and **the fifth
@@ -400,6 +498,14 @@ The 17 expected failures are stable across B4, C1, C3 and C5: the 7 `TC_ARITY_00
 sealed-vocabulary probe (`IMP010`), 5 `src/examples/`, 3 code-graph fixtures and 1 test-coverage
 fixture. **Confirm the failing set member-for-member rather than the count** — the count moves by one
 whenever an item adds a file.
+
+**AND A SOURCE-DERIVED GATE HAS ITS OWN HAND-MAINTAINED INPUT — the literal the gate cannot see.**
+Earned by WI-D3. `make discovery` re-derives `driver_env_keys()` from source rather than trusting a
+literal, which is the right shape; but **the FILE LIST it derives from is itself a literal nobody
+re-derives.** It named two files, the driver's env surface had moved into a third, and the derived set
+came back four keys short. It failed *loudly* — a derivation with a wrong input disagrees with the
+literal it checks rather than agreeing with it — but that is luck of direction, not design. **When a
+gate derives a claim from source, ask what tells it WHICH source.**
 
 **S12. An identity transition is the correct answer for a component that did nothing and a silent
 defect for one that did something — and no type distinguishes them.** Earned by B2b, and it is the
@@ -533,6 +639,14 @@ rule and a current one look identical.**
 has recorded — B1's 130/105 and its v0.26.0 baseline of 213/22, B3's 161/74 — cleared the root cache
 only, so **none is the cache-cold measurement it claims.** They are not necessarily wrong, since a
 warm cache only misleads when its input changed, but they are not what they say.
+
+**AND BEFORE BELIEVING ANY GATE, CHECK THAT NOTHING ELSE IS RUNNING ONE.** Earned by WI-D4, which
+found a second Claude session with a `make dst` in flight in the same working tree at session start.
+The `.ailang` caches are shared and the recipes write hard-coded `/tmp` paths — `/tmp/corpus_pr.out`,
+`/tmp/latency_pair.out` — that two runs overwrite under each other. **Every measurement the item needed
+would have been poisoned, and nothing would have said so.** The item stopped its own run and waited.
+Concurrency in one tree is a measurement hazard of exactly the kind S9 exists for, and it is invisible
+in the same way a warm cache is.
 
 **S8. When a guard asserts that X influences Y, check that X cannot reach Y except through the
 mechanism under test.** Earned by A13 stage 4, and it is the first rule this project has that
@@ -2341,9 +2455,161 @@ pin that is only incidentally in its way** — which means the moment a legitima
 bank, nothing in-process catches it and the wire gate is the only thing left. That is the S16 reading,
 and it is stronger than "the wire gate is not redundant."
 
+**WI-D2, 2026-08-05 (`def464e`, ~46 min) — ROW 7 CLOSES. `d64_gap_register` goes 13 → 2**
+(`ScratchpadResult`, `SessionSuspend`), Logical variants reaching the returned trace go 15 of 28 to
+**26 of 28**, and `make ledger_parity` compares **17** variants wire-against-trace where C3's gate
+compared one. The shape was the one predicted: the tool fold was **WI-A1's loss channel, second
+instance** — `ToolDispatchOutcome` returned msgs and world and nothing about what was emitted, over a
+multi-fire `emit` callback — and it was closed by A1's widen / C1's fill / C3's read, with
+`c2_trace_wire_events` gaining a second caller rather than a new mechanism. **No `LedgerTrace` was
+threaded into `tool_phase`; the driver remains the sole appender.** `driver_only` re-issued v7 → v8,
+and **the anchor cascade was paid ONCE** — the first item to manage that — by tensing every comment
+before deriving the anchors, which is S18 working as written.
+
+**MY HANDOFF WAS WRONG ABOUT `ExtToolHandled`, and the evidence was in a file I had already
+generated.** It reserved that variant as needing an installed extension and the `on_budget_plan` ABI
+change. It needs neither — it is emitted whenever `dispatch_tool_handle` returns `Handled`, which any
+hook can do. **Measured at 47 wire occurrences in a single `make dst` run**, and confirmed at review
+against the `make dst` log I captured myself *three items earlier*: **exactly 47**, from
+`long_qwen_compaction_dst.ail`, months of items before D2 touched anything. It was found only because
+S15 required the survivors' reasons to be written as measurements, so the number had to be produced —
+**the reason the item was about to write was the thing that disproved it.**
+
+**ROW 10 IS NOW THE ONLY RED ROW**, and that sentence has not been true before in this project. Of
+C4's eleven, ten hold. The name is still refused — a gate with one red row is a NO exactly as it was
+with four — but it is **one item away**, and that item is named, sized and has a producer: a
+**filesystem class in the world**, so `resolve_context_limit`'s `Env` and `FS` halves route together.
+**Two of the ten passes stay VACUOUS in their installed-extension clauses**; closing row 10 makes the
+gate green and does not make those non-vacuous, and per D10 a second profile earns them from scratch.
+
+**WI-D3, 2026-08-05 (`14ba6f9`, ~2h05m) — ROW 10 CLOSES. C4's TABLE IS GREEN, ELEVEN OF ELEVEN.**
+The world gained a filesystem class (`Ports.file_read`, a POINT READ), `resolve_context_limit` is
+threaded at all **eight** call sites — the Makefile's deferral note said six — and the effect classes
+with two-sided poison pairs go 3 → **5**. Verified at review: `make world_state` exit 0 with AI, Clock,
+Env, FS and the tool contract each showing both halves, plus RNG's structural "no driver module
+reaches `std/rand`".
+
+**THE NAME IS STILL NOT ADOPTED, and D10's outstanding condition is the gate RE-RUN, not the ADR.**
+007's taxonomy ADR is `Accepted 2026-07-26`, so the second condition has been satisfied for weeks.
+**Eleven items have now declined the name.** And a green gate for `driver_only` is a green gate for
+`driver_only`: two of the eleven passes stay **VACUOUS in their installed-extension clauses**, and per
+D10 they transfer to no second profile.
+
+**THE FIRST REGRESSION IN THE SERIES, and the item reports it rather than repairing it.**
+`make seeded_generator` and `make corpus_pr` were green at HEAD and are red here — **one cause, not
+two.** Routing `context_usage` puts the driver's config reads into the **recorded interaction log**:
+each `resolve_context_limit` performs five env requests and the driver re-resolves a static value on
+every loop arm, so a run carries 15–95 interactions no generator authored. Confirmed at review —
+`seeded_generator` reports `the bounded run recorded 24 interactions against a declared budget of 6`
+and `env_missing=50` dominating the S7 distinctness set. **This is not new breakage so much as newly
+visible breakage:** `seeded_generator`'s bound is `log length <= 3 * max_interactions`, and **the `3 *`
+was already absorbing driver overhead the generator never authored** — the check compares a GENERATOR
+budget against a log the DRIVER also writes into. D3 widened the driver's share until the slack ran
+out.
+
+**A THIRD TARGET IS RED AND WI-D3'S REPORT DOES NOT MENTION IT — found at review, and it has a
+counterexample to the report's own stated basis.** `make smoke_parity` was green through D2 and is red
+at HEAD. `make dst` therefore has **five** red targets, not the two this series has carried:
+`corpus_pr`, `seeded_generator`, **`smoke_parity`**, `test_coverage`, `test_coverage_selftest` — and
+its ✓ rows fall **831 → 701**, because an aborting target stops producing rows rather than reporting
+failures.
+
+The chain, measured: `scripts/smoke_v2_compaction_full_loop.ail` drives the **scripted** world through
+`run_v2_with_scripted_ports`, and its compaction behaviour depends on `test/tiny`'s context limit —
+**which is in `.motoko/model-catalog.json` at 100.** With `resolve_context_limit` routed and the
+fixture's `files` table empty, it now resolves to **0**, compaction never fires structurally, and the
+parity harness's `grep -q '"type":"compaction_extension".*"note":"structural:'` finds **zero** where
+it requires one. The adjacent `msg_count":14` assertion still passes, so the target fails on one
+clause of two.
+
+**D3's stated basis for believing this safe was:** *"The DST fixtures did not depend on the VALUES —
+their models are absent from the catalogue and resolve to 0."* **`test/tiny` is not absent.** The
+claim held for the fixtures checked and there was a fixture that was not checked. **This is S13's
+lesson in a new place: `make world_state`, `discovery`, `strict_replay` and `compaction_dst` were all
+run and all pass; the target that broke is one none of them covers.**
+
+**The repair is named, measured and deliberately not taken:** `session_policy_init` already resolves
+the limit into `policy.step.compaction.context_limit` and the four `c2_loop` sites recompute it;
+reading the policy instead takes a run from 12–19 resolutions to one. A temporary assertion reported
+**zero mismatches** across `world_state`, `discovery`, `strict_replay` and `compaction_dst`. It was
+left because it is a change to the driver's call pattern rather than to its hermeticity, and landing a
+behavioural refactor at the end of a long session without its assertion first (S1) is how this project
+ships the defect it counts. **Owed as the next item's FIRST move, before the acceptance-table re-run,
+because it moves the env census numbers D3 just pinned.**
+
+**WI-D4, 2026-08-05 (~3h25m) — THE THREE TARGETS RESTORED.** `make dst` back to its two pre-existing
+red targets, ✓ rows 745 → **845**, sweep 226/17 member-for-member, `corpus_pr`'s class rows green
+**and printed**, and `resolve_context_limit` down from 8 sites on a run's path to **1**. The four
+`c2_loop` re-resolves were licensed by **657 site executions across the whole gate with zero
+mismatches** — D3 owed that measurement at three sites and D4 took it at all four. `driver_only`
+re-issued v9 → **v10**.
+
+**The successor audit the handoff demanded found exactly what it was written for.** Three of four
+sites were not load-bearing; **`AwaitApproval` was** — `post_ctx` is `post` advanced past the
+resolution, and `post` is `st` advanced past the **approval read**, so collapsing to `st` rather than
+`post` type-checks and silently discards the approval cursor. **WI-D1's production defect in reverse,
+in exactly the population the handoff named.** Not shipped; caught by reading the arm's own comment.
+
+**And the conflation had THREE channels where the handoff named one — the second is the finding.**
+See **S20**: the budget was the small one; the *salt* meant the driver's read count changed which
+branch every generated choice took.
+
+**Two corrections to this reviewer's own analysis, both verified:** `corpus_pr`'s class rows were
+**red, not missing** (see S19's extension — I grepped a `make` transcript that truncates on failure),
+and the conflation was three channels rather than one. The first matters most: **"unevidenced"
+understated "failing"**, and the real state was a required fault class that no member of D11's
+blocking bank reached.
+
+**WI-D5, 2026-08-06 (~25 min) — THE TABLE IS RE-RUN AT ELEVEN OF ELEVEN AND THE NAME IS ADOPTED.**
+The first run of the full table since C4. `make dst` exit 2 with **only** `test_coverage` and
+`test_coverage_selftest` (pre-existing since B2a), **845 ✓ rows** — identical to D4's, same
+methodology — and a cache-cold sweep at **226/17, member for member**. The baseline profile is
+**`driver_only/10` under manifest `driver_only/3`**, named per D10's requirement that every report
+name the profile. Condition 2 (007's taxonomy ADR) confirmed `Accepted 2026-07-26`. Adoption is
+recorded in `design_docs/implemented/motoko_agent/m-motoko-dst-framework.md` with the three
+superseded claims **restated with their date rather than deleted** (S15). **Nothing was renamed** —
+007 grandfathers the existing `dst` identifiers and D10's adoption permits the label without
+requiring churn.
+
+**THE VERDICT CARRIES A MANDATORY CAVEAT: the axis's extension-model coverage is ZERO, and it is
+STRUCTURAL.** The empty install list is forced while `on_budget_plan` declares `! {Env, FS}` and
+returns a successor-free `BudgetPatch`. **Four rows lean on that emptiness, not two** — and the
+fourth is the item's finding: row 3 passes **vacuously**; row 4's `extension_effect_fault` waiver and
+**row 7's `ScratchpadResult` exemption** are bought by it; row 5's pass is real but does not transfer.
+**Row 7's leaning is NEW and appeared because D2 succeeded** — at C4 the register's thirteen entries
+made the profile's emptiness irrelevant there, and closing eleven of them left a residue in which one
+of two survivors is purchased by the empty install list. **Closing a row can concentrate a vacuity
+rather than remove it**, and nothing in these rules tracks that.
+
+**One row passes on a stated reading, reported rather than buried.** Row 7's third conjunct is
+literally false for two Logical variants; it passes on WI-D2's recorded reading — *emissions that
+OCCUR reach the trace* — backed by 17 variants compared wire-against-trace out of process. **This is
+not the narrowing C4 forbade** (no reclassification, no shrunk profile claim; D2 closed the row by
+appending eleven variants). But it is the table's single interpretive dependency: reject the reading
+and row 7 is red and the verdict is NO. **At C4 the row failed under every reading, which is why
+nobody had to adjudicate it then.**
+
+**THE TABLE AS OF WI-D4 WAS UNOBSTRUCTED AND WAS NOT CLAIMED.** Rows 4 and 11's evidence is green and
+printed, rows 7 and 10 were green throughout, and nothing in D4 re-ran the table — that was D5's job.
+Three things it must not inherit as settled: **the env census numbers moved 12/12/12/19/8 → 1 across
+the board**, the profile is **v10** so any artifact naming v9 is stale, and **two of the eleven passes
+remain vacuous** in their installed-extension clauses. **Twelve items have now declined the name.**
+
 3. **This entry did not say what to do with a NO.** It describes running the table and adopting the
    name. "Expect NO" had to arrive by handoff rather than by plan. **A gate that reports NO with a
    work list is the successful outcome, not the failed one.**
+4. **AND IT STILL DOES NOT SAY WHAT A YES MEANS.** Defect 3 was answered; its mirror was not.
+   Nothing in this entry says that adoption is a **documentation act with a mandatory caveat** rather
+   than a rename — that 007 grandfathers the existing identifiers, that D10's adoption permits the
+   label without requiring churn, and that the verdict must carry what the label does *not* assert.
+   All of that had to arrive by handoff at WI-D5, which is the same failure mode as defect 3 one
+   branch over.
+5. **"WHAT THE LABEL DOES NOT ASSERT" IS PROSE, AND IT IS NOW LOAD-BEARING FOR EVERY FUTURE REPORT.**
+   The zero-extension-coverage sentence lives in a note and a design document — **exactly the class
+   S15 says gets quoted forward and re-dated**, and this project has carried that class in five
+   consecutive items. Everything it asserts is already computed: the install list is empty, the
+   emptiness is forced by `on_budget_plan`'s row, and `make driver_only` guards both. **A row that
+   printed the caveat as gate output would make it impossible to report a green table without it.**
 
 **WI-C5. The second profile: `compose`-bearing.** Depends on **B2, A5, A10 and A12** — B2 for the
 coverage widening, A5 because its routed-set claim is a routing-completeness claim gated on the
@@ -2495,6 +2761,12 @@ branch is not HEAD state; the `arniwesth/ailang` fork is not the upstream gate �
   including comments, BEFORE running it.** Two consumers exist that no checklist in this project names:
   the `predicate-anchors` script itself, and `attribution_table_dst`'s `omitted_site()` fixture. Both
   were found by a gate rather than by search.
+- **A PORT OR RESULT-TYPE WIDENING IS A FIVE-CONSUMER ANCHOR CASCADE, and line-count neutrality is
+  unavailable whenever a type gains a field.** WI-D2 moved five anchors adding one field to two
+  variants of `ToolDispatchOutcome` and one accumulator to a fold — neither has a below-the-anchor
+  form — and paid two source files, four artifact consumers, a profile version bump and a content-hash
+  re-record. **D1 avoided the cascade entirely by being line-count-neutral; that route closes the
+  moment a type changes shape.** Size a widening as the cascade, not as the edit.
 - **A GENERATOR CHANGE IS A FIVE-ARTIFACT CASCADE, and no item that budgets for "add a draw" budgets
   for it.** Measured at WI-D1: editing `choose_provider` re-dated the corpus bank (12 seeds, **not one
   survived**), `seeded_generator`'s S7 fixture *and* its anti-count pair, D8's canary at both versions,
