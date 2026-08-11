@@ -299,6 +299,7 @@ func test_pre_step_passthrough_when_unchanged() -> bool
     let ctx = test_ctx(1);
     match compact_for_pre_step(ctx, [tool("t1", "short")]) {
       PassThrough => true,
+      PassThroughObserved(_, _) => false,
       Compacted(_, _, _) => false
     }
   }
@@ -309,6 +310,7 @@ func test_pre_step_passthrough_when_input_under_target() -> bool
     let ctx = test_ctx(10000);
     match compact_for_pre_step(ctx, repeated_tools(20, long_tool_content())) {
       PassThrough => true,
+      PassThroughObserved(_, _) => false,
       Compacted(_, _, _) => false
     }
   }
@@ -324,6 +326,7 @@ func test_pre_step_selects_gentlest_result_tier() -> bool
           && contains(note, "keep_last=10")
           && candidate_fits(ctx, out),
       PassThrough => false
+      ,PassThroughObserved(_, _) => false
     }
   }
 
@@ -334,6 +337,7 @@ func test_oversized_recent_tool_result_is_capped_under_pressure() -> bool
     match compact_for_pre_step(test_ctx(300), input) {
       Compacted(out, _, _) => contains(show(out), "large tool result capped") && length(show(out)) < length(show(input)),
       PassThrough => false
+      ,PassThroughObserved(_, _) => false
     }
   }
 
@@ -342,6 +346,7 @@ func test_small_recent_tool_result_is_untouched() -> bool
   {
     match compact_for_pre_step(test_ctx(10000), [tool("recent", "small result")]) {
       PassThrough => true,
+      PassThroughObserved(_, _) => false,
       Compacted(_, _, _) => false
     }
   }

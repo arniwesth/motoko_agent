@@ -337,6 +337,7 @@ export function buildChildEnv(
       (process.stdin.isTTY ? "" : "1"),
     MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
     MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
+    MOTOKO_CAPTURE_FAILED_PAYLOAD: process.env.MOTOKO_CAPTURE_FAILED_PAYLOAD ?? "",
     MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
     AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
     AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",

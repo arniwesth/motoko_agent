@@ -34,6 +34,7 @@ import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
+import std/fs (writeFileResult)
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes (toString)
 import std/trace as Trace
@@ -54,6 +55,7 @@ import src/core/ext/runtime (
   PreStepStage,
   StageApplied,
   StageRejected,
+  StageObserved,
   StagePassed
 )
 import src/core/phase_vocab (
@@ -79,6 +81,7 @@ import src/core/phase_vocab (
   CompactionApplied,
   CompactionExhausted,
   ExtCompactionRejected,
+  ExtensionDiagnostic,
   ThinkingStreamStart,
   ThinkingStreamEnd,
   ProviderResult,
@@ -107,6 +110,7 @@ import src/core/phase_vocab (
   WireRecord,
   TraceStageApplied,
   TraceStageRejected,
+  TraceStageObserved,
   empty_ledger_trace,
   ledger_append,
   apply_state_delta,
@@ -306,6 +310,12 @@ func emit_pre_step_stages(session_id: string, step_idx: int, stages: [PreStepSta
           step: step_idx,
           note: reason
         })),
+        StageObserved(code, fields) => ledger_emit(session_id, ExtensionDiagnostic({
+          step: step_idx,
+          extension: s.ext_id,
+          code: code,
+          fields: fields
+        })),
         StagePassed => ()
       };
       emit_pre_step_stages(session_id, step_idx, rest)
@@ -405,6 +415,7 @@ pure func runtime_status_counts_rec(records: [LedgerRecord], counts: RuntimeStat
             stage_rejected_total: counts.stage_rejected_total + 1,
             compaction_ai_applied: counts.compaction_ai_applied
           },
+          TraceStageObserved(_, _) => counts,
           _ => counts
         },
         _ => counts
@@ -604,17 +615,59 @@ func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState
   c2_initial_state_with_counts(history, provider, zero_runtime_status_counts())
 }
 
-func ext_ai_step(p: Ports, model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+-- Serialize the exact [Message] payload a provider rejected, so a
+-- non-retryable ProtocolError (e.g. hy3:free/Novita "invalid request error")
+-- can be inspected/replayed offline. Off by default; enabled by setting
+-- MOTOKO_CAPTURE_FAILED_PAYLOAD (writes .motoko/failing_payload.json). Useful
+-- for diagnosing the intermittent Novita rejections during hy3:free runs.
+func dbg_toolcall_json(c: ToolCall) -> Json {
+  jo([kv("id", js(c.id)), kv("name", js(c.name)), kv("arguments", js(c.arguments))])
+}
+
+func dbg_toolcalls_json(cs: [ToolCall]) -> [Json] {
+  match cs { [] => [], c :: rest => dbg_toolcall_json(c) :: dbg_toolcalls_json(rest) }
+}
+
+func dbg_message_json(m: Message) -> Json {
+  jo([
+    kv("role", js(m.role)),
+    kv("content", js(m.content)),
+    kv("tool_calls", ja(dbg_toolcalls_json(m.tool_calls))),
+    kv("tool_call_id", js(m.tool_call_id))
+  ])
+}
+
+func dbg_messages_json(msgs: [Message]) -> [Json] {
+  match msgs { [] => [], m :: rest => dbg_message_json(m) :: dbg_messages_json(rest) }
+}
+
+func capture_failing_payload(e: AIError, msgs: [Message]) -> () ! {FS} {
+  let payload = encode(jo([
+    kv("error_code", js(e.code)),
+    kv("error_message", js(e.message)),
+    kv("retryable", jb(e.retryable)),
+    kv("messages", ja(dbg_messages_json(msgs)))
+  ]));
+  match writeFileResult(".motoko/failing_payload.json", payload) { Ok(_) => (), Err(_) => () }
+}
+
+func ext_ai_step(p: Ports, model: string, base_url: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
   let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
-  match p.model_step(model, msgs_to_messages(msgs), on_chunk) {
+  -- Resolve the provider API model the same way the main step loop does
+  -- (dispatch_step calls provider_api_model at src/core/session.ail:1695).
+  -- Extensions (e.g. compaction_ai) pass their configured model verbatim,
+  -- which for OpenRouter still carries the "openrouter/" routing prefix; sent
+  -- raw the provider rejects it with 400 "not a valid model ID", surfacing as
+  -- compaction_ai.summarizer_failed / provider_error. Strip it here.
+  match p.model_step(provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk) {
     Ok(result) => Ok(result.message.content),
     Err(e) => Err("${e.code}: ${e.message}")
   }
 }
 
-func ext_ports_of(p: Ports) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+func ext_ports_of(p: Ports, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
   let ai_step = func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
-    ext_ai_step(p, model, msgs)
+    ext_ai_step(p, model, base_url, msgs)
   };
   {
     ai_step: ai_step,
@@ -624,11 +677,11 @@ func ext_ports_of(p: Ports) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process,
   }
 }
 
-func ext_ports_for_provider(rt: ExtRuntime, history: [Message], provider: StepProvider) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+func ext_ports_for_provider(rt: ExtRuntime, history: [Message], provider: StepProvider, base_url: string) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
   match provider {
-    Ported(p) => ext_ports_of(p),
-    LiveAI => ext_ports_of(live_ports(rt)),
-    Scripted(script) => ext_ports_of(scripted_ports_from_steps(history, script))
+    Ported(p) => ext_ports_of(p, base_url),
+    LiveAI => ext_ports_of(live_ports(rt), base_url),
+    Scripted(script) => ext_ports_of(scripted_ports_from_steps(history, script), base_url)
   }
 }
 
@@ -1563,7 +1616,7 @@ func c2_loop(
               let raw = readLine();
               let resolution = resolve_approval(raw, req.default_allow, raw == "");
               let tool_step_idx = c2_done_step(st.step_idx);
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), resolve_context_limit(model), ext_ports_for_provider(rt, c2_pending_context(st), st.provider), st.ext_artifacts, st.telemetry);
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), resolve_context_limit(model), ext_ports_for_provider(rt, c2_pending_context(st), st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
               match resolution {
                 ApprovalDenied(reason) => {
                   let _ = ledger_emit(session_id, NativeToolDenied({
@@ -1590,7 +1643,7 @@ func c2_loop(
           let calls = c2_tool_plan_calls(plan.entries);
           let request_id = "step-${show(tool_step_idx)}";
           let ctx_msgs = c2_pending_context(st);
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_for_provider(rt, ctx_msgs, st.provider), st.ext_artifacts, st.telemetry);
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, resolve_context_limit(model), ext_ports_for_provider(rt, ctx_msgs, st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let _ = if emit_calls then
             ledger_emit(session_id, NativeToolCalls({
@@ -1637,7 +1690,7 @@ func c2_loop(
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
           let ext_context_limit = if context_limit - pinned_tokens < 0 then 0 else context_limit - pinned_tokens;
-          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_for_provider(rt, st.msgs, st.provider), st.ext_artifacts, st.telemetry);
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_for_provider(rt, st.msgs, st.provider, policy.step.provider_base_url), st.ext_artifacts, st.telemetry);
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
@@ -1679,7 +1732,8 @@ func c2_loop(
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
                   let _ = ledger_emit(session_id, end_event);
-                  if should_retry_stream_error(policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
+                  let _ = if not e.retryable && getEnvOr("MOTOKO_CAPTURE_FAILED_PAYLOAD", "") != "" then capture_failing_payload(e, compacted_msgs) else ();
+                  if should_retry_stream_error(e.retryable, policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
                     let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
                     let _ = ledger_emit(session_id, retry_event);
                     let next_state: C2LoopState = {
@@ -1720,7 +1774,7 @@ func c2_loop(
                   let applied = apply_state_delta(step_state, phase.delta);
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_for_provider(rt, msgs_with_assistant, next_provider), chain.artifacts, applied.telemetry);
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_for_provider(rt, msgs_with_assistant, next_provider, policy.step.provider_base_url), chain.artifacts, applied.telemetry);
                   let trace_after_model = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), phase.events);
                   match dispatch_response_intercept(rt, post_ctx, result.message.content) {
                     InterceptHandled(envelope) => {
@@ -1756,7 +1810,15 @@ func c2_loop(
                       c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                     },
                     NoIntercept => {
-                      if result.finish_reason == "tool_calls" then {
+                      -- Execute tool calls whenever the model emitted any, not
+                      -- only when finish_reason=="tool_calls". Some providers
+                      -- (e.g. hy3:free/Novita) return tool_calls with a
+                      -- different finish_reason; gating on the string alone
+                      -- drops the call and runs the finalize/guard path, which
+                      -- injects a nudge after an unanswered tool_call and ships
+                      -- a malformed [assistant(tool_calls) -> user] payload the
+                      -- provider then rejects (400 invalid_request_error).
+                      if result.finish_reason == "tool_calls" || n_calls > 0 then {
                         let next_state: C2LoopState = {
                           msgs: msgs_with_assistant,
 	                          step_idx: step_idx + 1,
@@ -2533,6 +2595,11 @@ pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool
           step: 3,
           ext_id: "compaction_structural#3",
           outcome: TraceStageApplied("structural: tier=emergency keep_last=3")
+        }),
+        CompactionStageRecord({
+          step: 3,
+          ext_id: "compaction_ai#0",
+          outcome: TraceStageObserved("compaction_ai.summarizer_failed", [{ key: "attempts", value: "2" }])
         })
       ]
     };

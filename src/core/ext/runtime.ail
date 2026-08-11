@@ -2,10 +2,10 @@ module src/core/ext/runtime
 
 import std/clock (now)
 import std/io (println)
-import std/json (Json, encode, jo, kv, js, jnum)
+import std/json (Json, encode, jo, kv, js, jnum, get, asString)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
-import std/string (startsWith)
+import std/string (startsWith, length as string_length, charAt, charCode)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (RuntimeConfig, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -19,6 +19,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   ResponseInterceptDecision,
   FinalizeDecision,
   PreStepDecision,
+  DiagnosticField,
   ExtensionHooks,
   ExtRuntime
 )
@@ -27,7 +28,7 @@ import src/core/ext/registry_generated (parse_core_ext_order)
 import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
-export type StageOutcome = StageApplied(string) | StageRejected(string) | StagePassed
+export type StageOutcome = StageApplied(string) | StageRejected(string) | StageObserved(string, [DiagnosticField]) | StagePassed
 export type PreStepStage = { ext_id: string, outcome: StageOutcome }
 export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage], artifacts: Json }
 
@@ -66,6 +67,87 @@ func hash_index(id: string) -> int {
 func hook_name(id: string) -> string {
   let i = hash_index(id);
   if i < 0 then id else _str_slice(id, 0, i)
+}
+
+func cap_string(s: string, n: int) -> string {
+  if string_length(s) <= n then s else _str_slice(s, 0, n)
+}
+
+func ascii_sanitize_rec(s: string, i: int, out: string) -> string {
+  if i >= string_length(s) then out
+  else {
+    let c = charAt(s, i);
+    let code = charCode(c);
+    ascii_sanitize_rec(s, i + 1, if code >= 32 && code <= 126 then "${out}${c}" else out)
+  }
+}
+
+func ascii_sanitize(s: string, n: int) -> string {
+  cap_string(ascii_sanitize_rec(s, 0, ""), n)
+}
+
+func valid_code_rec(code: string, i: int, seen_dot: bool) -> bool {
+  if i >= string_length(code) then seen_dot && code != ""
+  else {
+    let c = charAt(code, i);
+    let n = charCode(c);
+    let allowed = (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || c == "." || c == "_" || c == "-";
+    allowed && valid_code_rec(code, i + 1, seen_dot || c == ".")
+  }
+}
+
+func has_key(key: string, fields: [DiagnosticField]) -> bool {
+  match fields {
+    [] => false,
+    f :: rest => f.key == key || has_key(key, rest)
+  }
+}
+
+func normalize_fields_rec(fields: [DiagnosticField], kept: [DiagnosticField]) -> [DiagnosticField] {
+  match fields {
+    [] => kept,
+    f :: rest => {
+      let key = ascii_sanitize(f.key, 64);
+      let value = ascii_sanitize(f.value, 256);
+      if key == "" || has_key(key, kept) then normalize_fields_rec(rest, kept)
+      else normalize_fields_rec(rest, kept ++ [{ key: key, value: value }])
+    }
+  }
+}
+
+func compare_fields(a: DiagnosticField, b: DiagnosticField) -> int {
+  compare_keys_rec(a.key, b.key, 0)
+}
+
+func compare_keys_rec(a: string, b: string, i: int) -> int {
+  if i >= string_length(a) then if i >= string_length(b) then 0 else -1
+  else if i >= string_length(b) then 1
+  else {
+    let ac = charCode(charAt(a, i));
+    let bc = charCode(charAt(b, i));
+    if ac < bc then -1 else if ac > bc then 1 else compare_keys_rec(a, b, i + 1)
+  }
+}
+
+func insert_field(field: DiagnosticField, sorted: [DiagnosticField]) -> [DiagnosticField] {
+  match sorted {
+    [] => [field],
+    x :: rest => if compare_fields(field, x) <= 0 then field :: sorted else x :: insert_field(field, rest)
+  }
+}
+
+func sort_fields(fields: [DiagnosticField]) -> [DiagnosticField] {
+  match fields { [] => [], x :: rest => insert_field(x, sort_fields(rest)) }
+}
+
+func take_fields(n: int, fields: [DiagnosticField]) -> [DiagnosticField] {
+  if n <= 0 then [] else match fields { [] => [], x :: rest => x :: take_fields(n - 1, rest) }
+}
+
+export pure func normalize_diagnostic(code: string, fields: [DiagnosticField]) -> { code: string, fields: [DiagnosticField] } {
+  let clean_code = ascii_sanitize(code, 96);
+  let normalized_code = if valid_code_rec(clean_code, 0, false) then clean_code else "extension.invalid_diagnostic";
+  { code: normalized_code, fields: take_fields(16, sort_fields(normalize_fields_rec(fields, []))) }
 }
 
 export func loaded_extension_names(rt: ExtRuntime) -> [string] {
@@ -157,6 +239,7 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
       let _ = if is_test_dummy(h.id) then {
         let tag = match decision {
           PassThrough => "passthrough",
+          PassThroughObserved(code, _) => "observed:${code}",
           Compacted(_, note, _) => "compacted:${note}"
         };
         emit_dummy_hook("on_pre_step", "decision", tag)
@@ -165,6 +248,11 @@ func fold_pre_step_chain_rec(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg], 
         PassThrough => {
           let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts);
           { msgs: next.msgs, stages: { ext_id: h.id, outcome: StagePassed } :: next.stages, artifacts: next.artifacts }
+        },
+        PassThroughObserved(code, fields) => {
+          let observation = normalize_diagnostic(code, fields);
+          let next = fold_pre_step_chain_rec(rest, ctx, msgs, artifacts);
+          { msgs: next.msgs, stages: { ext_id: h.id, outcome: StageObserved(observation.code, observation.fields) } :: next.stages, artifacts: next.artifacts }
         },
         Compacted(compacted_msgs, note, next_artifacts) => {
           match validate_compactor_output(msgs, compacted_msgs) {
@@ -450,6 +538,58 @@ func chain_hook_c() -> ExtensionHooks {
     Compacted([chain_call_msg("tc-chain"), chain_tool_msg("tc-chain", "rewritten")] ++ msgs, "C", jo([]))
   })
 }
+
+func chain_hook_observed() -> ExtensionHooks {
+  chain_base_hook("chain_observed", func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    PassThroughObserved("bad code", [
+      { key: "z", value: "last" },
+      { key: "a", value: "first" },
+      { key: "a", value: "duplicate" },
+      { key: "", value: "dropped" }
+    ])
+  })
+}
+
+func observed_stage_normalizes_and_preserves_flow_test() -> bool
+  tests [((), true)]
+  {
+    let artifacts = jo([kv("sentinel", js("unchanged"))]);
+    let ctx = { smoke_ctx() | artifacts: artifacts };
+    let input = [chain_msg("user", "unchanged")];
+    let v: VerificationConfig = { enabled: false, command: "make check_core" };
+    let rt = { registry: { hooks: [chain_hook_observed()] }, strict_mode: false, verification: v };
+    let result = dispatch_pre_step_chain(rt, ctx, input);
+    match result.msgs { m :: [] => m.role == "user" && m.content == "unchanged", _ => false }
+      && match get(result.artifacts, "sentinel") { Some(v) => match asString(v) { Some(s) => s == "unchanged", None => false }, None => false }
+      && match result.stages {
+        s :: [] => match s.outcome {
+          StageObserved(code, fields) => code == "extension.invalid_diagnostic" && match fields {
+            a :: z :: [] => a.key == "a" && a.value == "first" && z.key == "z" && z.value == "last",
+            _ => false
+          },
+          _ => false
+        },
+        _ => false
+      }
+  }
+
+func many_fields(n: int) -> [DiagnosticField] {
+  if n <= 0 then [] else { key: "key_${show(n)}", value: "value" } :: many_fields(n - 1)
+}
+
+func field_count(fields: [DiagnosticField]) -> int {
+  match fields { [] => 0, _ :: rest => 1 + field_count(rest) }
+}
+
+func diagnostic_bounds_test() -> bool
+  tests [((), true)]
+  {
+    let n = normalize_diagnostic("extension.valid_code", many_fields(20));
+    field_count(n.fields) == 16
+      && match n.fields { first :: _ => first.key == "key_1", [] => false }
+      && normalize_diagnostic("invalid code", []).code == "extension.invalid_diagnostic"
+      && string_length(normalize_diagnostic("extension.${"x"}${"x"}${"x"}${"x"}", []).code) <= 96
+  }
 
 func stages_are_applied_rejected_applied(stages: [PreStepStage]) -> bool {
   match stages {

@@ -10,7 +10,7 @@ import std/list (length as list_length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (contains, substring, length as string_length)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtPorts, PreStepDecision, PassThrough, Compacted, Msg, ToolCall)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtPorts, PreStepDecision, PassThrough, PassThroughObserved, Compacted, Msg, ToolCall)
 import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/compaction (calibrated_usage_percent_anchored)
@@ -358,17 +358,18 @@ func cached_summary(artifacts: Json, digest: string) -> Option[string] {
 }
 
 type RollingCache = { summary: string, boundary_marker: int }
+type RollingCacheState = CacheAbsent | CacheValid(RollingCache) | CacheMalformed
 
-func rolling_cache(artifacts: Json) -> Option[RollingCache] {
+func rolling_cache(artifacts: Json) -> RollingCacheState {
   match get(artifacts, "compaction_ai") {
-    None => None,
+    None => CacheAbsent,
     Some(node) => match get(node, "summary") {
-      None => None,
+      None => CacheMalformed,
       Some(sj) => match asString(sj) {
-        None => None,
+        None => CacheMalformed,
         Some(summary) => match getInt(node, "boundary_marker") {
-          None => None,
-          Some(boundary) => Some({ summary: summary, boundary_marker: boundary })
+          None => CacheMalformed,
+          Some(boundary) => if boundary < 0 then CacheMalformed else CacheValid({ summary: summary, boundary_marker: boundary })
         }
       }
     }
@@ -408,10 +409,89 @@ func finalize_compaction(ctx: ExtCtx, msgs: [Msg], prefix: [Msg], recent_turns: 
   let status = latest_runtime_status_result(msgs);
   let compacted = prefix ++ [summary_msg(ctx, summary, status)] ++ recent_turns;
   let new_pct = usage_percent(ctx, compacted, ctx.context_limit);
-  if new_pct > pct then PassThrough
+  if new_pct > pct then PassThroughObserved("compaction_ai.output_not_relieving", [
+    { key: "boundary_marker", value: show(boundary_marker) },
+    { key: "new_pct", value: show(new_pct) },
+    { key: "pct", value: show(pct) }
+  ])
   else {
     let action = if refreshed then "AI-folded" else "AI-cache-reused";
     Compacted(compacted, "${action} ${show(old_count)} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary, boundary_marker, ctx.step))
+  }
+}
+
+-- The summarizer's raw provider text is deliberately kept out of the ledger
+-- event (replay-stable, no request-specific numbers). Classify the known
+-- failure modes into stable reason_class values instead. `context_overflow`
+-- is the summarizer request exceeding the model context window (input +
+-- reserved output > limit) — the dominant cause of over-threshold AI folds
+-- failing, now bounded by max_fold_tokens.
+func is_context_overflow(reason: string) -> bool {
+  contains(reason, "maximum context length")
+    || contains(reason, "context length is")
+    || contains(reason, "reduce the length")
+    || contains(reason, "prompt is too long")
+    || contains(reason, "too many tokens")
+}
+
+func summarizer_reason_class(reason: string) -> string {
+  if reason == "empty summary" then "empty_response"
+  else if is_context_overflow(reason) then "context_overflow"
+  else "provider_error"
+}
+
+-- Upper bound (in char/4-estimated tokens) on the `old` segment folded into a
+-- single summarizer request. The provider rejects a request whose real input
+-- plus reserved output exceeds the model context window
+-- (`compaction_ai.summarizer_failed` / `provider_error`); because compaction is
+-- ephemeral the folded history can grow well past 100% of the window, so bound
+-- it. Half the window leaves room for the reserved output budget and for the
+-- char/4 estimate undercounting the model's real tokenizer (~1.3-1.5x on
+-- code/path content). Returns 0 (no cap) for the tiny context limits used by
+-- unit/DST fixtures so their full-body folds are preserved.
+func max_fold_tokens(ctx: ExtCtx) -> int {
+  if ctx.context_limit < 8000 then 0 else ctx.context_limit / 2
+}
+
+-- Raise the recent (verbatim) budget when the body would otherwise fold more
+-- than max_fold_tokens, so `old` stays within the summarizer request budget.
+-- Returns `budget` unchanged when no cap applies (cap disabled, or the body
+-- already fits under the cap).
+func bounded_fold_budget(ctx: ExtCtx, body: [Msg], budget: int) -> int {
+  let cap = max_fold_tokens(ctx);
+  if cap <= 0 then budget
+  else {
+    let needed = msgs_tokens(body) - cap;
+    if needed > budget then needed else budget
+  }
+}
+
+func fresh_compaction(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig, pct: int, p: { prefix: [Msg], rest: [Msg] }, budget: int) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  let eff_budget = bounded_fold_budget(ctx, p.rest, budget);
+  let split_result = if budget > 0 then { prefix: p.prefix, old: split_body_tokens(p.rest, eff_budget).old, recent: split_body_tokens(p.rest, eff_budget).recent } else split_msgs(msgs, cfg.keep_recent);
+  if list_length(split_result.old) == 0 then PassThroughObserved("compaction_ai.no_foldable_prefix", [
+    { key: "pct", value: show(pct) },
+    { key: "tail_budget", value: show(budget) },
+    { key: "tail_tokens", value: show(msgs_tokens(p.rest)) }
+  ])
+  else {
+    let projected_pct = usage_percent(ctx, split_result.prefix ++ split_result.recent, ctx.context_limit);
+    if pct - projected_pct < cfg.min_relief_pct then PassThroughObserved("compaction_ai.insufficient_relief", [
+      { key: "min_relief_pct", value: show(cfg.min_relief_pct) },
+      { key: "pct", value: show(pct) },
+      { key: "projected_pct", value: show(projected_pct) }
+    ])
+    else match summarize_with_ai_result(ctx, summarization_prompt(split_result.old, split_result.recent), cfg.model) {
+      Ok(summary) => {
+        let boundary = list_length(split_result.old);
+        finalize_compaction(ctx, msgs, split_result.prefix, split_result.recent, boundary, segment_digest(split_result.old), summary, boundary, pct, true)
+      },
+      Err(reason) => PassThroughObserved("compaction_ai.summarizer_failed", [
+        { key: "attempts", value: show(summarizer_max_attempts()) },
+        { key: "pct", value: show(pct) },
+        { key: "reason_class", value: summarizer_reason_class(reason) }
+      ])
+    }
   }
 }
 
@@ -422,13 +502,14 @@ export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -
     let p = split_prefix(msgs);
     let budget = cfg.keep_recent_tokens;
     match rolling_cache(ctx.artifacts) {
-      Some(cache) => {
+      CacheValid(cache) => {
         let tail = drop_msgs(p.rest, cache.boundary_marker);
         let safety_refresh = ctx.context_limit > 0 && ctx.telemetry.last_input_tokens * 100 / ctx.context_limit >= cfg.hard_override_pct;
         if (budget <= 0 || msgs_tokens(tail) <= budget) && not safety_refresh then
           finalize_compaction(ctx, msgs, p.prefix, tail, cache.boundary_marker, segment_digest(drop_msgs(p.rest, cache.boundary_marker)), cache.summary, cache.boundary_marker, pct, false)
         else {
-          let cut = if budget > 0 then split_body_tokens(tail, budget) else split_body(tail, cfg.keep_recent);
+          let cut_budget = bounded_fold_budget(ctx, tail, budget);
+          let cut = if budget > 0 then split_body_tokens(tail, cut_budget) else split_body(tail, cfg.keep_recent);
           if list_length(cut.old) == 0 then
             finalize_compaction(ctx, msgs, p.prefix, tail, cache.boundary_marker, segment_digest(tail), cache.summary, cache.boundary_marker, pct, false)
           else match summarize_with_ai_result(ctx, update_summarization_prompt(cache.summary, cut.old, cut.recent), cfg.model) {
@@ -440,21 +521,8 @@ export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -
           }
         }
       },
-      None => {
-        let split_result = if budget > 0 then { prefix: p.prefix, old: split_body_tokens(p.rest, budget).old, recent: split_body_tokens(p.rest, budget).recent } else split_msgs(msgs, cfg.keep_recent);
-        if list_length(split_result.old) == 0 then PassThrough
-        else {
-          let projected = split_result.prefix ++ split_result.recent;
-          if pct - usage_percent(ctx, projected, ctx.context_limit) < cfg.min_relief_pct then PassThrough
-          else match summarize_with_ai_result(ctx, summarization_prompt(split_result.old, split_result.recent), cfg.model) {
-            Ok(summary) => {
-              let boundary = list_length(split_result.old);
-              finalize_compaction(ctx, msgs, split_result.prefix, split_result.recent, boundary, segment_digest(split_result.old), summary, boundary, pct, true)
-            },
-            Err(_) => PassThrough
-          }
-        }
-      }
+      CacheAbsent => fresh_compaction(ctx, msgs, cfg, pct, p, budget),
+      CacheMalformed => fresh_compaction(ctx, msgs, cfg, pct, p, budget)
     }
   }
 }
@@ -535,12 +603,46 @@ func long_content() -> string {
   "deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789 deterministic payload abcdefghijklmnopqrstuvwxyz 0123456789"
 }
 
+func repeat_str(n: int, s: string) -> string {
+  if n <= 0 then "" else "${s}${repeat_str(n - 1, s)}"
+}
+
+-- A summarizer request that overflows the model context window is classified
+-- as context_overflow (not the generic provider_error), so the terminal
+-- diagnostic names the actual cause. Empty and other errors keep their classes.
+func test_summarizer_reason_class_maps_context_overflow() -> bool
+  tests [((), true)]
+  {
+    (summarizer_reason_class("400: This endpoint's maximum context length is 262144 tokens. However, you requested about 300000 tokens. Please reduce the length of either one.") == "context_overflow")
+      && (summarizer_reason_class("empty summary") == "empty_response")
+      && (summarizer_reason_class("503: upstream connect error") == "provider_error")
+  }
+
+-- bounded_fold_budget raises the recent budget so the folded `old` segment
+-- stays within max_fold_tokens on a realistically-sized context window, is a
+-- no-op for the tiny limits used by fixtures, and leaves small bodies alone.
+func test_bounded_fold_budget_caps_large_body() -> bool
+  tests [((), true)]
+  {
+    let big = [assistant(repeat_str(80, long_content()))];
+    let big_tokens = msgs_tokens(big);
+    let ctx_real = test_ctx(1, 8000, empty_ext_artifacts());
+    let ctx_tiny = test_ctx(1, 250, empty_ext_artifacts());
+    (bounded_fold_budget(ctx_real, big, 120) == big_tokens - 4000)
+      && (bounded_fold_budget(ctx_real, big, 120) > 120)
+      && (bounded_fold_budget(ctx_tiny, big, 120) == 120)
+      && (bounded_fold_budget(ctx_real, [assistant("hi")], 120) == 120)
+  }
+
 func test_ai_drip_projected_relief_passthrough() -> bool
   tests [((), true)]
   {
     let msgs = repeated_pairs(2, "tiny");
     match compact_with_ai(test_ctx(1, 500, empty_ext_artifacts()), msgs, test_cfg(false)) {
       PassThrough => true,
+      PassThroughObserved("compaction_ai.insufficient_relief", _) => true,
+      PassThroughObserved("compaction_ai.no_foldable_prefix", _) => true,
+      PassThroughObserved(_, _) => false,
       Compacted(_, _, _) => false
     }
   }
@@ -555,6 +657,7 @@ func test_ai_batch_compacts_many_old_messages() -> bool
           && list_length(out) < list_length(msgs)
           && not recent_starts_with_tool(out),
       PassThrough => false
+      ,PassThroughObserved(_, _) => false
     }
   }
 
@@ -567,8 +670,42 @@ func test_ai_summarizer_failure_degrades_to_passthrough() -> bool
   {
     let msgs = repeated_pairs(8, long_content());
     match compact_with_ai(test_ctx(1, 250, empty_ext_artifacts()), msgs, test_cfg(false)) {
-      PassThrough => true,
+      PassThroughObserved("compaction_ai.summarizer_failed", _) => true,
+      PassThrough => false,
+      PassThroughObserved(_, _) => false,
       Compacted(_, _, _) => false
+    }
+  }
+
+func test_ai_no_foldable_prefix_observed() -> bool
+  tests [((), true)]
+  {
+    let msgs = [user(long_content())];
+    let cfg = { test_cfg(false) | keep_recent_tokens: 10000 };
+    match compact_with_ai(test_ctx_stub(1, 10, empty_ext_artifacts()), msgs, cfg) {
+      PassThroughObserved("compaction_ai.no_foldable_prefix", _) => true,
+      _ => false
+    }
+  }
+
+func test_ai_output_not_relieving_observed() -> bool
+  tests [((), true)]
+  {
+    let msgs = [user("short")];
+    match finalize_compaction(test_ctx_stub(1, 10, empty_ext_artifacts()), msgs, [], [], 1, "d", long_content(), 1, 1, true) {
+      PassThroughObserved("compaction_ai.output_not_relieving", _) => true,
+      _ => false
+    }
+  }
+
+func test_ai_malformed_cache_recovers_with_fresh_fold() -> bool
+  tests [((), true)]
+  {
+    let malformed = jo([kv("compaction_ai", jo([kv("summary", jnum(1.0))]))]);
+    let msgs = repeated_pairs(8, long_content());
+    match compact_with_ai(test_ctx_stub(1, 250, malformed), msgs, test_cfg(false)) {
+      Compacted(_, note, artifacts) => contains(note, "AI-folded") && match rolling_cache(artifacts) { CacheValid(_) => true, _ => false },
+      _ => false
     }
   }
 
@@ -579,6 +716,7 @@ func test_ai_over_threshold_reuses_cache_without_passthrough() -> bool
     let cfg = test_cfg(true);
     match compact_with_ai(test_ctx_stub(10, 1000, empty_ext_artifacts()), msgs, cfg) {
       PassThrough => false,
+      PassThroughObserved(_, _) => false,
       Compacted(out1, _, artifacts) => {
         let grown_msgs = msgs ++ [user("new contiguous tail fact")];
         let later = compact_with_ai(test_ctx_stub(11, 1000, artifacts), grown_msgs, cfg);
@@ -588,8 +726,9 @@ func test_ai_over_threshold_reuses_cache_without_passthrough() -> bool
             contains(note, "AI-cache-reused")
               && list_length(out2) == list_length(out1) + 1
               && match out2 { [] => false, _ => contains(canonical_msgs(out2), "new contiguous tail fact") }
-              && match same_step { Compacted(_, _, _) => true, PassThrough => false },
-          PassThrough => false
+              && match same_step { Compacted(_, _, _) => true, PassThrough => false, PassThroughObserved(_, _) => false },
+          PassThrough => false,
+          PassThroughObserved(_, _) => false
         }
       }
     }

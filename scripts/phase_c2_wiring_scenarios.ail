@@ -22,6 +22,7 @@ import src/core/phase_vocab (
   TraceStageApplied,
   TraceStagePassed,
   TraceStageRejected,
+  TraceStageObserved,
   WireRecord,
   empty_ledger_trace,
   ledger_append,
@@ -29,7 +30,7 @@ import src/core/phase_vocab (
 )
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
-import src/core/test/stub_step (Scripted, ScriptedStep, prose_step, tool_step, empty_rt, deny_all_rt)
+import src/core/test/stub_step (Scripted, ScriptedStep, prose_step, tool_step, tool_step_finish, empty_rt, deny_all_rt)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/types (Msg)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -195,6 +196,22 @@ func scenario_traced_tool_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, 
 
 func traced_tool_decisions_scenario() -> Scenario {
   { id: "traced_tool_decisions", run: scenario_traced_tool_decisions }
+}
+
+-- Regression: a step that emits a tool_call but reports finish_reason="stop"
+-- (as hy3:free/Novita does) must still RunTools, not drop the call and
+-- Finalize. The drop produced a malformed [assistant(tool_calls) -> user]
+-- payload the provider rejected with 400 invalid_request_error.
+func scenario_tool_call_with_stop_finish_still_runs() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let traced = run_scripted(deny_all_rt(), [tool_step_finish("BashExec", "{\"cmd\":\"true\"}", "tc", "stop"), prose_step("done")]);
+  match traced.result {
+    Ok(_) => assert_decisions(traced.trace, ["CallModel", "RunTools", "CallModel", "Finalize"]),
+    Err(e) => Err({ failed_invariant: "tool_call with stop finish still runs", trace: ["${e.code}:${e.message}"] })
+  }
+}
+
+func tool_call_with_stop_finish_still_runs_scenario() -> Scenario {
+  { id: "tool_call_with_stop_finish_still_runs", run: scenario_tool_call_with_stop_finish_still_runs }
 }
 
 func scenario_traced_persist_nudge_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
@@ -470,6 +487,7 @@ func stage_tag(r: LedgerRecord) -> string {
         TraceStagePassed => "${s.ext_id}:pass",
         TraceStageApplied(_) => "${s.ext_id}:apply",
         TraceStageRejected(_) => "${s.ext_id}:reject"
+        ,TraceStageObserved(_, _) => "${s.ext_id}:observe"
       },
     _ => ""
   }
@@ -733,6 +751,7 @@ export func main() -> () ! {IO} {
     decision_record_append_name_round_trip_scenario(),
     traced_prose_decisions_scenario(),
     traced_tool_decisions_scenario(),
+	    tool_call_with_stop_finish_still_runs_scenario(),
 	    traced_persist_nudge_decisions_scenario(),
 	    traced_approval_default_deny_scenario(),
 	    traced_stage_records_scenario(),

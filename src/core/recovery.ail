@@ -9,8 +9,13 @@ import std/ai (Message, ToolCall)
 import std/list as List (length)
 import std/string (contains)
 
-export pure func should_retry_stream_error(retry_enabled: bool, remaining_step_budget: int) -> bool {
-  retry_enabled && remaining_step_budget > 1
+-- Retry a failed model stream only when the provider marked the error
+-- retryable (transient: timeout / connection / rate-limit / 5xx). A
+-- non-retryable error (ProtocolError, ContextLength, SchemaValidation,
+-- AuthFailed, ...) means the exact same request will fail again, so retrying
+-- just burns the step budget resending a doomed payload — fail fast instead.
+export pure func should_retry_stream_error(retryable: bool, retry_enabled: bool, remaining_step_budget: int) -> bool {
+  retryable && retry_enabled && remaining_step_budget > 1
 }
 
 export pure func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
@@ -61,9 +66,10 @@ pure func msg(role: string, content: string) -> Message {
 pure func test_stream_retry_policy() -> bool
   tests [((), true)]
   {
-    should_retry_stream_error(true, 2)
-      && not should_retry_stream_error(true, 1)
-      && not should_retry_stream_error(false, 4)
+    should_retry_stream_error(true, true, 2)
+      && not should_retry_stream_error(true, true, 1)
+      && not should_retry_stream_error(true, false, 4)
+      && not should_retry_stream_error(false, true, 4)
   }
 
 pure func test_persist_nudge_counts_marker_messages() -> bool
