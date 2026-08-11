@@ -38,7 +38,7 @@ import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/test/stub_step (LiveAI, ScriptedWorld, tool_step, prose_step)
 import src/core/ports (WorldState, empty_world_state)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan, BudgetPatch, ExtRuntime, ExtCtx, ExtensionHooks, Allow, PassThrough,
   PreStepDecision, PromptPatch, ToolPolicyDecision, ToolHandleDecision, ToolSchema,
   ResponseInterceptDecision, FinalizeDecision, Delegate, NoIntercept, NoDecision
@@ -58,11 +58,11 @@ func allow_rt() -> ExtRuntime {
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough },
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
     on_tool_policy: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow },
-    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate },
-    on_response_intercept: func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-    on_solver_candidate: func(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
   };
   { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
 }

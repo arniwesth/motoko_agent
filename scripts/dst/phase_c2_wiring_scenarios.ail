@@ -35,7 +35,7 @@ import src/core/ports (ScriptedStep)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/types (Msg)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
   ExtCtx,
@@ -212,32 +212,32 @@ func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision
   Pending("approval required", DenyAfterTimeout)
 }
 
-func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
   Delegate
-}
+}, next_state: ctx.world } }
 
-func no_intercept(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func no_intercept(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   NoIntercept
-}
+}, next_state: ctx.world } }
 
-func no_solver(_ctx: ExtCtx, _text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func no_solver(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   NoDecision
-}
+}, next_state: ctx.world } }
 
-func guard_solver(ctx: ExtCtx, text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   decide_with_budget(ctx, text, 2)
-}
+}, next_state: ctx.world } }
 
 func bad_system_msg() -> Msg {
   { role: "system", content: "bad", tool_calls: [], tool_call_id: "" }
 }
 
 func stage_hook(id: string, mode: string) -> ExtensionHooks {
-  let on_pre = func(_ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let on_pre = func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
     if mode == "pass" then PassThrough
     else if mode == "apply" then Compacted(msgs, "applied", jo([]))
     else Compacted([bad_system_msg()], "rejected", jo([]))
-  };
+  }, next_state: ctx.world } };
   {
     id: id,
     provided_tools: [],
@@ -259,9 +259,9 @@ func guard_hook() -> ExtensionHooks {
     on_describe_tools: no_describe,
     on_build_system_prompt: no_prompt,
     on_budget_plan: no_budget,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
       PassThrough
-    },
+    }, next_state: ctx.world } },
     on_tool_policy: no_policy,
     on_tool_handle: no_handle,
     on_response_intercept: no_intercept,
@@ -278,9 +278,9 @@ func guard_rt() -> ExtRuntime {
   }
 }
 
-func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func pc_guard_solver(ctx: ExtCtx, text: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   pc_decide_with_budget(ctx, text, 2)
-}
+}, next_state: ctx.world } }
 
 func pc_guard_hook() -> ExtensionHooks {
   {
@@ -289,9 +289,9 @@ func pc_guard_hook() -> ExtensionHooks {
     on_describe_tools: no_describe,
     on_build_system_prompt: no_prompt,
     on_budget_plan: no_budget,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
       PassThrough
-    },
+    }, next_state: ctx.world } },
     on_tool_policy: no_policy,
     on_tool_handle: no_handle,
     on_response_intercept: no_intercept,

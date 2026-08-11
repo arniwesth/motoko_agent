@@ -5,7 +5,7 @@ import std/list (length)
 import std/result (Result, Ok, Err)
 import std/string (length as string_length)
 import std/ai (ToolCall)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
@@ -59,7 +59,7 @@ func ctx(limit: int) -> ExtCtx {
 	    state_key: "k",
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry()
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
 	  }
 	}
 

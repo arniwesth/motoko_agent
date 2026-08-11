@@ -1,0 +1,616 @@
+-- WI-B2b. The world token's codec: `WorldState` across the extension seam.
+--
+-- WHY THIS MODULE EXISTS, in one sentence: `packages/motoko-ext-abi` cannot
+-- name `src/core/ports.WorldState`, because `motoko_core` depends on the ABI and
+-- the dependency cannot invert — so the successor crosses the seam as an OPAQUE
+-- Json token (`ExtWorld`) and this module is the only place that opens it.
+--
+-- The alternatives, and why the ABI's own inlining idiom does not extend here,
+-- are argued at `ExtWorld`'s declaration in the ABI. The short version: AILANG
+-- unifies records STRUCTURALLY, which is why `Msg` and `ToolCallEnvelope` can be
+-- inlined there and passed core values, but it unifies sums NOMINALLY — and
+-- `WorldState` transitively contains `IdentityBody`, `OutcomeStatus` and the
+-- generator's sums. A mirrored world would not type-check at the seam.
+--
+-- THE ONE FAILURE MODE, and it is the reason `ext_world_test.ail` exists: a
+-- field the encoder writes and the decoder ignores. Both halves type-check, the
+-- world silently loses a cursor, and every count still balances — plan S7's
+-- record-level rule, which the round-trip suite asserts field by field with no
+-- two values equal.
+--
+-- D1 is not weakened by the round trip. The world has exactly ONE home; this is
+-- a transport, and `token_to_world` is total — a token that does not decode
+-- yields `empty_world_state()` rather than a partially-filled world, because a
+-- half-decoded cursor is F6 with extra steps.
+
+module src/core/ext_world
+
+import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray)
+-- NOT decoration. `std/json`'s accessors return `Option`, and without this
+-- import `None` and `Some(j)` in a match arm are FRESH VARIABLE BINDINGS rather
+-- than constructor patterns: the first arm matches everything, the second is
+-- unreachable, every field reads back as its fallback, and the module
+-- type-checks clean with no warning. `src/core/ports.ail` carries the same note
+-- because that is exactly what happened while its codecs were being written.
+import std/option (Option, Some, None)
+import std/list as List (length)
+import std/result (Ok, Err)
+import std/ai (ToolCall)
+import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
+import src/core/dst_interaction (
+  Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
+  OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity
+)
+import src/core/dst_generator (GeneratorState, GeneratorBounds, BoundFailure)
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld)
+
+-- ---------------------------------------------------------------------------
+-- accessors. Deliberate copies of `ports.ail`'s private ones rather than an
+-- export widening: these are three-line total readers, and exporting them from
+-- `ports` would put four new names on a module 34 exports wide to save nine
+-- lines here.
+-- ---------------------------------------------------------------------------
+
+pure func str_field(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(v) => v }
+  }
+}
+
+pure func int_field(obj: Json, key: string, fallback: int) -> int {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asNumber(j) { None => fallback, Some(v) => _float_to_int(v) }
+  }
+}
+
+pure func bool_field(obj: Json, key: string, fallback: bool) -> bool {
+  match get(obj, key) {
+    None => fallback,
+    Some(j) => match asBool(j) { None => fallback, Some(v) => v }
+  }
+}
+
+pure func json_array(obj: Json, key: string) -> [Json] {
+  match get(obj, key) {
+    None => [],
+    Some(j) => match asArray(j) { None => [], Some(xs) => xs }
+  }
+}
+
+pure func obj_field(obj: Json, key: string) -> Json {
+  match get(obj, key) { None => jo([]), Some(j) => j }
+}
+
+pure func jint(n: int) -> Json { jnum(_int_to_float(n)) }
+
+-- ---------------------------------------------------------------------------
+-- strings <-> [string]
+-- ---------------------------------------------------------------------------
+
+pure func strings_json(xs: [string]) -> [Json] {
+  match xs { [] => [], x :: rest => js(x) :: strings_json(rest) }
+}
+
+pure func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => (match asString(x) { None => "", Some(v) => v }) :: strings_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- ToolCall
+-- ---------------------------------------------------------------------------
+
+pure func tool_call_json(c: ToolCall) -> Json {
+  jo([kv("id", js(c.id)), kv("name", js(c.name)), kv("arguments", js(c.arguments))])
+}
+
+pure func tool_calls_json(cs: [ToolCall]) -> [Json] {
+  match cs { [] => [], c :: rest => tool_call_json(c) :: tool_calls_json(rest) }
+}
+
+pure func tool_calls_of(xs: [Json]) -> [ToolCall] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ id: str_field(x, "id", ""),
+         name: str_field(x, "name", ""),
+         arguments: str_field(x, "arguments", "") }) :: tool_calls_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- ScriptedStep / ScriptedTool
+-- ---------------------------------------------------------------------------
+
+pure func scripted_step_json(s: ScriptedStep) -> Json {
+  jo([
+    kv("prose", js(s.prose)),
+    kv("tool_calls", ja(tool_calls_json(s.tool_calls))),
+    kv("input_tokens", jint(s.input_tokens)),
+    kv("output_tokens", jint(s.output_tokens)),
+    kv("finish_reason", js(s.finish_reason)),
+    kv("chunks", ja(strings_json(s.chunks))),
+    -- WI-B2b's two ScriptedStep widenings, and they are separate changes: the
+    -- FAULT is an error case, the LATENCY is a duration. Both are carried here
+    -- because this token is a transport for the whole world, not a wire format
+    -- — contrast `encode_provider_outcome`, where `advance_ms` deliberately
+    -- travels beside the payload rather than inside it.
+    kv("error_code", js(s.error_code)),
+    kv("error_message", js(s.error_message)),
+    kv("advance_ms", jint(s.advance_ms))
+  ])
+}
+
+pure func scripted_steps_json(xs: [ScriptedStep]) -> [Json] {
+  match xs { [] => [], x :: rest => scripted_step_json(x) :: scripted_steps_json(rest) }
+}
+
+pure func scripted_steps_of(xs: [Json]) -> [ScriptedStep] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ prose: str_field(x, "prose", ""),
+         tool_calls: tool_calls_of(json_array(x, "tool_calls")),
+         input_tokens: int_field(x, "input_tokens", 0),
+         output_tokens: int_field(x, "output_tokens", 0),
+         finish_reason: str_field(x, "finish_reason", ""),
+         chunks: strings_of(json_array(x, "chunks")),
+         error_code: str_field(x, "error_code", ""),
+         error_message: str_field(x, "error_message", ""),
+         advance_ms: int_field(x, "advance_ms", 0) }) :: scripted_steps_of(rest)
+  }
+}
+
+pure func scripted_tool_json(t: ScriptedTool) -> Json {
+  jo([
+    kv("tool_call_id", js(t.tool_call_id)),
+    kv("duration_ms", jint(t.duration_ms)),
+    kv("code", js(t.code)),
+    kv("message", js(t.message)),
+    kv("content", js(t.content))
+  ])
+}
+
+pure func scripted_tools_json(xs: [ScriptedTool]) -> [Json] {
+  match xs { [] => [], x :: rest => scripted_tool_json(x) :: scripted_tools_json(rest) }
+}
+
+pure func scripted_tools_of(xs: [Json]) -> [ScriptedTool] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ tool_call_id: str_field(x, "tool_call_id", ""),
+         duration_ms: int_field(x, "duration_ms", 0),
+         code: str_field(x, "code", ""),
+         message: str_field(x, "message", ""),
+         content: str_field(x, "content", "") }) :: scripted_tools_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- env pairs
+-- ---------------------------------------------------------------------------
+
+pure func env_json(xs: [{ key: string, value: string }]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => jo([kv("key", js(x.key)), kv("value", js(x.value))]) :: env_json(rest)
+  }
+}
+
+pure func env_of(xs: [Json]) -> [{ key: string, value: string }] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ key: str_field(x, "key", ""), value: str_field(x, "value", "") }) :: env_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- IdentityBody. A SUM, and the discriminator is written explicitly rather than
+-- derived from `identity_kind`: that function's strings are an artifact surface
+-- with a schema version, and reusing them here would couple this transport to
+-- a versioned wire format for no gain. An unrecognised tag decodes to
+-- `ClockAdvanceIdentity`, which is the nullary variant — see `token_to_world`
+-- on why a total decoder is the right shape.
+-- ---------------------------------------------------------------------------
+
+pure func identity_body_json(b: IdentityBody) -> Json {
+  match b {
+    ProviderIdentity(origin, step, model) =>
+      jo([kv("t", js("provider")), kv("a", js(origin)), kv("b", jint(step)), kv("c", js(model))]),
+    ToolIdentity(origin, call_id, name) =>
+      jo([kv("t", js("tool")), kv("a", js(origin)), kv("b", js(call_id)), kv("c", js(name))]),
+    ApprovalIdentity(origin, call_id, name) =>
+      jo([kv("t", js("approval")), kv("a", js(origin)), kv("b", js(call_id)), kv("c", js(name))]),
+    ExtensionEffectIdentity(ext_id, class_id, call_id) =>
+      jo([kv("t", js("extension_effect")), kv("a", js(ext_id)), kv("b", js(class_id)), kv("c", js(call_id))]),
+    EnvironmentReadIdentity(key) =>
+      jo([kv("t", js("environment_read")), kv("a", js(key))]),
+    RandomDrawIdentity(label) =>
+      jo([kv("t", js("random_draw")), kv("a", js(label))]),
+    ClockAdvanceIdentity =>
+      jo([kv("t", js("clock_advance"))])
+  }
+}
+
+pure func identity_body_of(j: Json) -> IdentityBody {
+  let t = str_field(j, "t", "");
+  if t == "provider" then
+    ProviderIdentity(str_field(j, "a", ""), int_field(j, "b", 0), str_field(j, "c", ""))
+  else if t == "tool" then
+    ToolIdentity(str_field(j, "a", ""), str_field(j, "b", ""), str_field(j, "c", ""))
+  else if t == "approval" then
+    ApprovalIdentity(str_field(j, "a", ""), str_field(j, "b", ""), str_field(j, "c", ""))
+  else if t == "extension_effect" then
+    ExtensionEffectIdentity(str_field(j, "a", ""), str_field(j, "b", ""), str_field(j, "c", ""))
+  else if t == "environment_read" then
+    EnvironmentReadIdentity(str_field(j, "a", ""))
+  else if t == "random_draw" then
+    RandomDrawIdentity(str_field(j, "a", ""))
+  else
+    ClockAdvanceIdentity
+}
+
+-- ---------------------------------------------------------------------------
+-- OutcomeStatus / StreamChunkRecord / TimedOutcome / Interaction
+-- ---------------------------------------------------------------------------
+
+pure func outcome_status_json(s: OutcomeStatus) -> Json {
+  match s {
+    OutcomeOk => js("ok"),
+    OutcomeFault => js("fault"),
+    OutcomeMissing => js("missing")
+  }
+}
+
+pure func outcome_status_of(j: Json, key: string) -> OutcomeStatus {
+  let s = str_field(j, key, "");
+  if s == "fault" then OutcomeFault
+  else if s == "missing" then OutcomeMissing
+  else OutcomeOk
+}
+
+pure func chunk_records_json(xs: [StreamChunkRecord]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      jo([kv("offset_ms", jint(x.offset_ms)), kv("text", js(x.text))]) :: chunk_records_json(rest)
+  }
+}
+
+pure func chunk_records_of(xs: [Json]) -> [StreamChunkRecord] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ offset_ms: int_field(x, "offset_ms", 0),
+         text: str_field(x, "text", "") }) :: chunk_records_of(rest)
+  }
+}
+
+pure func timed_outcome_json(o: TimedOutcome) -> Json {
+  jo([
+    kv("advance_ms", jint(o.advance_ms)),
+    kv("chunks", ja(chunk_records_json(o.chunks))),
+    kv("payload", js(o.payload)),
+    kv("status", outcome_status_json(o.status)),
+    kv("fault_class_id", js(o.fault_class_id))
+  ])
+}
+
+pure func timed_outcome_of(j: Json) -> TimedOutcome {
+  { advance_ms: int_field(j, "advance_ms", 0),
+    chunks: chunk_records_of(json_array(j, "chunks")),
+    payload: str_field(j, "payload", ""),
+    status: outcome_status_of(j, "status"),
+    fault_class_id: str_field(j, "fault_class_id", "") }
+}
+
+pure func interaction_json(i: Interaction) -> Json {
+  jo([
+    kv("ordinal", jint(i.identity.ordinal)),
+    kv("body", identity_body_json(i.identity.body)),
+    kv("request_projection", js(i.request_projection)),
+    kv("deadline_ms", jint(i.deadline_ms)),
+    kv("outcome", timed_outcome_json(i.outcome))
+  ])
+}
+
+pure func interactions_json(xs: [Interaction]) -> [Json] {
+  match xs { [] => [], x :: rest => interaction_json(x) :: interactions_json(rest) }
+}
+
+pure func interactions_of(xs: [Json]) -> [Interaction] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ identity: { ordinal: int_field(x, "ordinal", 0),
+                     body: identity_body_of(obj_field(x, "body")) },
+         request_projection: str_field(x, "request_projection", ""),
+         deadline_ms: int_field(x, "deadline_ms", 0),
+         outcome: timed_outcome_of(obj_field(x, "outcome")) }) :: interactions_of(rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- GeneratorState
+-- ---------------------------------------------------------------------------
+
+pure func bound_failures_json(xs: [BoundFailure]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      jo([kv("bound", js(x.bound)), kv("limit", jint(x.limit)),
+          kv("requested", jint(x.requested))]) :: bound_failures_json(rest)
+  }
+}
+
+pure func bound_failures_of(xs: [Json]) -> [BoundFailure] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      ({ bound: str_field(x, "bound", ""),
+         limit: int_field(x, "limit", 0),
+         requested: int_field(x, "requested", 0) }) :: bound_failures_of(rest)
+  }
+}
+
+pure func bounds_json(b: GeneratorBounds) -> Json {
+  jo([
+    kv("max_interactions", jint(b.max_interactions)),
+    kv("max_chunks_per_interaction", jint(b.max_chunks_per_interaction)),
+    kv("max_payload_bytes", jint(b.max_payload_bytes)),
+    kv("max_resource_size", jint(b.max_resource_size)),
+    kv("max_clock_advance_ms", jint(b.max_clock_advance_ms))
+  ])
+}
+
+pure func bounds_of(j: Json) -> GeneratorBounds {
+  { max_interactions: int_field(j, "max_interactions", 0),
+    max_chunks_per_interaction: int_field(j, "max_chunks_per_interaction", 0),
+    max_payload_bytes: int_field(j, "max_payload_bytes", 0),
+    max_resource_size: int_field(j, "max_resource_size", 0),
+    max_clock_advance_ms: int_field(j, "max_clock_advance_ms", 0) }
+}
+
+pure func generator_json(g: GeneratorState) -> Json {
+  jo([
+    kv("id", js(g.id)),
+    kv("version", js(g.version)),
+    kv("seed", jint(g.seed)),
+    kv("rng", jint(g.rng)),
+    kv("draws", jint(g.draws)),
+    kv("approvals_closed", jb(g.approvals_closed)),
+    kv("bounds", bounds_json(g.bounds)),
+    kv("failures", ja(bound_failures_json(g.failures)))
+  ])
+}
+
+pure func generator_of(j: Json) -> GeneratorState {
+  { id: str_field(j, "id", ""),
+    version: str_field(j, "version", ""),
+    seed: int_field(j, "seed", 0),
+    rng: int_field(j, "rng", 0),
+    draws: int_field(j, "draws", 0),
+    approvals_closed: bool_field(j, "approvals_closed", false),
+    bounds: bounds_of(obj_field(j, "bounds")),
+    failures: bound_failures_of(json_array(j, "failures")) }
+}
+
+-- ---------------------------------------------------------------------------
+-- The seam itself
+-- ---------------------------------------------------------------------------
+
+export pure func world_json(w: WorldState) -> Json {
+  jo([
+    kv("script", ja(scripted_steps_json(w.script))),
+    kv("clock_ms", jint(w.clock_ms)),
+    kv("approvals", ja(strings_json(w.approvals))),
+    kv("env", ja(env_json(w.env))),
+    kv("tools", ja(scripted_tools_json(w.tools))),
+    kv("log", ja(interactions_json(w.log))),
+    kv("gen", generator_json(w.gen))
+  ])
+}
+
+export pure func world_of_json(j: Json) -> WorldState {
+  { script: scripted_steps_of(json_array(j, "script")),
+    clock_ms: int_field(j, "clock_ms", 0),
+    approvals: strings_of(json_array(j, "approvals")),
+    env: env_of(json_array(j, "env")),
+    tools: scripted_tools_of(json_array(j, "tools")),
+    log: interactions_of(json_array(j, "log")),
+    gen: generator_of(obj_field(j, "gen")) }
+}
+
+-- The extension-facing pair. `world_to_token` is total; `token_to_world` is
+-- total by construction because every accessor above carries a fallback.
+--
+-- The token is `Json` and not an encoded STRING deliberately: `ExtWorld.token`
+-- is never parsed by extension code, so a string would buy nothing and would add
+-- an `encode`/`decode` pair that can fail, on a path that currently cannot.
+export pure func world_to_token(w: WorldState) -> ExtWorld {
+  { token: world_json(w) }
+}
+
+export pure func token_to_world(t: ExtWorld) -> WorldState {
+  world_of_json(t.token)
+}
+
+-- The identity a hook that performs no world-threading effect returns. Named so
+-- that a reader of an extension sees "I did not touch the world" rather than a
+-- bare field copy, and so the grep for world-passing sites finds it.
+export pure func unchanged_world(t: ExtWorld) -> ExtWorld { t }
+
+-- ---------------------------------------------------------------------------
+-- The round trip. Plan S7's record-level rule: a codec's failure mode is a
+-- field the encoder writes and the decoder ignores, or the reverse. Both halves
+-- type-check and the loss is silent until a replay serves a different response
+-- while every count still balances.
+--
+-- EVERY quantity below is DISTINCT. That is the whole mechanism — a fixture
+-- whose values repeat cannot distinguish which field a check is reading, so a
+-- decoder that reads `output_tokens` into `input_tokens` would pass. The two
+-- `advance_ms` values (449 on the script entry, 617 in the log) are deliberately
+-- different from each other for the same reason: they are the two places a
+-- duration lives, and confusing them is the defect this catches.
+--
+-- The world here also carries every SHAPE the token must survive: a script
+-- entry WITH a fault and WITHOUT one, a non-empty approvals queue, an env pair,
+-- a scripted tool, an interaction whose identity is a payload-carrying variant,
+-- and a generator with a recorded bound failure. A field that no fixture
+-- populates is a field the round trip cannot check.
+-- ---------------------------------------------------------------------------
+
+pure func codec_fixture_world() -> WorldState {
+  { script: [
+      { prose: "s0 prose", tool_calls: [{ id: "c-11", name: "Read", arguments: "{\"p\":1}" }],
+        input_tokens: 101, output_tokens: 103, finish_reason: "tool_calls",
+        chunks: ["ch-a", "ch-b"], error_code: "", error_message: "", advance_ms: 449 },
+      -- The faulted entry: WI-B2b widening 1 must survive the transport, and it
+      -- is a SECOND entry so that a decoder collapsing the list is visible.
+      { prose: "s1 prose", tool_calls: [], input_tokens: 107, output_tokens: 109,
+        finish_reason: "stop", chunks: [], error_code: "provider_error_retryable",
+        error_message: "upstream 503", advance_ms: 457 }
+    ],
+    clock_ms: 1213,
+    approvals: ["yes", "no", ""],
+    env: [{ key: "MOTOKO_MODE", value: "dst" }],
+    tools: [{ tool_call_id: "t-17", duration_ms: 199, code: "E_TOOL",
+              message: "tool said no", content: "the content" }],
+    log: [
+      { identity: { ordinal: 5, body: ProviderIdentity("origin-a", 7, "model-z") },
+        request_projection: "proj-1",
+        deadline_ms: 311,
+        outcome: { advance_ms: 617, chunks: [{ offset_ms: 23, text: "chunk text" }],
+                   payload: "the payload", status: OutcomeFault,
+                   fault_class_id: "provider_error_retryable" } }
+    ],
+    gen: { id: "gen-id", version: "gen-version", seed: 29, rng: 31, draws: 37,
+           approvals_closed: true,
+           bounds: { max_interactions: 41, max_chunks_per_interaction: 43,
+                     max_payload_bytes: 47, max_resource_size: 53,
+                     max_clock_advance_ms: 59 },
+           failures: [{ bound: "max_payload_bytes", limit: 61, requested: 67 }] } }
+}
+
+pure func eq_scripted_step(a: ScriptedStep, b: ScriptedStep) -> bool {
+  a.prose == b.prose && a.input_tokens == b.input_tokens
+    && a.output_tokens == b.output_tokens && a.finish_reason == b.finish_reason
+    && a.error_code == b.error_code && a.error_message == b.error_message
+    && a.advance_ms == b.advance_ms
+}
+
+pure func test_the_world_token_round_trips_every_scalar_field() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    back.clock_ms == w.clock_ms
+      && List.length(back.script) == List.length(w.script)
+      && List.length(back.approvals) == List.length(w.approvals)
+      && List.length(back.env) == List.length(w.env)
+      && List.length(back.tools) == List.length(w.tools)
+      && List.length(back.log) == List.length(w.log)
+  }
+
+-- The script cursor is what `ai_step` actually consumes, so its round trip is
+-- the one that decides whether the extension seam threads a real world or a
+-- plausible-looking empty one. Asserted entry by entry, both the clean and the
+-- faulted step.
+pure func test_the_world_token_round_trips_the_script_cursor() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    match back.script {
+      [] => false,
+      b0 :: b_rest => match w.script {
+        [] => false,
+        w0 :: w_rest => match b_rest {
+          [] => false,
+          b1 :: _ => match w_rest {
+            [] => false,
+            w1 :: _ =>
+              eq_scripted_step(b0, w0) && eq_scripted_step(b1, w1)
+                && b0.error_code == "" && b1.error_code == "provider_error_retryable"
+                && b0.advance_ms == 449 && b1.advance_ms == 457
+          }
+        }
+      }
+    }
+  }
+
+-- The interaction log and the generator are the two nested structures, and they
+-- are where a dropped field is least visible: nothing in a run reads them until
+-- a replay does. Asserted through to the leaves, including the identity
+-- variant's payload and the recorded bound failure.
+pure func test_the_world_token_round_trips_the_log_and_the_generator() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    let log_ok = match back.log {
+      [] => false,
+      i :: _ =>
+        i.identity.ordinal == 5
+          && i.request_projection == "proj-1"
+          && i.deadline_ms == 311
+          && i.outcome.advance_ms == 617
+          && i.outcome.payload == "the payload"
+          && i.outcome.fault_class_id == "provider_error_retryable"
+          && (match i.outcome.status { OutcomeFault => true, OutcomeOk => false, OutcomeMissing => false })
+          && (match i.identity.body {
+                ProviderIdentity(origin, step, model) =>
+                  origin == "origin-a" && step == 7 && model == "model-z",
+                _ => false
+              })
+          && (match i.outcome.chunks {
+                [] => false,
+                c :: _ => c.offset_ms == 23 && c.text == "chunk text"
+              })
+    };
+    let g = back.gen;
+    let gen_ok =
+      g.id == "gen-id" && g.version == "gen-version" && g.seed == 29
+        && g.rng == 31 && g.draws == 37 && g.approvals_closed
+        && g.bounds.max_interactions == 41
+        && g.bounds.max_chunks_per_interaction == 43
+        && g.bounds.max_payload_bytes == 47
+        && g.bounds.max_resource_size == 53
+        && g.bounds.max_clock_advance_ms == 59
+        && (match g.failures {
+              [] => false,
+              f :: _ => f.bound == "max_payload_bytes" && f.limit == 61 && f.requested == 67
+            });
+    log_ok && gen_ok
+  }
+
+-- The remaining scalars, asserted by value rather than by count: the approvals
+-- queue's ORDER (a cursor consumed head-first, so a reversed list replays
+-- different answers), the env pair, and the scripted tool's five fields.
+pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
+  tests [((), true)]
+  {
+    let back = token_to_world(world_to_token(codec_fixture_world()));
+    let approvals_ok = match back.approvals {
+      a :: b :: c :: [] => a == "yes" && b == "no" && c == "",
+      _ => false
+    };
+    let env_ok = match back.env {
+      e :: [] => e.key == "MOTOKO_MODE" && e.value == "dst",
+      _ => false
+    };
+    let tools_ok = match back.tools {
+      t :: [] => t.tool_call_id == "t-17" && t.duration_ms == 199 && t.code == "E_TOOL"
+                   && t.message == "tool said no" && t.content == "the content",
+      _ => false
+    };
+    approvals_ok && env_ok && tools_ok
+  }

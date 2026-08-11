@@ -2,7 +2,7 @@ module sunholo/motoko_ext_exa_search/exa_search
 
 import std/option (Option, Some, None)
 
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg,
@@ -46,7 +46,7 @@ export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> Promp
   build_prompt_patch(cached_prompt)
 }
 
-export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS, Rand} {
+export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process, FS, Rand}  { { decision: {
   match resolve_tool(call.tool, mappings) {
     Some(m) => match run_mcp_tool(call.id, m.canonical, ctx.workdir, cfg, m.mcp_name, call.arguments) {
       Some(result) => Handled(result),
@@ -54,28 +54,26 @@ export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx
     },
     None => Delegate
   }
-}
+}, next_state: ctx.world } }
 
 export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS, Process, Rand} {
   let cfg = mcp_config(timeout_ms, max_output_chars);
   let mappings = tool_mappings();
   let cached_prompt = load_agent_prompt(workdir);
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-    on_tool_handle(cfg, mappings, ctx, call)
-  };
-  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(cfg, mappings, ctx, call) };
+  let intercept = func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     no_response_intercept()
-  };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     no_finalize_decision()
-  };
+  }, next_state: ctx.world } };
   {
     id: "exa_search",
     provided_tools: all_tool_names(mappings),
     on_describe_tools: \_ . [],
     on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
     on_budget_plan: budget_hook,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough },
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } },
     on_tool_policy: no_tool_policy,
     on_tool_handle: handle,
     on_response_intercept: intercept,

@@ -66,7 +66,11 @@ reachable, tree 130/105. Report: `NOTE-b1-execution-report-and-plan-corrections.
 rule **S9**. **Cluster 12 = WI-B3: DONE 2026-08-04**, 48m40s — zero `images` failures, tree 161/74, earned
 standing rule **S10**. **Cluster 13 = WI-B2a: DONE 2026-08-04**, 2h13m — ABI answer two rows not four, `check_core`
 GREEN, tree 218/17 above the v0.26.0 baseline; rewrote **S9** and earned **S11**.
-**Cluster 14 = WI-B2b**, handoff written: `HANDOFF-execute-b2b-world-token-widening.md` — the last of
+**Cluster 14 = WI-B2b: DONE 2026-08-04**, ~2h05m — opaque `ExtWorld` token, `ai_step` left the
+classifier-2 set, `check_core` green at 52; earned **S12** and S11's second clause.
+**Cluster 15 = WI-B4**, handoff written: `HANDOFF-execute-b4-close-the-repin-wave.md` — the wave's
+green gate and the last of Milestone B. Original B2b handoff:
+`HANDOFF-execute-b2b-world-token-widening.md` — the last of
 Milestone B's content, and the change that is *supposed* to move classifier 2's pinned membership.
 Original B2a handoff: `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —
@@ -116,6 +120,15 @@ four things it cannot:
 1. **Current grounding** — a table of the anchors the cluster will touch, re-verified at HEAD, gated
    behind `git diff --stat <last-known-good>..HEAD -- src packages scripts` with the instruction to
    re-measure everything if it is non-empty.
+
+   **NEVER restate commit state in a handoff — say "confirm with `git status`". Four handoffs, four
+   errors, and the file count was right every single time.** B1's handoff was wrong about B1, B3's
+   about B3, B2a's about B3, and B2b's about B2a — the last one *in a paragraph explicitly warning
+   about this mistake*, quoting the previous report as "stating it plainly". The reports were accurate
+   when written; the work was committed afterwards. **Commit state is the one anchor that changes
+   between writing a handoff and reading it, by definition**, and the next session must run
+   `git status` anyway. Describe the *contents* — file counts, which files — and let the reader
+   establish the state.
 
    **A recommendation inherited from a prior cluster is a claim, and stage 5 found one that
    contradicted the same handoff's own prohibition.** Cluster 10 recommended attaching D8's canary to

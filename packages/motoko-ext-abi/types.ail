@@ -9,7 +9,7 @@
 module sunholo/motoko_ext_abi/types
 
 import std/option (Option)
-import std/json (Json)
+import std/json (Json, jo)
 
 -- Inlined from std/ai to avoid importing AI-effect functions into this pure ABI package.
 export type ToolSchema = { name: string, description: string, parameters: string }
@@ -59,13 +59,90 @@ export type VerificationConfig = { enabled: bool, command: string }
 
 export type BudgetPlan = { total: int, solver: int, verifier: int }
 
+-- WI-B2b. THE WORLD TOKEN — D1's successor state, crossing the extension seam.
+--
+-- `token` is OPAQUE and extension code must not read it. It is produced and
+-- consumed only by the host (`src/core/ext_world.ail`); an extension's whole
+-- obligation is to CARRY it — take the one in `ExtCtx.world`, pass it to every
+-- world-threading port call, and return the last one it holds as `next_state`.
+--
+-- WHY OPAQUE, and this is the item's central decided binding. The successor is
+-- `src/core/ports.WorldState`, and this ABI cannot name that type: `motoko_core`
+-- depends on THIS package, so the dependency cannot invert. Three alternatives
+-- were measured and rejected:
+--
+--   1. INLINE IT, the idiom this file already uses for `Msg`, `ToolCall`,
+--      `ToolCallEnvelope` and `ToolResultEnvelope`. Those work because AILANG
+--      unifies records STRUCTURALLY — a probe confirmed a differently-NAMED but
+--      identically-shaped record unifies across modules. It does not extend to
+--      `WorldState`, because `WorldState` transitively contains SUM types
+--      (`IdentityBody`, `OutcomeStatus`, `ToolFaultChoice`) and the same probe
+--      showed sums are NOMINAL: two identically-shaped sums fail to unify with
+--      `cannot unify type constructors: BStatus vs AStatus`. A mirrored world
+--      would therefore not type-check at the seam.
+--   2. PARAMETRISE this ABI over the world type. That changes `ExtCtx` into
+--      `ExtCtx[W]` and so rewrites `on_build_system_prompt` and `on_tool_policy`
+--      — two of D5's three ROWLESS slots, which are its entire coverable
+--      surface and which B1, B2a and B3 all left byte-identical. Rejected.
+--   3. EXTRACT `dst_interaction` (404 lines) and `dst_generator` (1519) into a
+--      leaf package below this one. Both import only `std/*`, so it is feasible
+--      — but it puts the DST generator into all fourteen extension packages'
+--      dependency graphs to serve one seam. Out of proportion.
+--
+-- So the token is a Json carrier, which is exactly why D5 says "explicit/OPAQUE
+-- world token": the dependency direction is what makes opacity necessary, not a
+-- preference. The cost is a real codec, and its guard is S7's record-level rule
+-- — a field-by-field round trip with every field holding a distinct value, at
+-- the foot of `src/core/ext_world.ail`. A field the encoder writes and the
+-- decoder ignores is this design's one silent failure mode; both halves of it
+-- were mutation-tested when the codec landed and both mutants died.
+export type ExtWorld = { token: Json }
+
+-- The empty world, for a context that has no driver behind it — test fixtures,
+-- smoke harnesses, and the no-op ports. It is `jo([])` rather than a sentinel
+-- because the host's decoder is TOTAL: every field falls back, so an empty
+-- object decodes to exactly `empty_world_state()`. That means a fixture using
+-- this is not carrying a special value the host has to recognise; it is
+-- carrying a real, empty world.
+--
+-- It is NOT a default for production code. A hook handed this on a live path
+-- would see an empty script and be told the model answered — which is precisely
+-- the pre-WI-B2b behaviour this widening removed.
+export pure func empty_ext_world() -> ExtWorld { { token: jo([]) } }
+
+-- The result of a world-threading `ai_step`. A RECORD and not a sum, per plan
+-- decision P1 (A12's precedent): a later effect class adds a FIELD here, where a
+-- sum would make it a variant restructuring at every match site.
+--
+-- `next_state` is named for the criterion, not for taste. D5's classifier 2
+-- selects "a field whose call is the extension-side entry to a core seam that D1
+-- requires to thread successor state, AND WHICH CANNOT RETURN IT", and
+-- `tools/ext_call_inventory/derive.py` derives that mechanically by asking
+-- whether the result type has a field literally called `next_state`
+-- (`SUCCESSOR_FIELD`). Renaming this field silently puts `ai_step` back in the
+-- classifier-2 set. That is a DISCOVERED binding, matching `ProviderExchange`,
+-- `EnvRead`, `ToolExecution` and `ClockReading` in `src/core/ports.ail`.
+export type AiStepOutcome = {
+  result: Result[string, string],
+  next_state: ExtWorld
+}
+
 export type ExtPorts = {
-  -- WI-B2a: `+ Trace`, and it is the ONE ABI row this item changed. Demanded,
-  -- not chosen: `Ports.model_step` has carried `Trace` since WI-A1, and
-  -- `session.ext_ports_of` bridges `Ports` to `ExtPorts`, so the bridging
-  -- lambda performs `Trace` and a closed row cannot hide it. M2 predicted this
-  -- row; WI-B1 could not confirm it because the module died on `images` first.
-  ai_step: (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace},
+  -- WI-B2b: takes and returns the world token. This is the widening that lifts
+  -- D1's extension-model-path exclusion — `session.ext_ai_step` handed
+  -- `empty_world_state()` and dropped the successor precisely because this
+  -- signature had nowhere to put it.
+  --
+  -- WI-B2a: `+ Trace`. Demanded, not chosen: `Ports.model_step` has carried
+  -- `Trace` since WI-A1, and `session.ext_ports_of` bridges `Ports` to
+  -- `ExtPorts`, so the bridging lambda performs `Trace` and a closed row cannot
+  -- hide it. M2 predicted this row; WI-B1 could not confirm it because the
+  -- module died on `images` first.
+  ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace},
+  -- `proc_exec` and `env_get` stay un-widened and stay in the classifier-2 set.
+  -- They front `Ports.tool_exec` and `Ports.env_get`, both of which thread a
+  -- successor, so both still drop one. Widening them is WI-C5's, and leaving
+  -- them measured-and-named is S2: the classifier keeps reporting them.
   proc_exec: (string, string) -> string ! {IO, Process, FS},
   clock_now: () -> int ! {Clock},
   env_get: (string, string) -> string ! {Env}
@@ -101,7 +178,21 @@ export type ExtCtx = {
   context_limit: int,
   ports: ExtPorts,
   artifacts: Json,
-  telemetry: TokenTelemetry
+  telemetry: TokenTelemetry,
+  -- WI-B2b: the INBOUND half of the world token. The successor travels back out
+  -- on the hook's outcome record; this is where it comes in.
+  --
+  -- It rides on `ExtCtx` rather than being added as a parameter to every hook
+  -- deliberately: `ExtCtx` is a record, so this is an ADDITIVE field (A12's P1
+  -- argument again), and it leaves the type NAME of every hook slot's parameter
+  -- list unchanged. That is what keeps D5's three rowless slots
+  -- (`on_describe_tools`, `on_build_system_prompt`, `on_tool_policy`)
+  -- byte-identical through this ABI major, which B1, B2a and B3 all managed and
+  -- which `make profile_coverage` would otherwise report.
+  --
+  -- A hook that performs no world-threading effect returns this value unchanged
+  -- as its `next_state`. That is D1's identity transition, not a stub.
+  world: ExtWorld
 }
 
 export type PromptPatch = {
@@ -153,6 +244,28 @@ export type PreStepDecision
   | PassThroughObserved(code: string, fields: [DiagnosticField])
   | Compacted(msgs: [Msg], note: string, artifacts: Json)
   deriving (Eq)
+
+-- WI-B2b. THE OUTBOUND HALF of the world token, one wrapper per hook result.
+--
+-- The four decision types above are unchanged and stay SUMS — they are genuine
+-- alternatives and a reader matches on them. What is added is a RECORD around
+-- each, carrying the decision beside the successor, which is plan decision P1's
+-- shape: a later effect class adds a field to these four records, where folding
+-- the successor INTO each sum would have meant restructuring every variant and
+-- every match arm in the tree.
+--
+-- `next_state` is named to satisfy `derive.py`'s `SUCCESSOR_FIELD`, exactly as
+-- on `AiStepOutcome` above — see that type's comment.
+--
+-- A hook that performs no world-threading effect writes
+-- `{ decision: <its decision>, next_state: ctx.world }`. Returning a DIFFERENT
+-- world than the one it was given, without having called a world-threading
+-- port, is the F6 defect this whole protocol exists to prevent.
+export type PreStepOutcome = { decision: PreStepDecision, next_state: ExtWorld }
+export type ToolHandleOutcome = { decision: ToolHandleDecision, next_state: ExtWorld }
+export type ResponseInterceptOutcome = { decision: ResponseInterceptDecision, next_state: ExtWorld }
+export type FinalizeOutcome = { decision: FinalizeDecision, next_state: ExtWorld }
+
 export type ExtensionHooks = {
   id: string,
   provided_tools: [string],
@@ -165,14 +278,14 @@ export type ExtensionHooks = {
   -- two callers of `ai_step` in the tree — `compaction_ai.summarize_attempt`
   -- and `reject_fixtures.nocache_pre_step` — are both on the `on_pre_step` path.
   -- That is why THIS row moved and the other two did not: measured, not assumed.
-  on_pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
+  on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
   on_tool_handle: (ExtCtx, ToolCallEnvelope)
-    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
   on_response_intercept: (ExtCtx, string)
-    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
   on_solver_candidate: (ExtCtx, string)
-    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
 }
 
 export type ExtRegistry = { hooks: [ExtensionHooks] }

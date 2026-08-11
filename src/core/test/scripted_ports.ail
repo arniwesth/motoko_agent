@@ -101,7 +101,7 @@ pure func tool_call() -> ToolCall {
 }
 
 pure func scripted_step() -> ScriptedStep {
-  { prose: "", tool_calls: [tool_call()], input_tokens: 3, output_tokens: 4, finish_reason: "tool_calls", chunks: [] }
+  { prose: "", tool_calls: [tool_call()], input_tokens: 3, output_tokens: 4, finish_reason: "tool_calls", chunks: [], error_code: "", error_message: "", advance_ms: 0 }
 }
 
 pure func test_scripted_model_threads_state() -> bool

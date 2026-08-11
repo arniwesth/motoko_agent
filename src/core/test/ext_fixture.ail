@@ -9,7 +9,7 @@ import std/json (jo, kv, js)
 import std/option (None)
 import std/string (contains)
 import src/core/config (VerificationConfig)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
   ExtCtx,
@@ -63,31 +63,31 @@ pure func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecis
   Allow
 }
 
-pure func handle_tool(_ctx: ExtCtx, call: ToolCallEnvelope)
-  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+pure func handle_tool(ctx: ExtCtx, call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
   if call.tool == "FixtureEcho" then
     Handled(fixture_result("fixture-internal-tool-id", "FixtureEcho", "fixture handled ${call.id}"))
   else Delegate
-}
+}, next_state: ctx.world } }
 
-pure func intercept_response(_ctx: ExtCtx, response: string)
-  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func intercept_response(ctx: ExtCtx, response: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   if contains(response, "[FIXTURE_INTERCEPT]") then
     InterceptHandled(fixture_result("fixture-intercept-id", "FixtureIntercept", "fixture intercept"))
   else NoIntercept
-}
+}, next_state: ctx.world } }
 
-pure func solve_candidate(_ctx: ExtCtx, candidate: string)
-  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func solve_candidate(ctx: ExtCtx, candidate: string)
+  -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   if contains(candidate, "[FIXTURE_CONTINUE]") then
     ContinueWithFeedback("fixture feedback")
   else NoDecision
-}
+}, next_state: ctx.world } }
 
-pure func pre_step(_ctx: ExtCtx, msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+pure func pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
   Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}", empty_ext_artifacts())
-}
+}, next_state: ctx.world } }
 
 export pure func fixture_rt() -> ExtRuntime {
   let hooks: ExtensionHooks = {

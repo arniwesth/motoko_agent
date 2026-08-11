@@ -21,7 +21,7 @@ import std/io (println)
 import std/option (None)
 import std/json (jo, kv, js, jnum, jb, encode)
 import std/ai (ToolSchema)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PromptPatch, BudgetPatch, Msg, PassThrough)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PromptPatch, BudgetPatch, Msg, PassThrough, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
 import src/core/config (VerificationConfig)
 import src/core/ext/runtime (dispatch_tool_handle)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
@@ -29,7 +29,7 @@ import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, result_to_j
 
 -- Stub that handles any "FakeTool" call by returning a synthetic envelope.
 -- For other tools, returns Delegate so the native path takes over.
-pure func handle_fake_tool(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+pure func handle_fake_tool(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
   if call.tool == "FakeTool" then {
     let env: ToolResultEnvelope = {
       tool_call_id: call.id,
@@ -43,19 +43,19 @@ pure func handle_fake_tool(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDe
   } else {
     Delegate
   }
-}
+}, next_state: ctx.world } }
 
 pure func nooppolicy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   NoOpinion
 }
 
-pure func noop_response_intercept(_ctx: ExtCtx, _response: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func noop_response_intercept(ctx: ExtCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   NoIntercept
-}
+}, next_state: ctx.world } }
 
-pure func nodecision_solver_candidate(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func nodecision_solver_candidate(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
   NoDecision
-}
+}, next_state: ctx.world } }
 
 pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
   { prepend: [], append: [] }
@@ -67,9 +67,9 @@ pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch !
 
 pure func empty_describe_tools() -> [ToolSchema] { [] }
 
-pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+pure func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
   PassThrough
-}
+}, next_state: ctx.world } }
 
 func mk_handle_hook() -> ExtensionHooks {
   {
@@ -111,7 +111,7 @@ export func main() -> () ! {Clock, Env, IO, AI, FS, Net, Process, Rand, SharedMe
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry()
+	    telemetry: zero_token_telemetry(), world: empty_ext_world()
 	  };
 
   -- Case 1: FakeTool — extension should return Handled
@@ -121,7 +121,7 @@ export func main() -> () ! {Clock, Env, IO, AI, FS, Net, Process, Rand, SharedMe
     arguments: jo([])
   };
 
-  let decision_fake = dispatch_tool_handle(rt, ctx, envelope_fake);
+  let decision_fake = dispatch_tool_handle(rt, ctx, envelope_fake).decision;
   match decision_fake {
     Delegate => println("--- M5 handle smoke FAIL: FakeTool — expected Handled, got Delegate ---"),
     Handled(env) => {
@@ -140,7 +140,7 @@ export func main() -> () ! {Clock, Env, IO, AI, FS, Net, Process, Rand, SharedMe
     arguments: jo([])
   };
 
-  let decision_bash = dispatch_tool_handle(rt, ctx, envelope_bash);
+  let decision_bash = dispatch_tool_handle(rt, ctx, envelope_bash).decision;
   match decision_bash {
     Handled(_env) => println("--- M5 handle smoke FAIL: BashExec — expected Delegate, got Handled ---"),
     Delegate => println("--- M5 handle smoke PASS: BashExec correctly delegated to native ---")

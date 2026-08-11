@@ -4,7 +4,7 @@ import std/env (getEnvOr)
 import std/extension (requireWorkdirFile)
 import std/option (Option, None)
 import std/result (Result, Ok, Err)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtensionHooks, ExtCtx, BudgetPlan, BudgetPatch,
   ToolCallEnvelope, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   NoIntercept, NoDecision
@@ -46,18 +46,16 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process,
       no_budget_patch()
     },
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
         PassThrough
-      },
+      }, next_state: ctx.world } },
     on_tool_policy: on_tool_policy,
-    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-      on_tool_handle(ctx, call)
-    },
-    on_response_intercept: func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call) },
+    on_response_intercept: func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
       NoIntercept
-    },
-    on_solver_candidate: func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
       NoDecision
-    }
+    }, next_state: ctx.world } }
   }
 }

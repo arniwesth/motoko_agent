@@ -4,7 +4,7 @@ import std/json (Json, jo, kv, js, ja, decode, getString, get, asArray, asString
 import std/net (httpGet, httpPost)
 import std/option (Option, Some, None)
 import std/rand (uuid4)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtCtx, ExtensionHooks, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ToolResultEnvelope, ResponseInterceptDecision, FinalizeDecision,
   ToolCallEnvelope, Msg, PreStepDecision
@@ -155,7 +155,7 @@ export func make_hooks(cfg: A2AConfig) -> ExtensionHooks ! {Net, Rand} {
   let agents = cfg.agents;
   let schemas = collect_schemas(agents);
   let names = collect_tool_names(agents);
-  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
     match find_agent_for_tool(agents, call.tool) {
       None  => Delegate,
       Some(a) => {
@@ -164,13 +164,13 @@ export func make_hooks(cfg: A2AConfig) -> ExtensionHooks ! {Net, Rand} {
         Handled(make_result(call, result, 0))
       }
     }
-  };
-  let intercept = func(_ctx: ExtCtx, _text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let intercept = func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     NoIntercept
-  };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     NoDecision
-  };
+  }, next_state: ctx.world } };
   {
     id: "a2a",
     provided_tools: names,
@@ -181,7 +181,7 @@ export func make_hooks(cfg: A2AConfig) -> ExtensionHooks ! {Net, Rand} {
     on_tool_handle:        handle,
     on_response_intercept: intercept,
     on_solver_candidate:   finalize,
-    on_pre_step:           func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
+    on_pre_step:           func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
   }
 }
 

@@ -156,6 +156,19 @@ field the encoder writes and the decoder ignores; both halves type-check and the
 until a replay serves a different response while every count still balances. A14 and A15 encode
 programs for D8's persistence and inherit this directly.
 
+**S12. An identity transition is the correct answer for a component that did nothing and a silent
+defect for one that did something — and no type distinguishes them.** Earned by B2b, and it is the
+band B2a's closed-row argument does **not** cover. That argument holds and was re-confirmed: closed
+rows admit exactly one width, so not one of B2b's 181 rowed sites had two answers. But B2b changed the
+*shape* of results, not just their rows, and `next_state: ctx.world` type-checks everywhere. Two
+instances, both in the one hook in the tree that actually calls `ai_step`: a re-wrap that **discarded
+the world the summarizer advanced** (F6, again), and **failure branches returning the entered world
+after attempts had been made and script entries consumed** — *the decision falls back; the world must
+not.* Both pass every test in the tree. B2b's shipped mitigation is comment-level and says so:
+**a real instrument is an assertion that a component which performed a call did not return the state
+it was given**, which needs a counter the token does not carry. **Where you cannot build the
+instrument, say the mitigation is weaker than a check rather than letting a comment read as one.**
+
 **S11. `export type X = X` is prohibited where `X` is a record — it resolves to itself and fails at
 every construction site, never at the cause.** Earned by B2a, which found two instances. v0.33.0
 accepts the alias at its declaration and treats it as unexpandable thereafter, so the error surfaces
@@ -166,6 +179,16 @@ B2a's own first reading called it "a latent instance, safe because `ScriptedStep
 constructor"; it is a record, and the compiler corrected the comment. **The prohibition is on the
 form, not on the symptom: it is a defect wherever `X` is a record, whether or not the tree is
 currently green.** Repair by removing the re-export and repointing importers.
+
+**Second clause, from B2b — the same species with a different shape: a type declared locally in a
+module that imports another module declaring the same NAME is silently shadowed by the imported
+one, and the local declaration is dead.** B2b's structural-versus-nominal probe passed on its first
+run **and so did three mutants** — an extra record field, an extra sum variant, a changed payload
+type — because the probe's local types were being silently replaced by the imported ones it was
+comparing against. The probe looked like a result and was inert. Only renaming the types apart
+produced the real answer (records unify **structurally**; sums are **nominal**). **Both clauses are
+one defect: a declaration the compiler accepts and then quietly discards.** The control that failed
+is what separated a finding from a fiction, and it was nearly skipped.
 
 **S10. Drive tooling off the compiler's VERDICT, never off its prose — a diagnostic's labels are an
 interface, and this one is context-dependent.** Earned by WI-B3. `ailang check` reports
@@ -1774,6 +1797,46 @@ M2's prediction was right about `ai_step += Trace` and wrong about the breadth. 
 baseline of 213/22. **What remains of B2 is B2b alone: the world-token widening.** The row
 corrections are done.
 
+**B2b LANDED 2026-08-04, and the exclusion is lifted — but the conformance decision it forces is
+DEFERRED to the plan, deliberately.** The token is an **opaque `ExtWorld = { token: Json }`**, and
+that was *forced rather than preferred*: the ABI imports only `std/option` and `std/json`, and
+`motoko_core` depends on the ABI, so **the ABI cannot name `WorldState`** — the dependency cannot
+invert. Inlining fails because AILANG unifies records **structurally** but sums **nominally**
+(probed), and `WorldState` transitively contains sums. Parametrising the ABI would rewrite two of
+D5's three rowless slots. The inbound half rides on **`ExtCtx.world` as an additive field**, which is
+the design's whole trick: **no hook's parameter list changed type, so all four un-widened slots are
+byte-identical to HEAD** and `make profile_coverage` is green.
+
+**`ai_step` left the classifier-2 set — 3 → 2, with zero member call sites — and the pin moved
+deliberately.** `make ext_call_inventory_selftest` is green *with the pin moved*, which is the point.
+**`make driver_only` now exits 2**, reporting that its manifest fixture records a classifier-2 set the
+tool no longer derives. **That is the stop condition firing correctly and it is reported, not
+repaired.**
+
+**Two questions, answered separately as required.** Did `ai_step` stop being a classifier-2 caller?
+**Yes, measured.** Is `compaction_ai` now installable? B2b said **"yes on the evidence"** — and that
+reasoning is **correct against the classifier-2 objection and does not reach a second, independent
+barrier.** Measured at HEAD: four of its **unconditionally-dispatched** slots are excludable-only
+under D5's declared-row rule — `on_budget_plan` (constant but declares `{Env, FS}`) and
+`on_response_intercept` / `on_solver_candidate` / `on_pre_step` (nine-effect rows) — and D5 forbids
+installing an extension with *any* unconditionally-dispatched hook excluded. **So the omission
+survives the death of its original reason, and the recorded reason is now false either way.** The one
+genuinely open question is whether `on_pre_step` qualifies under D5's **criterion 2** — effectful only
+through world-mediated ports with explicit world state returned — which B2b's widening may have made
+true, and which the declared-row paragraph does not govern, since that paragraph constrains criterion
+**1**. **WI-B4 decides it and records the reasoning.** The rest of B2b's finding stands: **yes on the
+evidence** was — it calls no other
+classifier-2 field, so the recorded reason for omitting it is void and D5's
+unconditionally-dispatched objection has nothing left to bite on. **Re-issuing `driver_only` with
+`compaction_ai` installed changes what the profile COVERS — a conformance claim, not a tidy-up — so
+it is the plan's to take, with a profile version bump.**
+
+**FOUR artifacts encode the old exclusion, not three.** The derived set, the pin
+(`tools/ext_call_inventory/fixtures/expected.json` — note the `fixtures/` segment), `driver_only`'s
+omission record, and **`dst_fault_catalogue.ail:299-333`**, whose `NoReachableBranch` still says
+`session.ext_ai_step` "hands the port a FRESH EMPTY world". It no longer does. All four must agree
+before the name gate.
+
 **Two counts in this plan were wrong and are corrected by measurement.** The 191 rowed sites are
 **206** — the grep counts only `<Type> ! {row}` annotations and misses **15 lambda-form** hook
 assignments, three of which were B1's un-widened cascade sites, which is how the undercount
@@ -1836,6 +1899,18 @@ B1's mutation loop, which could not complete — and B3's, which also could not.
 carrying cascade sites were behind the `images` wall, and B3 adds **64 further `images` sites in
 files that die on the third frontier before type checking**. Both sets are **unverified, which must
 not read as verified**.
+
+**`derive.py` FAILS OPEN and its failure is indistinguishable from a pass — B2b nearly shipped that
+twice, and B4 must not trust its exit code.** After the widening the tool reported `ai_step unrouted`,
+which is not a milder `member`: it means the field *bypasses the world protocol entirely* and removes
+it from the gated set. The tool's own comment calls that class of answer "the single most expensive
+bug in this tool's history." Two innocuous constructs caused it independently — **a nested paren in an
+argument list** (its one-level call-forwarding regex cannot match it) and **an anonymous record return
+type** (it takes the first non-effect-row `{` after a signature as the body, and got the return type).
+Both were fixed at the source by hoisting a `let` and naming the type. **Any run that touches
+`ext_ports_of` or its helpers must read the derived membership, not the exit status** — and the tool
+needs a **positive control**: a fixture whose field *must* resolve to a seam and which fails loudly if
+it stops. `control_resolved.ail` checks call-site resolution, not the bridge.
 
 **B2a narrows the target and says why.** Its **123 closed-row lockstep sites need no mutation loop**:
 a closed row admits exactly one width — an implementation must *equal* its ABI field's row, not be a

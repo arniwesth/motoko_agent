@@ -3,7 +3,7 @@ module sunholo/motoko_ext_ailang_docs/ailang_docs
 import std/option (Option, Some, None)
 import std/fs (fileExists)
 
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   PassThrough, PreStepDecision, Msg,
@@ -30,7 +30,7 @@ func workdir_is_ailang_project(workdir: string) -> bool ! {FS} {
   fileExists("${workdir}/ailang.toml")
 }
 
-export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS, Rand} {
+export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process, FS, Rand}  { { decision: {
   match resolve_tool(call.tool, mappings) {
     Some(m) => match run_mcp_tool(call.id, m.canonical, ctx.workdir, cfg, m.mcp_name, call.arguments) {
       Some(result) => Handled(result),
@@ -38,7 +38,7 @@ export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx
     },
     None => Delegate
   }
-}
+}, next_state: ctx.world } }
 
 export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS, Process, Rand} {
   let active = workdir_is_ailang_project(workdir);
@@ -46,15 +46,13 @@ export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) 
   let mappings = tool_mappings();
   let tools = if active then all_tool_names(mappings) else [];
   let schemas = if active then tool_schemas() else [];
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-    on_tool_handle(cfg, mappings, ctx, call)
-  };
-  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(cfg, mappings, ctx, call) };
+  let intercept = func(ctx: ExtCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     NoIntercept
-  };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     NoDecision
-  };
+  }, next_state: ctx.world } };
   {
     id: "ailang_docs",
     provided_tools: tools,
@@ -65,9 +63,9 @@ export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) 
         no_budget_patch()
       },
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+      func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
         PassThrough
-      },
+      }, next_state: ctx.world } },
     on_tool_policy:
       \_ctx _call. NoOpinion,
     on_tool_handle: handle,

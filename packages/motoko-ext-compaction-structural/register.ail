@@ -1,7 +1,7 @@
 module sunholo/motoko_ext_compaction_structural/register
 
 import std/option (None)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
   ExtCtx,
@@ -20,9 +20,9 @@ func no_budget_patch(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS}
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-func pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+func pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
   compact_for_pre_step(ctx, msgs)
-}
+}, next_state: ctx.world } }
 
 export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
   {
@@ -33,8 +33,8 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
     on_budget_plan: no_budget_patch,
     on_pre_step: pre_step,
     on_tool_policy: \_ctx _call. NoOpinion,
-    on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate },
-    on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-    on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
   }
 }

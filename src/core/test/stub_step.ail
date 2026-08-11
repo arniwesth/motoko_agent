@@ -33,7 +33,7 @@ import src/core/dst_interaction (
   Interaction, StreamChunkRecord, TimedOutcome,
   ProviderIdentity, OutcomeOk
 )
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ExtRuntime, ExtRegistry, ExtensionHooks, ExtCtx,
   BudgetPlan, PromptPatch, BudgetPatch,
   ToolPolicyDecision, ToolHandleDecision,
@@ -462,7 +462,7 @@ export pure func prose_step(text: string) -> ScriptedStep {
     input_tokens: 100,
     output_tokens: 50,
     finish_reason: "stop",
-    chunks: []
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
   }
 }
 
@@ -473,7 +473,7 @@ export pure func chunked_prose_step(text: string, chunks: [string]) -> ScriptedS
     input_tokens: 100,
     output_tokens: 50,
     finish_reason: "stop",
-    chunks: chunks
+    chunks: chunks, error_code: "", error_message: "", advance_ms: 0
   }
 }
 
@@ -484,7 +484,7 @@ export pure func tool_step(tool: string, args_json: string, step_id: string) -> 
     input_tokens: 200,
     output_tokens: 100,
     finish_reason: "tool_calls",
-    chunks: []
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
   }
 }
 
@@ -502,7 +502,7 @@ export pure func token_step(prose: string, input_tok: int, output_tok: int) -> S
     input_tokens: input_tok,
     output_tokens: output_tok,
     finish_reason: "stop",
-    chunks: []
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
   }
 }
 
@@ -517,7 +517,7 @@ export pure func continuing_token_step(input_tok: int, output_tok: int, step_id:
     input_tokens: input_tok,
     output_tokens: output_tok,
     finish_reason: "tool_calls",
-    chunks: []
+    chunks: [], error_code: "", error_message: "", advance_ms: 0
   }
 }
 
@@ -535,18 +535,18 @@ export func deny_all_rt() -> ExtRuntime {
   let deny_policy = func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
     Deny("test: all tools denied")
   };
-  let no_handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope)
-    -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let no_handle = func(ctx: ExtCtx, _call: ToolCallEnvelope)
+    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
     Delegate
-  };
-  let no_intercept = func(_ctx: ExtCtx, _text: string)
-    -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let no_intercept = func(ctx: ExtCtx, _text: string)
+    -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     NoIntercept
-  };
-  let no_solver = func(_ctx: ExtCtx, _text: string)
-    -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let no_solver = func(ctx: ExtCtx, _text: string)
+    -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
     NoDecision
-  };
+  }, next_state: ctx.world } };
   let hooks: ExtensionHooks = {
     id: "test_deny_all",
     provided_tools: [],
@@ -555,9 +555,9 @@ export func deny_all_rt() -> ExtRuntime {
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
       PassThrough
-    },
+    }, next_state: ctx.world } },
     on_tool_policy: deny_policy,
     on_tool_handle: no_handle,
     on_response_intercept: no_intercept,

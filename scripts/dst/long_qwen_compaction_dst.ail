@@ -31,7 +31,7 @@ import src/core/phase_vocab (
   ErrorEvent,
   RunSummary
 )
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
   ExtRegistry,
   ExtensionHooks,
@@ -334,13 +334,11 @@ func compaction_ai_hook() -> ExtensionHooks ! {AI, Clock, Env, FS, IO, Net, Proc
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
     on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
-    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
-      compact_with_ai(ctx, msgs, cfg)
-    },
+    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { compact_with_ai(ctx, msgs, cfg) },
     on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
   }
 }
 
@@ -351,13 +349,13 @@ func structural_hook() -> ExtensionHooks {
     on_describe_tools: \_ . [],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
     on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
-    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
       compact_for_pre_step(ctx, msgs)
-    },
+    }, next_state: ctx.world } },
     on_tool_policy: \_ _ . Allow,
-    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    on_tool_handle: \ctx _. { decision: Delegate, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
   }
 }
 
@@ -383,9 +381,9 @@ func long_tool_hook() -> ExtensionHooks {
     on_describe_tools: \_ . [{ name: "LongResult", description: "deterministic long-result fixture", parameters: "{\"type\":\"object\"}" }],
     on_build_system_prompt: \_ . { prepend: [], append: [] },
     on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
-    on_pre_step: \_ _ . PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
+    on_pre_step: \ctx _. { decision: PassThrough, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
     on_tool_policy: \_ _ . Allow,
-    on_tool_handle: func(_ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+    on_tool_handle: func(ctx: ExtCtx, call) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
       let next = next_marker_from_call_id(call.id);
       Handled({
         tool_call_id: call.id,
@@ -395,9 +393,9 @@ func long_tool_hook() -> ExtensionHooks {
         stderr: "",
         metadata: jo([kv("fixture", js("long_qwen")), kv("next", js(next))])
       })
-    },
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    }, next_state: ctx.world } },
+    on_response_intercept: \ctx _. { decision: NoIntercept, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \ctx _. { decision: NoDecision, next_state: ctx.world } ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
   }
 }
 
@@ -780,13 +778,13 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
     history_slice: [],
     state_key: "k",
     ports: {
-      ai_step: func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+      ai_step: func(world: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} { { result: {
         let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
         match ports.model_step(empty_world_state(), model, msgs_to_messages(msgs), on_chunk).result {
           Ok(r) => Ok(r.message.content),
           Err(e) => Err(e.message)
         }
-      },
+      }, next_state: world } },
       proc_exec: fixed_ext_exec,
       clock_now: fixed_ext_clock,
       env_get: fixed_ext_env

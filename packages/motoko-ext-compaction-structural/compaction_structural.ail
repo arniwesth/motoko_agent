@@ -4,7 +4,7 @@ import std/string (contains, length, substring)
 import std/list (foldl)
 import std/result (Result, Ok, Err)
 import std/json (jo)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, 
   ExtCtx,
   Msg,
   PreStepDecision,
@@ -233,7 +233,7 @@ func test_ctx(limit: int) -> ExtCtx {
     context_limit: limit,
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry()
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
   }
 }
 

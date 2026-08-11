@@ -117,7 +117,7 @@ import src/core/dst_corpus (
   first_corpus_message, corpus_rules_of, render_corpus, corpus_rules_version,
   trajectory_key, eq_ints
 )
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan, BudgetPatch, Delegate, ExtCtx, ExtRuntime, ExtensionHooks,
   FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
   PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
@@ -179,14 +179,14 @@ func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
 func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
-func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { Delegate }
-func no_intercept(_ctx: ExtCtx, _text: string)
-  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
-func no_solver(_ctx: ExtCtx, _text: string)
-  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
-func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
+func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoIntercept }, next_state: ctx.world } }
+func no_solver(ctx: ExtCtx, _text: string)
+  -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: { NoDecision }, next_state: ctx.world } }
+func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("generated: approval required", DenyAfterTimeout)
 }

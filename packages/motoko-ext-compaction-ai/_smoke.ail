@@ -34,7 +34,7 @@ import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config)
 import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
 import pkg/sunholo/motoko_ext_compaction_ai/types (default_config)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, BudgetPlan, PassThrough, PassThroughObserved, Compacted)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, BudgetPlan, PassThrough, PassThroughObserved, Compacted)
 
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   -- Assertion 1: register_with_config doesn't panic
@@ -58,7 +58,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     context_limit: 1,
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry()
+    telemetry: zero_token_telemetry(), world: empty_ext_world()
   };
   match compact_with_ai(ctx, [{ role: "user", content: "long enough to trigger compaction", tool_calls: [], tool_call_id: "" }], default_config()) {
     PassThrough => println("OK: compact_with_ai can pass through"),

@@ -555,7 +555,7 @@ export pure func provider_steps_served(xs: [Interaction]) -> int {
     i :: rest =>
       (match i.identity.body {
          ProviderIdentity(_, _, _) =>
-           match decode_provider_outcome(i.outcome.payload) {
+           match decode_provider_outcome(i.outcome.payload, i.outcome.advance_ms) {
              ProviderServed(_) => 1,
              ProviderScriptExhausted => 0,
              ProviderUndecodable(_) => 0
@@ -658,7 +658,7 @@ pure func script_of(xs: [Interaction]) -> Result[[ScriptedStep], ReplayRefusal] 
     i :: rest =>
       match i.identity.body {
         ProviderIdentity(_, _, _) =>
-          match decode_provider_outcome(i.outcome.payload) {
+          match decode_provider_outcome(i.outcome.payload, i.outcome.advance_ms) {
             ProviderUndecodable(why) => Err(ProviderOutcomeUndecodable(i.identity.ordinal, why)),
             ProviderScriptExhausted => script_of(rest),
             ProviderServed(s) =>
@@ -946,7 +946,7 @@ pure func test_a_differing_outcome_is_a_mismatch_even_when_the_identity_matches(
 pure func provider_i(ord: int, prose: string) -> Interaction {
   mk(ProviderIdentity("loop_v2", ord, "m"), ord,
      ok_out(0, encode_provider_outcome({ prose: prose, tool_calls: [], input_tokens: 1,
-                                         output_tokens: 2, finish_reason: "stop", chunks: [] })))
+                                         output_tokens: 2, finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 })))
 }
 
 pure func exhausted_i(ord: int) -> Interaction {
@@ -1018,8 +1018,8 @@ pure func test_a_faithful_reconstitution_produces_no_findings() -> bool
   {
     let p = fixture_program();
     let w = { empty_world_state() |
-              script: [{ prose: "s0", tool_calls: [], input_tokens: 1, output_tokens: 2, finish_reason: "stop", chunks: [] },
-                       { prose: "s1", tool_calls: [], input_tokens: 1, output_tokens: 2, finish_reason: "stop", chunks: [] }],
+              script: [{ prose: "s0", tool_calls: [], input_tokens: 1, output_tokens: 2, finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 },
+                       { prose: "s1", tool_calls: [], input_tokens: 1, output_tokens: 2, finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 }],
               clock_ms: 5,
               approvals: ["yes"],
               env: p.initial_world.synthetic_environment,
@@ -1049,7 +1049,7 @@ pure func test_every_queue_is_balanced_in_both_directions() -> bool
   tests [((), true)]
   {
     let p = fixture_program();
-    let good: ScriptedStep = { prose: "s", tool_calls: [], input_tokens: 0, output_tokens: 0, finish_reason: "stop", chunks: [] };
+    let good: ScriptedStep = { prose: "s", tool_calls: [], input_tokens: 0, output_tokens: 0, finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 };
     let tool: ScriptedTool = { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT" };
     let base = { empty_world_state() |
                  script: [good, good], clock_ms: 5, approvals: ["yes"],

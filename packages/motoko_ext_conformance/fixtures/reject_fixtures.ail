@@ -94,7 +94,7 @@ func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
   Compacted([assistant_summary(summary), first_msg(msgs)], "reject fixture: no cache", jo([]))
 }
 
-func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
+func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
