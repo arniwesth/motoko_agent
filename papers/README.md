@@ -53,6 +53,7 @@ Papers that informed Motoko's design and point to future research directions.
 
 - **AlphaEvolve** — AlphaEvolve framework for evolutionary optimization; relevant to automated agent improvement
 - **Qwopus3-5-27b — Complete Guide to LLM Fine-tuning** — Fine-tuning methodology reference for model adaptation
+- **Deli_AutoResearch** — [victorchen96.github.io/auto_research](https://victorchen96.github.io/auto_research/framework.html) — Deli Chen's (DeepSeek) protocol for long-horizon autonomous research: orchestrator/worker separation, heartbeat watchdogs, stall detection, and a paper-writing skill with simulated peer review under anti-inflation rules. Polices agent-written papers the way Motoko's DST polices agent-written code; the review protocol's transferable subset is adopted in the DST technical report's freeze checklist (`papers/motoko-dst-report/SCOPE.md`)
 
 ---
 
