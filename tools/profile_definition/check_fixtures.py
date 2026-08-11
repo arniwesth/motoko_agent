@@ -195,12 +195,90 @@ def check_omission_basis(profile_src, required):
 
     print(f"  ✓ omission basis intact: on_budget_plan is Unconditional, declares NO effect "
           f"row (WI-D6; was ! {{Env, FS}} through WI-D5), and returns {ret_type} (no successor)")
-    print("    → the slot is coverable under D5 criterion 1, so an extension IS installable")
-    print("    → driver_only installs none anyway: the empty install list is now CHOSEN")
-    print("      rather than FORCED, and covers exactly as much as before, which is nothing")
     if not required:
         print("    ! note: check 3 is now VACUOUS (zero classifier-2 member call sites). "
               "This check, not that one, is what holds the omission.")
+
+    check_barrier_count(abi, disp)
+
+
+def check_barrier_count(abi, disp):
+    """WI-D7. THE INSTALLABILITY QUESTION, DERIVED RATHER THAN ASSERTED.
+
+    THIS CHECK EXISTS BECAUSE THE LINE IT REPLACES WAS FALSE. Through WI-D6
+    this file printed, on every run:
+
+        → the slot is coverable under D5 criterion 1, so an extension IS
+          installable
+
+    and it does not follow. `on_budget_plan` was ONE of FOUR unconditionally
+    dispatched slots. D5 forbids installing an extension with any
+    unconditionally-dispatched hook excluded, so ALL of them must be coverable
+    before any extension is installable, and the other three were not. D6's
+    report and its design-document edit inherited the same wrong conclusion;
+    `dst_driver_only.ail` stated it correctly at the same time, and the two
+    disagreed with nothing going red. That is what this function fixes: the
+    count is now DERIVED from the ABI and the dispatch table on every run, so
+    no artifact can carry a stale answer to it.
+
+    THE RULE, read straight off D5: a slot is a BARRIER when it is
+    unconditionally dispatched AND declares a non-empty effect row. A non-empty
+    row fails criterion 1 outright. It could still pass criterion 2, but only
+    if every effect in it is a world-mediated port — and none of the effects in
+    any of these rows is. So a non-empty row on an unconditionally-dispatched
+    slot is a barrier, and the count of barriers is the number of things
+    standing between this tree and an installable extension.
+
+    WHAT GOES RED, AND WHY THAT IS THE POINT. If the count reaches ZERO, an
+    extension becomes installable and the omission has to be DECIDED rather
+    than inherited — which is WI-C5's trigger, not an ABI edit's side effect.
+    This is B4's guard shape, which WI-D6 recorded as the standard: pin the
+    FACT, not the direction, so the check fires whichever way the row moves.
+    """
+    slots = ["on_budget_plan", "on_pre_step", "on_tool_handle",
+             "on_response_intercept", "on_solver_candidate"]
+
+    barriers, covered, gated = [], [], []
+    for slot in slots:
+        # `\s*` spans newlines: two of these five slots wrap their arrow onto
+        # the next line, and a line-anchored pattern would read them as rowless.
+        m = re.search(re.escape(slot) + r":\s*\([^)]*\)\s*->\s*\w+\s*(!\s*\{([^}]*)\})?",
+                      abi, re.M)
+        if not m:
+            fail(f"could not read `{slot}`'s declaration in {ABI_TYPES.relative_to(REPO)} — "
+                 "the barrier count cannot be derived, so installability is unknown")
+        row = (m.group(2) or "").strip()
+
+        # The dispatch classification is a SECOND producer: it lives in
+        # dst_profile_coverage.ail, not in the ABI, and neither derives from
+        # the other (S16).
+        camel = "On" + "".join(p.capitalize() for p in slot.removeprefix("on_").split("_"))
+        if not re.search(camel + r"\s*=>\s*Unconditional", disp):
+            gated.append(slot)
+        elif row:
+            barriers.append((slot, row))
+        else:
+            covered.append(slot)
+
+    n = len(barriers)
+    print(f"  ✓ barrier count DERIVED from the ABI rows and the dispatch table: {n}")
+    for slot, row in barriers:
+        print(f"      BARRIER  {slot}: unconditionally dispatched, declares ! {{{row}}}")
+    for slot in covered:
+        print(f"      coverable {slot}: unconditionally dispatched, declares NO row")
+    for slot in gated:
+        print(f"      gated     {slot}: excludable, so not a barrier")
+
+    if n == 0:
+        fail("the barrier count has reached ZERO: every unconditionally-dispatched hook\n"
+             "      declares an empty effect row, so an extension IS now installable in a\n"
+             "      conformant profile. That is WI-C5's trigger and it must be DECIDED, not\n"
+             "      inherited as a side effect of an ABI edit. Re-decide driver_only's empty\n"
+             "      install list, and note that installing anything is a coverage claim and a\n"
+             "      profile version bump. See the header of src/core/dst_driver_only.ail.")
+
+    print(f"    → {n} barrier(s) stand, so NO extension is installable in a conformant profile")
+    print("    → driver_only's empty install list is therefore still not a free choice")
 
 
 def main():

@@ -367,6 +367,35 @@ sides.** D6's answer is the general one: the gate now derives its subject list f
 `registry_generated.ail` and asserts membership both ways, so **an extension added tomorrow cannot
 escape measurement by not being noticed.**
 
+**EXTENDED BY WI-D7, ONE LEVEL UP AND AGAINST THE ITEM THAT EARNED THIS RULE: when an item's
+conclusion is "X IS NOW UNBLOCKED", derive the list of things that BLOCK X from a producer and assert
+the COUNT — not just the list of things you changed.** D6 derived its *subject* list from
+`registry_generated.ail` and asserted the agreement, exactly as this rule requires, and then took its
+*barrier* count from prose. **It was wrong by three.** `on_budget_plan` was one of four barriers;
+`on_pre_step`, `on_response_intercept` and `on_solver_candidate` are all unconditionally dispatched
+and none is coverable, so no extension was installable and none is now. **A scope claim and a
+completeness claim are the same kind of claim**, and the checked one held while the unchecked one did
+not.
+
+**The disagreement reached SIX artifacts, two of them EXECUTABLE** — `check_fixtures.py` asserted
+installability in `print()` and `hook_guard_dst.ail` in `println`, on every run since D6 — and they
+could disagree indefinitely because **nothing computed the count.** D7's answer is the general one:
+`make profile_definition` now derives it from the ABI rows and `dst_profile_coverage.hook_dispatch`,
+prints each slot's status, and **goes red at zero** so reaching it is a decision rather than a side
+effect of an ABI edit. Verified at review: it prints
+`3 barrier(s) stand, so NO extension is installable in a conformant profile`.
+
+**EXTENDED BY WI-D7, AND THE EXTENSION IS ABOUT THE ANSWER RATHER THAN THE QUESTION: a reported
+concentration is a CLAIM about what a closure removed, so a closure that did not happen produces
+concentrations that did not happen.** D6 applied S21 correctly — it asked each surviving exemption why
+it survived — and answered *"the reason concentrated"* in three separate files, each locally
+consistent. **All three were downstream of one wrong sentence**, and D7 withdrew them: row 3 still
+rests on an install list no profile *can* fill, row 4's waiver still rests on two reasons rather than
+one, and row 5's *"compose is now actionable"* was false because compose is not installable. A fifth
+site outside the table (`dst_hook_guard`'s unreachability) went the same way. **So: when an item
+reports a concentration, the reason it says was REMOVED must be checked as an artifact, not
+asserted.** A concentration is falsifiable and nothing was falsifying these.
+
 **S21. When a row closes, re-ask of every surviving exemption in every OTHER row why it survives — a
 closure narrows the set of reasons, and a reason that used to be one of many can become the only
 one.** Earned by WI-D5, and it is the only rule here about a defect that gets WORSE as the work gets
@@ -2719,6 +2748,90 @@ because no gate compares them.
 
 **What D6 delivered, stated at its true size: one barrier of four removed, and the argument that
 could remove the other three.** That is a real result.
+
+**WI-D7, 2026-08-06 (~45 min) — THE OTHER THREE MEASURED. NONE FELL. THE COUNT IS STILL THREE.**
+Route A is **refused for all three slots**, each by exactly **one binding of fifteen**, and the
+compiler names the refuser every time: `on_pre_step` by `compaction_ai`, `on_response_intercept` by
+`compose`, `on_solver_candidate` by **`context_mode`**, whose `finalize_with_index` spawns a `node`
+bridge fire-and-forget on the default path — verified at review at `context_mode.ail:185`. **My
+handoff predicted Route A for that slot and "genuinely open" for `on_pre_step`; it was right once of
+three.**
+
+**Two rows narrowed anyway and neither removes a barrier** — `on_response_intercept` to
+`! {IO, Process, FS, Clock}`, `on_solver_candidate` to `! {Process}` — because a non-empty row fails
+criterion 1 at four effects exactly as at nine. **What the narrowings buy is the compiler**: a binding
+that starts reading `Env` now fails to build where at nine effects it compiled silently.
+
+**`on_pre_step`'s barrier is the ROW'S VOCABULARY, and that is the item's sharpest result.** Its one
+performing binding reaches all ten effects through a **single call to `ctx.ports.ai_step`** — a D1
+world-mediated port — and returns `next_state`. **Criterion 2's substance is already satisfied.** What
+refuses it is that criterion 2 is evaluated against the *declared* row, and **a declared row has no
+vocabulary for saying an effect arrives through a world-mediated port.** No narrowing reaches that; it
+needs a port-surface change or a criterion that can read mediation. B4 argued this, and it is now
+measured.
+
+**The runtime capability trap reaches ZERO of fifteen on these slots** — not a reduced fraction, zero,
+because the effects at stake are the ones `register_with_config` itself performs. **So the compiler is
+not the third producer here, it is the only one**, and the gate says so rather than implying a witness
+it does not have. That is D6's fraction rule returning the answer it was written to make visible.
+
+**The barrier count is now a DERIVED, CHECKED ARTIFACT** that goes red at zero. Verified at review:
+`make profile_definition` prints `3 barrier(s) stand, so NO extension is installable in a conformant
+profile`. **This is D5's planning defect 4 discharged for the claim that most needed it.**
+
+*(One correction to D7's own corrections list: it states that D5's and D6's plan entries are still
+owed. Both exist — written at review — and this entry makes three.)*
+
+### WI-D7 — the three remaining barriers, measured. **NONE OF THEM FELL. THE COUNT IS STILL THREE.**
+
+**Executed 2026-08-06.** Method: each slot's row narrowed to nothing tree-wide, then all 71 files of
+the fifteen packages derived from `registry_generated.ail` re-checked. That makes the **effect
+checker** the producer, which is total over inputs where the capability trap is a witness over one
+path — and here it is the **only** producer, because the per-process capability confound D6
+documented blocks the runtime arm for every one of these subjects.
+
+**Fourteen of fifteen bindings accept the empty row in every slot. Each slot is refused by exactly
+ONE, and the compiler names it:**
+
+| Slot | Refused by | Effects, per the compiler | Row after D7 |
+|---|---|---|---|
+| `on_pre_step` | `compaction_ai` | all ten, via `ExtPorts.ai_step` | **unchanged** — ten |
+| `on_response_intercept` | `compose` (inline path) | `Clock, FS, IO, Process` | **narrowed** 9 → 4 |
+| `on_solver_candidate` | `context_mode` | `Process` | **narrowed** 9 → 1 |
+
+Each confirmed a second time from the **body** rather than the annotation, by narrowing the refusing
+helper's own row: `Effect checking failed for function 'fresh_compaction'`, `'on_response_intercept'`,
+`'finalize_with_index'`.
+
+**THE PLAN'S OWN CLAUSE ABOVE WAS WRONG, AND THIS IS THE CORRECTION.** The D6 correction paragraph
+says the other two slots "declare nine effects while returning constants". **`on_solver_candidate`
+does not.** `context_mode.finalize_with_index` spawns a `node` bridge fire-and-forget to index the
+final output — a real subprocess, on the default path. Twelve of the fifteen bindings *are*
+constants, which is how both the handoff and this plan came to say all of them were. **S22 again, and
+this time it bit a barrier count rather than a subject count.**
+
+**NEITHER NARROWING REMOVES A BARRIER.** A non-empty row fails D5 criterion 1 at four effects exactly
+as at nine, and none of `Process`, `FS`, `IO`, `Clock` is a world-mediated port, so criterion 2 fails
+too. What the narrowings buy is the **compiler**: a binding that starts reading `Env` in either slot
+now fails to build. **Three barriers stand and no extension is installable** — and that count is now
+**derived on every run** by `make profile_definition` from the ABI rows and the dispatch table, and
+goes **red if it reaches zero**, because that is WI-C5's trigger rather than an ABI edit's side
+effect.
+
+**THE SHARPEST FINDING IS `on_pre_step`, AND IT IS A SHAPE FINDING RATHER THAN A MEASUREMENT.**
+`compaction_ai` reaches all ten effects through a single call to `ExtPorts.ai_step` — which **is** a
+D1 world-mediated port, returning `AiStepOutcome.next_state`, which `compact_with_ai` returns rather
+than `ctx.world`. **Criterion 2's substance is already satisfied by the only binding that performs
+anything.** What refuses the slot is that criterion 2 is evaluated against the *declared row*, and a
+declared row has no vocabulary for saying an effect arrives through a world-mediated port. **The
+barrier there is the row's vocabulary — not the behaviour, and not the row's width.** No amount of
+narrowing reaches it; it needs either a port-surface change or a criterion that can read mediation.
+
+**`driver_only` v11 → v12**, and it is a claim change with no anchor moved: v11's header said the
+empty install list had become CHOSEN. **It is still FORCED.** The file had disagreed with itself for
+one item — its `omitted_extensions` reason said the three barriers stood while its header said the
+emptiness was a choice, both written by D6 on the same day, and nothing went red because no artifact
+computed the count. **That is now the checked artifact.**
 
 **WI-C5. The second profile: `compose`-bearing.** Depends on **B2, A5, A10 and A12** — B2 for the
 coverage widening, A5 because its routed-set claim is a routing-completeness claim gated on the

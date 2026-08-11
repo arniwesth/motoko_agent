@@ -643,11 +643,11 @@ export func deny_all_rt() -> ExtRuntime {
     Delegate
   }, next_state: ctx.world } };
   let no_intercept = func(ctx: ExtCtx, _text: string)
-    -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+    -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
     NoIntercept
   }, next_state: ctx.world } };
   let no_solver = func(ctx: ExtCtx, _text: string)
-    -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+    -> FinalizeOutcome ! {Process}  { { decision: {
     NoDecision
   }, next_state: ctx.world } };
   let hooks: ExtensionHooks = {

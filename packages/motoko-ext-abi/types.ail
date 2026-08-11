@@ -375,14 +375,107 @@ export type ExtensionHooks = {
   -- two callers of `ai_step` in the tree — `compaction_ai.summarize_attempt`
   -- and `reject_fixtures.nocache_pre_step` — are both on the `on_pre_step` path.
   -- That is why THIS row moved and the other two did not: measured, not assumed.
+  -- WI-D7 MEASURED THIS ROW AND DID NOT MOVE IT. Recorded because "unchanged"
+  -- and "unexamined" are indistinguishable in a diff, and this row is now the
+  -- former.
+  --
+  -- THE MEASUREMENT: all fifteen bindings narrowed to no row at all, tree-wide,
+  -- and `ailang check` run over all 71 files of the fifteen packages derived
+  -- from `registry_generated.ail`. FOURTEEN of fifteen accept the empty row.
+  -- ONE refuses, and the compiler names it:
+  --
+  --   packages/motoko-ext-compaction-ai/register.ail:93
+  --   failed to unify record field 'on_pre_step': incompatible closed rows:
+  --   r1 has extra labels [AI Clock Env FS IO Net Process SharedMem Stream Trace]
+  --
+  -- and the body confirms it independently — narrowing `compact_with_ai`'s own
+  -- annotation gives `Effect checking failed for function 'fresh_compaction'`,
+  -- which is the effect checker inferring from the body over ALL inputs rather
+  -- than comparing two annotations.
+  --
+  -- WHY NO NARROWER ROW IS AVAILABLE, and it is NOT that the behaviour is wide.
+  -- `compaction_ai`'s pre-step reaches every one of those ten effects through a
+  -- SINGLE call — `ctx.ports.ai_step`, whose own port row above is exactly
+  -- those ten. The row here is a consequence of the PORT's row, so narrowing it
+  -- is a port-surface change and not a hook-row change. That is WI-C5/D1 work
+  -- and deliberately not done here.
+  --
+  -- THE PART THAT MATTERS FOR D5'S CRITERIA, and it is a shape finding rather
+  -- than a measurement. `ai_step` IS a D1 world-mediated port — WI-B2b widened
+  -- it to return `AiStepOutcome` with `next_state` — `PreStepOutcome` carries
+  -- `next_state`, and `compact_with_ai` returns `s.next_state` rather than
+  -- `ctx.world`. So criterion 2's SUBSTANCE is already satisfied by the only
+  -- binding that performs anything. What refuses the slot is that criterion 2
+  -- is evaluated against the DECLARED row, and a declared row cannot say
+  -- "these ten arrive through a world-mediated port". THE BARRIER IS THE
+  -- ROW'S VOCABULARY, not the behaviour and not the row's width.
   on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace},
   on_tool_policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision,
   on_tool_handle: (ExtCtx, ToolCallEnvelope)
     -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand},
+  -- WI-D7 NARROWED THIS ROW from nine effects to four, and the narrowing is
+  -- to a MEASUREMENT rather than to zero.
+  --
+  -- WAS, through WI-D6: `! {IO, Process, FS, AI, Env, Net, SharedMem, Clock,
+  -- Stream}` — nine, closed, and never measured against any binding.
+  --
+  -- THE MEASUREMENT: all fifteen bindings narrowed to no row at all, tree-wide,
+  -- and checked over all 71 files of the fifteen packages derived from
+  -- `registry_generated.ail`. FOURTEEN of fifteen accept the empty row — every
+  -- one of them returns a constant `NoIntercept` beside `ctx.world`. ONE
+  -- refuses, and the compiler names it:
+  --
+  --   packages/motoko-ext-compose/compose.ail:816
+  --   failed to unify record field 'on_response_intercept': incompatible
+  --   closed rows: r1 has extra labels [Clock FS IO Process]
+  --
+  -- confirmed from the body independently: narrowing `compose`'s own
+  -- `on_response_intercept` annotation gives `Effect checking failed for
+  -- function 'on_response_intercept'`.
+  --
+  -- THIS IS THE ROW WI-C5 PREDICTED WOULD REFUSE, AND IT NAMED THE PATH.
+  -- `make declared_vs_performed` has carried `must_die_on
+  -- compose_intercept_inline FS` since C5 precisely so that a green non-inline
+  -- arm could not be read as "on_response_intercept performs no FS". The
+  -- compiler agrees and is more specific than the runtime witness was: the
+  -- inline path performs `Clock, FS, IO, Process` — `now()` for the snippet
+  -- name, `mkdirAll`/`writeFile`/`removeFile` for the scratch module, and
+  -- `check_snippet`/`run_snippet` spawning the compiler.
+  --
+  -- WHY THIS DOES NOT MAKE THE SLOT COVERABLE. A four-effect row is still a
+  -- non-empty row, so D5's criterion 1 fails exactly as it did at nine. None
+  -- of the four is a world-mediated port, so criterion 2 fails too, even
+  -- though `ResponseInterceptOutcome` carries `next_state`. THE SLOT IS STILL
+  -- A BARRIER. What the narrowing buys is the compiler: a binding that starts
+  -- reading `Env` in this slot now fails to build, where at nine effects it
+  -- would have compiled silently.
   on_response_intercept: (ExtCtx, string)
-    -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    -> ResponseInterceptOutcome ! {IO, Process, FS, Clock},
+  -- WI-D7 NARROWED THIS ROW from nine effects to one, on the same method.
+  --
+  -- FOURTEEN of fifteen bindings accept the empty row. ONE refuses:
+  --
+  --   packages/motoko-ext-context-mode/register.ail:56
+  --   failed to unify record field 'on_solver_candidate': incompatible closed
+  --   rows: r1 has extra labels [Process]
+  --
+  -- and from the body: narrowing `context_mode.finalize_with_index`'s own
+  -- annotation gives `Effect checking failed for function
+  -- 'finalize_with_index'`. It spawns a `node` bridge fire-and-forget to index
+  -- the final output — a real subprocess, on the default path, not a fixture.
+  --
+  -- THE HANDOFF FOR THIS ITEM PREDICTED ROUTE A HERE — "bindings return
+  -- constants; measure and see". They do not. `context_mode`'s does not, and
+  -- it is in `registry_generated.ail` like the rest. Recorded because the
+  -- prediction was reasonable from reading twelve of the fifteen bindings, and
+  -- that is exactly the failure mode S22 exists for.
+  --
+  -- STILL A BARRIER, for the same reason as `on_response_intercept` above:
+  -- `! {Process}` is non-empty, so criterion 1 fails, and `Process` is not a
+  -- world-mediated port, so criterion 2 fails despite `FinalizeOutcome`
+  -- carrying `next_state`.
   on_solver_candidate: (ExtCtx, string)
-    -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+    -> FinalizeOutcome ! {Process}
 }
 
 export type ExtRegistry = { hooks: [ExtensionHooks] }

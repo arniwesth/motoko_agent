@@ -61,16 +61,24 @@
 --   these rows still establish the MECHANISM rather than a protected profile.
 --
 --   NO LONGER TRUE: the clause about `on_budget_plan`. WI-D6 narrowed that row
---   to none after measuring all fifteen bindings, so an extension IS now
---   installable in a conformant profile. What keeps this guard unreached is no
---   longer the ABI — it is simply that `driver_only` chooses to install
---   nothing, and it is the ONLY remaining reason where there used to be two.
+--   to none after measuring all fifteen bindings, so that particular slot no
+--   longer refuses anything.
 --
--- That is plan rule S21 in its narrowest form: closing the ABI barrier did not
--- make this guard reachable, it CONCENTRATED the reason it is unreachable onto
--- the profile's empty install list alone. The guard becomes reachable when a
--- profile installs an extension and excludes its `on_tool_handle`, which is
--- WI-C5's.
+-- CORRECTED AT WI-D7 (2026-08-06), AND THE CORRECTION IS TO WHAT WI-D6 WROTE
+-- HERE RATHER THAN TO WHAT WI-D6 DID. The paragraph above used to continue
+-- "so an extension IS now installable in a conformant profile", and that does
+-- not follow. `on_budget_plan` was ONE of FOUR unconditionally-dispatched
+-- slots, and D5 forbids installing an extension with ANY of them excluded, so
+-- every one has to be coverable before any extension is installable.
+--
+-- WI-D7 measured the other three across all fifteen bindings. All three still
+-- declare non-empty rows, so all three still fail criterion 1, and NO
+-- EXTENSION IS INSTALLABLE. The count is derived on every run by
+-- `make profile_definition` and printed as a number rather than as a claim.
+--
+-- So the honest version of the sentence is: this guard is unreached for TWO
+-- reasons still — `driver_only` installs nothing, AND nothing is installable
+-- anyway. WI-D6 removed one of four barriers; it did not remove the class.
 --
 -- So the guard is STRUCTURE, not enforcement-in-effect, and the acceptance
 -- script drives it with a SYNTHETIC definition that does exclude a gated hook.

@@ -386,6 +386,137 @@ fi
 cleanup
 
 echo ""
+echo "-- WI-D7: the other THREE unconditionally-dispatched slots --"
+
+# WI-D6 measured ONE of four unconditionally-dispatched slots and its report
+# concluded that an extension had become installable. It had not. D5 forbids
+# installing an extension with ANY unconditionally-dispatched hook excluded, so
+# all four must be coverable, and the other three were never measured.
+#
+# WI-D7 measured them the same way D6 measured its own: narrow the row tree-wide
+# and let the effect checker answer over ALL inputs, rather than witnessing one
+# path with the capability trap. The trap cannot reach these at all — the same
+# per-process capability confound documented above applies — so the compiler is
+# not the third producer here, it is the ONLY one, and the rows below say so
+# rather than implying a witness they do not have.
+#
+# THE RESULT, and it is the same shape three times: fourteen of fifteen bindings
+# accept the empty row, and exactly ONE refuses. The refusing binding is named
+# because C5's `must_die_on compose_intercept_inline FS` established the
+# discipline — a slot's green is not a claim about the slot until the binding
+# that would refuse it has been looked for and either found or ruled out.
+
+# The ABI rows, asserted at the widths WI-D7 measured. Narrower would be a claim
+# no binding supports; wider would be a row nothing performs. Either turns this
+# red rather than passing quietly.
+check_slot_row() {
+  local slot=$1 want=$2 refuser=$3 effects=$4
+  local got
+  # `-A1` because two of the three slots wrap their arrow onto the next line —
+  # and the match must be NON-GREEDY, because joining that next line can bring a
+  # SECOND `->` into scope. The first version was greedy, matched the following
+  # field's arrow, and reported `on_pre_step` as declaring no row at all.
+  got=$(grep -A1 "^  $slot: (ExtCtx" "$ABI" | tr '\n' ' ' \
+        | LC_ALL=C perl -ne 'print "$1\n" if /-> *[A-Za-z]+ *(! *\{[^}]*\})?/' | sed 's/ *$//')
+  if [ "$got" = "$want" ]; then
+    ok "$slot declares $want — the union of what its fifteen bindings perform (refused by $refuser: $effects)"
+  else
+    bad "$slot declares '$got', not '$want' — WI-D7 measured this row against all fifteen bindings; a change of width is a change of claim and must be re-measured, not inherited"
+  fi
+}
+
+check_slot_row on_pre_step \
+  "! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}" \
+  "compaction_ai" "all ten, reached through ExtPorts.ai_step"
+check_slot_row on_response_intercept \
+  "! {IO, Process, FS, Clock}" \
+  "compose" "the inline-snippet path"
+check_slot_row on_solver_candidate \
+  "! {Process}" \
+  "context_mode" "a node bridge spawned fire-and-forget"
+
+# The refusing bindings, read from THEIR OWN declarations rather than from the
+# slot rows above. A second producer for the same fact: the slot row is the
+# union the ABI declares, these are what the individual bodies were annotated
+# at, and neither is derived from the other.
+check_refuser() {
+  local file=$1 fn=$2 want=$3
+  # `--` because every one of these patterns begins with `->`, which grep would
+  # otherwise read as an option.
+  if grep -qF -- "$want" "$file"; then
+    ok "$fn still declares $want — the binding that refuses its slot, named rather than left to a reader"
+  else
+    bad "$fn no longer declares $want in $file — if it narrowed, its SLOT can narrow too and the row above is now overstated; re-measure"
+  fi
+}
+check_refuser packages/motoko-ext-compaction-ai/compaction_ai.ail compact_with_ai \
+  "-> PreStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace}"
+check_refuser "$COMPOSE" compose.on_response_intercept \
+  "-> ResponseInterceptOutcome ! {IO, Process, FS, Clock}"
+check_refuser packages/motoko-ext-context-mode/context_mode.ail finalize_with_index \
+  "-> FinalizeDecision ! {Process}"
+
+# No binding site left at the pre-D7 nine-effect row. Closed-row equality means
+# a stale site cannot compile, so this row is belt-and-braces for the SOURCE —
+# but it is scoped to source deliberately: `.packages/` is build output and
+# asserting an ABI property over it reports staleness as non-conformance, which
+# is the defect WI-D6 found the first time it wrote a grep like this.
+#
+# SCOPED TO THE TWO RETURN TYPES, and the first version was not. Bare, the row
+# also matches the conformance harness's scenario runners
+# (`packages/motoko_ext_conformance/harness.ail`, `scripts/dst/conformance_selftest.ail`),
+# which return `Result[(), ScenarioFailure]` and `int`. Those are CALLERS of the
+# hooks, not bindings of them, and their nine-effect row is honest — it is
+# justified by `on_pre_step`, which did not narrow. A grep whose claim is about
+# hook bindings must not be able to match a hook caller.
+stale=$(grep -rlE "(ResponseInterceptOutcome|FinalizeOutcome) ! \{IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream\}" \
+        --include=*.ail packages/ src/ scripts/ 2>/dev/null | grep -v '^\.packages/' || true)
+if [ -z "$stale" ]; then
+  ok "no source site binds an intercept or solver hook at the pre-D7 nine-effect row"
+else
+  bad "binding sites still at the nine-effect row, so the narrowing is partial: $stale"
+fi
+
+# TWO-SIDED compile-time controls, one per narrowed slot, on D6's discipline:
+# the mutant must be REJECTED under the narrowed row and ACCEPTED under a
+# widened one, so the rejection is attributable to the row rather than to
+# anything else in the file.
+write_slot_mutant() {  # $1 = return type, $2 = row, $3 = extra import, $4 = body
+  cat > "$MUTANT" <<EOF
+module scripts/dst/dvp_mutant_probe
+$3
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx)
+export func mutant_hook(ctx: ExtCtx, _s: string) -> $1$2 {
+  $4
+}
+EOF
+}
+
+control_pair() {  # $1 = label, $2 = ret, $3 = narrow row, $4 = wide row, $5 = import, $6 = body
+  local label=$1
+  write_slot_mutant "$2" "$3" "$5" "$6"
+  if mout=$(AILANG_RELAX_MODULES=1 ailang check "$MUTANT" 2>&1); then
+    bad "$label: a performing body was ACCEPTED under the narrowed row — the row is decorative and the slot's measurement rests on nothing"
+  elif echo "$mout" | grep -q "Effect checking failed for function 'mutant_hook'"; then
+    ok "$label: mutant REJECTED by the effect checker under the narrowed row"
+  else
+    bad "$label: rejected, but NOT by effect checking — it fails for an unrelated reason and establishes nothing: $(echo "$mout" | grep -E '^Error' | head -1)"
+  fi
+  write_slot_mutant "$2" "$4" "$5" "$6"
+  if AILANG_RELAX_MODULES=1 ailang check "$MUTANT" >/dev/null 2>&1; then
+    ok "$label: the SAME mutant with the row WIDENED is accepted — the rejection is caused by the row"
+  else
+    bad "$label: the widened mutant is also rejected — the negative result is not attributable to the effect row"
+  fi
+}
+
+control_pair "on_solver_candidate" "int" " ! {Process}" " ! {Process, Env}" \
+  "import std/env (getEnvOr)" 'let _ = getEnvOr("PATH", ""); 0'
+control_pair "on_response_intercept" "int" " ! {IO, Process, FS, Clock}" " ! {IO, Process, FS, Clock, Env}" \
+  "import std/env (getEnvOr)" 'let _ = getEnvOr("PATH", ""); 0'
+cleanup
+
+echo ""
 echo "-- the three producers compared --"
 echo "      DECLARED  on_budget_plan : ! {}   (ABI row, static, authored — WI-D6 narrowed it)"
 echo "      PERFORMED on_budget_plan : ! {}   (runtime trap, out of process, $n_measured of 15 witnessed)"
@@ -396,12 +527,21 @@ echo "      tree was installable in a conformant profile. WI-D6 closed the gap b
 echo "      moving the DECLARATION to the measurement, per D5's own verdict that"
 echo "      the barrier was 'the rule, not the behaviour'."
 echo ""
+echo ""
+echo "      AND WHAT IT DID NOT DO, CORRECTED AT WI-D7. This block used to end"
+echo "      'the empty install list is no longer FORCED — it is now CHOSEN'. It is"
+echo "      still FORCED. on_budget_plan was ONE of FOUR unconditionally-dispatched"
+echo "      slots; the other three are measured above and all three still declare"
+echo "      non-empty rows, so all three still fail D5 criterion 1."
+echo "      THREE BARRIERS STAND AND NO EXTENSION IS INSTALLABLE."
+echo "      The count is derived from the ABI and the dispatch table on every run"
+echo "      by \`make profile_definition\`, which goes RED if it reaches zero."
+echo ""
 echo "      WHAT THIS DOES NOT LICENSE — AND IT IS THE SENTENCE D5 MADE MANDATORY:"
 echo "      the axis's extension-model coverage is still ZERO. driver_only installs"
-echo "      no extension. What changed is that the empty install list is no longer"
-echo "      FORCED — it is now CHOSEN — and a chosen emptiness covers exactly as"
-echo "      much as a forced one. Coverage needs a profile that installs something,"
-echo "      which is WI-C5 and is not this item."
+echo "      no extension, and nothing about the extension model has been tested by"
+echo "      this gate. Coverage needs a profile that installs something, which is"
+echo "      WI-C5 and is not this item."
 
 echo ""
 if [ "$fail" -ne 0 ]; then

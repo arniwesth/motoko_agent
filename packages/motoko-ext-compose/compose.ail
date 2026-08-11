@@ -817,8 +817,8 @@ export func register_with_config(runtime_cfg: ComposeHostConfig) -> ExtensionHoo
   let composition_mode = runtime_cfg.compose.mode;
   let snippet_caps = join_csv(runtime_cfg.snippet_caps);
   let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call, runtime_cfg, snippet_caps) };
-  let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { on_response_intercept(ctx, response_text, composition_mode, snippet_caps) };
-  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}  { { decision: {
+  let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { on_response_intercept(ctx, response_text, composition_mode, snippet_caps) };
+  let finalize = func(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
     no_finalize_decision()
   }, next_state: ctx.world } };
   {
