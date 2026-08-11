@@ -1,0 +1,574 @@
+-- scripts/dst/profile_definition_dst.ail
+--
+-- WI-A10 acceptance for the MACHINERY, under ADR-001 D5. This script owns no
+-- profile: `driver_only` and its own acceptance are a separate module and a
+-- separate commit, so that a reviewer sees the validator REJECT before seeing
+-- the definition that passes it.
+--
+-- The inline tests in src/core/dst_profile.ail check the rules one at a time.
+-- This script checks them the way a profile load actually meets them: as whole
+-- DEFINITIONS, mutated one field at a time from a definition that loads clean,
+-- asserting that each rejection NAMES ITS RULE.
+--
+-- Three fixture shapes carry most of the weight:
+--
+--   `field_drop_sweep`      every required D5 field, dropped in turn, asserting
+--                           the rejection names THAT field. "Loads clean" cannot
+--                           falsify a field the validator was never told to
+--                           require, so the sweep is over the field list rather
+--                           than over one representative field.
+--
+--   `partial_disclosure`    S1 / cluster 3's C8. Two lists that are disjoint,
+--                           every id a real slot, the CORRECT TOTAL ENTRY COUNT
+--                           (seven covered plus one excluded is eight) — and one
+--                           slot classified nowhere. A row-shape validator
+--                           accepts it. Only counting per SLOT rejects it.
+--
+--   `seven_unconditional`   each of the SEVEN unconditionally-dispatched slots
+--                           excluded in turn. D5's prose says six. Under six,
+--                           the `on_describe_tools` case loads clean and then
+--                           fails closed on the first model step.
+--
+-- And the NEGATIVE CONTROL, which is not decoration: a validator that only ever
+-- rejects passes a suite of only-rejecting fixtures while being useless. The
+-- `clean` definition below must produce zero rejections, and the sweep mutates
+-- it rather than building each fixture from scratch, so every rejection is
+-- attributable to the one field that changed.
+
+module scripts/dst/profile_definition_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Option, Some, None)
+
+import src/core/dst_profile (
+  ProfileDefinition,
+  ProfileRejection,
+  ExecutionManifest,
+  ManifestRejection,
+  InstalledPackage,
+  AdapterBoundary,
+  ResourceModel,
+  DiagnosticProjection,
+  ForbiddenCapability,
+  WaivedFaultClass,
+  AttributionRef,
+  OmittedExtension,
+  UnroutedSiteDeclaration,
+  HookClassificationEntry,
+  HookClassification,
+  EffectFree, WorldMediated, ExplicitlyExcluded,
+  Classifier2Call,
+  RoutedSetClaim,
+  validate_definition_at_load,
+  validate_manifest,
+  definition_ok,
+  manifest_ok,
+  rejection_rule,
+  rejection_message,
+  manifest_rule,
+  manifest_message,
+  routed_set_claim,
+  waivers_from,
+  profile_rules_version,
+  MissingRequiredField,
+  routing_violation_at,
+  is_excluded_hook
+)
+import src/core/dst_attribution_table (
+  CoreSite,
+  unconditional_core_sites,
+  table_identity,
+  table_source_revision
+)
+import src/core/dst_fault_catalogue (
+  FaultClass,
+  fault_catalogue,
+  conditional_class_ids
+)
+import src/core/dst_profile_coverage (all_hook_slots, hook_slot_id, hook_dispatch, Unconditional, Gated, HookSlot)
+import src/core/dst_result (DstResult, RunFailed, harness_failure_kind_name, ReplayMetadata)
+import src/core/phase_vocab (empty_ledger_trace)
+
+-- ---------------------------------------------------------------------------
+-- The measured inventory and the derived call set, both as ARGUMENTS
+-- ---------------------------------------------------------------------------
+--
+-- Same discipline as `attribution_table_dst`: the discovered set is what an
+-- inventory found in the source, not a copy of what the table declares, so the
+-- completeness check has something to disagree with. The two extra rows are the
+-- attributed sites, which the unconditional-core declaration deliberately omits.
+pure func head_inventory() -> [CoreSite] {
+  unconditional_core_sites()
+    ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+          routed: false, note: "" },
+        { site: { file: "src/core/tool_phase.ail", line: 287 }, effect: "Process",
+          routed: false, note: "" }]
+}
+
+-- Classifier 2's member call sites, as `make profile_definition` derives them
+-- from `tools/ext_call_inventory/derive.py --json`. The make target asserts the
+-- tool still reports exactly these, so the fixture cannot drift from the tool
+-- while both stay green — which is the composition defect this item is most
+-- likely to commit.
+pure func head_classifier_2_calls() -> [Classifier2Call] {
+  [{ extension_id: "compaction_ai", field: "ai_step",
+     site: "packages/motoko-ext-compaction-ai/compaction_ai.ail:106" }]
+}
+
+-- ---------------------------------------------------------------------------
+-- The definition that must load clean
+-- ---------------------------------------------------------------------------
+--
+-- Deliberately NOT `driver_only`: this is the machinery's own control, so that
+-- a change to the shipped profile cannot turn the machinery's suite red or, far
+-- worse, green.
+pure func clean() -> ProfileDefinition {
+  let id = table_identity();
+  let cat = fault_catalogue();
+  {
+    profile_id: "fixture_clean",
+    profile_version: "1",
+    installed_packages: [],
+    hook_classifications: [],
+    disclosures: [],
+    adapter_boundaries: [
+      { boundary_id: "provider.openai_chat", included: true, note: "the shape the driver speaks" },
+      { boundary_id: "provider.wire_parser", included: false, note: "D3 excludes wire-parser faults" }
+    ],
+    resource_models: [{ model_id: "tool.all_or_nothing", promise: "a failed tool call leaves no partial logical update" }],
+    diagnostic_projections: [{ projection_id: "ledger.trace", note: "the returned trace" }],
+    forbidden_capabilities: [{ capability: "Clock", instrument: "make world_state (Clock poison pair)" }],
+    waived_fault_classes: waivers_from(cat, conditional_class_ids(cat)),
+    exercised_fault_classes: [],
+    attribution_ref: { source_revision: id.source_revision, content_hash: id.content_hash },
+    omitted_extensions: [{ extension_id: "compaction_ai", reason: "calls the classifier-2 field ai_step" }],
+    unrouted_reachable_sites: [
+      { site_key: "src/core/session.ail:796",
+        instrument: "make world_state (Clock poison pair)",
+        why_unroutable: "ExtPorts.clock_now is zero-argument; plan rule S2" },
+      { site_key: "src/core/test/stub_step.ail:146",
+        instrument: "make world_state (Clock poison pair)",
+        why_unroutable: "live_ports' clock adapter; a deterministic run uses the scripted adapter" }
+    ],
+    scan_roots: ["src", "packages"]
+  }
+}
+
+pure func clean_manifest() -> ExecutionManifest {
+  {
+    source_revision: "HEAD",
+    toolchain: "ailang 0.26.0",
+    extension_packages: [],
+    abi_version: "4.0",
+    profile_id: "fixture_clean",
+    profile_version: "1",
+    event_vocabulary_version: "event-vocabulary/1",
+    normalized_configuration: "{}",
+    classifier_2_set: ["ai_step", "env_get", "proc_exec"],
+    unrouted_fields: ["clock_now"],
+    scan_roots: ["src", "packages"],
+    scan_root_commit: "HEAD",
+    profile_rules_version: "profile-rules/1",
+    coverage_rules_version: "coverage-rules/1",
+    attribution_rules_version: "attribution-rules/1",
+    fault_catalogue_version: "fault-catalogue/1"
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Assertion helpers
+-- ---------------------------------------------------------------------------
+
+pure func has_rule(rs: [ProfileRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if rejection_rule(r) == rule then true else has_rule(rest, rule)
+  }
+}
+
+pure func names_field(rs: [ProfileRejection], field: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest =>
+      match r {
+        MissingRequiredField(f, _) => if f == field then true else names_field(rest, field),
+        _ => names_field(rest, field)
+      }
+  }
+}
+
+func report(rs: [ProfileRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${rejection_message(r)}");
+      report(rest)
+    }
+  }
+}
+
+func load(d: ProfileDefinition) -> [ProfileRejection] {
+  validate_definition_at_load(d, table_source_revision(), head_inventory(),
+                              head_classifier_2_calls(), fault_catalogue())
+}
+
+-- A fixture that must be REJECTED, and BY ITS RULE. Asserting the rule and not
+-- merely the rejection is what stops a fixture from passing for the wrong
+-- reason: every mutation below is one field away from a definition that loads
+-- clean, so an unrelated rule firing means the mutation did something else.
+func assert_rejected(label: string, rule: string, d: ProfileDefinition) -> bool ! {IO} {
+  let rs = load(d);
+  let ok = List.length(rs) > 0 && has_rule(rs, rule);
+  let _ = if ok then println("  ✓ ${label}: rejected by [${rule}]")
+          else {
+            let _ = println("  ✗ ${label}: expected rejection by [${rule}], got ${show(List.length(rs))}");
+            report(rs)
+          };
+  ok
+}
+
+-- The stale-BINDING fixture needs a different loading revision rather than a
+-- different definition, so it does not go through `load` — which always loads
+-- at the table's own bound revision, as a real load does.
+func assert_stale_binding() -> bool ! {IO} {
+  let rs = validate_definition_at_load(clean(), "deadbeef", head_inventory(),
+                                       head_classifier_2_calls(), fault_catalogue());
+  let ok = has_rule(rs, "stale-source-revision");
+  let _ = if ok then println("  ✓ a load against a DIFFERENT source revision: rejected by [stale-source-revision]")
+          else {
+            let _ = println("  ✗ a stale source revision was not rejected");
+            report(rs)
+          };
+  ok
+}
+
+-- A discovered core site in NEITHER the rows nor the unconditional set. The
+-- defect is in what is ABSENT, so no row-shape check can see it; the discovered
+-- set is an argument for exactly this reason.
+func assert_site_unaccounted() -> bool ! {IO} {
+  let extra: [CoreSite] =
+    head_inventory() ++ [{ site: { file: "src/core/newly_added.ail", line: 7 },
+                           effect: "Clock", routed: false, note: "" }];
+  let rs = validate_definition_at_load(clean(), table_source_revision(), extra,
+                                       head_classifier_2_calls(), fault_catalogue());
+  let ok = has_rule(rs, "site-unaccounted");
+  let _ = if ok then println("  ✓ a DISCOVERED core site in neither list: rejected by [site-unaccounted]")
+          else {
+            let _ = println("  ✗ an unaccounted discovered site was not rejected");
+            report(rs)
+          };
+  ok
+}
+
+func assert_clean(label: string, d: ProfileDefinition) -> bool ! {IO} {
+  let rs = load(d);
+  let ok = List.length(rs) == 0;
+  let _ = if ok then println("  ✓ ${label}: loads clean")
+          else {
+            let _ = println("  ✗ ${label}: expected a clean load, got ${show(List.length(rs))} rejection(s)");
+            report(rs)
+          };
+  ok
+}
+
+-- ---------------------------------------------------------------------------
+-- The field-drop sweep
+-- ---------------------------------------------------------------------------
+--
+-- Every required D5 field, dropped in turn from the clean definition, asserting
+-- the rejection names THAT field by name. A single representative field would
+-- leave the other eight untested, and a validator that forgot one of them would
+-- still pass — which is the exact failure "loads clean" cannot detect.
+func drop_sweep() -> bool ! {IO} {
+  let c = clean();
+  let a = assert_names("profile_id", { c | profile_id: "" });
+  let b = assert_names("profile_version", { c | profile_version: "" });
+  let d = assert_names("adapter_boundaries", { c | adapter_boundaries: [] });
+  let e = assert_names("resource_models", { c | resource_models: [] });
+  let f = assert_names("diagnostic_projections", { c | diagnostic_projections: [] });
+  let g = assert_names("forbidden_capabilities", { c | forbidden_capabilities: [] });
+  let h = assert_names("attribution_ref.source_revision",
+                       { c | attribution_ref: { source_revision: "", content_hash: c.attribution_ref.content_hash } });
+  let i = assert_names("attribution_ref.content_hash",
+                       { c | attribution_ref: { source_revision: c.attribution_ref.source_revision, content_hash: "" } });
+  let j = assert_names("scan_roots", { c | scan_roots: [] });
+  a && b && d && e && f && g && h && i && j
+}
+
+func assert_names(field: string, d: ProfileDefinition) -> bool ! {IO} {
+  let rs = load(d);
+  let ok = names_field(rs, field);
+  let _ = if ok then println("  ✓ missing '${field}': rejected, and the rejection NAMES the field")
+          else {
+            let _ = println("  ✗ missing '${field}': no rejection named that field");
+            report(rs)
+          };
+  ok
+}
+
+-- ---------------------------------------------------------------------------
+-- Disclosure fixtures
+-- ---------------------------------------------------------------------------
+
+pure func installed(ext_id: string, path: string) -> InstalledPackage {
+  { extension_id: ext_id, package_id: "sunholo/${ext_id}", version: "0.1.0", source_path: path }
+}
+
+pure func with_disclosure(ext_id: string, covered: [string], excluded: [string]) -> ProfileDefinition {
+  { clean() |
+    installed_packages: [installed(ext_id, "packages/motoko-ext-${ext_id}/${ext_id}.ail")],
+    disclosures: [{ extension_id: ext_id, covered: covered, excluded: excluded }] }
+}
+
+pure func all_ids_rec(xs: [HookSlot]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => hook_slot_id(x) :: all_ids_rec(rest)
+  }
+}
+
+pure func without(ids: [string], drop: string) -> [string] {
+  match ids {
+    [] => [],
+    x :: rest => if x == drop then without(rest, drop) else x :: without(rest, drop)
+  }
+}
+
+-- Each of the SEVEN unconditionally-dispatched slots, excluded in turn, with
+-- the other seven covered. Iterating `all_hook_slots()` and consulting
+-- `hook_dispatch` means this sweep cannot go stale: a ninth slot, or a slot
+-- whose dispatch kind changes, is picked up without editing this function.
+-- Writing "the seven" out by hand here would be the very re-derivation the
+-- module header forbids.
+func seven_unconditional() -> bool ! {IO} {
+  sweep_slots(all_hook_slots(), 0, true)
+}
+
+func sweep_slots(xs: [HookSlot], seen: int, acc: bool) -> bool ! {IO} {
+  match xs {
+    [] => {
+      let ok = seen == 7;
+      let _ = if ok then println("  ✓ all SEVEN unconditionally-dispatched slots reject exclusion (D5's prose says six)")
+              else println("  ✗ expected 7 unconditionally-dispatched slots, swept ${show(seen)}");
+      acc && ok
+    },
+    s :: rest => {
+      let id = hook_slot_id(s);
+      match hook_dispatch(s) {
+        Gated => {
+          -- The one gated slot: excluding it is LEGAL, and asserting that keeps
+          -- this sweep from degenerating into "reject every exclusion".
+          let d = with_disclosure("gatedok", without(all_ids_rec(all_hook_slots()), id), [id]);
+          let ok = List.length(load(d)) == 0;
+          let _ = if ok then println("  ✓ '${id}' is GATED: excluding it loads clean")
+                  else {
+                    let _ = println("  ✗ '${id}' is gated but excluding it was rejected");
+                    report(load(d))
+                  };
+          sweep_slots(rest, seen, acc && ok)
+        },
+        Unconditional => {
+          let d = with_disclosure("uncond", without(all_ids_rec(all_hook_slots()), id), [id]);
+          let ok = has_rule(load(d), "unconditional-hook-excluded");
+          let _ = if ok then println("  ✓ '${id}' unconditionally dispatched: excluding it is rejected")
+                  else println("  ✗ '${id}' unconditionally dispatched: exclusion was NOT rejected");
+          sweep_slots(rest, seen + 1, acc && ok)
+        }
+      }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The routed-set claim (decision 2)
+-- ---------------------------------------------------------------------------
+
+func routed_claim_is_computed() -> bool ! {IO} {
+  let c = routed_set_claim(clean());
+  -- The claim is asserted as a PARTITION, not against a written-down number.
+  -- P3's worked example is D4's `4 / 12 / 13` split, which described a tree
+  -- that moved twice inside one milestone; a constant here would be that
+  -- mistake again, one artifact later.
+  let ok = c.reachable_total == c.routed + c.declared_unrouted && c.reachable_total > 0;
+  let _ = if ok then println("  ✓ routed-set claim is a partition of the table: ${show(c.reachable_total)} reachable = ${show(c.routed)} routed + ${show(c.declared_unrouted)} declared-unrouted")
+          else println("  ✗ routed-set claim is not a partition");
+  ok
+}
+
+-- ---------------------------------------------------------------------------
+-- The runtime exclusion check (D5, D6.6)
+-- ---------------------------------------------------------------------------
+
+func exclusion_check() -> bool ! {IO} {
+  let meta: ReplayMetadata =
+    { source_revision: "HEAD", toolchain_version: "ailang 0.26.0",
+      profile_id: "fixture_clean", profile_version: "1",
+      event_vocabulary_version: "event-vocabulary/1" };
+  let d = with_disclosure("gated", without(all_ids_rec(all_hook_slots()), "on_tool_handle"), ["on_tool_handle"]);
+  let violated =
+    match routing_violation_at(d, "gated", "on_tool_handle", 4, empty_ledger_trace(), meta) {
+      None => false,
+      Some(RunFailed(f)) =>
+        harness_failure_kind_name(f.kind) == "routing_violation" && f.interaction_position == 4,
+      Some(_) => false
+    };
+  let proceeds =
+    match routing_violation_at(d, "gated", "on_tool_policy", 4, empty_ledger_trace(), meta) {
+      None => true,
+      Some(_) => false
+    };
+  -- Vacuous for an empty install list, which is `driver_only`'s shape. Stated
+  -- as an assertion rather than a comment: "vacuous" is a claim about the code.
+  let vacuous =
+    match routing_violation_at(clean(), "anything", "on_tool_handle", 0, empty_ledger_trace(), meta) {
+      None => true,
+      Some(_) => false
+    };
+  let _ = if violated then println("  ✓ dispatch reaching an EXCLUDED hook returns a typed HarnessFailure (routing_violation)")
+          else println("  ✗ dispatch reaching an excluded hook did not return a routing_violation");
+  let _ = if proceeds then println("  ✓ dispatch reaching a COVERED hook proceeds (the guard is not fail-closed on everything)")
+          else println("  ✗ a covered hook was blocked");
+  let _ = if vacuous then println("  ✓ an empty install list cannot violate: vacuous for driver_only, binding from C5")
+          else println("  ✗ an empty install list produced a routing violation");
+  -- D6.6's other half — a raw capability bypass must NOT become a typed value —
+  -- is not assertable from inside a passing run, because on the pin a denied
+  -- effect terminates evaluation and this script would not reach its next line.
+  -- `make world_state` and `make terminal_trace` assert it, from outside.
+  let _ = println("  i the D6.6 complement (a raw capability bypass stays a non-zero run, NOT a typed");
+  let _ = println("    HarnessFailure) is asserted from OUTSIDE by make world_state / make terminal_trace;");
+  let _ = println("    a denied effect terminates evaluation, so no in-process assertion can observe it");
+  violated && proceeds && vacuous
+}
+
+-- ---------------------------------------------------------------------------
+-- The manifest
+-- ---------------------------------------------------------------------------
+
+pure func has_manifest_rule(rs: [ManifestRejection], rule: string) -> bool {
+  match rs {
+    [] => false,
+    r :: rest => if manifest_rule(r) == rule then true else has_manifest_rule(rest, rule)
+  }
+}
+
+func assert_manifest_rejected(label: string, rule: string, m: ExecutionManifest) -> bool ! {IO} {
+  let rs = validate_manifest(m, clean());
+  let ok = has_manifest_rule(rs, rule);
+  let _ = if ok then println("  ✓ ${label}: rejected by [${rule}]")
+          else println("  ✗ ${label}: expected [${rule}], got ${show(List.length(rs))} rejection(s)");
+  ok
+}
+
+func manifest_checks() -> bool ! {IO} {
+  let m = clean_manifest();
+  let control = manifest_ok(m, clean());
+  let _ = if control then println("  ✓ NEGATIVE CONTROL: the clean manifest validates")
+          else println("  ✗ the clean manifest did not validate");
+  let a = assert_manifest_rejected("a blank toolchain axis", "manifest-field-missing", { m | toolchain: "" });
+  let b = assert_manifest_rejected("a blank normalized configuration", "manifest-field-missing", { m | normalized_configuration: "" });
+  let c = assert_manifest_rejected("no scan-root commit", "manifest-field-missing", { m | scan_root_commit: "" });
+  let d = assert_manifest_rejected("an empty classifier-2 set", "manifest-field-missing", { m | classifier_2_set: [] });
+  let e = assert_manifest_rejected("an empty unrouted-field set", "manifest-field-missing", { m | unrouted_fields: [] });
+  let f = assert_manifest_rejected("a manifest naming a different profile version", "manifest-profile-mismatch", { m | profile_version: "99" });
+  -- The composition defect, in the one place a manifest is MOST likely to
+  -- commit it: a manifest is a transcription by nature, so every version it
+  -- records that an artifact also reports is read back and compared.
+  let g = assert_manifest_rejected("a TRANSCRIBED event-vocabulary version", "manifest-version-drifted", { m | event_vocabulary_version: "event-vocabulary/0" });
+  let h = assert_manifest_rejected("a TRANSCRIBED attribution-rules version", "manifest-version-drifted", { m | attribution_rules_version: "attribution-rules/0" });
+  let i = assert_manifest_rejected("a TRANSCRIBED fault-catalogue version", "manifest-version-drifted", { m | fault_catalogue_version: "fault-catalogue/0" });
+  control && a && b && c && d && e && f && g && h && i
+}
+
+-- ---------------------------------------------------------------------------
+
+export func main() -> () ! {IO} {
+  let _ = println("profile_definition_dst  (${profile_rules_version()})");
+
+  let _ = println("  -- the NEGATIVE CONTROL, first --");
+  let control = assert_clean("a well-formed empty-install definition", clean());
+
+  let _ = println("  -- required fields: every one, named --");
+  let sweep = drop_sweep();
+
+  let _ = println("  -- the coverage floor and the disclosure (delegated to A6) --");
+  let floor = assert_rejected("an installed extension with ZERO covered hooks", "coverage-floor",
+                              with_disclosure("inert", [], all_ids_rec(all_hook_slots())));
+  let unknown = assert_rejected("an unknown hook id", "unknown-hook-id",
+                                with_disclosure("typo", ["on_describe_tool"], []));
+  let overlap = assert_rejected("covered and excluded not DISJOINT", "covered-excluded-disjoint",
+                                with_disclosure("overlap", all_ids_rec(all_hook_slots()), ["on_tool_handle"]));
+  -- THE fixture that separates this from a row-shape validator. Both lists are
+  -- disjoint, every id is a real slot, and the entry count is CORRECT — seven
+  -- covered plus one excluded is eight. `on_solver_candidate` is classified
+  -- nowhere. Only counting per SLOT rejects it.
+  let partial = assert_rejected("SET COMPLETENESS: eight entries, seven slots", "covered-excluded-exhaustive",
+                                with_disclosure("partial",
+                                  ["on_describe_tools", "on_describe_tools", "on_build_system_prompt",
+                                   "on_budget_plan", "on_pre_step", "on_tool_policy",
+                                   "on_response_intercept"],
+                                  ["on_tool_handle"]));
+
+  let _ = println("  -- the seven/one dispatch split, swept rather than restated --");
+  let seven = seven_unconditional();
+
+  let _ = println("  -- the attribution reference --");
+  let stale_bind = assert_stale_binding();
+  let stale_id = assert_rejected("a profile recording a STALE table identity", "attribution-identity-stale",
+                                 { clean() | attribution_ref: { source_revision: table_source_revision(), content_hash: "sha256:0000" } });
+  let unaccounted = assert_site_unaccounted();
+
+  let _ = println("  -- classifier 2 and the scan roots --");
+  let c2 = assert_rejected("an INSTALLED extension calling a classifier-2 field", "classifier-2-extension-installed",
+                           { clean() |
+                             installed_packages: [installed("compaction_ai", "packages/motoko-ext-compaction-ai/compaction_ai.ail")],
+                             disclosures: [{ extension_id: "compaction_ai",
+                                             covered: all_ids_rec(all_hook_slots()), excluded: [] }],
+                             omitted_extensions: [] });
+  let roots = assert_rejected("a package whose AILANG source is OUTSIDE the scan roots", "package-outside-scan-roots",
+                              { clean() |
+                                installed_packages: [installed("remote", "/root/.ailang/registry/sunholo/remote/lib.ail")],
+                                disclosures: [{ extension_id: "remote",
+                                                covered: all_ids_rec(all_hook_slots()), excluded: [] }] });
+
+  let _ = println("  -- decision 1: unrouted reachable core sites --");
+  let undeclared = assert_rejected("an unrouted reachable site left UNDECLARED", "unrouted-site-undeclared",
+                                   { clean() | unrouted_reachable_sites: [] });
+  let no_instr = assert_rejected("a declared unrouted site with NO INSTRUMENT", "unrouted-site-without-instrument",
+                                 { clean() | unrouted_reachable_sites: [
+                                     { site_key: "src/core/session.ail:796", instrument: "", why_unroutable: "S2" },
+                                     { site_key: "src/core/test/stub_step.ail:146",
+                                       instrument: "make world_state", why_unroutable: "live adapter" }] });
+  let stale_decl = assert_rejected("a declaration for a site that is no longer reachable-and-unrouted", "declared-site-not-reachable",
+                                   { clean() | unrouted_reachable_sites:
+                                       clean().unrouted_reachable_sites ++
+                                       [{ site_key: "src/core/moved.ail:1", instrument: "make world_state",
+                                          why_unroutable: "stale" }] });
+
+  let _ = println("  -- D3 waivers, read back from the catalogue --");
+  let unwaived = assert_rejected("a conditional class neither waived nor claimed exercised", "conditional-class-unaccounted",
+                                 { clean() | waived_fault_classes: [] });
+  let not_cond = assert_rejected("waiving an UNCONDITIONAL class", "waived-class-not-conditional",
+                                 { clean() | waived_fault_classes:
+                                     clean().waived_fault_classes ++
+                                     [{ class_id: "provider_error_retryable", condition: "because" }] });
+
+  let _ = println("  -- decision 2: the routed-set claim is computed --");
+  let claim = routed_claim_is_computed();
+
+  let _ = println("  -- the execution manifest (D5's separate list) --");
+  let manifest = manifest_checks();
+
+  let _ = println("  -- runtime routing's fail-closed exclusion check --");
+  let exclusion = exclusion_check();
+
+  let all = control && sweep && floor && unknown && overlap && partial && seven
+            && stale_bind && stale_id && unaccounted && c2 && roots
+            && undeclared && no_instr && stale_decl && unwaived && not_cond
+            && claim && manifest && exclusion;
+  if all then println("profile_definition_dst PASS")
+  else {
+    let _ = println("profile_definition_dst FAIL");
+    exit(1)
+  }
+}

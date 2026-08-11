@@ -1,0 +1,353 @@
+-- src/core/dst_driver_only.ail
+--
+-- `driver_only` v1 — the first conformant simulation profile (ADR-001 D5,
+-- plan P4). One INSTANCE of the machinery in src/core/dst_profile.ail, kept in
+-- its own module and its own commit so that the validator's rejections are
+-- readable before the definition that passes them.
+--
+-- Per D10 the name carries neither "DST" nor "simulation": it names what is in
+-- the system under test, which is the real traced driver plus the main-loop
+-- cursor and nothing else.
+--
+-- ============================================================================
+-- Why the install list is empty, and why that is not a weakness
+-- ============================================================================
+--
+-- No shipped configuration can be the first profile. All fourteen install
+-- `compaction_ai`, which calls `ExtPorts.ai_step` — a classifier-2 field, whose
+-- core seam threads successor state that the ext seam cannot carry. Under D1/D5
+-- such an extension must have every hook it registers excluded, and seven of
+-- the eight ABI slots are dispatched unconditionally, so exclusion cannot save
+-- it: the run would fail closed on the first system-prompt build. The conformant
+-- move is to OMIT it, named, with the reason — which is `omitted_extensions`
+-- below, and which `make driver_only` re-derives from the call inventory rather
+-- than trusting this file.
+--
+-- An empty install list makes the coverage floor and the per-hook disclosure
+-- hold VACUOUSLY, and that vacuity is safe rather than convenient: the
+-- per-extension rules make an unchecked installed extension impossible, so
+-- there is nothing for an empty list to hide. Four of D5's fields are NOT
+-- vacuous for an empty install list, and all four carry real content here — the
+-- adapter/parser boundaries, the logical resource models, the permitted
+-- diagnostic projections, and the forbidden capabilities.
+--
+-- ============================================================================
+-- What this profile CLAIMS, and what each claim rests on
+-- ============================================================================
+--
+-- The attribution reference is recorded as LITERALS, not as a call to
+-- `table_identity()`. That is deliberate and it is the difference between a
+-- check and a tautology: D4 states that a table correction re-issues every
+-- referring profile, which is only mechanically true if the profile records the
+-- content hash and something compares it. If this file called the live function
+-- the comparison would always pass and the rule would be decorative. The cost
+-- is that a table edit turns `make driver_only` red until the profile is
+-- re-issued with a version bump. That cost IS the rule.
+--
+-- The routed-set claim is NOT recorded. `routed_set_claim` computes it from the
+-- table at the bound revision (plan P3). P4 describes "a reachable clock set of
+-- the four driver sites"; at HEAD the computed answer is SEVEN reachable — five
+-- routed and two declared-unrouted — because A12 routed a fifth site in
+-- `tool_phase.ail` and A5 declared the two unrouted ones explicitly. Writing
+-- four down here is exactly the defect P3 exists to prevent, so nothing is
+-- written down.
+--
+-- The two declared-unrouted sites are A10's decision 1 in force. Each names its
+-- instrument, and the instrument is not a promise: `make world_state` runs the
+-- Clock poison PAIR, which shows the deterministic entry point completes with
+-- `Clock` withheld — so it reaches neither site — and that the live world dies
+-- with `Clock` withheld, so the first half is evidence of containment rather
+-- than evidence that nothing reads a clock at all.
+
+module src/core/dst_driver_only
+
+import std/list as List (length)
+
+import src/core/dst_profile (
+  ProfileDefinition,
+  ExecutionManifest,
+  ProfileRejection,
+  RoutedSetClaim,
+  AttributionRef,
+  Classifier2Call,
+  routed_set_claim,
+  waivers_from,
+  validate_definition_at_load,
+  definition_ok,
+  profile_rules_version
+)
+import src/core/dst_attribution_table as Attr (CoreSite)
+import src/core/dst_fault_catalogue as Fault (FaultClass, fault_catalogue, conditional_class_ids)
+import src/core/dst_profile_coverage as Cov (coverage_rules_version)
+import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
+
+export pure func driver_only_id() -> string { "driver_only" }
+export pure func driver_only_version() -> string { "1" }
+
+-- The attribution table this profile was issued against. Literals by design —
+-- see the header. Re-issuing the profile after a table correction means bumping
+-- `driver_only_version` and re-recording both halves of this pair.
+export pure func driver_only_attribution_ref() -> AttributionRef {
+  { source_revision: "5ad3433",
+    content_hash: "sha256:2eb2422f0068626cb33f087489d840dd9fb4f80c503f0fe505e10ad8d4341cca" }
+}
+
+-- ---------------------------------------------------------------------------
+-- The definition
+-- ---------------------------------------------------------------------------
+
+export pure func driver_only() -> ProfileDefinition {
+  let cat = fault_catalogue();
+  {
+    profile_id: driver_only_id(),
+    profile_version: driver_only_version(),
+
+    -- D5 field 2. Empty: see the header. `compaction_ai` is omitted below
+    -- rather than installed-and-excluded.
+    installed_packages: [],
+    hook_classifications: [],
+
+    -- D5 field 9. Vacuous, and safe for the reason the header gives.
+    disclosures: [],
+
+    -- D5 field 3. NOT vacuous for an empty install list: this field is what
+    -- scopes D3's wire-parser exclusion, and it is the driver's own boundaries
+    -- that are being scoped, not an extension's.
+    adapter_boundaries: [
+      { boundary_id: "provider.model_step", included: true,
+        note: "Ports.model_step and the ProviderExchange it returns; a deterministic run binds the scripted adapter, and the boundary is in scope either way" },
+      { boundary_id: "provider.wire_parser", included: false,
+        note: "the provider's on-the-wire response parser. D3 excludes wire-parser faults from the fault catalogue, and THIS is the field that scopes that exclusion to a named boundary rather than leaving it as prose" },
+      { boundary_id: "tool.envelope_dispatch", included: true,
+        note: "tool_envelope_dispatch and tool_phase's typed ToolCallEnvelope contract" },
+      { boundary_id: "tool.process_exec", included: true,
+        note: "Ports.tool_exec, whose ToolExecution threads successor state (A12)" },
+      { boundary_id: "approval.stdin_channel", included: false,
+        note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
+      { boundary_id: "extension.abi", included: false,
+        note: "the motoko-ext-abi hook surface, ABI 4.0. Excluded BECAUSE the install list is empty — no extension behaviour is in the system under test, which is what makes this the interim profile the ADR describes rather than a claim about extensions" }
+    ],
+
+    -- D5 field 4. The logical transitions the profile promises a fault leaves
+    -- behind. D3 forbids a timeout leaving the simulator's logical state
+    -- ambiguous, and these are the promises the fault catalogue's per-class
+    -- `logical_transition` rows are read against.
+    resource_models: [
+      { model_id: "tool.all_or_nothing",
+        promise: "a failed tool call performs no partial logical update; the call either completes and is observable in the ledger or it does not and is not" },
+      { model_id: "tool.deadline_outcome_is_stated",
+        promise: "a tool completing after its declared deadline states whether the work completed before or after the observation; the outcome is never left ambiguous" },
+      { model_id: "provider.no_partial_commit",
+        promise: "a provider error, including a partial stream followed by an error, commits no message to the conversation; the logical state is the state before the step" },
+      { model_id: "approval.single_shot",
+        promise: "an approval decision is taken once per request and is not re-read; a denial is terminal for that request rather than retried" }
+    ],
+
+    -- D5 field 5. D1's collecting sink is bounded by exactly this list: a
+    -- projection not named here may not be emitted during execution. NOT
+    -- vacuous for an empty install list — these are the driver's own.
+    diagnostic_projections: [
+      { projection_id: "ledger.trace",
+        note: "the LedgerTrace the traced driver returns; D6's recorded axis" },
+      { projection_id: "ledger.run_summary",
+        note: "the single final RunSummary record every terminal path emits (D6.1, WI-A9)" },
+      { projection_id: "result.interaction_log",
+        note: "what the world served the driver, in order (D6, WI-A9)" },
+      { projection_id: "result.replay_metadata",
+        note: "the interpretation context a trace is useless without (D8)" }
+    ],
+
+    -- D5 field 6. What A12's poison probes test against. Every entry names the
+    -- check that goes red if the capability is exercised — a forbidden
+    -- capability with no instrument is enforced by nothing, and the machinery
+    -- rejects a blank instrument for that reason.
+    forbidden_capabilities: [
+      { capability: "Clock",
+        instrument: "make world_state — the Clock poison PAIR: the deterministic entry point completes with Clock withheld, and the live world dies with it withheld" },
+      { capability: "AI",
+        instrument: "make world_state — the provider poison PAIR: the deterministic entry point completes with AI withheld, and the live world dies with it withheld" },
+      { capability: "Process",
+        instrument: "make world_state — the typed tool-contract poison PAIR: a fully-seeded world completes with Process withheld, and an UNSEEDED one dies" },
+      { capability: "Rand",
+        instrument: "make world_state — no module under src/core/*.ail reaches std/rand, checked structurally; D1 names an ambient RNG as a prohibited hiding place for world state" },
+      { capability: "Env",
+        instrument: "make world_state — PROVENANCE ONLY, stated as the weaker instrument it is: the Env-withheld poison pair is deferred, so the evidence is world_state_probe's provenance assertion rather than a withheld-capability pair" }
+    ],
+
+    -- D5 field 7. READ from A7's catalogue, both the id list and each
+    -- condition — not transcribed. `driver_only` exercises no conditional
+    -- class, so it waives every one of them, and the day A7 adds a conditional
+    -- class this profile waives it automatically rather than silently omitting
+    -- it. The machinery separately rejects a waiver whose condition has drifted
+    -- from the catalogue's.
+    waived_fault_classes: waivers_from(cat, conditional_class_ids(cat)),
+    exercised_fault_classes: [],
+
+    -- D5 field 8. Literals, deliberately: see the header.
+    attribution_ref: driver_only_attribution_ref(),
+
+    -- D5 field 10. The reason names the field AND the call site, because
+    -- "calls ai_step" alone is not falsifiable by a reader and the site is.
+    -- `make driver_only` re-derives this from the tool and fails if an
+    -- installable classifier-2 caller is missing from this list.
+    omitted_extensions: [
+      { extension_id: "compaction_ai",
+        reason: "calls the classifier-2 field ExtPorts.ai_step at packages/motoko-ext-compaction-ai/compaction_ai.ail:106. Ports.model_step threads successor state through ProviderExchange and ExtPorts.ai_step returns Result[string, string], which cannot carry it — so every hook compaction_ai registers would have to be excluded, and seven of the eight ABI slots are dispatched unconditionally. Excluding them is not a runnable configuration, so it is OMITTED (D1/D5). Widening ExtPorts is Milestone B's ABI major, not a fix available here." }
+    ],
+
+    -- A10 decision 1, in force. Exactly the reachable-and-unrouted set; the
+    -- machinery checks BOTH directions, so a site that gets routed or moves
+    -- cannot leave a stale declaration behind reading as if the gap were live.
+    unrouted_reachable_sites: [
+      { site_key: "src/core/session.ail:796",
+        instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site",
+        why_unroutable: "ext_unrouted_clock. ExtPorts.clock_now is zero-argument and AILANG has no zero-arg lambdas in expression position on the pin, so no world capture is possible here at all. Standing rule S2 chose the ambient read over a frozen snapshot deliberately: a frozen cursor is silently wrong and invisible to every gate, while the ambient read turns the Clock poison probe red the moment anyone calls it. Closing it is WI-C5's, behind Milestone B's ABI widening." },
+      { site_key: "src/core/test/stub_step.ail:146",
+        instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read",
+        why_unroutable: "live_ports' clock adapter — the one place the driver's call graph reads a real wall clock, by design, and therefore the one place {Clock} is genuinely load-bearing. It is IN this profile's reachable set even though a deterministic run binds the scripted adapter instead: D4's profile-reachable is INSTALLATION-scoped, not execution-scoped, and carving it out on execution-scope grounds would put a fail-open exception into an installation-scoped rule (A10 decision 1)." }
+    ],
+
+    -- D5 obligation 2's roots, and the set an installed package's AILANG source
+    -- must lie within. Every extension in `[extensions] packages` is a path
+    -- dependency under `packages/`, so the exposure is nil today; the gate
+    -- exists for the first registry-resolved EXTENSION, which the resolved lock
+    -- graph would otherwise carry into an install list with nothing having
+    -- scanned it. (`ailang.toml:9`'s `sunholo/logging` is registry-resolved and
+    -- outside these roots, but it is a library dependency and not an extension,
+    -- so it is not installable and not this rule's business.)
+    scan_roots: ["src", "packages"]
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The claim, computed
+-- ---------------------------------------------------------------------------
+
+-- Decision 2. Derived from the table at the revision the profile binds, so a
+-- table correction moves the claim instead of leaving a stale number behind.
+export pure func driver_only_routed_claim() -> RoutedSetClaim {
+  routed_set_claim(driver_only())
+}
+
+export pure func validate_driver_only(
+  loading_against: string,
+  discovered: [CoreSite],
+  calls: [Classifier2Call],
+  catalogue: [FaultClass]
+) -> [ProfileRejection] {
+  validate_definition_at_load(driver_only(), loading_against, discovered, calls, catalogue)
+}
+
+-- ---------------------------------------------------------------------------
+-- The per-run execution manifest
+-- ---------------------------------------------------------------------------
+
+-- D5's manifest is PER RUN, so it is built rather than declared. Everything
+-- that can be read from an artifact is read here; everything that is a property
+-- of the run or of the scan is an argument, which is why the derived classifier
+-- sets arrive from the caller (the tool derives them per run and consults no
+-- list) rather than being frozen into this file.
+export pure func driver_only_manifest(
+  source_revision: string,
+  toolchain: string,
+  abi_version: string,
+  normalized_configuration: string,
+  classifier_2_set: [string],
+  unrouted_fields: [string],
+  scan_root_commit: string
+) -> ExecutionManifest {
+  {
+    source_revision: source_revision,
+    toolchain: toolchain,
+    extension_packages: [],
+    abi_version: abi_version,
+    profile_id: driver_only_id(),
+    profile_version: driver_only_version(),
+    event_vocabulary_version: event_vocabulary_version(),
+    normalized_configuration: normalized_configuration,
+    classifier_2_set: classifier_2_set,
+    unrouted_fields: unrouted_fields,
+    scan_roots: driver_only().scan_roots,
+    scan_root_commit: scan_root_commit,
+    profile_rules_version: profile_rules_version(),
+    coverage_rules_version: Cov.coverage_rules_version(),
+    attribution_rules_version: Attr.attribution_rules_version(),
+    fault_catalogue_version: Fault.fault_catalogue_version()
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. The load-time acceptance is scripts/dst/driver_only_dst.ail,
+-- which supplies the measured inventory and the derived call set.
+-- ---------------------------------------------------------------------------
+
+-- The claim is asserted as a PARTITION and against the table, never against a
+-- written-down number. P4 says "four driver sites" and the computed answer is
+-- seven reachable / five routed / two declared-unrouted; a constant here would
+-- have frozen P4's number and gone quietly wrong.
+pure func test_routed_claim_is_computed_not_recorded() -> bool
+  tests [((), true)]
+  {
+    let c = driver_only_routed_claim();
+    c.reachable_total == c.routed + c.declared_unrouted
+      && c.reachable_total == List.length(Attr.reachable_core_sites([]))
+  }
+
+-- Every reachable-and-unrouted site is declared, and every declaration still
+-- applies. Asserted here as a COUNT MATCH against the table rather than against
+-- the literal 2, so routing a site is a one-line profile edit and not a silent
+-- pass.
+pure func test_declarations_match_the_unrouted_set() -> bool
+  tests [((), true)]
+  {
+    List.length(driver_only().unrouted_reachable_sites)
+      == driver_only_routed_claim().declared_unrouted
+  }
+
+-- P4: the omission is NAMED. An empty omission list would satisfy every other
+-- rule in the machinery while making the profile's central claim — that no
+-- shipped configuration can be the first profile — unstated.
+pure func test_omission_is_named() -> bool
+  tests [((), true)]
+  {
+    match driver_only().omitted_extensions {
+      [] => false,
+      o :: _ => o.extension_id == "compaction_ai" && o.reason != ""
+    }
+  }
+
+-- The waiver list is READ from the catalogue, so it cannot fall behind it. A
+-- transcribed list would pass a count check the day it was written and fail
+-- silently the day a conditional class was added.
+pure func test_waivers_track_the_catalogue() -> bool
+  tests [((), true)]
+  {
+    let cat = fault_catalogue();
+    List.length(driver_only().waived_fault_classes)
+      == List.length(conditional_class_ids(cat))
+      && List.length(conditional_class_ids(cat)) > 0
+  }
+
+-- The four D5 fields that are NOT vacuous for an empty install list all carry
+-- content. Cluster 3 identified them; this is what makes that identification
+-- falsifiable rather than a remark.
+pure func test_the_four_non_vacuous_fields_are_populated() -> bool
+  tests [((), true)]
+  {
+    let d = driver_only();
+    List.length(d.adapter_boundaries) > 0
+      && List.length(d.resource_models) > 0
+      && List.length(d.diagnostic_projections) > 0
+      && List.length(d.forbidden_capabilities) > 0
+      && List.length(d.installed_packages) == 0
+  }
+
+-- The manifest's fifth axis is read, not transcribed.
+pure func test_manifest_reads_the_vocabulary_version() -> bool
+  tests [((), true)]
+  {
+    let m = driver_only_manifest("r", "t", "4.0", "{}", ["ai_step"], ["clock_now"], "r");
+    m.event_vocabulary_version == event_vocabulary_version()
+      && m.profile_id == "driver_only"
+      && m.profile_version == "1"
+  }

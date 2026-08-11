@@ -1,0 +1,274 @@
+-- scripts/dst/driver_only_dst.ail
+--
+-- `driver_only` v1 acceptance (ADR-001 D5, plan P4). The machinery's own suite
+-- is scripts/dst/profile_definition_dst.ail and lands separately; this script
+-- asserts only what is true of THIS profile.
+--
+-- The load here is the real one: the same `validate_definition_at_load` a
+-- runner calls, at the table's bound revision, against the measured HEAD
+-- inventory and the classifier-2 call set the tool derives. `make driver_only`
+-- re-derives that call set from `tools/ext_call_inventory/derive.py` and fails
+-- if this file's copy has drifted, so a green load here cannot be a green load
+-- against a stale input.
+--
+-- Four claims, in the order a reviewer would want them:
+--
+--   1. it LOADS CLEAN — the whole point, and the one thing the machinery's
+--      only-rejecting fixtures cannot establish;
+--   2. it NAMES ITS OMISSION, with a reason that survives being read;
+--   3. its waivers come from A7's stable ids and each condition matches the
+--      catalogue's;
+--   4. its routed-set claim is COMPUTED, and is printed so a reviewer sees the
+--      number without the profile having recorded one.
+
+module scripts/dst/driver_only_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Option, Some, None)
+
+import src/core/dst_driver_only (
+  driver_only,
+  driver_only_id,
+  driver_only_version,
+  driver_only_routed_claim,
+  driver_only_manifest,
+  validate_driver_only
+)
+import src/core/dst_profile (
+  ProfileDefinition,
+  ProfileRejection,
+  Classifier2Call,
+  WaivedFaultClass,
+  UnroutedSiteDeclaration,
+  OmittedExtension,
+  rejection_rule,
+  rejection_message,
+  manifest_rule,
+  manifest_message,
+  ManifestRejection,
+  validate_manifest,
+  routing_violation_at,
+  is_excluded_hook
+)
+import src/core/dst_attribution_table (
+  CoreSite,
+  unconditional_core_sites,
+  table_source_revision,
+  table_identity
+)
+import src/core/dst_fault_catalogue (
+  FaultClass,
+  fault_catalogue,
+  conditional_class_ids,
+  waiving_condition
+)
+import src/core/dst_result (RunFailed, ReplayMetadata)
+import src/core/phase_vocab (empty_ledger_trace)
+
+-- The measured inventory, as `attribution_table_dst` measures it: what an
+-- inventory found in the SOURCE, not a copy of what the table declares.
+pure func head_inventory() -> [CoreSite] {
+  unconditional_core_sites()
+    ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+          routed: false, note: "" },
+        { site: { file: "src/core/tool_phase.ail", line: 287 }, effect: "Process",
+          routed: false, note: "" }]
+}
+
+-- Classifier 2's member call sites in installable extensions, as the tool
+-- derives them. `make driver_only` asserts this matches the tool's own output.
+pure func head_classifier_2_calls() -> [Classifier2Call] {
+  [{ extension_id: "compaction_ai", field: "ai_step",
+     site: "packages/motoko-ext-compaction-ai/compaction_ai.ail:106" }]
+}
+
+func report(rs: [ProfileRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${rejection_message(r)}");
+      report(rest)
+    }
+  }
+}
+
+-- 1. The load.
+func scenario_loads_clean() -> bool ! {IO} {
+  let rs = validate_driver_only(table_source_revision(), head_inventory(),
+                                head_classifier_2_calls(), fault_catalogue());
+  let ok = List.length(rs) == 0;
+  let _ = if ok then println("  ✓ driver_only v${driver_only_version()} LOADS CLEAN at the bound revision")
+          else {
+            let _ = println("  ✗ driver_only did NOT load clean: ${show(List.length(rs))} rejection(s)");
+            report(rs)
+          };
+  ok
+}
+
+-- The attribution reference is recorded as literals, so this is a real
+-- comparison rather than a tautology — and a table correction re-issues this
+-- profile (D4). If it fires, the fix is to bump driver_only_version and
+-- re-record the pair, not to make the profile call table_identity().
+func scenario_attribution_ref_is_current() -> bool ! {IO} {
+  let live = table_identity();
+  let rec = driver_only().attribution_ref;
+  let ok = rec.source_revision == live.source_revision && rec.content_hash == live.content_hash;
+  let _ = if ok then println("  ✓ the recorded attribution reference is current: (${rec.source_revision}, ${rec.content_hash})")
+          else {
+            let _ = println("  ✗ the attribution table was corrected and driver_only was not re-issued (D4)");
+            let _ = println("      recorded: (${rec.source_revision}, ${rec.content_hash})");
+            println("      live:     (${live.source_revision}, ${live.content_hash})")
+          };
+  ok
+}
+
+-- 2. The omission.
+func scenario_names_its_omission() -> bool ! {IO} {
+  match driver_only().omitted_extensions {
+    [] => {
+      let _ = println("  ✗ driver_only omits nothing; P4 requires the compaction_ai omission to be NAMED");
+      false
+    },
+    o :: rest => {
+      let ok = o.extension_id == "compaction_ai" && o.reason != "" && List.length(rest) == 0;
+      let _ = if ok then {
+                let _ = println("  ✓ names its omission: '${o.extension_id}'");
+                println("      reason: ${o.reason}")
+              } else println("  ✗ the omission list is not the single named compaction_ai entry");
+      ok
+    }
+  }
+}
+
+-- 3. The waivers, each condition compared against the catalogue's.
+func scenario_waivers_come_from_the_catalogue() -> bool ! {IO} {
+  let cat = fault_catalogue();
+  let ids = conditional_class_ids(cat);
+  let ws = driver_only().waived_fault_classes;
+  let count_ok = List.length(ws) == List.length(ids) && List.length(ids) > 0;
+  let each_ok = check_waivers(ws, cat);
+  let _ = if count_ok then println("  ✓ waives all ${show(List.length(ids))} conditional D3 classes, by A7's stable ids")
+          else println("  ✗ the waiver list does not cover every conditional class (${show(List.length(ws))} of ${show(List.length(ids))})");
+  count_ok && each_ok
+}
+
+func check_waivers(ws: [WaivedFaultClass], cat: [FaultClass]) -> bool ! {IO} {
+  match ws {
+    [] => true,
+    w :: rest => {
+      let ok = match waiving_condition(cat, w.class_id) {
+        None => false,
+        Some(c) => c == w.condition
+      };
+      let _ = if ok then println("      ✓ ${w.class_id}: condition read from the catalogue")
+              else println("      ✗ ${w.class_id}: the recorded condition is not the catalogue's");
+      let tail = check_waivers(rest, cat);
+      ok && tail
+    }
+  }
+}
+
+-- 4. The claim, computed and printed.
+func scenario_routed_claim() -> bool ! {IO} {
+  let c = driver_only_routed_claim();
+  let ok = c.reachable_total == c.routed + c.declared_unrouted && c.reachable_total > 0;
+  let _ = println("  ✓ routed-set claim, COMPUTED at the bound revision (nothing recorded):");
+  let _ = println("      reachable core sites: ${show(c.reachable_total)}");
+  let _ = println("      routed:               ${show(c.routed)}");
+  let _ = println("      declared unrouted:    ${show(c.declared_unrouted)}");
+  let _ = println("      (plan P4 says 'the four driver sites'; the computed answer is ${show(c.routed)} routed,");
+  let _ = println("       because A12 routed a fifth in tool_phase.ail and A5 declared the two unrouted ones)");
+  let _ = if ok then () else println("  ✗ the claim is not a partition of the reachable set");
+  ok
+}
+
+-- Decision 1 in force, printed so a reviewer sees WHAT is declared and WHAT
+-- stands behind it rather than only that a check passed.
+func scenario_declared_unrouted_sites() -> bool ! {IO} {
+  let ds = driver_only().unrouted_reachable_sites;
+  let ok = List.length(ds) == driver_only_routed_claim().declared_unrouted && List.length(ds) > 0;
+  let _ = println("  ✓ decision 1: every unrouted reachable core site is DECLARED and INSTRUMENTED");
+  let _ = show_declarations(ds);
+  let _ = if ok then () else println("  ✗ the declared set does not match the computed unrouted set");
+  ok
+}
+
+func show_declarations(ds: [UnroutedSiteDeclaration]) -> () ! {IO} {
+  match ds {
+    [] => (),
+    d :: rest => {
+      let _ = println("      ${d.site_key}");
+      let _ = println("        instrument: ${d.instrument}");
+      show_declarations(rest)
+    }
+  }
+}
+
+-- The exclusion check is VACUOUS here, and that is a claim about the code
+-- rather than a remark: nothing is installed, so nothing is excluded, so no
+-- dispatch can violate. It becomes binding at WI-C5.
+func scenario_exclusion_check_is_vacuous() -> bool ! {IO} {
+  let meta: ReplayMetadata =
+    { source_revision: "HEAD", toolchain_version: "ailang 0.26.0",
+      profile_id: driver_only_id(), profile_version: driver_only_version(),
+      event_vocabulary_version: "event-vocabulary/1" };
+  let none_excluded = not is_excluded_hook(driver_only(), "compose", "on_tool_handle");
+  let no_violation =
+    match routing_violation_at(driver_only(), "compose", "on_tool_handle", 0,
+                               empty_ledger_trace(), meta) {
+      None => true,
+      Some(_) => false
+    };
+  let ok = none_excluded && no_violation;
+  let _ = if ok then println("  ✓ the runtime exclusion check is VACUOUS for driver_only: nothing installed, nothing excluded, no dispatch can violate (binding from WI-C5)")
+          else println("  ✗ driver_only produced a routing violation, which an empty install list cannot");
+  ok
+}
+
+-- The per-run manifest, built and validated against the definition it realizes.
+func scenario_manifest() -> bool ! {IO} {
+  let m = driver_only_manifest("HEAD", "ailang 0.26.0", "4.0", "{}",
+                               ["ai_step", "env_get", "proc_exec"], ["clock_now"], "HEAD");
+  let rs = validate_manifest(m, driver_only());
+  let ok = List.length(rs) == 0;
+  let _ = if ok then {
+            let _ = println("  ✓ the per-run execution manifest validates against the definition it realizes");
+            let _ = println("      profile:            ${m.profile_id}/${m.profile_version}");
+            let _ = println("      event vocabulary:   ${m.event_vocabulary_version}");
+            let _ = println("      classifier-2 set:   ${show(List.length(m.classifier_2_set))} field(s), derived");
+            let _ = println("      unrouted fields:    ${show(List.length(m.unrouted_fields))} field(s), derived");
+            println("      scan roots:         ${show(List.length(m.scan_roots))} at commit ${m.scan_root_commit}")
+          } else {
+            let _ = println("  ✗ the manifest did not validate");
+            report_manifest(rs)
+          };
+  ok
+}
+
+func report_manifest(rs: [ManifestRejection]) -> () ! {IO} {
+  match rs {
+    [] => (),
+    r :: rest => {
+      let _ = println("      ${manifest_message(r)}");
+      report_manifest(rest)
+    }
+  }
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("driver_only_dst  (${driver_only_id()} v${driver_only_version()})");
+  let a = scenario_loads_clean();
+  let b = scenario_attribution_ref_is_current();
+  let c = scenario_names_its_omission();
+  let d = scenario_waivers_come_from_the_catalogue();
+  let e = scenario_routed_claim();
+  let f = scenario_declared_unrouted_sites();
+  let g = scenario_exclusion_check_is_vacuous();
+  let h = scenario_manifest();
+  if a && b && c && d && e && f && g && h then println("driver_only_dst PASS")
+  else {
+    let _ = println("driver_only_dst FAIL");
+    exit(1)
+  }
+}
