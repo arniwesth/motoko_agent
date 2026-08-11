@@ -202,7 +202,7 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- there is it goes at the TOP of this block with its date, per plan rule S15 —
 -- re-dating a claim in place is how a sentence becomes a false statement about
 -- history, and this file will carry claims that move.
-export pure func no_ops_version() -> string { "4" }
+export pure func no_ops_version() -> string { "5" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -210,6 +210,12 @@ export pure func no_ops_version() -> string { "4" }
 -- can be re-issued silently by the other's edit.
 export pure func no_ops_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
+    -- WI-D20: re-recorded with `driver_only`'s, from
+    -- sha256:6b929328f5dbb8007451f84224b6f2c83d618e09966681a9e3a683392718c3a7.
+    -- The FIRST re-issue of this pair not caused by a Route B surface item: three
+    -- `tool_phase.ail` anchors moved for the `on_tool_handle` successor fix, and
+    -- one of the three also changed rather than merely moving. See
+    -- `driver_only_attribution_ref`, which carries the full account.
     -- WI-D18: re-recorded with `driver_only`'s, from
     -- sha256:4e532c81e5b37538db280e1345b4d6a13dd12c8b61309bd39f73e123e36edbb7.
     -- WI-D17 recorded that one, from
@@ -217,7 +223,7 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- WI-D16 recorded that one, from
     -- sha256:ccfc1e3401635ae59326da4052621d934875bdedd0a05552dd7dc1e41a64b210.
     -- An anchor re-measurement, not a table correction — see `no_ops_version`.
-    content_hash: "sha256:6b929328f5dbb8007451f84224b6f2c83d618e09966681a9e3a683392718c3a7" }
+    content_hash: "sha256:5f000167b1af7f0fa67740501b5a98c852b06e5fb25767c7429599295cd2311c" }
 }
 
 -- ---------------------------------------------------------------------------

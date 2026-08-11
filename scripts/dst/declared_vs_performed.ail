@@ -638,6 +638,54 @@ export func compose_intercept_threading() -> () ! {AI, Clock, Env, FS, IO, Net, 
   reached("compose_intercept_threading", trace_of(out.next_state))
 }
 
+-- WI-D20. THE `on_tool_handle` REACHABILITY ARM, and it witnesses LESS than its
+-- intercept sibling for a structural reason that is stated rather than hidden.
+--
+-- `compose_intercept_threading` above can trace `on_response_intercept`'s whole
+-- routed chain because that hook reaches its filesystem seams without a model.
+-- `on_tool_handle` cannot: `handle_compose_tool` -> `run_attempts` ->
+-- `one_attempt` calls `callStreamResult`, which is AMBIENT AI from `ai_compat`
+-- and not `ExtPorts.ai_step`, so `trace_ports` has nothing to substitute for it.
+-- With no provider the author returns no snippet, `one_attempt` takes its early
+-- `NeedRetry`, and the seventeen routed FS sites below that point are never
+-- reached in this process.
+--
+-- SO THIS ARM PINS TWO LINKS OF THE SPINE, AND EXACTLY TWO. The first draft of
+-- this comment claimed three; the third was measured and found NOT pinned, and
+-- the label is narrowed here rather than the claim left standing.
+--
+-- WHAT IT PINS, each confirmed by running the mutant:
+--
+--   * `on_tool_handle` returning `handled.next_state` rather than `ctx.world`.
+--     Mutated, the witness comes back EMPTY — the same answer a hook that routed
+--     nothing gives.
+--   * `handle_compose_tool` passing `started.next_state` into `run_attempts`
+--     rather than its own `w`. Mutated, the witness is `clock_now;` — the entry
+--     clock's successor is discarded and the exhaust clock starts from a fresh
+--     token.
+--
+-- WHAT IT DOES NOT PIN, AND WHY NO IN-PROCESS FIXTURE CAN: `run_attempts`
+-- recursing on `w2` (the attempt's successor) rather than on `w`. Mutated, this
+-- witness is UNCHANGED — because without a model `one_attempt` reaches its early
+-- `NeedRetry` before any routed seam, so `w2` and `w` are the SAME WORLD and the
+-- two answers agree by construction. That is WI-D18's empty-directory shape and
+-- WI-D19's populated-directory shape a third time: the distinguishing input is an
+-- attempt that actually performed something, which needs the model this process
+-- does not have. Named as a gap rather than covered by a row that would pass
+-- either way.
+--
+-- The graded end of this is `discovery_dst`'s `batch_handle_scenario`, which
+-- drives the production driver rather than the dispatcher alone. The two are
+-- complementary and neither subsumes the other: that one grades the DRIVER's
+-- threading with a compose-shaped hook, this one grades COMPOSE's threading with
+-- a driver-shaped dispatch.
+export func compose_tool_handle_threading() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_tool_handle(compose_then_witness("subagent"),
+            { probe_ctx("subagent") | ports: trace_ports() },
+            { id: "probe-handle", tool: "Compose", arguments: jo([]) });
+  reached("compose_tool_handle_threading", trace_of(out.next_state))
+}
+
 -- CONTROL for Env. Must die with Env withheld. Dispatched through the pre-step
 -- fold — see the note above `env_reading_pre_step` for why this control no
 -- longer lives in `on_budget_plan`.

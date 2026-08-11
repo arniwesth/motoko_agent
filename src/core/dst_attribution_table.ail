@@ -71,9 +71,12 @@
 -- ============================================================================
 --
 -- 1. **Row 2's line moved.** D4 cites `src/core/tool_phase.ail:222` for the
---    mixed-guard example. WI-A12 rewrote that file; the guard is now at `:286`
---    and the effectful call it guards is `:287`. The ADR's prose anchor is
---    stale, the example itself is intact.
+--    mixed-guard example. WI-A12 rewrote that file; the guard is now at `:317`
+--    and the effectful call it guards is `:318`. The ADR's prose anchor is
+--    stale, the example itself is intact. (This note said `:286`/`:287` from
+--    WI-A12 until WI-D20, which moved the pair twice over — the offsets are
+--    re-stated rather than re-dated because the claim is about HEAD, not about
+--    what a past item did; plan rule S15 governs the latter and not this.)
 --
 -- 2. **The core clock inventory is no longer "four driver sites".** D4's table
 --    says four; at HEAD there are SIX routed core sites and ONE ambient one.
@@ -205,11 +208,11 @@ export pure func attribution_rows() -> [AttributionRow] {
       note: "ambient now() inside emit_dummy_hook (:187-195), reached only via the five is_test_dummy guards in this file; installing test_dummy is necessary for it to execute"
     },
     {
-      site: { file: "src/core/tool_phase.ail", line: 314 },
+      site: { file: "src/core/tool_phase.ail", line: 318 },
       effect: "Process",
       hook_ids: ["scratchpad"],
       reviewer: "arni.westh",
-      note: "exec_scratchpad_cell_ws under the MIXED guard at :313; necessity rests on the named reviewer because the second conjunct is interprocedural (D4's stated gap)"
+      note: "exec_scratchpad_cell_ws under the MIXED guard at :317; necessity rests on the named reviewer because the second conjunct is interprocedural (D4's stated gap)"
     }
   ]
 }
@@ -233,8 +236,8 @@ export pure func unconditional_core_sites() -> [CoreSite] {
       note: "provider.ports.clock_now — routed by WI-A12" },
     { site: { file: "src/core/session.ail", line: 2885 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/tool_phase.ail", line: 373 }, effect: "Clock", routed: true,
-      note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it" },
+    { site: { file: "src/core/tool_phase.ail", line: 413 }, effect: "Clock", routed: true,
+      note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it. WI-D20 moved it 373 -> 413 and CHANGED ITS ARGUMENT: it read ports.clock_now(world) and now reads ports.clock_now(handle_world), because a DELEGATING on_tool_handle may have advanced the world before this native dispatch begins and starting from `world` would discard what it did. Same site, same effect, same routing, different starting world — recorded here because the other two tool_phase anchors this item moved are byte-identical drift and this one is not" },
     { site: { file: "src/core/test/stub_step.ail", line: 203 }, effect: "Clock", routed: false,
       note: "live_ports' clock adapter — the one place the driver reads a real clock, by design; a deterministic profile uses the scripted adapter and never reaches it" }
   ]
@@ -622,8 +625,8 @@ pure func test_duplicate_site_is_rejected() -> bool
 pure func test_empty_intersection_removes_the_site() -> bool
   tests [((), true)]
   {
-    let with_sp = classify_site("src/core/tool_phase.ail:314", ["scratchpad#3"]);
-    let without = classify_site("src/core/tool_phase.ail:314", ["compaction_ai#0", "context_mode#1"]);
+    let with_sp = classify_site("src/core/tool_phase.ail:318", ["scratchpad#3"]);
+    let without = classify_site("src/core/tool_phase.ail:318", ["compaction_ai#0", "context_mode#1"]);
     with_sp == "attributed-reachable" && without == "attributed-unreachable"
   }
 
@@ -669,7 +672,7 @@ pure func test_head_inventory_is_complete() -> bool
   {
     let discovered = unconditional_core_sites()
       ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
-          { site: { file: "src/core/tool_phase.ail", line: 314 }, effect: "Process", routed: false, note: "" }];
+          { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process", routed: false, note: "" }];
     List.length(validate_completeness(discovered, attribution_rows(), unconditional_core_sites())) == 0
   }
 

@@ -893,3 +893,43 @@ in the smaller hook. **So the first routing tests D16's, D17's and D18's reasoni
 motivated it, at a tenth of 2b's size** — and the handoff's most valuable requested line is whether any
 seam needed changing on contact with its first caller, because four items built these on measurements
 taken with no callers at all.
+
+**Cluster 38 = WI-D21, the subprocess discrimination: HANDED OFF 2026-08-08**,
+`HANDOFF-execute-d21-the-subprocess-discrimination.md`. **The decision WI-D19 and WI-D20 both named and
+both declined with the same sentence** — *"the two live options are unchanged and neither is taken
+here."* Twice-deferred with a reason is this project's own signal to take it, and compose's three
+`std/process.exec` sources are the last hook-reachable sources that could route and do not.
+
+**The clustering work was correcting the inherited framing, and it changed what the item is.** Both
+reports concluded *"the seam does not front subprocesses; it fronts Motoko's own tool names"* — true
+about what it fronts, and it produces the wrong menu. Read end to end rather than grepped (S28):
+`session.ail:879-889` sets `call.tool = name`, `tool_runtime.ail:175` routes `BashExec` to
+`run_process_result`, `to_bash_result` builds a record carrying **`exit_code`**, and
+`tool_dispatch_adapter.ail:178` encodes it to JSON. **So `proc_exec(w, "BashExec", args)` already runs a
+subprocess and already produces a real exit code. The data is not lost — the TYPE is**, and "build a
+real subprocess seam beside `proc_exec`" would duplicate machinery the seam already reaches.
+
+**And then the finding that decides the item's shape: THE DETERMINISTIC HALF CANNOT ANSWER.**
+`ScriptedTool` is `{tool_call_id, duration_ms, code, message, content}` and `ToolCompleted` carries
+`content: string` — **no exit code anywhere.** So a nonzero exit is either `ToolFailed`, which makes a
+compile error a fault the A7 catalogue has no class for, or a JSON blob in `content`, which is the
+string-parsing path one layer down. **A nonzero `ailang check` is a NORMAL answer — compose's whole
+retry loop is built on it** — which is what makes both representations wrong rather than merely ugly.
+
+**Clustering note to carry: a seam question that looks like an ABI row can be a core class change, and
+the way to find out is to ask whether the DETERMINISTIC adapter can answer it.** The live half of this
+seam is richer than the deterministic half, which has not happened before in this project. The chain is
+`ExtProcOutcome` → `ToolOutcome`/`ToolCompleted` → `ScriptedTool` → `decode_tool_outcome`/`tools_of`,
+and the last link means the recorded corpus is involved. **That is D3's or D17's size, not a row.**
+
+**It also gives the owed program-schema change its SECOND consumer** — `InitialWorld.files`, owed since
+D17 and grown a field by D18, and now `ScriptedTool`'s exit code. Per S23 that is the threshold at which
+a deferred change should be scheduled rather than carried.
+
+**The decision the item actually owns is the recording one, and it reopens something D19 decided.**
+Today the plumbing records an extension's subprocess as `ToolIdentity`, putting a compiler invocation in
+the run's tool-dispatch census beside the model's calls. D2 has `ExtensionEffectIdentity` for exactly
+this — **and D19 pinned `ExtensionEffect` at literal zero in `absent_classes` on the ground that its
+unreachability is STRUCTURAL**, which is the distinction it used to justify witnessing the three
+filesystem classes rather than removing them. **If this is that class's home, "structural" is the wrong
+word and the pin has to move.**

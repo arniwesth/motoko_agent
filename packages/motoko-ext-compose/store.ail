@@ -1,8 +1,20 @@
 module sunholo/motoko_ext_compose/store
 
 import std/bytes (fromString, length, slice, toString)
-import std/fs (mkdirAll, writeFile)
 import std/crypto (sha256Hex)
+
+-- WI-D20. `std/fs` IS GONE FROM THIS MODULE, and that is the whole of what
+-- routing bought here: every one of these three functions was `mkdirAll` then
+-- `writeFile`, and all six sites now leave through `ExtPorts`. A module with no
+-- ambient effect import is what classifier 3 measures, so this file stops
+-- contributing to compose's ambient count entirely rather than shrinking it.
+--
+-- THE SPELLING IS UNCHANGED HERE, deliberately, and it is worth saying because
+-- WI-D19 and this item both had to move one. `"${workdir}/.motoko-store/..."`
+-- is used for the create AND the write at all three sites — one spelling per
+-- path, which is WI-D18 §5's rule already satisfied. `compose.ail:501` was the
+-- site that violated it and it is fixed there, not here.
+import pkg/sunholo/motoko_ext_abi/types (ExtPorts, ExtWorld)
 
 func truncate_utf8_by_bytes(s: string, max_bytes: int) -> string {
   let b = fromString(s);
@@ -16,40 +28,55 @@ func truncate_utf8_by_bytes(s: string, max_bytes: int) -> string {
   }
 }
 
-export func store_stdout_and_elide(workdir: string, compose_id: string, stdout: string, max_stdout_bytes: int) -> { stdout: string, truncated: bool, raw_path: string } ! {FS} {
+export func store_stdout_and_elide(p: ExtPorts, w: ExtWorld, workdir: string, compose_id: string, stdout: string, max_stdout_bytes: int) -> { stdout: string, truncated: bool, raw_path: string, next_state: ExtWorld } ! {FS} {
   let compose_store_dir = "${workdir}/.motoko-store/compose";
-  let _ = mkdirAll(compose_store_dir);
+  let made = p.dir_make(w, compose_store_dir);
   let raw_path = "${compose_store_dir}/${compose_id}.stdout";
-  let _ = writeFile(raw_path, stdout);
+  let written = p.file_write(made.next_state, raw_path, stdout);
   let out_bytes = length(fromString(stdout));
   if out_bytes > max_stdout_bytes then {
     let clipped = truncate_utf8_by_bytes(stdout, max_stdout_bytes);
     {
       stdout: "${clipped}\n[stdout elided; full output at ${raw_path}]",
       truncated: true,
-      raw_path: raw_path
+      raw_path: raw_path,
+      next_state: written.next_state
     }
   } else {
-    { stdout: stdout, truncated: false, raw_path: raw_path }
+    { stdout: stdout, truncated: false, raw_path: raw_path, next_state: written.next_state }
   }
 }
 
-export func store_snippet(workdir: string, compose_id: string, attempt: int, snippet_full_source: string) -> string ! {FS} {
+-- ROUTED THOUGH IT HAS NO CALLERS, and that is recorded rather than hidden.
+-- `compose.ail` imports `store_stdout_and_elide` and `store_snippet_with_meta`
+-- and nothing in the tree calls this one, so it is NOT among the seventeen
+-- functions WI-D20 was scoped on — it is an eighteenth, routed because leaving
+-- one ambient `mkdirAll`/`writeFile` pair behind would have kept `std/fs`
+-- imported here and left the module AMBIENT for a function nobody runs. A dead
+-- ambient source measures the same as a live one in classifier 3, which is the
+-- argument for routing it; that it is dead is the argument for saying so here
+-- rather than counting it as progress.
+export func store_snippet(p: ExtPorts, w: ExtWorld, workdir: string, compose_id: string, attempt: int, snippet_full_source: string) -> { path: string, next_state: ExtWorld } ! {FS} {
   let snippets_dir = "${workdir}/.motoko-store/snippets";
-  let _ = mkdirAll(snippets_dir);
+  let made = p.dir_make(w, snippets_dir);
   let file_name = "compose_${sha256Hex(compose_id)}_attempt_${show(attempt)}.ail";
   let path = "${snippets_dir}/${file_name}";
-  let _ = writeFile(path, snippet_full_source);
-  path
+  let written = p.file_write(made.next_state, path, snippet_full_source);
+  { path: path, next_state: written.next_state }
 }
 
-export func store_snippet_with_meta(workdir: string, compose_id: string, attempt: int, snippet_full_source: string, meta_json: string) -> { ail_path: string, meta_path: string } ! {FS} {
+export func store_snippet_with_meta(p: ExtPorts, w: ExtWorld, workdir: string, compose_id: string, attempt: int, snippet_full_source: string, meta_json: string) -> { ail_path: string, meta_path: string, next_state: ExtWorld } ! {FS} {
   let snippets_dir = "${workdir}/.motoko-store/snippets";
-  let _ = mkdirAll(snippets_dir);
+  let made = p.dir_make(w, snippets_dir);
   let base_name = "compose_${sha256Hex(compose_id)}_attempt_${show(attempt)}";
   let ail_path = "${snippets_dir}/${base_name}.ail";
   let meta_path = "${snippets_dir}/${base_name}.meta.json";
-  let _ = writeFile(ail_path, snippet_full_source);
-  let _ = writeFile(meta_path, "${meta_json}\n");
-  { ail_path: ail_path, meta_path: meta_path }
+  -- THE SECOND WRITE TAKES THE FIRST'S SUCCESSOR. `p.file_write(made.next_state, meta_path, …)`
+  -- type-checks identically and loses the `.ail` write from the world — two
+  -- writes at one cursor, and the recorder logs the later one only. This is the
+  -- one site in this module where the successor can be dropped without the
+  -- compiler noticing, so it is the one with a comment.
+  let wrote_ail = p.file_write(made.next_state, ail_path, snippet_full_source);
+  let wrote_meta = p.file_write(wrote_ail.next_state, meta_path, "${meta_json}\n");
+  { ail_path: ail_path, meta_path: meta_path, next_state: wrote_meta.next_state }
 }

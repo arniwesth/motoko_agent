@@ -133,7 +133,7 @@ import src/core/phase_vocab (
   LedgerTrace
 )
 import src/core/test/stub_step (ScriptedWorld, RecordingWorld, tool_step, prose_step)
-import src/core/ports (ScriptedStep, WorldState, empty_world_state)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state, scripted_dir_list)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/dst_interaction (
@@ -354,6 +354,60 @@ func routing_intercept(ctx: ExtCtx, _text: string)
     else { ok: true, error: "", next_state: empty_listing.next_state };
   { decision: NoIntercept, next_state: gone.next_state }
 }
+-- ---------------------------------------------------------------------------
+-- WI-D20: THE ROUTED `on_tool_handle`, and the half a census cannot see
+-- ---------------------------------------------------------------------------
+--
+-- `routing_intercept` above proves the RECORDER counts a routed hook's effects.
+-- This hook proves something the census structurally cannot: that each dispatch
+-- SEES THE WORLD THE PREVIOUS ONE LEFT.
+--
+-- WHY THAT NEEDED ITS OWN INSTRUMENT. `tool_phase.execute_allowed_tool_call` had
+-- TWO independent defects:
+--
+--   * it projected `.decision` off `dispatch_tool_handle` and returned
+--     `next_state: world` on every arm, dropping the successor;
+--   * it fed the hook a `ctx` built ONCE per batch, so `ctx.world` goes stale
+--     from the second tool call onward.
+--
+-- THIS HOOK, IN THIS SCENARIO, CATCHES THE FIRST ONLY, and that is stated here
+-- because the first draft of this comment claimed both and was wrong. Reverting
+-- the successor turns the rows below red; reverting the re-seating leaves them
+-- GREEN, because `script()` puts one tool call in each batch and a per-batch
+-- `ctx` is never stale within a batch of one. The second defect needs a batch of
+-- two, which is `batch_handle_scenario` further down. Measured by running both
+-- mutants, not reasoned about.
+--
+-- SO THE FILENAME IS DERIVED FROM WHAT THE HOOK OBSERVES. It lists `handled/`,
+-- takes the entry count, and writes `handled/call_<n>.ail`. Threaded correctly
+-- the three dispatches see 0, 1 and 2 and leave THREE distinct files. With the
+-- successor dropped — or with a stale `ctx.world` — every dispatch sees an empty
+-- directory, every write names `call_0.ail`, and the final world holds ONE
+-- entry while the census still reports three writes.
+--
+-- That difference is read off the FINAL WORLD rather than off the log, which is
+-- the S24 split `routing_scenario` states: the log knows whether the calls ran,
+-- the world knows whether they composed.
+--
+-- IT RETURNS `Delegate`, DELIBERATELY AND NOT FOR CONVENIENCE. Delegate is the
+-- arm the driver was MOST wrong on — it dropped the successor there and then
+-- started the native dispatch's `ports.clock_now(world)` from the pre-hook world,
+-- so a delegating hook's effects were discarded twice over. It also keeps this
+-- scenario one hook slot away from `approve`, so every other witness in the file
+-- keeps measuring what it measured before.
+func routing_tool_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+  let p = ctx.ports;
+  let made = p.dir_make(ctx.world, "handled");
+  let listed = p.dir_list(made.next_state, "handled");
+  -- `listed.entries` and NOT a counter closed over at registration: a counter
+  -- would advance whether or not the world threaded, which is the exact
+  -- non-measurement this row exists to avoid.
+  let seen = List.length(listed.entries);
+  let wrote = p.file_write(listed.next_state, "handled/call_${show(seen)}.ail", "seen=${show(seen)}\n");
+  { decision: Delegate, next_state: wrote.next_state }
+}
+
 func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
@@ -984,6 +1038,207 @@ func routing_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
   ok_ran && ok_reached && ok_balanced && t1 && t2 && t3 && t4 && t5
 }
 
+-- ---------------------------------------------------------------------------
+-- WI-D20: the routed `on_tool_handle` scenario
+-- ---------------------------------------------------------------------------
+
+-- `provided_tools: ["T"]` IS LOAD-BEARING AND IS THE ONE THING THAT DIFFERS
+-- BESIDES THE SLOT. `on_tool_handle` is the ONE GATED slot in the ABI —
+-- `ext/runtime.first_handle` only invokes a hook whose `provided_tools` contains
+-- the call's tool name, and `script()` emits `tool_step("T", …)`. Left at `[]`
+-- the hook is never invoked, every count below is zero, and the scenario passes
+-- while measuring nothing. That is precisely the vacuity `ok_reached` exists to
+-- refuse, and it is why this line has a comment.
+func handle_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [{ approval_hooks_of(id) | provided_tools: ["T"], on_tool_handle: routing_tool_handle }] },
+    strict_mode: false, verification: v }
+}
+
+func run_handle(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    handle_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+-- The distinct filenames the hook left behind, read from the FINAL WORLD's
+-- directory rather than from the interaction log.
+--
+-- This is the whole instrument. `count_kind(log, "file_write")` is 3 under every
+-- one of the three behaviours — correct threading, a dropped successor, and a
+-- stale `ctx.world` — because three writes happened in all three. What separates
+-- them is whether they collided on one key, and only the world knows that.
+-- `scripted_dir_list` is the SAME reader `ExtPorts.dir_list` bottoms out in, so
+-- this row and the hook agree on what "the entries of `handled`" means by
+-- construction rather than by a second implementation that could drift.
+func handled_entries(w: WorldState) -> [string] ! {FS} {
+  scripted_dir_list(w, "handled").entries
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D20: the BATCH scenario, and why the scenario above could not be it
+-- ---------------------------------------------------------------------------
+--
+-- THIS FIXTURE EXISTS BECAUSE THE ONE ABOVE MEASURED LESS THAN ITS LABEL, AND
+-- THE MUTANT IS WHAT SAID SO. `routing_handle_scenario`'s threading row was
+-- written claiming it caught BOTH driver defects — the dropped successor and the
+-- stale `ctx.world`. Reverting the successor turned it red; reverting the
+-- re-seating left it GREEN. The row was half an instrument and read like a whole
+-- one.
+--
+-- WHY IT COULD NOT SEE THE SECOND HALF, and the reason is structural rather than
+-- an oversight: `ctx` is rebuilt per BATCH, and `script()` emits one tool call per
+-- assistant step, so every batch above holds exactly one call and a per-batch
+-- `ctx` is never stale within it. The two answers agree on every single-call
+-- batch BY CONSTRUCTION — which is WI-D18's empty-directory shape and WI-D19's
+-- populated-directory shape for the third consecutive item.
+--
+-- THE DISTINGUISHING INPUT IS A BATCH OF TWO, and it needs BOTH halves:
+--
+--   * two tool calls in ONE assistant step, so the fold in
+--     `dispatch_tool_entries_with_builtin` runs twice against one `ctx`;
+--   * a policy that ALLOWS rather than one that suspends for approval, because
+--     the pending path resolves one call at a time through `c2_loop` and builds a
+--     fresh `ctx` for each — so an approval-gated batch of two is still, for this
+--     defect, two batches of one.
+--
+-- Both differences are here and nowhere else in the file, which is why this
+-- scenario carries its own runtime and its own script rather than sharing
+-- `approval_hooks_of`'s policy.
+func allow_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Allow
+}
+
+-- ONE step carrying TWO calls. `ScriptedStep.tool_calls` is a list and nothing
+-- but convention put one element in it; `tool_step` is not used here because it
+-- builds the single-call shape this scenario exists to escape.
+func two_call_step() -> ScriptedStep {
+  { tool_step("T", "{}", "b0") | tool_calls: [{ id: "b0", name: "T", arguments: "{}" },
+                                              { id: "b1", name: "T", arguments: "{}" }] }
+}
+
+func batch_script() -> [ScriptedStep] {
+  [two_call_step(), prose_step("done")]
+}
+
+func batch_world() -> WorldState {
+  { empty_world_state() |
+    script: batch_script(),
+    approvals: [],
+    env: world_env(),
+    tools: scripted_tools() }
+}
+
+func batch_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [{ approval_hooks_of(id) | provided_tools: ["T"],
+                          on_tool_policy: allow_policy,
+                          on_tool_handle: routing_tool_handle }] },
+    strict_mode: false, verification: v }
+}
+
+func run_batch(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    batch_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+func batch_handle_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("-- WI-D20: TWO tool calls in ONE batch — the stale-ctx input --");
+  let initial = batch_world();
+  let run = run_batch("discovery_batch", initial);
+  let entries = handled_entries(run.world);
+  let log = run.world.log;
+
+  let ok_ran = check("batch: the scenario reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so every row below is vacuous");
+
+  -- The batch really did hold TWO calls. Without this the scenario could silently
+  -- degrade to a one-call batch — a script edit, a policy that denies the second —
+  -- and the threading row below would go green for the reason it is meant to
+  -- refuse. It is the `provided_tools` trap one level up.
+  let ok_batched = check("batch: the fold really ran twice against ONE ctx",
+                         count_kind(log, "dir_make") == 2,
+                         "dir_make=${show(count_kind(log, "dir_make"))} — expected 2, one per call in a single batch. It reads 1 under EITHER of two causes and both are worth failing on: the batch stopped being a batch and the stale-ctx input was never presented, or the stale ctx was handed back as the successor and took the first call's log entry down with it");
+
+  -- THE ROW THE FIXTURE WAS BUILT FOR. Both calls share one `ctx`, so the second
+  -- one sees the first's world ONLY through `execute_allowed_tool_call`'s
+  -- re-seating. Without it the second dispatch reads a `ctx.world` from before the
+  -- batch, lists an empty `handled/`, and writes `call_0.ail` a second time — one
+  -- entry where there should be two, with both `dir_make`s and both `file_write`s
+  -- still faithfully logged and every class balanced.
+  let ok_reseated = check("batch: the SECOND call in the batch saw the FIRST call's world",
+                          show(entries) == show(["call_0.ail", "call_1.ail"]),
+                          "handled/ holds ${show(entries)} — expected [call_0.ail, call_1.ail]; a single call_0.ail means the second dispatch was handed the batch-start ctx.world, which is the defect no class count can see");
+
+  let _ = println("  handled/ holds ${show(List.length(entries))}: ${show(entries)} (dir_make=${show(count_kind(log, "dir_make"))} file_write=${show(count_kind(log, "file_write"))})");
+
+  ok_ran && ok_batched && ok_reseated
+}
+
+func routing_handle_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("-- WI-D20: a ROUTED on_tool_handle on a graded profile --");
+  let initial = base_world([approve_line(), approve_line(), approve_line()]);
+  let run = run_handle("discovery_handle", initial);
+  let log = run.world.log;
+
+  -- ONE `dir_make` and ONE `file_write` per DISPATCH, counted from the hook's own
+  -- text, and the dispatch count is `tool_dispatches` — the witness read off tool
+  -- ROLE MESSAGES in the returned conversation, which production driver code
+  -- writes and which exists whether or not the recorder recorded anything.
+  --
+  -- NOT `provider_calls`. The intercept scenario above uses the provider count
+  -- because the intercept fires once per assistant RESPONSE; this hook fires once
+  -- per approved TOOL CALL, and `script()` ends with a prose terminator, so the
+  -- two differ by one. Using the wrong one here is a green row for the wrong
+  -- reason, which is why the two scenarios name different fields.
+  let dispatches = tool_results_witnessed(match run.result { Ok(ms) => ms, Err(_) => [] });
+  let w = { witness_for(initial, run, env_reads_always(1))
+            | file_writes: dispatches, dir_makes: dispatches, file_removes: 0 };
+
+  let ok_ran = check("handle: the scenario reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so every witness below is vacuous");
+
+  -- REACHABILITY, SEPARATE FROM VERDICT (S24), AND IT MEASURES WHAT ITS LABEL
+  -- SAYS. The label claims the routed hook RAN, so the row reads the two classes
+  -- the hook itself performs. It deliberately does NOT read `provider_calls` or
+  -- `tool_dispatches`: both are non-zero in a run where the driver dispatched
+  -- tools and `provided_tools` was left empty, which is the state this file was
+  -- in before this scenario existed — the same measures-less-than-its-label
+  -- defect WI-D19 §8 recorded and the third consecutive item to face it.
+  let ok_reached = check("handle: the routed hook actually RAN — its seams reached the recorder",
+                         count_kind(log, "dir_make") > 0 && count_kind(log, "file_write") > 0,
+                         "dir_make=${show(count_kind(log, "dir_make"))} file_write=${show(count_kind(log, "file_write"))} — a gated hook whose provided_tools does not contain the tool is never invoked, and every row below would pass vacuously");
+
+  let entries = handled_entries(run.world);
+  let _ = println("  handled/ holds ${show(List.length(entries))} entr(y|ies): ${show(entries)} (dispatches ${show(dispatches)})");
+
+  let fs = check_discovery(log, w);
+  let _ = if List.length(fs) > 0 then report_findings(fs) else ();
+  let ok_balanced = check("handle: the routed classes balance against a witness that is not the log",
+                          List.length(fs) == 0,
+                          "${show(List.length(fs))} finding(s) above");
+
+  -- THE ROW THIS SCENARIO EXISTS FOR, and the one no count can stand in for.
+  -- THREE distinct names means every dispatch observed its predecessor's world.
+  -- ONE name means the successor was dropped or `ctx.world` was stale — and the
+  -- census above is GREEN in that state, which is why this is a separate row and
+  -- not a clause of `ok_balanced`.
+  let ok_threaded = check("handle: each dispatch SAW the previous dispatch's world",
+                          List.length(entries) == dispatches && dispatches > 1,
+                          "handled/ holds ${show(List.length(entries))} entr(y|ies) ${show(entries)} against ${show(dispatches)} dispatches — fewer names than dispatches means the writes collided on call_0.ail, which is what a DROPPED SUCCESSOR produces. The stale-ctx defect is NOT visible here and is graded by batch_handle_scenario instead");
+
+  ok_ran && ok_reached && ok_balanced && ok_threaded
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("discovery_dst: WI-A13 stage 2 — completeness AND fidelity against driver_only");
 
@@ -1027,8 +1282,13 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- filesystem mutation through `ExtPorts`.
   let ok_routing = routing_scenario();
 
+  -- WI-D20: the second routed slot, and the first graded run that can see
+  -- whether one dispatch's world reached the next.
+  let ok_handle = routing_handle_scenario();
+  let ok_batch = batch_handle_scenario();
+
   let _ = println("");
-  if ok_approve && ok_deny && ok_eof && ok_routing then
+  if ok_approve && ok_deny && ok_eof && ok_routing && ok_handle && ok_batch then
     println("discovery_dst PASS")
   else {
     let _ = println("discovery_dst FAIL");

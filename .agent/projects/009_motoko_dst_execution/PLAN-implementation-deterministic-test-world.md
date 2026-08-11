@@ -498,6 +498,50 @@ not re-issued (D4)"*. **The second profile binds the same table at the same iden
 cascade now has two consumers and the anchors target names one. **A third profile extends the list
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
+**S29. A HOOK SLOT'S DRIVER ARMS MUST BE AUDITED BEFORE THE SLOT IS ROUTED — AND THE DROP IS USUALLY
+ONE FRAME ABOVE THE DISPATCHER.** Earned by WI-D19 and WI-D20. **Two slots audited, two drops found, and
+the second was worse than the first.**
+
+`on_response_intercept` carried its successor on **one arm of four** and dropped it twice more into the
+solver dispatch. `on_tool_handle` carried it on **none** — and `ext/runtime.dispatch_tool_handle` was
+**correct and always had been**. The drop was in its caller,
+`tool_phase.execute_allowed_tool_call`, which wrote `dispatch_tool_handle(rt, ctx, envelope).decision`.
+**A field access, so there was never an arm at which the world could have been kept, and a grep for the
+slot name finds the innocent dispatcher.**
+
+**Why nothing could see either: every hook binding in the tree returned `ctx.world` unchanged**, so
+dropping the successor and threading it produce identical worlds. The compiler sees a `WorldState` in a
+`WorldState` field; the effect checker sees no effect; the extension inventories count call sites in
+extensions; `check_discovery`'s classes are zero on both sides. **The defect becomes visible only on the
+first run where a hook actually performs something** — which is why it survived from B2b to D19.
+
+**AND CHECK THE READ SIDE, because the obvious fix for the write side is a regression.** `ctx` is built
+**once per batch** and passed unchanged through the fold while `world` advances per entry, so from the
+second tool call onward `ctx.world` is the batch-start world. Writing the successor back **without
+re-seating `ctx` from the live world** rewinds past everything the earlier entries did — and it
+type-checks exactly as readily as the correct version. **Both halves are one decision.**
+
+**Base rate 2 of 2. `on_pre_step` and `on_solver_candidate` are unaudited.**
+
+**S28. A TEXTUAL MATCH IS NOT A CALL SITE, AND THIS APPLIES TO THE HANDOFF'S OWN ANALYSIS TOOLS.**
+Earned by WI-D19/D20 against the WI-D19 handoff, which shipped **two** instances of the same defect in
+one five-line reachability walk — one caught before publication and one not.
+
+**Caught:** a walk from `register_with_config` reported **20 of 21** effect-bearing functions as
+reachable, because registration **constructs** the `ExtensionHooks` record, so every hook body is
+reachable *through the constructor* without running at registration time.
+
+**Shipped:** the handoff's module partition listed **`guard.ail`** among the five modules holding
+`on_tool_handle`'s effect sites, with two effect-bearing functions. **`guard.ail` imports `std/string`
+and nothing else.** Its apparent `readFile(` and `exec(` are **string literals** — the guard searches a
+snippet's *text* for those substrings — and a regex that strips comments still finds them.
+
+**Both are D15's finding in a new instrument: an import, a constructor reference, or a substring is not
+a call.** The project spent a whole item establishing that for classifier 3 and then reproduced it
+twice in the tool used to price classifier 3's successor. **Any reachability walk used to size work
+must be corrected for both before it is trusted**, and a false member survives being copied from
+handoff to handoff.
+
 **S27. TWO DECISIONS TAKEN IN ONE ITEM CAN PRODUCE A FINDING NEITHER PRODUCES ALONE — so when an
 item owns more than one decision, ask what the pair implies before reporting them separately.** Earned
 by WI-D18, and it is the first rule here about an interaction rather than a defect.
@@ -3183,6 +3227,85 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D19 + WI-D20, 2026-08-08 (~52m and ~1h13m) — THE FIRST TWO ROUTINGS. Compose's hook-reachable
+filesystem and clock effects are now fully mediated.**
+Verified at review by measurement, not from the reports: **compose is at 11 ambient sources and 32
+`ExtPorts` field calls in closure**, from 28 and 5 at D19's HEAD and 0 field calls before it. **The only
+live ambient filesystem calls left in the package are `config.ail:39-40`** — registration's, structurally
+unroutable — and `std/fs` is imported by that one module alone, `std/clock` by none, `std/process` by
+three. Green at review: `discovery`, `world_state`, `invariants`, `program_persistence`, and
+`declared_vs_performed` at **40 passed, 0 failed**. **Yields unmoved at 4 of 15 and 5 of 15**, door-3
+residue still `intToFloat, show`, exactly as the handoff predicted and for the predicted reason.
+
+**THE FIRST CALLER FALSIFIED A SEAM, AND IT FALSIFIES D16's REASONING RATHER THAN AN IMPLEMENTATION.**
+`ExtPorts.proc_exec` fronts `Ports.tool_exec`, which reaches `tool_runtime.run_native_call` — verified:
+**an if-chain over six of Motoko's OWN tool names** (`ReadFile`, `Search`, `WriteFile`, `EditFile`,
+`BashExec`, `RunTests`) with a final `else` returning *"…requires extension capability and is not
+available in native runtime"* (`tool_runtime.ail:180`). **So the seam does not front subprocesses; it
+fronts tool names**, and `proc_exec(w, "ailang", …)` returns a tool-error blob rather than invoking the
+compiler. D20 confirmed it is a property of the seam and not of compose by hitting **`rg`** in
+`grep_impl`, an ordinary subprocess with no relation to a compiler, failing identically. **The shape
+fails independently**: both callers branch on an exit code and `ExtProcOutcome` carries one rendered
+string. **Four `exec` sites correctly left ambient and documented rather than widened** — D16 argued at
+length that compose's `exec` sites were `proc_exec`'s and never checked what the live adapter does with
+the name.
+
+**THE DRIVER-ARM AUDITS ARE THE TWO ITEMS' MOST VALUABLE OUTPUT AND EARNED S29.** Verified at review:
+`tool_phase.ail:365` now re-seats `{ ctx | world: world_to_token(world) }` and binds the whole outcome,
+where it previously projected `.decision`. **And `tool_envelope_dispatch.ail:44` still projects
+`.decision`** — reported, not patched, because the scratchpad loopback path needs a core type change in
+another package on a route `on_tool_handle` never travels. **That refusal is correct and it is named
+here so it is not lost.**
+
+**`path_stat` over `file_read.present` for the existence guard**, on the ground that the guard protects a
+`removeFile` and `ExtFileRead.present` answers the same for a directory as for a file — the adapter
+disagreement D18 §3.2 measured. `remove_if_file` (`compose.ail:871`) is one function, copied seventeen
+times rather than a pattern re-derived.
+
+**THE PATH KEY BIT TWICE AND THE COMPILER PICKED THE SPELLING BOTH TIMES.** My handoff left the
+direction open; it is not open — `compose_module_header` emits `module tmp/${name}` and AILANG resolves
+a module path against the file's path, so the write cannot move and **the create does**: `dir_make("tmp")`
+at `compose.ail:769` (D19) and `one_attempt` (D20). D18's rule obeyed at the call site; the world was not
+taught to normalise.
+
+**Tripwires: fired, and answered by WITNESS.** They could not fire on their own — **no graded profile in
+this tree installs compose**, C5's is still owed — so D19 built the graded scenario rather than ship a
+routing with three green rows that were green for the wrong reason. `DiscoveryWitness` gained
+`file_writes`, `file_removes`, `dir_makes` (`dst_discovery.ail:280-282`), verified;
+`ExtensionEffect` and `RandomDraw` stay pinned at literal zero because their unreachability is
+**structural**.
+
+**MY HANDOFF'S ANALYSIS SHIPPED A FALSE MEMBER AND IT EARNED S28.** I listed **`guard.ail`** among the
+five modules holding `on_tool_handle`'s effect sites. It imports `std/string` and nothing else; its
+`readFile(`/`exec(` are **string literals** the guard searches a snippet's text for. **That is the second
+instance of "a textual match is not a call site" in the same five-line walk** — I caught the
+constructor-reachability one and corrected it in the handoff, and shipped this one.
+
+**THE ANCHOR PREDICTION SPLIT: D19 HELD IT, D20 FALSIFIED IT, AND BOTH ARE INSTRUCTIVE.** D19's driver
+fix landed in `session.ail` above two anchors and cascaded nothing, because every edit was made
+**line-count-neutral on purpose** and the explanation was written where there are no anchors. **D20 could
+not**: its fix needs `ext_world`'s codec inside `tool_phase.ail` and **an import can only go above the
+anchors** (verified at `tool_phase.ail:43`). Re-baselined 313/314/373 → **317/318/413**, green at review,
+`driver_only_version` **18**. **And one of the three is not pure offset drift** — `:413` reads
+`ports.clock_now(handle_world)` where `:373` read `ports.clock_now(world)` — which is recorded rather
+than averaged into "the offset moved". **The re-baseline has NINE consumer sites, not six**; three are
+`*_dst.ail` discovered-site fixtures invisible to every obvious grep, whose failure reads like a real
+routing-claim defect. The enumeration is now in `anchors.sh`.
+
+**Four consecutive items have found a row measuring less than its own label; D20 found three at once**,
+and the three repairs went three ways — a new fixture (a **batch of two**, since `ctx` is per-batch and
+a single-call batch cannot distinguish re-seating from dropping it), a **narrowed label** where no
+fixture could exist in-process, and one avoided by writing the reachability row against the classes the
+hook itself performs rather than `provider_calls`.
+
+**Two process rules, both paid for.** D19 lost a sweep to two concurrent `make dst` runs and **shipped a
+mutant in `df7fd26`** by committing mid-harness (repaired in `136924f`); D20 lost a sweep to a
+comment-only edit made while a sweep was reading the file. **The rule is: do not touch any tracked file
+while a long instrument runs** — S17's neighbour, and stated at both scales.
+
+**Criterion 1 did not move and could not**, as predicted: `ExtPorts.file_write` declares `! {FS}`, so no
+routed hook's declared row narrows. **Criterion 2 is the whole of the prize and it moved a long way.**
 
 **WI-D18, 2026-08-08 (~1h03m) — THE DIRECTORY SEAM, AND THE WORLD'S PATH KEY.**
 Verified at review: `Ports` **8 fields → 11** (`path_stat -> PathStat`, `dir_list -> DirListing`,
