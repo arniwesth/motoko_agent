@@ -2068,10 +2068,15 @@ func c2_loop(
               -- chain already consumed. This is the pre-step half of the same
               -- threading the intercept and solver hooks do below.
               let exchange = dispatch_step(st.provider, token_to_world(chain.next_state), provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
-              -- exchange.emissions rides along but has no driver consumer yet:
-              -- live_ports returns [] until the recorded-stream API lands, and
-              -- projecting the log into the ledger is WI-A12's work. WI-A1 is
-              -- behaviour-preserving by construction.
+              -- exchange.emissions rides along and STILL has no driver consumer
+              -- — but the reason changed at WI-C1 and the difference matters.
+              -- It used to be empty at the source: `live_ports` returned []
+              -- unconditionally. It is now NON-EMPTY on a live exchange
+              -- (`stepWithStreamRecorded`, AILANG v0.33.0) and this line still
+              -- drops it on the floor. The gap moved from producer to consumer.
+              -- Projecting the log into the ledger is D6.4's stream-parity
+              -- invariant, which is WI-C3's. Until that lands, a green tree is
+              -- NOT evidence of stream parity: nothing reads this field.
               match exchange.result {
                 Err(e) => {
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });

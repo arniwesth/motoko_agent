@@ -147,7 +147,7 @@ pure func clean() -> ProfileDefinition {
       { site_key: "src/core/session.ail:851",
         instrument: "make world_state (Clock poison pair)",
         why_unroutable: "ExtPorts.clock_now is zero-argument; plan rule S2" },
-      { site_key: "src/core/test/stub_step.ail:163",
+      { site_key: "src/core/test/stub_step.ail:182",
         instrument: "make world_state (Clock poison pair)",
         why_unroutable: "live_ports' clock adapter; a deterministic run uses the scripted adapter" }
     ],
@@ -539,7 +539,7 @@ export func main() -> () ! {IO} {
   let no_instr = assert_rejected("a declared unrouted site with NO INSTRUMENT", "unrouted-site-without-instrument",
                                  { clean() | unrouted_reachable_sites: [
                                      { site_key: "src/core/session.ail:851", instrument: "", why_unroutable: "S2" },
-                                     { site_key: "src/core/test/stub_step.ail:163",
+                                     { site_key: "src/core/test/stub_step.ail:182",
                                        instrument: "make world_state", why_unroutable: "live adapter" }] });
   let stale_decl = assert_rejected("a declaration for a site that is no longer reachable-and-unrouted", "declared-site-not-reachable",
                                    { clean() | unrouted_reachable_sites:

@@ -1,0 +1,163 @@
+-- WI-C2: the direct positive integration probe for ADR-001 D1's substrate gate.
+--
+-- D1 requires, before streaming trace parity can be claimed and therefore
+-- before the DST name is earned, that "the upstream recorded-stream API must be
+-- pinned and a direct positive version of the spike must prove immediate
+-- projection, exact returned-log parity, success, partial-stream-then-error,
+-- and no duplicate delivery."
+--
+-- FIVE CLAUSES, FIVE ANSWERS. A conjunction that passes tells you nothing about
+-- which clause held, so each is emitted as its own evidence line and asserted by
+-- its own row in run_recorded_stream_probe.sh.
+--
+-- TWO ENTRY POINTS, BECAUSE THE CLAUSES NEED TWO SUBJECTS AND CONFLATING THEM
+-- IS HOW C1 SHIPS UNPROVEN:
+--
+--   `main_substrate` drives `std/ai.stepWithStreamRecorded` directly. It proves
+--      the API. This is the spike's probe re-run against the PINNED RELEASE
+--      rather than the local prototype it originally passed against, which is
+--      the specific thing D1 asks for and the specific thing the spike could
+--      not supply.
+--
+--   `main_adoption` drives `stub_step.live_ports`' OWN `model_step` closure —
+--      the one WI-C1 edited. This is the entry point that matters, because the
+--      substrate probe would stay green through a `live_ports` that dropped
+--      every chunk: it does not call `live_ports` at all. A green substrate
+--      probe is evidence about AILANG; only this one is evidence about Motoko.
+--
+-- WHAT NEITHER CAN DO IN-PROCESS, and it is a property of the API rather than a
+-- weakness of the probe: the callback's effect row is a CLOSED `{IO}`, so it
+-- cannot accumulate its own projections — that is precisely the capability the
+-- upstream request was about, and the reason the recorded stream exists at all.
+-- Projection is therefore observed EXTERNALLY, on stdout, and parity is asserted
+-- by the runner comparing projected lines against the returned list. Same method
+-- the spike used, for the same reason.
+--
+-- Requires a native SSE provider. `--ai-stub` cannot serve this probe: it fires
+-- the callback exactly twice and always succeeds, so it can exercise neither the
+-- ordering/duplication clauses nor the partial-stream-then-error clause. See
+-- recorded_stream_server.py.
+
+module scripts/dst/recorded_stream_dst
+
+import std/ai (stepWithStreamRecorded, Message, StreamChunk, ContentDelta, ThinkingDelta, Usage)
+import std/io (println)
+import std/list as List (length, foldl)
+import std/result (Result, Ok, Err)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state)
+import src/core/test/stub_step (live_ports, empty_rt)
+
+-- Live projection. Stands in for the production TUI renderer: it does exactly
+-- what a real sink does, which is print and return unit.
+func render(chunk: StreamChunk) -> () ! {IO} {
+  match chunk {
+    ContentDelta(text) => println("LIVE ${text}"),
+    ThinkingDelta(_) => println("LIVE thinking"),
+    Usage(_) => println("LIVE usage")
+  }
+}
+
+-- Render a returned chunk list to a stable, comparable string. The separator is
+-- what makes an ADJACENT REPEAT visible: "rep|rep|" and "rep|" are different
+-- strings, so a de-duplicating implementation cannot pass by accident.
+func join(acc: string, chunk: StreamChunk) -> string {
+  match chunk {
+    ContentDelta(text) => "${acc}${text}|",
+    ThinkingDelta(_) => "${acc}thinking|",
+    Usage(_) => "${acc}usage|"
+  }
+}
+
+pure func probe_messages() -> [Message] {
+  [{ role: "user", content: "recorded stream D1 gate probe",
+     tool_calls: [], tool_call_id: "", images: [] }]
+}
+
+-- CLAUSE 1 (immediate projection) is established by the SANDWICH, and it is the
+-- clause a stub is least able to prove, so the mechanism is stated rather than
+-- asserted: `CALL begin` is printed before the provider call, `RETURNED` after
+-- it returns, and both are ordinary sequenced IO in the same process. A `LIVE`
+-- line between them can only have been written by the callback DURING the call.
+--
+-- This is what makes the forbidden fallback VISIBLY NOT SELECTED. D1 rejects
+-- "delaying all chunk projection until provider completion" outright. Under
+-- delayed projection every `LIVE` line lands AFTER `RETURNED`, because there is
+-- nothing to project until the call has returned its chunks — so the sandwich
+-- inverts and the row goes red. The probe does not assert that the fallback was
+-- not chosen; it is arranged so that choosing it fails.
+func emit_evidence(subject: string) -> () ! {IO} { println("SUBJECT ${subject}") }
+
+export func main_substrate() -> () ! {AI, IO} {
+  let _ = emit_evidence("substrate");
+  let _ = println("CALL begin");
+  let rec = stepWithStreamRecorded("", probe_messages(), [], [], render);
+  let _ = println("RETURNED count=${show(List.length(rec.chunks))} order=${List.foldl(join, "", rec.chunks)}");
+  match rec.outcome {
+    Ok(result) => println("OUTCOME ok ${result.finish_reason}"),
+    Err(error) => println("OUTCOME err ${error.code}")
+  }
+}
+
+-- THE FORBIDDEN FALLBACK, BUILT SO THAT THE GATE CAN BE SEEN REJECTING IT.
+--
+-- D1 rejects "delaying all chunk projection until provider completion" outright,
+-- on the ground that it changes live UX semantics. A gate that cannot tell
+-- delayed projection apart from immediate projection does not enforce that
+-- rejection — it just happens to agree with it, and it would keep agreeing after
+-- someone switched. That is a D1-level finding if it is true, so it is measured
+-- instead of assumed.
+--
+-- This entry point IS the rejected design: the callback is a no-op sink, and
+-- every chunk is projected after the call returns, off the returned log. It is
+-- the closest thing to delayed projection that the recorded-stream API makes
+-- expressible at all — and note that the API makes it expressible for the first
+-- time, since before it there was nothing to project late FROM. So this control
+-- is newly needed as of WI-C1, not an inherited one.
+--
+-- The runner asserts this entry point FAILS the immediate-projection sandwich.
+-- If it ever passes, the sandwich has stopped discriminating and clause 1 is
+-- being certified by an instrument that certifies everything.
+func discard(_chunk: StreamChunk) -> () ! {IO} { () }
+
+func project_all(cs: [StreamChunk]) -> () ! {IO} {
+  match cs {
+    [] => (),
+    x :: rest => { let _ = render(x); project_all(rest) }
+  }
+}
+
+export func main_delayed_projection_control() -> () ! {AI, IO} {
+  let _ = emit_evidence("delayed_control");
+  let _ = println("CALL begin");
+  let rec = stepWithStreamRecorded("", probe_messages(), [], [], discard);
+  let _ = println("RETURNED count=${show(List.length(rec.chunks))} order=${List.foldl(join, "", rec.chunks)}");
+  -- Every LIVE line lands AFTER RETURNED. That is the whole point.
+  let _ = project_all(rec.chunks);
+  match rec.outcome {
+    Ok(result) => println("OUTCOME ok ${result.finish_reason}"),
+    Err(error) => println("OUTCOME err ${error.code}")
+  }
+}
+
+-- The adoption probe. Note what it does NOT do: it does not reach into
+-- `live_ports` or reimplement it. It takes the `Ports` record the driver itself
+-- takes (`session.ail:882` binds exactly this for `LiveAI`) and calls the same
+-- `model_step` field the loop calls.
+export func main_adoption() -> () ! {AI, Clock, Env, IO, Trace} {
+  let _ = emit_evidence("adoption");
+  let ports = live_ports(empty_rt());
+  let _ = println("CALL begin");
+  let ex = ports.model_step(empty_world_state(), "", probe_messages(), render);
+  let _ = println("RETURNED count=${show(List.length(ex.emissions))} order=${List.foldl(join, "", ex.emissions)}");
+  -- The Err-branch guard, in-process and on the record. `chunks` is populated on
+  -- BOTH outcomes, and the natural adoption — `match rec.outcome { Ok(..) =>
+  -- .., Err(..) => .. }` with an empty emission list on the error arm —
+  -- type-checks, passes check_core and passes driver_only. This line is what
+  -- fails when someone writes it: in partial_error mode the outcome is Err and
+  -- the emission log must still be non-empty.
+  let _ = println("EMISSIONS_NONEMPTY ${show(List.length(ex.emissions) > 0)}");
+  match ex.result {
+    Ok(result) => println("OUTCOME ok ${result.finish_reason}"),
+    Err(error) => println("OUTCOME err ${error.code}")
+  }
+}

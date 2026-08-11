@@ -75,14 +75,35 @@ Handoff: `HANDOFF-execute-b4-close-the-repin-wave.md` — the wave's
 green gate and the last of Milestone B. Original B2b handoff:
 `HANDOFF-execute-b2b-world-token-widening.md` — the last of
 Milestone B's content, and the change that is *supposed* to move classifier 2's pinned membership.
-**MILESTONE C IS OPEN. Cluster 16 = WI-C1 + WI-C2: HANDED OFF 2026-08-05**, handoff
-`HANDOFF-execute-c1-c2-recorded-stream-adoption.md`. **The two items are one cluster and the reason is
-measured, not stylistic:** C1's edit is two lines plus an import, and with it applied `ailang check`,
-`make check_core` (52/52) and `make driver_only` (exit 0) are **byte-identical to their values without
-it**. C1 alone is a commit that provably certifies nothing — the S8/S13 shape — and C2 is its only
-evidence. This is the first cluster to pair an item with its own gate for that reason, and the rule
-generalises: **when an item's whole deliverable is invisible to every existing gate, it does not ship
-as its own cluster.** Original B2a handoff:
+**MILESTONE C IS OPEN. Cluster 16 = WI-C1 + WI-C2: DONE 2026-08-05**, ~57 min — `c0fbf10`,
+`12577c2`, report `NOTE-c1-c2-execution-report-and-plan-corrections.md`. Handoff:
+`HANDOFF-execute-c1-c2-recorded-stream-adoption.md`. D1's five clauses answered in **23 rows across
+two subjects and two outcomes**, against a pinned release for the first time; `driver_only` v4 → v5;
+earned **S14** and **S15**.
+
+**The two items were clustered on a measurement, and the measurement was the right one.** C1's edit is
+two lines plus an import, and with it applied `ailang check`, `make check_core` (52/52) and
+`make driver_only` (exit 0) are byte-identical to their values without it — C1 alone is a commit that
+provably certifies nothing. **Execution then made the case stronger than the prediction:** the natural
+wrong adoption is green under all three of those gates *and* under **every substrate row of C2's own
+probe**, going red only on C2's *adoption* rows in partial-stream-then-error. So C1 shipped alone would
+not merely have been unverified — it would have been unverifiable by the probe D1's own wording most
+naturally describes. **The generalised rule is S14.**
+
+**The clustering rule this earns, and it is narrower than "pair items with their gates":** when an
+item's whole deliverable is invisible to every existing gate, it does not ship as its own cluster —
+**and the gate it ships with must drive the item's own closure, not the dependency it adopts.**
+
+**Cluster 17 = WI-C3: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-c3-streaming-trace-parity.md`. **Grounding resized the item before it started.** The
+plan reads C3 as *build the parity invariant*; the invariant already exists, is already keyed on
+content, and is already proven red against omission, duplication and reordering mutants. What does
+not exist is a **bridge from a run to an `ExecutionUnderTest`** — measured at HEAD, that type has
+**exactly one construction site in the tree**, a hand-authored fixture in `invariants_dst.ail`, and no
+seeded runner imports `dst_invariants` at all. **So the whole D7 suite, not just the emission log, has
+no real-run consumer.** The handoff makes the scope call explicit rather than letting a green
+`make dst` settle it, because the two readings differ in whether D6.4 is discharged and C4 reads that
+answer directly. Original B2a handoff:
 `HANDOFF-execute-b2a-abi-rows-and-cascade.md` — B2 split in two, only the row-and-cascade half
 forced. Original B3 handoff: `HANDOFF-execute-b3-message-migration.md` —
 **B3 before B2, because B2's scope is unmeasurable until the `images` wall clears** (B1 could see only

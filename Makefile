@@ -66,6 +66,32 @@ smoke_parity:
 		diff -r /tmp/phase_a_parity_a /tmp/phase_a_parity_b; \
 	fi'
 
+# ADR-001 D1's substrate gate (WI-C2), asserted clause by clause.
+#
+# D1 requires, before streaming trace parity can be claimed and therefore before
+# the DST name is earned, that the recorded-stream API be PINNED and a direct
+# positive version of the spike prove five properties: immediate projection,
+# exact returned-log parity, success, partial-stream-then-error, and no
+# duplicate delivery. Five clauses, five rows — a conjunction that passes says
+# nothing about which clause held.
+#
+# WHY THIS TARGET CANNOT USE --ai-stub, which every other target here does.
+# Measured, not assumed: the stub is a provider WITHOUT native streaming, so per
+# std/ai's own contract it fires the callback exactly twice — one
+# ContentDelta(full_text), one Usage — and it always returns Ok. On two chunks,
+# ordering is barely exercised and duplication not at all; partial-
+# stream-then-error cannot be produced at all. A stub-driven pass would look
+# identical to a real one in the output, which is the shape this milestone
+# exists to stop. The target therefore stands up a real native SSE endpoint on
+# loopback and points AILANG's OpenAI provider at it via OPENAI_BASE_URL.
+#
+# It needs python3 and a free loopback port ($$PORT, default 8819). No network
+# egress and no API key: OPENAI_API_KEY is a literal placeholder the fixture
+# server ignores.
+.PHONY: recorded_stream
+recorded_stream:
+	./scripts/dst/run_recorded_stream_probe.sh
+
 phase_c_l1: compaction_dst
 	ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
 	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
@@ -73,7 +99,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage recorded_stream smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
