@@ -16,7 +16,7 @@ import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_toke
 import src/core/compaction (calibrated_usage_percent_anchored)
 
 func msg_to_message(m: Msg) -> Message {
-  { role: m.role, content: m.content, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id }
+  { role: m.role, content: m.content, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id, images: [] }
 }
 
 func msgs_to_messages(msgs: [Msg]) -> [Message] {

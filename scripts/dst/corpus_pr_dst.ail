@@ -200,7 +200,7 @@ pure func contains_str(xs: [string], t: string) -> bool {
 -- ---------------------------------------------------------------------------
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
 func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }

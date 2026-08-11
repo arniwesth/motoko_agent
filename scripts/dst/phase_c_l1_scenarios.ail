@@ -49,7 +49,7 @@ func harness_self_test_scenario() -> Scenario {
 }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func call(id: string) -> ToolCall {
@@ -245,11 +245,11 @@ func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure]
 func scenario_ext_compaction_invalid_rejected() -> Result[(), ScenarioFailure]
   ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let input = [
-    { role: "assistant", content: "call", tool_calls: [call("tc")], tool_call_id: "" },
-    { role: "tool", content: "result", tool_calls: [], tool_call_id: "tc" }
+    { role: "assistant", content: "call", tool_calls: [call("tc")], tool_call_id: "", images: [] },
+    { role: "tool", content: "result", tool_calls: [], tool_call_id: "tc", images: [] }
   ];
   let invalid = [
-    { role: "assistant", content: "invented", tool_calls: [call("missing")], tool_call_id: "" }
+    { role: "assistant", content: "invented", tool_calls: [call("missing")], tool_call_id: "", images: [] }
   ];
   match validate_compactor_output(input, invalid) {
     Err(e) => ok_or_failure(true, "invalid compaction rejected", ["err=${e}"]),

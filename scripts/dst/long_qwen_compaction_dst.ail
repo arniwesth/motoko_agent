@@ -75,7 +75,7 @@ func budget() -> BudgetPlan {
 }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func abi_msg(role: string, content: string) -> Msg {
@@ -136,7 +136,7 @@ func highest_agent_idx_from_markers(msgs: [Message], n: int) -> int {
 
 func step_result(content: string, calls: [ToolCall], finish: string) -> StepResult {
   {
-    message: { role: "assistant", content: content, tool_calls: [], tool_call_id: "" },
+    message: { role: "assistant", content: content, tool_calls: [], tool_call_id: "", images: [] },
     tool_calls: calls,
     finish_reason: finish,
     input_tokens: 100,

@@ -49,7 +49,8 @@ pure func dp7_rejection_message(text: string) -> Message {
     role: "user",
     content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${text}",
     tool_calls: [],
-    tool_call_id: ""
+    tool_call_id: "",
+    images: []
   }
 }
 
@@ -121,7 +122,7 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   else if s.last_finish_reason == "dp7_rejected"
   then InjectUserMessage(dp7_rejection_message(s.last_response_text))
   else if s.last_finish_reason == "solver_feedback"
-  then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "" })
+  then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "", images: [] })
   else if s.last_finish_reason == "persist_nudge"
   then InjectUserMessage(persist_nudge_message(s.nudges_used + 1, pol.persist_retries))
   else if s.last_finish_reason == "stop" || s.last_finish_reason == "dp7_approved" || s.last_finish_reason == "dp7_fail_open"
@@ -138,7 +139,7 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
 }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func mk_policy(context_limit: int) -> StepPolicy {

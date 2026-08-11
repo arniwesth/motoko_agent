@@ -10,14 +10,19 @@
 
 module scripts/smoke_catalog_compaction
 
-import std/ai (Message)
 import std/io (println, exit)
 import std/result (Ok, Err)
 import std/string (repeat)
 import src/core/context_usage (catalog_context_limit_for)
+import pkg/sunholo/motoko_ext_abi/types (Msg)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_step_with_limit)
 
-func msg(role: string, content: string, tool_call_id: string) -> Message {
+-- Builds the ext-ABI Msg, not std/ai.Message. Since AILANG v0.33.0 the two are
+-- no longer structurally identical — Message gained `images: [ImagePart]` and
+-- Msg deliberately stays at four fields (see src/core/types.ail). This script
+-- only ever feeds compact_step_with_limit, which is Msg-typed, so it builds Msg
+-- directly rather than crossing the seam.
+func msg(role: string, content: string, tool_call_id: string) -> Msg {
   {
     role: role,
     content: content,
@@ -40,7 +45,7 @@ export func main() -> () ! {IO, FS, Env} {
 
   -- A large user message cannot be structurally elided. With the catalog's
   -- 100-token test limit, compact_step_with_limit must report exhaustion.
-  let oversized_history: [Message] = [
+  let oversized_history: [Msg] = [
     msg("user", repeat("x", 390), ""),
     msg("tool", "short tool result", "call-smoke")
   ];

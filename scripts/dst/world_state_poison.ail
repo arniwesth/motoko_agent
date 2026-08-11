@@ -68,7 +68,7 @@ func allow_rt() -> ExtRuntime {
 }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }

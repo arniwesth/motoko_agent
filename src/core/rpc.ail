@@ -236,7 +236,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
 
   let init: [Msg] = [
     { role: "system", content: system, tool_calls: [], tool_call_id: "" },
-    { role: "user", content: task, tool_calls: [], tool_call_id: "" }
+    { role: "user", content: task, tool_calls: [], tool_call_id: "", images: [] }
   ];
 
   let _ = emit(encode(jo([

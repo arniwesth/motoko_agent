@@ -44,15 +44,15 @@ import src/core/test/stub_step (
 -- Only `content` length feeds estimate_tokens_messages.
 
 func mk_user(content: string) -> Message {
-  { role: "user", content: content, tool_calls: [], tool_call_id: "" }
+  { role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func mk_tool(id: string, content: string) -> Message {
-  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id, images: [] }
 }
 
 func parity_system_message() -> Message {
-  { role: "system", content: "parity system prefix", tool_calls: [], tool_call_id: "" }
+  { role: "system", content: "parity system prefix", tool_calls: [], tool_call_id: "", images: [] }
 }
 
 func mk_history(content_chars: int) -> [Message] {
