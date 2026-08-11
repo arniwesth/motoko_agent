@@ -193,6 +193,17 @@ describes a run rather than a design. **So: when recording why something is unre
 measurement, not the diagnosis.** Fourth consecutive item to carry this class, and the first to say
 how to stop carrying it.
 
+**WI-D2 SHARPENS IT AGAIN, and the failure is narrower than "structural reasons go stale".** Of
+`parity_gap_reasons`' thirteen entries, **eleven named a structural cause and nine were wrong** — and
+seven of those said *"inside the tool dispatch fold"*, which described **where the code lived**, not
+what prevented the append. The obstacle was the fold's RETURN TYPE. A reason naming the location
+cannot go red when the location is fine and the type is not. **So: a structural reason must name the
+thing that would have to CHANGE, not the place the code lives.** The item also found four sites where
+**the REASON expired and the CONCLUSION held** — three justified reading the wire instead of the trace
+on the grounds that the trace did not carry the event, which is no longer true while the conclusion
+still stands on independence of authorship. **Restate those in two parts rather than re-dating them**,
+so the next reader can see which half is load-bearing.
+
 **S14. A direct probe of an upstream API is NOT evidence that OUR adoption of it works — the gate
 must drive our own closure.** Earned by WI-C1, and **measured rather than argued**: the natural wrong
 adoption of `stepWithStreamRecorded` (match on the outcome, `Err` arm drops the chunks) is green under
@@ -242,6 +253,19 @@ binding is a CONSTANT NO-OP is unobservable in a dispatch result by definition. 
 from the registry entirely reddened only the ONE arm that names it by id. Three of four arms
 therefore establish "the fold ran and performed nothing", not "the subject ran and performed
 nothing", and the two are joined by a separate structural row rather than conflated.
+
+**GENERALISED AT WI-D2 FROM A PROPERTY'S TWO SIDES TO AN ARTIFACT'S TWO PINS.** C3's form is about a
+check whose two sides share a producer. D2's is about two SEPARATE artifacts pinned against each other
+— `d64_gap_register` and the vocabulary's `reaches_trace_today` survey — which reads like redundancy
+and is not. **Both are hand-written claims, and agreeing with each other is not evidence about the
+code.** Measured: with the driver appending nothing from the tool fold, `make event_vocabulary` and
+`make invariants` are **both exit 0** while the new wire gate reads `projected 1, returned 0`.
+Reproduced independently at review, all three exit codes confirmed. **The register's two-sided pin is
+not a check that the append exists; it is a check that two claims match.** So: **when a pin compares
+two artifacts, ask which one an execution produced. If neither, the pin checks consistency, not
+truth** — and the fix is to drive the requirement off the claim under test, as D2's gate does by
+deriving its required set from `event_vocabulary()` minus the register, so *removing a name from the
+register is what makes the gate demand its append.*
 
 **A further C5 finding, for any future "did X perform effect E" check: prefer the ENFORCEMENT
 mechanism over the RECORD.** The world interaction log looks like a second producer and is not one
@@ -318,6 +342,14 @@ mutant, and recovered only from a `cp` taken seconds earlier in the same command
 item the working tree IS the work and git is the only copy of the state before it**; a path-scoped
 checkout does not distinguish the mutant from the ninety minutes underneath it. S8 already asks items
 to budget mutation loops as the cost of a detector — this is the operational half.
+
+**AND A COUNT COMPARISON NEEDS AN ORDER CLAIM BESIDE IT — measured twice, one item apart.** C3 kept
+`stream-parity-count` and `stream-parity-order` as separate rows and said why: a reordering leaves the
+count identical. WI-D2's first wire gate forgot the lesson one file over, comparing per-variant counts
+alone — and its own M3 mutant, a log appended in the **wrong position**, left **eighteen count rows
+green** with only a pinned order sequence catching it. The order pin was added *after* the mutant was
+written; the first version would have shipped over it. **An aggregate that survives a permutation is
+not a check on a sequence.**
 
 **S13. Sweep the whole tree before believing a gate — `check_core` is a SUBSET gate, and the sweep is
 the step every item under budget pressure drops.** Milestone B found five frontiers and **the fifth
@@ -2341,6 +2373,33 @@ pin that is only incidentally in its way** — which means the moment a legitima
 bank, nothing in-process catches it and the wire gate is the only thing left. That is the S16 reading,
 and it is stronger than "the wire gate is not redundant."
 
+**WI-D2, 2026-08-05 (`def464e`, ~46 min) — ROW 7 CLOSES. `d64_gap_register` goes 13 → 2**
+(`ScratchpadResult`, `SessionSuspend`), Logical variants reaching the returned trace go 15 of 28 to
+**26 of 28**, and `make ledger_parity` compares **17** variants wire-against-trace where C3's gate
+compared one. The shape was the one predicted: the tool fold was **WI-A1's loss channel, second
+instance** — `ToolDispatchOutcome` returned msgs and world and nothing about what was emitted, over a
+multi-fire `emit` callback — and it was closed by A1's widen / C1's fill / C3's read, with
+`c2_trace_wire_events` gaining a second caller rather than a new mechanism. **No `LedgerTrace` was
+threaded into `tool_phase`; the driver remains the sole appender.** `driver_only` re-issued v7 → v8,
+and **the anchor cascade was paid ONCE** — the first item to manage that — by tensing every comment
+before deriving the anchors, which is S18 working as written.
+
+**MY HANDOFF WAS WRONG ABOUT `ExtToolHandled`, and the evidence was in a file I had already
+generated.** It reserved that variant as needing an installed extension and the `on_budget_plan` ABI
+change. It needs neither — it is emitted whenever `dispatch_tool_handle` returns `Handled`, which any
+hook can do. **Measured at 47 wire occurrences in a single `make dst` run**, and confirmed at review
+against the `make dst` log I captured myself *three items earlier*: **exactly 47**, from
+`long_qwen_compaction_dst.ail`, months of items before D2 touched anything. It was found only because
+S15 required the survivors' reasons to be written as measurements, so the number had to be produced —
+**the reason the item was about to write was the thing that disproved it.**
+
+**ROW 10 IS NOW THE ONLY RED ROW**, and that sentence has not been true before in this project. Of
+C4's eleven, ten hold. The name is still refused — a gate with one red row is a NO exactly as it was
+with four — but it is **one item away**, and that item is named, sized and has a producer: a
+**filesystem class in the world**, so `resolve_context_limit`'s `Env` and `FS` halves route together.
+**Two of the ten passes stay VACUOUS in their installed-extension clauses**; closing row 10 makes the
+gate green and does not make those non-vacuous, and per D10 a second profile earns them from scratch.
+
 3. **This entry did not say what to do with a NO.** It describes running the table and adopting the
    name. "Expect NO" had to arrive by handoff rather than by plan. **A gate that reports NO with a
    work list is the successful outcome, not the failed one.**
@@ -2495,6 +2554,12 @@ branch is not HEAD state; the `arniwesth/ailang` fork is not the upstream gate �
   including comments, BEFORE running it.** Two consumers exist that no checklist in this project names:
   the `predicate-anchors` script itself, and `attribution_table_dst`'s `omitted_site()` fixture. Both
   were found by a gate rather than by search.
+- **A PORT OR RESULT-TYPE WIDENING IS A FIVE-CONSUMER ANCHOR CASCADE, and line-count neutrality is
+  unavailable whenever a type gains a field.** WI-D2 moved five anchors adding one field to two
+  variants of `ToolDispatchOutcome` and one accumulator to a fold — neither has a below-the-anchor
+  form — and paid two source files, four artifact consumers, a profile version bump and a content-hash
+  re-record. **D1 avoided the cascade entirely by being line-count-neutral; that route closes the
+  moment a type changes shape.** Size a widening as the cascade, not as the edit.
 - **A GENERATOR CHANGE IS A FIVE-ARTIFACT CASCADE, and no item that budgets for "add a draw" budgets
   for it.** Measured at WI-D1: editing `choose_provider` re-dated the corpus bank (12 seeds, **not one
   survived**), `seeded_generator`'s S7 fixture *and* its anti-count pair, D8's canary at both versions,

@@ -205,11 +205,11 @@ export pure func attribution_rows() -> [AttributionRow] {
       note: "ambient now() inside emit_dummy_hook (:187-195), reached only via the five is_test_dummy guards in this file; installing test_dummy is necessary for it to execute"
     },
     {
-      site: { file: "src/core/tool_phase.ail", line: 289 },
+      site: { file: "src/core/tool_phase.ail", line: 314 },
       effect: "Process",
       hook_ids: ["scratchpad"],
       reviewer: "arni.westh",
-      note: "exec_scratchpad_cell_ws under the MIXED guard at :288; necessity rests on the named reviewer because the second conjunct is interprocedural (D4's stated gap)"
+      note: "exec_scratchpad_cell_ws under the MIXED guard at :313; necessity rests on the named reviewer because the second conjunct is interprocedural (D4's stated gap)"
     }
   ]
 }
@@ -229,11 +229,11 @@ export pure func unconditional_core_sites() -> [CoreSite] {
       note: "ports.clock_now — routed by WI-A12" },
     { site: { file: "src/core/session.ail", line: 1232 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2543 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2601 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2653 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2711 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/tool_phase.ail", line: 344 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/tool_phase.ail", line: 373 }, effect: "Clock", routed: true,
       note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it" },
     { site: { file: "src/core/test/stub_step.ail", line: 202 }, effect: "Clock", routed: false,
       note: "live_ports' clock adapter — the one place the driver reads a real clock, by design; a deterministic profile uses the scripted adapter and never reaches it" }
@@ -622,8 +622,8 @@ pure func test_duplicate_site_is_rejected() -> bool
 pure func test_empty_intersection_removes_the_site() -> bool
   tests [((), true)]
   {
-    let with_sp = classify_site("src/core/tool_phase.ail:289", ["scratchpad#3"]);
-    let without = classify_site("src/core/tool_phase.ail:289", ["compaction_ai#0", "context_mode#1"]);
+    let with_sp = classify_site("src/core/tool_phase.ail:314", ["scratchpad#3"]);
+    let without = classify_site("src/core/tool_phase.ail:314", ["compaction_ai#0", "context_mode#1"]);
     with_sp == "attributed-reachable" && without == "attributed-unreachable"
   }
 
@@ -669,7 +669,7 @@ pure func test_head_inventory_is_complete() -> bool
   {
     let discovered = unconditional_core_sites()
       ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
-          { site: { file: "src/core/tool_phase.ail", line: 289 }, effect: "Process", routed: false, note: "" }];
+          { site: { file: "src/core/tool_phase.ail", line: 314 }, effect: "Process", routed: false, note: "" }];
     List.length(validate_completeness(discovered, attribution_rows(), unconditional_core_sites())) == 0
   }
 

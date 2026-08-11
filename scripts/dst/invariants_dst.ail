@@ -279,10 +279,20 @@ pure func fixture_summary(err: string, millicents: int) -> LedgerEvent {
 -- would leave untested.
 --
 -- `CostExhausted` is CONSTRUCTED rather than observed and that is deliberate:
--- it is on `d64_gap_register()`, so the driver does not append it today, and
 -- without it the monotone budget family has exactly one cost point and is
 -- trivially green. A family that is vacuous on every real trace and vacuous on
 -- its fixture is not a family. See the run report's coverage note.
+--
+--   HALF OF THIS NOTE'S ORIGINAL REASON EXPIRED AT WI-D2 and is restated rather
+--   than deleted. It said the construction was necessary because `CostExhausted`
+--   was on `d64_gap_register()` and "the driver does not append it today". WI-D2
+--   appends it — `session.c2_fail` puts it in the trace before `c2_finalize`,
+--   and `make ledger_parity` witnesses it on a capped run — so a real trace
+--   carrying one is now obtainable. The construction stays because the reason
+--   that never depended on the register still holds: this fixture must carry TWO
+--   cost points to make the monotone family non-vacuous, and no single real run
+--   produces two `CostExhausted` records — the second one would be a record
+--   after the terminal summary.
 --
 -- `CompactionExhausted` follows the compaction STAGE record, never precedes it:
 -- it is a terminal cause, and a stage applied after it is the transition
@@ -658,8 +668,8 @@ func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
   let a = report("the register agrees with the vocabulary in both directions", List.length(vs) == 0,
                  "${rule_list(vs)}\n      ${first_message(vs)}");
   let gap = logical_variants_not_in_trace(event_vocabulary());
-  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3)",
-                 List.length(gap) == 13
+  let b = report("the D6.4 gap is ${List.length(gap)} (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3, eleven more by WI-D2)",
+                 List.length(gap) == 2
                    && not contains_str(gap, "DoneEvent")
                    && not contains_str(gap, "StreamDelta"),
                  "the gap is ${List.length(gap)}: ${join_str(gap)}");
@@ -689,7 +699,26 @@ func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
   let f = report("StreamDelta left the gap by being APPENDED, not by being reclassified",
                  is_logical(event_vocabulary(), "StreamDelta"),
                  "StreamDelta is no longer classified Logical — D6.4's named exception was dissolved, not closed");
-  a && b && c && d && e && f
+  -- WI-D2's eleven get the same guard, and one row rather than eleven for a
+  -- reason: `display_only_baseline()` is pinned at six by row `d` above, so a
+  -- reclassification would have to move the baseline too. What this row adds is
+  -- the DIRECT statement for the variants WI-D2 closed — a reader checking why
+  -- the register is 2 should not have to derive "and none of the eleven was
+  -- reclassified" from two other rows.
+  let g = report("WI-D2's eleven left the gap by being APPENDED, not by being reclassified",
+                 is_logical(event_vocabulary(), "CostExhausted")
+                   && is_logical(event_vocabulary(), "Dp7VerifierRejected")
+                   && is_logical(event_vocabulary(), "ThinkingStreamEnd")
+                   && is_logical(event_vocabulary(), "NativeToolDenied")
+                   && is_logical(event_vocabulary(), "ToolPending")
+                   && is_logical(event_vocabulary(), "DelegatedToolDeferred")
+                   && is_logical(event_vocabulary(), "V2ToolDispatchStart")
+                   && is_logical(event_vocabulary(), "V2ToolDispatchComplete")
+                   && is_logical(event_vocabulary(), "NativeToolCalls")
+                   && is_logical(event_vocabulary(), "NativeToolResults")
+                   && is_logical(event_vocabulary(), "ExtToolHandled"),
+                 "one of WI-D2's eleven is no longer classified Logical — a gap was dissolved, not closed");
+  a && b && c && d && e && f && g
 }
 
 -- D6.4's NAMED EXCEPTION, reached by CONSTRUCTION. A count-only check is green

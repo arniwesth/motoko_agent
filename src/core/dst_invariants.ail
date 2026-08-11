@@ -31,9 +31,13 @@
 -- ============================================================================
 --
 -- D6.4 requires every LOGICAL `LedgerEvent` to reach the returned trace. At
--- HEAD before this item, 28 of 34 variants were classified Logical and 13
--- reached the trace, so 15 did not — `logical_variants_not_in_trace()`, which
--- WI-A8 exposed for exactly this invariant to consume.
+-- WI-A8, when this module was written, 28 of 34 variants were classified
+-- Logical and 13 reached the trace, so 15 did not —
+-- `logical_variants_not_in_trace()`, which
+-- WI-A8 exposed for exactly this invariant to consume. **At WI-D2 the same
+-- count reads 26 reaching and 2 not**; the paragraphs below are kept in A8's
+-- tense because they describe why the artifact was built this way, not what it
+-- currently measures.
 --
 -- A parity invariant written against that is RED, and there is a one-line way
 -- to make it green that destroys the point: reclassify the fifteen as
@@ -61,8 +65,23 @@
 --      the one D6.4 calls authoritative: "an external `ledger_emit` call is not
 --      evidence that the event is in `LedgerTrace`".
 --
--- WI-A14 CLOSED ONE OF THE FIFTEEN; WI-C3 CLOSED A SECOND (`StreamDelta`), and
--- the register is now THIRTEEN. See `d64_gap_register`.
+-- WI-A14 CLOSED ONE OF THE FIFTEEN; WI-C3 CLOSED A SECOND (`StreamDelta`);
+-- **WI-D2 CLOSED ELEVEN MORE, and the register is now TWO.** See
+-- `d64_gap_register`.
+--
+--   AND THE THREE CHECKS ABOVE WERE NOT ENOUGH ON THEIR OWN, which WI-D2
+--   measured rather than argued. Checks 1 and 2 both compare the register
+--   against `reaches_trace_today` — a hand-maintained SURVEY. Flipping the
+--   survey and the register together, with no production change, satisfies
+--   both: they agree with each other about a claim neither of them checks.
+--   Check 3 does not close it either; it rules out a DisplayOnly record being
+--   IN the trace, not a Logical event being absent from it.
+--
+--   The fourth check is out of process. `scripts/dst/run_ledger_parity_wire.sh`
+--   reads `d64_gap_register()` and, for every Logical variant it does not list,
+--   compares what the driver PROJECTED to the wire against what it APPENDED to
+--   the returned trace. That is S16's rule applied to this family: the two
+--   sides have different producers only across the process boundary.
 --
 -- ============================================================================
 -- What the parity family can and cannot do — measured at WI-C3
@@ -597,7 +616,7 @@ export pure func display_only_baseline() -> [string] {
 }
 
 -- D6.4's DECLARED GAP: Logical variants the driver does not append to the
--- returned trace. WI-A8 measured fifteen; this register carries THIRTEEN.
+-- returned trace. WI-A8 measured fifteen; this register carries TWO.
 --
 -- `DoneEvent` is the one WI-A14 closed, and it is the decision this item was
 -- handed by name.
@@ -625,22 +644,62 @@ export pure func display_only_baseline() -> [string] {
 --   since DisplayOnly means "cannot change invariant results" and D6.3 is an
 --   invariant over precisely this event's content.
 --
--- The remaining thirteen are NOT waived and are NOT reclassified. They are the
--- work list, and `parity_register_findings` makes the register shrink-only:
--- closing one without editing this list is `parity-gap-register-stale`.
+-- WI-D2 TOOK THE REGISTER FROM THIRTEEN TO TWO, and the eleven it closed are the
+-- ones acceptance row 7 actually turned on.
+--
+--   The tool-dispatch fold — seven of the ten — was WI-A1's loss channel a
+--   second time. `tool_phase.ail` contains no reference to `LedgerTrace` and
+--   never did; it took a multi-fire `emit` callback returning `()` and returned
+--   a `ToolDispatchOutcome` carrying the messages and the world and nothing
+--   about what it had emitted. The fix is the move this project has now made
+--   three times: WIDEN THE RETURN (A1), FILL IT (C1), GIVE IT A READER (C3).
+--   `ToolDispatchOutcome` gained an `emitted: [LedgerEvent]` log on both
+--   variants, the fold accumulates into it, and the driver appends it with
+--   `c2_trace_wire_events` — the same function C3 built for stream deltas, so
+--   this added a second caller rather than a mechanism.
+--
+--   `ThinkingStreamEnd` was one line: `ThinkingStreamStart` was already
+--   appended at the same site and the closing bracket was `ledger_emit`-only.
+--
+--   `CostExhausted` took `DoneEvent`'s treatment exactly, for `DoneEvent`'s
+--   reason: it is a terminal path, so the append lands BEFORE `c2_finalize` or
+--   D6.1's final-record rule breaks. `Dp7VerifierRejected` is on the
+--   re-injection path, which is not terminal, so nothing constrains its order.
+--
+-- WHAT WAS DELIBERATELY NOT DONE: no `LedgerTrace` was threaded into
+-- `tool_phase`. It type-checks — `ledger_append` is in `phase_vocab`, which that
+-- module already imports — and it puts a SECOND APPENDER in the tree, after
+-- which trace order is a function of two writers and D6.3's "agreement
+-- decidable over the returned trace alone" depends on their interleaving. The
+-- driver is the sole appender and that is load-bearing.
+--
+-- The remaining two are NOT waived and are NOT reclassified. They are what is
+-- left of the work list, and `parity_register_findings` pins this list against
+-- the vocabulary's gap in BOTH directions: a gap nobody registered is
+-- `parity-gap-register-missing`, and a registered variant that is no longer a
+-- gap is `parity-gap-register-stale`. Closing one without editing this list is
+-- red, and so is editing this list without closing one.
+--
+-- THE THIRD PIN IS NEW AT WI-D2 AND IT IS THE ONE THAT MAKES THE OTHER TWO
+-- MEAN SOMETHING. Both of the above compare this list against
+-- `reaches_trace_today`, which is a hand-maintained SURVEY — a claim, not an
+-- observation. `scripts/dst/run_ledger_parity_wire.sh` reads this register, and
+-- for every Logical variant NOT in it compares the count the driver PROJECTED
+-- to the wire against the count it APPENDED to the returned trace, out of
+-- process. So removing a name from this list is what makes that gate demand the
+-- append, and a survey flipped without the production change is red there even
+-- though both in-process pins agree with each other.
+-- TWO, NOT THREE. `ExtToolHandled` was expected to survive here on the grounds
+-- that it needs an installed extension. It does not: `dispatch_tool_handle`
+-- returning `Handled` reaches it, which any hook can do without an install and
+-- without the `on_budget_plan` ABI change, and
+-- `scripts/dst/long_qwen_compaction_dst.ail` had been doing it since long before
+-- WI-D2. MEASURED: 47 `ext_tool_handled` lines on the wire across one `make dst`
+-- run at HEAD before this item. A variant emitted 47 times is not a variant no
+-- run reaches, so it is closed and witnessed by `make ledger_parity`'s `handled`
+-- subject rather than excused.
 export pure func d64_gap_register() -> [string] {
   ["ScratchpadResult",
-   "NativeToolDenied",
-   "ToolPending",
-   "ExtToolHandled",
-   "DelegatedToolDeferred",
-   "V2ToolDispatchStart",
-   "V2ToolDispatchComplete",
-   "Dp7VerifierRejected",
-   "CostExhausted",
-   "ThinkingStreamEnd",
-   "NativeToolCalls",
-   "NativeToolResults",
    "SessionSuspend"]
 }
 
@@ -650,33 +709,28 @@ export pure func d64_gap_register() -> [string] {
 -- against.
 export type ParityGap = { variant: string, why: string }
 
+-- THE REASONS ARE MEASUREMENTS, NOT DIAGNOSES, and that is S15's practical form
+-- rather than a style preference. WI-D1 found SEVEN stale reasons in this
+-- project's registers and measured the discriminator: of four entries, the three
+-- that named a STRUCTURAL cause ("the type has no such field") were false within
+-- an item or two of being written, and the one that quoted a NUMBER ("measured 0
+-- of 260") was still true four items later. A structural claim goes stale the
+-- moment someone adds the field and nothing tells the reason.
+--
+-- WI-D2 paid that bill immediately: of the thirteen entries this function
+-- carried, ELEVEN gave a structural reason and NINE of those were already
+-- obsolete or wrong when this item read them — seven said "inside the tool
+-- dispatch fold" as though the fold were the obstacle when the obstacle was the
+-- fold's RETURN TYPE, and one asserted `ExtToolHandled` was unreachable without
+-- an installed extension while `make dst` was emitting it 47 times a run.
+--
+-- So both surviving entries below quote a count, and both name the run the count
+-- came from.
 export pure func parity_gap_reasons() -> [ParityGap] {
-  [{ variant: "CostExhausted",
-     why: "Emitted on the cost-cap terminal path immediately before the finalizer. Closing it is the same one-line append the DoneEvent took and it is NOT blocked; it is out of this item's scope only because it is a second terminal path and the item that changes a terminal path should change one at a time." },
-   { variant: "Dp7VerifierRejected",
-     why: "Emitted on the re-injection path, which is not terminal: the run continues and terminates later via max-steps or budget. The append is unblocked." },
-   { variant: "ScratchpadResult",
-     why: "Emitted by the scratchpad extension's tool path. Reaching it needs a profile that installs the extension; driver_only installs none (plan P4), so no run this project can currently execute produces it." },
-   { variant: "ExtToolHandled",
-     why: "As ScratchpadResult: an extension-served tool, unreachable under driver_only." },
-   { variant: "NativeToolDenied",
-     why: "The approval-denial path. Reachable under driver_only and unblocked; it is a per-tool-call append inside the dispatch fold rather than at a terminal, which is a larger edit than a terminal path and is where the remaining bulk of D6.4's gap lives." },
-   { variant: "ToolPending",
-     why: "As NativeToolDenied: inside the tool dispatch fold." },
-   { variant: "DelegatedToolDeferred",
-     why: "As NativeToolDenied: inside the tool dispatch fold." },
-   { variant: "V2ToolDispatchStart",
-     why: "As NativeToolDenied: inside the tool dispatch fold." },
-   { variant: "V2ToolDispatchComplete",
-     why: "As NativeToolDenied: inside the tool dispatch fold." },
-   { variant: "NativeToolCalls",
-     why: "As NativeToolDenied: inside the tool dispatch fold." },
-   { variant: "NativeToolResults",
-     why: "As NativeToolDenied: inside the tool dispatch fold." },
-   { variant: "ThinkingStreamEnd",
-     why: "The stream bracket's closing half. ThinkingStreamStart already reaches the trace and this does not, which is the sharpest single statement of the gap: the same code path appends one bracket and projects the other." },
+  [{ variant: "ScratchpadResult",
+     why: "MEASURED 0 `scratchpad_result` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Its two emission sites are in `tool_phase.execute_allowed_tool_call` and both are now inside the returned `emitted` log, so this is a REACHABILITY gap and not a parity one: if a run emits it, it reaches the trace. Closing it needs a run that emits it, and the only such run is one where a tool named `scratchpad` is served by a hook returning `Handled` with a `cells` key in its metadata. WI-D2 declined to construct one — a constructed scenario would close this register entry while establishing nothing about a profile." },
    { variant: "SessionSuspend",
-     why: "Emitted on the suspend control path, which no deterministic run reaches today — the driver_only profile has no suspend trigger." }]
+     why: "MEASURED 0 `session_suspend` events on the wire across one full `make dst` run at WI-D2, out of 1895 wire events total. Emitted on the suspend control path; no profile in this tree has a suspend trigger, so the count is 0 rather than small. Same shape as ScratchpadResult: a coverage gap, not a parity one." }]
 }
 
 -- ============================================================================
@@ -1758,7 +1812,8 @@ pure func all_obligations_nonempty(fs: [InvariantFamily]) -> bool {
 -- display-only set to make the parity family green. The second is the one-line
 -- wrong answer, and the module header says why it is wrong.
 --
--- 14 at WI-A14, THIRTEEN at WI-C3, which closed StreamDelta. The literal is
+-- 14 at WI-A14, 13 at WI-C3 which closed StreamDelta, **TWO at WI-D2** which
+-- closed the other eleven. The literal is
 -- deliberately not derived from `d64_gap_register()`: a row asserting the
 -- register equals itself is green after any edit, and shrinking the register is
 -- exactly the move that has to be a deliberate, recorded change.
@@ -1766,7 +1821,7 @@ pure func test_parity_register_agrees_with_the_vocabulary() -> bool
   tests [((), true)]
   {
     List.length(parity_register_findings()) == 0
-      && List.length(d64_gap_register()) == 13
+      && List.length(d64_gap_register()) == 2
       && List.length(display_only_baseline()) == 6
   }
 

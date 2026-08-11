@@ -54,11 +54,18 @@
 --   tool_dispatches   the tool-result messages the driver returned. Written by
 --                     `tool_phase.ail`'s `tool_outcome_message`, downstream of
 --                     the port but in a different module and a different
---                     record. The wire's `v2_tool_dispatch_start`
---                     (tool_phase.ail:332), emitted BEFORE the port calls at
---                     :342-350, is the stronger form of the same witness and is
---                     compared in the `discovery` make target, because it goes
---                     to the wire and is never appended to the returned trace.
+--                     record. The wire's `v2_tool_dispatch_start`, emitted
+--                     BEFORE the port calls that follow it, is the stronger form
+--                     of the same witness and is compared in the `discovery`
+--                     make target — because the wire has a DIFFERENT AUTHOR from
+--                     the census it is compared against.
+--
+--                     TENSED AT WI-D2: this clause used to say "because it goes
+--                     to the wire and is never appended to the returned trace",
+--                     which stopped being true when WI-D2 closed
+--                     `V2ToolDispatchStart` in `d64_gap_register`. Independence
+--                     was always the operative reason and absence was never
+--                     more than the mechanism that guaranteed it.
 --   approval_reads    the tool-role messages the driver returned. Under a
 --                     policy that sends EVERY tool call to the approval channel
 --                     — which both discovery scenarios use — the driver makes

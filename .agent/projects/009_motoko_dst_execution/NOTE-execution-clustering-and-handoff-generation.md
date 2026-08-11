@@ -189,6 +189,27 @@ but no event log. **That is `on_chunk` over a pre-A1 `ProviderExchange`** — WI
 second instance. The three-step move is already validated: A1 widened the channel, C1 filled it, C3
 gave it a reader, and `c2_trace_wire_events` already does the appending for stream deltas.
 
+**Cluster 21 outcome: WI-D2 DONE 2026-08-05**, ~46 min, `def464e` — **row 7 CLOSES**, the register
+goes 13 → **2**, and `make ledger_parity` compares 17 variants wire-against-trace. The A1-shaped
+prediction held exactly. **The handoff was wrong about `ExtToolHandled`** — reserved as needing an
+installed extension, it needs neither, and was already on the wire **47 times a run** in a `make dst`
+log captured three items earlier. Found only because S15 forced the survivors' reasons to be
+measurements. **Anchor cascade paid ONCE** — the first item to manage it, by tensing comments before
+deriving anchors.
+
+**Cluster 22 = row 10, the filesystem world class: HANDED OFF 2026-08-05**, handoff
+`HANDOFF-execute-d3-filesystem-world-class-row-10.md`. **The last red row.** Grounding found most of
+the design already written down: `Makefile:1392-1416` records why the env poison pair was deferred and
+why routing the env half alone is refused — *"a world-supplied path to an ambient file … a green check
+implying absent coverage"*, cluster 4's C1b defect. The driver's own env reads are **all routed
+already**; what fails is `context_usage.resolve_context_limit`, which takes only a model, is called at
+eight sites, and reads four env vars **to compute file paths it then reads**.
+
+**Also surfaced and worth carrying: D10 has a SECOND condition nobody has mentioned in a long time** —
+the name needs the acceptance table *and* project-007's taxonomy ADR accepted. **Checked: 007 is
+`Accepted 2026-07-26`**, so the table is the only thing outstanding, and re-running it is its own item
+after this one.
+
 **Worth recording as clustering guidance in its own right: the seven-for-seven grounding record in
 Milestones C and D is not a run of luck, it is a property of this plan.** Items were sized from the
 ADR's decisions, and the ADR describes *what must be true*, not *what the tree currently does*. Every
