@@ -20,6 +20,7 @@ module src/core/tool_catalog
 
 import std/ai (ToolSchema)
 import std/list as List (length)
+import std/string (contains)
 import src/core/config (VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtensionHooks)
 
@@ -64,6 +65,12 @@ pure func search_schema() -> ToolSchema = {
   parameters: "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},\"dir\":{\"type\":\"string\",\"description\":\"Subdirectory to scope the search (default '.')\"}},\"required\":[\"pattern\"]}"
 }
 
+pure func motoko_runtime_status_schema() -> ToolSchema = {
+  name: "MotokoRuntimeStatus",
+  description: "Get exact Motoko runtime status for the current session, including current step, step budget, compaction counts, system-prefix digest, and cumulative usage. Use this when asked about how many steps have run, whether compaction happened, or whether the system prefix stayed stable.",
+  parameters: "{\"type\":\"object\",\"properties\":{},\"required\":[]}"
+}
+
 -- The full tool catalog motoko_agent advertises to the model. Pass this
 -- to upstream `runTools(model, msgs, tools(), dispatch, budget)`.
 export pure func tools() -> [ToolSchema] {
@@ -73,7 +80,8 @@ export pure func tools() -> [ToolSchema] {
     edit_file_schema(),
     bash_exec_schema(),
     run_tests_schema(),
-    search_schema()
+    search_schema(),
+    motoko_runtime_status_schema()
   ]
 }
 
@@ -122,14 +130,14 @@ export pure func tools_with_extensions(rt: ExtRuntime) -> [ToolSchema] {
 
 pure func test_base_tools_count() -> bool
   tests [((), true)]
-  { List.length(tools()) == 6 }
+  { List.length(tools()) == 7 }
 
 pure func test_no_extensions_returns_base_tools() -> bool
   tests [((), true)]
   {
     let v: VerificationConfig = { enabled: false, command: "make check_core" };
     let rt: ExtRuntime = { registry: { hooks: [] }, strict_mode: false, verification: v };
-    List.length(tools_with_extensions(rt)) == 6
+    List.length(tools_with_extensions(rt)) == 7
   }
 
 pure func test_ext_schema_synthesised_name() -> bool
@@ -137,4 +145,14 @@ pure func test_ext_schema_synthesised_name() -> bool
   {
     let s = ext_tool_schema("MyTool");
     s.name == "MyTool"
+  }
+
+pure func test_runtime_status_schema() -> bool
+  tests [((), true)]
+  {
+    let s = motoko_runtime_status_schema();
+    s.name == "MotokoRuntimeStatus"
+      && contains(s.description, "how many steps have run")
+      && contains(s.description, "system prefix stayed stable")
+      && s.parameters == "{\"type\":\"object\",\"properties\":{},\"required\":[]}"
   }
