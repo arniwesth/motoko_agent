@@ -1,0 +1,12 @@
+module tools/test_coverage/fixtures/named_only
+
+-- SURVIVOR, and the only fixture that exercises the `named-test` syntactic
+-- form on its own. skip_recorded.ail carries both forms, so a mutant deleting
+-- the `named-test` pattern would leave it detected and escape; this file has
+-- nothing else to be found by, and fires `undetected` the moment the pattern
+-- stops matching. A pattern no fixture can lose is a pattern nobody checks.
+
+import std/string (contains)
+
+test "contains empty needle" { contains("abc", "") }
+test "contains middle" { contains("abc", "b") }

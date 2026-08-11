@@ -1,0 +1,15 @@
+module tools/test_coverage/fixtures/phantom_pattern
+
+-- Fires R4 `phantom`. This module has NO tests. The syntactic derivation
+-- matches anyway, because the documentation string below contains a line that
+-- looks like a test block. This is cluster 14's site 31 in miniature: a guard
+-- greping `MOTOKO_DST_SCALE.*demo` matched the workflow comment explaining that
+-- the string must not appear. A pattern cannot tell code from prose about code.
+
+export pure func syntax_help() -> string
+  {
+    "attach cases to a function like this:
+    tests [
+      ((0), 0)
+    ]"
+  }

@@ -1,7 +1,27 @@
-# Handoff: resume project 009 once the upstream recorded-stream API has landed
+# Milestone B briefing (formerly: "resume project 009 once the upstream API has landed")
 
-Audience: a fresh agent session with no context from the spike session (2026-07-31). This handoff
-is **triggered, not immediate** — most of it is wasted effort until the condition below holds.
+**⚑ READ THIS FIRST. This is NO LONGER AN EXECUTABLE HANDOFF — do not work from its Mission or its
+Sequence.**
+
+It was written 2026-07-31 as a *triggered* handoff, before Milestone A existed. The trigger has since
+fired and the milestone has since completed, so its executable half is spent:
+
+| Section | Status |
+|---|---|
+| `## Trigger condition` | **Fired 2026-08-04.** v0.33.0 ships `stepWithStreamRecorded`. Historical — the check itself is still the right check, and is worth re-reading before trusting any future claim of a landed API |
+| `## Mission`, `## Sequence`, `## State you inherit`, and everything down to `## Constraints` | **DEAD.** The Mission asks for the source-grounded plan that ADR-001 mandates — that plan was written, and **all seventeen of its Milestone A items have landed**. Sequence step 1 is "widen `Ports.model_step`", which is WI-A1 and landed 2026-08-02. Retained only as a record of what the spike session knew |
+| `# ⚑ TRIGGER FIRED` and `# What Milestone B inherits` | **LIVE.** These are why the file still matters |
+
+**So: you do not execute this document. You read the two live sections, and you execute
+`PLAN-implementation-deterministic-test-world.md`'s WI-B1 → WI-B4** — which is the repin wave, and
+which did not exist when this file was written.
+
+**Its live half is a required input to that work**, because `## What Milestone B inherits` carries
+five things that are true at HEAD and stated in no B item: the `make dst` ordering hazard, the three
+artifact sets needing a re-sweep rather than a re-pin, the four places `emissions: []` is load-bearing,
+the never-run scheduled workflow, and why B2 is the free moment for the two `ScriptedStep` widenings.
+
+---
 
 ## Trigger condition — check this first, and be strict about it
 
@@ -21,8 +41,10 @@ grep -c 'stepWithStreamRecorded\|chunks:' "$(dirname "$(command -v ailang)")/../
 As of 2026-07-31 the answer on v0.31.0 is `0`. **A prototype on a fork is not this** — one exists
 (see *State you inherit*) and it does not satisfy D1, no matter how green it runs.
 
-If the trigger has not fired, the only items worth doing are **Open item 1** (the port widening,
-which has no upstream dependency) and the ADR revision round. Stop after those.
+**⚑ THE TRIGGER FIRED 2026-08-04 — see the section immediately below.** `v0.33.0` exports
+`stepWithStreamRecorded`, verified against the released tag. The sentence that used to sit here told
+a reader to do "the port widening (Open item 1)" and stop; that item is WI-A1 and landed 2026-08-02,
+and Milestone A completed 2026-08-04. **There is no longer anything to stop after.**
 
 ## STOP — this handoff was written 2026-07-31 and Milestone A has since completed
 
@@ -163,6 +185,117 @@ Findable, unresolved, each with enough detail to pick up cold:
 - **Do not re-point the AILANG clone's `upstream` push URL.** It is disabled deliberately.
 - **F1–F5 are unfixed findings against `ADR-001`.** If the revision round has not happened, say so rather than building on decisions the spike showed are underspecified — particularly F1, where D1 does not say who owns the provider cursor and *both answers compile*.
 - Prefer measurement over estimation where M1/M2 already answer the question.
+
+---
+
+# ⚑ TRIGGER FIRED — 2026-08-04. THE GATE IS CLEARED.
+
+**`std/ai.stepWithStreamRecorded` shipped in released AILANG `v0.33.0`** (published
+2026-08-04T12:25:38Z), adopted from this project's prototype with authorship credited in
+`ab209fcbf`. Upstream #546 is answered.
+
+**Verified against the released tag itself, not the changelog and not `dev`** — which is what the
+trigger condition at the top of this file demands:
+
+```
+std/ai.ail @ v0.33.0
+  export type RecordedStream = {
+    chunks: [StreamChunk],
+    outcome: Result[StepResult, AIError]
+  }
+
+  export func stepWithStreamRecorded(
+    model: string, messages: [Message], tools: [ToolSchema],
+    cache_breakpoints: [CacheBreakpoint],
+    on_chunk: (StreamChunk) -> () ! {IO}
+  ) -> RecordedStream ! {AI}
+```
+
+**It is the shape D1 selected, on both halves.** The `{chunks, outcome}` form — not
+`Result[{result, chunks}, err]`, which discards chunks observed before a mid-stream failure, the case
+replay needs most. And `on_chunk` survives unchanged, so **immediate projection is preserved**, which
+is the half D1 refused to trade away.
+
+**What this does and does not clear.** D1 names three conditions:
+
+| | |
+|---|---|
+| 1. A **released** AILANG exports a recorded-stream API | ✅ **MET** — v0.33.0, verified above |
+| 2. This repo's toolchain **repinned** to it | ⬜ WI-B1 |
+| 3. D1's **positive integration probe** passes | ⬜ WI-C2 |
+
+**Milestone B is unblocked. Start at WI-B1.**
+
+## One correction to B1's sizing, and it is not small
+
+**The repin target is v0.33.0, and M2's measured 381 effect-row edits across 71 files was
+v0.26.0 → v0.31.0.** Two further releases have landed since (v0.32.0, v0.33.0). **Treat 381 as a
+floor, not the number** — and per the standing discipline, re-measure rather than re-cite: the first
+honest signal after B1 is `ailang check` failing across the tree, and its size is the measurement.
+
+## The `IncompleteStream` question moved
+
+Upstream's closing comment says: *"S2 continues under #578 (your `IncompleteStream` question is the
+open thread there)."* **Answered: the reply was POSTED to #578 on 2026-08-04T13:25:55Z** —
+`DRAFT-reply-578-cancellable-context-and-incomplete-stream.md` is the record of what was sent. It
+carries three things: demand evidence for the cancellable context (our filed provider-hang issue,
+scoped honestly as TypeScript-side today and forward-dated as the DST migration moves the seam into
+AILANG), a scope correction (**we implement no `AIHandler`**, so upstream's out-of-repo implementer
+count is zero and v2 is cheaper than #578 estimates), and the `IncompleteStream` answer — a
+first-class code, evidenced by this codebase having taken that fork both ways.
+
+**Nothing is owed back until upstream replies.** If the answer lands as a code, B1/B2 should match on
+it rather than on the `unencodable stream chunk` message prefix.
+
+---
+
+# UPSTREAM STATUS — checked 2026-08-04 against the API, not the changelog (superseded by the above)
+
+**The gate is NOT cleared, and it is closer than any prior check.** `sunholo-data/ailang#546` moved
+substantially between 2026-08-01 (this project's last recorded status) and 2026-08-03.
+
+| Fact | Evidence |
+|---|---|
+| The park is **RESOLVED** — option (c), bound the drain locally, no interface change | comment 2026-08-03T08:20Z; **this project's sealed-interface analysis was the deciding evidence**, then verified first-party at `a929ec452` |
+| The design doc absorbed five of our points | PR #562. "Lossless" is restated as exact w.r.t. **adapter-emitted** chunks, not the wire; the sibling divergence is now deliberate and stated |
+| **PR #577 is MERGED** | 2026-08-03T16:55:09Z. Our patch applied **verbatim, in its own commit, credited**, plus a shared stream core, the fail-loud latch (public prefix `unencodable stream chunk`), a bounded **inert** drain (256 chunks / 1 MiB), and a 14-row matrix with our four tests untouched |
+| **No release contains it yet** | `std/ai.ail` at **`dev`** contains `stepWithStreamRecorded`; at **`v0.32.0`** it does not. v0.32.0 was published 2026-08-03T15:22Z — **1h33m before the merge** |
+| The wall-clock residual is split out | **#578** (cancellable provider context / AIHandler v2). The drain bounds post-failure work but the call still returns only when the provider's stream ends. A sentinel-panic abort was ruled out as unsound on `js && wasm` |
+
+**So D1's trigger is one release away, not one design cycle away.** The check the trigger section
+above prescribes still applies unchanged — verify against a *released* binary, not `dev`, not a
+changelog.
+
+## AN ANSWER IS OWED TO UPSTREAM, AND IT BLOCKS THEIR S2
+
+Asked 2026-08-03T10:20Z and **repeated 16:35Z as explicitly owed before S2**:
+
+> for the unencodable-chunk failure, do you prefer a first-class `AIError` code (e.g.
+> `IncompleteStream`) over the stable message prefix on `Internal`? The prefix ships in S1 as public
+> contract; a dedicated code would widen the `AIError` code set, which we didn't want to assume on
+> your behalf.
+
+**This project has direct, filed evidence and the answer is a first-class code.** Recorded here so
+whoever picks this up does not re-derive it:
+
+1. **We are already living with the failure this choice produces.**
+   `.agent/issues/max-steps-termination-discriminated-by-error-message-string.md`: `step_machine.ail`
+   emits the same `Internal` code for two structurally different failures, so the driver
+   discriminates by **matching the message text** (`session.ail`, `decision_fail_reason`). An edit to
+   that string — a reword, a typo fix — silently reclassifies every max-steps run. It is open.
+2. **WI-A9 declined to fix it, and cluster 4's C2 is why that matters here.** The `AIError` code is
+   **wire-visible**: it is emitted as an `error` ledger event (`ErrorEvent { code: e.code }`) that the
+   TypeScript TUI consumes. So changing a code later is a compatibility event — which is an argument
+   for getting the code right *at introduction*, when it is free.
+3. **D3's fault catalogue requires a stable class id per fault class.** A message prefix is not a
+   stable id. Keying a versioned artifact on a prose string is the shape D6.2 rejected when it
+   dropped `dp7_rejected` as a stale label.
+4. **Their stated objection cuts the other way.** "It widens the public error vocabulary" — S1
+   already ships the prefix *as public contract*, so the widening has happened; it has happened in
+   the form that cannot be checked. A code is versioned and greppable; a prefix is prose that
+   behaves like an API.
+
+**Posting this is outward-facing and has not been done.** It needs a decision from the operator.
 
 ---
 

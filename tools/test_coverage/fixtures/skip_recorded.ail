@@ -1,0 +1,28 @@
+module tools/test_coverage/fixtures/skip_recorded
+
+-- SURVIVOR under a table that records the `Named test blocks` limitation.
+-- Seven tests: three inline cases that RUN, and four `test "..."` blocks that
+-- v0.26.0 skips entirely while still printing "All tests passed!" and exiting
+-- 0. src/core/prompts_test.ail is in exactly this state at HEAD with six.
+--
+-- Its four quantities are total=7, passed=3, failed=0, skipped=4. R1 reads
+-- `failed` and R7 reads `skipped`; keeping them unequal here and unequal the
+-- other way round in failing_test.ail is what stops either rule from being
+-- satisfied by the other one's number.
+
+import std/string (startsWith)
+
+export pure func shout(s: string) -> string
+  tests [
+    (("a"), "a!"),
+    (("bc"), "bc!"),
+    ((""), "!")
+  ]
+  {
+    "${s}!"
+  }
+
+test "startsWith empty needle" { startsWith("abc", "") }
+test "startsWith prefix" { startsWith("abc", "ab") }
+test "startsWith whole" { startsWith("abc", "abc") }
+test "startsWith miss" { not startsWith("abc", "b") }

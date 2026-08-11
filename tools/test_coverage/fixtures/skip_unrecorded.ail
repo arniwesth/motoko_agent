@@ -1,0 +1,26 @@
+module tools/test_coverage/fixtures/skip_unrecorded
+
+-- Fires R7 `unrecorded_skip` and nothing else. The self-test table records
+-- only the `Named test blocks` limitation; the precondition below is
+-- unreachable for generated input, so the property gives up and reports a
+-- DIFFERENT skip reason. src/core/compress.ail loses two properties this way
+-- at HEAD.
+--
+-- The passing `tests [...]` block is not decoration: without it the file also
+-- trips `undetected`, and a row that fires two rules cannot show which one
+-- caught it. Each row asserts ITS OWN rule.
+
+export pure func only_at_one_point(n: int) -> int
+  requires { n == 987654321 }
+  {
+    n + 1
+  }
+
+export pure func identity_int(n: int) -> int
+  tests [
+    ((3), 3),
+    ((8), 8)
+  ]
+  {
+    n
+  }
