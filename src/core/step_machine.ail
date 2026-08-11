@@ -1,0 +1,358 @@
+-- src/core/step_machine.ail
+--
+-- Pure Phase C decision policy. WI-C5 routes live entrypoints through
+-- session.ail; later WIs deepen the semantic split from the legacy loop body.
+
+module src/core/step_machine
+
+import std/ai (Message, ToolCall)
+import std/json (jo)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  StepState,
+  StepPolicy,
+  StepDecision,
+  RunTools,
+  CallModel,
+  Finalize,
+  Fail,
+  InjectUserMessage,
+  AwaitApproval,
+  TakeCheckpoint,
+  ToolPlanEntry,
+  ToolPlan,
+  ExecNative,
+  history_from_seed,
+  project
+)
+import src/core/recovery (persist_nudge_message)
+
+pure func plan_native(calls: [ToolCall]) -> [ToolPlanEntry] {
+  match calls {
+    [] => [],
+    c :: rest => {
+      let entry: ToolPlanEntry = { call: c, executor: ExecNative };
+      entry :: plan_native(rest)
+    }
+  }
+}
+
+pure func dp7_rejection_message(text: string) -> Message {
+  {
+    role: "user",
+    content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${text}",
+    tool_calls: [],
+    tool_call_id: ""
+  }
+}
+
+pure func await_approval_from_calls(step_idx: int, calls: [ToolCall]) -> StepDecision {
+  match calls {
+    [] => Fail({ code: "Internal", message: "approval requested without pending call", retryable: false }),
+    c :: rest => AwaitApproval({
+      call: c,
+      default_allow: false,
+      reason: "tool approval required",
+      stream_id: "step-${show(step_idx)}",
+      remaining: plan_native(rest)
+    })
+  }
+}
+
+pure func cost_cap_message(total_cost_millicents: int, max_cost_millicents: int) -> string {
+  "cost cap reached: ${show(total_cost_millicents)} of ${show(max_cost_millicents)} millicents used"
+}
+
+func call_model_or_fail(s: StepState, pol: StepPolicy) -> StepDecision {
+  if pol.step_budget > 0 && s.step_idx >= pol.step_budget
+  then Fail({ code: "Internal", message: "v2 loop: step budget exhausted", retryable: false })
+  else if pol.max_cost_millicents > 0 && pol.cost_metered && s.totals.cost_millicents >= pol.max_cost_millicents
+  then Fail({ code: "BudgetExceeded", message: cost_cap_message(s.totals.cost_millicents, pol.max_cost_millicents), retryable: false })
+  else match project(s.history, s.telemetry, pol.compaction) {
+    Err(reason) => Fail({ code: "ContextExhausted", message: reason, retryable: false }),
+    Ok(_) => CallModel({ model: pol.model })
+  }
+}
+
+export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
+  if s.last_finish_reason == "hybrid_bash" && List.length(s.pending_tool_calls) > 0
+  then RunTools({ entries: plan_native(s.pending_tool_calls) })
+  else if List.length(s.pending_tool_calls) > 0
+  then {
+    if s.last_finish_reason == "await_approval" then await_approval_from_calls(s.step_idx, s.pending_tool_calls)
+    else RunTools({ entries: plan_native(s.pending_tool_calls) })
+  }
+  else if s.last_finish_reason == "dp7_rejected"
+  then InjectUserMessage(dp7_rejection_message(s.last_response_text))
+  else if s.last_finish_reason == "solver_feedback"
+  then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "" })
+  else if s.last_finish_reason == "persist_nudge"
+  then InjectUserMessage(persist_nudge_message(s.nudges_used + 1, pol.persist_retries))
+  else if s.last_finish_reason == "stop" || s.last_finish_reason == "dp7_approved" || s.last_finish_reason == "dp7_fail_open"
+  then Finalize({ reason: "model_stop", output: s.last_response_text })
+  else if s.last_finish_reason == "stream_error"
+  then call_model_or_fail(s, pol)
+  else if s.last_finish_reason == "intercept_handled"
+  then call_model_or_fail(s, pol)
+  else if s.last_finish_reason == "tools_complete"
+  then call_model_or_fail(s, pol)
+  else if s.last_finish_reason == "user_injected"
+  then call_model_or_fail(s, pol)
+  else call_model_or_fail(s, pol)
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func mk_policy(context_limit: int) -> StepPolicy {
+  {
+    step_budget: 8,
+    max_cost_millicents: 0,
+    cost_metered: true,
+    persist_retries: 2,
+    retry_stream_errors: true,
+    require_system_prompt: true,
+    model: "phase-c-model",
+    provider_base_url: "",
+    compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+  }
+}
+
+func mk_state(reason: string, response: string, pending: [ToolCall], step_idx: int, cost: int, context_limit: int) -> Result[StepState, string] {
+  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: step_idx,
+      history: h,
+      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0 },
+      totals: { input_tokens: 0, output_tokens: 0, cost_millicents: cost, cost_warned_pct: 0 },
+      nudges_used: 0,
+      ext_artifacts: jo([]),
+      pending_tool_calls: pending,
+      last_finish_reason: reason,
+      last_response_text: response
+    })
+  }
+}
+
+func is_fail(d: StepDecision, code: string) -> bool {
+  match d {
+    Fail(f) => f.code == code,
+    _ => false
+  }
+}
+
+func fail_message(d: StepDecision) -> string {
+  match d {
+    Fail(f) => f.message,
+    _ => ""
+  }
+}
+
+func is_finalize(d: StepDecision, output: string) -> bool {
+  match d {
+    Finalize(f) => f.output == output,
+    _ => false
+  }
+}
+
+func is_inject(d: StepDecision) -> bool {
+  match d {
+    InjectUserMessage(_) => true,
+    _ => false
+  }
+}
+
+func is_await_approval(d: StepDecision, remaining: int) -> bool {
+  match d {
+    AwaitApproval(req) => List.length(req.remaining) == remaining,
+    _ => false
+  }
+}
+
+func await_stream_id(d: StepDecision) -> string {
+  match d {
+    AwaitApproval(req) => req.stream_id,
+    _ => ""
+  }
+}
+
+func is_call_model(d: StepDecision) -> bool {
+  match d {
+    CallModel(_) => true,
+    _ => false
+  }
+}
+
+func is_run_tools(d: StepDecision, n: int) -> bool {
+  match d {
+    RunTools(p) => List.length(p.entries) == n,
+    _ => false
+  }
+}
+
+pure func test_decide_step_budget() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 8, 0, 0) {
+      Ok(s) => fail_message(decide(s, mk_policy(0))) == "v2 loop: step budget exhausted",
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_cost_cap() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 10, 0) {
+      Ok(s) => {
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
+        fail_message(decide(s, pol)) == "cost cap reached: 10 of 10 millicents used"
+      },
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_cost_cap_unmetered_does_not_exhaust() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 10, 0) {
+      Ok(s) => {
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", compaction: mk_policy(0).compaction };
+        not is_fail(decide(s, pol), "BudgetExceeded")
+      },
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_pending_tools() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc", name: "ReadFile", arguments: "{}" };
+    match mk_state("tool_calls", "", [call], 0, 0, 0) {
+      Ok(s) => is_run_tools(decide(s, mk_policy(0)), 1),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_pending_approval() -> bool
+  tests [((), true)]
+  {
+    let c1: ToolCall = { id: "tc1", name: "ReadFile", arguments: "{}" };
+    let c2: ToolCall = { id: "tc2", name: "ReadFile", arguments: "{}" };
+    match mk_state("await_approval", "", [c1, c2], 3, 0, 0) {
+      Ok(s) => {
+        let d = decide(s, mk_policy(0));
+        is_await_approval(d, 1) && await_stream_id(d) == "step-3"
+      },
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_model_stop_finalize() -> bool
+  tests [((), true)]
+  {
+    match mk_state("stop", "done", [], 0, 0, 0) {
+      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_dp7_reject_injects_user_message() -> bool
+  tests [((), true)]
+  {
+    match mk_state("dp7_rejected", "bad", [], 0, 0, 0) {
+      Ok(s) => is_inject(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_solver_feedback_injects_user_message() -> bool
+  tests [((), true)]
+  {
+    match mk_state("solver_feedback", "revise", [], 0, 0, 0) {
+      Ok(s) =>
+        match decide(s, mk_policy(0)) {
+          InjectUserMessage(m) => m.role == "user" && m.content == "revise",
+          _ => false
+        },
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_stream_error_calls_model() -> bool
+  tests [((), true)]
+  {
+    match mk_state("stream_error", "bad stream", [], 0, 0, 0) {
+      Ok(s) => is_call_model(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_intercept_handled_calls_model() -> bool
+  tests [((), true)]
+  {
+    match mk_state("intercept_handled", "handled", [], 0, 0, 0) {
+      Ok(s) => is_call_model(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_dp7_approve_finalizes() -> bool
+  tests [((), true)]
+  {
+    match mk_state("dp7_approved", "done", [], 0, 0, 0) {
+      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_dp7_fail_open_finalizes() -> bool
+  tests [((), true)]
+  {
+    match mk_state("dp7_fail_open", "done", [], 0, 0, 0) {
+      Ok(s) => is_finalize(decide(s, mk_policy(0)), "done"),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_persist_nudge() -> bool
+  tests [((), true)]
+  {
+    match mk_state("persist_nudge", "", [], 0, 0, 0) {
+      Ok(s) => is_inject(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_actual_token_pressure_still_calls_model() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 0, 1) {
+      Ok(s) => is_call_model(decide(s, mk_policy(1))),
+      Err(_) => false
+    }
+  }
+
+pure func test_decide_fresh_state_calls_model() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 0, 0) {
+      Ok(s) => is_call_model(decide(s, mk_policy(0))),
+      Err(_) => false
+    }
+  }
+
+pure func test_v1_policy_never_returns_take_checkpoint() -> bool
+  tests [((), true)]
+  {
+    match mk_state("", "", [], 0, 0, 0) {
+      Ok(s) =>
+        match decide(s, mk_policy(0)) {
+          TakeCheckpoint(_) => false,
+          _ => true
+        },
+      Err(_) => false
+    }
+  }

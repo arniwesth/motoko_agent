@@ -1,0 +1,124 @@
+-- scripts/phase_c_approval_protocol.ail
+--
+-- Placeholder runner for the Phase C scripted approval protocol. WI-C4 adds
+-- the approve/deny/default-ordering scenarios; WI-C0 only pins the command
+-- shape and minimal-caps execution.
+
+module scripts/phase_c_approval_protocol
+
+import std/ai (ToolCall)
+import std/io (println, exit)
+import std/list as List (length)
+import std/option (Some, None)
+import src/core/phase_vocab (ToolPending)
+import src/core/ports (ApprovalResolution, ApprovalAllowed, ApprovalDenied)
+import src/core/tool_phase (
+  plan_pending_approval_from_calls,
+  resolve_approval,
+  denial_message,
+  execution_order_after_approval,
+  native_plan
+)
+
+type CaseResult = { ok: bool, failed_invariant: string, trace: [string] }
+
+func call(id: string) -> ToolCall {
+  { id: id, name: "BashExec", arguments: "{}" }
+}
+
+func trace_contains(xs: [string], value: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == value then true else trace_contains(rest, value)
+  }
+}
+
+func print_trace(xs: [string]) -> () ! {IO} {
+  match xs {
+    [] => (),
+    x :: rest => {
+      let _ = println("trace ${x}");
+      print_trace(rest)
+    }
+  }
+}
+
+func fail_case(id: string, invariant_name: string, trace: [string]) -> CaseResult {
+  { ok: false, failed_invariant: "scenario=${id} invariant=${invariant_name}", trace: trace }
+}
+
+func pass_case() -> CaseResult {
+  { ok: true, failed_invariant: "", trace: [] }
+}
+
+func scenario(id: string, raw: string, eof: bool, default_allow: bool, expect_allow: bool, expect_reason: string) -> CaseResult {
+  match plan_pending_approval_from_calls(7, "stream-7", [call("a"), call("b"), call("c")], default_allow, "needs approval") {
+    None => fail_case(id, "pending request constructed", ["plan=none"]),
+    Some(p) => {
+      let event_ok = match p.event {
+        ToolPending(i) => i.id == "a" && i.stream_id == "stream-7",
+        _ => false
+      };
+      let trace0 = ["tool_pending", "approval_read"];
+      let order_ok = match trace0 {
+        "tool_pending" :: "approval_read" :: [] => true,
+        _ => false
+      };
+      let resolution = resolve_approval(raw, default_allow, eof);
+      let resolution_ok = match resolution {
+        ApprovalAllowed => expect_allow && expect_reason == "",
+        ApprovalDenied(reason) => (not expect_allow) && reason == expect_reason
+      };
+      let behavior_ok = match resolution {
+        ApprovalAllowed =>
+          match execution_order_after_approval(p.request) {
+            "a" :: "b" :: "c" :: [] => true,
+            _ => false
+          },
+        ApprovalDenied(reason) => {
+          let msg = denial_message(p.request.call, reason);
+          msg.role == "tool" && msg.tool_call_id == "a" && List.length(p.request.remaining) == 2 && reason == expect_reason
+        }
+      };
+      if event_ok && order_ok && resolution_ok && behavior_ok then pass_case()
+      else fail_case(id, "approval protocol order/default/result", [
+        "event_ok=${show(event_ok)}",
+        "order_ok=${show(order_ok)}",
+        "resolution_ok=${show(resolution_ok)}",
+        "behavior_ok=${show(behavior_ok)}"
+      ])
+    }
+  }
+}
+
+func run_cases(results: [CaseResult], failed: int) -> int ! {IO} {
+  match results {
+    [] => failed,
+    r :: rest => {
+      if r.ok then run_cases(rest, failed)
+      else {
+        let _ = println(r.failed_invariant);
+        let _ = print_trace(r.trace);
+        run_cases(rest, failed + 1)
+      }
+    }
+  }
+}
+
+export func main() -> () ! {IO} {
+  let results = [
+    scenario("approve", "{\"type\":\"approve\"}", false, false, true, ""),
+    scenario("deny_with_reason", "{\"type\":\"deny\",\"reason\":\"blocked\"}", false, true, false, "blocked"),
+    scenario("deny_default_reason", "{\"type\":\"deny\"}", false, true, false, "denied by operator"),
+    scenario("eof_default_allow", "", true, true, true, ""),
+    scenario("eof_default_deny", "", true, false, false, "timeout — no approval received"),
+    scenario("unparseable_default_deny", "wat", false, false, false, "unparseable response — default deny applied"),
+    scenario("unknown_default_deny", "{\"type\":\"later\"}", false, false, false, "unknown approval command — default deny applied")
+  ];
+  let failed = run_cases(results, 0);
+  if failed == 0 then println("phase_c_approval_protocol PASS count=${show(List.length(results))}")
+  else {
+    let _ = println("phase_c_approval_protocol FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}

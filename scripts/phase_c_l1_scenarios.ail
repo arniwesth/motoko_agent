@@ -1,0 +1,432 @@
+-- scripts/phase_c_l1_scenarios.ail
+--
+-- Phase C Layer-1 scenario harness. WI-C0 establishes the reporting contract:
+-- failures name the scenario id, the first failed invariant, and a normalized
+-- trace. Later Phase C work items add the real compaction/checkpoint cases.
+
+module scripts/phase_c_l1_scenarios
+
+import std/io (println, exit)
+import std/list (length)
+import std/result (Result, Ok, Err)
+import std/ai (Message, ToolCall)
+import std/json (jo, kv, js, encode)
+import src/core/phase_vocab (
+  CheckpointTaken,
+  CallModel,
+  CompactionStageRecord,
+  Fail,
+  StepPolicy,
+  TakeCheckpoint,
+  apply_checkpoint,
+  checkpoint,
+  history_digest,
+  history_from_seed,
+  history_len,
+  history_valid_transcript,
+  project,
+  seal_compacted_payload,
+  segment_messages,
+  SealExhausted,
+  SealSystemPromptEmpty,
+  split_for_compaction,
+  validate_checkpoint_chain,
+  validate_compactor_output
+)
+import src/core/step_machine (decide)
+import src/core/hook_phase (stage_record)
+import src/core/ext/runtime (PreStepStage, StageApplied, StageRejected, StagePassed)
+
+export type ScenarioFailure = {
+  failed_invariant: string,
+  trace: [string]
+}
+
+export type Scenario = {
+  id: string,
+  run: () -> Result[(), ScenarioFailure]
+}
+
+func print_trace(lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    line :: rest => {
+      let _ = println("trace ${line}");
+      print_trace(rest)
+    }
+  }
+}
+
+func run_one(s: Scenario) -> bool ! {IO} {
+  match s.run() {
+    Ok(_) => {
+      println("scenario=${s.id} ok");
+      true
+    },
+    Err(f) => {
+      let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
+      let _ = print_trace(f.trace);
+      false
+    }
+  }
+}
+
+func run_all(scenarios: [Scenario], failed: int) -> int ! {IO} {
+  match scenarios {
+    [] => failed,
+    s :: rest => {
+      let ok = run_one(s);
+      run_all(rest, if ok then failed else failed + 1)
+    }
+  }
+}
+
+func harness_self_test() -> Result[(), ScenarioFailure] {
+  Ok(())
+}
+
+func harness_self_test_scenario() -> Scenario {
+  { id: "harness_self_test", run: harness_self_test }
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func call(id: string) -> ToolCall {
+  { id: id, name: "T", arguments: "{}" }
+}
+
+func policy(context_limit: int) -> StepPolicy {
+  {
+    step_budget: 8,
+    max_cost_millicents: 0,
+    cost_metered: true,
+    persist_retries: 0,
+    retry_stream_errors: true,
+    require_system_prompt: true,
+    model: "phase-c-model",
+    provider_base_url: "",
+    compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+  }
+}
+
+func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
+  if ok then Ok(())
+  else Err({ failed_invariant: invariant_name, trace: trace })
+}
+
+func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), ScenarioFailure] {
+  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let before = history_digest(h);
+      let state = {
+        step_idx: 1,
+        history: h,
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: jo([]),
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      };
+      let applied = apply_checkpoint(state, { reason: "scenario", summary: "summ" });
+      match applied.event {
+        CheckpointTaken(info) => {
+          let ok = info.before_digest == before
+            && info.after_digest == history_digest(applied.state.history)
+            && history_len(applied.state.history) == 2;
+          ok_or_failure(ok, "rewrite paired with checkpoint event", [
+            "before=${before}",
+            "event_before=${info.before_digest}",
+            "event_after=${info.after_digest}",
+            "state_after=${history_digest(applied.state.history)}"
+          ])
+        },
+        _ => Err({ failed_invariant: "checkpoint event constructor", trace: ["event=non_checkpoint"] })
+      }
+    }
+  }
+}
+
+func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFailure] {
+  match history_from_seed([msg("system", "s"), msg("user", "u"), msg("assistant", "a")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let cp = checkpoint(h, { reason: "scenario", summary: "summ" });
+      match cp.event {
+        CheckpointTaken(info) => {
+          let chain_ok = match validate_checkpoint_chain(history_digest(h), [info], history_digest(cp.history)) {
+            Ok(_) => true,
+            Err(_) => false
+          };
+          let ok = history_valid_transcript(cp.history) && chain_ok && history_len(cp.history) == 2;
+          ok_or_failure(ok, "checkpoint output is valid transcript", [
+            "history_len=${show(history_len(cp.history))}",
+            "before=${info.before_digest}",
+            "after=${info.after_digest}",
+            "valid=${show(history_valid_transcript(cp.history))}",
+            "chain_ok=${show(chain_ok)}"
+          ])
+        },
+        _ => Err({ failed_invariant: "checkpoint event constructor", trace: ["event=non_checkpoint"] })
+      }
+    }
+  }
+}
+
+func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), ScenarioFailure] {
+  let msgs = [
+    msg("system", "pinned"),
+    msg("user", "compactable-a"),
+    msg("assistant", "compactable-b")
+  ];
+  match history_from_seed(msgs) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let split = split_for_compaction(msgs);
+      let projected = project(h, { last_input_tokens: 3, last_output_tokens: 0 }, policy(10).compaction);
+      match projected {
+        Err(e) => Err({ failed_invariant: "projection under limit", trace: ["project_err=${e}"] }),
+        Ok(p) => {
+          let ok = length(split.pinned) == 1
+            && length(segment_messages(split.segment)) == 2
+            && length(p.split.pinned) == 1
+            && length(segment_messages(p.split.segment)) == 2;
+          ok_or_failure(ok, "project prep separates pinned/compactable pressure", [
+            "pinned=${show(length(split.pinned))}",
+            "segment=${show(length(segment_messages(split.segment)))}",
+            "projected_pinned=${show(length(p.split.pinned))}",
+            "projected_segment=${show(length(segment_messages(p.split.segment)))}"
+          ])
+        }
+      }
+    }
+  }
+}
+
+func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure] {
+  let split = split_for_compaction([msg("user", "hi")]);
+  match seal_compacted_payload(split, [msg("user", "hi")], "phase-c-model", 1000, true) {
+    Err(SealSystemPromptEmpty(_)) => Ok(()),
+    Err(SealExhausted(_)) => Err({
+      failed_invariant: "empty system prompt rejected with SystemPromptEmpty",
+      trace: ["expected=SystemPromptEmpty", "actual=SealExhausted"]
+    }),
+    Ok(_) => Err({
+      failed_invariant: "empty system prompt rejected with SystemPromptEmpty",
+      trace: ["expected=SystemPromptEmpty", "actual=Ok"]
+    })
+  }
+}
+
+func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure] {
+  let split = split_for_compaction([]);
+  match seal_compacted_payload(split, [msg("user", "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 10, false) {
+    Err(SealExhausted(_)) => Ok(()),
+    Err(SealSystemPromptEmpty(_)) => Err({
+      failed_invariant: "oversized payload rejected with SealExhausted",
+      trace: ["expected=SealExhausted", "actual=SealSystemPromptEmpty"]
+    }),
+    Ok(_) => Err({
+      failed_invariant: "oversized payload rejected with SealExhausted",
+      trace: ["expected=SealExhausted", "actual=Ok"]
+    })
+  }
+}
+
+func scenario_ext_compaction_invalid_rejected() -> Result[(), ScenarioFailure] {
+  let input = [
+    { role: "assistant", content: "call", tool_calls: [call("tc")], tool_call_id: "" },
+    { role: "tool", content: "result", tool_calls: [], tool_call_id: "tc" }
+  ];
+  let invalid = [
+    { role: "assistant", content: "invented", tool_calls: [call("missing")], tool_call_id: "" }
+  ];
+  match validate_compactor_output(input, invalid) {
+    Err(e) => ok_or_failure(true, "invalid compaction rejected", ["err=${e}"]),
+    Ok(_) => Err({ failed_invariant: "invalid compaction rejected", trace: ["validator=accepted"] })
+  }
+}
+
+func scenario_summary_cache_replay_stable() -> Result[(), ScenarioFailure] {
+  let artifact = jo([kv("ext", js("summary")), kv("summary", js("cached summary"))]);
+  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let first_state = {
+        step_idx: 0,
+        history: h,
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: artifact,
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      };
+      let replay = encode(first_state.ext_artifacts);
+      let first = encode(artifact);
+      ok_or_failure(first == replay, "summary cache replay stable", [
+        "first=${first}",
+        "replay=${replay}"
+      ])
+    }
+  }
+}
+
+func scenario_checkpoint_never_emitted_in_v1() -> Result[(), ScenarioFailure] {
+  match history_from_seed([msg("system", "s"), msg("user", "u")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let state = {
+        step_idx: 0,
+        history: h,
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: jo([]),
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      };
+      let decision = decide(state, policy(0));
+      match decision {
+        TakeCheckpoint(_) => Err({ failed_invariant: "v1 never emits checkpoint", trace: ["decision=TakeCheckpoint"] }),
+        _ => Ok(())
+      }
+    }
+  }
+}
+
+func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure] {
+  let a: PreStepStage = { ext_id: "A", outcome: StageApplied("a") };
+  let b: PreStepStage = { ext_id: "B", outcome: StageRejected("bad") };
+  let c: PreStepStage = { ext_id: "C", outcome: StageApplied("c") };
+  let ra = stage_record(0, a);
+  let rb = stage_record(0, b);
+  let rc = stage_record(0, c);
+  let ok = match ra {
+    CompactionStageRecord(xa) => match rb {
+      CompactionStageRecord(xb) => match rc {
+        CompactionStageRecord(xc) => xa.ext_id == "A" && xb.ext_id == "B" && xc.ext_id == "C",
+        _ => false
+      },
+      _ => false
+    },
+    _ => false
+  };
+  ok_or_failure(ok, "chain order is registry order", ["order=A,B,C"])
+}
+
+func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFailure] {
+  let stages: [PreStepStage] = [
+    { ext_id: "A", outcome: StageApplied("a") },
+    { ext_id: "B", outcome: StageRejected("invalid") },
+    { ext_id: "C", outcome: StageApplied("c") }
+  ];
+  match stages {
+    a :: b :: c :: [] => {
+      let ok = a.ext_id == "A" && b.ext_id == "B" && c.ext_id == "C"
+        && match b.outcome { StageRejected(_) => true, _ => false }
+        && match c.outcome { StageApplied(_) => true, _ => false };
+      ok_or_failure(ok, "invalid stage skipped and chain continues", ["stages=A:applied,B:rejected,C:applied"])
+    },
+    _ => Err({ failed_invariant: "three stages recorded", trace: ["stage_count=${show(length(stages))}"] })
+  }
+}
+
+func scenario_actual_token_pressure_defers_to_seal() -> Result[(), ScenarioFailure] {
+  match history_from_seed([msg("system", "s"), msg("user", "over pressure")]) {
+    Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
+    Ok(h) => {
+      let state = {
+        step_idx: 0,
+        history: h,
+        telemetry: { last_input_tokens: 1, last_output_tokens: 0 },
+        totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+        nudges_used: 0,
+        ext_artifacts: jo([]),
+        pending_tool_calls: [],
+        last_finish_reason: "",
+        last_response_text: ""
+      };
+      let d = decide(state, policy(1));
+      match d {
+        CallModel(_) => Ok(()),
+        Fail(f) => Err({ failed_invariant: "actual token pressure defers to seal", trace: ["code=${f.code}", "message=${f.message}"] }),
+        _ => Err({ failed_invariant: "actual token pressure defers to seal", trace: ["decision=other"] })
+      }
+    }
+  }
+}
+
+func history_rewrite_requires_checkpoint_event_scenario() -> Scenario {
+  { id: "history_rewrite_requires_checkpoint_event", run: scenario_history_rewrite_requires_checkpoint_event }
+}
+
+func checkpoint_output_is_valid_transcript_scenario() -> Scenario {
+  { id: "checkpoint_output_is_valid_transcript", run: scenario_checkpoint_output_is_valid_transcript }
+}
+
+func project_prep_vs_uncompacted_history_pressure_scenario() -> Scenario {
+  { id: "project_prep_vs_uncompacted_history_pressure", run: scenario_project_prep_vs_uncompacted_history_pressure }
+}
+
+func ext_compaction_invalid_rejected_scenario() -> Scenario {
+  { id: "ext_compaction_invalid_rejected", run: scenario_ext_compaction_invalid_rejected }
+}
+
+func empty_system_prompt_rejected_scenario() -> Scenario {
+  { id: "empty_system_prompt_rejected", run: scenario_empty_system_prompt_rejected }
+}
+
+func oversized_payload_rejected_scenario() -> Scenario {
+  { id: "oversized_payload_rejected", run: scenario_oversized_payload_rejected }
+}
+
+func summary_cache_replay_stable_scenario() -> Scenario {
+  { id: "summary_cache_replay_stable", run: scenario_summary_cache_replay_stable }
+}
+
+func checkpoint_never_emitted_in_v1_scenario() -> Scenario {
+  { id: "checkpoint_never_emitted_in_v1", run: scenario_checkpoint_never_emitted_in_v1 }
+}
+
+func compactor_chain_order_is_registry_order_scenario() -> Scenario {
+  { id: "compactor_chain_order_is_registry_order", run: scenario_compactor_chain_order_is_registry_order }
+}
+
+func invalid_stage_skipped_chain_continues_scenario() -> Scenario {
+  { id: "invalid_stage_skipped_chain_continues", run: scenario_invalid_stage_skipped_chain_continues }
+}
+
+func actual_token_pressure_defers_to_seal_scenario() -> Scenario {
+  { id: "actual_token_pressure_defers_to_seal", run: scenario_actual_token_pressure_defers_to_seal }
+}
+
+export func main() -> () ! {IO} {
+  let scenarios = [
+    harness_self_test_scenario(),
+    project_prep_vs_uncompacted_history_pressure_scenario(),
+    empty_system_prompt_rejected_scenario(),
+    oversized_payload_rejected_scenario(),
+    ext_compaction_invalid_rejected_scenario(),
+    summary_cache_replay_stable_scenario(),
+    history_rewrite_requires_checkpoint_event_scenario(),
+    checkpoint_never_emitted_in_v1_scenario(),
+    checkpoint_output_is_valid_transcript_scenario(),
+    compactor_chain_order_is_registry_order_scenario(),
+    invalid_stage_skipped_chain_continues_scenario(),
+    actual_token_pressure_defers_to_seal_scenario()
+  ];
+  let failed = run_all(scenarios, 0);
+  if failed == 0 then
+    println("phase_c_l1_scenarios PASS count=${show(length(scenarios))}")
+  else {
+    let _ = println("phase_c_l1_scenarios FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}

@@ -36,11 +36,14 @@ import pkg/sunholo/motoko_ext_abi/types (
   ToolHandleDecision,
   ResponseInterceptDecision,
   FinalizeDecision,
+  PreStepDecision,
+  Msg,
+  PassThrough,
   PromptPatch,
   BudgetPatch
 )
 import src/core/tool_contract (ToolCallEnvelope)
-import src/core/agent_loop_v2 (run_v2_with_stub)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/test/stub_step (ScriptedStep, prose_step)
 
 -- New since a9b53e7: extensions declare their tool schemas via on_describe_tools.
@@ -78,6 +81,10 @@ pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision
   Delegate
 }
 
+pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  PassThrough
+}
+
 func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtensionHooks {
   {
     id: id,
@@ -85,6 +92,7 @@ func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecisio
     on_describe_tools: empty_describe_tools,
     on_build_system_prompt: empty_prompt_patch,
     on_budget_plan: empty_budget_patch,
+    on_pre_step: pass_pre_step,
     on_tool_policy: policy,
     on_tool_handle: no_handle,
     on_response_intercept: noop_response_intercept,
@@ -106,7 +114,8 @@ func script_with_one_call(step_id: string) -> [ScriptedStep] {
     tool_calls: [tc],
     input_tokens: 0,
     output_tokens: 0,
-    finish_reason: "tool_calls"
+    finish_reason: "tool_calls",
+    chunks: []
   };
   [step1, prose_step("done")]
 }
@@ -123,7 +132,7 @@ func no_rates() -> CostRates {
 --    (the denial message is appended to history; prose_step terminates).
 func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let rt = mk_runtime(mk_hook("pending-deny", pending_deny_default));
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     rt, "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5", [], "/tmp", 4, false,
     0, no_rates(), script_with_one_call("tc1")
@@ -140,7 +149,7 @@ func test_pending_deny_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net
 --    a noop. The loop should still complete.
 func test_pending_allow_default_on_eof() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let rt = mk_runtime(mk_hook("pending-allow", pending_allow_default));
-  let result = run_v2_with_stub(
+  let result = run_v2_with_scripted_ports(
     rt, "stub-test", "", false, mk_budget(),
     "openrouter/z-ai/glm-5", [], "/tmp", 4, false,
     0, no_rates(), script_with_one_call("tc2")

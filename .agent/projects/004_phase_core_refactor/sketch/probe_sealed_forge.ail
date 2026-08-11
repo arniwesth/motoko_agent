@@ -1,0 +1,7 @@
+-- Tries to import the constructor of an UNEXPORTED type.
+module probe_sealed_forge
+import std/io (println)
+import hist_opaque (MkSealed, unseal)
+export func main() -> () ! {IO} {
+  println("forged=${show(unseal(MkSealed(7)))}")
+}

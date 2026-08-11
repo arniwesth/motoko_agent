@@ -1,0 +1,102 @@
+-- src/core/recovery.ail
+--
+-- Pure recovery policy for stream retries and persist nudges. WI-C5 routes
+-- live entrypoints through session.ail; later WIs wire these helpers deeper.
+
+module src/core/recovery
+
+import std/ai (Message, ToolCall)
+import std/list as List (length)
+import std/string (contains)
+
+export pure func should_retry_stream_error(retry_enabled: bool, remaining_step_budget: int) -> bool {
+  retry_enabled && remaining_step_budget > 1
+}
+
+export pure func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
+
+pure func tool_calls_have_writefile(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.name == "WriteFile" then true else tool_calls_have_writefile(rest)
+  }
+}
+
+export pure func any_writefile_attempt(msgs: [Message]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if tool_calls_have_writefile(m.tool_calls) then true
+      else any_writefile_attempt(rest)
+  }
+}
+
+export pure func count_persist_nudges(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "user" && contains(m.content, persist_nudge_marker()) then 1 else 0;
+      here + count_persist_nudges(rest)
+    }
+  }
+}
+
+export pure func should_inject_persist_nudge(persist_budget: int, nudges_used: int, write_attempted: bool) -> bool {
+  persist_budget > 0 && nudges_used < persist_budget && not write_attempted
+}
+
+export pure func persist_nudge_message(nudge_num: int, budget: int) -> Message {
+  {
+    role: "user",
+    content: "${persist_nudge_marker()} You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs.",
+    tool_calls: [],
+    tool_call_id: ""
+  }
+}
+
+pure func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+pure func test_stream_retry_policy() -> bool
+  tests [((), true)]
+  {
+    should_retry_stream_error(true, 2)
+      && not should_retry_stream_error(true, 1)
+      && not should_retry_stream_error(false, 4)
+  }
+
+pure func test_persist_nudge_counts_marker_messages() -> bool
+  tests [((), true)]
+  {
+    count_persist_nudges([msg("user", persist_nudge_marker()), msg("assistant", persist_nudge_marker())]) == 1
+  }
+
+pure func test_persist_nudge_policy() -> bool
+  tests [((), true)]
+  {
+    should_inject_persist_nudge(2, 1, false)
+      && not should_inject_persist_nudge(2, 2, false)
+      && not should_inject_persist_nudge(2, 0, true)
+  }
+
+pure func test_writefile_attempt_detection() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc", name: "WriteFile", arguments: "{}" };
+    let m: Message = { role: "assistant", content: "", tool_calls: [call], tool_call_id: "" };
+    any_writefile_attempt([m]) && not any_writefile_attempt([msg("assistant", "no tools")])
+  }
+
+pure func test_persist_nudge_message_shape() -> bool
+  tests [((), true)]
+  {
+    let m = persist_nudge_message(1, 2);
+    m.role == "user" && List.length(m.tool_calls) == 0 && contains(m.content, persist_nudge_marker())
+  }
+
+pure func test_persist_nudge_message_live_bytes() -> bool
+  tests [((), true)]
+  {
+    persist_nudge_message(1, 2).content == "[motoko-persist-nudge] You stopped without writing a solution file. Do NOT answer in prose — use the WriteFile tool to save your complete solution to the file the task specifies, then keep going (read errors, edit, re-run) until it compiles and runs."
+  }

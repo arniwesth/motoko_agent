@@ -1,0 +1,2073 @@
+-- src/core/session.ail
+-- Phase C live v2 driver: the imperative shell over a pure step machine.
+--
+-- This module owns the real effect row and is the sole emitter of ledger
+-- events. Per step it lifts C2LoopState into a StepState, calls the pure
+-- `decide` (src/core/step_machine.ail), and executes the returned
+-- StepDecision through phases (model_phase / tool_phase / hook_phase) and
+-- ports. State deltas flow through apply_state_delta.
+--
+-- Continuation is state, not a field: `decide` re-derives each
+-- CallModel / RunTools / AwaitApproval / Finalize / Fail decision from
+-- typed StepState fields, and c2_loop tail-recurses with the next state.
+--
+-- This is the only agent loop. The legacy rpc_loop was deleted in the
+-- M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover; rpc.ail is now a thin entry
+-- point that builds config and calls run_v2_with_conversation here.
+-- src/core/agent_loop_v2.ail is a compatibility facade re-exporting
+-- these entry points under the historical import surface.
+--
+-- Companion to: src/core/step_machine.ail (pure decide),
+-- src/core/phase_vocab.ail (sealed types + transcript gate),
+-- src/core/ports.ail (port adapters), src/core/tool_phase.ail.
+--
+-- Companion to: src/core/tool_dispatch_adapter (M1), src/core/tool_catalog (M2)
+
+module src/core/session
+
+import std/ai (step, Message, ToolCall, ToolSchema, AIError, StepResult, StreamChunk, ContentDelta, ThinkingDelta, Usage)
+import std/io (println, readLine)
+import std/clock (now)
+import std/env (getEnvOr)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import std/string (trim, startsWith, substring, toLower, contains)
+import std/string as Str (length)
+import std/process (exec, ProcessError, ProcessOutput)
+import std/bytes (toString)
+import std/trace as Trace
+import src/core/tool_catalog (tools_with_extensions)
+import src/core/tool_contract (call_to_json)
+import src/core/parse (extract_bash)
+import src/core/tool_dispatch_adapter (tool_call_to_envelope)
+import src/core/types (Msg)
+import src/core/config (CostRates)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision)
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
+import src/core/context_usage (catalog_context_limit_for)
+import src/core/ext/runtime (
+  dispatch_response_intercept,
+  dispatch_solver_candidate,
+  dispatch_pre_step_chain,
+  PreStepStage,
+  StageApplied,
+  StageRejected,
+  StagePassed
+)
+import src/core/phase_vocab (
+  LedgerEvent,
+  to_schema_v1_kvs,
+  payload_digest,
+  msgs_to_messages,
+  split_for_compaction,
+  segment_messages,
+  system_prefix_chars,
+  step_result_to_message,
+  envelope_to_tool_message,
+  ProviderCallPrepared,
+  RunSummary,
+  NativeToolDenied,
+  Dp7VerifierRejected,
+  CostExhausted,
+  StreamErrorRetry,
+  CostWarning,
+  CompactionApplied,
+  CompactionExhausted,
+  ExtCompactionRejected,
+  ThinkingStreamStart,
+  ThinkingStreamEnd,
+  ProviderResult,
+  ExtInterceptHandled,
+  HybridBashExtracted,
+  DoneEvent,
+  ExtSolverFeedback,
+  PersistNudge,
+  NativeToolCalls,
+  NativeToolResults,
+  StreamDelta,
+  SessionSuspend,
+  SessionStart,
+  ErrorEvent,
+  StepState,
+  StepPolicy,
+  StepDecision,
+  PhaseResult,
+  ApprovalRequest,
+  ToolPlanEntry,
+  LedgerTrace,
+  LedgerRecord,
+  DecisionRecord,
+  WireRecord,
+  empty_ledger_trace,
+  ledger_append,
+  apply_state_delta,
+  apply_checkpoint,
+  history_from_seed,
+  history_append,
+  payload_messages,
+  seal_compacted_payload,
+  SealExhausted,
+  SealSystemPromptEmpty,
+  CallModel,
+  RunTools,
+  AwaitApproval,
+  InjectUserMessage,
+  TakeCheckpoint,
+  Finalize,
+  Fail
+)
+import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, Ported, ScriptedStep, live_ports, scripted_ports_from_steps)
+import src/core/step_machine (decide)
+import src/core/model_phase (phase_from_result)
+import src/core/hook_phase (stage_record)
+import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
+import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries, ToolDispatchDone, ToolDispatchPending)
+import src/core/ports (ApprovalAllowed, ApprovalDenied)
+
+type SessionPolicy = {
+  step: StepPolicy,
+  headless: bool
+}
+
+export type TracedSessionResult = {
+  result: Result[[Message], AIError],
+  trace: LedgerTrace
+}
+
+-- Convert Motoko's UI/profile model identifier to the provider API model id
+-- expected by upstream stepWithStream(). The --ai flag already selected the
+-- handler/provider; the model argument passed to step is forwarded to the
+-- upstream API body.
+--
+-- Important: OpenRouter's API model ids are themselves vendor/model strings
+-- such as "anthropic/claude-sonnet-4-6" and "openai/gpt-4o". Strip the
+-- explicit Motoko/OpenRouter routing prefix only for pinned vendor/model ids;
+-- keep "openrouter/auto" intact because AILANG/OpenRouter use it as the
+-- routing-policy model.
+--
+-- Direct provider prefixes are Motoko routing syntax and are stripped before
+-- the provider request. AILANG itself treats vendor/model strings such as
+-- "openai/..." and "anthropic/..." as OpenRouter, so the TS launcher also
+-- strips those prefixes for --ai provider selection.
+pure func provider_api_model(model: string, openai_base_url: string) -> string {
+  if model == "openrouter/auto" then
+    model
+  else if startsWith(model, "openrouter/") then
+    let prefix_len = Str.length("openrouter/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "openai/") then
+    let prefix_len = Str.length("openai/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "anthropic/") then
+    let prefix_len = Str.length("anthropic/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else if startsWith(model, "google/") then
+    let prefix_len = Str.length("google/") in
+    let total = Str.length(model) in
+    substring(model, prefix_len, total)
+  else
+    model
+}
+
+-- emit a JSON line to stdout for the TS env-server to forward to the TUI.
+-- Same protocol as src/core/ai_compat (M-AI-CALL-STREAM-HELPER side).
+func emit_json(payload: Json) -> () ! {IO} {
+  println(encode(payload))
+}
+
+pure func trace_event_enabled(event_type: string) -> bool {
+  event_type == "session_start" || event_type == "run_summary"
+}
+
+pure func trace_sensitive_key(key: string) -> bool {
+  key == "task"
+    || key == "text"
+    || key == "text_delta"
+    || key == "output"
+    || key == "content"
+    || key == "cmd"
+    || key == "feedback"
+    || key == "errors"
+    || key == "message"
+}
+
+pure func trace_string_value(s: string) -> Json {
+  if Str.length(s) > 256 then
+    js("${substring(s, 0, 256)}...[truncated]")
+  else
+    js(s)
+}
+
+pure func trace_value_for_key(key: string, value: Json) -> Json {
+  if trace_sensitive_key(key) then js("[redacted]")
+  else match value {
+    JString(s) => trace_string_value(s),
+    JArray(_) => js("[array]"),
+    JObject(_) => js("[object]"),
+    _ => value
+  }
+}
+
+pure func trace_extra_kvs(extra: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  match extra {
+    [] => [],
+    item :: rest => kv(item.key, trace_value_for_key(item.key, item.value)) :: trace_extra_kvs(rest)
+  }
+}
+
+func emit_trace_event(session_id: string, event_type: string, extra: [{key: string, value: Json}]) -> () ! {Trace} {
+  if trace_event_enabled(event_type) then
+    Trace.event(event_type, encode(jo([
+      kv("schema_version", js(schema_version())),
+      kv("session_id",     js(session_id)),
+      kv("type",           js(event_type))
+    ] ++ trace_extra_kvs(extra))))
+  else
+    ()
+}
+
+-- M-MOTOKO-EVAL-INSTRUMENTATION (schema v1):
+-- The session JSONL is the single structured-output surface for downstream
+-- consumers (TUI replay, AILANG eval-harness adapter, post-run analysis).
+-- Schema v1 = additive metadata on every event (schema_version + session_id)
+-- + per-step token/cost telemetry + a terminal `run_summary` event with
+-- cumulative totals. Documented at:
+--   design_docs/planned/m-motoko-eval-instrumentation.md
+-- Bumping this string is a breaking change for downstream parsers.
+pure func schema_version() -> string { "1" }
+
+-- Build-time constant injected by `make build` (Makefile sets -ldflags or
+-- equivalent). Falls back to "dev" for local-source runs. Surfaced in
+-- session_start + run_summary so the AILANG eval harness can correlate
+-- benchmark results with the exact motoko commit that produced them
+-- (mitigates "self-referential masking" — see eval-instrumentation design
+-- doc Risk #4).
+pure func motoko_commit() -> string { "dev" }
+
+-- Convert millicents (integer arithmetic, used internally by the cost
+-- tracker) to USD float. 100000 millicents = $1.00.
+pure func millicents_to_usd(mc: int) -> float {
+  _int_to_float(mc) / 100000.0
+}
+
+pure func event_type_from_projected(kvs: [{key: string, value: Json}]) -> string {
+  match kvs {
+    [] => "",
+    x :: _ =>
+      if x.key == "type" then
+        match x.value {
+          JString(s) => s,
+          _ => ""
+        }
+      else ""
+  }
+}
+
+pure func event_extra_from_projected(kvs: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    _ :: rest => rest
+  }
+}
+
+func ledger_emit(session_id: string, e: LedgerEvent) -> () ! {IO, Trace} {
+  let projected = to_schema_v1_kvs(e);
+  let event_type = event_type_from_projected(projected);
+  emit_json(jo([
+    kv("schema_version", js(schema_version())),
+    kv("session_id",     js(session_id))
+  ] ++ projected));
+  emit_trace_event(session_id, event_type, event_extra_from_projected(projected))
+}
+
+func emit_pre_step_stages(session_id: string, step_idx: int, stages: [PreStepStage]) -> () ! {IO, Trace} {
+  match stages {
+    [] => (),
+    s :: rest => {
+      let _ = match s.outcome {
+        StageApplied(note) => ledger_emit(session_id, CompactionApplied({
+          step: step_idx,
+          note: note
+        })),
+        StageRejected(reason) => ledger_emit(session_id, ExtCompactionRejected({
+          step: step_idx,
+          note: reason
+        })),
+        StagePassed => ()
+      };
+      emit_pre_step_stages(session_id, step_idx, rest)
+    }
+  }
+}
+
+-- Cumulative token/cost totals threaded through loop_v2 recursion. Bundled
+-- into a single record (vs 6 extra params) so adding new totals later (e.g.
+-- reasoning tokens) doesn't require touching every call site again.
+type RuntimeLoopTotals = {
+  input_tokens: int,
+  output_tokens: int,
+  cache_read: int,
+  cache_creation: int,
+  cost_millicents: int,
+  cost_warned_pct: int
+}
+
+type C2LoopState = {
+  msgs: [Message],
+  step_idx: int,
+  totals: RuntimeLoopTotals,
+  provider: StepProvider,
+  pending_tool_calls: [ToolCall],
+  pending_tool_context: [Message],
+  pending_tool_prefix: [Message],
+  pending_tool_batched: bool,
+  accumulated_tool_msgs: [Message],
+  pending_approval: Option[ApprovalRequest],
+  last_finish_reason: string,
+  last_response_text: string,
+  nudges_used: int,
+  finalize_source: string,
+  trace: LedgerTrace
+}
+
+pure func zero_totals() -> RuntimeLoopTotals {
+  { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0, cost_millicents: 0, cost_warned_pct: 0 }
+}
+
+pure func c2_decision_name(d: StepDecision) -> string {
+  match d {
+    CallModel(_) => "CallModel",
+    RunTools(_) => "RunTools",
+    AwaitApproval(_) => "AwaitApproval",
+    InjectUserMessage(_) => "InjectUserMessage",
+    TakeCheckpoint(_) => "TakeCheckpoint",
+    Finalize(_) => "Finalize",
+    Fail(_) => "Fail"
+  }
+}
+
+pure func c2_append_decision(trace: LedgerTrace, step_idx: int, decision: StepDecision) -> LedgerTrace {
+  ledger_append(trace, DecisionRecord({ step: step_idx, decision: c2_decision_name(decision) }))
+}
+
+pure func c2_trace_stage_records(trace: LedgerTrace, step_idx: int, stages: [PreStepStage]) -> LedgerTrace {
+  match stages {
+    [] => trace,
+    s :: rest => c2_trace_stage_records(ledger_append(trace, stage_record(step_idx, s)), step_idx, rest)
+  }
+}
+
+pure func c2_trace_wire_events(trace: LedgerTrace, events: [LedgerEvent]) -> LedgerTrace {
+  match events {
+    [] => trace,
+    e :: rest => c2_trace_wire_events(ledger_append(trace, WireRecord(e)), rest)
+  }
+}
+
+func c2_emit_events(session_id: string, events: [LedgerEvent]) -> () ! {IO, Trace} {
+  match events {
+    [] => (),
+    e :: rest => {
+      let _ = ledger_emit(session_id, e);
+      c2_emit_events(session_id, rest)
+    }
+  }
+}
+
+pure func c2_tool_plan_calls(entries: [ToolPlanEntry]) -> [ToolCall] {
+  match entries {
+    [] => [],
+    e :: rest => e.call :: c2_tool_plan_calls(rest)
+  }
+}
+
+pure func c2_step_totals(totals: RuntimeLoopTotals) -> {
+  input_tokens: int,
+  output_tokens: int,
+  cost_millicents: int,
+  cost_warned_pct: int
+} {
+  {
+    input_tokens: totals.input_tokens,
+    output_tokens: totals.output_tokens,
+    cost_millicents: totals.cost_millicents,
+    cost_warned_pct: totals.cost_warned_pct
+  }
+}
+
+func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
+  match history_from_seed(st.msgs) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: st.step_idx,
+      history: h,
+      telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+      totals: c2_step_totals(st.totals),
+      nudges_used: st.nudges_used,
+      ext_artifacts: jo([]),
+      pending_tool_calls: st.pending_tool_calls,
+      last_finish_reason: st.last_finish_reason,
+      last_response_text: st.last_response_text
+    })
+  }
+}
+
+func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState {
+  {
+    msgs: history,
+    step_idx: 0,
+    totals: zero_totals(),
+    provider: provider,
+    pending_tool_calls: [],
+    pending_tool_context: [],
+    pending_tool_prefix: [],
+    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+    last_finish_reason: "",
+    last_response_text: "",
+    nudges_used: count_persist_nudges(history),
+    finalize_source: "",
+    trace: empty_ledger_trace()
+  }
+}
+
+func ported_provider(rt: ExtRuntime, history: [Message], provider: StepProvider) -> StepProvider {
+  match provider {
+    Ported(_) => provider,
+    LiveAI => Ported(live_ports(rt)),
+    Scripted(script) => Ported(scripted_ports_from_steps(history, script))
+  }
+}
+
+pure func c2_add_step_totals(totals: RuntimeLoopTotals, result: StepResult, step_cost: int, warned_pct: int) -> RuntimeLoopTotals {
+  {
+    input_tokens: totals.input_tokens + result.input_tokens,
+    output_tokens: totals.output_tokens + result.output_tokens,
+    cache_read: totals.cache_read + result.cache_read_input_tokens,
+    cache_creation: totals.cache_creation + result.cache_creation_input_tokens,
+    cost_millicents: totals.cost_millicents + step_cost,
+    cost_warned_pct: warned_pct
+  }
+}
+
+func c2_emit_cost_warning(
+  session_id: string,
+  step_idx: int,
+  total_cost_millicents: int,
+  max_cost_millicents: int,
+  already_warned_pct: int
+) -> int ! {IO, Trace} {
+  if max_cost_millicents > 0 then {
+    let pct = (total_cost_millicents * 100) / max_cost_millicents;
+    if pct >= 90 && already_warned_pct < 90 then {
+      let _ = ledger_emit(session_id, CostWarning({ threshold: "90pct", step: step_idx, pct: pct, total_cost_millicents: total_cost_millicents, total_cost_usd: millicents_to_usd(total_cost_millicents), cap_millicents: max_cost_millicents }));
+      90
+    } else if pct >= 75 && already_warned_pct < 75 then {
+      let _ = ledger_emit(session_id, CostWarning({ threshold: "75pct", step: step_idx, pct: pct, total_cost_millicents: total_cost_millicents, total_cost_usd: millicents_to_usd(total_cost_millicents), cap_millicents: max_cost_millicents }));
+      75
+    } else if pct >= 50 && already_warned_pct < 50 then {
+      let _ = ledger_emit(session_id, CostWarning({ threshold: "50pct", step: step_idx, pct: pct, total_cost_millicents: total_cost_millicents, total_cost_usd: millicents_to_usd(total_cost_millicents), cap_millicents: max_cost_millicents }));
+      50
+    } else already_warned_pct
+  } else already_warned_pct
+}
+
+pure func c2_done_step(step_idx: int) -> int {
+  if step_idx <= 0 then 0 else step_idx - 1
+}
+
+-- append_stream_delta: dispatch one StreamChunk variant to the ledger.
+-- protocol.
+--
+-- ContentDelta(text) → thinking_delta event (TUI appends to per-stream_id
+--                       buffer in arrival order; this is the assistant's
+--                       visible content as it streams).
+-- ThinkingDelta(text) → reasoning_delta event (NEW v0.18.8; AILANG-side
+--                       API-level thinking from claude-opus-4.5+,
+--                       OpenAI o1/o3, Gemini 2.5+ thinking models). TUI
+--                       renders in a separate panel; never mixed with
+--                       content stream.
+-- Usage(_)            → dropped here (final usage telemetry comes from
+--                       the StepResult.{input,output,cache}_*_input_tokens
+--                       fields after the call returns).
+--
+-- Tag-convention reasoning (glm-5, deepseek-r1: <thinking>...</thinking>
+-- inside ContentDelta) is NOT split here — that belongs in the TUI's
+-- streaming-render path which already strips think-tag bodies for live
+-- render via stripThinkBlocksForLive().
+--
+-- Extracted from agent_loop_v2 because match inside lambda hits a known
+-- AILANG parser bug.
+func append_stream_delta(session_id: string, step_idx: int, stream_id: string, chunk: StreamChunk) -> () ! {IO, Trace} {
+  match chunk {
+    ContentDelta(text) =>
+      ledger_emit(session_id, StreamDelta({
+        step: step_idx,
+        stream_id: stream_id,
+        seq: 0,
+        kind: "thinking",
+        text: text
+      })),
+    ThinkingDelta(text) =>
+      ledger_emit(session_id, StreamDelta({
+        step: step_idx,
+        stream_id: stream_id,
+        seq: 0,
+        kind: "reasoning",
+        text: text
+      })),
+    Usage(_) => ()
+  }
+}
+
+-- Derive a session_id from MOTOKO_SESSION_ID env var (set by the TS wrapper
+-- to match the JSONL filename) or fall back to a now()-derived id. The
+-- wrapper-set form is preferred so the JSONL session_id matches the
+-- filename consumers grep for.
+func derive_session_id() -> string ! {Env, Clock} {
+  let env_id = getEnvOr("MOTOKO_SESSION_ID", "");
+  if env_id != "" then env_id
+  else "session_${show(now())}"
+}
+
+-- Build the standard kv-list emitted on every per-step event that has
+-- StepResult tokens in scope. `cost_step_mc` is the per-step millicents
+-- (computed from result.input_tokens/output_tokens × cost_rates).
+--
+-- Cache token fields (cache_read_input_tokens / cache_creation_input_tokens)
+-- are emitted ONLY when non-zero — omit-when-absent semantics so consumers
+-- can distinguish "provider doesn't surface caching" from "this turn had
+-- zero cache hits". Anthropic populates both; OpenAI + Gemini populate
+-- cache_read only; other providers omit both.
+func per_step_usage_kvs(result: StepResult, cost_step_mc: int) -> [{key: string, value: Json}] {
+  let base = [
+    kv("input_tokens",  jnum(_int_to_float(result.input_tokens))),
+    kv("output_tokens", jnum(_int_to_float(result.output_tokens))),
+    kv("cost_usd",      jnum(millicents_to_usd(cost_step_mc)))
+  ];
+  let with_read = if result.cache_read_input_tokens > 0 then
+    base ++ [kv("cache_read_input_tokens", jnum(_int_to_float(result.cache_read_input_tokens)))]
+    else base;
+  if result.cache_creation_input_tokens > 0 then
+    with_read ++ [kv("cache_creation_input_tokens", jnum(_int_to_float(result.cache_creation_input_tokens)))]
+    else with_read
+}
+
+-- Map a finish_reason variant to its JSONL string. Single source of truth
+-- so the run_summary's finish_reason values stay consistent across all 6
+-- termination paths.
+pure func finish_reason_str(r: int) -> string {
+  if r == 0 then "stop"
+  else if r == 1 then "cost_exhausted"
+  else if r == 2 then "dp7_rejected"
+  else if r == 3 then "compaction_exhausted"
+  else if r == 4 then "max_steps"
+  else "error"
+}
+
+-- Build and emit a schema-v1 run_summary event. Always emitted on every
+-- termination path (success, Err, cost_exhausted, dp7_rejected,
+-- compaction_exhausted, max_steps) so downstream eval harnesses get
+-- partial totals on crash and never see a "missing totals" case.
+func emit_run_summary(
+  session_id: string,
+  model: string,
+  totals: RuntimeLoopTotals,
+  steps_executed: int,
+  finish_code: int,
+  error_msg: string,
+  started_at_ms: int
+) -> () ! {IO, Clock, Trace} {
+  let now_ms = now();
+  let duration = now_ms - started_at_ms;
+  let total_tokens = totals.input_tokens + totals.output_tokens;
+  let usage_kvs = if totals.cache_read > 0 || totals.cache_creation > 0 then
+    [kv("input_tokens",                jnum(_int_to_float(totals.input_tokens))),
+     kv("output_tokens",               jnum(_int_to_float(totals.output_tokens))),
+     kv("cache_read_input_tokens",     jnum(_int_to_float(totals.cache_read))),
+     kv("cache_creation_input_tokens", jnum(_int_to_float(totals.cache_creation))),
+     kv("total_tokens",                jnum(_int_to_float(total_tokens)))]
+    else
+    [kv("input_tokens",  jnum(_int_to_float(totals.input_tokens))),
+     kv("output_tokens", jnum(_int_to_float(totals.output_tokens))),
+     kv("total_tokens",  jnum(_int_to_float(total_tokens)))];
+  let error_kv = if error_msg == "" then kv("error", js(""))
+                 else kv("error", js(error_msg));
+  ledger_emit(session_id, RunSummary({
+    model: model,
+    motoko_commit: motoko_commit(),
+    finish_reason: finish_reason_str(finish_code),
+    steps_executed: steps_executed,
+    input_tokens: totals.input_tokens,
+    output_tokens: totals.output_tokens,
+    cache_read_input_tokens: totals.cache_read,
+    cache_creation_input_tokens: totals.cache_creation,
+    total_cost_usd: millicents_to_usd(totals.cost_millicents),
+    total_cost_millicents: totals.cost_millicents,
+    duration_ms: duration,
+    error: error_msg
+  }))
+}
+
+pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openrouter/deepseek/deepseek-v4-flash", "") == "deepseek/deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_openrouter_auto_stays_intact() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openrouter/auto", "") == "openrouter/auto"
+  }
+
+pure func test_provider_api_model_local_openai_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/deepseek-v4-flash", "http://127.0.0.1:8000/v1") == "deepseek-v4-flash"
+  }
+
+pure func test_provider_api_model_local_openai_preserves_slashful_id() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/google/gemma-4-26B-A4B-it", "http://127.0.0.1:8000/v1") == "google/gemma-4-26B-A4B-it"
+  }
+
+pure func test_provider_api_model_direct_openai_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("openai/gpt-4o", "") == "gpt-4o"
+  }
+
+pure func test_provider_api_model_direct_anthropic_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("anthropic/claude-sonnet-4-6", "") == "claude-sonnet-4-6"
+  }
+
+pure func test_provider_api_model_direct_google_strips_routing_prefix() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("google/gemini-2.5-flash", "") == "gemini-2.5-flash"
+  }
+
+pure func test_provider_api_model_ollama_keeps_routing_prefix_for_provider() -> bool
+  tests [((), true)]
+  {
+    provider_api_model("ollama/qwen3.5:35b-a3b-mxfp8", "") == "ollama/qwen3.5:35b-a3b-mxfp8"
+  }
+
+-- Build the per-turn ExtCtx that motoko's extension hooks receive. Mirrors
+-- mk_ext_ctx in rpc.ail but constructs from v2's typed-loop state instead
+-- of the legacy AgentState shape. history_slice converts upstream Message
+-- to motoko's Msg (text-only) since extensions inspect text not tool_calls.
+func mk_v2_ext_ctx(
+  task: string,
+  step_idx: int,
+  model: string,
+  cwd: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  history: [Message],
+  context_limit: int
+) -> ExtCtx {
+  let remaining = if budget.total - step_idx < 0 then 0 else budget.total - step_idx;
+  {
+    task: task,
+    step: step_idx,
+    model: model,
+    cwd: cwd,
+    hybrid_tools: hybrid_tools,
+    budget: budget,
+    mode: "v2",
+    workdir: cwd,
+    env_server_url: env_url,
+    budget_remaining: remaining,
+    history_slice: messages_to_msgs(history),
+    state_key: "core:ext:v2",
+    context_limit: context_limit
+  }
+}
+
+-- Convert upstream [Message] to motoko's [Msg] for ExtCtx.history_slice
+-- and on_pre_step. Since motoko_ext_abi 2.1.0 (M-ABI-MSG-WIRE-PARITY),
+-- Msg carries tool_calls + tool_call_id, so copy them verbatim. The
+-- compaction round-trip is now lossless: any extension that returns
+-- Compacted([Msg]) preserves wire-format correlation IDs.
+func messages_to_msgs(msgs: [Message]) -> [Msg] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id
+    } :: messages_to_msgs(rest))
+  }
+}
+
+func count_system_prefix(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => if m.role == "system" then 1 + count_system_prefix(rest) else 0
+  }
+}
+
+-- TUI wire-format helpers (M-MOTOKO-RPC-LOOP M10 follow-up): the legacy
+-- TUI renderer (src/tui/src/ui.ts) expects BATCHED native_tool_calls /
+-- native_tool_results events with `request_id` and `tool_calls` /
+-- `results` array fields, not the per-call events v2 originally emitted.
+-- These helpers convert v2's typed [ToolCall] and tool-role [Message]
+-- into the array shape the TUI renders. See loop_v2 for the emit calls.
+
+func tool_calls_to_envelope_jsons(calls: [ToolCall]) -> [Json] {
+  match calls {
+    [] => [],
+    c :: rest => call_to_json(tool_call_to_envelope(c)) :: tool_calls_to_envelope_jsons(rest)
+  }
+}
+
+-- Helper: pull a string field from a decoded JSON object with a fallback.
+func json_field_str(obj: Json, key: string, fallback: string) -> string {
+  match get(obj, key) {
+    None    => fallback,
+    Some(j) => match asString(j) { None => fallback, Some(s) => s }
+  }
+}
+
+-- Helper: detect whether a JSON object has a boolean field set to true.
+-- Used to detect policy_denied_message / delegated_deferred_message
+-- payloads (both flag themselves with `error: true`).
+func json_field_bool_true(obj: Json, key: string) -> bool {
+  match get(obj, key) {
+    None    => false,
+    Some(j) => match j {
+      JBool(true) => true,
+      _           => false
+    }
+  }
+}
+
+-- Each tool-role Message produced by dispatch_calls has a JSON-encoded
+-- payload in its content (either dispatch_one's tool_result_item JSON,
+-- a policy_denied_message JSON, or a delegated_deferred_message JSON).
+-- The TUI's applyNativeToolResults reads `tool_call_id`, `exit_code`,
+-- `stdout`, `stderr`, `truncated` from each result entry — so we
+-- normalise to that shape, lifting tool_call_id from the Message and
+-- forwarding the inner payload's known fields with safe defaults.
+func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
+  match msgs {
+    [] => [],
+    m :: rest => {
+      let inner = match decode(m.content) {
+        Ok(j) => j,
+        Err(_) => jo([])
+      };
+      let stdout_str = json_field_str(inner, "stdout", "");
+      let stderr_str = json_field_str(inner, "stderr", "");
+      -- If the payload flags itself as an error (policy_denied_message
+      -- or delegated_deferred_message both set `error: true`), drive
+      -- the TUI's "failed" rendering by emitting exit_code: 1; otherwise
+      -- treat as success (exit_code: 0). dispatch_one's payloads always
+      -- include exit_code on the wire but parsing JSON numbers from
+      -- typed Json values requires a different accessor than we use here;
+      -- the boolean error gate is a simpler proxy that gets the TUI
+      -- coloring right for the v2-emitted shapes.
+      let is_error = json_field_bool_true(inner, "error");
+      let normalized = jo([
+        kv("tool_call_id", js(m.tool_call_id)),
+        kv("exit_code", jnum(if is_error then 1.0 else 0.0)),
+        kv("stdout", js(stdout_str)),
+        kv("stderr", js(stderr_str)),
+        kv("truncated", jb(false)),
+        kv("payload", inner)
+      ]);
+      normalized :: tool_messages_to_result_jsons(rest)
+    }
+  }
+}
+
+-- M7: Synthesize a BashExec ToolCall from a hybrid-mode shell command
+-- extracted from the assistant's prose. The model emitted no typed
+-- tool_calls (finish_reason != "tool_calls") but its content contained
+-- a fenced shell block (```bash / ```sh / ```shell / ```), so we treat
+-- that block as the canonical hybrid shorthand and pass it through the
+-- M3-M6 dispatch pipeline as if it were a typed BashExec call.
+--
+-- This preserves the full M4 policy gate + M5 tool-handle routing + M6
+-- backend split for hybrid commands (e.g. an extension can still Deny
+-- a hybrid `rm -rf /` just as it would deny a typed call). The
+-- synthetic call uses a "hybrid-step-N" id so it doesn't collide with
+-- model-emitted tool_call_ids on the wire.
+func synthesize_hybrid_bash_call(cmd: string, step_idx: int) -> ToolCall {
+  {
+    id: "hybrid-step-${show(step_idx)}",
+    name: "BashExec",
+    arguments: encode(jo([kv("cmd", js(cmd))]))
+  }
+}
+
+-- Build a structured tool-role Message indicating the ohmy_pi delegation
+-- pathway is not yet wired in v2. M6 plumbs split_by_backend through but
+-- defers the inbox-based wait_for_tool_results to a follow-up — for now
+-- delegated calls return this clear, recoverable error so the model can
+-- adapt (e.g. retry with a non-delegated argument shape, or surface that
+-- ohmy_pi was selected but unavailable).
+-- Build a denial tool-role Message for a ToolCall the policy gate rejected.
+-- The model sees a structured `{denied_by_policy, reason, tool}` JSON in the
+-- tool result, correlated by tool_call_id, so it can correct course on the
+-- next turn without ambiguity.
+func policy_denied_message(call: ToolCall, reason: string) -> Message {
+  let denial_payload = encode(jo([
+    kv("error", jb(true)),
+    kv("denied_by_policy", jb(true)),
+    kv("tool", js(call.name)),
+    kv("reason", js(reason))
+  ]));
+  {
+    role: "tool",
+    content: denial_payload,
+    tool_calls: [],
+    tool_call_id: call.id
+  }
+}
+
+-- Compute per-step cost in millicents from token counts and provider rates.
+-- Integer division truncates toward zero (conservative — never over-counts).
+-- Returns 0 when rates are zero (unmetered/unknown provider).
+pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: CostRates) -> int {
+  (input_tokens * rates.input_per_1m_millicents +
+   output_tokens * rates.output_per_1m_millicents) / 1000000
+}
+
+-- The v2 loop. Iterates until the model returns finish_reason != "tool_calls"
+-- (and any solver-candidate hooks accept the result) or step_budget hits zero.
+-- Returns the final messages list.
+--
+-- DP0 (pre-step compaction): before each LLM call, extension compactors
+-- transform the provider payload, with the structural compactor registered
+-- last. Core refuses only if the post-chain payload remains critically full.
+--
+-- M3 wiring: between step() and tool dispatch, fires extension hooks at the
+-- two existing decision points motoko's rpc_loop uses (DP1 from the design
+-- doc). NoIntercept / NoDecision are no-ops; the typed-step protocol means
+-- prose-only responses unambiguously stop the loop (no continuation-intent
+-- heuristic needed).
+
+-- DP7: pre-finalize AILANG type-check gate.
+-- Runs make check_core in the project workdir before any done emission.
+-- Fail-open: if check infrastructure is missing (no workdir, no Makefile, or
+-- no check_core target), returns Approve so projects without DP7 setup are not
+-- blocked. Only genuine type errors (exit non-zero with substantive output)
+-- produce Reject.
+type FinalizeVerification
+  = Approve
+  | Reject(string)
+
+-- Detect "infrastructure missing" — the verification command failed because the
+-- project lacks a Makefile/target or the workdir doesn't exist, NOT because the
+-- code under verification has type errors. These cases must fail-open.
+pure func is_missing_infrastructure(output: string) -> bool {
+  let lower = toLower(output);
+  contains(lower, "no rule to make target")
+    || contains(lower, "no targets specified and no makefile found")
+    || contains(lower, "no makefile found")
+    || contains(lower, "make: *** no")
+    || contains(lower, "no such file or directory")
+    || contains(lower, "command not found")
+}
+
+func run_dp7_verifier(rt: ExtRuntime, workdir: string) -> FinalizeVerification ! {Process} {
+  if not rt.verification.enabled then Approve
+  else
+    match exec("bash", ["-c", "cd \"$1\" && ${rt.verification.command} 2>&1", "_dp7", workdir]) {
+      Err(_) => Approve,
+      Ok(out) => {
+        if out.exitCode == 0 then Approve
+        else {
+          let output = toString(out.stdout);
+          if is_missing_infrastructure(output) then Approve
+          else Reject(output)
+        }
+      }
+    }
+}
+
+func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Message] ! {Process, IO, Trace} {
+  match run_dp7_verifier(rt, workdir) {
+    Approve => None,
+    Reject(errors) => {
+      let _ = ledger_emit(session_id, Dp7VerifierRejected({
+        step: step_idx,
+        errors: errors
+      }));
+      Some({
+        role: "user",
+        content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${errors}",
+        tool_calls: [],
+        tool_call_id: ""
+      })
+    }
+  }
+}
+
+func dp7_rejection_errors(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[string] ! {Process, IO, Trace} {
+  match run_dp7_verifier(rt, workdir) {
+    Approve => None,
+    Reject(errors) => {
+      let _ = ledger_emit(session_id, Dp7VerifierRejected({
+        step: step_idx,
+        errors: errors
+      }));
+      Some(errors)
+    }
+  }
+}
+
+-- M-MOTOKO-PERSIST-NUDGE: bounded loop-persistence at the NoDecision boundary.
+-- Root cause (2026-06-18 A/B transcripts): on local models the agent often
+-- DISENGAGES after 0–1 tool calls WITHOUT writing a solution — either answering
+-- in prose (0 tool calls) or making one inspect call (e.g. `cat solution.ail`)
+-- and stopping. The loop then finalizes at NoDecision. These helpers let the loop
+-- inject a bounded nudge to keep going instead. Off by default (MOTOKO_PERSIST_
+-- RETRIES=0); opt-in for A/B so the rotation is unchanged until validated.
+
+-- Marker embedded in injected nudges so we can count them from history alone
+-- (no new loop_v2 state to thread through its 16 recursive call sites).
+func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
+
+-- How many persistence nudges are allowed this run (MOTOKO_PERSIST_RETRIES,
+-- default 0 = feature off).
+pure func parse_persist_retries_budget(raw: string) -> int {
+  match _stringToInt(trim(raw)) {
+    Some(n) => if n > 0 then n else 0,
+    None => 0
+  }
+}
+
+func session_policy_init(model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicy ! {Env} {
+  let budget_steps = if step_budget <= 0 then 8 else step_budget;
+  let persist_retries = parse_persist_retries_budget(getEnvOr("MOTOKO_PERSIST_RETRIES", "0"));
+  let retry_stream_errors = getEnvOr("MOTOKO_RETRY_STREAM_ERROR", "1") != "0";
+  let provider_base_url = getEnvOr("OPENAI_BASE_URL", "");
+  let headless = getEnvOr("MOTOKO_HEADLESS", "") == "1";
+  {
+    step: {
+      step_budget: budget_steps,
+      max_cost_millicents: max_cost_millicents,
+      cost_metered: cost_rates.input_per_1m_millicents > 0,
+      persist_retries: persist_retries,
+      retry_stream_errors: retry_stream_errors,
+      require_system_prompt: not headless,
+      model: model,
+      provider_base_url: provider_base_url,
+      compaction: {
+        context_limit: catalog_context_limit_for(model),
+        elide_tier_pct: 70,
+        elide_hard_tier_pct: 85,
+        emergency_pct: exhaustion_pct()
+      }
+    },
+    headless: headless
+  }
+}
+
+pure func session_policy_with_model(policy: SessionPolicy, model: string) -> SessionPolicy {
+  {
+    step: {
+      step_budget: policy.step.step_budget,
+      max_cost_millicents: policy.step.max_cost_millicents,
+      cost_metered: policy.step.cost_metered,
+      persist_retries: policy.step.persist_retries,
+      retry_stream_errors: policy.step.retry_stream_errors,
+      require_system_prompt: policy.step.require_system_prompt,
+      model: model,
+      provider_base_url: policy.step.provider_base_url,
+      compaction: {
+        context_limit: catalog_context_limit_for(model),
+        elide_tier_pct: policy.step.compaction.elide_tier_pct,
+        elide_hard_tier_pct: policy.step.compaction.elide_hard_tier_pct,
+        emergency_pct: policy.step.compaction.emergency_pct
+      }
+    },
+    headless: policy.headless
+  }
+}
+
+-- Count nudges already injected (user messages carrying the marker) so we never
+-- exceed the budget — the count IS the persistence state, read from history.
+func count_persist_nudges(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => {
+      let here = if m.role == "user" && contains(m.content, persist_nudge_marker()) then 1 else 0;
+      here + count_persist_nudges(rest)
+    }
+  }
+}
+
+func tool_calls_have_writefile(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.name == "WriteFile" then true else tool_calls_have_writefile(rest)
+  }
+}
+
+-- True once the model has attempted ANY WriteFile this run — if so it is engaged
+-- with producing a solution, so we let it finalize/fail on its own (don't nudge).
+-- Both disengagement modes (0 calls / 1 inspect call) have zero WriteFile, so
+-- this gates the nudge precisely to the premature-stop case.
+func any_writefile_attempt(msgs: [Message]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if tool_calls_have_writefile(m.tool_calls) then true
+      else any_writefile_attempt(rest)
+  }
+}
+
+func c2_fail(
+  session_id: string,
+  model: string,
+  totals: RuntimeLoopTotals,
+  step_idx: int,
+  max_cost_millicents: int,
+  started_at_ms: int,
+  code: string,
+  message: string,
+  retryable: bool
+) -> Result[[Message], AIError] ! {IO, Trace} {
+  let finish_reason =
+    if code == "BudgetExceeded" then 1
+    else if code == "ContextExhausted" then 3
+    else if code == "Internal" && message == "v2 loop: step budget exhausted" then 4
+    else 5;
+  let _ = if code == "BudgetExceeded" then
+    ledger_emit(session_id, CostExhausted({
+      step: step_idx,
+      total_cost_millicents: totals.cost_millicents,
+      total_cost_usd: millicents_to_usd(totals.cost_millicents),
+      cap_millicents: max_cost_millicents
+    }))
+  else ();
+  let _ = emit_run_summary(session_id, model, totals, step_idx, finish_reason, message, started_at_ms);
+  Err({ code: code, message: message, retryable: retryable })
+}
+
+pure func c2_pending_context(st: C2LoopState) -> [Message] {
+  if List.length(st.pending_tool_context) > 0 then st.pending_tool_context else st.msgs
+}
+
+pure func c2_pending_prefix(st: C2LoopState) -> [Message] {
+  if List.length(st.pending_tool_prefix) > 0 then st.pending_tool_prefix else st.msgs
+}
+
+func c2_finish_tool_batch(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  started_at_ms: int,
+  st: C2LoopState,
+  trace: LedgerTrace,
+  tool_step_idx: int,
+  stream_id: string,
+  tool_msgs: [Message]
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let request_id = "step-${show(tool_step_idx)}";
+  let _ = if st.pending_tool_batched then
+    ledger_emit(session_id, NativeToolResults({
+      request_id: request_id,
+      step: tool_step_idx,
+      stream_id: stream_id,
+      payload: ja(tool_messages_to_result_jsons(tool_msgs))
+    }))
+  else ();
+  let next_state: C2LoopState = {
+    msgs: c2_pending_prefix(st) ++ tool_msgs,
+    step_idx: st.step_idx,
+    totals: st.totals,
+    provider: st.provider,
+    pending_tool_calls: [],
+    pending_tool_context: [],
+    pending_tool_prefix: [],
+    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+    last_finish_reason: "tools_complete",
+    last_response_text: "",
+    nudges_used: st.nudges_used,
+    finalize_source: "",
+    trace: trace
+  };
+  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+}
+
+func c2_continue_tool_batch(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  started_at_ms: int,
+  st: C2LoopState,
+  trace: LedgerTrace,
+  req: ApprovalRequest,
+  accumulated: [Message]
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match req.remaining {
+    [] => c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace, c2_done_step(st.step_idx), req.stream_id, accumulated),
+    _ => {
+      let next_state: C2LoopState = {
+        msgs: st.msgs,
+        step_idx: st.step_idx,
+        totals: st.totals,
+        provider: st.provider,
+        pending_tool_calls: c2_tool_plan_calls(req.remaining),
+        pending_tool_context: st.pending_tool_context,
+        pending_tool_prefix: st.pending_tool_prefix,
+        pending_tool_batched: st.pending_tool_batched,
+        accumulated_tool_msgs: accumulated,
+        pending_approval: None,
+        last_finish_reason: "approval_resolved",
+        last_response_text: "",
+        nudges_used: st.nudges_used,
+        finalize_source: "",
+        trace: trace
+      };
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+    }
+  }
+}
+
+func c2_after_dp7(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  msgs_with_assistant: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  totals: RuntimeLoopTotals,
+  next_provider: StepProvider,
+  session_id: string,
+  started_at_ms: int,
+  trace: LedgerTrace,
+  next_step_idx: int,
+  done_step_idx: int,
+  output: string,
+  source: string
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match dp7_rejection_errors(rt, workdir, done_step_idx, session_id) {
+    Some(errors) => {
+      let next_state: C2LoopState = {
+        msgs: msgs_with_assistant,
+        step_idx: next_step_idx,
+        totals: totals,
+        provider: next_provider,
+        pending_tool_calls: [],
+        pending_tool_context: [],
+        pending_tool_prefix: [],
+        pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+        last_finish_reason: "dp7_rejected",
+        last_response_text: errors,
+        nudges_used: count_persist_nudges(msgs_with_assistant),
+        finalize_source: "",
+        trace: trace
+      };
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+    },
+    None => {
+      let next_state: C2LoopState = {
+        msgs: msgs_with_assistant,
+        step_idx: next_step_idx,
+        totals: totals,
+        provider: next_provider,
+        pending_tool_calls: [],
+        pending_tool_context: [],
+        pending_tool_prefix: [],
+        pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+        last_finish_reason: "dp7_approved",
+        last_response_text: output,
+        nudges_used: count_persist_nudges(msgs_with_assistant),
+        finalize_source: source,
+        trace: trace
+      };
+      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+    }
+  }
+}
+
+func c2_loop(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  session_id: string,
+  started_at_ms: int,
+  st: C2LoopState
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match c2_step_state(st) {
+    Err(reason) => {
+      let result: Result[[Message], AIError] = Err({ code: "InvalidHistory", message: reason, retryable: false });
+      { result: result, trace: st.trace }
+    },
+    Ok(step_state) => {
+      let decision = decide(step_state, policy.step);
+      let trace_with_decision = c2_append_decision(st.trace, st.step_idx, decision);
+      match decision {
+        Fail(info) => {
+          let result = c2_fail(session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable);
+          { result: result, trace: trace_with_decision }
+        },
+        Finalize(info) => {
+          let done_step = c2_done_step(st.step_idx);
+          let _ = emit_run_summary(session_id, model, st.totals, st.step_idx, 0, "", started_at_ms);
+          let _ = ledger_emit(session_id, DoneEvent({
+            step: done_step,
+            output: info.output,
+            source: st.finalize_source
+          }));
+          { result: Ok(st.msgs), trace: trace_with_decision }
+        },
+        InjectUserMessage(msg) => {
+          let next_msgs = st.msgs ++ [msg];
+          let next_nudges = if st.last_finish_reason == "persist_nudge" then st.nudges_used + 1 else st.nudges_used;
+          let next_state: C2LoopState = {
+            msgs: next_msgs,
+            step_idx: st.step_idx,
+            totals: st.totals,
+            provider: st.provider,
+            pending_tool_calls: [],
+            pending_tool_context: [],
+            pending_tool_prefix: [],
+            pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+            last_finish_reason: "user_injected",
+            last_response_text: "",
+            nudges_used: next_nudges,
+            finalize_source: "",
+            trace: trace_with_decision
+          };
+          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+        },
+        TakeCheckpoint(plan) => {
+          let cp = apply_checkpoint(step_state, plan);
+          let _ = ledger_emit(session_id, cp.event);
+          let next_state: C2LoopState = {
+            msgs: st.msgs,
+            step_idx: st.step_idx,
+            totals: st.totals,
+            provider: st.provider,
+            pending_tool_calls: st.pending_tool_calls,
+            pending_tool_context: st.pending_tool_context,
+            pending_tool_prefix: st.pending_tool_prefix,
+            pending_tool_batched: st.pending_tool_batched,
+            accumulated_tool_msgs: st.accumulated_tool_msgs,
+            pending_approval: st.pending_approval,
+            last_finish_reason: st.last_finish_reason,
+            last_response_text: st.last_response_text,
+            nudges_used: st.nudges_used,
+            finalize_source: st.finalize_source,
+            trace: ledger_append(trace_with_decision, WireRecord(cp.event))
+          };
+          c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+        },
+        AwaitApproval(_) => {
+          match st.pending_approval {
+            None => {
+              let result: Result[[Message], AIError] = Err({ code: "Internal", message: "approval requested without pending approval state", retryable: false });
+              { result: result, trace: trace_with_decision }
+            },
+            Some(req) => {
+              let raw = readLine();
+              let resolution = resolve_approval(raw, req.default_allow, raw == "");
+              let tool_step_idx = c2_done_step(st.step_idx);
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), catalog_context_limit_for(model));
+              match resolution {
+                ApprovalDenied(reason) => {
+                  let _ = ledger_emit(session_id, NativeToolDenied({
+                    step: tool_step_idx,
+                    stream_id: req.stream_id,
+                    tool: req.call.name,
+                    id: req.call.id,
+                    reason: reason
+                  }));
+                  let denial_msg = policy_denied_message(req.call, reason);
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [denial_msg])
+                },
+                ApprovalAllowed => {
+                  let msg = execute_allowed_tool_call(rt, ctx, req.call, workdir, tool_step_idx, req.stream_id, ohmy_pi, \event. ledger_emit(session_id, event));
+                  c2_continue_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, req, st.accumulated_tool_msgs ++ [msg])
+                }
+              }
+            }
+          }
+        },
+        RunTools(plan) => {
+          let tool_step_idx = c2_done_step(st.step_idx);
+          let stream_id = "step-${show(tool_step_idx)}";
+          let calls = c2_tool_plan_calls(plan.entries);
+          let request_id = "step-${show(tool_step_idx)}";
+          let ctx_msgs = c2_pending_context(st);
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, catalog_context_limit_for(model));
+          let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
+          let _ = if emit_calls then
+            ledger_emit(session_id, NativeToolCalls({
+              request_id: request_id,
+              step: tool_step_idx,
+              stream_id: stream_id,
+              payload: ja(tool_calls_to_envelope_jsons(calls))
+            }))
+          else ();
+          match dispatch_tool_entries(rt, ctx, plan.entries, workdir, tool_step_idx, stream_id, ohmy_pi, st.accumulated_tool_msgs, \event. ledger_emit(session_id, event)) {
+            ToolDispatchDone(tool_msgs) =>
+              c2_finish_tool_batch(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, st, trace_with_decision, tool_step_idx, stream_id, tool_msgs),
+            ToolDispatchPending(pending) => {
+              let next_state: C2LoopState = {
+                msgs: st.msgs,
+                step_idx: st.step_idx,
+                totals: st.totals,
+                provider: st.provider,
+                pending_tool_calls: [pending.request.call],
+                pending_tool_context: st.pending_tool_context,
+                pending_tool_prefix: st.pending_tool_prefix,
+                pending_tool_batched: st.pending_tool_batched,
+                accumulated_tool_msgs: pending.accumulated,
+                pending_approval: Some(pending.request),
+                last_finish_reason: "await_approval",
+                last_response_text: pending.request.reason,
+                nudges_used: st.nudges_used,
+                finalize_source: "",
+                trace: trace_with_decision
+              };
+              c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+            }
+          }
+        },
+        CallModel(_) => {
+          let step_idx = st.step_idx;
+          let context_limit = catalog_context_limit_for(model);
+          let split = split_for_compaction(st.msgs);
+          let compactable_msgs = segment_messages(split.segment);
+          let pinned_tokens = estimate_tokens_messages(split.pinned);
+          let ext_context_limit = if context_limit - pinned_tokens < 0 then 0 else context_limit - pinned_tokens;
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit);
+          let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
+          let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
+          let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
+          match seal_compacted_payload(split, msgs_to_messages(chain.msgs), model, context_limit, policy.step.require_system_prompt) {
+            Err(SealSystemPromptEmpty(reason)) => {
+              let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
+              let _ = ledger_emit(session_id, event);
+              let _ = emit_run_summary(session_id, model, st.totals, step_idx, 5, reason, started_at_ms);
+              let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
+              { result: result, trace: ledger_append(trace_after_stages, WireRecord(event)) }
+            },
+            Err(SealExhausted(compaction_reason)) => {
+              let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
+              let _ = ledger_emit(session_id, event);
+              let _ = emit_run_summary(session_id, model, st.totals, step_idx, 3, compaction_reason, started_at_ms);
+              let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
+              { result: result, trace: ledger_append(trace_after_stages, WireRecord(event)) }
+            },
+            Ok(payload) => {
+              let compacted_msgs = payload_messages(payload);
+              let stream_id = "step-${show(step_idx)}";
+              let start_event = ThinkingStreamStart({ step: step_idx, stream_id: stream_id, model: model });
+              let _ = ledger_emit(session_id, start_event);
+              let on_chunk: (StreamChunk) -> () ! {IO, Trace} = \chunk. append_stream_delta(session_id, step_idx, stream_id, chunk);
+              let prepared_event = ProviderCallPrepared({
+                step: step_idx,
+                msg_count: List.length(compacted_msgs),
+                system_prefix_count: count_system_prefix(compacted_msgs),
+                system_prefix_chars: system_prefix_chars(compacted_msgs),
+                payload_digest: payload_digest(compacted_msgs),
+                model: model
+              });
+              let _ = ledger_emit(session_id, prepared_event);
+              let dispatched = dispatch_step(st.provider, provider_api_model(model, policy.step.provider_base_url), compacted_msgs, rt, on_chunk);
+              let next_provider = dispatched.next_provider;
+              match dispatched.result {
+                Err(e) => {
+                  let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "errored" });
+                  let _ = ledger_emit(session_id, end_event);
+                  if should_retry_stream_error(policy.step.retry_stream_errors, policy.step.step_budget - step_idx) then {
+                    let retry_event = StreamErrorRetry({ step: step_idx, error: e.message });
+                    let _ = ledger_emit(session_id, retry_event);
+                    let next_state: C2LoopState = {
+                      msgs: st.msgs,
+                      step_idx: step_idx + 1,
+                      totals: st.totals,
+                      provider: next_provider,
+                      pending_tool_calls: [],
+                      pending_tool_context: [],
+                      pending_tool_prefix: [],
+                      pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                      last_finish_reason: "stream_error",
+                      last_response_text: e.message,
+                      nudges_used: st.nudges_used,
+                      finalize_source: "",
+                      trace: ledger_append(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), WireRecord(retry_event))
+                    };
+                    c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                  } else {
+                    let _ = emit_run_summary(session_id, model, st.totals, step_idx, 5, e.message, started_at_ms);
+                    { result: Err(e), trace: ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)) }
+                  }
+                },
+                Ok(result) => {
+                  let n_calls = List.length(result.tool_calls);
+                  let step_cost = step_cost_millicents(result.input_tokens, result.output_tokens, cost_rates);
+                  let phase = phase_from_result(result, step_idx, n_calls, millicents_to_usd(step_cost), step_cost);
+                  let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "completed" });
+                  let _ = ledger_emit(session_id, end_event);
+                  let _ = c2_emit_events(session_id, phase.events);
+                  let new_warned_pct = c2_emit_cost_warning(session_id, step_idx, st.totals.cost_millicents + step_cost, max_cost_millicents, st.totals.cost_warned_pct);
+                  let new_totals = c2_add_step_totals(st.totals, result, step_cost, new_warned_pct);
+                  let applied = apply_state_delta(step_state, phase.delta);
+                  let assistant_msg = step_result_to_message(result);
+                  let msgs_with_assistant = st.msgs ++ [assistant_msg];
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit);
+                  let trace_after_model = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), phase.events);
+                  match dispatch_response_intercept(rt, post_ctx, result.message.content) {
+                    InterceptHandled(envelope) => {
+                      let event = ExtInterceptHandled({
+                        step: step_idx,
+                        stream_id: "",
+                        tool: envelope.tool,
+                        id: "",
+                        exit_code: envelope.exit_code
+                      });
+                      let _ = ledger_emit(session_id, event);
+                      let tool_msg = envelope_to_tool_message(envelope);
+                      let next_state: C2LoopState = {
+                        msgs: msgs_with_assistant ++ [tool_msg],
+                        step_idx: step_idx + 1,
+                        totals: new_totals,
+                        provider: next_provider,
+                        pending_tool_calls: [],
+                        pending_tool_context: [],
+                        pending_tool_prefix: [],
+                        pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                        last_finish_reason: "intercept_handled",
+                        last_response_text: result.message.content,
+                        nudges_used: applied.nudges_used,
+                        finalize_source: "",
+                        trace: ledger_append(trace_after_model, WireRecord(event))
+                      };
+                      c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                    },
+                    NoIntercept => {
+                      if result.finish_reason == "tool_calls" then {
+                        let next_state: C2LoopState = {
+                          msgs: msgs_with_assistant,
+                          step_idx: step_idx + 1,
+                          totals: new_totals,
+                          provider: next_provider,
+                          pending_tool_calls: applied.pending_tool_calls,
+                          pending_tool_context: msgs_with_assistant,
+                          pending_tool_prefix: msgs_with_assistant,
+                          pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                          last_finish_reason: "tool_calls",
+                          last_response_text: applied.last_response_text,
+                          nudges_used: applied.nudges_used,
+                          finalize_source: "",
+                          trace: trace_after_model
+                        };
+                        c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                      } else {
+                        let hybrid_attempt: Option[string] = if hybrid_tools then extract_bash(result.message.content) else None;
+                        match hybrid_attempt {
+                          Some(cmd) => {
+                            let event = HybridBashExtracted({ step: step_idx, cmd: cmd });
+                            let _ = ledger_emit(session_id, event);
+                            let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
+                            let augmented_assistant_msg: Message = {
+                              role: "assistant",
+                              content: result.message.content,
+                              tool_calls: [synth_call],
+                              tool_call_id: ""
+                            };
+                            let next_state: C2LoopState = {
+                              msgs: msgs_with_assistant,
+                              step_idx: step_idx + 1,
+                              totals: new_totals,
+                              provider: next_provider,
+                              pending_tool_calls: [synth_call],
+                              pending_tool_context: msgs_with_assistant,
+                              pending_tool_prefix: st.msgs ++ [augmented_assistant_msg],
+                              pending_tool_batched: false,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                              last_finish_reason: "hybrid_bash",
+                              last_response_text: result.message.content,
+                              nudges_used: applied.nudges_used,
+                              finalize_source: "",
+                              trace: ledger_append(trace_after_model, WireRecord(event))
+                            };
+                            c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                          },
+                          None => {
+                            match dispatch_solver_candidate(rt, post_ctx, result.message.content) {
+                              Accept(output) =>
+                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
+                              ContinueWithFeedback(feedback) => {
+                                let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
+                                let _ = ledger_emit(session_id, event);
+                                let next_state: C2LoopState = {
+                                  msgs: msgs_with_assistant,
+                                  step_idx: step_idx + 1,
+                                  totals: new_totals,
+                                  provider: next_provider,
+                                  pending_tool_calls: [],
+                                  pending_tool_context: [],
+                                  pending_tool_prefix: [],
+                                  pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                                  last_finish_reason: "solver_feedback",
+                                  last_response_text: feedback,
+                                  nudges_used: applied.nudges_used,
+                                  finalize_source: "",
+                                  trace: ledger_append(trace_after_model, WireRecord(event))
+                                };
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                              },
+                              NoDecision => {
+                                if should_inject_persist_nudge(policy.step.persist_retries, st.nudges_used, any_writefile_attempt(msgs_with_assistant)) then {
+                                  let event = PersistNudge({
+                                    step: step_idx,
+                                    nudge_num: st.nudges_used + 1,
+                                    budget: policy.step.persist_retries
+                                  });
+                                  let _ = ledger_emit(session_id, event);
+                                  let next_state: C2LoopState = {
+                                    msgs: msgs_with_assistant,
+                                    step_idx: step_idx + 1,
+                                    totals: new_totals,
+                                    provider: next_provider,
+                                    pending_tool_calls: [],
+                                    pending_tool_context: [],
+                                    pending_tool_prefix: [],
+                                    pending_tool_batched: true,
+    accumulated_tool_msgs: [],
+    pending_approval: None,
+                                    last_finish_reason: "persist_nudge",
+                                    last_response_text: result.message.content,
+                                    nudges_used: st.nudges_used,
+                                    finalize_source: "",
+                                    trace: ledger_append(trace_after_model, WireRecord(event))
+                                  };
+                                  c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
+                                } else
+                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, result.message.content, "")
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+func run_v2_from_messages_traced_with_policy(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let session_id = derive_session_id();
+  let started_at_ms = now();
+  let session_span = "motoko.session.${session_id}";
+  let live_provider = ported_provider(rt, history, provider);
+  Trace.spanStart(session_span);
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, live_provider));
+  Trace.spanEnd(session_span);
+  result
+}
+
+export func run_v2_session_traced(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider)
+}
+
+export func run_v2_session_traced_with_persist_retries(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  persist_retries: int,
+  provider: StepProvider
+) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let base = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  let policy: SessionPolicy = {
+    step: {
+      step_budget: base.step.step_budget,
+      max_cost_millicents: base.step.max_cost_millicents,
+      cost_metered: base.step.cost_metered,
+      persist_retries: persist_retries,
+      retry_stream_errors: base.step.retry_stream_errors,
+      require_system_prompt: base.step.require_system_prompt,
+      model: base.step.model,
+      provider_base_url: base.step.provider_base_url,
+      compaction: base.step.compaction
+    },
+    headless: base.headless
+  };
+  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider)
+}
+
+func run_v2_from_messages_with_policy(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let session_id = derive_session_id();
+  let started_at_ms = now();
+  let session_span = "motoko.session.${session_id}";
+  let live_provider = ported_provider(rt, history, provider);
+  Trace.spanStart(session_span);
+  let result = c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, c2_initial_state(history, live_provider)).result;
+  Trace.spanEnd(session_span);
+  result
+}
+
+export func run_v2(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  initial_msgs: [Msg],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let messages = msgs_to_messages(initial_msgs);
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider)
+}
+
+-- Run loop_v2 starting from an existing [Message] history (instead of the
+-- legacy [Msg] shape). Used by conversation_loop_v2 to resume after each
+-- user_message arrives — preserves the assistant/tool history accumulated
+-- across the prior task so the model retains context.
+export func run_v2_from_messages(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider)
+}
+
+-- Read a JSON-shaped string field from a decoded Json object, returning
+-- "" when the key is absent or has the wrong type. Mirrors rpc.ail's
+-- get_str helper (kept inline to avoid an import-time circular reference
+-- between rpc.ail and agent_loop_v2.ail).
+func msg_get_str(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    None    => "",
+    Some(j) => match asString(j) { None => "", Some(s) => s }
+  }
+}
+
+-- M8 multi-turn driver: after a v2 task returns, drain stdin for the next
+-- user command and resume. Mirrors rpc.ail's conversation_loop in command
+-- handling (abort/exit/model_change/user_message) but operates on
+-- [Message] history instead of [Msg] + AgentState.
+--
+-- Commands recognized:
+--   abort | exit              → return () (TUI session ends)
+--   model_change { model }    → update model, recurse with same history
+--   user_message { content }  → append user msg, run_v2_from_messages,
+--                                 recurse with returned [Message]
+--   anything else (unparseable
+--     or unknown type)        → discard line, recurse (matches legacy
+--                                 conversation_loop fall-through)
+--
+-- EOF (readLine returns "") cleanly terminates the loop — the env-server
+-- closes stdin when the user exits the TUI.
+func conversation_loop_v2_with_policy(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  policy: SessionPolicy,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  session_id: string
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -- Headless mode (M-MOTOKO-HEADLESS, 2026-05-08): skip the stdin-polling
+  -- conversation loop entirely when MOTOKO_HEADLESS=1. The TS TUI layer
+  -- (src/tui/src/index.ts) sets this env var when stdin is not a TTY
+  -- (CLI subprocess, eval-harness adapter, MCP-mediated invocation) so
+  -- the agent loop runs the initial task to completion and then exits 0
+  -- instead of hanging on readLine() forever (the AILANG readLine builtin
+  -- blocks on non-TTY stdin instead of returning EOF). This is the
+  -- M-BENCH-MOTOKO Day-1 design that originally got skipped — restored
+  -- after the AILANG eval-harness adapter smoke test surfaced the hang
+  -- on 2026-05-08 (msg_20260508_102147_4f9aa71d).
+  if policy.headless then ()
+  else {
+  let raw = readLine();
+  if raw == "" then ()
+  else match decode(raw) {
+    Err(_) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+    Ok(obj) => {
+      let cmd_type = msg_get_str(obj, "type");
+      if cmd_type == "abort" || cmd_type == "exit" then ()
+      else if cmd_type == "model_change" then {
+        let new_model = msg_get_str(obj, "model");
+        let next_policy = session_policy_with_model(policy, new_model);
+        conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, next_policy, new_model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+      }
+      else if cmd_type == "restart" then {
+        -- Emit session_suspend event and exit cleanly; TUI will respawn
+        let target_profile = msg_get_str(obj, "profile");
+        let _ = ledger_emit(session_id, SessionSuspend({
+          session_id: session_id,
+          target_profile: target_profile
+        }));
+        ()
+      }
+      else if cmd_type == "user_message" then {
+        let content = msg_get_str(obj, "content");
+        let user_msg: Message = {
+          role: "user",
+          content: content,
+          tool_calls: [],
+          tool_call_id: ""
+        };
+        let next_history = history ++ [user_msg];
+        let _ = ledger_emit(session_id, SessionStart({
+          task: content,
+          model: model,
+          mode: "v2"
+        }));
+        match run_v2_from_messages_with_policy(rt, content, env_url, hybrid_tools, budget, policy, model, next_history, workdir, ohmy_pi, max_cost_millicents, cost_rates, provider) {
+          Ok(updated_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, updated_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id),
+          Err(e) => {
+            let _ = ledger_emit(session_id, ErrorEvent({
+              source: "agent_loop_v2",
+              code: e.code,
+              message: e.message
+            }));
+            conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+          }
+        }
+      }
+      else conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+    }
+  }
+  }
+}
+
+export func conversation_loop_v2(
+  rt: ExtRuntime,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider,
+  session_id: string
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  let live_provider = ported_provider(rt, history, provider);
+  conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id)
+}
+
+-- M8 combined entry point: runs the initial task via run_v2, then enters
+-- conversation_loop_v2 for follow-up turns. On error from the initial run,
+-- emits a structured error event and still enters conversation_loop_v2
+-- with the original [Msg] history (translated) so the TUI session stays
+-- responsive — matching the legacy behavior where run_with_config falls
+-- through to conversation_loop after rpc_loop returns.
+export func run_v2_with_conversation(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  initial_msgs: [Msg],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  provider: StepProvider
+) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let initial_messages = msgs_to_messages(initial_msgs);
+  let session_id = derive_session_id();
+  let policy = session_policy_init(model, step_budget, max_cost_millicents, cost_rates);
+  let live_provider = ported_provider(rt, initial_messages, provider);
+  match run_v2_from_messages_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, ohmy_pi, max_cost_millicents, cost_rates, live_provider) {
+    Ok(final_history) => conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, final_history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id),
+    Err(e) => {
+      let _ = ledger_emit(session_id, ErrorEvent({
+        source: "agent_loop_v2",
+        code: e.code,
+        message: e.message
+      }));
+      conversation_loop_v2_with_policy(rt, env_url, hybrid_tools, budget, policy, model, initial_messages, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, live_provider, session_id)
+    }
+  }
+}
+
+-- Run loop_v2 with a scripted provider. No real LLM call made.
+-- Intended for integration tests only; not exported from rpc.ail.
+export func run_v2_with_stub(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  script: [ScriptedStep]
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
+}
+
+-- Phase C compatibility adapter. WI-C6 moves the parity fleet to
+-- scripted-port imports; keep this entry for external callers until they are
+-- audited.
+export func run_v2_with_stub_port_adapter(
+  rt: ExtRuntime,
+  task: string,
+  env_url: string,
+  hybrid_tools: bool,
+  budget: BudgetPlan,
+  model: string,
+  history: [Message],
+  workdir: string,
+  step_budget: int,
+  ohmy_pi: bool,
+  max_cost_millicents: int,
+  cost_rates: CostRates,
+  script: [ScriptedStep]
+) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  run_v2_with_stub(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, script)
+}
+
+-- M-MOTOKO-EVAL-INSTRUMENTATION inline tests (pure-only). Validates the
+-- schema-v1 contract surface that downstream eval harnesses depend on.
+
+pure func test_schema_version_is_one() -> bool
+  tests [((), true)]
+  {
+    schema_version() == "1"
+  }
+
+pure func test_millicents_to_usd_zero() -> bool
+  tests [((), true)]
+  {
+    millicents_to_usd(0) == 0.0
+  }
+
+pure func test_millicents_to_usd_one_dollar() -> bool
+  tests [((), true)]
+  {
+    millicents_to_usd(100000) == 1.0
+  }
+
+pure func test_millicents_to_usd_fraction() -> bool
+  tests [((), true)]
+  {
+    -- 12345678 millicents = $123.45678
+    millicents_to_usd(12345678) == 123.45678
+  }
+
+pure func test_finish_reason_str_table() -> bool
+  tests [((), true)]
+  {
+    finish_reason_str(0) == "stop"
+      && finish_reason_str(1) == "cost_exhausted"
+      && finish_reason_str(2) == "dp7_rejected"
+      && finish_reason_str(3) == "compaction_exhausted"
+      && finish_reason_str(4) == "max_steps"
+      && finish_reason_str(5) == "error"
+      && finish_reason_str(99) == "error"
+  }
+
+pure func test_zero_totals_initializes_clean() -> bool
+  tests [((), true)]
+  {
+    let z = zero_totals();
+    z.input_tokens == 0
+      && z.output_tokens == 0
+      && z.cache_read == 0
+      && z.cache_creation == 0
+      && z.cost_millicents == 0
+      && z.cost_warned_pct == 0
+  }
+
+-- Cache-token plumbing helpers (M4 from M-MOTOKO-EVAL-INSTRUMENTATION):
+-- shape sanity for a list-of-kv length given a hypothetical StepResult.
+
+pure func kv_len(xs: [{key: string, value: Json}]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + kv_len(rest) }
+}
+
+pure func mk_test_step_result(input: int, output: int, cr: int, cc: int) -> StepResult {
+  {
+    message: { role: "assistant", content: "", tool_calls: [], tool_call_id: "" },
+    tool_calls: [],
+    finish_reason: "stop",
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_input_tokens: cr,
+    cache_creation_input_tokens: cc
+  }
+}
+
+pure func test_per_step_usage_kvs_no_cache() -> bool
+  tests [((), true)]
+  {
+    -- No cache fields → exactly 3 kv entries (input, output, cost_usd)
+    let r = mk_test_step_result(100, 50, 0, 0);
+    kv_len(per_step_usage_kvs(r, 1500)) == 3
+  }
+
+pure func test_per_step_usage_kvs_cache_read_only() -> bool
+  tests [((), true)]
+  {
+    -- OpenAI / Gemini case: only cache_read populated → 4 kv entries
+    let r = mk_test_step_result(100, 50, 25, 0);
+    kv_len(per_step_usage_kvs(r, 1500)) == 4
+  }
+
+pure func test_per_step_usage_kvs_full_cache() -> bool
+  tests [((), true)]
+  {
+    -- Anthropic case: both cache_read + cache_creation → 5 kv entries
+    let r = mk_test_step_result(100, 50, 25, 12);
+    kv_len(per_step_usage_kvs(r, 1500)) == 5
+  }

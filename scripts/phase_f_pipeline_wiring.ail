@@ -1,0 +1,115 @@
+-- scripts/phase_f_pipeline_wiring.ail
+--
+-- Phase F functional-core pipeline wiring harness.
+
+module scripts/phase_f_pipeline_wiring
+
+import std/ai (Message, ToolCall)
+import std/io (println, exit)
+import std/json (jo)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  CallModel,
+  Fail,
+  StepPolicy,
+  StepState,
+  history_from_seed,
+  project,
+  segment_messages
+)
+import src/core/step_machine (decide)
+
+type CheckResult = { ok: bool, name: string, detail: string }
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func policy(context_limit: int) -> StepPolicy {
+  {
+    step_budget: 8,
+    max_cost_millicents: 0,
+    cost_metered: true,
+    persist_retries: 0,
+    retry_stream_errors: true,
+    require_system_prompt: true,
+    model: "phase-f-model",
+    provider_base_url: "",
+    compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+  }
+}
+
+func pending() -> [ToolCall] {
+  []
+}
+
+func state_with_pressure(context_limit: int) -> Result[StepState, string] {
+  match history_from_seed([msg("system", "pinned"), msg("user", "compactable")]) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: 0,
+      history: h,
+      telemetry: { last_input_tokens: context_limit + 1, last_output_tokens: 0 },
+      totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+      nudges_used: 0,
+      ext_artifacts: jo([]),
+      pending_tool_calls: pending(),
+      last_finish_reason: "",
+      last_response_text: ""
+    })
+  }
+}
+
+func check_project_non_failing_prep() -> CheckResult {
+  match history_from_seed([msg("system", "pinned"), msg("user", "a"), msg("assistant", "b")]) {
+    Err(e) => { ok: false, name: "project_non_failing_prep", detail: "seed failed: ${e}" },
+    Ok(h) =>
+      match project(h, { last_input_tokens: 999, last_output_tokens: 0 }, policy(1).compaction) {
+        Err(e) => { ok: false, name: "project_non_failing_prep", detail: "project failed early: ${e}" },
+        Ok(p) => {
+          let ok = List.length(p.split.pinned) == 1 && List.length(segment_messages(p.split.segment)) == 2;
+          {
+            ok: ok,
+            name: "project_non_failing_prep",
+            detail: "pinned=${show(List.length(p.split.pinned))} segment=${show(List.length(segment_messages(p.split.segment)))}"
+          }
+        }
+      }
+  }
+}
+
+func check_decide_pressure_calls_model() -> CheckResult {
+  match state_with_pressure(1) {
+    Err(e) => { ok: false, name: "decide_pressure_calls_model", detail: "state failed: ${e}" },
+    Ok(s) =>
+      match decide(s, policy(1)) {
+        CallModel(req) => { ok: req.model == "phase-f-model", name: "decide_pressure_calls_model", detail: "model=${req.model}" },
+        Fail(f) => { ok: false, name: "decide_pressure_calls_model", detail: "early fail ${f.code}: ${f.message}" },
+        _ => { ok: false, name: "decide_pressure_calls_model", detail: "decision was not CallModel" }
+      }
+  }
+}
+
+func run_all(results: [CheckResult], failed: int) -> int ! {IO} {
+  match results {
+    [] => failed,
+    r :: rest => {
+      if r.ok then run_all(rest, failed)
+      else {
+        let _ = println("phase_f_pipeline_wiring FAIL ${r.name}: ${r.detail}");
+        run_all(rest, failed + 1)
+      }
+    }
+  }
+}
+
+export func main() -> () ! {IO} {
+  let results = [
+    check_project_non_failing_prep(),
+    check_decide_pressure_calls_model()
+  ];
+  let failed = run_all(results, 0);
+  if failed == 0 then println("phase_f_pipeline_wiring PASS count=${show(List.length(results))}")
+  else exit(1)
+}

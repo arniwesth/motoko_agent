@@ -21,24 +21,6 @@ pure func est0(system: string) -> int
   ]
   { estimate_tokens([], system) }
 
--- Concrete model limits live in .motoko/model-catalog.json under
--- context_limits. Without a readable catalog, unknown means "no limit known"
--- so callers fail open instead of guessing provider-family windows in code.
-export pure func context_limit_for(model: string) -> int
-  ensures { result >= 0 }
-  tests [
-    ("anthropic/some-future-model",                 0),
-    ("gemini-new-model",                            0),
-    ("google/some-gemini-model",                    0),
-    ("openrouter/anthropic/claude-sonnet-4-5",      0),
-    ("openrouter/openai/some-model",                0),
-    ("openrouter/whatever",                         0),
-    ("totally-unknown",                             0)
-  ]
-  {
-    0
-  }
-
 func catalog_path() -> string ! {Env, FS} {
   let explicit = getEnvOr("MOTOKO_MODELS_FILE", "");
   if explicit != "" then explicit
@@ -67,16 +49,16 @@ func lookup_context_limit(limits: Json, model: string) -> Option[int] {
 
 export func catalog_context_limit_for(model: string) -> int ! {Env, FS} {
   let path = catalog_path();
-  if not fileExists(path) then context_limit_for(model)
+  if not fileExists(path) then 0
   else {
     match decode(readFile(path)) {
-      Err(_) => context_limit_for(model),
+      Err(_) => 0,
       Ok(root) => match get(root, "context_limits") {
         Some(limits) => match lookup_context_limit(limits, model) {
           Some(n) => n,
-          None => context_limit_for(model)
+          None => 0
         },
-        None => context_limit_for(model)
+        None => 0
       }
     }
   }

@@ -39,6 +39,21 @@ smoke_no_delegated_storm:
 	[ "$$fail" -eq 0 ] || { echo "smoke_no_delegated_storm FAILED — re-enabling ohmy_pi without M6.5 wired causes BashExec storms"; exit 1; }; \
 	echo "smoke_no_delegated_storm: all 4 profiles have ohmy_pi=false ✓"
 
+smoke_parity:
+	@bash -euo pipefail -c '\
+	if [ -n "$${PARITY_BASELINE:-}" ]; then \
+		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_after; \
+		diff -r "$$PARITY_BASELINE" /tmp/phase_a_parity_after; \
+	else \
+		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_a; \
+		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_b; \
+		diff -r /tmp/phase_a_parity_a /tmp/phase_a_parity_b; \
+	fi'
+
+phase_c_l1:
+	ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail
+	ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
+
 # Type-check every AILANG core runtime module in src/core/, then
 # runtime-boot-probe every extension in the active profile's registry
 # so DP7 can catch the class of bugs that pass type-check but crash

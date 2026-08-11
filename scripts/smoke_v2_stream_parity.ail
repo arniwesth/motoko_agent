@@ -1,0 +1,53 @@
+module scripts/smoke_v2_stream_parity
+
+import std/io (println, exit)
+import std/result (Result, Ok, Err)
+import std/ai (Message)
+import src/core/config (CostRates)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
+import src/core/test/stub_step (ScriptedStep, empty_rt, chunked_prose_step)
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 4, solver: 4, verifier: 0 }
+}
+
+func seed_history() -> [Message] {
+  [
+    { role: "system", content: "stream system prefix", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "stream chunks", tool_calls: [], tool_call_id: "" }
+  ]
+}
+
+func script() -> [ScriptedStep] {
+  [chunked_prose_step("full text", ["chunk-a", "chunk-b", "chunk-c"])]
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let result = run_v2_with_scripted_ports(
+    empty_rt(),
+    "phase-b-stream-parity",
+    "",
+    false,
+    mk_budget(),
+    "anthropic/claude-sonnet-4-6",
+    seed_history(),
+    "/tmp",
+    4,
+    false,
+    0,
+    no_rates(),
+    script()
+  );
+  match result {
+    Ok(_) => println("phase_b_stream_parity PASS"),
+    Err(e) => {
+      let _ = println("phase_b_stream_parity FAIL: ${e.code}: ${e.message}");
+      exit(1)
+    }
+  }
+}

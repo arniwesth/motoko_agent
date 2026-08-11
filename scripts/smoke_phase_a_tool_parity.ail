@@ -1,0 +1,86 @@
+-- scripts/smoke_phase_a_tool_parity.ail
+--
+-- Phase-A event-parity smoke: scripted model emits a native ReadFile tool
+-- call, the v2 loop dispatches it, appends the tool-role result, then a
+-- prose step terminates. The parity harness checks the emitted event bracket.
+
+module scripts/smoke_phase_a_tool_parity
+
+import std/io (println, exit)
+import std/fs (mkdirAllResult, writeFileResult)
+import std/json (jo, kv, js, jnum, encode)
+import std/result (Result, Ok, Err)
+import std/ai (Message, AIError)
+import src/core/config (CostRates)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/test/scripted_ports (run_v2_with_scripted_ports)
+import src/core/test/stub_step (ScriptedStep, empty_rt, tool_step, prose_step)
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func mk_budget() -> BudgetPlan {
+  { total: 4, solver: 4, verifier: 0 }
+}
+
+func seed_fixture(workdir: string, rel_path: string) -> bool ! {IO, FS} {
+  match mkdirAllResult(workdir) {
+    Err(msg) => {
+      let _ = println("FAIL: mkdirAll(${workdir}) -> ${msg}");
+      false
+    },
+    Ok(_) => match writeFileResult("${workdir}/${rel_path}", "phase-a fixture\nsecond line\n") {
+      Err(msg) => {
+        let _ = println("FAIL: writeFileResult(${workdir}/${rel_path}) -> ${msg}");
+        false
+      },
+      Ok(_) => true
+    }
+  }
+}
+
+func script(rel_path: string) -> [ScriptedStep] {
+  let args = encode(jo([
+    kv("path", js(rel_path)),
+    kv("start", jnum(1.0)),
+    kv("end", jnum(2.0))
+  ]));
+  [tool_step("ReadFile", args, "call-1"), prose_step("done")]
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let workdir = "/tmp/phase-a-tool-parity";
+  let rel_path = "fixture.txt";
+  if not seed_fixture(workdir, rel_path) then exit(1)
+  else {
+    let result = run_v2_with_scripted_ports(
+      empty_rt(),
+      "phase-a-tool-parity",
+      "",
+      false,
+      mk_budget(),
+      "openrouter/z-ai/glm-5",
+      [],
+      workdir,
+      4,
+      false,
+      0,
+      no_rates(),
+      script(rel_path)
+    );
+    match result {
+      Ok(history) => {
+        if _list_length(history) >= 3 then println("phase_a_tool_parity PASS")
+        else {
+          let _ = println("phase_a_tool_parity FAIL: short history");
+          exit(1)
+        }
+      },
+      Err(e) => {
+        let _ = println("phase_a_tool_parity FAIL: ${e.code}: ${e.message}");
+        exit(1)
+      }
+    }
+  }
+}
