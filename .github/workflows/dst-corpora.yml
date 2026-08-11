@@ -69,6 +69,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the pinned AILANG toolchain
         run: ./scripts/install-prerequisites.sh
+      # The installer puts ailang in ~/.local/bin and now exports that through
+      # $GITHUB_PATH. This step is the assertion that it arrived: a toolchain
+      # that installs successfully and is then invisible to the next step made
+      # `make corpus_pr` fail in under a second on every PR since WI-A15, and
+      # "Process completed with exit code 2" said nothing about why.
+      - name: Confirm ailang is on PATH
+        run: ailang --version
       - name: D11's blocking PR corpus
         run: make corpus_pr
 
@@ -94,6 +101,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the pinned AILANG toolchain
         run: ./scripts/install-prerequisites.sh
+      - name: Confirm ailang is on PATH
+        run: ailang --version
       - name: Resolve the rotation epoch
         id: epoch
         run: |

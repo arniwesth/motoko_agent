@@ -1872,8 +1872,18 @@ terminal_trace:
 #
 # All eight need the full capability set and --ai-stub, and all eight read from
 # /dev/null so a stub prompt cannot block CI. This mirrors compaction_dst.
+#
+# THE SETUP LINE IS PART OF THE TARGET, not a documented precondition.
+# smoke_v2_dp7_gate needs three /tmp workdirs (always-fail, always-pass, and
+# no-Makefile) to tell DP7's three outcomes apart. Only `smoke_parity` created
+# them, via phase_a_event_parity.sh — and in CI that step runs AFTER this one,
+# so smoke_driver failed on every PR from the day WI-A16 wired it in while
+# passing on any developer machine where an earlier `make smoke_parity` had left
+# the directories behind. A target whose result depends on what ran before it is
+# not a gate, so it now makes its own fixtures.
 .PHONY: smoke_driver
 smoke_driver:
+	@bash scripts/setup_dp7_smoke_workdirs.sh > /dev/null
 	@fail=0; \
 	for f in scripts/smoke_v2_dp7_gate.ail \
 	         scripts/smoke_v2_pending_full_loop.ail \
