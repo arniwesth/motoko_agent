@@ -1,0 +1,77 @@
+module sunholo/motoko_ext_ailang_docs/ailang_docs
+
+import std/option (Option, Some, None)
+import std/fs (fileExists)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  PassThrough, PreStepDecision, Msg,
+  ToolCallEnvelope
+)
+import pkg/sunholo/motoko_ext_mcp/types (McpServerConfig, McpToolMapping)
+import pkg/sunholo/motoko_ext_mcp/exec (run_mcp_tool)
+import pkg/sunholo/motoko_ext_mcp/resolve (resolve_tool, all_tool_names)
+import pkg/sunholo/motoko_ext_ailang_docs/types (mcp_config, tool_mappings, tool_schemas)
+import pkg/sunholo/motoko_ext_ailang_docs/prompts (build_prompt_patch)
+
+func no_budget_patch() -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+-- Workdir gate: only register tools when the workdir is plausibly an
+-- AILANG project. Cheap heuristic — check for ailang.toml at the root.
+-- False negatives (working on AILANG code outside an ailang.toml dir)
+-- are fine: the model can still answer AILANG questions from its own
+-- training, just without the docs tools surfaced. False positives
+-- (toml exists but task is unrelated) are bounded by the prompt-side
+-- task_signals_ailang gate in build_prompt_patch.
+func workdir_is_ailang_project(workdir: string) -> bool ! {FS} {
+  fileExists("${workdir}/ailang.toml")
+}
+
+export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, FS} {
+  match resolve_tool(call.tool, mappings) {
+    Some(m) => match run_mcp_tool(call.id, m.canonical, ctx.workdir, cfg, m.mcp_name, call.arguments) {
+      Some(result) => Handled(result),
+      None => Delegate
+    },
+    None => Delegate
+  }
+}
+
+export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> ExtensionHooks ! {FS} {
+  let active = workdir_is_ailang_project(workdir);
+  let cfg = mcp_config(timeout_ms, max_output_chars);
+  let mappings = tool_mappings();
+  let tools = if active then all_tool_names(mappings) else [];
+  let schemas = if active then tool_schemas() else [];
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle(cfg, mappings, ctx, call)
+  };
+  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoIntercept
+  };
+  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    NoDecision
+  };
+  {
+    id: "ailang_docs",
+    provided_tools: tools,
+    on_describe_tools: \_ . schemas,
+    on_build_system_prompt: \ctx. build_prompt_patch(ctx.task),
+    on_budget_plan:
+      func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+        no_budget_patch()
+      },
+    on_pre_step:
+      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+        PassThrough
+      },
+    on_tool_policy:
+      \_ctx _call. NoOpinion,
+    on_tool_handle: handle,
+    on_response_intercept: intercept,
+    on_solver_candidate: finalize
+  }
+}

@@ -6,6 +6,7 @@ import std/result (Result, Ok, Err)
 import std/string (length as string_length)
 import std/ai (ToolCall)
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   compact_for_pre_step,
   elide_old_tool_results,
@@ -103,9 +104,12 @@ func ctx(limit: int) -> ExtCtx {
     env_server_url: "",
     budget_remaining: 1,
     history_slice: [],
-    state_key: "k"
-  }
-}
+	    state_key: "k",
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry()
+	  }
+	}
 
 func tool_heavy_msgs() -> [Msg] {
   let c = long_content();
@@ -153,14 +157,14 @@ func same_tool_ids(a: [Msg], b: [Msg]) -> bool {
 func expect_passthrough(decision: PreStepDecision) -> bool {
   match decision {
     PassThrough => true,
-    Compacted(_, _) => false
+    Compacted(_, _, _) => false
   }
 }
 
 func expect_compacted_keep(decision: PreStepDecision, keep_last: int, invariant_name: string) -> Result[(), ScenarioFailure] {
   match decision {
     PassThrough => Err({ failed_invariant: invariant_name, trace: ["decision=PassThrough"] }),
-    Compacted(out, _) => {
+    Compacted(out, _, _) => {
       let kept = count_kept_tools(out, long_content());
       ok_or_failure(kept == keep_last, invariant_name, [
         "kept=${show(kept)}",
@@ -250,7 +254,7 @@ func scenario_emergency_recovery_or_defer() -> Result[(), ScenarioFailure] {
   let recovery = compact_for_pre_step(ctx(tool_limit), tools);
   match recovery {
     PassThrough => Err({ failed_invariant: "emergency tool-heavy pressure recovers", trace: ["decision=PassThrough"] }),
-    Compacted(out, _) => {
+    Compacted(out, _, _) => {
       let recovered = length(out) == length(tools) && count_kept_tools(out, long_content()) == emergency_keep_last();
       if not recovered then Err({
         failed_invariant: "emergency tool-heavy pressure recovers",
@@ -261,7 +265,7 @@ func scenario_emergency_recovery_or_defer() -> Result[(), ScenarioFailure] {
         let blocked_limit = limit_for_pct(blocked, emergency_pct() + 2);
         match compact_for_pre_step(ctx(blocked_limit), blocked) {
           PassThrough => Ok(()),
-          Compacted(_, _) => Err({
+          Compacted(_, _, _) => Err({
             failed_invariant: "emergency non-tool pressure defers to seal",
             trace: ["decision=Compacted", "final_keep_last=${show(emergency_final_keep_last())}"]
           })

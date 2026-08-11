@@ -31,6 +31,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   Handled
 )
 import src/core/types (Msg)
+import src/core/ext/ctx_defaults (empty_ext_artifacts)
 
 pure func count_system(msgs: [Msg]) -> int {
   match msgs {
@@ -85,7 +86,7 @@ pure func solve_candidate(_ctx: ExtCtx, candidate: string)
 
 pure func pre_step(_ctx: ExtCtx, msgs: [Msg])
   -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}")
+  Compacted(msgs, "fixture_prestep sys=${show(count_system(msgs))}", empty_ext_artifacts())
 }
 
 export pure func fixture_rt() -> ExtRuntime {

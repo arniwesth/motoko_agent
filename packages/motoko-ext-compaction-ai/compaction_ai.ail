@@ -1,0 +1,180 @@
+-- AI-powered conversation compaction extension.
+-- Uses host-provided ports to summarize old conversation turns when context fills up.
+
+module sunholo/motoko_ext_compaction_ai/compaction_ai
+
+import std/ai (Message)
+import std/crypto (sha256Hex)
+import std/json (Json, jo, kv, js, get, asString)
+import std/list (length as list_length)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, PreStepDecision, PassThrough, Compacted, Msg, ToolCall)
+import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
+import src/core/compaction (usage_percent_with_limit)
+
+func msg_to_message(m: Msg) -> Message {
+  { role: m.role, content: m.content, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id }
+}
+
+func msgs_to_messages(msgs: [Msg]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => msg_to_message(m) :: msgs_to_messages(rest)
+  }
+}
+
+func usage_percent(msgs: [Msg], context_limit: int) -> int {
+  usage_percent_with_limit(msgs_to_messages(msgs), context_limit)
+}
+
+func format_msg(m: Msg) -> string {
+  "[${m.role}] ${m.content}"
+}
+
+func format_msgs_for_summary(msgs: [Msg]) -> string {
+  match msgs {
+    [] => "",
+    m :: [] => format_msg(m),
+    m :: rest => "${format_msg(m)}\n${format_msgs_for_summary(rest)}"
+  }
+}
+
+func summarization_prompt(old_turns: [Msg], recent_turns: [Msg]) -> string {
+  let old_text = format_msgs_for_summary(old_turns);
+  let recent_count = list_length(recent_turns);
+  "Summarize the following conversation history in 2-3 sentences.
+Preserve:
+- Key decisions made
+- Files modified
+- Errors encountered and how they were resolved
+- Current task state
+
+OLD TURNS (summarize these):
+${old_text}
+
+RECENT TURNS (keep these verbatim - ${show(recent_count)} messages):
+[... see recent context ...]
+
+Provide a concise summary that captures essential context for continuing the task."
+}
+
+export func summarize_with_ai(ctx: ExtCtx, prompt: string, model: string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  let prompt_msgs: [Msg] = [{ role: "user", content: prompt, tool_calls: [], tool_call_id: "" }];
+  match ctx.ports.ai_step(model, prompt_msgs) {
+    Ok(content) => content,
+    Err(msg) => "[summarizer unavailable: ${msg}]"
+  }
+}
+
+type SplitResult = { prefix: [Msg], old: [Msg], recent: [Msg] }
+
+func split_prefix(msgs: [Msg]) -> { prefix: [Msg], rest: [Msg] } {
+  match msgs {
+    [] => { prefix: [], rest: [] },
+    m :: rest =>
+      if m.role == "system" then {
+        let next = split_prefix(rest);
+        { prefix: m :: next.prefix, rest: next.rest }
+      } else { prefix: [], rest: msgs }
+  }
+}
+
+func has_tool_call_id(calls: [ToolCall], id: string) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.id == id then true else has_tool_call_id(rest, id)
+  }
+}
+
+func has_tool_result_for(calls: [ToolCall], msgs: [Msg]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "tool" && has_tool_call_id(calls, m.tool_call_id) then true
+      else has_tool_result_for(calls, rest)
+  }
+}
+
+func split_body(body: [Msg], keep_recent: int) -> { old: [Msg], recent: [Msg] } {
+  let n = list_length(body);
+  if n <= keep_recent then { old: [], recent: body }
+  else match body {
+    [] => { old: [], recent: [] },
+    m :: rest => {
+      if list_length(rest) < keep_recent then { old: [], recent: body }
+      else if list_length(m.tool_calls) > 0 && has_tool_result_for(m.tool_calls, rest) then { old: [], recent: body }
+      else {
+        let next = split_body(rest, keep_recent);
+        { old: m :: next.old, recent: next.recent }
+      }
+    }
+  }
+}
+
+func split_msgs(msgs: [Msg], keep_recent: int) -> SplitResult {
+  let p = split_prefix(msgs);
+  let body = split_body(p.rest, keep_recent);
+  { prefix: p.prefix, old: body.old, recent: body.recent }
+}
+
+func summary_msg(summary: string) -> Msg {
+  { role: "assistant", content: "[CONTEXT SUMMARY] ${summary}", tool_calls: [], tool_call_id: "" }
+}
+
+func canonical_msgs(msgs: [Msg]) -> string {
+  match msgs {
+    [] => "",
+    m :: rest => "${m.role}|${m.tool_call_id}|${show(list_length(m.tool_calls))}|${m.content}\n${canonical_msgs(rest)}"
+  }
+}
+
+func segment_digest(msgs: [Msg]) -> string {
+  "sha256:${sha256Hex(canonical_msgs(msgs))}"
+}
+
+func cached_summary(artifacts: Json, digest: string) -> Option[string] {
+  match get(artifacts, "compaction_ai") {
+    None => None,
+    Some(node) => {
+      let stored_digest = match get(node, "segment_digest") { None => "", Some(j) => match asString(j) { None => "", Some(s) => s } };
+      if stored_digest != digest then None
+      else match get(node, "summary") {
+        None => None,
+        Some(sj) => asString(sj)
+      }
+    }
+  }
+}
+
+func cache_artifact(digest: string, summary: string) -> Json {
+  jo([
+    kv("compaction_ai", jo([
+      kv("segment_digest", js(digest)),
+      kv("summary", js(summary))
+    ]))
+  ])
+}
+
+export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  let pct = usage_percent(msgs, ctx.context_limit);
+  if pct < cfg.threshold_pct then PassThrough
+  else {
+    let keep_recent = if pct >= 90 then (cfg.keep_recent / 2) else cfg.keep_recent;
+    let split_result = split_msgs(msgs, keep_recent);
+    let old_turns = split_result.old;
+    let recent_turns = split_result.recent;
+
+    if list_length(old_turns) == 0 then PassThrough
+    else {
+      let digest = segment_digest(old_turns);
+      let summary = match cached_summary(ctx.artifacts, digest) {
+        Some(cached) => cached,
+        None => summarize_with_ai(ctx, summarization_prompt(old_turns, recent_turns), cfg.model)
+      };
+      let compacted = split_result.prefix ++ [summary_msg(summary)] ++ recent_turns;
+      let new_pct = usage_percent(compacted, ctx.context_limit);
+      Compacted(compacted, "AI-summarized ${show(list_length(old_turns))} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary))
+    }
+  }
+}

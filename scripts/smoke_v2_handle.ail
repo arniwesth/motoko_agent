@@ -24,6 +24,7 @@ import std/ai (ToolSchema)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtRegistry, ExtensionHooks, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision, PromptPatch, BudgetPatch, Msg, PassThrough)
 import src/core/config (VerificationConfig)
 import src/core/ext/runtime (dispatch_tool_handle)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, result_to_json)
 
 -- Stub that handles any "FakeTool" call by returning a synthetic envelope.
@@ -107,8 +108,11 @@ export func main() -> () ! {IO, Clock, Env} {
     budget_remaining: 4,
     history_slice: [],
     state_key: "test",
-    context_limit: 0
-  };
+	    context_limit: 0,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry()
+	  };
 
   -- Case 1: FakeTool — extension should return Handled
   let envelope_fake: ToolCallEnvelope = {

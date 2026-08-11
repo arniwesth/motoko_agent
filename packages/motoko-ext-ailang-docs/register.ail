@@ -1,0 +1,26 @@
+module sunholo/motoko_ext_ailang_docs/register
+
+import std/env (getEnvOr)
+import std/string (stringToInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_ailang_docs/ailang_docs (make_hooks)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None    => fallback
+  }
+}
+
+-- Mirrors motoko_ext_exa_search/register: read workdir + timing knobs
+-- from env, hand off to ailang_docs.make_hooks. The workdir-gate happens
+-- inside make_hooks (see workdir_is_ailang_project), so a non-AILANG
+-- workdir loads the extension with empty provided_tools — same shape
+-- as motoko_ext_omnigraph's portability gate.
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+  let workdir          = getEnvOr("MOTOKO_WORKDIR", ".");
+  let timeout_ms       = parse_int_or(getEnvOr("AILANG_DOCS_TIMEOUT_MS", "30000"), 30000);
+  let max_output_chars = parse_int_or(getEnvOr("AILANG_DOCS_MAX_OUTPUT_CHARS", "8000"), 8000);
+  make_hooks(workdir, timeout_ms, max_output_chars)
+}

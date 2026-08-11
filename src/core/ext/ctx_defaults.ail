@@ -1,0 +1,38 @@
+module src/core/ext/ctx_defaults
+
+import std/json (Json, jo)
+import std/result (Result, Err)
+import pkg/sunholo/motoko_ext_abi/types (ExtPorts, Msg, TokenTelemetry)
+
+func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  Err("ext ai_step port unavailable")
+}
+
+func noop_proc_exec(_cmd: string, _cwd: string) -> string ! {IO, Process, FS} {
+  ""
+}
+
+func noop_clock_now() -> int ! {Clock} {
+  0
+}
+
+func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
+  fallback
+}
+
+export func noop_ext_ports() -> ExtPorts {
+  {
+    ai_step: noop_ai_step,
+    proc_exec: noop_proc_exec,
+    clock_now: noop_clock_now,
+    env_get: noop_env_get
+  }
+}
+
+export pure func empty_ext_artifacts() -> Json {
+  jo([])
+}
+
+export pure func zero_token_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0 }
+}

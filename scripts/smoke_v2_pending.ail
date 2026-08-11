@@ -33,9 +33,13 @@ import pkg/sunholo/motoko_ext_abi/types (
   FinalizeDecision,
   PromptPatch,
   BudgetPatch,
-  PolicyDefault
+	  PolicyDefault,
+	  Msg,
+	  PreStepDecision,
+	  PassThrough
 )
 import src/core/ext/runtime (dispatch_tool_policy)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
 import std/ai (ToolSchema)
@@ -87,6 +91,10 @@ pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision
   Delegate
 }
 
+pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  PassThrough
+}
+
 -- Build an ExtensionHooks record with the given policy fn. All other
 -- hook slots get neutral implementations.
 func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtensionHooks {
@@ -94,9 +102,10 @@ func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecisio
     id: id,
     provided_tools: [],
     on_describe_tools: empty_describe_tools,
-    on_build_system_prompt: empty_prompt_patch,
-    on_budget_plan: empty_budget_patch,
-    on_tool_policy: policy,
+	    on_build_system_prompt: empty_prompt_patch,
+	    on_budget_plan: empty_budget_patch,
+	    on_pre_step: pass_pre_step,
+	    on_tool_policy: policy,
     on_tool_handle: no_handle,
     on_response_intercept: noop_response_intercept,
     on_solver_candidate: nodecision_solver_candidate
@@ -126,9 +135,13 @@ func mk_ctx() -> ExtCtx {
     env_server_url: "",
     budget_remaining: 4,
     history_slice: [],
-    state_key: "test"
-  }
-}
+	    state_key: "test",
+	    context_limit: 0,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry()
+	  }
+	}
 
 func mk_envelope() -> ToolCallEnvelope {
   { id: "test-call-1", tool: "BashExec", arguments: jo([]) }

@@ -1,0 +1,23 @@
+[package]
+name = "sunholo/motoko_ext_omnigraph"
+version = "0.2.3"
+edition = "1"
+ailang = ">=0.18.11"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+
+[effects]
+max = ["Process", "FS", "Env", "SharedMem", "IO"]
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_omnigraph/register",
+  "sunholo/motoko_ext_omnigraph/omnigraph",
+  "sunholo/motoko_ext_omnigraph/exec",
+  "sunholo/motoko_ext_omnigraph/types",
+  "sunholo/motoko_ext_omnigraph/args",
+  "sunholo/motoko_ext_omnigraph/guardrail",
+  "sunholo/motoko_ext_omnigraph/normalize",
+  "sunholo/motoko_ext_omnigraph/prompts"
+]

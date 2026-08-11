@@ -12,13 +12,17 @@ IFACE_SCHEMA = "ailang.iface/v1"
 DEFAULT_PROFILE = "core"
 PROFILES = {
     "core": ("src/core",),
-    "all": ("src", "scripts", "examples"),
+    "all": ("src", "scripts", "examples", "packages"),
     "smoke": ("scripts", "examples", "src/examples"),
 }
 ROOT_HOST_GLOBS = (
     "AGENTS.md",
+    "Makefile",
     "ailang.toml",
+    "ailang.lock",
     "config.json",
+    ".motoko/config/**/*.json",
+    "packages/**/*.toml",
     "scripts/install-prerequisites.sh",
     "tools/code-graph/README.md",
     "tools/code-graph/**/*.py",

@@ -44,7 +44,7 @@ import src/core/tool_dispatch_adapter (tool_call_to_envelope)
 import src/core/types (Msg)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ResponseInterceptDecision, FinalizeDecision)
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision)
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
 import src/core/context_usage (catalog_context_limit_for)
 import src/core/ext/runtime (
@@ -124,7 +124,7 @@ import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ApprovalAllowed, ApprovalDenied)
+import src/core/ports (ApprovalAllowed, ApprovalDenied, Ports)
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -321,6 +321,8 @@ type C2LoopState = {
   msgs: [Message],
   step_idx: int,
   totals: RuntimeLoopTotals,
+  ext_artifacts: Json,
+  telemetry: { last_input_tokens: int, last_output_tokens: int },
   provider: StepProvider,
   pending_tool_calls: [ToolCall],
   pending_tool_context: [Message],
@@ -406,10 +408,10 @@ func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
     Ok(h) => Ok({
       step_idx: st.step_idx,
       history: h,
-      telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+      telemetry: st.telemetry,
       totals: c2_step_totals(st.totals),
       nudges_used: st.nudges_used,
-      ext_artifacts: jo([]),
+      ext_artifacts: st.ext_artifacts,
       pending_tool_calls: st.pending_tool_calls,
       last_finish_reason: st.last_finish_reason,
       last_response_text: st.last_response_text
@@ -422,6 +424,8 @@ func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState
     msgs: history,
     step_idx: 0,
     totals: zero_totals(),
+    ext_artifacts: jo([]),
+    telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
     provider: provider,
     pending_tool_calls: [],
     pending_tool_context: [],
@@ -435,6 +439,38 @@ func c2_initial_state(history: [Message], provider: StepProvider) -> C2LoopState
     finalize_source: "",
     trace: empty_ledger_trace()
   }
+}
+
+func ext_ai_step(p: Ports, model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
+  match p.model_step(model, msgs_to_messages(msgs), on_chunk) {
+    Ok(result) => Ok(result.message.content),
+    Err(e) => Err("${e.code}: ${e.message}")
+  }
+}
+
+func ext_ports_of(p: Ports) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+  let ai_step = func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+    ext_ai_step(p, model, msgs)
+  };
+  {
+    ai_step: ai_step,
+    proc_exec: p.tool_exec,
+    clock_now: p.clock_now,
+    env_get: p.env_get
+  }
+}
+
+func ext_ports_for_provider(rt: ExtRuntime, history: [Message], provider: StepProvider) -> ExtPorts ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+  match provider {
+    Ported(p) => ext_ports_of(p),
+    LiveAI => ext_ports_of(live_ports(rt)),
+    Scripted(script) => ext_ports_of(scripted_ports_from_steps(history, script))
+  }
+}
+
+pure func ext_token_telemetry(t: { last_input_tokens: int, last_output_tokens: int }) -> TokenTelemetry {
+  { last_input_tokens: t.last_input_tokens, last_output_tokens: t.last_output_tokens }
 }
 
 func ported_provider(rt: ExtRuntime, history: [Message], provider: StepProvider) -> StepProvider {
@@ -676,7 +712,10 @@ func mk_v2_ext_ctx(
   hybrid_tools: bool,
   budget: BudgetPlan,
   history: [Message],
-  context_limit: int
+  context_limit: int,
+  ports: ExtPorts,
+  artifacts: Json,
+  telemetry: { last_input_tokens: int, last_output_tokens: int }
 ) -> ExtCtx {
   let remaining = if budget.total - step_idx < 0 then 0 else budget.total - step_idx;
   {
@@ -692,7 +731,10 @@ func mk_v2_ext_ctx(
     budget_remaining: remaining,
     history_slice: messages_to_msgs(history),
     state_key: "core:ext:v2",
-    context_limit: context_limit
+    context_limit: context_limit,
+    ports: ports,
+    artifacts: artifacts,
+    telemetry: ext_token_telemetry(telemetry)
   }
 }
 
@@ -1100,9 +1142,11 @@ func c2_finish_tool_batch(
   else ();
   let next_state: C2LoopState = {
     msgs: c2_pending_prefix(st) ++ tool_msgs,
-    step_idx: st.step_idx,
-    totals: st.totals,
-    provider: st.provider,
+	    step_idx: st.step_idx,
+	    totals: st.totals,
+	    ext_artifacts: st.ext_artifacts,
+	    telemetry: st.telemetry,
+	    provider: st.provider,
     pending_tool_calls: [],
     pending_tool_context: [],
     pending_tool_prefix: [],
@@ -1142,9 +1186,11 @@ func c2_continue_tool_batch(
     _ => {
       let next_state: C2LoopState = {
         msgs: st.msgs,
-        step_idx: st.step_idx,
-        totals: st.totals,
-        provider: st.provider,
+	        step_idx: st.step_idx,
+	        totals: st.totals,
+	        ext_artifacts: st.ext_artifacts,
+	        telemetry: st.telemetry,
+	        provider: st.provider,
         pending_tool_calls: c2_tool_plan_calls(req.remaining),
         pending_tool_context: st.pending_tool_context,
         pending_tool_prefix: st.pending_tool_prefix,
@@ -1174,9 +1220,11 @@ func c2_after_dp7(
   workdir: string,
   ohmy_pi: bool,
   max_cost_millicents: int,
-  cost_rates: CostRates,
-  totals: RuntimeLoopTotals,
-  next_provider: StepProvider,
+	  cost_rates: CostRates,
+	  totals: RuntimeLoopTotals,
+	  ext_artifacts: Json,
+	  telemetry: { last_input_tokens: int, last_output_tokens: int },
+	  next_provider: StepProvider,
   session_id: string,
   started_at_ms: int,
   trace: LedgerTrace,
@@ -1189,9 +1237,11 @@ func c2_after_dp7(
     Some(errors) => {
       let next_state: C2LoopState = {
         msgs: msgs_with_assistant,
-        step_idx: next_step_idx,
-        totals: totals,
-        provider: next_provider,
+	        step_idx: next_step_idx,
+	        totals: totals,
+	        ext_artifacts: ext_artifacts,
+	        telemetry: telemetry,
+	        provider: next_provider,
         pending_tool_calls: [],
         pending_tool_context: [],
         pending_tool_prefix: [],
@@ -1209,9 +1259,11 @@ func c2_after_dp7(
     None => {
       let next_state: C2LoopState = {
         msgs: msgs_with_assistant,
-        step_idx: next_step_idx,
-        totals: totals,
-        provider: next_provider,
+	        step_idx: next_step_idx,
+	        totals: totals,
+	        ext_artifacts: ext_artifacts,
+	        telemetry: telemetry,
+	        provider: next_provider,
         pending_tool_calls: [],
         pending_tool_context: [],
         pending_tool_prefix: [],
@@ -1273,9 +1325,11 @@ func c2_loop(
           let next_nudges = if st.last_finish_reason == "persist_nudge" then st.nudges_used + 1 else st.nudges_used;
           let next_state: C2LoopState = {
             msgs: next_msgs,
-            step_idx: st.step_idx,
-            totals: st.totals,
-            provider: st.provider,
+	            step_idx: st.step_idx,
+	            totals: st.totals,
+	            ext_artifacts: st.ext_artifacts,
+	            telemetry: st.telemetry,
+	            provider: st.provider,
             pending_tool_calls: [],
             pending_tool_context: [],
             pending_tool_prefix: [],
@@ -1295,9 +1349,11 @@ func c2_loop(
           let _ = ledger_emit(session_id, cp.event);
           let next_state: C2LoopState = {
             msgs: st.msgs,
-            step_idx: st.step_idx,
-            totals: st.totals,
-            provider: st.provider,
+	            step_idx: st.step_idx,
+	            totals: st.totals,
+	            ext_artifacts: cp.state.ext_artifacts,
+	            telemetry: cp.state.telemetry,
+	            provider: st.provider,
             pending_tool_calls: st.pending_tool_calls,
             pending_tool_context: st.pending_tool_context,
             pending_tool_prefix: st.pending_tool_prefix,
@@ -1322,7 +1378,7 @@ func c2_loop(
               let raw = readLine();
               let resolution = resolve_approval(raw, req.default_allow, raw == "");
               let tool_step_idx = c2_done_step(st.step_idx);
-              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), catalog_context_limit_for(model));
+              let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, c2_pending_context(st), catalog_context_limit_for(model), ext_ports_for_provider(rt, c2_pending_context(st), st.provider), st.ext_artifacts, st.telemetry);
               match resolution {
                 ApprovalDenied(reason) => {
                   let _ = ledger_emit(session_id, NativeToolDenied({
@@ -1349,7 +1405,7 @@ func c2_loop(
           let calls = c2_tool_plan_calls(plan.entries);
           let request_id = "step-${show(tool_step_idx)}";
           let ctx_msgs = c2_pending_context(st);
-          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, catalog_context_limit_for(model));
+          let ctx = mk_v2_ext_ctx(task, tool_step_idx, model, workdir, env_url, hybrid_tools, budget, ctx_msgs, catalog_context_limit_for(model), ext_ports_for_provider(rt, ctx_msgs, st.provider), st.ext_artifacts, st.telemetry);
           let emit_calls = st.pending_tool_batched && List.length(st.accumulated_tool_msgs) == 0 && st.last_finish_reason != "approval_resolved";
           let _ = if emit_calls then
             ledger_emit(session_id, NativeToolCalls({
@@ -1365,9 +1421,11 @@ func c2_loop(
             ToolDispatchPending(pending) => {
               let next_state: C2LoopState = {
                 msgs: st.msgs,
-                step_idx: st.step_idx,
-                totals: st.totals,
-                provider: st.provider,
+	                step_idx: st.step_idx,
+	                totals: st.totals,
+	                ext_artifacts: st.ext_artifacts,
+	                telemetry: st.telemetry,
+	                provider: st.provider,
                 pending_tool_calls: [pending.request.call],
                 pending_tool_context: st.pending_tool_context,
                 pending_tool_prefix: st.pending_tool_prefix,
@@ -1391,7 +1449,7 @@ func c2_loop(
           let compactable_msgs = segment_messages(split.segment);
           let pinned_tokens = estimate_tokens_messages(split.pinned);
           let ext_context_limit = if context_limit - pinned_tokens < 0 then 0 else context_limit - pinned_tokens;
-          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit);
+          let pre_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, st.msgs, ext_context_limit, ext_ports_for_provider(rt, st.msgs, st.provider), st.ext_artifacts, st.telemetry);
           let chain = dispatch_pre_step_chain(rt, pre_ctx, messages_to_msgs(compactable_msgs));
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
@@ -1436,9 +1494,11 @@ func c2_loop(
                     let _ = ledger_emit(session_id, retry_event);
                     let next_state: C2LoopState = {
                       msgs: st.msgs,
-                      step_idx: step_idx + 1,
-                      totals: st.totals,
-                      provider: next_provider,
+	                      step_idx: step_idx + 1,
+	                      totals: st.totals,
+	                      ext_artifacts: chain.artifacts,
+	                      telemetry: st.telemetry,
+	                      provider: next_provider,
                       pending_tool_calls: [],
                       pending_tool_context: [],
                       pending_tool_prefix: [],
@@ -1469,7 +1529,7 @@ func c2_loop(
                   let applied = apply_state_delta(step_state, phase.delta);
                   let assistant_msg = step_result_to_message(result);
                   let msgs_with_assistant = st.msgs ++ [assistant_msg];
-                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit);
+                  let post_ctx = mk_v2_ext_ctx(task, step_idx, model, workdir, env_url, hybrid_tools, budget, msgs_with_assistant, context_limit, ext_ports_for_provider(rt, msgs_with_assistant, next_provider), chain.artifacts, applied.telemetry);
                   let trace_after_model = c2_trace_wire_events(ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), phase.events);
                   match dispatch_response_intercept(rt, post_ctx, result.message.content) {
                     InterceptHandled(envelope) => {
@@ -1484,9 +1544,11 @@ func c2_loop(
                       let tool_msg = envelope_to_tool_message(envelope);
                       let next_state: C2LoopState = {
                         msgs: msgs_with_assistant ++ [tool_msg],
-                        step_idx: step_idx + 1,
-                        totals: new_totals,
-                        provider: next_provider,
+	                        step_idx: step_idx + 1,
+	                        totals: new_totals,
+	                        ext_artifacts: chain.artifacts,
+	                        telemetry: applied.telemetry,
+	                        provider: next_provider,
                         pending_tool_calls: [],
                         pending_tool_context: [],
                         pending_tool_prefix: [],
@@ -1505,9 +1567,11 @@ func c2_loop(
                       if result.finish_reason == "tool_calls" then {
                         let next_state: C2LoopState = {
                           msgs: msgs_with_assistant,
-                          step_idx: step_idx + 1,
-                          totals: new_totals,
-                          provider: next_provider,
+	                          step_idx: step_idx + 1,
+	                          totals: new_totals,
+	                          ext_artifacts: chain.artifacts,
+	                          telemetry: applied.telemetry,
+	                          provider: next_provider,
                           pending_tool_calls: applied.pending_tool_calls,
                           pending_tool_context: msgs_with_assistant,
                           pending_tool_prefix: msgs_with_assistant,
@@ -1536,9 +1600,11 @@ func c2_loop(
                             };
                             let next_state: C2LoopState = {
                               msgs: msgs_with_assistant,
-                              step_idx: step_idx + 1,
-                              totals: new_totals,
-                              provider: next_provider,
+	                              step_idx: step_idx + 1,
+	                              totals: new_totals,
+	                              ext_artifacts: chain.artifacts,
+	                              telemetry: applied.telemetry,
+	                              provider: next_provider,
                               pending_tool_calls: [synth_call],
                               pending_tool_context: msgs_with_assistant,
                               pending_tool_prefix: st.msgs ++ [augmented_assistant_msg],
@@ -1556,15 +1622,17 @@ func c2_loop(
                           None => {
                             match dispatch_solver_candidate(rt, post_ctx, result.message.content) {
                               Accept(output) =>
-                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
+	                                c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, next_provider, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, output, "ext_solver_accept"),
                               ContinueWithFeedback(feedback) => {
                                 let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
                                 let _ = ledger_emit(session_id, event);
                                 let next_state: C2LoopState = {
                                   msgs: msgs_with_assistant,
-                                  step_idx: step_idx + 1,
-                                  totals: new_totals,
-                                  provider: next_provider,
+	                                  step_idx: step_idx + 1,
+	                                  totals: new_totals,
+	                                  ext_artifacts: chain.artifacts,
+	                                  telemetry: applied.telemetry,
+	                                  provider: next_provider,
                                   pending_tool_calls: [],
                                   pending_tool_context: [],
                                   pending_tool_prefix: [],
@@ -1589,9 +1657,11 @@ func c2_loop(
                                   let _ = ledger_emit(session_id, event);
                                   let next_state: C2LoopState = {
                                     msgs: msgs_with_assistant,
-                                    step_idx: step_idx + 1,
-                                    totals: new_totals,
-                                    provider: next_provider,
+	                                    step_idx: step_idx + 1,
+	                                    totals: new_totals,
+	                                    ext_artifacts: chain.artifacts,
+	                                    telemetry: applied.telemetry,
+	                                    provider: next_provider,
                                     pending_tool_calls: [],
                                     pending_tool_context: [],
                                     pending_tool_prefix: [],
@@ -1606,7 +1676,7 @@ func c2_loop(
                                   };
                                   c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                                 } else
-                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, next_provider, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, result.message.content, "")
+	                                  c2_after_dp7(rt, task, env_url, hybrid_tools, budget, policy, model, msgs_with_assistant, workdir, ohmy_pi, max_cost_millicents, cost_rates, new_totals, chain.artifacts, applied.telemetry, next_provider, session_id, started_at_ms, trace_after_model, step_idx + 1, step_idx, result.message.content, "")
                               }
                             }
                           }
