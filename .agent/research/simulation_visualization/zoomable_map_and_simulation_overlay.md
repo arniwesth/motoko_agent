@@ -8,11 +8,11 @@
 
 ## 0. Verdict up front
 
-Feasible, and cheaper than it looks — because AILANG has explicit grep-able imports, `ailang iface <module>` already emits normalized JSON interfaces, and we own the compiler, so extraction (the part that kills most such projects) is nearly free. The static map alone does **not** need a GPU at this scale; the simulation overlay does, which is what retroactively justifies fastplotlib.
+Feasible, and cheaper than it looks — because the extraction layer (the part that kills most such projects) **already exists**: `tools/code-graph/` (`ailang-graph`) extracts a structural and effect graph from this repo's AILANG source today — exact module imports, function-level nodes, source-parsed approximate calls and reachable effects, an `ailang iface` typed pass, and a SQL query CLI (`cgq.py`), all landing in `tools/code-graph/.out/`. The static map alone does **not** need a GPU at this scale; the simulation overlay does, which is what retroactively justifies fastplotlib.
 
 The two things to get right early: **deterministic stable layout** and **edge aggregation across zoom levels**. The thing to resist: rendering real, editable code inside the GPU canvas.
 
-The single genuinely new piece of plumbing is **event → subject-module attribution** (§7). Everything else is assembly of parts we already have precedents for (`code-graph/` did the same pipeline shape for the C# Zeus codebase: extract → chDB → visualize).
+The genuinely new pieces are the **layout + viewer** (§3.3–§3.4) and **event → subject-module attribution** (§7). The store, extractor, and query surface are adoption, not construction.
 
 ---
 
@@ -33,7 +33,7 @@ The first question is static. The last three are *dynamic* — and no static map
 
 ~1k modules, an estimated 5–15k functions. This is **small by GPU-rendering standards**. fastplotlib is built to scatter millions of points; 15k nodes + edges renders at 60fps in plain canvas, sigma.js, or anything else. So GPU acceleration is *not* the deciding factor for the static map, and choosing fastplotlib must be justified on other grounds:
 
-- Python-native, works in Jupyter/Qt/glfw — fits the existing tooling (`code-graph/load.py`, `metrics.py`, `visualize.py` are already Python).
+- Python-native, works in Jupyter/Qt/glfw — fits the existing tooling (the `ailang-graph` extractor, query CLI, and viz are already Python; there are marimo notebooks in `tools/code-graph/notebooks/`).
 - Pan/zoom, picking, and an event system come free.
 - Headroom for the simulation overlay (§6), where element counts genuinely explode: thousands of seeds × hundreds–thousands of events each = millions of event-instances scrubbed at interactive framerates. That *is* the scientific-viz workload fastplotlib exists for.
 
@@ -44,29 +44,33 @@ The first question is static. The last three are *dynamic* — and no static map
 ## 3. Architecture: four separated layers
 
 ```
-ailang extractor  →  graph store (parquet / chDB, versioned)  →  layout engine (deterministic)  →  viewer (fastplotlib)
+ailang-graph extractor (EXISTS)  →  graph store: tools/code-graph/.out/ (EXISTS)  →  layout engine (deterministic, NEW)  →  viewer (fastplotlib, NEW)
 ```
 
 Keep the layers separable so the renderer is swappable and the store is independently useful.
 
-### 3.1 Extraction
+### 3.1 Extraction — already built: `ailang-graph`
 
-Two granularities, phased:
+`tools/code-graph/` extracts a structural **and effect** graph from this repo's AILANG source today (see its `AGENTS.md`). What it provides, and how much the map can trust each piece:
 
-- **Module level (v1):** AILANG imports are explicit and syntactically regular (`import src/core/types as T`, `import std/list as List (length)`). A module-level dependency graph is a day of regex work, or cleaner via the compiler. Incremental re-extraction at this level is ~1s of grep — cheap enough to run on every change, which matters because *a stale map is a distrusted map* (see Sourcetrail's fate, §9).
-- **Function level (v2):** `ailang iface <module>` already outputs a normalized JSON interface per module — exported functions, types, signatures. A call graph needs AST support; since we own the compiler, that is a feature request to ourselves (`ailang ai-check` already emits structured JSON, so the machinery for structured output exists). Do not attempt function-level extraction by regex.
+- **Module imports — exact.** Static repo imports parsed from source. This is the ground truth for the declared-architecture layer (§6.5).
+- **Function-level nodes and calls — approximate.** `funcs.csv` / `invokes.csv` are source-parsed approximations; every answer carries `approximate` / `stale` / `coverage` / `incomplete` metadata, and the tool's own contract says agents must not treat call rows as compiler-derived facts (`incomplete=true` means *unknown*, not *no*).
+- **Effect edges — a whole extra dimension.** `effect_edges.csv` / `effects.csv` record reachable effects per function (`cgq.py q reaches Net`). This is a graph layer the original sketch didn't anticipate: the map can color regions by reachable effect — "everything that can touch Net" as a spatial query.
+- **Typed pass** via `ailang iface`; **profiles** (`core` = `src/core/**` minus tests; `all` = broad); **source index** with function-level `source_chunks` joined by `func_slug`.
 
-### 3.2 Graph store
+Refresh is `tools/code-graph/extract.sh` — the incremental-freshness requirement (*a stale map is a distrusted map*, §9) is met by the existing staleness metadata rather than needing new machinery. The remaining extraction wish is a **compiler-derived exact call graph** to upgrade the approximate `invokes` (we own the compiler; `ailang ai-check` shows the structured-output machinery exists). The map must not launder approximations into facts: approximate edges should be visually distinct from exact ones.
 
-Columnar, versioned, queryable — parquet files or chDB, following the `code-graph/` precedent (Roslyn → CSV → chDB for Zeus). Schema sketch:
+### 3.2 Graph store — already built, needs layout projections
+
+The store exists as CSVs in `tools/code-graph/.out/` (`modules`, `imports`, `funcs`, `invokes`, `effect_edges`, `types`, `uses`, `source_chunks`, `extraction_status`), SQL-queryable via `cgq.py sql "..."`. What the map adds to it, rather than replaces:
 
 ```
-nodes(id, kind{package|module|function}, parent_id, path, name, loc, sig_hash)
-edges(src_id, dst_id, kind{import|call}, weight)
-snapshots(commit_sha, extracted_at)
+layout(node_id, level, x, y, radius)          -- deterministic, per snapshot (§3.3)
+edges_agg(level, src_agg, dst_agg, weight)    -- precomputed per-LOD edge aggregation (§4)
+activity(seed, event_idx, variant, subject)   -- the overlay (§8)
 ```
 
-**The store is arguably worth more than the visualization.** "What depends on `tool_phase`, transitively?" as a queryable table is something Motoko itself can consume when working on its own codebase — the viewer and the agent tool are two views over the same store. Build the store first; treat the viewer as one client. (This also connects to `omnigraph/` — the decision graph and the code graph could eventually share a query surface, but that is out of scope here.)
+**The store is arguably worth more than the visualization — and this is already proven in practice:** `cgq.py q importers/callers/reaches` is exactly the agent-consumable query surface the original sketch called for. The viewer is a second client of an existing store, not a new system. (`concept_edges` — the LLM-extracted relation graph over `.agent` Markdown — is adjacent and out of scope here, though a far-future map could render project memory and code in one space.)
 
 ### 3.3 Layout — the real risk
 
@@ -167,7 +171,26 @@ Three routes, cheapest first:
 
 1. **Static subject table (v1).** A hand-maintained (or AST-derived) map from event variant → subject module(s), refined by payload fields — the event vocabulary already records payload schemas, and payloads name tools and phases, so `ToolCall{tool: "..."}` can resolve to the specific tool module. ~34 rows plus payload-refinement rules. This is a natural sibling of `dst_attribution_table` and is sufficient to ship §6.1 and §6.2.
 2. **Driver instrumentation (v2).** Tag events with their subject at emission. Exact, and we own every line of the driver. The cost is touching the trace schema — which is a *maintained compatibility surface* under ADR-001 D6, so this is a vocabulary-versioning event, not a casual edit. Route 1's external table avoids that cost entirely, which is another reason it goes first.
-3. **AILANG effect-trace correlation (v3+).** `ailang replay <trace.jsonl>` operates on language-level effect traces; correlating those with ledger events would give *function-grained* attribution. Defer until L3 zoom exists and route 1/2 feel coarse.
+3. **AILANG semantic-trace correlation (v3+).** Verified empirically (2026-08-08, AILANG v0.33.0): `ailang run --emit-trace jsonl` emits a **span tree** — `function_enter`/`function_exit` with `span_id`/`parent_span_id`, args, results, durations, plus `effect` events inside their enclosing span (OTel export also available). See §7.1. Defer until L3 zoom exists, but this is a verified mechanism, not speculation.
+
+### 7.1 Semantic-trace correlation in detail
+
+The DST driver is itself an AILANG program. Run it under `--emit-trace`: every ledger append becomes a function-call span in the semantic trace. Because both the ledger and the interpreter record appends in the same deterministic order, **the k-th append span in the semantic trace is the k-th event in `trace.jsonl`** — an ordinal join guaranteed by determinism. No correlation IDs, no timestamps, no changes to the D6-governed trace schema. (Cross-checkable against payload args echoed in `function_enter`.)
+
+Consequences:
+
+- **Attribution becomes derived, not curated.** With each ledger event pinned to a span, walking `parent_span_id` yields the full call stack at emission. The emitter-vs-subject distinction dissolves — the stack contains both the driver frame and the `tool_phase`/dispatcher/store frames. "Subject" becomes a projection rule over the stack (e.g., deepest non-driver, non-stdlib frame). The route-1 static table then becomes a *validation target*: derive attribution from stacks, diff against the curated table, investigate disagreements.
+- **Function-grained glow (L3) with real durations** — the span tree is literally a flame graph; projected onto map coordinates it is a spatial flame graph.
+- **Sub-event scrubbing** — the semantic trace records everything that happens *between* ledger events; the ledger's 34 variants become waypoints in a continuous execution recording.
+- **Function-grain coverage for free** — every `function_enter` is a coverage tick; §6.2 sharpens from module- to function-resolution with zero instrumentation.
+- **A second divergence layer** — `ailang replay <trace.jsonl>` verifies a run against a recorded semantic trace, giving divergence detection *below* `ReplayMismatch`: when the ledger diverges at event N, the semantic traces localize the first differing function call underneath it.
+- **No observer effect, structurally.** DST runs on logical time, so tracing overhead cannot change behavior — deep tracing of a deterministic simulation is the best case for this instrumentation; heisenbugs are impossible by construction.
+
+Why it is still v3+:
+
+- **Volume.** Deep tier records every call; a corpus run plausibly emits 10⁸+ events. Mitigations: the existing tier system (`standard`/`deep`), per-module trace filtering (compiler feature we can add), or trace-on-demand — deep-trace only the seed under investigation, which fits the debugging workflow anyway.
+- **Name qualification.** Stdlib calls are qualified (`std/io.println`); local functions appear bare (`helper`). Module identity is recoverable from the enclosing `module_start` span, but the map wants fully-qualified names in the record — a small compiler patch.
+- **Unknowns:** naming of lambda/closure frames, recursion behavior, and whether the DST harness's process model aligns per-seed with per-trace boundaries.
 
 **Design note:** the attribution table is agent-readable before it is human-viewable. "Which modules did seed X touch, in what order" as a queryable table is something Motoko itself can consume when debugging its own DST failures. Build the attribution layer as a store table with two clients (viewer, agent), not as viewer-internal code.
 
@@ -193,7 +216,7 @@ DST run → trace.jsonl (ledger events, wire vocabulary)
 - **Sourcetrail** — indexed, zoomable code map; the closest thing to part 1 that ever shipped. Discontinued 2021. **CodeSee** — dependency-map product; also dead. The graveyard reflects the cost of being a *general product across languages* — per-language indexers are a treadmill. An internal tool for one codebase, in a language we own the compiler for, does not pay that cost. But the lesson stands: *the map must never be stale*, hence cheap incremental extraction (§3.1) is a day-one requirement, not a polish item.
 - **CodeCity / software cartography** literature — established that stable spatial metaphors build navigational memory; supports the determinism requirement in §3.3.
 - **Holten, hierarchical edge bundling (2006)** — the standard answer for cross-hierarchy edges over a containment layout.
-- **In-repo:** `code-graph/` (Roslyn → CSV → chDB → mermaid/SVG for Zeus) validates the extract→store→visualize pipeline shape and the chDB choice. `omnigraph/` is adjacent (typed decision graph) but currently a stub; possible future convergence at the query layer, out of scope here.
+- **In-repo:** two generations. `/code-graph/` at repo root is the *original C# version* (Roslyn → CSV → chDB → mermaid/SVG), ported from another project — its scripts still point at `src/Zeus.csproj` and it is not wired to this codebase. `tools/code-graph/` (`ailang-graph`) is the *working AILANG adaptation*: same pipeline shape, AILANG-native extractor, plus effect edges, profiles, staleness metadata, and the `cgq.py` query CLI. The AILANG version is the foundation this project builds on; the C# version is history/reference. `omnigraph/` is adjacent (typed decision graph) but currently a stub; possible future convergence at the query layer, out of scope here.
 - **fastplotlib** — young but active; built on pygfx/wgpu. Strengths: instanced rendering at scale, native pan/zoom, picking/events, Jupyter/Qt/glfw. Weaknesses: no graph layout (fine — layout is ours anyway), weak large-volume text (motivates the L4 punt), no UI widgets (pair with Qt/imgui).
 
 ---
@@ -202,24 +225,25 @@ DST run → trace.jsonl (ledger events, wire vocabulary)
 
 | Phase | Deliverable | Depends on | Rough size |
 |---|---|---|---|
-| **P1** | Module-level import extractor → parquet store; incremental refresh | — | days |
-| **P2** | Deterministic packed layout + bundled edges; fastplotlib viewer with pan/zoom, 2–3 LOD thresholds, picking, click-to-editor | P1 | ~a week |
-| **P3** | Subject attribution table (34 variants + payload rules); **static heat overlay** from one trace | P1, vocabulary | days |
+| **P0** | ~~Extractor + store~~ — **exists** (`ailang-graph`, `tools/code-graph/.out/`, `cgq.py`) | — | done |
+| **P1** | Layout projections over the existing store: `layout` + `edges_agg` tables, deterministic packing over the module/dir tree | P0 | days |
+| **P2** | fastplotlib viewer: pan/zoom, 2–3 LOD thresholds, bundled edges, picking, click-to-editor; approximate edges visually distinct from exact ones | P1 | ~a week |
+| **P3** | Subject attribution table (34 variants + payload rules); **static heat overlay** from one trace | P0, vocabulary | days |
 | **P4** | Replay scrubber (single trace, glow decay) | P2, P3 | ~a week |
 | **P5** | Two-trace diff view (divergence localization via `ReplayMismatch`) | P4 | days |
 | **P6** | Corpus aggregation: coverage dead zones, fault blast radius, declared-vs-performed overlay | P3–P5 | 1–2 weeks |
-| **P7** | Function-level graph (`ailang iface` / compiler AST), L3 zoom | P2, compiler work | open |
+| **P7** | L3 function zoom over existing `funcs`/`invokes` (approximate); upgrade path: compiler-derived exact call graph, §7.1 semantic-trace attribution | P2 | open |
 | **Deferred** | In-canvas code rendering (L4 beyond preview), animated LOD transitions, driver-emitted subject tags (vocabulary versioning) | — | — |
 
-P3 is deliberately early and deliberately *static* — a heat-painted map from a single trace already answers "what does seed 12345 touch" with no animation machinery, and it forces the attribution design (the only novel plumbing) before any investment in the fancy views.
+P3 is deliberately early and deliberately *static* — a heat-painted map from a single trace already answers "what does seed 12345 touch" with no animation machinery, and it forces the attribution design (the only novel plumbing) before any investment in the fancy views. Note that P7's *data* already exists in approximate form — what gates L3 zoom is layout/rendering work plus honest display of the approximation metadata, not extraction.
 
 ---
 
 ## 11. Open questions
 
 1. **Subject attribution for ambiguous variants** — some events plausibly describe an *interaction* (two subjects). Does the table map to a set of modules, and does the viewer split the glow? Probably yes/yes; needs a pass over all 34 variants.
-2. **Call-graph extraction** — what exactly should the compiler emit? A `calls(caller_fn, callee_fn)` relation from the typed AST seems right; scope it with the AILANG side.
-3. **Layout area metric** — LOC, function count, or export count? LOC is honest but rewards verbosity; function count is probably the better default.
-4. **Viewer host** — Jupyter (fast iteration, weak chrome) vs Qt app (proper scrubber/search UI). Likely Jupyter for P2–P4, Qt if it graduates.
-5. **Where the store lives** — `.code-graph/`-style artifact directory vs committed snapshots. Traces are already artifacts; the graph store probably follows the same convention (generated, not committed).
-6. **Does the agent get a query tool over the store in P1?** Strongly inclined yes — it is nearly free once the store exists, and it delivers navigation value before any pixel is rendered.
+2. **Call-graph fidelity ladder** — three rungs now exist or are in reach: (a) `ailang-graph`'s source-parsed `invokes` (approximate, exists today), (b) a compiler-derived exact `calls` relation from the typed AST (feature request to the AILANG side), (c) the *dynamic* call graph from semantic traces (§7.1 — observed calls, per seed). The interesting question is no longer "how to get a call graph" but how the map renders the disagreement between rungs — e.g., approximate edges the compiler refutes, or dynamic edges the static graph lacks.
+3. **Layout area metric** — LOC, function count, or export count? LOC is honest but rewards verbosity; function count is probably the better default. (`funcs.csv` and `source_chunks.csv` already carry what's needed either way.)
+4. **Viewer host** — Jupyter/marimo (fast iteration, weak chrome; marimo already in use under `tools/code-graph/notebooks/`) vs Qt app (proper scrubber/search UI). Likely notebook for P1–P4, Qt if it graduates.
+5. ~~Where the store lives~~ — **answered**: `tools/code-graph/.out/`, generated not committed, refreshed by `extract.sh`. Layout/activity tables should land beside the existing CSVs.
+6. ~~Does the agent get a query tool over the store?~~ — **answered**: it already has one (`cgq.py q importers/callers/reaches/search`, plus raw SQL). The overlay work should extend `cgq.py` with activity queries (`q touched <seed>`, `q divergence <seedA> <seedB>`) rather than invent a parallel surface.
