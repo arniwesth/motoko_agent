@@ -107,12 +107,8 @@ import std/result (Result, Ok, Err)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
-import src/core/test/stub_step (GeneratedWorld, RecordingWorld, ScriptedStep)
-import src/core/ports (
-  WorldState, empty_world_state,
-  ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable,
-  decode_provider_outcome
-)
+import src/core/test/stub_step (GeneratedWorld, RecordingWorld)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state, ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable, decode_provider_outcome)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/dst_interaction (
@@ -239,7 +235,7 @@ func no_intercept(_ctx: ExtCtx, _text: string)
 func no_solver(_ctx: ExtCtx, _text: string)
   -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
 func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("generated: approval required", DenyAfterTimeout)
 }
@@ -262,14 +258,14 @@ func approval_rt(id: string) -> ExtRuntime {
 }
 
 func run_generated(id: string, w: WorldState) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), GeneratedWorld(w))
 }
 
 func run_recording(id: string, w: WorldState) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w))
@@ -489,7 +485,7 @@ func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Inter
 }
 
 func build_seed(e: BankEntry)
-  -> BuiltMember ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = generated_world(e.seed);
   let r = run_generated("corpus_${e.seed}", initial);
   let p = program_of(r.world, initial);
@@ -498,7 +494,7 @@ func build_seed(e: BankEntry)
 }
 
 func build_all(es: [BankEntry])
-  -> [BuiltMember] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> [BuiltMember] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match es {
     [] => [],
     e :: rest => {
@@ -509,7 +505,7 @@ func build_all(es: [BankEntry])
 }
 
 func build_constructed()
-  -> BuiltMember ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = empty_terminal_world();
   let r = run_recording("corpus_constructed", initial);
   let p = constructed_program(r.world, initial);
@@ -798,7 +794,7 @@ func scenario_the_corpus_has_two_keys(bs: [BuiltMember]) -> bool ! {IO} {
 -- so a corpus keyed on the identity alone reports two programs where it holds
 -- one, and `AliasedTrajectory` is the only rule that can see it.
 func scenario_the_version_axis_aliases_and_the_identity_key_cannot_see_it(bs: [BuiltMember])
-  -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("\n-- site 22 at the corpus layer, run rather than cited --");
   let seed_hi = 7;
   let w2 = generated_world_at("2", seed_hi);
@@ -1004,7 +1000,7 @@ func emit_rows(bs: [BuiltMember]) -> () ! {IO} {
 -- Entry point
 -- ---------------------------------------------------------------------------
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("WI-A15 commit 1 — D11's blocking PR corpus (${corpus_rules_version()})");
   let seeded = build_all(fixed_bank());
   let constructed = build_constructed();

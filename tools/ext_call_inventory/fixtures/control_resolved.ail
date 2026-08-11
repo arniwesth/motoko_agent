@@ -12,6 +12,6 @@ module tools/ext_call_inventory/fixtures/control_resolved
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg)
 
 export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
-  -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  -> Result[string, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   ctx.ports.ai_step(model, msgs)
 }

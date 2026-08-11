@@ -84,8 +84,8 @@ import std/result (Result, Ok, Err)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
-import src/core/test/stub_step (GeneratedWorld, ScriptedStep)
-import src/core/ports (WorldState, empty_world_state)
+import src/core/test/stub_step (GeneratedWorld)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/dst_interaction (Interaction, interaction_kind)
@@ -186,7 +186,7 @@ func no_intercept(_ctx: ExtCtx, _text: string)
 func no_solver(_ctx: ExtCtx, _text: string)
   -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
 func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("generated: approval required", DenyAfterTimeout)
 }
@@ -209,7 +209,7 @@ func approval_rt(id: string) -> ExtRuntime {
 }
 
 func run_generated(id: string, w: WorldState) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), GeneratedWorld(w))
@@ -283,7 +283,7 @@ pure func branch_ids(classes: [string], rows: [FaultClass]) -> [string] {
 -- ---------------------------------------------------------------------------
 
 func run_seed(seed: int)
-  -> CorpusMember ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> CorpusMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = generated_world(seed);
   let r = run_generated("rot_${seed}", initial);
   let p = program_of(r.world, initial);
@@ -297,7 +297,7 @@ func run_seed(seed: int)
 }
 
 func run_window(seeds: [int])
-  -> [CorpusMember] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> [CorpusMember] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match seeds {
     [] => [],
     s :: rest => {
@@ -328,7 +328,7 @@ pure func take_n(xs: [int], n: int) -> [int] {
 -- THE JOB. This is what CI runs, and what `make corpus_rotating` forces to fail.
 -- ---------------------------------------------------------------------------
 
-export func scheduled_run() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func scheduled_run() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let sc = scale();
   let cfg = scaled_rotation(sc);
   let job = scaled_job(sc);

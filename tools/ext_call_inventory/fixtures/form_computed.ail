@@ -21,6 +21,6 @@ export func pick(a: ExtPorts, b: ExtPorts, use_a: bool) -> ExtPorts {
 }
 
 export func summarize(a: ExtPorts, b: ExtPorts, use_a: bool, model: string, msgs: [Msg])
-  -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  -> Result[string, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   pick(a, b, use_a).ai_step(model, msgs)
 }

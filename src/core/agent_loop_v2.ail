@@ -10,7 +10,8 @@ import std/ai (Message, AIError)
 import std/result (Result)
 import src/core/config (CostRates)
 import src/core/types (Msg)
-import src/core/test/stub_step (StepProvider, Scripted, ScriptedStep)
+import src/core/test/stub_step (StepProvider, Scripted)
+import src/core/ports (ScriptedStep)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/session as Session
 
@@ -28,7 +29,7 @@ export func run_v2(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2(rt, task, env_url, hybrid_tools, budget, model, initial_msgs, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
 }
 
@@ -46,7 +47,7 @@ export func run_v2_from_messages(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
 }
 
@@ -64,7 +65,7 @@ export func conversation_loop_v2(
   cost_rates: CostRates,
   provider: StepProvider,
   session_id: string
-) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
 }
 
@@ -82,7 +83,7 @@ export func run_v2_with_conversation(
   max_cost_millicents: int,
   cost_rates: CostRates,
   provider: StepProvider
-) -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_with_conversation(rt, task, env_url, hybrid_tools, budget, model, initial_msgs, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
 }
 
@@ -100,7 +101,7 @@ export func run_v2_with_stub(
   max_cost_millicents: int,
   cost_rates: CostRates,
   script: [ScriptedStep]
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
 }
 
@@ -118,6 +119,6 @@ export func run_v2_with_stub_port_adapter(
   max_cost_millicents: int,
   cost_rates: CostRates,
   script: [ScriptedStep]
-) -> Result[[Message], AIError] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
 }

@@ -51,14 +51,8 @@ import src/core/phase_vocab (
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
 import src/core/session (TracedSessionResult)
 import src/core/session as Session
-import src/core/test/stub_step (
-  ScriptedStep,
-  Scripted,
-  empty_rt,
-  deny_all_rt,
-  prose_step,
-  continuing_token_step
-)
+import src/core/test/stub_step (Scripted, empty_rt, deny_all_rt, prose_step, continuing_token_step)
+import src/core/ports (ScriptedStep)
 
 func glm5_rates() -> CostRates {
   { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000 }
@@ -122,7 +116,7 @@ func assert_terminal_trace(
 
 -- 1. Success. A single prose step finishes with "stop", so decide() reaches
 --    Finalize and the run terminates cleanly.
-func scenario_success() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_success() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = Session.run_v2_session_traced(
     empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
     [system_msg()], "/tmp", 4, false, 0, zero_rates(), Scripted([prose_step("done")])
@@ -132,7 +126,7 @@ func scenario_success() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clo
 
 -- 2. Max steps. Six continuing steps against a step_budget of 2: the loop can
 --    never finalize, so call_model_or_fail raises the step-budget Fail.
-func scenario_max_steps() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_max_steps() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = Session.run_v2_session_traced(
     deny_all_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
     [system_msg()], "/tmp", 2, false, 0, zero_rates(), Scripted(steps_at_16400(6))
@@ -142,7 +136,7 @@ func scenario_max_steps() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, C
 
 -- 3. Budget exhaustion. Same script, metered, cap 50000 mc: 4 steps at 16400
 --    breach the cap before the step budget is reached.
-func scenario_budget() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_budget() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = Session.run_v2_session_traced(
     deny_all_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
     [system_msg()], "/tmp", 10, false, 50000, glm5_rates(), Scripted(steps_at_16400(6))
@@ -154,7 +148,7 @@ func scenario_budget() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Cloc
 --    are not a head prefix, so c2_step_state fails on the first pass. This is
 --    one of the two terminal returns that emitted no run_summary at all before
 --    WI-A9 — it now finalizes like every other path.
-func scenario_invalid_history() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func scenario_invalid_history() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = Session.run_v2_session_traced(
     empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
     [user_msg(), system_msg()], "/tmp", 4, false, 0, zero_rates(), Scripted([prose_step("done")])
@@ -162,7 +156,7 @@ func scenario_invalid_history() -> bool ! {AI, FS, Process, IO, Env, Net, Shared
   assert_terminal_trace("invalid_history", "error", false, run)
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   println("=== terminal_trace_dst (D6.1) ===");
   let r1 = scenario_success();
   let r2 = scenario_max_steps();

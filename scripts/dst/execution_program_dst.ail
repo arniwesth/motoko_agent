@@ -25,7 +25,6 @@ import std/list as List (length)
 import src/core/dst_program (
   ExecutionProgram,
   InitialWorld,
-  GeneratorBounds,
   ProgramRejection,
   program_schema_version,
   program_rule,
@@ -35,6 +34,9 @@ import src/core/dst_program (
   validate_bounds,
   bound_violation_message
 )
+-- WI-B2a: `GeneratorBounds` is taken from its OWNING module. It used to be
+-- re-exported by `dst_program`; v0.33.0 rejects that re-export form.
+import src/core/dst_generator (GeneratorBounds)
 import src/core/dst_interaction (
   Interaction,
   CausalIdentity,

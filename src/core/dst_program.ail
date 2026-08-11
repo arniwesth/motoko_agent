@@ -92,9 +92,31 @@ export type InitialWorld = {
 -- `src/core/dst_interaction`: the bounds are consulted at the moment of a
 -- choice, which is inside a port adapter, and `ports.ail` cannot import this
 -- module without dragging the whole `dst_profile` closure into the production
--- driver's import graph. It is re-exported here so that a reader still finds it
--- beside the program's other types and so that no existing importer changed.
-export type GeneratorBounds = GeneratorBounds
+-- driver's import graph. It was re-exported here, as `type GeneratorBounds =
+-- GeneratorBounds`, so that a reader still found it beside the program's other
+-- types and so that no existing importer changed.
+--
+-- WI-B2a REMOVED that re-export, because AILANG v0.33.0 rejects it. The form is
+-- accepted at its declaration and then resolves to ITSELF rather than to the
+-- imported type, so the alias is unexpandable: any attempt to unify a record
+-- literal against a field of this type fails with `cannot unify record with
+-- unexpandable type constructor GeneratorBounds`. That took out `dst_replay`
+-- and `execution_program_dst` — 8 files — because `ExecutionProgram.bounds`
+-- carries the type. The declaration itself never errors, so the failure lands
+-- at every CONSTRUCTION site and never at the cause.
+--
+-- The name is now imported (line 35) for this module's own use and NOT
+-- re-exported; the two importers that took it from here now take it from
+-- `src/core/dst_generator` directly.
+--
+-- `stub_step.ail:49` carried the identical form for `ScriptedStep` and was
+-- removed in the same item, for the same reason. It was NOT a second, harmless
+-- instance: it was blocking 33 files, invisibly, because they all died on an
+-- effect row first. Both re-exports are records, and a record is exactly what
+-- this defect eats — the alias only fails where something asks the compiler to
+-- EXPAND it to its fields, which is every construction site and no declaration
+-- site. If a third `export type X = X` appears, it is a defect wherever X is a
+-- record, whether or not the tree is currently green.
 
 export type DiscoveryConfig = {
   schema_version: string,

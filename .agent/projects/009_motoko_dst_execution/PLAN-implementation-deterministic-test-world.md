@@ -156,6 +156,67 @@ field the encoder writes and the decoder ignores; both halves type-check and the
 until a replay serves a different response while every count still balances. A14 and A15 encode
 programs for D8's persistence and inherit this directly.
 
+**S11. `export type X = X` is prohibited where `X` is a record — it resolves to itself and fails at
+every construction site, never at the cause.** Earned by B2a, which found two instances. v0.33.0
+accepts the alias at its declaration and treats it as unexpandable thereafter, so the error surfaces
+as `cannot unify record with unexpandable type constructor X` at each *use*, arbitrarily far from the
+re-export. `dst_program.ail`'s `GeneratorBounds` blocked 8 files; `stub_step.ail`'s `ScriptedStep`
+blocked **33** — and the second was invisible because every one of them died on an effect row first.
+B2a's own first reading called it "a latent instance, safe because `ScriptedStep` is an ADT matched by
+constructor"; it is a record, and the compiler corrected the comment. **The prohibition is on the
+form, not on the symptom: it is a defect wherever `X` is a record, whether or not the tree is
+currently green.** Repair by removing the re-export and repointing importers.
+
+**S10. Drive tooling off the compiler's VERDICT, never off its prose — a diagnostic's labels are an
+interface, and this one is context-dependent.** Earned by WI-B3. `ailang check` reports
+`expected`/`actual` in an order that **flips by error context**: under a `let`/`return type
+annotation` the *literal* is `expected`, while under `function application, parameter N` or
+`list element N` the *parameter type* is. So the identical text `extra fields: images` means **add**
+in one context and **remove** in the other — and the `Hint:` is derived from whichever order was
+used, so **on every revert site the hint reads "add the field(s) to the literal" when the fix is to
+delete it.** A fix loop reading those labels re-added the field to three sites that had already been
+correctly reverted, then oscillated thirty times on a fourth. The repair was to stop reading labels
+entirely: **flip the literal and ask the compiler whether that site's error moved.** That is immune
+to label order, it converged in 60 edits, and the one site it could not satisfy turned out to be a
+genuine implicit crossing rather than a shape problem — which is information the label-reading loop
+could never have produced.
+
+**S9. Clear EVERY live `.ailang/cache` before believing any check whose input you just mutated —
+they are per-directory, and `rm -rf .ailang/cache` clears one of them.** Four phantoms now, and B2a's
+is the one that establishes the rule's real shape. **`rm -rf .ailang/cache` clears only the ROOT
+cache.** AILANG writes one cache per compiled source directory — `src/core/`, `scripts/`, each
+`packages/*/`, and so on — so a repo-local clear leaves the rest warm. At B2a that produced a **false
+red that survived five wrong hypotheses over roughly forty minutes**: `check_core` fell 51/51 → 44/51
+and stayed there through a repo-local clear, a full `sync_packages`, a `.packages` rebuild, an
+`ailang lock` refresh, and two source-level theories. The cause was a stale per-directory cache
+holding a pre-`Trace` interface; clearing them all fixed it with **no source change**.
+
+Use a sweep, not a path:
+
+```bash
+find . -type d -name cache -path '*.ailang*' \
+     -not -path './ailang/*' -not -path './tools/code-graph/*' -exec rm -rf {} +
+```
+
+**Two exclusions, and both are load-bearing.** `./ailang/` is a git-ignored clone of the compiler, not
+ours. **`./tools/code-graph/` holds 34 committed `.gob`/`.json` files under two
+`.ailang/cache` fixture directories that are deliberate test fixtures**, read by
+`test_source_index.py` and `test_precision_recall.py` — an unguarded sweep **deletes tracked
+fixtures and breaks those tests.** B2a's proposed version of this rule omitted the exclusion.
+
+**Correcting B2a's framing, because it is alarming and wrong in the direction that matters:** its
+report says the caches "are TRACKED IN GIT … they travel between branches … a phantom no per-session
+discipline can catch." **The live caches are git-ignored** — verified with `git check-ignore` on both
+that exist. The only tracked `.ailang/cache` paths are those code-graph fixtures. **A stale interface
+does not arrive by checkout**, and no cross-branch hazard exists. **Do not cite a fixed count
+either:** the number of live cache directories is however many source directories have been compiled
+— two at the time of writing, not 34, which was a tracked-*file* count read as a directory count.
+
+**The retroactive consequence stands and is the part to carry:** every whole-tree sweep this project
+has recorded — B1's 130/105 and its v0.26.0 baseline of 213/22, B3's 161/74 — cleared the root cache
+only, so **none is the cache-cold measurement it claims.** They are not necessarily wrong, since a
+warm cache only misleads when its input changed, but they are not what they say.
+
 **S10. Drive tooling off the compiler's VERDICT, never off its prose — a diagnostic's labels are an
 interface, and this one is context-dependent.** Earned by WI-B3. `ailang check` reports
 `expected`/`actual` in an order that **flips by error context**: under a `let`/`return type
@@ -1703,6 +1764,23 @@ then close the cascade they imply** — is handed off as
 `HANDOFF-execute-b2a-abi-rows-and-cascade.md`. **B2b — the world-token widening plus the two
 `ScriptedStep` widenings** — follows.
 
+**B2a LANDED 2026-08-04 and the ABI answer is TWO rows, not four.** `ExtPorts.ai_step` gains
+`Trace` (M2 predicted it; B1 could not confirm it) and `ExtensionHooks.on_pre_step` gains `Trace` as
+a *consequence* — `Trace` reaches the extension surface only through `ai_step`, and the tree's only
+two extension callers of it are both on the `on_pre_step` path. **`on_response_intercept` and
+`on_solver_candidate` are measured NOT demanded.** So the cascade cost **62 sites, not 191**, and
+M2's prediction was right about `ai_step += Trace` and wrong about the breadth. `make check_core` is
+**green** — the first since the repin — and the tree is **218 pass / 17 fail**, above the v0.26.0
+baseline of 213/22. **What remains of B2 is B2b alone: the world-token widening.** The row
+corrections are done.
+
+**Two counts in this plan were wrong and are corrected by measurement.** The 191 rowed sites are
+**206** — the grep counts only `<Type> ! {row}` annotations and misses **15 lambda-form** hook
+assignments, three of which were B1's un-widened cascade sites, which is how the undercount
+surfaced. And the cascade/latent split B2a was asked for is **262 cascade against 31 latent**: the
+repin's genuinely *new* demand is small, and most of the diff is one ABI row's blast radius arriving
+twice.
+
 **B2a's defining constraint, and it is why the split matters:** the cascade's size is a function of
 the ABI, so **the rows must be settled before anything below them is repaired, or the repair is done
 twice.** Rows are closed, so widening a hook field forces every implementation to widen in lockstep —
@@ -1736,11 +1814,44 @@ two riders honoured: tooling first (the brace-balanced rewriter and fix loop are
 minutes true), and the settled decision that Motoko's `Msg` and the ext-ABI `Msg` stay at four
 fields, vision parts dropped at the seam.
 
-**WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** **Also re-run
+**WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** **A5's attribution anchors were ALREADY STALE at HEAD — nine of ten — and re-deriving them is
+yours** (B2a). `make dst` reached `attribution_table` for the first time since the repin and it went
+red on nine anchors that do not match at HEAD, *before any repin edit*: `tool_phase.ail:286` points at
+a return-type annotation, `session.ail:807` at a comment, `stub_step.ail:161` at a `let` binding, and
+`session.ail`'s 948/1053/2290/2400 at `else {` and three comments. Only `ext/runtime.ail:190` matches.
+**The table drifted at some earlier point and nothing reported it, because `make dst` exited 2 long
+before reaching the check** — absent reading identically to unchanged, one level above where B1 and
+B3 found it. Six handoffs said "six items have paid zero this way"; that described a discipline which
+had **already failed**. Choosing which site is "the" attributed site is a D4 judgement with other
+consumers, so it belongs here rather than in a repair item.
+
+**And make the anchor discipline mechanical rather than remembered.** B2a's repair tool asserts, on
+every edit, that the file's **line count is unchanged** — because A5's anchors are line numbers and a
+widening that collapses a multi-line signature moves every anchor below it. **It fired on
+`session.ail`**, refusing a rewrite that would have gone 2962 → 2961 lines and silently moved anchors
+2290 and 2400. Move that guard somewhere durable.
+
+**Also re-run
 B1's mutation loop, which could not complete — and B3's, which also could not.** Twenty files
 carrying cascade sites were behind the `images` wall, and B3 adds **64 further `images` sites in
 files that die on the third frontier before type checking**. Both sets are **unverified, which must
-not read as verified**. Exactly one of them has a
+not read as verified**.
+
+**B2a narrows the target and says why.** Its **123 closed-row lockstep sites need no mutation loop**:
+a closed row admits exactly one width — an implementation must *equal* its ABI field's row, not be a
+subset or superset — so there is no band where two answers type-check, and both rows it changed were
+mutation-tested and are load-bearing. **The loop belongs on the 180 function rows instead**, where a
+*wider* row type-checks fine. That is the silent band B1's three known over-widenings live in
+(`context_mode.ail:163`, `omnigraph.ail:79`, `:113`), so the population is known to contain the
+defect. And note the mechanism: the compiler reports what a body needs *given its callees' declared
+rows*, so **one over-wide callee propagates a too-wide answer to every caller above it**, and all of
+them type-check.
+
+**Probe from the module that FORCES the row, not from a convenient one.** B2a reproduced B1's
+per-file blind spot deliberately: removing `Trace` from the `ai_step` rows reads **GREEN** probed from
+`compaction_ai.ail`, which over-declares `Trace` independently, and **RED** probed from `session.ail`,
+where the demand arises. A row mutation is only observable from the module that forces it, and
+choosing the probe by convenience turns a load-bearing row into a false over-wide finding. Exactly one of them has a
 narrow row (`compose.ail:756`) and is the remaining over-widening candidate; the other 41 full-row
 sites are forced structurally by closed-row assignment. B1's loop also has a named structural blind
 spot: it is per-file, so it cannot see a mutation whose breakage lands in a *different* file —

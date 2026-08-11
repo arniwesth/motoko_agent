@@ -132,10 +132,8 @@ import src/core/phase_vocab (
   RunSummary,
   LedgerTrace
 )
-import src/core/test/stub_step (
-  ScriptedWorld, RecordingWorld, ScriptedStep, tool_step, prose_step
-)
-import src/core/ports (WorldState, empty_world_state)
+import src/core/test/stub_step (ScriptedWorld, RecordingWorld, tool_step, prose_step)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/dst_interaction (
@@ -167,13 +165,15 @@ import src/core/dst_discovery (
 import src/core/dst_program (
   ExecutionProgram,
   InitialWorld,
-  GeneratorBounds,
   validate_program,
   program_ok,
   program_message,
   program_schema_version,
   validate_bounds
 )
+-- WI-B2a: `GeneratorBounds` is taken from its OWNING module. It used to be
+-- re-exported by `dst_program`; v0.33.0 rejects that re-export form.
+import src/core/dst_generator (GeneratorBounds)
 import src/core/dst_driver_only (driver_only, driver_only_manifest)
 import src/core/dst_profile (ExecutionManifest)
 import src/core/dst_fault_catalogue (required_class_ids)
@@ -262,7 +262,7 @@ func no_intercept(_ctx: ExtCtx, _text: string)
 func no_solver(_ctx: ExtCtx, _text: string)
   -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
 func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("discovery: approval required", DenyAfterTimeout)
 }
@@ -289,7 +289,7 @@ func approval_rt(id: string) -> ExtRuntime {
 -- ---------------------------------------------------------------------------
 
 func run_recording(id: string, w: WorldState) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
@@ -298,7 +298,7 @@ func run_recording(id: string, w: WorldState) -> TracedSessionResult
 
 -- The same scenario with the NON-recording adapters. Axis C.
 func run_plain(id: string, w: WorldState) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), ScriptedWorld(w)
@@ -577,7 +577,7 @@ func run_scenario(
   label: string,
   answers: [string],
   tool_timeout_read_per_dispatch: bool
-) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world(answers);
   let run = run_recording("discovery_${label}", initial);
   let log = run.world.log;
@@ -707,13 +707,13 @@ func run_scenario(
 -- describes one. Comparing a wire total against a per-run census would need a
 -- multiplier, and a multiplier is a number that goes stale the moment a
 -- scenario is added. One run, one census, exact equality, nothing to maintain.
-export func wire_witness() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world([approve_line(), approve_line(), approve_line()]);
   let run = run_recording("wire_witness", initial);
   println("CENSUS wire ${census_line(census(run.world.log))}")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("discovery_dst: WI-A13 stage 2 — completeness AND fidelity against driver_only");
 
   -- approve: three approvals granted, three native dispatches follow.

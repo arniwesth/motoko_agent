@@ -1050,7 +1050,7 @@ func scenario_deterministic_and_diffable() -> bool ! {IO} {
 -- decode path, or bump `program_schema_version()` and pin a runner for v1.
 -- Regenerating the file is the response that is not available, because it
 -- destroys the evidence.
-func scenario_the_frozen_v1_specimen_still_decodes() -> bool ! {IO} {
+func scenario_the_frozen_v1_specimen_still_decodes() -> bool ! {IO, FS} {
   match FS.readFileResult(v1_fixture_path()) {
     Err(e) => { let _ = println("  ✗ the frozen v1 specimen could not be read (${e}); the compatibility policy has no artifact and asserts nothing"); false },
     Ok(bytes) => {
@@ -1079,7 +1079,7 @@ func scenario_the_frozen_v1_specimen_still_decodes() -> bool ! {IO} {
 }
 
 -- The fail-closed half, against real bytes rather than a hand-built record.
-func scenario_an_unknown_schema_fails_closed() -> bool ! {IO} {
+func scenario_an_unknown_schema_fails_closed() -> bool ! {IO, FS} {
   match FS.readFileResult(v0_fixture_path()) {
     Err(e) => { let _ = println("  ✗ the unknown-schema specimen could not be read (${e}); the fail-closed row would be vacuous"); false },
     Ok(bytes) =>

@@ -91,7 +91,7 @@ pure func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision
   Delegate
 }
 
-pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func pass_pre_step(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
   PassThrough
 }
 
@@ -148,7 +148,7 @@ func mk_envelope() -> ToolCallEnvelope {
 }
 
 -- Test runner: dispatch policy and assert the variant.
-func run_case(name: string, hooks: [ExtensionHooks], expect: string) -> bool ! {IO} {
+func run_case(name: string, hooks: [ExtensionHooks], expect: string) -> bool ! {IO, Clock} {
   let rt = mk_runtime(hooks);
   let ctx = mk_ctx();
   let env = mk_envelope();

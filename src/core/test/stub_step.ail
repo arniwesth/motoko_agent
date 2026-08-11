@@ -44,9 +44,9 @@ import src/core/types (Msg)
 
 -- `ScriptedStep` now lives in src/core/ports — WI-A2 moved it there so that
 -- `WorldState` can carry it without either the port module or the driver
--- closing an LDR002 module cycle. It is re-exported here because this module
--- is the fixture surface every test script imports.
-export type ScriptedStep = ScriptedStep
+-- closing an LDR002 module cycle. It WAS re-exported here, as `export type
+-- ScriptedStep = ScriptedStep`; WI-B2a removed that — see `dst_program.ail`,
+-- which carried the identical form. Importers now take it from `ports`.
 
 -- Step provider: either the live AI, a scripted sequence, or a port-backed
 -- provider used by the Phase C2 driver while preserving old entrypoints.
@@ -143,7 +143,7 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
 --
 -- It is also stateless, so it returns its input state unchanged. That identity
 -- transition is D1's specified answer, not a decision left to construction sites.
-export func live_ports(rt: ExtRuntime) -> Ports {
+export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, IO} {
   let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
     func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
@@ -196,7 +196,7 @@ export func live_ports(rt: ExtRuntime) -> Ports {
 -- worse of the two failures: nothing crashes and no invariant fires, so it is
 -- close to indistinguishable from a real result. See F6, and
 -- scripts/dst/scripted_cursor_probe.ail, which is its executable statement.
-export func scripted_ports() -> Ports {
+export func scripted_ports() -> Ports ! {IO, Trace} {
   let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
     func(state: WorldState, _model: string, _msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
@@ -245,7 +245,7 @@ export func scripted_ports() -> Ports {
 --    "loop_v2" is used for every driver-issued request, matching the name stage
 --    1's inline test already assumed, so that a future second producer is a
 --    NEW origin rather than a redefinition of this one.
-func recording_model_step(rt: ExtRuntime) -> (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
+func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {IO, Trace} {
   func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
   -> ProviderExchange ! {AI, IO, Trace} {
     -- NOT named `step`: this module imports `std/ai (step, ...)`, and a local
@@ -330,7 +330,7 @@ pure func provider_calls_in(log: [Interaction], acc: int) -> int {
 -- recording counterpart. Built by record update over `ports_shape_probe` for
 -- the reason `live_ports` is — a second function-typed constructor parameter
 -- does not compile on this pin.
-export func recording_ports(rt: ExtRuntime) -> Ports {
+export func recording_ports(rt: ExtRuntime) -> Ports ! {Clock, Env, FS, IO, Process, Trace} {
   { ports_shape_probe(recording_model_step(rt)) |
     clock_now: recording_clock,
     approval_read: recording_approval,
@@ -369,7 +369,7 @@ export func recording_ports(rt: ExtRuntime) -> Ports {
 -- that ever stopped being true. A leftover tail is a response the world can
 -- serve that the generator did not choose for this request, which is the
 -- anonymous-response-queue shape D2's ordered protocol exists to replace.
-func generating_model_step(rt: ExtRuntime) -> (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
+func generating_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {AI, IO, Trace} {
   func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
   -> ProviderExchange ! {AI, IO, Trace} {
     let seeded =
@@ -400,7 +400,7 @@ func generating_model_step(rt: ExtRuntime) -> (WorldState, string, [Message], (S
 --          by `dst_generator.choose_environment`, which D2 permits explicitly:
 --          "Generation may also choose ordinary configuration and message
 --          inputs."
-export func generating_ports(rt: ExtRuntime) -> Ports {
+export func generating_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO, Process, Trace} {
   { ports_shape_probe(generating_model_step(rt)) |
     clock_now: recording_clock,
     approval_read: generating_approval,
@@ -555,7 +555,7 @@ export func deny_all_rt() -> ExtRuntime {
     on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
       PassThrough
     },
     on_tool_policy: deny_policy,

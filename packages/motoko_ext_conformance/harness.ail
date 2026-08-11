@@ -45,11 +45,11 @@ func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
   fallback
 }
 
-func canned_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func canned_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   Ok("CANNED SUMMARY")
 }
 
-func poison_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func poison_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   Ok("POISON")
 }
 
@@ -198,7 +198,7 @@ func decision_artifacts(d: PreStepDecision) -> Json {
   }
 }
 
-export func compaction_occurred(hooks: ExtensionHooks) -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func compaction_occurred(hooks: ExtensionHooks) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let segment = compaction_segment();
   let ctx = mk_conformance_ctx(segment, empty_ext_artifacts(), canned_ports());
   match hooks.on_pre_step(ctx, segment) {
@@ -226,7 +226,7 @@ func ok_or_failure(ok: bool, scenario: string, invariant_name: string, segment: 
   else Err(failure(scenario, invariant_name, segment, output))
 }
 
-export func scenario_system_prefix_preserved() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+export func scenario_system_prefix_preserved() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   {
     id: "conformance.compactor.system_prefix_preserved",
     run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
@@ -238,7 +238,7 @@ export func scenario_system_prefix_preserved() -> Scenario ! {AI, Clock, Env, FS
   }
 }
 
-export func scenario_tool_pairing_preserved() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+export func scenario_tool_pairing_preserved() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   {
     id: "conformance.compactor.tool_pairing_preserved",
     run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
@@ -251,7 +251,7 @@ export func scenario_tool_pairing_preserved() -> Scenario ! {AI, Clock, Env, FS,
   }
 }
 
-export func scenario_deterministic_replay() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+export func scenario_deterministic_replay() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   {
     id: "conformance.compactor.deterministic_replay",
     run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
@@ -265,7 +265,7 @@ export func scenario_deterministic_replay() -> Scenario ! {AI, Clock, Env, FS, I
   }
 }
 
-export func scenario_artifact_cache_effective() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+export func scenario_artifact_cache_effective() -> Scenario ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   {
     id: "conformance.compactor.artifact_cache_effective",
     run: func(hooks: ExtensionHooks) -> Result[(), ScenarioFailure] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
@@ -280,7 +280,7 @@ export func scenario_artifact_cache_effective() -> Scenario ! {AI, Clock, Env, F
   }
 }
 
-export func all_scenarios() -> [Scenario] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream} {
+export func all_scenarios() -> [Scenario] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   [
     scenario_system_prefix_preserved(),
     scenario_tool_pairing_preserved(),
@@ -322,7 +322,7 @@ func run_all(hooks: ExtensionHooks, scenarios: [Scenario], failed: int) -> int !
   }
 }
 
-export func run_conformance(hooks: ExtensionHooks) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func run_conformance(hooks: ExtensionHooks) -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let _ = println("conformance kit ${conformance_abi_version()} ABI ${conformance_abi_version()} hooks=${hooks.id}");
   run_all(hooks, all_scenarios(), 0)
 }

@@ -101,7 +101,7 @@ VERBATIM TAIL (${show(list_length(recent_turns))} messages) follows outside the 
 -- context as if it were a real summary.
 func summarizer_max_attempts() -> int { 2 }
 
-func summarize_attempt(ctx: ExtCtx, prompt: string, model: string, attempts_left: int) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func summarize_attempt(ctx: ExtCtx, prompt: string, model: string, attempts_left: int) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   let prompt_msgs: [Msg] = [{ role: "user", content: prompt, tool_calls: [], tool_call_id: "" }];
   match ctx.ports.ai_step(model, prompt_msgs) {
     Ok(content) =>
@@ -116,14 +116,14 @@ func summarize_attempt(ctx: ExtCtx, prompt: string, model: string, attempts_left
 -- Result-returning summarizer used on the compaction path. Ok(summary) on
 -- success; Err(reason) once attempts are exhausted so compact_with_ai can
 -- degrade to PassThrough.
-export func summarize_with_ai_result(ctx: ExtCtx, prompt: string, model: string) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+export func summarize_with_ai_result(ctx: ExtCtx, prompt: string, model: string) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   summarize_attempt(ctx, prompt, model, summarizer_max_attempts())
 }
 
 -- Back-compat string-returning wrapper. Preserves the historical
 -- "[summarizer unavailable: ...]" sentinel for external callers and the
 -- package smoke contract.
-export func summarize_with_ai(ctx: ExtCtx, prompt: string, model: string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+export func summarize_with_ai(ctx: ExtCtx, prompt: string, model: string) -> string ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   match summarize_with_ai_result(ctx, prompt, model) {
     Ok(content) => content,
     Err(msg) => "[summarizer unavailable: ${msg}]"
@@ -466,7 +466,7 @@ func bounded_fold_budget(ctx: ExtCtx, body: [Msg], budget: int) -> int {
   }
 }
 
-func fresh_compaction(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig, pct: int, p: { prefix: [Msg], rest: [Msg] }, budget: int) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func fresh_compaction(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig, pct: int, p: { prefix: [Msg], rest: [Msg] }, budget: int) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   let eff_budget = bounded_fold_budget(ctx, p.rest, budget);
   let split_result = if budget > 0 then { prefix: p.prefix, old: split_body_tokens(p.rest, eff_budget).old, recent: split_body_tokens(p.rest, eff_budget).recent } else split_msgs(msgs, cfg.keep_recent);
   if list_length(split_result.old) == 0 then PassThroughObserved("compaction_ai.no_foldable_prefix", [
@@ -495,7 +495,7 @@ func fresh_compaction(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig, pct: in
   }
 }
 
-export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   let pct = usage_percent(ctx, msgs, ctx.context_limit);
   if pct < cfg.threshold_pct then PassThrough
   else {
@@ -563,7 +563,7 @@ func test_ctx(step: int, limit: int, artifacts: Json) -> ExtCtx {
 
 -- A summarizer port that actually succeeds, so the compaction happy-path
 -- tests exercise a real summary rather than relying on the degrade path.
-func stub_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func stub_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   Ok("stub summary of prior turns")
 }
 
@@ -634,7 +634,7 @@ func test_bounded_fold_budget_caps_large_body() -> bool
       && (bounded_fold_budget(ctx_real, [assistant("hi")], 120) == 120)
   }
 
-func test_ai_drip_projected_relief_passthrough() -> bool
+func test_ai_drip_projected_relief_passthrough() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
   tests [((), true)]
   {
     let msgs = repeated_pairs(2, "tiny");
@@ -647,9 +647,8 @@ func test_ai_drip_projected_relief_passthrough() -> bool
     }
   }
 
-func test_ai_batch_compacts_many_old_messages() -> bool
-  tests [((), true)]
-  {
+func test_ai_batch_compacts_many_old_messages() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
     let msgs = repeated_pairs(8, long_content());
     match compact_with_ai(test_ctx_stub(1, 250, empty_ext_artifacts()), msgs, test_cfg(false)) {
       Compacted(out, note, _) =>
@@ -665,9 +664,8 @@ func test_ai_batch_compacts_many_old_messages() -> bool
 -- compaction (PassThrough) when the summarizer fails, instead of splicing
 -- a "[summarizer unavailable: ...]" placeholder in as if it were a real
 -- summary. Uses test_ctx (noop ports → ai_step returns Err).
-func test_ai_summarizer_failure_degrades_to_passthrough() -> bool
-  tests [((), true)]
-  {
+func test_ai_summarizer_failure_degrades_to_passthrough() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
     let msgs = repeated_pairs(8, long_content());
     match compact_with_ai(test_ctx(1, 250, empty_ext_artifacts()), msgs, test_cfg(false)) {
       PassThroughObserved("compaction_ai.summarizer_failed", _) => true,
@@ -677,9 +675,8 @@ func test_ai_summarizer_failure_degrades_to_passthrough() -> bool
     }
   }
 
-func test_ai_no_foldable_prefix_observed() -> bool
-  tests [((), true)]
-  {
+func test_ai_no_foldable_prefix_observed() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
     let msgs = [user(long_content())];
     let cfg = { test_cfg(false) | keep_recent_tokens: 10000 };
     match compact_with_ai(test_ctx_stub(1, 10, empty_ext_artifacts()), msgs, cfg) {
@@ -698,9 +695,8 @@ func test_ai_output_not_relieving_observed() -> bool
     }
   }
 
-func test_ai_malformed_cache_recovers_with_fresh_fold() -> bool
-  tests [((), true)]
-  {
+func test_ai_malformed_cache_recovers_with_fresh_fold() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
     let malformed = jo([kv("compaction_ai", jo([kv("summary", jnum(1.0))]))]);
     let msgs = repeated_pairs(8, long_content());
     match compact_with_ai(test_ctx_stub(1, 250, malformed), msgs, test_cfg(false)) {
@@ -709,9 +705,8 @@ func test_ai_malformed_cache_recovers_with_fresh_fold() -> bool
     }
   }
 
-func test_ai_over_threshold_reuses_cache_without_passthrough() -> bool
-  tests [((), true)]
-  {
+func test_ai_over_threshold_reuses_cache_without_passthrough() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
     let msgs = repeated_pairs(8, long_content());
     let cfg = test_cfg(true);
     match compact_with_ai(test_ctx_stub(10, 1000, empty_ext_artifacts()), msgs, cfg) {

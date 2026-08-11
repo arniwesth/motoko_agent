@@ -45,7 +45,7 @@ func expect_fail(label: string, hooks: ExtensionHooks, s: Scenario, expected: st
   }
 }
 
-func expect_accept(label: string, hooks: ExtensionHooks) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_accept(label: string, hooks: ExtensionHooks) -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let failures =
     expect_ok(label, hooks, scenario_system_prefix_preserved())
     + expect_ok(label, hooks, scenario_tool_pairing_preserved())
@@ -58,7 +58,7 @@ func expect_accept(label: string, hooks: ExtensionHooks) -> int ! {IO, Process, 
   }
 }
 
-func expect_reject_prefix() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_reject_prefix() -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let hooks = reject_prefix_hooks();
   expect_fail("reject_prefix", hooks, scenario_system_prefix_preserved(), "no_system_in_output")
     + expect_ok("reject_prefix", hooks, scenario_tool_pairing_preserved())
@@ -66,7 +66,7 @@ func expect_reject_prefix() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, 
     + expect_ok("reject_prefix", hooks, scenario_artifact_cache_effective())
 }
 
-func expect_reject_pair() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_reject_pair() -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let hooks = reject_pair_hooks();
   expect_ok("reject_pair", hooks, scenario_system_prefix_preserved())
     + expect_fail("reject_pair", hooks, scenario_tool_pairing_preserved(), "pairing_preserved")
@@ -74,7 +74,7 @@ func expect_reject_pair() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Cl
     + expect_ok("reject_pair", hooks, scenario_artifact_cache_effective())
 }
 
-func expect_reject_nocache() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func expect_reject_nocache() -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let hooks = reject_nocache_hooks();
   expect_ok("reject_nocache", hooks, scenario_system_prefix_preserved())
     + expect_ok("reject_nocache", hooks, scenario_tool_pairing_preserved())
@@ -82,7 +82,7 @@ func expect_reject_nocache() -> int ! {IO, Process, FS, AI, Env, Net, SharedMem,
     + expect_fail("reject_nocache", hooks, scenario_artifact_cache_effective(), "artifact_cache_effective")
 }
 
-export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   let ai = register_ai({});
   let structural = register_structural({});
   let failures =

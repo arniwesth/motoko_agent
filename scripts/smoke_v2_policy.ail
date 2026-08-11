@@ -45,8 +45,8 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   -- dispatch_one. We verify the policy gate fires (no crash), the call
   -- runs through, and the loop terminates.
   let initial_msgs: [Msg] = [
-    { role: "system", content: "You are a helpful assistant. Answer concisely." },
-    { role: "user", content: "What does 1+1 equal? One number, no tool calls." }
+    { role: "system", content: "You are a helpful assistant. Answer concisely.", tool_calls: [], tool_call_id: "" },
+    { role: "user", content: "What does 1+1 equal? One number, no tool calls.", tool_calls: [], tool_call_id: "" }
   ];
 
   -- Model is read from AILANG_SMOKE_MODEL so the matrix runner can drive

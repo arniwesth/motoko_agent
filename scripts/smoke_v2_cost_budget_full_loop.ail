@@ -26,13 +26,8 @@ import std/ai (Message, AIError)
 import src/core/config (CostRates)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
 import src/core/test/scripted_ports (run_v2_with_scripted_ports)
-import src/core/test/stub_step (
-  ScriptedStep,
-  empty_rt,
-  deny_all_rt,
-  prose_step,
-  continuing_token_step
-)
+import src/core/test/stub_step (empty_rt, deny_all_rt, prose_step, continuing_token_step)
+import src/core/ports (ScriptedStep)
 
 -- GLM-5-shaped rates: $0.60/M input, $2.08/M output (in millicents).
 func glm5_rates() -> CostRates {
@@ -69,7 +64,7 @@ func mk_budget() -> BudgetPlan {
 
 -- Smoke 1: cap=50000 mc, script of 6 token_steps. Expect Err(BudgetExceeded)
 -- at step 4 (4*16400=65600 ≥ 50000). The 5th and 6th steps should never run.
-func test_cap_50k_trips_at_step_4() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_cap_50k_trips_at_step_4() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- 6 continuing_steps (BashExec tool_calls), denied by deny_all_rt so they
   -- don't actually run. Loop iterates accumulating cost until cap breach.
   -- After step 4: 4*16400=65600 ≥ 50000 → expected Err(BudgetExceeded).
@@ -97,7 +92,7 @@ func test_cap_50k_trips_at_step_4() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 
 -- Smoke 2: cap=100000 mc with 5 token_steps + a final prose_step. Expect
 -- Ok (5*16400=82000 < 100000; the prose_step ends the loop normally).
-func test_cap_100k_completes_normally() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_cap_100k_completes_normally() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   -- 5 continuing_steps (5*16400=82000 < 100000) + prose terminator.
   let script: [ScriptedStep] = [
     continuing_token_step(100000, 50000, "tc1"),
@@ -130,7 +125,7 @@ func test_cap_100k_completes_normally() -> bool ! {AI, FS, Process, IO, Env, Net
 
 -- Smoke 3: cap=0 (disabled) with 6 continuing_steps + prose terminator.
 -- Cumulative cost would be 6*16400=98400 mc, but cap=0 disables the check.
-func test_cap_zero_disables_check() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_cap_zero_disables_check() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let script: [ScriptedStep] = [
     continuing_token_step(100000, 50000, "tc1"),
     continuing_token_step(100000, 50000, "tc2"),
@@ -162,7 +157,7 @@ func test_cap_zero_disables_check() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
 }
 
 -- Smoke 4: rates=zero (unmetered/Ollama) → cost check skipped even with cap set.
-func test_zero_rates_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+func test_zero_rates_fail_open() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let script: [ScriptedStep] = [
     continuing_token_step(100000, 50000, "tc1"),
     continuing_token_step(100000, 50000, "tc2"),
@@ -198,7 +193,7 @@ func report(name: string, ok: bool) -> () ! {IO} {
   else println("  ✗ ${name}")
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} = {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} = {
   println("=== smoke_v2_cost_budget_full_loop ===");
   let r1 = test_cap_50k_trips_at_step_4();
   report("cap=50k trips at step 4 (BudgetExceeded)", r1);

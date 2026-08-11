@@ -128,7 +128,7 @@ func expect_compacted_keep(decision: PreStepDecision, keep_last: int, invariant_
 }
 
 func scenario_estimate_tier_ladder() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let msgs = tool_heavy_msgs();
   let below_limit = limit_for_pct(msgs, elide_tier_pct() - 10);
   let tier_limit = limit_for_pct(msgs, elide_tier_pct() + 5);
@@ -175,7 +175,7 @@ func tool_shape_ok(input: [Msg], out: [Msg], keep_last: int) -> bool {
 }
 
 func scenario_tool_shape_preserved_by_elision() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let c = long_content();
   let input = [
     user("question"),
@@ -203,7 +203,7 @@ func non_tool_pressure_msgs() -> [Msg] {
 }
 
 func scenario_emergency_recovery_or_defer() -> Result[(), ScenarioFailure]
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let tools = tool_heavy_msgs();
   let tool_limit = limit_for_pct(tools, emergency_pct() + 2);
   let recovery = compact_for_pre_step(ctx(tool_limit), tools);

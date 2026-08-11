@@ -65,7 +65,7 @@ export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) 
         no_budget_patch()
       },
     on_pre_step:
-      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
         PassThrough
       },
     on_tool_policy:

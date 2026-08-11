@@ -8,7 +8,8 @@ import src/core/config (CostRates)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
 import src/core/test/scripted_ports (run_v2_with_scripted_ports)
 import src/core/test/ext_fixture (fixture_rt)
-import src/core/test/stub_step (ScriptedStep, prose_step, tool_step)
+import src/core/test/stub_step (prose_step, tool_step)
+import src/core/ports (ScriptedStep)
 
 func no_rates() -> CostRates {
   { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
@@ -34,7 +35,7 @@ func script() -> [ScriptedStep] {
   ]
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let result = run_v2_with_scripted_ports(
     fixture_rt(),
     "phase-b-fixture-parity",

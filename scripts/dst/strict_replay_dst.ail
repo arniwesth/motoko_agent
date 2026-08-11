@@ -134,8 +134,8 @@ import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderCallPrepared)
-import src/core/test/stub_step (RecordingWorld, ScriptedStep)
-import src/core/ports (WorldState, ScriptedTool, empty_world_state)
+import src/core/test/stub_step (RecordingWorld)
+import src/core/ports (ScriptedStep, WorldState, ScriptedTool, empty_world_state)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/dst_interaction (
@@ -274,7 +274,7 @@ func no_intercept(_ctx: ExtCtx, _text: string)
 func no_solver(_ctx: ExtCtx, _text: string)
   -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
 func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough }
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { PassThrough }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("strict replay: approval required", DenyAfterTimeout)
 }
@@ -297,7 +297,7 @@ func approval_rt(id: string) -> ExtRuntime {
 }
 
 func run_recording(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
-  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
     step_budget, false, 0, zero_rates(), RecordingWorld(w)
@@ -611,7 +611,7 @@ func run_scenario(
   -- to be, and saying which makes the obligation locatable instead of assumed
   -- of all of them.
   is_survive_fixture: bool
-) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world(script, answers, tools);
 
   -- ---- Discovery: produce the exact program ------------------------------
@@ -953,7 +953,7 @@ func run_scenario(
 --
 -- One run each, so the comparison is exact equality with no multiplier to keep
 -- in sync when a scenario is added.
-export func wire_witness() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world(rich_script(), rich_answers(), rich_tools());
   let discovery = run_recording("srwire_disc", initial, 12);
   let program = program_of(discovery.world.log, initial);
@@ -1048,7 +1048,7 @@ func rich_tools() -> [ScriptedTool] {
 -- exercise the Err path.
 func failure_answers() -> [string] { [approve_line(), deny_line("bravo")] }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only");
 
   let ok_rich = run_scenario("rich", rich_script(), rich_answers(), rich_tools(), 12, true, true);

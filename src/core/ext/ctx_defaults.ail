@@ -4,7 +4,7 @@ import std/json (Json, jo)
 import std/result (Result, Err)
 import pkg/sunholo/motoko_ext_abi/types (ExtPorts, Msg, TokenTelemetry)
 
-func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   Err("ext ai_step port unavailable")
 }
 

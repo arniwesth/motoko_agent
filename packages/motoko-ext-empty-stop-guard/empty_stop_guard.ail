@@ -49,7 +49,7 @@ func assistant(content: string) -> Msg {
   { role: "assistant", content: content, tool_calls: [], tool_call_id: "" }
 }
 
-func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+func noop_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
   Err("ext ai_step port unavailable")
 }
 
