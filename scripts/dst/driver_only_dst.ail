@@ -278,7 +278,11 @@ func scenario_manifest() -> bool ! {IO} {
   -- field, which is exactly what `tools/ext_call_inventory/derive.py` looks for,
   -- so the tool no longer derives it as unrouted. The empty list is re-derived
   -- by `tools/profile_definition/check_fixtures.py` rather than trusted here.
-  let m = driver_only_manifest("HEAD", "ailang 0.33.0", "4.0", "{}",
+  -- `abi_version` said "4.0" from WI-A10 until WI-D14 and had been stale since
+  -- WI-B2b, which took the ABI to 5.0. The manifest is what makes a run exactly
+  -- reproducible, so a stale version here pins the wrong contract — and nothing
+  -- compared it until `check_fixtures.py` gained the re-derivation.
+  let m = driver_only_manifest("HEAD", "ailang 0.33.0", "5.0", "{}",
                                ["env_get", "proc_exec"], [], "HEAD");
   let rs = validate_manifest(m, driver_only());
   let ok = List.length(rs) == 0;

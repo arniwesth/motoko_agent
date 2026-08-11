@@ -715,3 +715,43 @@ worth more than the profile.**
 already decided it.** D13's decline was sound reasoning that duplicated a review round from before the
 ADR was accepted. **A decision recorded in an artifact nobody re-reads is indistinguishable from a
 decision never taken** — the same shape as D11's false antecedent, one document over.
+
+
+## Cluster 32 outcome, and cluster 33 = registration versus hooks
+
+**WI-D14: the second profile exists and ALL FOUR of row 3's installed-extension clauses BOUND and
+held.** `driver_plus_no_ops/1` — four extensions, 32 hooks, **zero mediating**. Row 3's fifth clause
+("visible as such") needed a FIELD rather than the ids, because a no-op hook and a mediating one
+disclose the same eight names. The coverage statement is computed, and the guard **fails** a profile
+reporting non-zero coverage without saying none of it mediates — the fifth vacuity made into a
+rejection rather than a resolution.
+
+**And it produced the first LIVE instance of the counted failure mode in thirty-eight runs**: the ABI
+version pinned at `4.0` while the package declares `5.0`, silent for eleven items, in the artifact
+whose job is exact reproducibility. **Earned S23** — a transcribed constant becomes checkable the
+moment a second consumer has to state it. **What found it was writing the second profile's boundary
+note**, not any instrument.
+
+**Corrected at review: the stdlib-adjacent cache's producer is STILL unidentified.** D14 identified
+`~/.ailang`'s 4 files; the open question is `~/.local/share/ailang/std/.ailang`'s 52. Different
+directories.
+
+**Cluster 33 = WI-D15: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d15-registration-versus-hooks.md`.
+
+**Grounding found that Route B is not the blocker and never was the next thing to price.** Classifier
+3 reports `compaction_ai` **AMBIENT because of its REGISTRATION** — `register.ail` imports `std/env`
+and `std/fs`, while `compaction_ai.ail`, where the hooks live, imports seven modules every one of
+which is proven effect-free. **The tree holds both the verdict and its refutation**
+(`dst_driver_only.ail:597` argues the hooks are clean) **and nothing compares them.**
+
+**So the amendment's two properties pull opposite ways** — property 1 is call-granular, property 2 is
+closure-granular, classifier 3 implements 2 and coarsens 1 away on the record — and **D5's own text
+quantifies over hooks, which registration is not.** The reading decides whether Route B is tractable
+or larger than anyone has said.
+
+**Clustering note: a coarsening recorded as a decision can silently become a bound on what the system
+can ever achieve.** D12 recorded "an import alone is a rejection" as a conservative choice, correctly
+and in the open. Three items later it is the reason no mediating extension can ever be cleared. **When
+an item records a deliberate coarsening, the next item to depend on that instrument should re-ask what
+the coarsening now costs** — it is S21's shape applied to a design decision rather than to a vacuity.

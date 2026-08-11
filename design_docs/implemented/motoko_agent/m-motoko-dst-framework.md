@@ -18,6 +18,24 @@ changed no claim the table rests on — see the superseded-clause note below), a
 > and that exception is unchanged, so **adoption renamed nothing**. What changed is the second half:
 > the conformance bar is now met for one profile.
 
+> **THE CAVEAT BELOW WAS AMENDED ON 2026-08-07 (WI-D14) AND IS KEPT AS WRITTEN, because it was
+> true from 2026-07-24 until that date and re-dating it in place would make it a false claim about
+> history.** A SECOND profile now exists — `driver_plus_no_ops/1` — which installs four extensions
+> and covers 32 hooks, so *"the axis's extension-model coverage is ZERO"* is no longer true of the
+> axis as a whole. It remains true of `driver_only`, which still installs nothing, and every clause
+> below still describes that profile exactly.
+>
+> **The honest successor, which the second profile's own result computes rather than asserts:**
+> *extension-model coverage is NON-ZERO and ENTIRELY OF NO-OPS — 32 hooks across 4 installed
+> extensions, of which the 16 resting on D5 criterion 2 satisfy its port and origin-tag clauses
+> VACUOUSLY, over an empty set of performed effects. ZERO covered hooks mediate the world
+> substantively, so the coverage exercises NONE of the world-mediation machinery.* That is a weaker
+> claim than the number implies and a stronger one than zero, and no number alone separates it from
+> real coverage. `make driver_plus_no_ops` prints it, and
+> `tools/profile_definition/check_no_op_profile.py` fails if a non-zero coverage is stated without
+> it. **What has NOT changed: no profile in this tree covers a hook that performs an effect, so the
+> world-mediation machinery is still uncovered by any profile.**
+
 **What the label does NOT assert — mandatory in every report:** **the axis's extension-model
 coverage is ZERO.** `driver_only` installs no extension. Four of the eleven acceptance rows lean on
 that emptiness in a named clause — the boundary row passes **vacuously** in every
@@ -121,7 +139,11 @@ for the **generated axis under one profile**, whose **extension-model coverage i
 Naming block at the top. It is not a claim about the fixed scenarios, and it is not a claim about any
 profile that installs an extension, because none exists. (This sentence read *"zero and structurally
 so"* until 2026-08-06. WI-D6 removed the structural part and left the zero: an extension is now
-installable, and no profile installs one.)
+installable, and no profile installs one. **The final clause — "because none exists" — became FALSE
+on 2026-08-07**, when WI-D14 added `driver_plus_no_ops/1`, and it is kept rather than rewritten for
+the same reason as the rest of this paragraph. The adoption's scope is unchanged: the label was
+earned for `driver_only`, and the second profile earns its own rows from scratch per D10 — it has
+re-earned four of the eleven and claims none of the other seven.)
 
 The route was a cross-cutting change to effect routing and the terminal-trace contract, **not** a
 `ScriptedStep` extension (`ScriptedStep` was a success-only record; approvals, native tools, and

@@ -487,7 +487,29 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- vacuity this profile's acceptance table rests on is unchanged in extent.
 -- Naming an extension in `omitted_extensions` is not a coverage claim;
 -- installing one is, and it is WI-C5's.
-export pure func driver_only_version() -> string { "13" }
+--
+-- v13 → v14 AT WI-D14, AND IT IS THE SMALLEST KIND OF BUMP THIS FILE TAKES: a
+-- sentence inside one reason became FALSE, and nothing else moved. No anchor,
+-- no install, no coverage, no waiver, no attribution ref.
+--
+-- WHAT BECAME FALSE. `compaction_structural`'s reason below said installing it
+-- "is WI-C5's, not an instrument's side effect". **WI-D14 installed it — in a
+-- DIFFERENT PROFILE.** `src/core/dst_driver_plus_no_ops.ail` installs all four
+-- of the zero-barrier extensions and covers 32 hooks, entirely of no-ops. So
+-- the install decision was neither WI-C5's nor an instrument's; it was a second
+-- profile's, which is the case the sentence did not contemplate and which D10
+-- always permitted. The clause is qualified in place with its date rather than
+-- rewritten, per plan rule S15, because it was true from WI-D13 until 2026-08-07.
+--
+-- WHAT DID NOT CHANGE, AND IT IS WHY THIS IS A BUMP AND NOT A RE-ISSUE:
+-- **driver_only still installs nothing and still covers nothing, and its own
+-- coverage is still ZERO.** A second profile installing an extension takes
+-- nothing from this one and gives it nothing — per D10 each profile earns its
+-- rows from scratch, and `driver_plus_no_ops` inherits none of the eleven this
+-- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
+-- are unchanged in extent, and the mandatory zero-coverage caveat is still
+-- true of `driver_only` verbatim.
+export pure func driver_only_version() -> string { "14" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -543,7 +565,7 @@ export pure func driver_only() -> ProfileDefinition {
       { boundary_id: "approval.stdin_channel", included: false,
         note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
       { boundary_id: "extension.abi", included: false,
-        note: "the motoko-ext-abi hook surface, ABI 4.0. Excluded BECAUSE the install list is empty — no extension behaviour is in the system under test, which is what makes this the interim profile the ADR describes rather than a claim about extensions" }
+        note: "the motoko-ext-abi hook surface, ABI 5.0 (this note SAID 4.0 from WI-A10 until WI-D14, 2026-08-07, and had been stale since WI-B2b took the ABI to 5.0 — nothing compared it, which is the transcription defect this module's header is about; `check_fixtures.py` now re-derives it from packages/motoko-ext-abi/ailang.toml). Excluded BECAUSE the install list is empty — no extension behaviour is in the system under test, which is what makes this the interim profile the ADR describes rather than a claim about extensions" }
     ],
 
     -- D5 field 4. The logical transitions the profile promises a fault leaves
@@ -692,7 +714,7 @@ export pure func driver_only() -> ProfileDefinition {
       -- coverage number attached. That is the reason to decline, and it is a
       -- reason about evidence rather than about correctness.
       { extension_id: "compaction_structural",
-        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07); until today it was omitted by consequence like every other extension. ZERO barriers remain for it: classifier 3 (make ext_ambient_inventory) reports PORT-MEDIATED over its 4-module transitive closure — 0 ambient sources, 0 ExtPorts field calls — and all three barrier slots' outcome types return explicit world state. So D5 criterion 2 is satisfied, on the basis recorded above, with clauses 1 and 2 VACUOUS and clause 3 substantive. It is the sharpest of the four: it is the ONE extension of fifteen that binds on_pre_step as a named top-level function rather than an inline record-field expression, which is the form the effect checker actually reads, so its declared row constrains its binding where the other fourteen's do not. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: nothing about this extension would — what would have to change is this profile's willingness to bank coverage of hooks that perform nothing. Installing it is a coverage claim and a profile version bump and it is WI-C5's, not an instrument's side effect. THE MEASUREMENT, per D1's rule that a reason records a measurement rather than a diagnosis: its pre_step body verbatim, declared with no effect row outside the ABI record, is ACCEPTED (its only call is compact_for_pre_step, an export pure func); the same body plus one println is REJECTED with 'Missing effects: IO'. Two-sided, on all three barrier-slot bodies." },
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07); until today it was omitted by consequence like every other extension. ZERO barriers remain for it: classifier 3 (make ext_ambient_inventory) reports PORT-MEDIATED over its 4-module transitive closure — 0 ambient sources, 0 ExtPorts field calls — and all three barrier slots' outcome types return explicit world state. So D5 criterion 2 is satisfied, on the basis recorded above, with clauses 1 and 2 VACUOUS and clause 3 substantive. It is the sharpest of the four: it is the ONE extension of fifteen that binds on_pre_step as a named top-level function rather than an inline record-field expression, which is the form the effect checker actually reads, so its declared row constrains its binding where the other fourteen's do not. Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: nothing about this extension would — what would have to change is this profile's willingness to bank coverage of hooks that perform nothing. Installing it is a coverage claim and a profile version bump and it is WI-C5's, not an instrument's side effect. QUALIFIED AT WI-D14 (2026-08-07) AND KEPT AS WRITTEN, per plan rule S15: the previous sentence was true from WI-D13 until that date and is now false in one clause. Installing this extension was NEITHER WI-C5's nor an instrument's side effect — it was a SECOND PROFILE's, src/core/dst_driver_plus_no_ops.ail, which installs all four zero-barrier extensions and covers 32 hooks entirely of no-ops. D10 always permitted that and this reason did not contemplate it. THIS PROFILE'S DECISION IS UNCHANGED: driver_only still declines to install it, still installs nothing, and its own extension-model coverage is still ZERO; a second profile's install list takes nothing from this one's and gives it nothing. THE MEASUREMENT, per D1's rule that a reason records a measurement rather than a diagnosis: its pre_step body verbatim, declared with no effect row outside the ABI record, is ACCEPTED (its only call is compact_for_pre_step, an export pure func); the same body plus one println is REJECTED with 'Missing effects: IO'. Two-sided, on all three barrier-slot bodies." },
       { extension_id: "decision_framework",
         reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above and for the same reason. Classifier 3 reports PORT-MEDIATED over its 2-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Its three barrier-slot hooks are inline record-field expressions returning { PassThrough }, { NoIntercept } and { NoDecision } with next_state: ctx.world; on the shipped ABI an inline binding's declared row is INERT (ADR:1415's amended record-field passage), so the row was never the operative constraint for it and the measurement is the only thing that ever spoke. Two-sided control at WI-D13: each body rowless is ACCEPTED, each plus one println REJECTED 'Missing effects: IO'. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing — not anything about the extension." },
       { extension_id: "empty_stop_guard",
@@ -857,7 +879,12 @@ pure func test_the_four_non_vacuous_fields_are_populated() -> bool
 pure func test_manifest_reads_the_vocabulary_version() -> bool
   tests [((), true)]
   {
-    let m = driver_only_manifest("r", "t", "4.0", "{}", ["ai_step"], [], "r");
+    -- The `abi_version` argument said "4.0" until WI-D14 and had been stale
+    -- since WI-B2b, exactly as the two real records did. It is not what this
+    -- test asserts — but a fixture carrying a stale version reads as current,
+    -- and `check_fixtures.check_abi_version` is deliberately TOTAL over every
+    -- manifest this file builds rather than only over the shipped ones.
+    let m = driver_only_manifest("r", "t", "5.0", "{}", ["ai_step"], [], "r");
     m.event_vocabulary_version == event_vocabulary_version()
       && m.profile_id == driver_only_id()
       -- Reads rather than transcribes. This line held the literal "1" and went

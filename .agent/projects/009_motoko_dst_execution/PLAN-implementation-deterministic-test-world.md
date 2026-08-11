@@ -466,6 +466,29 @@ numbers were derived, which moved four `session.ail` line numbers by nine. **S15
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
 
+**S23. A TRANSCRIBED CONSTANT BECOMES CHECKABLE THE MOMENT A SECOND CONSUMER HAS TO STATE IT — so
+build the second consumer, or guard the first.** Earned by WI-D14, and it is the rule behind **the
+first LIVE instance of this project's counted failure mode in thirty-eight runs.**
+
+**`driver_only` and every manifest built for it pinned `abi_version` at `"4.0"`. The ABI package has
+declared `5.0` since WI-B2b** — verified at review: `packages/motoko-ext-abi/ailang.toml` says
+`version = "5.0"`, and the pre-D14 profile said `"4.0"`. **Both readings type-check**, because
+`abi_version` is a free `string` field and a free argument to the manifest builder, **and the wrong
+one was silent for eleven items** — in the one artifact whose entire stated purpose is exact
+reproducibility. The manifest's own header says it "is a transcription by nature … so every field that
+CAN be read back from an artifact is read back" and lists four rule versions as the composition
+defect's natural home. **`abi_version` was a fifth and nobody had put it on the list.**
+
+**What found it was not an instrument.** It was writing the SECOND profile's boundary note and having
+to ask what number to put in it. **A constant that only one artifact states is a constant nothing
+compares**; a second statement of it is a comparison whether or not anyone intends one.
+
+**Now guarded, and the guard is total rather than pointed:** `check_abi_version` re-derives the
+version from the package's own `ailang.toml` across both profiles' records, fixtures and inline tests
+and **fails if it finds no site to check** — which caught a third stale site on its first aggregate
+run, one the two hand-fixes had missed. Verified at review: *"the ABI version every profile record
+names is the one the package declares: 5.0 (6 site(s) across 4 file(s))"*.
+
 **S22. When an item's scope is "every X", DERIVE the list of X from a producer in the tree and assert
 the agreement in the gate. Never take it from prose.** Earned by WI-D6, against its own handoff.
 **The handoff named eight extensions binding `on_budget_plan`; there are fourteen besides compose.**
@@ -3039,6 +3062,46 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D14, 2026-08-07 (~50 min) — THE SECOND PROFILE EXISTS, AND ALL FOUR OF ROW 3'S
+INSTALLED-EXTENSION CLAUSES BOUND AND HELD.** `driver_plus_no_ops/1`: four extensions installed, **32
+hooks covered, zero of them mediating the world**. Verified at review — each of the four extensions
+reports *"8 hook(s) covered — floor satisfied, non-vacuously"*. Those clauses had quantified over the
+empty set for the entire project. **Clause 3 is half-bound and says so**: the AILANG rule still
+quantifies over an empty derived call list, and what discharges it substantively is classifier 3
+reporting **0 `ExtPorts` field calls** per installed closure — a measurement on the other side, named
+as such rather than claimed as a green line.
+
+**Row 3's fifth clause — "visible as such" — needed a FIELD, not the ids.** A no-op hook and a
+mediating one disclose the same eight names, so `HookClassificationEntry` gained
+`clauses: Criterion2Clauses`, one status per criterion-2 clause. **Before it, "this hook mediates the
+world" and "this hook performs nothing, so there is nothing to mediate" wrote the same string into the
+same record** — `basis`'s defect one level down.
+
+**The coverage statement is COMPUTED, and the D5 caveat survives rather than being deleted:**
+*"NON-ZERO and ENTIRELY OF NO-OPS: 32 hook(s) … 16 satisfy criterion 2's port and origin-tag clauses
+VACUOUSLY … a weaker claim than the number implies and a stronger one than zero."* `coverage_statement`
+still returns the ZERO sentence for an empty install list, and the guard **fails** a profile that
+reports non-zero coverage without saying none of it mediates. **The fifth vacuity was made into a
+rejection rather than a resolution.**
+
+**The four changed rows were re-earned on grounds that are NOT emptiness** — row 4's waiver by
+measurement (0 `ExtPorts` calls, so no installed hook can issue the class's delivery request), row 5's
+transfer by measurement (0 ambient sources, so installing four added no reachable core site), row 7 by
+two independent facts either of which suffices. **The other seven are explicitly NOT claimed**, in the
+script's own output.
+
+**And it produced the first LIVE instance of this project's counted failure mode in thirty-eight
+runs — see S23.** The counter moves **69 → 70**, and determinism did not catch this one either.
+
+**One correction applied at review: the stdlib-adjacent cache's producer is STILL UNIDENTIFIED.**
+WI-D14 reports it as *"IDENTIFIED, and it is `make sync_packages`"*, but its evidence is
+`find ~/.ailang` — **a different directory**. Measured: `~/.ailang` holds **4 files** (a registry copy
+of `sunholo/logging@0.4.0` plus `state/collaboration.db`, exactly what D14 lists), while
+`~/.local/share/ailang/std/.ailang` holds **52** — the stdlib compile cache whose warmth moves
+`effect_inventory_selftest` between `agree=1` and `agree=45`, and the one D11, D12 and D13 were
+chasing. D14's own scope note concedes it does not account for the 52. **What it identified is real
+and is not the open question.**
 
 **WI-D13, 2026-08-07 — `basis` LANDED, THE BARRIER DERIVATION RE-SHAPED, AND FOUR EXTENSIONS CLEAR
 — NOT ONE.** Verified at review: `basis` rejects three ways by name with a loading control, the
