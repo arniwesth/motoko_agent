@@ -1,0 +1,23 @@
+-- TWO-SIDED CONTROL for `control_registration_only`.  Byte-for-byte the same
+-- import and the same call; the only change is WHERE the call happens.  If this
+-- fixture does not come out AMBIENT while its twin comes out clean, the split is
+-- not measuring the reading -- it is measuring the file.
+module fixture/control_hook_reaches_env
+
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtCtx)
+
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env} {
+  {
+    id: "control_hook_reaches_env",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [getEnvOr("FIXTURE_MARKER", "")] },
+    on_budget_plan: \_ _ . { requested_total: None },
+    on_pre_step: func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
+  }
+}

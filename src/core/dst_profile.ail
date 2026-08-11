@@ -185,7 +185,19 @@ import src/core/phase_vocab (LedgerTrace, empty_ledger_trace)
 -- requires a profile-version change; changing what "conformant" MEANS changes
 -- it for every profile, so the rules are versioned on their own footing and the
 -- manifest records this alongside the other artifacts' rule versions.
-export pure func profile_rules_version() -> string { "profile-rules/1" }
+--
+-- BUMPED TO /2 AT WI-D14. Two rules were added and both can turn a definition
+-- that loaded clean under /1 into a rejection: `WorldMediated` now requires a
+-- MEASURED basis, and every classification entry must record criterion 2's
+-- three clauses (set for a criterion-2 entry, `NotApplicable` for any other).
+-- That is a change to what "conformant" MEANS, which D5 versions on its own
+-- footing rather than per profile.
+--
+-- NO PROFILE'S VERDICT MOVES WITH IT, and that is checked rather than asserted:
+-- both rules quantify over `hook_classifications`, and `driver_only` has none.
+-- `make driver_only` is what says so, on the same `validate_definition_at_load`
+-- call a runner makes.
+export pure func profile_rules_version() -> string { "profile-rules/2" }
 
 -- ---------------------------------------------------------------------------
 -- D5 field 2: included extension ids, and per-hook classifications
@@ -307,11 +319,63 @@ pure func kind_of(ps: [ClassificationProducer], id: string) -> Option[BasisKind]
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- WI-D14: criterion 2's THREE CLAUSES, recorded per entry
+-- ---------------------------------------------------------------------------
+--
+-- ADR-001 D5 admits a hook under criterion 2 when it is *"effectful only
+-- through D1 world-mediated ports, with origin tagged by extension id and
+-- explicit world state returned to the host"*. WI-B4 read that as a CONJUNCTION
+-- of three clauses and was right; reading it as one test is how it gets passed.
+--
+-- `basis` (WI-D13) records WHAT answered and WHEN. It cannot record HOW MUCH
+-- the answer said, and for criterion 2 that difference is the whole finding:
+-- **an extension that performs nothing satisfies clauses 1 and 2 over an empty
+-- set.** Amendment A predicted it in advance (`ADR:1611`) — *"the first hook
+-- classifier 3 clears will be one that performs nothing, not one that
+-- mediates"* — and WI-D13 measured exactly that for four extensions.
+--
+-- So the vacuity is a FIELD and not prose beside the profile. ADR-001's
+-- acceptance row 3 requires that *"a profile covering only ABI-pure no-op slots
+-- is visible as such"*, and visible-as-such is a property of the RECORD, not of
+-- a comment a reader may never open. Without this field the two claims
+--
+--   "this hook mediates the world through a port, tagged, returning state"
+--   "this hook performs nothing, so there is nothing to mediate or tag"
+--
+-- write the same string `world_mediated` into the same record — which is the
+-- shape `basis` was added to close one level up.
+export type ClauseStatus = Substantively | Vacuously | NotApplicable
+
+export pure func clause_status_id(s: ClauseStatus) -> string {
+  match s {
+    Substantively => "substantively",
+    Vacuously => "vacuously",
+    NotApplicable => "not_applicable"
+  }
+}
+
+-- The three clauses, in D5's own order. Field names say which clause, because
+-- `clause_1` would make a reader count the ADR's commas.
+export type Criterion2Clauses = {
+  ports: ClauseStatus,        -- (1) effectful only through D1 world-mediated ports
+  origin_tag: ClauseStatus,   -- (2) with origin tagged by extension id
+  world_state: ClauseStatus   -- (3) and explicit world state returned to the host
+}
+
+-- `NotApplicable` on all three: the entry does not rest on criterion 2 at all.
+-- Required of every `EffectFree` and `ExplicitlyExcluded` entry below, so a
+-- non-criterion-2 entry cannot carry criterion-2 evidence it does not have.
+export pure func no_criterion_2() -> Criterion2Clauses {
+  { ports: NotApplicable, origin_tag: NotApplicable, world_state: NotApplicable }
+}
+
 export type HookClassificationEntry = {
   extension_id: string,
   hook_id: string,
   classification: HookClassification,
-  basis: ClassificationBasis
+  basis: ClassificationBasis,
+  clauses: Criterion2Clauses
 }
 
 -- An installed extension, with the resolved path of its AILANG source. The path
@@ -486,6 +550,9 @@ export type ProfileRejection
   | ExtensionSetDisagrees(string, string)
   | ClassificationBasisNotRecorded(string, string, string)
   | ClassificationBasisUnrecognised(string, string, string)
+  | WorldMediatedOnAnAssumedBasis(string, string, string)
+  | Criterion2ClauseUnrecorded(string, string, string)
+  | Criterion2ClausesNotApplicable(string, string, string)
 
 export pure func rejection_rule(r: ProfileRejection) -> string {
   match r {
@@ -504,7 +571,10 @@ export pure func rejection_rule(r: ProfileRejection) -> string {
     ClassificationDisagreesWithDisclosure(_, _) => "classification-disagrees-with-disclosure",
     ExtensionSetDisagrees(_, _) => "extension-set-disagrees",
     ClassificationBasisNotRecorded(_, _, _) => "classification-basis-not-recorded",
-    ClassificationBasisUnrecognised(_, _, _) => "classification-basis-unrecognised"
+    ClassificationBasisUnrecognised(_, _, _) => "classification-basis-unrecognised",
+    WorldMediatedOnAnAssumedBasis(_, _, _) => "world-mediated-on-an-assumed-basis",
+    Criterion2ClauseUnrecorded(_, _, _) => "criterion-2-clause-unrecorded",
+    Criterion2ClausesNotApplicable(_, _, _) => "criterion-2-clauses-not-applicable"
   }
 }
 
@@ -539,7 +609,13 @@ export pure func rejection_message(r: ProfileRejection) -> string {
     ClassificationBasisNotRecorded(e, h, field) =>
       "[classification-basis-not-recorded] extension '${e}' classifies hook '${h}' and records no '${field}' for it; a classification with no evidentiary basis is indistinguishable from one that was measured, which is the fail-open ADR-001 Amendment A's default was written to close (ADR:1548) and which nothing enforced before WI-D13",
     ClassificationBasisUnrecognised(e, h, p) =>
-      "[classification-basis-unrecognised] extension '${e}' classifies hook '${h}' on the basis of producer '${p}', which is not a producer this tree has; see `recognised_producers`. A basis naming an instrument that does not exist is worse than no basis, because it reads as evidence — fail-closed, on classifier 2's discipline"
+      "[classification-basis-unrecognised] extension '${e}' classifies hook '${h}' on the basis of producer '${p}', which is not a producer this tree has; see `recognised_producers`. A basis naming an instrument that does not exist is worse than no basis, because it reads as evidence — fail-closed, on classifier 2's discipline",
+    WorldMediatedOnAnAssumedBasis(e, h, p) =>
+      "[world-mediated-on-an-assumed-basis] extension '${e}' classifies hook '${h}' as world-mediated on producer '${p}', which this tree records as an ASSUMPTION rather than a measurement. ADR-001 Amendment A's fail-closed default (ADR:1548) says criterion 2 may be recorded only on a producer that MEASURED it — a declared row bounds performed effects in one direction only and cannot distinguish mediation from ambience at any width (ADR:1449)",
+    Criterion2ClauseUnrecorded(e, h, clause) =>
+      "[criterion-2-clause-unrecorded] extension '${e}' classifies hook '${h}' as world-mediated and records clause '${clause}' as not-applicable; criterion 2 is a CONJUNCTION of three clauses (D5), so an entry claiming it must say how each one holds — substantively or vacuously. A clause satisfied over an empty set is coverage of a no-op, and ADR-001's acceptance row 3 requires that to be visible in the record",
+    Criterion2ClausesNotApplicable(e, h, clause) =>
+      "[criterion-2-clauses-not-applicable] extension '${e}' classifies hook '${h}' on a criterion OTHER than criterion 2 and records clause '${clause}' as satisfied; the clause record is criterion 2's and an effect-free or excluded entry carries evidence it does not rest on"
   }
 }
 
@@ -1062,9 +1138,200 @@ pure func basis_recorded(cs: [HookClassificationEntry]) -> [ProfileRejection] {
   }
 }
 
+-- WI-D14. THE KIND OF THE BASIS, ENFORCED FOR `WorldMediated` ONLY.
+--
+-- WI-D13 landed `basis` and checked that the producer is RECOGNISED. It did not
+-- check the producer's KIND, and the catalogue records one precisely so that a
+-- measured claim and a read one can be told apart. So until this item a profile
+-- could record `WorldMediated` on `declared_row` — a recognised producer, an
+-- ASSUMED one — and pass the gate, which is the fail-open Amendment A's
+-- default is written against in so many words: *"no profile may record
+-- `WorldMediated` on any other basis"* than classifier 3's (`ADR:1548`).
+--
+-- SCOPED TO `WorldMediated` DELIBERATELY, where D13's basis rule was
+-- deliberately uniform. The uniform rule asks "is there a basis at all", and
+-- every classification owes that. This one asks "is the basis strong enough for
+-- the claim", and the answer differs per claim: criterion 1's own basis IS an
+-- assumption (`ADR:1415`) and the amendment WITHHELD criterion 1, so requiring
+-- a measurement for `EffectFree` would be this module deciding an ADR-scope
+-- question. `ExplicitlyExcluded` is a decision, and its admissible basis is the
+-- profile's own disclosure, which `classification_agrees` above cross-checks.
+pure func world_mediated_is_measured(cs: [HookClassificationEntry]) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let here = match c.classification {
+        WorldMediated =>
+          match producer_kind(c.basis.producer) {
+            Some(Assumed) => [WorldMediatedOnAnAssumedBasis(c.extension_id, c.hook_id, c.basis.producer)],
+            Some(Measured) => [],
+            -- Unrecognised is `basis_recorded`'s rejection, not this one's. Two
+            -- rules firing on one defect reads as two defects.
+            None => []
+          },
+        EffectFree => [],
+        ExplicitlyExcluded => []
+      };
+      here ++ world_mediated_is_measured(rest)
+    }
+  }
+}
+
+-- WI-D14. THE THREE CLAUSES, REQUIRED OF THE ENTRIES THAT REST ON THEM AND
+-- FORBIDDEN OF THE ENTRIES THAT DO NOT.
+--
+-- Both directions, for the reason every set check in this module has both: one
+-- direction alone lets an entry carry a clause record that means nothing. A
+-- `WorldMediated` entry with a clause left `NotApplicable` has not said how the
+-- conjunct holds; an `EffectFree` entry with a clause SET is claiming
+-- criterion-2 evidence for a criterion-1 classification.
+--
+-- What this does NOT do, stated because the omission is the honest part: it
+-- does not check the clause statuses against a producer. `Vacuously` versus
+-- `Substantively` is a fact about the extension's source, and the instrument
+-- that can decide it is classifier 3 — a Python tool, so per plan rule P3 the
+-- comparison belongs in `tools/profile_definition/` and not in a constant here.
+-- `check_no_op_profile.py` re-derives it and fails if the record disagrees.
+pure func clause_named(cl: Criterion2Clauses, which: string) -> ClauseStatus {
+  if which == "ports" then cl.ports
+  else if which == "origin_tag" then cl.origin_tag
+  else cl.world_state
+}
+
+pure func clause_ids() -> [string] { ["ports", "origin_tag", "world_state"] }
+
+pure func clauses_recorded_rec(
+  c: HookClassificationEntry,
+  rests_on_criterion_2: bool,
+  which: [string]
+) -> [ProfileRejection] {
+  match which {
+    [] => [],
+    w :: rest => {
+      let applicable = match clause_named(c.clauses, w) {
+        NotApplicable => false,
+        Vacuously => true,
+        Substantively => true
+      };
+      let here =
+        if rests_on_criterion_2 && not applicable then
+          [Criterion2ClauseUnrecorded(c.extension_id, c.hook_id, w)]
+        else if not rests_on_criterion_2 && applicable then
+          [Criterion2ClausesNotApplicable(c.extension_id, c.hook_id, w)]
+        else [];
+      here ++ clauses_recorded_rec(c, rests_on_criterion_2, rest)
+    }
+  }
+}
+
+pure func clauses_recorded(cs: [HookClassificationEntry]) -> [ProfileRejection] {
+  match cs {
+    [] => [],
+    c :: rest => {
+      let on_2 = match c.classification {
+        WorldMediated => true,
+        EffectFree => false,
+        ExplicitlyExcluded => false
+      };
+      clauses_recorded_rec(c, on_2, clause_ids()) ++ clauses_recorded(rest)
+    }
+  }
+}
+
 export pure func validate_classifications(d: ProfileDefinition) -> [ProfileRejection] {
   classification_agrees(d.hook_classifications, d.disclosures)
     ++ basis_recorded(d.hook_classifications)
+    ++ world_mediated_is_measured(d.hook_classifications)
+    ++ clauses_recorded(d.hook_classifications)
+}
+
+-- ---------------------------------------------------------------------------
+-- WI-D14: WHAT THE COVERAGE NUMBER MEANS, computed from the record
+-- ---------------------------------------------------------------------------
+--
+-- ADR-001's acceptance row 3 ends: *"the result reports per-extension
+-- covered/excluded hook **ids**, so a profile covering only ABI-pure no-op
+-- slots is visible as such."* The ids are `DisclosureIds` and have been there
+-- since WI-A6. This is the second half of that sentence — the "as such".
+--
+-- WI-D5 made a caveat MANDATORY for every statement of this axis: *"the axis's
+-- extension-model coverage is ZERO"*. That sentence is FALSE for a profile that
+-- installs something, and deleting it would be the S15 failure mode with the
+-- sign flipped — a caveat dropped the moment it stopped being convenient. So it
+-- is computed instead, and it has three cases rather than one: zero, non-zero
+-- and entirely of no-ops, and non-zero with world mediation in it. The middle
+-- case is a WEAKER claim than a bare number implies and a STRONGER one than
+-- zero, and no number alone distinguishes it from the third.
+export type CoverageSubstance = {
+  installed_extensions: int,
+  covered_hooks: int,
+  excluded_hooks: int,
+  criterion_1_hooks: int,
+  criterion_2_hooks: int,
+  no_op_hooks: int,
+  world_mediating_hooks: int
+}
+
+-- Exported because a profile's own tests ask these questions of their entries,
+-- and a second `match` written over there would be a second reading of the same
+-- three constructors.
+export pure func clause_is_vacuous(s: ClauseStatus) -> bool {
+  match s { Vacuously => true, Substantively => false, NotApplicable => false }
+}
+
+export pure func clause_is_substantive(s: ClauseStatus) -> bool {
+  match s { Substantively => true, Vacuously => false, NotApplicable => false }
+}
+
+pure func substance_rec(cs: [HookClassificationEntry], acc: CoverageSubstance) -> CoverageSubstance {
+  match cs {
+    [] => acc,
+    c :: rest => {
+      let next = match c.classification {
+        ExplicitlyExcluded => { acc | excluded_hooks: acc.excluded_hooks + 1 },
+        EffectFree =>
+          { acc | covered_hooks: acc.covered_hooks + 1,
+                  criterion_1_hooks: acc.criterion_1_hooks + 1 },
+        WorldMediated =>
+          -- A hook whose ports clause holds VACUOUSLY performs nothing through
+          -- a port; one whose ports clause holds SUBSTANTIVELY is the thing the
+          -- world-mediation machinery exists for. The origin-tag clause is read
+          -- with it because a port call with nothing to tag is the same empty
+          -- set seen from the other side.
+          { acc | covered_hooks: acc.covered_hooks + 1,
+                  criterion_2_hooks: acc.criterion_2_hooks + 1,
+                  no_op_hooks:
+                    acc.no_op_hooks
+                      + (if clause_is_vacuous(c.clauses.ports) && clause_is_vacuous(c.clauses.origin_tag) then 1 else 0),
+                  world_mediating_hooks:
+                    acc.world_mediating_hooks + (if clause_is_substantive(c.clauses.ports) then 1 else 0) }
+      };
+      substance_rec(rest, next)
+    }
+  }
+}
+
+export pure func coverage_substance(d: ProfileDefinition) -> CoverageSubstance {
+  let zero: CoverageSubstance =
+    { installed_extensions: List.length(d.installed_packages),
+      covered_hooks: 0, excluded_hooks: 0, criterion_1_hooks: 0,
+      criterion_2_hooks: 0, no_op_hooks: 0, world_mediating_hooks: 0 };
+  substance_rec(d.hook_classifications, zero)
+}
+
+-- The sentence a result carries, derived rather than written. This is the
+-- successor to D5's mandatory zero-coverage caveat, and it says which of the
+-- three cases the profile is in without a reader having to add up ids.
+export pure func coverage_statement(d: ProfileDefinition) -> string {
+  let s = coverage_substance(d);
+  if s.installed_extensions == 0 then
+    "extension-model coverage is ZERO: this profile installs no extension, so every clause of ADR-001's acceptance row 3 that quantifies over installed extensions holds VACUOUSLY."
+  else if s.covered_hooks == 0 then
+    "extension-model coverage is ZERO: ${show(s.installed_extensions)} extension(s) installed and no hook covered."
+  else if s.world_mediating_hooks == 0 then
+    "extension-model coverage is NON-ZERO and ENTIRELY OF NO-OPS: ${show(s.covered_hooks)} hook(s) covered across ${show(s.installed_extensions)} installed extension(s) — ${show(s.criterion_1_hooks)} on criterion 1 and ${show(s.criterion_2_hooks)} on criterion 2, of which ${show(s.no_op_hooks)} satisfy criterion 2's port and origin-tag clauses VACUOUSLY, i.e. over an empty set of performed effects. ZERO covered hooks mediate the world substantively, so this coverage exercises NONE of the world-mediation machinery. It is a weaker claim than the number implies and a stronger one than zero."
+  else
+    "extension-model coverage is NON-ZERO: ${show(s.covered_hooks)} hook(s) covered across ${show(s.installed_extensions)} installed extension(s), of which ${show(s.world_mediating_hooks)} mediate the world SUBSTANTIVELY through a D1 port and ${show(s.no_op_hooks)} satisfy criterion 2 vacuously."
 }
 
 -- ---------------------------------------------------------------------------
@@ -1510,7 +1777,8 @@ pure func test_classification_must_agree_with_disclosure() -> bool
     let d: ProfileDefinition = { fixture_base() |
       installed_packages: [{ extension_id: "c", package_id: "p", version: "1", source_path: "packages/c/c.ail" }],
       hook_classifications: [{ extension_id: "c", hook_id: "on_tool_handle", classification: ExplicitlyExcluded,
-                               basis: { producer: "disclosure", revision: "HEAD" } }],
+                               basis: { producer: "disclosure", revision: "HEAD" },
+                               clauses: no_criterion_2() }],
       disclosures: [{ extension_id: "c", covered: ["on_tool_handle"], excluded: [] }] };
     has_rule(validate_classifications(d), "classification-disagrees-with-disclosure")
   }
@@ -1534,7 +1802,11 @@ pure func test_classification_must_agree_with_disclosure() -> bool
 -- something other than what it says.
 pure func based(p: string, rev: string) -> [HookClassificationEntry] {
   [{ extension_id: "c", hook_id: "on_pre_step", classification: WorldMediated,
-     basis: { producer: p, revision: rev } }]
+     basis: { producer: p, revision: rev },
+     -- WI-D14: the clause record the entry needs to be well-formed, so that a
+     -- basis fixture fails on its BASIS and not on a clause. This is the
+     -- no-op shape the four cleared extensions carry.
+     clauses: { ports: Vacuously, origin_tag: Vacuously, world_state: Substantively } }]
 }
 
 pure func with_classifications(cs: [HookClassificationEntry]) -> ProfileDefinition {
@@ -1598,6 +1870,112 @@ pure func test_the_record_distinguishes_measured_from_read() -> bool
     };
     let absent = match producer_kind("successor_detector") { Some(_) => false, None => true };
     measured == "measured" && read == "assumed" && absent
+  }
+
+-- ---------------------------------------------------------------------------
+-- WI-D14: the kind rule and the clause rule, each with a rejecting arm and a
+-- resolving control. Same discipline as D13's above and for the same reason —
+-- a validation that only ever accepts cannot be told from one that does not
+-- run, and both of these rules bind for the FIRST time in this tree at the
+-- profile WI-D14 adds.
+-- ---------------------------------------------------------------------------
+
+pure func mediated_on(p: string, cl: Criterion2Clauses) -> [HookClassificationEntry] {
+  [{ extension_id: "c", hook_id: "on_pre_step", classification: WorldMediated,
+     basis: { producer: p, revision: "c3de56f" }, clauses: cl }]
+}
+
+pure func no_op_clauses() -> Criterion2Clauses {
+  { ports: Vacuously, origin_tag: Vacuously, world_state: Substantively }
+}
+
+-- `declared_row` is RECOGNISED — D13's rule accepts it — and it is an
+-- ASSUMPTION. This is the entry that passed the gate until WI-D14: criterion 2
+-- recorded off a declaration, which cannot distinguish mediation from ambience
+-- at any width (ADR:1449).
+pure func test_world_mediated_on_a_read_basis_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(mediated_on("declared_row", no_op_clauses()));
+    has_rule(validate_classifications(d), "world-mediated-on-an-assumed-basis")
+  }
+
+-- The complement, and it is what keeps the rule scoped: the SAME assumed
+-- producer on an `EffectFree` entry is accepted, because criterion 1's basis IS
+-- an assumption and Amendment A withheld criterion 1 deliberately.
+pure func test_effect_free_on_a_read_basis_is_accepted() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(
+      [{ extension_id: "c", hook_id: "on_pre_step", classification: EffectFree,
+         basis: { producer: "declared_row", revision: "c3de56f" },
+         clauses: no_criterion_2() }]);
+    List.length(validate_classifications(d)) == 0
+  }
+
+-- A criterion-2 entry that leaves a clause unrecorded has not said how the
+-- conjunct holds. The rejection NAMES the clause.
+pure func test_unrecorded_criterion_2_clause_is_rejected() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(mediated_on("ext_ambient_inventory",
+      { ports: Vacuously, origin_tag: NotApplicable, world_state: Substantively }));
+    let rs = validate_classifications(d);
+    match rs {
+      [] => false,
+      r :: _ => match r {
+        Criterion2ClauseUnrecorded(_, _, clause) => clause == "origin_tag",
+        _ => false
+      }
+    }
+  }
+
+-- The other direction: an `EffectFree` entry carrying criterion-2 evidence.
+pure func test_criterion_2_clauses_on_a_criterion_1_entry_are_rejected() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(
+      [{ extension_id: "c", hook_id: "on_pre_step", classification: EffectFree,
+         basis: { producer: "declared_row", revision: "c3de56f" },
+         clauses: no_op_clauses() }]);
+    has_rule(validate_classifications(d), "criterion-2-clauses-not-applicable")
+  }
+
+-- THE CONTROL. The exact entry WI-D14's profile records: classifier 3, dated,
+-- with clauses 1 and 2 VACUOUS and clause 3 substantive. Asserted on the
+-- rejection COUNT, so a rule that stopped running fails here rather than
+-- passing.
+pure func test_the_no_op_criterion_2_entry_resolves() -> bool
+  tests [((), true)]
+  {
+    let d = with_classifications(mediated_on("ext_ambient_inventory", no_op_clauses()));
+    List.length(validate_classifications(d)) == 0
+  }
+
+-- The record can now tell coverage of a NO-OP from coverage of a MEDIATOR,
+-- which is the whole of ADR-001 row 3's "visible as such". Before this field
+-- both wrote `world_mediated` into the same record.
+pure func test_the_statement_distinguishes_no_ops_from_mediation() -> bool
+  tests [((), true)]
+  {
+    let vacuous = with_classifications(mediated_on("ext_ambient_inventory", no_op_clauses()));
+    let real = with_classifications(mediated_on("ext_ambient_inventory",
+      { ports: Substantively, origin_tag: Substantively, world_state: Substantively }));
+    let sv = coverage_substance(vacuous);
+    let sr = coverage_substance(real);
+    sv.covered_hooks == 1 && sv.no_op_hooks == 1 && sv.world_mediating_hooks == 0
+      && sr.covered_hooks == 1 && sr.no_op_hooks == 0 && sr.world_mediating_hooks == 1
+      && coverage_statement(vacuous) != coverage_statement(real)
+  }
+
+-- And an empty install list still says ZERO, so D5's mandatory caveat is
+-- computed rather than deleted.
+pure func test_the_statement_still_says_zero_for_an_empty_install_list() -> bool
+  tests [((), true)]
+  {
+    let s = coverage_substance(fixture_base());
+    s.installed_extensions == 0 && s.covered_hooks == 0
+      && startsWith(coverage_statement(fixture_base()), "extension-model coverage is ZERO")
   }
 
 -- The attribution reference is compared against the LIVE table identity, so a

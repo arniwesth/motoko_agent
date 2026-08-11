@@ -1,0 +1,22 @@
+-- PROPERTY 1's POSITIVE HALF.  `ctx.ports.ai_step(...)` is what criterion 2
+-- ADMITS.  A classifier that rejected it could never clear the one extension in
+-- the tree that actually mediates, which would make the whole instrument
+-- vacuous in the direction that matters.  Must resolve CLEAN.
+module fixture/control_ext_ports_call
+
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtCtx)
+
+export func register_with_config(_cfg: a) -> ExtensionHooks {
+  {
+    id: "control_ext_ports_call",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None },
+    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepOutcome ! {AI, IO, Trace} { ctx.ports.ai_step(ctx.world, msgs) },
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
+  }
+}

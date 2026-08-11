@@ -58,6 +58,12 @@ import src/core/dst_profile (
   HookClassificationEntry,
   HookClassification,
   EffectFree, WorldMediated, ExplicitlyExcluded,
+  Criterion2Clauses,
+  ClauseStatus,
+  Substantively, Vacuously, NotApplicable,
+  no_criterion_2,
+  coverage_substance,
+  coverage_statement,
   Classifier2Call,
   RoutedSetClaim,
   validate_definition_at_load,
@@ -175,7 +181,13 @@ pure func clean_manifest() -> ExecutionManifest {
     unrouted_fields: [],
     scan_roots: ["src", "packages"],
     scan_root_commit: "HEAD",
-    profile_rules_version: "profile-rules/1",
+    -- LITERALS DELIBERATELY, and this one moved at WI-D14: the rules gained the
+    -- basis-KIND check and criterion 2's clause record, so what "conformant"
+    -- means changed and D5 versions that on its own footing. The literal is the
+    -- point — `validate_manifest` compares it against the live function, so a
+    -- rules change that forgot the version bump is a rejection here rather than
+    -- a manifest that pins a vocabulary this tree no longer has.
+    profile_rules_version: "profile-rules/2",
     coverage_rules_version: "coverage-rules/1",
     attribution_rules_version: "attribution-rules/1",
     fault_catalogue_version: "fault-catalogue/2"
@@ -333,13 +345,31 @@ pure func with_disclosure(ext_id: string, covered: [string], excluded: [string])
 -- unrelated rule firing means the mutation did something other than what it
 -- says (the same discipline `assert_rejected` documents above).
 pure func with_basis(producer: string, revision: string) -> ProfileDefinition {
+  with_entry(WorldMediated, producer, revision, no_op_clauses())
+}
+
+-- WI-D14. The same one-entry definition, with the classification and the clause
+-- record open too, so a fixture can move exactly one of the four things an
+-- entry now carries. `no_op_clauses` is the shape the four cleared extensions
+-- record, which makes it the right default for the basis fixtures above: they
+-- must fail on the BASIS, not on a clause.
+pure func with_entry(
+  c: HookClassification,
+  producer: string,
+  revision: string,
+  cl: Criterion2Clauses
+) -> ProfileDefinition {
   { clean() |
     installed_packages: [installed("based", "packages/motoko-ext-based/based.ail")],
     disclosures: [{ extension_id: "based", covered: all_ids_rec(all_hook_slots()), excluded: [] }],
     hook_classifications: [
-      { extension_id: "based", hook_id: "on_pre_step", classification: WorldMediated,
-        basis: { producer: producer, revision: revision } }
+      { extension_id: "based", hook_id: "on_pre_step", classification: c,
+        basis: { producer: producer, revision: revision }, clauses: cl }
     ] }
+}
+
+pure func no_op_clauses() -> Criterion2Clauses {
+  { ports: Vacuously, origin_tag: Vacuously, world_state: Substantively }
 }
 
 pure func all_ids_rec(xs: [HookSlot]) -> [string] {
@@ -414,6 +444,30 @@ func routed_claim_is_computed() -> bool ! {IO} {
   let ok = c.reachable_total == c.routed + c.declared_unrouted && c.reachable_total > 0;
   let _ = if ok then println("  ✓ routed-set claim is a partition of the table: ${show(c.reachable_total)} reachable = ${show(c.routed)} routed + ${show(c.declared_unrouted)} declared-unrouted")
           else println("  ✗ routed-set claim is not a partition");
+  ok
+}
+
+-- WI-D14. ADR-001's acceptance row 3 ends "so a profile covering only ABI-pure
+-- no-op slots is visible as such". This is the assertion that the RECORD can
+-- tell those two apart: two definitions identical but for their clause record,
+-- with the same classification, the same producer and the same covered ids,
+-- must produce different statements and different substance counts. If they did
+-- not, the ids alone would be all a reader had, and the ids are the same.
+func coverage_statement_distinguishes() -> bool ! {IO} {
+  let vacuous = with_entry(WorldMediated, "ext_ambient_inventory", "c3de56f", no_op_clauses());
+  let mediating = with_entry(WorldMediated, "ext_ambient_inventory", "c3de56f",
+                             { ports: Substantively, origin_tag: Substantively,
+                               world_state: Substantively });
+  let sv = coverage_substance(vacuous);
+  let sm = coverage_substance(mediating);
+  let ok = sv.covered_hooks == sm.covered_hooks
+             && sv.no_op_hooks == 1 && sv.world_mediating_hooks == 0
+             && sm.no_op_hooks == 0 && sm.world_mediating_hooks == 1
+             && coverage_statement(vacuous) != coverage_statement(mediating);
+  let _ = if ok then {
+            let _ = println("  ✓ a NO-OP criterion-2 hook and a MEDIATING one carry the same covered ids and different substance");
+            println("      no-op:     ${coverage_statement(vacuous)}")
+          } else println("  ✗ the record cannot tell coverage of a no-op from coverage of a mediator (ADR-001 row 3)");
   ok
 }
 
@@ -607,6 +661,26 @@ export func main() -> () ! {IO} {
   let basis_ok = assert_clean("WorldMediated MEASURED by classifier 3, dated",
                               with_basis("ext_ambient_inventory", "c3de56f"));
 
+  -- WI-D14. THE TWO RULES THAT BIND FOR THE FIRST TIME AT THE SECOND PROFILE,
+  -- through the same load-time gate. Both arms and both controls: the kind rule
+  -- must reject a READ criterion-2 claim while ACCEPTING the same read basis on
+  -- a criterion-1 entry, and the clause rule must reject in both directions.
+  let _ = println("  -- WI-D14: the basis KIND, and criterion 2's three clauses --");
+  let read_c2 = assert_rejected("WorldMediated read off a DECLARED ROW — recognised, and an assumption",
+                                "world-mediated-on-an-assumed-basis",
+                                with_entry(WorldMediated, "declared_row", "c3de56f", no_op_clauses()));
+  let read_c1 = assert_clean("the SAME read basis on an EffectFree entry — criterion 1's own basis IS an assumption",
+                             with_entry(EffectFree, "declared_row", "c3de56f", no_criterion_2()));
+  let clause_gap = assert_rejected("a criterion-2 entry leaving the origin-tag clause unrecorded",
+                                   "criterion-2-clause-unrecorded",
+                                   with_entry(WorldMediated, "ext_ambient_inventory", "c3de56f",
+                                              { ports: Vacuously, origin_tag: NotApplicable,
+                                                world_state: Substantively }));
+  let clause_extra = assert_rejected("a criterion-1 entry carrying criterion-2 clause evidence",
+                                     "criterion-2-clauses-not-applicable",
+                                     with_entry(EffectFree, "declared_row", "c3de56f", no_op_clauses()));
+  let vacuity_visible = coverage_statement_distinguishes();
+
   let _ = println("  -- decision 2: the routed-set claim is computed --");
   let claim = routed_claim_is_computed();
 
@@ -620,6 +694,7 @@ export func main() -> () ! {IO} {
             && stale_bind && stale_id && unaccounted && c2 && roots
             && undeclared && no_instr && stale_decl && unwaived && not_cond
             && basis_blank && basis_undated && basis_unknown && basis_ok
+            && read_c2 && read_c1 && clause_gap && clause_extra && vacuity_visible
             && claim && manifest && exclusion;
   if all then println("profile_definition_dst PASS")
   else {

@@ -356,6 +356,21 @@ from the registry entirely reddened only the ONE arm that names it by id. Three 
 therefore establish "the fold ran and performed nothing", not "the subject ran and performed
 nothing", and the two are joined by a separate structural row rather than conflated.
 
+**AND WI-D15 FOUND TWO MORE DOORS, one of them live in the SHIPPED tool.** **Door 3: a
+NON-underscore language builtin.** `show` needs no import, is declared nowhere, and is not
+`_`-prefixed — so classifier 3 *neither resolves nor rejects it; it does not look at it.* Verified at
+review: **five `show(` calls in `compaction_structural.ail`**, none imported, none declared. That is
+the extension `driver_plus_no_ops` rests on, and sixteen of its criterion-2 entries trace to
+classifier 3 clearing it. Under the import-granular unit it costs nothing; **under any call-granular
+unit it is the dominant term.** No producer at HEAD can classify it — every `show(` in the 46-module
+stdlib corpus is inside a comment — and a textual derivation was tried and **discarded** because it
+could not distinguish a language builtin from a higher-order parameter, resolving `f`, `p` and `pred`
+as builtins. **A rule that invents evidence is worse than one that reports its absence.**
+
+**Door 4: a call site inside a STRING INTERPOLATION**, which the noise-stripper blanked. Ten builtin
+and two effectful std-symbol calls exist *only* there. Harmless to an import-granular verdict, and
+invisible to any call-granular reader that inherits the same lid.
+
 **AND WI-D12 ADDS THE DOOR AN INVENTORY DOES NOT WATCH: an instrument scoped to IMPORTS is blind to
 effects that need no import.** AILANG's effects are performed by `_`-prefixed compiler builtins —
 `std/io.println` is literally `_io_println(s)` — **and a builtin requires no import statement.** An
@@ -465,6 +480,47 @@ edits; what broke it was rewriting a historical comment block for tense under S1
 numbers were derived, which moved four `session.ail` line numbers by nine. **S15 and the anchor rule
 interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
 so re-dates every anchor below it. Do the tensing first.
+
+**S24. A FIXTURE SUITE PROVES THE SHAPES IT ENUMERATES; IT DOES NOT PROVE THE WALKER REACHED THE
+CODE.** Earned by WI-D15, which had **four** slips in its own tooling — and **two were FAIL-OPEN, and
+the assertion suite caught neither.** Both were caught by a human reading a verdict that was better
+than the source justified.
+
+The sharper of the two: a brace-delimited **record type in a return signature** —
+`-> Result[{ stdout: string, … }, string] ! {Process} {` — read as a function *body*, so `shell_exec`
+looked effect-free and **`omnigraph` reported HOOK-PORT-MEDIATED while its `on_tool_handle` calls
+`std/process.exec`.** A clean answer for an extension that shells out. Every fixture passed
+throughout, because the fixtures enumerate *shapes a walker must reject* and none of them asserts
+*that the walker arrived*.
+
+**The rule: for any analysis that walks to reach its subject, assert reachability separately from
+verdict.** A suite of rejecting fixtures with resolving controls — this project's standard since C5 —
+establishes the predicate and says nothing about the traversal. **And the practical tell is the one
+that worked twice here: a verdict better than the source justifies is worth reading by hand before it
+is banked.**
+
+**S23. A TRANSCRIBED CONSTANT BECOMES CHECKABLE THE MOMENT A SECOND CONSUMER HAS TO STATE IT — so
+build the second consumer, or guard the first.** Earned by WI-D14, and it is the rule behind **the
+first LIVE instance of this project's counted failure mode in thirty-eight runs.**
+
+**`driver_only` and every manifest built for it pinned `abi_version` at `"4.0"`. The ABI package has
+declared `5.0` since WI-B2b** — verified at review: `packages/motoko-ext-abi/ailang.toml` says
+`version = "5.0"`, and the pre-D14 profile said `"4.0"`. **Both readings type-check**, because
+`abi_version` is a free `string` field and a free argument to the manifest builder, **and the wrong
+one was silent for eleven items** — in the one artifact whose entire stated purpose is exact
+reproducibility. The manifest's own header says it "is a transcription by nature … so every field that
+CAN be read back from an artifact is read back" and lists four rule versions as the composition
+defect's natural home. **`abi_version` was a fifth and nobody had put it on the list.**
+
+**What found it was not an instrument.** It was writing the SECOND profile's boundary note and having
+to ask what number to put in it. **A constant that only one artifact states is a constant nothing
+compares**; a second statement of it is a comparison whether or not anyone intends one.
+
+**Now guarded, and the guard is total rather than pointed:** `check_abi_version` re-derives the
+version from the package's own `ailang.toml` across both profiles' records, fixtures and inline tests
+and **fails if it finds no site to check** — which caught a third stale site on its first aggregate
+run, one the two hand-fixes had missed. Verified at review: *"the ABI version every profile record
+names is the one the package declares: 5.0 (6 site(s) across 4 file(s))"*.
 
 **S22. When an item's scope is "every X", DERIVE the list of X from a producer in the tree and assert
 the agreement in the gate. Never take it from prose.** Earned by WI-D6, against its own handoff.
@@ -3039,6 +3095,79 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D15, 2026-08-07 (~45 min) — CRITERION 2 QUANTIFIES OVER HOOKS. The closure was never the
+scope.** The reading rests on two sentences already in the ADR: D5 says *"every hook reachable within
+that profile"*, and Amendment A's property 2 **opens by agreeing and derives the unit from it** —
+*"criterion 2 quantifies over every hook … **so** the unit is the extension's transitive module
+closure."* **The `so` is the whole argument**, and the amendment already calls its own unit a
+*coarsening* that *"caps the instrument's reach at four extensions."* **A coarsening is not a
+definition.** So the tree never held a contradiction between classifier 3's verdict and
+`driver_only.ail:597` — it held a conservative instrument and a sharper claim, and nothing compared
+them.
+
+**`driver_only.ail:597` was scoped correctly in KIND and wrongly in EXTENT** — one file is too narrow
+(the hook is bound in `register.ail`), the closure is too wide, and the right unit is neither.
+
+**The obvious sharpening is FAIL-OPEN, and the repository refutes it rather than an argument.**
+Dropping `register.ail` from the closure clears `microrag` of two ambient sources a hook really
+reaches — verified at review: `microrag_tool_handle` is a **named top-level hook function defined in
+`register.ail:160`**, and that file imports `std/process (exec)`. **9 of 15 extensions hold the
+`ExtensionHooks` record in `register.ail`; 6 declare named hook functions there.** The split is
+reachability-granular instead.
+
+**Yield 4 of 15 → 5 of 15, and the sets are NOT nested**: `mcp` and `test_dummy` added — both the D6
+confound exactly, registration reads `Env`/`FS` and the hooks close over the data — and
+**`compaction_structural` DROPPED**, on **door 3**, not on behaviour. See S16's extension.
+
+**The verdict is REPORTED, not promoted, and that is deliberate**: `ext_hook_scope` is a reporting
+target, the barrier derivation still reads `ext_ambient_inventory`'s closure verdict, and the selftest
+asserts the shipped verdict has **not** moved so a future edit cannot promote it quietly.
+
+**Route B's cost, re-derived: cheaper to SCOPE, not much cheaper to DO.** For `compose` the surface
+falls from **17 modules to 6** while the source count barely moves (**28 → 23**); `context_mode`
+roughly halves on both. **And a prerequisite appears that D9 did not price:** `compose` and
+`context_mode` are HOOK-UNRESOLVED on door 3 **regardless of Route B**.
+
+**WI-D14, 2026-08-07 (~50 min) — THE SECOND PROFILE EXISTS, AND ALL FOUR OF ROW 3'S
+INSTALLED-EXTENSION CLAUSES BOUND AND HELD.** `driver_plus_no_ops/1`: four extensions installed, **32
+hooks covered, zero of them mediating the world**. Verified at review — each of the four extensions
+reports *"8 hook(s) covered — floor satisfied, non-vacuously"*. Those clauses had quantified over the
+empty set for the entire project. **Clause 3 is half-bound and says so**: the AILANG rule still
+quantifies over an empty derived call list, and what discharges it substantively is classifier 3
+reporting **0 `ExtPorts` field calls** per installed closure — a measurement on the other side, named
+as such rather than claimed as a green line.
+
+**Row 3's fifth clause — "visible as such" — needed a FIELD, not the ids.** A no-op hook and a
+mediating one disclose the same eight names, so `HookClassificationEntry` gained
+`clauses: Criterion2Clauses`, one status per criterion-2 clause. **Before it, "this hook mediates the
+world" and "this hook performs nothing, so there is nothing to mediate" wrote the same string into the
+same record** — `basis`'s defect one level down.
+
+**The coverage statement is COMPUTED, and the D5 caveat survives rather than being deleted:**
+*"NON-ZERO and ENTIRELY OF NO-OPS: 32 hook(s) … 16 satisfy criterion 2's port and origin-tag clauses
+VACUOUSLY … a weaker claim than the number implies and a stronger one than zero."* `coverage_statement`
+still returns the ZERO sentence for an empty install list, and the guard **fails** a profile that
+reports non-zero coverage without saying none of it mediates. **The fifth vacuity was made into a
+rejection rather than a resolution.**
+
+**The four changed rows were re-earned on grounds that are NOT emptiness** — row 4's waiver by
+measurement (0 `ExtPorts` calls, so no installed hook can issue the class's delivery request), row 5's
+transfer by measurement (0 ambient sources, so installing four added no reachable core site), row 7 by
+two independent facts either of which suffices. **The other seven are explicitly NOT claimed**, in the
+script's own output.
+
+**And it produced the first LIVE instance of this project's counted failure mode in thirty-eight
+runs — see S23.** The counter moves **69 → 70**, and determinism did not catch this one either.
+
+**One correction applied at review: the stdlib-adjacent cache's producer is STILL UNIDENTIFIED.**
+WI-D14 reports it as *"IDENTIFIED, and it is `make sync_packages`"*, but its evidence is
+`find ~/.ailang` — **a different directory**. Measured: `~/.ailang` holds **4 files** (a registry copy
+of `sunholo/logging@0.4.0` plus `state/collaboration.db`, exactly what D14 lists), while
+`~/.local/share/ailang/std/.ailang` holds **52** — the stdlib compile cache whose warmth moves
+`effect_inventory_selftest` between `agree=1` and `agree=45`, and the one D11, D12 and D13 were
+chasing. D14's own scope note concedes it does not account for the 52. **What it identified is real
+and is not the open question.**
 
 **WI-D13, 2026-08-07 — `basis` LANDED, THE BARRIER DERIVATION RE-SHAPED, AND FOUR EXTENSIONS CLEAR
 — NOT ONE.** Verified at review: `basis` rejects three ways by name with a loading control, the

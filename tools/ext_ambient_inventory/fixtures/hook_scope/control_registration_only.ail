@@ -1,0 +1,24 @@
+-- POSITIVE CONTROL.  Registration reads Env; no hook can reach it.  This is the
+-- WI-D6 shape (nine of fifteen register_with_config implementations read Env
+-- before any hook is dispatched) and it is the shape the reading turns on: the
+-- import is in the closure, the CALL is not hook-reachable.  Must resolve CLEAN.
+module fixture/control_registration_only
+
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks, ExtCtx)
+
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env} {
+  let marker = getEnvOr("FIXTURE_MARKER", "");
+  {
+    id: "control_registration_only",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [marker] },
+    on_budget_plan: \_ _ . { requested_total: None },
+    on_pre_step: func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_tool_policy: \_ctx _call. NoOpinion,
+    on_tool_handle: func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
+  }
+}

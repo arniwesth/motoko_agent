@@ -1,0 +1,720 @@
+-- src/core/dst_driver_plus_no_ops.ail
+--
+-- `driver_plus_no_ops` v1 — the SECOND conformant profile (ADR-001 D5, WI-D14),
+-- and the first that installs anything at all.
+--
+-- Per D10 the name carries neither "DST" nor "simulation": it names what is in
+-- the system under test, which is the real traced driver plus four extensions
+-- whose hooks perform nothing. The name says "no-ops" because that is what the
+-- coverage is, and a reader should learn that from the profile's NAME before
+-- reaching its numbers.
+--
+-- ============================================================================
+-- WHY THIS PROFILE EXISTS, AND WHY IT IS NOT AN UPGRADE OF `driver_only`
+-- ============================================================================
+--
+-- `driver_only` installs nothing. Every clause of ADR-001's acceptance row 3
+-- that quantifies over installed extensions has therefore been VACUOUS for the
+-- entire project — the coverage floor, the unconditional-hook rule, the
+-- classifier-2 rule and the per-extension id disclosure have never once been
+-- asked a question about a non-empty set. **This profile is the first that
+-- makes them bind.** That, and not the coverage number, is what it is for.
+--
+-- WI-D13 re-shaped the barrier derivation from the SLOT to the (extension,
+-- slot) pair on the strength of classifier 3 and found FOUR extensions at zero
+-- barriers: `compaction_structural`, `decision_framework`, `empty_stop_guard`
+-- and `progress_contract_guard`. It DECLINED to install them, on the ground
+-- that two of criterion 2's three clauses hold vacuously and the coverage would
+-- be "a fifth vacuity with a number attached". That pause was right, and the
+-- ADR had already ruled on what to do about it. Row 3's own text ends:
+--
+--     ...and the result reports per-extension covered/excluded hook IDS, so a
+--     profile covering only ABI-pure no-op slots is visible as such.
+--
+-- **The ADR contemplates exactly this profile and its answer is DISCLOSURE, not
+-- refusal.** It was raised at acceptance as R5 — "the general floor can be
+-- satisfied by ABI-pure no-op slots without covering extension behavior"
+-- (`ADR:8819`) — and that clause was the disposition. So the question this file
+-- answers is not whether such a profile may exist. It is whether this one
+-- discloses honestly enough that a reader cannot mistake it for
+-- extension-model coverage.
+--
+-- ============================================================================
+-- WHAT A READER OF v1 MUST NOT CONCLUDE
+-- ============================================================================
+--
+-- WI-D5 made one sentence mandatory in every statement of this axis: *"the
+-- axis's extension-model coverage is ZERO"*. That sentence is FALSE for this
+-- profile and it is NOT simply deleted — deleting a caveat the moment it stops
+-- being convenient is the S15 failure mode with the sign flipped. Its honest
+-- successor is computed rather than written, by `coverage_statement` in
+-- src/core/dst_profile.ail, and for this profile it reads:
+--
+--   extension-model coverage is NON-ZERO and ENTIRELY OF NO-OPS ... ZERO
+--   covered hooks mediate the world substantively, so this coverage exercises
+--   NONE of the world-mediation machinery.
+--
+-- Thirty-two covered hooks, and not one of them performs an effect. Criterion
+-- 2's port clause and origin-tag clause hold over an EMPTY SET of performed
+-- effects for every criterion-2 entry below, and each entry records that fact
+-- in its own `clauses` field rather than leaving it to this comment. That is a
+-- weaker claim than the number implies and a stronger one than zero, and no
+-- number alone distinguishes it from real coverage.
+--
+-- **Route B is untouched.** The world-mediated process and file seams on
+-- `ExtPorts` do not exist yet, `compose` still stands at three barriers, and
+-- WI-C5's compose-bearing profile is NOT discharged by this one. Calling this
+-- the second profile does not make it the profile C5 owes.
+--
+-- ============================================================================
+-- WHAT THIS PROFILE EARNS, AND WHAT IT DOES NOT — per D10
+-- ============================================================================
+--
+-- D10: additional profiles earn coverage SEPARATELY. This profile earns all
+-- eleven acceptance rows itself, from scratch, and inherits NONE of
+-- `driver_only`'s. Four of `driver_only`'s eleven lean on the empty install
+-- list (WI-D5 tabulated them) and those four are exactly the ones that change
+-- here:
+--
+--   row 3  driver_only's pass is VACUOUS.               Re-earned, non-vacuously.
+--   row 4  the `extension_effect_fault` waiver, "by     Re-earned, on DIFFERENT
+--          construction because driver_only installs     ground: four installed,
+--          none".                                        none of them effectful.
+--   row 5  compose's unrouted clock reads are outside   Re-earned by measurement:
+--          reach only because nothing is installed.      0 ambient sources in each
+--                                                        installed closure.
+--   row 7  the `ScratchpadResult` exemption — no run    Re-earned by measurement:
+--          emits it because no hook is installed to      all four bind
+--          emit it.                                      `provided_tools: []` and
+--                                                        return `Delegate`.
+--
+-- `make driver_plus_no_ops` runs those four and says so. **The other SEVEN are
+-- NOT claimed for this profile.** Running the whole table is WI-C4's shape and
+-- is a separate item; a row not run is a row not earned, and this file does not
+-- borrow `driver_only`'s answer to any of them.
+--
+-- ============================================================================
+-- THE ATTRIBUTION REFERENCE AND THE ROUTED SET
+-- ============================================================================
+--
+-- Recorded as LITERALS for the same reason `driver_only` records them so: D4
+-- makes a table correction re-issue every referring profile, which is only
+-- mechanically true if the profile records the content hash and something
+-- compares it. Calling `table_identity()` here would make the comparison a
+-- tautology. The cost is that a table edit turns this target red until the
+-- profile is re-issued, and that cost IS the rule.
+--
+-- **Installing four extensions adds NO reachable core site**, and that is a
+-- measured fact rather than an assumption: `reachable_core_sites` adds an
+-- attributed row only when the row's hook set intersects the install list, and
+-- the table's two attributed rows belong to `test_dummy` and `scratchpad`,
+-- neither of which is installed here. So the routed-set claim is the same
+-- partition `driver_only` computes — 7 reachable, 6 routed, 1 declared-unrouted
+-- — and the acceptance script asserts that equality rather than restating the
+-- numbers, so an attributed row gained by an installed extension would show up
+-- as a difference instead of as silence.
+
+module src/core/dst_driver_plus_no_ops
+
+import std/list as List (length)
+
+import src/core/dst_profile (
+  ProfileDefinition,
+  ExecutionManifest,
+  ProfileRejection,
+  RoutedSetClaim,
+  AttributionRef,
+  Classifier2Call,
+  ClassificationBasis,
+  Criterion2Clauses,
+  HookClassification,
+  HookClassificationEntry,
+  InstalledPackage,
+  OmittedExtension,
+  EffectFree, WorldMediated, ExplicitlyExcluded,
+  Substantively, Vacuously,
+  no_criterion_2,
+  clause_is_vacuous,
+  clause_is_substantive,
+  PackageVersion,
+  CoverageSubstance,
+  coverage_substance,
+  coverage_statement,
+  routed_set_claim,
+  waivers_from,
+  validate_definition_at_load,
+  profile_rules_version
+)
+import src/core/dst_attribution_table as Attr (
+  CoreSite,
+  attribution_rules_version,
+  reachable_core_sites
+)
+import src/core/dst_fault_catalogue as Fault (FaultClass, fault_catalogue, conditional_class_ids)
+import src/core/dst_profile_coverage as Cov (
+  coverage_rules_version,
+  DisclosureIds,
+  HookSlot,
+  all_hook_slots,
+  hook_slot_id
+)
+import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
+
+export pure func no_ops_id() -> string { "driver_plus_no_ops" }
+
+-- v1. The first issue. There is no supersession history here yet, and when
+-- there is it goes at the TOP of this block with its date, per plan rule S15 —
+-- re-dating a claim in place is how a sentence becomes a false statement about
+-- history, and this file will carry claims that move.
+export pure func no_ops_version() -> string { "1" }
+
+-- The same attribution table `driver_only` binds, at the same identity. Two
+-- profiles referring to one table is the case D4's rule was written for: a
+-- correction re-issues BOTH, and each records the pair itself so that neither
+-- can be re-issued silently by the other's edit.
+export pure func no_ops_attribution_ref() -> AttributionRef {
+  { source_revision: "c0fbf10",
+    content_hash: "sha256:ccfc1e3401635ae59326da4052621d934875bdedd0a05552dd7dc1e41a64b210" }
+}
+
+-- ---------------------------------------------------------------------------
+-- The four installed extensions
+-- ---------------------------------------------------------------------------
+--
+-- Exactly the set WI-D13 measured at ZERO barriers, and nothing else. The set
+-- is not derived here and must not be: it is a property of the SOURCE at a
+-- revision, derived per run by classifier 3 and by the barrier derivation in
+-- `tools/profile_definition/check_fixtures.py`. Per plan rule P3 a constant
+-- here would make the profile agree with itself, so
+-- `tools/profile_definition/check_no_op_profile.py` re-derives the zero-barrier
+-- set on every run and fails if this list is not exactly it.
+export pure func installed_extension_ids() -> [string] {
+  ["compaction_structural", "decision_framework", "empty_stop_guard", "progress_contract_guard"]
+}
+
+pure func packages_of(ids: [string]) -> [InstalledPackage] {
+  match ids {
+    [] => [],
+    id :: rest => package_of(id) :: packages_of(rest)
+  }
+}
+
+-- `source_path` is the module that BINDS the hooks, which is what the scan-root
+-- rule is checked against and what classifier 3 takes as its closure root.
+pure func package_of(id: string) -> InstalledPackage {
+  if id == "compaction_structural" then
+    { extension_id: id, package_id: "sunholo/motoko_ext_compaction_structural", version: "1.1.0",
+      source_path: "packages/motoko-ext-compaction-structural/register.ail" }
+  else if id == "decision_framework" then
+    { extension_id: id, package_id: "sunholo/motoko_ext_decision_framework", version: "0.2.2",
+      source_path: "packages/motoko-ext-decision-framework/register.ail" }
+  else if id == "empty_stop_guard" then
+    { extension_id: id, package_id: "sunholo/motoko_ext_empty_stop_guard", version: "0.1.0",
+      source_path: "packages/motoko-ext-empty-stop-guard/register.ail" }
+  else
+    { extension_id: id, package_id: "sunholo/motoko_ext_progress_contract_guard", version: "0.1.0",
+      source_path: "packages/motoko-ext-progress-contract-guard/register.ail" }
+}
+
+-- ---------------------------------------------------------------------------
+-- The per-hook classification, and the evidence under each of the two kinds
+-- ---------------------------------------------------------------------------
+--
+-- EVERY ONE OF THE EIGHT ABI SLOTS IS COVERED FOR EVERY INSTALLED EXTENSION,
+-- and nothing is excluded. That is a stronger claim than the floor requires —
+-- the floor asks for one covered hook — and it is made because it is true and
+-- because the weaker version would leave the unconditional-hook rule vacuous
+-- again, one level down. Thirty-two entries, on TWO different criteria and two
+-- different kinds of evidence:
+--
+--   FOUR SLOTS declare NO effect row in the ABI (`on_describe_tools`,
+--   `on_build_system_prompt`, `on_budget_plan`, `on_tool_policy`). They are
+--   covered under CRITERION 1 — "deterministic and effect-free for its explicit
+--   inputs" — whose basis in this tree is the DECLARED ROW. `ADR:1415` records
+--   that reading as an interim rule and an ASSUMPTION, and the basis below says
+--   so: producer `declared_row`, kind `Assumed`. A reader can see from the
+--   record alone that these four are READ and not MEASURED.
+--
+--   FOUR SLOTS declare a non-empty row (`on_pre_step`, `on_tool_handle`,
+--   `on_response_intercept`, `on_solver_candidate`). Criterion 1 is unavailable
+--   for them — a named binding cannot declare narrower than a closed ABI slot,
+--   so on its own basis criterion 1 fails, and admitting a measurement into
+--   criterion 1's basis is an ADR-scope act Amendment A deliberately WITHHELD.
+--   They are covered under CRITERION 2, on classifier 3's measurement, and each
+--   records which of criterion 2's three clauses is substantive and which holds
+--   vacuously.
+--
+-- THE ROWED/ROWLESS SPLIT IS A FACT ABOUT THE ABI AND IS RE-DERIVED. It is
+-- stated once, below, because AILANG cannot read the ABI's effect rows — and
+-- `check_no_op_profile.py` re-derives it from `packages/motoko-ext-abi/types.ail`
+-- on every run and fails if this list disagrees. That is the same discipline
+-- classifier 2's call inventory gets, and for the same reason: both readings
+-- type-check and the stale one is silent.
+export pure func criterion_2_slot_ids() -> [string] {
+  ["on_pre_step", "on_tool_handle", "on_response_intercept", "on_solver_candidate"]
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
+}
+
+-- The revision each producer ran at. It is a STAMP, not a liveness check, and
+-- the distinction matters: nothing compares it against `git HEAD`, because a
+-- profile is issued at a revision and the tree moves under it. What keeps the
+-- record honest is that `check_no_op_profile.py` re-runs classifier 3 on every
+-- run and fails if the live verdicts disagree with what these entries claim —
+-- so a stale stamp beside a still-true measurement is visible as a stamp, and a
+-- stale stamp beside a changed measurement is RED.
+export pure func measured_at() -> string { "7bf37c7" }
+
+-- CRITERION 2, MEASURED, WITH TWO CLAUSES VACUOUS. The whole of WI-D13's
+-- reading, in the record rather than in prose beside it:
+--
+--   (1) ports       classifier 3 reports the extension PORT-MEDIATED over its
+--                   transitive closure, with 0 ambient sources AND 0 `ExtPorts`
+--                   field calls. The set of performed effects is EMPTY, so the
+--                   quantifier holds over nothing. VACUOUS.
+--   (2) origin_tag  nothing is performed, so there is no origin to tag. VACUOUS.
+--                   (WI-B4 established that `PreStepStage = { ext_id, outcome }`
+--                   tags `on_pre_step`'s dispatch, so the clause IS satisfiable
+--                   non-vacuously — just not by an extension that performs
+--                   nothing.)
+--   (3) world_state every binding returns `next_state: ctx.world` and all four
+--                   outcome types carry the field, derived from the ABI's own
+--                   type declarations. SUBSTANTIVE, and the only clause here
+--                   that is a substantive fact about these bindings.
+pure func no_op_criterion_2() -> Criterion2Clauses {
+  { ports: Vacuously, origin_tag: Vacuously, world_state: Substantively }
+}
+
+pure func classification_of(slot_id: string) -> HookClassification {
+  if contains_str(criterion_2_slot_ids(), slot_id) then WorldMediated else EffectFree
+}
+
+pure func basis_of(slot_id: string) -> ClassificationBasis {
+  if contains_str(criterion_2_slot_ids(), slot_id) then
+    { producer: "ext_ambient_inventory", revision: measured_at() }
+  else
+    { producer: "declared_row", revision: measured_at() }
+}
+
+pure func clauses_of(slot_id: string) -> Criterion2Clauses {
+  if contains_str(criterion_2_slot_ids(), slot_id) then no_op_criterion_2() else no_criterion_2()
+}
+
+pure func entries_for(ext_id: string, slots: [HookSlot]) -> [HookClassificationEntry] {
+  match slots {
+    [] => [],
+    s :: rest => {
+      let id = Cov.hook_slot_id(s);
+      let e: HookClassificationEntry =
+        { extension_id: ext_id, hook_id: id, classification: classification_of(id),
+          basis: basis_of(id), clauses: clauses_of(id) };
+      e :: entries_for(ext_id, rest)
+    }
+  }
+}
+
+-- Iterating `all_hook_slots()` rather than writing eight ids per extension is
+-- what makes a ninth ABI slot a compile-time visible change here instead of a
+-- silently unclassified one: A6's own completeness backstop (`make
+-- profile_coverage` counts the ABI's `on_*` fields) then covers this file too.
+pure func classifications_of(ids: [string]) -> [HookClassificationEntry] {
+  match ids {
+    [] => [],
+    id :: rest => entries_for(id, Cov.all_hook_slots()) ++ classifications_of(rest)
+  }
+}
+
+pure func all_slot_ids(slots: [HookSlot]) -> [string] {
+  match slots { [] => [], s :: rest => Cov.hook_slot_id(s) :: all_slot_ids(rest) }
+}
+
+-- D5 field 9. IDS, never counts — the whole point of the disclosure mechanism,
+-- and the half of row 3 that says a no-op profile must be visible as such.
+-- `excluded` is EMPTY for all four, which is a claim with teeth: seven of the
+-- eight slots are unconditionally dispatched and could not be excluded anyway,
+-- and the eighth is the gated `on_tool_handle`, which this profile could
+-- legitimately exclude and does not.
+pure func disclosures_of(ids: [string]) -> [DisclosureIds] {
+  match ids {
+    [] => [],
+    id :: rest => {
+      let d: DisclosureIds =
+        { extension_id: id, covered: all_slot_ids(Cov.all_hook_slots()), excluded: [] };
+      d :: disclosures_of(rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The eleven that are NOT installed
+-- ---------------------------------------------------------------------------
+--
+-- Completeness is the point: installed plus omitted is every extension in
+-- `ailang.toml`'s `[extensions] packages`, and `check_no_op_profile.py` checks
+-- that partition against the resolved list rather than against this file. An
+-- extension in neither is a decision INHERITED rather than taken, which is what
+-- WI-D7's trigger exists to refuse — here at the granularity of the whole
+-- installable set rather than only of the zero-barrier ones.
+pure func barrier_reason() -> string {
+  "NOT INSTALLED, and un-installable in a conformant profile at this revision rather than declined. Three barrier slots stand for it — on_pre_step, on_response_intercept and on_solver_candidate each declare a non-empty ABI effect row and are unconditionally dispatched, so criterion 1 fails on the declared row and D5 forbids installing an extension with any unconditionally-dispatched hook excluded. Criterion 2 is not available either, and that is a MEASUREMENT rather than an absence of one, per D1's rule that a reason records a measurement: classifier 3 (make ext_ambient_inventory) reports this extension AMBIENT — at least one ambient effect source in its transitive module closure — so criterion 2's first clause FAILS on evidence, the barrier count for it is 3 rather than 0, and WI-D13's per-(extension, slot) derivation leaves all three standing. Every one of the ten extensions sharing this reason is AMBIENT at HEAD; the ambient COUNTS differ and the verdict does not, which is why one reason serves them all and no count is restated here (P3). Per WI-D2's rule a structural reason must name the thing that would have to CHANGE: world-MEDIATION of the effects it performs, which is Route B and a port-surface change, and not anything this profile can decide. Re-derived on every run by tools/profile_definition/check_fixtures.py, which prints the standing count per extension, and by check_no_op_profile.py, which fails if a zero-barrier extension appears in this list."
+}
+
+pure func omit_each(ids: [string], reason: string) -> [OmittedExtension] {
+  match ids {
+    [] => [],
+    id :: rest => {
+      let o: OmittedExtension = { extension_id: id, reason: reason };
+      o :: omit_each(rest, reason)
+    }
+  }
+}
+
+pure func not_installed() -> [OmittedExtension] {
+  [{ extension_id: "compaction_ai",
+     reason: "NOT INSTALLED, and it is the sharpest of the eleven. classifier 3 reports it AMBIENT rather than PORT-MEDIATED, so criterion 2's first clause fails on a measurement and not merely for want of one; and on_pre_step reaches ExtPorts.ai_step, which is a D1 world-mediated port returning AiStepOutcome.next_state, so criterion 2's SUBSTANCE is closer to satisfied for it than for anything else in the tree while its declared row has no vocabulary for saying so. THE BARRIER THERE IS THE ROW'S VOCABULARY, NOT THE BEHAVIOUR — WI-D7 and WI-D8 measured that and it is unchanged here. This profile does not install it, and the fact that it installs four OTHER extensions does not weaken the reason: WI-D14 covers no-ops, and compaction_ai is the one extension whose hooks are not no-ops in the direction that would make the coverage mean something." }]
+    ++ omit_each(["a2a", "ailang_docs", "compose", "context_mode", "exa_search", "mcp",
+                  "microrag", "omnigraph", "scratchpad", "test_dummy"], barrier_reason())
+}
+
+-- ---------------------------------------------------------------------------
+-- The definition
+-- ---------------------------------------------------------------------------
+
+export pure func driver_plus_no_ops() -> ProfileDefinition {
+  let cat = fault_catalogue();
+  let ids = installed_extension_ids();
+  {
+    profile_id: no_ops_id(),
+    profile_version: no_ops_version(),
+
+    -- D5 field 2, and the first non-empty install list in this project.
+    installed_packages: packages_of(ids),
+    hook_classifications: classifications_of(ids),
+
+    -- D5 field 9. The first non-vacuous disclosure.
+    disclosures: disclosures_of(ids),
+
+    -- D5 field 3. ONE ENTRY DIFFERS FROM `driver_only`'s AND IT IS THE ONE THAT
+    -- MATTERS: `extension.abi` is INCLUDED here. That boundary was excluded in
+    -- `driver_only` explicitly "BECAUSE the install list is empty — no
+    -- extension behaviour is in the system under test", and that sentence is
+    -- what this profile changes. What crosses the boundary is four extensions'
+    -- worth of hook dispatch; what does NOT cross it is any effect, because the
+    -- hooks perform none.
+    adapter_boundaries: [
+      { boundary_id: "provider.model_step", included: true,
+        note: "Ports.model_step and the ProviderExchange it returns; a deterministic run binds the scripted adapter, and the boundary is in scope either way" },
+      { boundary_id: "provider.wire_parser", included: false,
+        note: "the provider's on-the-wire response parser. D3 excludes wire-parser faults from the fault catalogue, and THIS is the field that scopes that exclusion to a named boundary rather than leaving it as prose" },
+      { boundary_id: "tool.envelope_dispatch", included: true,
+        note: "tool_envelope_dispatch and tool_phase's typed ToolCallEnvelope contract" },
+      { boundary_id: "tool.process_exec", included: true,
+        note: "Ports.tool_exec, whose ToolExecution threads successor state (A12)" },
+      { boundary_id: "approval.stdin_channel", included: false,
+        note: "live_ports' operator stdin channel; a deterministic run binds the scripted approval adapter and this boundary is out of the system under test" },
+      { boundary_id: "extension.abi", included: true,
+        note: "the motoko-ext-abi hook surface, ABI 5.0. INCLUDED, which is the whole difference between this profile and driver_only: four extensions' hooks are dispatched across it on every run. What that buys is the DISPATCH being under test, not the extensions' effects — they perform none, and the coverage statement says so" },
+      { boundary_id: "extension.ext_ports", included: false,
+        note: "the ExtPorts surface an extension uses to reach the world. EXCLUDED, and by MEASUREMENT rather than by declaration: classifier 3 reports 0 ExtPorts field calls in each of the four installed closures, so no installed hook crosses this boundary at all. It is the boundary WI-C5's compose-bearing profile would have to include, and naming it excluded here is what keeps that visible" }
+    ],
+
+    -- D5 field 4. The driver's own four, plus the one this profile adds because
+    -- it is the promise an installed no-op hook makes and nothing else in the
+    -- tree states it.
+    resource_models: [
+      { model_id: "tool.all_or_nothing",
+        promise: "a failed tool call performs no partial logical update; the call either completes and is observable in the ledger or it does not and is not" },
+      { model_id: "tool.deadline_outcome_is_stated",
+        promise: "a tool completing after its declared deadline states whether the work completed before or after the observation; the outcome is never left ambiguous" },
+      { model_id: "provider.no_partial_commit",
+        promise: "a provider error, including a partial stream followed by an error, commits no message to the conversation; the logical state is the state before the step" },
+      { model_id: "approval.single_shot",
+        promise: "an approval decision is taken once per request and is not re-read; a denial is terminal for that request rather than retried" },
+      { model_id: "extension.hook_is_state_preserving",
+        promise: "every installed hook returns as its successor world exactly the world it was given; an installed extension advances no logical resource, so a fault's logical transition is the same with these four installed as without them. This is the promise that makes the coverage below no-op coverage, stated as a resource model so it is falsifiable rather than implied" }
+    ],
+
+    -- D5 field 5. D1's collecting sink is bounded by exactly this list.
+    -- Unchanged from `driver_only`: installing hooks that perform nothing adds
+    -- no projection, and adding one speculatively would permit an emission this
+    -- profile cannot produce.
+    diagnostic_projections: [
+      { projection_id: "ledger.trace",
+        note: "the LedgerTrace the traced driver returns; D6's recorded axis" },
+      { projection_id: "ledger.run_summary",
+        note: "the single final RunSummary record every terminal path emits (D6.1, WI-A9)" },
+      { projection_id: "result.interaction_log",
+        note: "what the world served the driver, in order (D6, WI-A9)" },
+      { projection_id: "result.replay_metadata",
+        note: "the interpretation context a trace is useless without (D8)" }
+    ],
+
+    -- D5 field 6. Each instrument now has TWO clauses, and the second is what
+    -- this profile owes that `driver_only` did not: `make world_state`'s poison
+    -- pairs run the driver, and the driver is no longer the whole system under
+    -- test. The second clause covers the part that is new — the installed
+    -- extensions' own closures — and it is a measurement, not a declaration.
+    forbidden_capabilities: [
+      { capability: "Clock",
+        instrument: "make world_state — the Clock poison PAIR: the deterministic entry point completes with Clock withheld, and the live world dies with it withheld. AND for the installed set: make ext_ambient_inventory reports 0 ambient sources in each of the four transitive closures, so no installed hook reads a clock" },
+      { capability: "AI",
+        instrument: "make world_state — the provider poison PAIR: the deterministic entry point completes with AI withheld, and the live world dies with it withheld. AND for the installed set: 0 ambient sources and 0 ExtPorts field calls per closure, so no installed hook reaches a provider by either route" },
+      { capability: "Process",
+        instrument: "make world_state — the typed tool-contract poison PAIR: a fully-seeded world completes with Process withheld, and an UNSEEDED one dies. AND for the installed set: 0 ambient sources per closure, which is the clause that matters here because on_solver_candidate's ABI row is ! {Process} and context_mode's binding of it really does spawn a subprocess — these four do not" },
+      { capability: "Rand",
+        instrument: "make world_state — no module under src/core/*.ail reaches std/rand, checked structurally; D1 names an ambient RNG as a prohibited hiding place for world state. AND for the installed set: 0 ambient sources per closure, so the structural claim extends to the four installed packages by measurement rather than by scope" },
+      { capability: "Env",
+        instrument: "make world_state — the host-env poison PAIR, as of WI-D3: the deterministic entry point completes with Env withheld and the live world dies with it withheld. AND for the installed set: 0 ambient sources per closure. NAMED LIMIT: register_with_config is OUTSIDE that closure — compaction_structural's declares ! {Env, FS} — and registration happens before any hook is dispatched, so this instrument covers the hooks and not the registration. That gap is stated rather than closed, and it is the same gap WI-D6 recorded when it found 8 of 15 unreachable by the runtime instrument for exactly this reason" }
+    ],
+
+    -- D5 field 7. READ from A7's catalogue, both the id list and each condition.
+    --
+    -- THE WAIVERS ARE UNCHANGED FROM `driver_only`'s AND ONE OF THEM NOW RESTS
+    -- ON DIFFERENT GROUND, which is the finding row 4 produces for this
+    -- profile. `extension_effect_fault`'s catalogue condition reads: "the
+    -- selected D5 profile installs an extension with an effectful hook that
+    -- issues this world request; driver_only installs none, so it waives this
+    -- class by construction (plan P4)". This profile DOES install extensions —
+    -- four — and still waives the class, because none of them has an effectful
+    -- hook: classifier 3 reports 0 ExtPorts field calls in each closure, so
+    -- none can issue the world request the class is delivered by
+    -- (`ExtPorts.ai_step`). The class is INAPPLICABLE, measured, rather than
+    -- inapplicable by emptiness.
+    --
+    -- THE CONDITION TEXT NAMES `driver_only` INSIDE IT, and the machinery
+    -- requires a waiver's condition to match the catalogue's verbatim, so this
+    -- profile records a sentence about a different profile. That is a defect in
+    -- the catalogue's wording rather than in either profile — a shared artifact
+    -- carrying one profile's name in a rule that applies to all of them — and
+    -- it is REPORTED rather than fixed here: correcting it is a
+    -- fault-catalogue content change with its own version bump and its own
+    -- ripple, and WI-D14's remit is the profile.
+    waived_fault_classes: waivers_from(cat, conditional_class_ids(cat)),
+    exercised_fault_classes: [],
+
+    -- D5 field 8. Literals, deliberately: see the header.
+    attribution_ref: no_ops_attribution_ref(),
+
+    -- D5 field 10. Every extension in the resolved install set that this
+    -- profile does not install, by name and with a reason.
+    omitted_extensions: not_installed(),
+
+    -- A10 decision 1. IDENTICAL to `driver_only`'s, and that identity is a
+    -- measured result rather than a copy: installing these four adds no
+    -- attributed row, because the table's two attributed rows belong to
+    -- `test_dummy` and `scratchpad`. The acceptance script asserts the routed
+    -- claim equals the empty-install one rather than restating the numbers.
+    unrouted_reachable_sites: [
+      { site_key: "src/core/test/stub_step.ail:203",
+        instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read",
+        why_unroutable: "live_ports' clock adapter — the one place the driver's call graph reads a real wall clock, by design. It is IN this profile's reachable set even though a deterministic run binds the scripted adapter instead: D4's profile-reachable is INSTALLATION-scoped, not execution-scoped (A10 decision 1)." }
+    ],
+
+    -- D5 obligation 2's roots. All four installed packages resolve under
+    -- `packages/`, so the scan-root rule passes on a NON-EMPTY install list
+    -- here for the first time — it has never had an installed package to check.
+    scan_roots: ["src", "packages"]
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The claims, computed
+-- ---------------------------------------------------------------------------
+
+export pure func no_ops_routed_claim() -> RoutedSetClaim {
+  routed_set_claim(driver_plus_no_ops())
+}
+
+export pure func no_ops_substance() -> CoverageSubstance {
+  coverage_substance(driver_plus_no_ops())
+}
+
+export pure func no_ops_coverage_statement() -> string {
+  coverage_statement(driver_plus_no_ops())
+}
+
+export pure func validate_no_ops(
+  loading_against: string,
+  discovered: [CoreSite],
+  calls: [Classifier2Call],
+  catalogue: [FaultClass]
+) -> [ProfileRejection] {
+  validate_definition_at_load(driver_plus_no_ops(), loading_against, discovered, calls, catalogue)
+}
+
+-- ---------------------------------------------------------------------------
+-- The per-run execution manifest
+-- ---------------------------------------------------------------------------
+
+pure func versions_of(ps: [InstalledPackage]) -> [PackageVersion] {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let v: PackageVersion = { package_id: p.package_id, version: p.version };
+      v :: versions_of(rest)
+    }
+  }
+}
+
+-- D5's manifest is PER RUN, so it is built rather than declared. Unlike
+-- `driver_only`'s, `extension_packages` is NON-EMPTY here and is projected from
+-- the install list rather than restated — a manifest that names a different set
+-- of packages from the definition it realizes pins nothing.
+export pure func no_ops_manifest(
+  source_revision: string,
+  toolchain: string,
+  abi_version: string,
+  normalized_configuration: string,
+  classifier_2_set: [string],
+  unrouted_fields: [string],
+  scan_root_commit: string
+) -> ExecutionManifest {
+  {
+    source_revision: source_revision,
+    toolchain: toolchain,
+    extension_packages: versions_of(driver_plus_no_ops().installed_packages),
+    abi_version: abi_version,
+    profile_id: no_ops_id(),
+    profile_version: no_ops_version(),
+    event_vocabulary_version: event_vocabulary_version(),
+    normalized_configuration: normalized_configuration,
+    classifier_2_set: classifier_2_set,
+    unrouted_fields: unrouted_fields,
+    scan_roots: driver_plus_no_ops().scan_roots,
+    scan_root_commit: scan_root_commit,
+    profile_rules_version: profile_rules_version(),
+    coverage_rules_version: Cov.coverage_rules_version(),
+    attribution_rules_version: Attr.attribution_rules_version(),
+    fault_catalogue_version: Fault.fault_catalogue_version()
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests. The load-time acceptance is scripts/dst/driver_plus_no_ops_dst.ail,
+-- which supplies the measured inventory and the derived call set.
+-- ---------------------------------------------------------------------------
+
+-- The three D5 fields that name the install set must be ONE set, stated three
+-- ways, and all three must be non-empty. The machinery rejects a disagreement;
+-- this asserts the shape the machinery has never been given before.
+pure func test_the_install_set_is_one_set_stated_three_ways() -> bool
+  tests [((), true)]
+  {
+    let d = driver_plus_no_ops();
+    let n = List.length(installed_extension_ids());
+    n == 4
+      && List.length(d.installed_packages) == n
+      && List.length(d.disclosures) == n
+      && List.length(d.hook_classifications) == n * List.length(Cov.all_hook_slots())
+  }
+
+-- Every slot of every installed extension is covered and nothing is excluded.
+-- Asserted against `all_hook_slots()` rather than against the literal 8, so a
+-- ninth ABI slot moves this assertion instead of silently passing it.
+pure func test_every_slot_is_covered_and_nothing_is_excluded() -> bool
+  tests [((), true)]
+  {
+    let d = driver_plus_no_ops();
+    covers_all(d.disclosures, List.length(Cov.all_hook_slots()))
+  }
+
+pure func covers_all(ds: [DisclosureIds], n: int) -> bool {
+  match ds {
+    [] => true,
+    x :: rest =>
+      List.length(x.covered) == n && List.length(x.excluded) == 0 && covers_all(rest, n)
+  }
+}
+
+-- THE ITEM'S CENTRAL ASSERTION, and it is about the RECORD rather than about
+-- the extensions: the coverage is non-zero, every criterion-2 hook is a no-op,
+-- and NOT ONE covered hook mediates the world substantively.
+pure func test_the_coverage_is_non_zero_and_entirely_no_ops() -> bool
+  tests [((), true)]
+  {
+    let s = no_ops_substance();
+    s.installed_extensions == 4
+      && s.covered_hooks == 32
+      && s.excluded_hooks == 0
+      && s.criterion_1_hooks == 16
+      && s.criterion_2_hooks == 16
+      && s.no_op_hooks == 16
+      && s.world_mediating_hooks == 0
+  }
+
+-- The two halves of the record that make the criterion-2 entries readable: a
+-- MEASURED producer, and clause 3 substantive with clauses 1 and 2 vacuous.
+-- Asserted by walking the entries rather than by reading the constructor
+-- functions, so a future edit that changes one entry is caught.
+pure func test_every_criterion_2_entry_is_measured_and_two_clauses_vacuous() -> bool
+  tests [((), true)]
+  {
+    entries_ok(driver_plus_no_ops().hook_classifications, 0)
+  }
+
+pure func entries_ok(cs: [HookClassificationEntry], seen: int) -> bool {
+  match cs {
+    [] => seen == 32,
+    c :: rest => {
+      let ok = match c.classification {
+        WorldMediated =>
+          c.basis.producer == "ext_ambient_inventory"
+            && clause_is_vacuous(c.clauses.ports) && clause_is_vacuous(c.clauses.origin_tag)
+            && clause_is_substantive(c.clauses.world_state),
+        EffectFree =>
+          c.basis.producer == "declared_row"
+            && not clause_is_vacuous(c.clauses.ports)
+            && not clause_is_substantive(c.clauses.world_state),
+        ExplicitlyExcluded => false
+      };
+      ok && c.basis.revision != "" && entries_ok(rest, seen + 1)
+    }
+  }
+}
+
+-- Installing four extensions added NO reachable core site, so the routed claim
+-- is the same partition the empty install list computes. Asserted as an
+-- equality against the table rather than against the numbers 7/6/1.
+pure func test_installing_added_no_reachable_site() -> bool
+  tests [((), true)]
+  {
+    let c = no_ops_routed_claim();
+    c.reachable_total == c.routed + c.declared_unrouted
+      && c.reachable_total == List.length(Attr.reachable_core_sites([]))
+      && List.length(driver_plus_no_ops().unrouted_reachable_sites) == c.declared_unrouted
+  }
+
+-- Installed plus omitted is the whole installable set. The count is asserted
+-- against `ailang.toml` by `check_no_op_profile.py`; what is asserted here is
+-- that the two lists are DISJOINT, which no external check would notice.
+pure func test_installed_and_omitted_are_disjoint() -> bool
+  tests [((), true)]
+  {
+    let d = driver_plus_no_ops();
+    disjoint(omitted_ids(d.omitted_extensions), installed_extension_ids())
+      && List.length(d.omitted_extensions) == 11
+  }
+
+pure func omitted_ids(os: [OmittedExtension]) -> [string] {
+  match os { [] => [], o :: rest => o.extension_id :: omitted_ids(rest) }
+}
+
+pure func disjoint(xs: [string], ys: [string]) -> bool {
+  match xs { [] => true, x :: rest => if contains_str(ys, x) then false else disjoint(rest, ys) }
+}
+
+-- The manifest's extension list is a PROJECTION of the install list, not a
+-- second record of it. `driver_only` could not assert this: its list is empty
+-- and an empty projection of an empty list proves nothing.
+pure func test_manifest_projects_the_install_list() -> bool
+  tests [((), true)]
+  {
+    let m = no_ops_manifest("r", "t", "5.0", "{}", ["env_get", "proc_exec"], [], "r");
+    List.length(m.extension_packages) == List.length(driver_plus_no_ops().installed_packages)
+      && List.length(m.extension_packages) == 4
+      && m.profile_id == no_ops_id()
+      && m.profile_version == no_ops_version()
+      && m.profile_rules_version == profile_rules_version()
+  }
