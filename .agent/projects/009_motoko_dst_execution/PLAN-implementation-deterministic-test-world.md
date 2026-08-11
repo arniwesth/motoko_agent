@@ -222,6 +222,30 @@ describes a run rather than a design. **So: when recording why something is unre
 measurement, not the diagnosis.** Fourth consecutive item to carry this class, and the first to say
 how to stop carrying it.
 
+**A STATUS COLUMN IS A LIVE CLAIM AND ROTS LIKE ONE — WI-D11 found the ADR's gate-mechanism table
+wrong on THREE OF FIVE ROWS.** `ADR:2410-2412` record classifier 2, the site-to-hook attribution table
+and coverage-floor validation as **"Deferred"**. **Verified at review: `make ext_call_inventory`,
+`make attribution_table` and `make profile_coverage` all exit 0** — every one built, green, and in
+`make dst`, and the same document describes each as built in its own amendment paragraphs. **The
+governance act checked five COUNT sites and found two the handoff had missed; it did not check the
+State column, and that is where the disagreement was.** The column is demonstrably live-maintained —
+WI-D10 edited classifier 1's State cell and the reviewers revised it four days later — so a reader is
+taught that it tracks HEAD, which makes three false rows **silent** rather than merely stale.
+
+**AND WI-D10 ADDS THE REFUSAL CASE, WHICH IS THE HARDEST ONE TO GET RIGHT: adding a CORRECT offset to
+a number that is ALREADY WRONG does not fix it — it makes it look freshly maintained.** The D10
+handoff instructed that 77 live ADR citations be re-derived after the amendment shifted them.
+**Measured before the edit, roughly one in seven ADR self-citations already pointed at a blank line or
+a code fence** — the report counts 105 of 753 instances (13.9%); an independent re-derivation at
+review counts **38 of 272 distinct citations (14.0%)**, which is the same rate by a different unit.
+**So the instruction was wrong and the item was right to refuse it.** Offsetting them all would have
+produced a document whose citations were uniformly *fresh* and still substantially *wrong*, in the one
+medium where nothing can go red. **The decay was reported, priced and left owed instead**, and named
+anchors were adopted for the two amended passages so the new text contributes zero numeric
+self-citations. **The rule: before mechanically correcting a reference layer, measure how much of it
+was already correct. If the answer is "most", correct it; if the answer is "unknown", correcting it
+hides that.**
+
 **WI-D2 SHARPENS IT AGAIN, and the failure is narrower than "structural reasons go stale".** Of
 `parity_gap_reasons`' thirteen entries, **eleven named a structural cause and nine were wrong** — and
 seven of those said *"inside the tool dispatch fold"*, which described **where the code lived**, not
@@ -232,6 +256,55 @@ thing that would have to CHANGE, not the place the code lives.** The item also f
 on the grounds that the trace did not carry the event, which is no longer true while the conclusion
 still stands on independence of authorship. **Restate those in two parts rather than re-dating them**,
 so the next reader can see which half is load-bearing.
+
+**EXTENDED BY WI-D10, AND THIS IS THE FORM WHERE THE WHOLE LAYER IS ALREADY GONE.** Every prior
+instance of S15 is about one stale number. WI-D10 was the first item to edit ADR-001's *body* rather
+than append to it, so it had to re-derive the citations below the edit — and measured the layer first
+rather than trusting it. **105 of the ADR's 753 internal line-number self-citations (13.9%) pointed
+at a BLANK LINE or a CODE-FENCE MARKER *before* the edit**, 72 of them in the region the edit does
+not touch at all; a hand-sample of fourteen more found roughly two that still matched their claim.
+**The citation layer had already decayed document-wide from ordinary growth, and no item in
+thirty-four had ever re-derived it.**
+
+**So the re-derivation was deliberately NOT performed, and that is the rule: adding a correct offset
+to an already-wrong number produces a wrong number that looks freshly maintained.** That is S15's C4
+extension — *"launders a guess into a fact"* — in the one medium where it is invisible by
+construction, because every rewritten citation is well-formed and nothing can go red. **Report the
+decay, price the repair, and do not disguise it as a cascade.**
+
+**THE DETECTOR IS CHEAP AND NOBODY HAD RUN IT: a citation whose target line is BLANK or a code fence
+is definitely wrong**, needs no semantics, and covers a whole document in seconds. Run it before
+believing any line-number citation — including the ones in a handoff. WI-D10's own handoff cited
+`ADR:2113` for *"None of the three"*; that sentence was at `:2115`.
+
+**AND THE CENSUS ERRED IN BOTH DIRECTIONS AT ONCE, because it did not know every citation FORM.**
+The amendment review counted `ADR:NNN` and reported 76 self-citations below the insertion point.
+There is a second form — a backticked bare `` `:NNN` `` — with **197** instances, so the census was
+too small. **But most of that form is not an ADR citation at all:** it is a *file-relative
+continuation* of the file named earlier in the same sentence (`session.ail:1770` … then `` `:1778` ``),
+so counting them would have been too large. **Naming the form is not enough; the form's REFERENT has
+to be derived too** — and a census that gets one of those wrong is wrong in a direction it cannot
+detect from its own output.
+
+**AND A NOTE THAT STATES A SHIFT, PLACED ABOVE THE REGION IT DESCRIBES, INVALIDATES ITS OWN NUMBERS.**
+S18 says tensing a comment is a source edit for cascade purposes; this is that one level up, and it
+bites twice because the correction is also an edit. WI-D10 wrote the shift as `+260`, added the note,
+and the true shift became `+287`/`+305`. **Derive the map from the DIFF, never from the edit sizes,
+and then patch only the digits so the line count does not move again.**
+
+**FINALLY, FROM WI-D10's ONE MEASUREMENT: when a review proposes a fallback route, probe it AND
+enumerate the alternatives, because the proposed route is the first one someone thought of rather
+than the best one available.** The review argued classifier 3's symbol granularity was reachable by a
+per-declaration textual parse, *"a small change"* to an existing tool. **Probed: it works** — 465
+symbols over 46 modules, unclaimed-`export` residue 0, collapsing back to the shipped module
+derivation 46 of 46. **And it fails OPEN on 44 of 465 symbols** — 39 `export func` carrying no row at
+all and 5 effect-*polymorphic* (`std/list.mapE` and siblings) — which for a fail-closed instrument is
+the wrong direction, and one of the 39 (`std/json.jo`) is imported by three of the four extensions the
+instrument's whole yield rests on. **Two strictly better producers existed and nobody had looked:**
+the compiler's own cached `iface.json` (`ailang.iface/v1`, per-symbol, typed, 23 of 46 modules — every
+one this tree compiles), and `ailang iface`'s own stdout, which already emits `funcs[].effects` and is
+blocked only by MOD010's path rule. **A tool's stated limitation is a claim about the tool, and this
+project's record on those is why S22 exists.**
 
 **S14. A direct probe of an upstream API is NOT evidence that OUR adoption of it works — the gate
 must drive our own closure.** Earned by WI-C1, and **measured rather than argued**: the natural wrong
@@ -282,6 +355,19 @@ binding is a CONSTANT NO-OP is unobservable in a dispatch result by definition. 
 from the registry entirely reddened only the ONE arm that names it by id. Three of four arms
 therefore establish "the fold ran and performed nothing", not "the subject ran and performed
 nothing", and the two are joined by a separate structural row rather than conflated.
+
+**AND WI-D11 FOUND THE RULE STATED CORRECTLY IN ONE FILE AND VIOLATED IN THE NEXT.**
+`src/core/dst_attribution_table.ail:446-448` says, verbatim: *"The discovered set is an ARGUMENT,
+never a constant in this module. It comes from an inventory run against the source, and **hardcoding
+it here would make this check agree with itself by construction.**"* At the only live call,
+`scripts/dst/attribution_table_dst.ail:133` passes `head_inventory()` — which is
+`unconditional_core_sites()` **plus the two sites `attribution_rows()` already contains**
+(`ext/runtime.ail:190`, `tool_phase.ail:314`). **Verified at review: the "discovered" set is the union
+of the two lists `validate_completeness` checks membership against, so it cannot reject over them.**
+The negative fixture proves the *rule* discriminates; nothing feeds the *instrument* a real inventory.
+**A module that names its own failure mode in a header comment does not thereby avoid it** — the
+comment and the call site are in different files, and nothing connects them. This is acceptance row
+5's completeness guard.
 
 **GENERALISED AT WI-D2 FROM A PROPERTY'S TWO SIDES TO AN ARTIFACT'S TWO PINS.** C3's form is about a
 check whose two sides share a producer. D2's is about two SEPARATE artifacts pinned against each other
@@ -345,6 +431,15 @@ bookkeeping gap "missing" implies. **The correction matters in the direction tha
 `tail` reported success over a run that exited 1. The four are now: an absent tick (C4), an absent
 count (D1), a truncated artifact row (D4), and a discarded exit status (D6). **Every one is a signal
 that was produced and then lost between the producer and the reader.**
+
+**EXTENDED BY WI-D10, ONE LEVEL UP, AND IT IS THE PRETTIEST INSTANCE OF THIS RULE: a note that
+STATES a line-number offset, placed above the region it describes, makes its own number wrong.**
+WI-D10's line-number map first read `+260`; the note sits above the shifted region, so writing it
+moved the very lines it was measuring, and the true offsets are `+287` and `+305`. **Well-formed,
+plausible, and invisible to every gate** — caught only by re-deriving the map from the diff after the
+fact. S18 says tensing a comment is a source edit for cascade purposes; **this says a comment ABOUT a
+cascade is part of the cascade it describes.** Derive such a map from the diff, after the edit,
+never from the intent before it.
 
 **S18. Tensing a comment IS a source edit for anchor-cascade purposes.** Earned by WI-C5, which is
 the SECOND consecutive item to pay the line-number cascade twice, both times for the same reason:
@@ -656,17 +751,40 @@ sealed-vocabulary probe (`IMP010`), 5 `src/examples/`, 3 code-graph fixtures and
 fixture. **Confirm the failing set member-for-member rather than the count** — the count moves by one
 whenever an item adds a file.
 
+**AND S9 REACHES ONE DIRECTORY TOO FEW: THERE IS A COMPILE CACHE BESIDE THE STDLIB, AND
+`effect_inventory_selftest`'S ANSWER IS A FUNCTION OF IT.** Measured at the acceptance-reviewers'
+governance act and pinned at review. **Three sessions ran the same gate on the same tree today and got
+three different answers** — `agree=0` (this reviewer), `agree=1` (both acceptance reviewers, four
+consecutive runs), `agree=45` (this reviewer again, hours later). Not one of them is a fact about the
+tree.
+
+**The variable is `/home/motoko/.local/share/ailang/std/.ailang/cache/`**, which held **230 files
+written that day**. It is outside S9's sweep by construction: the sweep runs from the repository root
+and excludes `./ailang/` and `./tools/code-graph/`, and this path is under `~/.local/share`.
+**Demonstrated two-sided:** clearing it takes the selftest `agree=45 → agree=1`, and restoring the
+230 files takes it back to 45. `std/env` is the one module that resolves cold, which is the
+acceptance reviewers' unexplained observation, explained.
+
+**So both of the competing findings about classifier 1 were readings of cache warmth.** *"Its
+acceptance criterion is NOT met at HEAD"* (WI-D10) was true at `agree=0`; *"the criterion is met and
+that is worse than the red"* (the governance act) was true at `agree=1`. **The gate measures the
+cache, not the tree** — and the amended ≥90% criterion inherits the same defect, because its numerator
+is *modules `ailang iface` can resolve*, which is exactly what the cache decides. **S9's sweep needs
+this path, and any coverage criterion over `ailang iface` needs a cache-state precondition.**
+
 **AND A GATE THAT IS NOT IN `make dst` DEGRADES INVISIBLY, however loudly it fails when run.** Found
 by the amendment review, outside its scope. **Classifier 1 — the ADR's one *built* gate mechanism —
-does not meet its recorded acceptance criterion at HEAD.** `ADR:2108` records it *"Built and
-independently verified … Met at `a0d4edb`, run by both acceptance reviewers: 0 unresolved,
-`agree=43 disagree=0`"*, and its criterion has two clauses. **Verified at review: `make
-effect_inventory_selftest` exits 2 reporting `agree=0 disagree=0` and "This is a pass-shaped absence,
-not a pass"** — all 46 `ailang iface` calls fail `MOD010`, so every classification comes from an
-unvalidated textual fallback. **Neither `effect_inventory` nor `effect_inventory_selftest` is in
-`make dst`**, so thirty-three items ran without seeing it, across a toolchain repin the Makefile
-itself says to re-run after. **The tool failed closed correctly and said so in plain words; nothing
-was listening.** A gate's loudness is worth nothing if no aggregate target invokes it.
+does not meet its recorded acceptance criterion at HEAD.** The ADR's gate-mechanism table — classifier
+1's row was `ADR:2110` when the review wrote this, is `ADR:2397` after WI-D10's amendment — recorded
+it *"Built and independently verified … Met at `a0d4edb`, run by both acceptance reviewers: 0
+unresolved, `agree=43 disagree=0`"*, and its criterion has two clauses. **Verified at review and again
+at WI-D10: `make effect_inventory_selftest` exits 2 reporting `agree=0 disagree=0` and "This is a
+pass-shaped absence, not a pass"** — all 46 `ailang iface` calls fail `MOD010`, so every classification
+comes from an unvalidated textual fallback. **Neither `effect_inventory` nor
+`effect_inventory_selftest` is in `make dst`**, so thirty-three items ran without seeing it, across a
+toolchain repin the Makefile itself says to re-run after. **The tool failed closed correctly and said
+so in plain words; nothing was listening.** A gate's loudness is worth nothing if no aggregate target
+invokes it. **WI-D10 annotated the row and left the repair owed and unowned.**
 
 **AND A SOURCE-DERIVED GATE HAS ITS OWN HAND-MAINTAINED INPUT — the literal the gate cannot see.**
 Earned by WI-D3. `make discovery` re-derives `driver_env_keys()` from source rather than trusting a
@@ -2842,6 +2960,71 @@ because no gate compares them.
 
 **What D6 delivered, stated at its true size: one barrier of four removed, and the argument that
 could remove the other three.** That is a real result.
+
+**WI-D10, 2026-08-06 (45 min) — BOTH AMENDMENTS LANDED. Zero source files changed.** B applied
+first, its range extended `:1398-1418` → `:1398-1429` because the draft's own consequence list reaches
+two passages below `:1418` and stopping short would have left the ADR contradicting its correction two
+paragraphs later. A inserted with all four conditions. **The gate-mechanism table gained no row and
+the deferred count is untouched at three** — verified at review — because that edit is both acceptance
+reviewers' jointly.
+
+**A-2 was SPLIT rather than signed or dropped**, which is better than the handoff's binary: the
+*measurement* that falsifies the sufficiency claim is stated in full (`compose` 17 modules,
+`context_mode` 7, both DIRTY on imports where Route B routes only calls), and the *cost estimate*
+— "materially more work" — is left out and recorded as owed to WI-C5's owner. **No cost claim in the
+ADR now lacks an owner.**
+
+**A-1's probe found the proposed fallback works and FAILS OPEN on 44 of 465 symbols** — 39 `export
+func` with no row at all, 5 with an effect *variable* — which for a fail-closed instrument is the
+wrong direction, and `std/json.jo` is among them, imported by three of the four extensions A-3's yield
+rests on. **Two strictly better producers existed and nobody had looked:** the compiler's own cached
+`iface.json` (`ailang.iface/v1`, 23 of 46 stdlib modules, per-symbol, distinguishing an effect
+*variable* from concrete labels) and `ailang iface`'s own stdout, which already emits
+`funcs[].effects` and **is blocked only by MOD010's path rule, not by a missing capability**. So
+classifier 3's symbol-granular property is buildable and the amendment does not rest on the broken
+route.
+
+**THE ITEM REFUSED THIS HANDOFF'S CENTRAL INSTRUCTION AND WAS RIGHT TO** — see S15's refusal case.
+**And the handoff contained the very defect it was written about:** it cited `:2113` for the
+"None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
+against the pre-edit file at review.
+
+**WI-D11, 2026-08-07 (~21 min) — DOES THE NAME ADOPTION STAND? **YES, QUALIFIED.** Zero files
+changed.
+
+**The sentence that appeared to unseat the adoption has a FALSE ANTECEDENT, and it has been false
+since 2026-08-03.** `ADR:2038` reads *"**Classifier 2 is not built**, so D5's routing audit as a whole
+remains non-citable as name-adoption gate evidence until it is."* **Classifier 2 was built at WI-A4
+(`5ad3433`) and passes its published criterion** — verified at review, `make
+ext_call_inventory_selftest` exit 0, *"self-test: 0 failure(s)"*, fail-closed on all four
+unresolvable forms with a resolving control beside them. **So the routing audit's stated blocker was
+discharged three days before D5 adopted the name, and D5's adoption was sound.** D5 did not reason its
+way there — it checked D10's two conditions and never mentioned citability, and **neither did this
+reviewer's handoff.** It was right without checking.
+
+**D10 states TWO conditions, quoted and joined by "and"**, and `ADR:2463`'s gate-mechanism sentence is
+120 lines away in another section, glossed by its own colon as a constraint on **one instrument cited
+for one purpose** — corroborated by `ADR:2036-2041` and `PLAN:3201`, both of which make citability a
+two-classifier condition on the *audit*, not a five-mechanism condition on the *name*.
+
+**The constraint bites on exactly ONE of the eleven rows.** Row 5 names the routing audit in its own
+text and its evidence is that audit's output. **Row 3 names classifier 2 and borrows nothing from it**,
+because `driver_only` installs nothing so the quantifier is empty — **the fifth thing the empty install
+list buys**, and the reading that could have gone the other way.
+
+**The qualification is classifier 1, and the measurement turned out BOUNDED rather than unbounded** —
+the opposite of what this handoff expected. **No repository operation produces the 230-file stdlib
+cache**: a 243-file cache-cold sweep leaves it at 0, `make dst` in full leaves it at 52, and the
+selftest reads `agree=1` in both. So under **every cache state this repository can establish**,
+classifier 1's coverage against the amended criterion is **0/21** and it fails. **Its derived set is
+cache-invariant** — 13 effect-bearing / 8 proven-effect-free, byte-identical cold and warm — so what is
+missing is the *validation*, not the answers. That is why it qualifies the name rather than unseating
+it, and the repair now carries one more requirement: **state a cache precondition, or the repaired
+gate measures the cache again.**
+
+**Two findings reported and left, both the acceptance reviewers' or an owner's:** the gate table's
+State column (see S15's extension — three of five rows say "Deferred" for built, green mechanisms),
+and `head_inventory()` feeding `validate_completeness` its own output (see S16's extension).
 
 **THE AMENDMENT REVIEW, 2026-08-06 — BOTH ACCEPT WITH CONDITIONS. B first, then A, then the table.**
 `REVIEW-adr-001-criterion-2-amendment.md`, by a reviewer independent of D6/D7/D8/D9. **Neither is

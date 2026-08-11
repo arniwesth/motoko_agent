@@ -564,3 +564,91 @@ amendment.
 source-anchor kind.** Four items paid the `make anchors` version. This is the same shape in a
 different medium, it is cheaper (no profile re-issue, no content hash), and it was invisible until
 someone counted.
+
+
+## Cluster 28 = the acceptance reviewers' admission. Handed off 2026-08-06.
+
+`HANDOFF-acceptance-reviewers-admit-classifier-3.md`. **Addressed to both ADR-001 acceptance
+reviewers jointly — the second non-execution handoff in this project, and a different kind again from
+the amendment review.** That one asked for a disposition on a draft; this asks for a **governance
+act**: changing a count two people signed as finite.
+
+**The ADR says in its own text that this is not the amendment's to make** (`:1493-1496`), which is why
+WI-D10 landed both amendments and stopped one edit short.
+
+**Grounding found the act is not the count — it is a ruling nobody has made.** WI-D10 annotated
+classifier 1's row to *"Built; its acceptance criterion is NOT met at HEAD"* and flagged the cell edit
+rather than burying it. **So the table now asks a question its own shape cannot express: is a
+mechanism whose acceptance criterion is unmet still "Built"?** Three readings are available and they
+give three different counts — four, or five, or a state the table has no vocabulary for. **The count
+being changed from three depends on which is taken**, which is why the ruling and the admission are
+one handoff rather than two.
+
+**Clustering note: a handoff can be addressed to a ROLE rather than to a session.** Every prior one
+assumed whoever picks it up executes it. This one cannot be executed by a session that is not those
+two people, and saying so is the deliverable — an item that could be picked up and done by anyone
+would be the wrong artifact here.
+
+
+## Cluster 28 outcome, and cluster 29 = does the name adoption stand?
+
+**The governance act landed: classifier 3 ADMITTED (deferred 3 → 4, table 4 → 5), with a condition of
+the reviewers' own** — the admission holds only while the barrier count is *derived*, so `basis` must
+reach `HookClassificationEntry` with or before any change that lowers it. They applied the architecture
+test on two arms rather than inheriting it, took a **third reading** on classifier 1 that is neither
+"Built" nor "Deferred", **revised** WI-D10's cell edit rather than ratifying it, and found **two live
+count sites beyond the two the handoff named**.
+
+**And a measurement in it does not reproduce, which is how cluster 29 was found.** Three sessions ran
+`make effect_inventory_selftest` on the same tree on 2026-08-06 and got `agree=0`, `agree=1` and
+`agree=45`. The variable is a compile cache at `/home/motoko/.local/share/ailang/std/.ailang/cache/`
+that **S9's sweep cannot reach** — the sweep runs from the repo root, that path is under
+`~/.local/share`. Two-sided: clearing it gives `45 → 1`, restoring gives `1 → 45`. **Both competing
+findings about classifier 1 were readings of cache warmth.**
+
+**Cluster 29 = WI-D11, does the name adoption stand: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d11-does-the-name-adoption-stand.md`.
+
+**Grounding found a contradiction that predates the governance act by a full item.** The ADR says the
+gate mechanisms *"block the name: D5's routing audit is not citable as name-adoption gate evidence
+until each is built and passes its criterion"* — and it said so, with "three", **at the ADR state
+WI-D5 read**. WI-D5 adopted the name anyway, checking D10's two conditions and never mentioning that
+sentence. **Neither did this reviewer's handoff.** So the question is not whether the governance act
+broke something; it is whether the adoption was sound when it was made, and nobody asked.
+
+**Clustering note: a determination is a third genre, distinct from both execution and review.** A
+review dispositions someone else's draft; this asks whether a decision already taken was correct, on
+evidence anyone can re-derive. **It is the first item in this project pointed backwards at the
+project's own headline claim**, and the handoff's hardest instruction is the symmetric one — do not
+conclude the name stands because it was announced, and do not conclude it falls because a sentence
+says "blocks".
+
+
+## Cluster 29 outcome, and cluster 30 = build classifier 3
+
+**WI-D11 answered: the name STANDS, qualified.** The sentence that appeared to unseat it has a **false
+antecedent** — `ADR:2038` says *"Classifier 2 is not built"*, and classifier 2 was built at WI-A4 on
+2026-08-03 and passes its criterion (verified: `ext_call_inventory_selftest` exit 0, zero failures).
+**So the routing audit's stated blocker was discharged three days before D5 adopted the name.** D5 was
+right without checking, and neither D5 nor this reviewer's handoff checked.
+
+**Two findings left for other pens, both verified at review:** the gate table records three built,
+green mechanisms as *"Deferred"* (`ext_call_inventory`, `attribution_table`, `profile_coverage` all
+exit 0), and `head_inventory()` feeds `validate_completeness` **its own output** at the only live call
+— which `dst_attribution_table.ail:446-448` forbids in as many words, one file over.
+
+**Cluster 30 = WI-D12, build classifier 3: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d12-build-classifier-3.md`.
+
+**Grounding settled the producer question, and the answer is neither candidate the review proposed.**
+The textual parse fails open on 44 of 465 symbols; `ailang iface`'s stdout needs a stdlib cache no
+project operation produces. **The compiler's own cached `iface.json` covers 21 of the 21 std modules
+the repo imports — zero missing — is keyed by symbol, and distinguishes a CLOSED EMPTY ROW from an
+EFFECT VARIABLE**, which is the distinction the whole yield turns on: `std/json`'s 38 exports carry no
+textual row, so the textual route reports all 38 unresolved including `jo`, and three of the four clean
+extensions import it. **That is what makes the yield 4 of 15 rather than 1.**
+
+**Clustering note: three consecutive clusters have been decided by a measurement taken at review of the
+previous one**, not by the plan and not by the handoff. D10's producer probe, D11's cache bound, and
+now D12's producer choice. **Grounding is no longer resizing items — it is choosing between designs**,
+and the handoff's job has shifted accordingly: carry the measurement, not the instruction.
