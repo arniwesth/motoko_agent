@@ -116,6 +116,24 @@ func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[
   else Err({ failed_invariant: invariant_name, trace: trace })
 }
 
+func no_system_in(msgs: [Message]) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest => if m.role == "system" then false else no_system_in(rest)
+  }
+}
+
+func scenario_segment_excludes_system_prefix() -> Result[(), ScenarioFailure] {
+  let split = split_for_compaction([msg("system", "s1"), msg("system", "s2"), msg("user", "u"), msg("assistant", "a")]);
+  let seg = segment_messages(split.segment);
+  let pinned_ok = length(split.pinned) == 2;
+  ok_or_failure(no_system_in(seg) && pinned_ok, "compactable segment excludes the system prefix", [
+    "segment_had_system_or_bad_pin",
+    "pinned=${show(length(split.pinned))}",
+    "segment=${show(length(seg))}"
+  ])
+}
+
 func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), ScenarioFailure] {
   match history_from_seed([msg("system", "s"), msg("user", "u")]) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
@@ -407,9 +425,14 @@ func actual_token_pressure_defers_to_seal_scenario() -> Scenario {
   { id: "actual_token_pressure_defers_to_seal", run: scenario_actual_token_pressure_defers_to_seal }
 }
 
+func segment_excludes_system_prefix_scenario() -> Scenario {
+  { id: "segment_excludes_system_prefix", run: scenario_segment_excludes_system_prefix }
+}
+
 export func main() -> () ! {IO} {
   let scenarios = [
     harness_self_test_scenario(),
+    segment_excludes_system_prefix_scenario(),
     project_prep_vs_uncompacted_history_pressure_scenario(),
     empty_system_prompt_rejected_scenario(),
     oversized_payload_rejected_scenario(),

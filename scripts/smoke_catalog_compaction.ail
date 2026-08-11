@@ -15,7 +15,7 @@ import std/io (println, exit)
 import std/result (Ok, Err)
 import std/string (repeat)
 import src/core/context_usage (catalog_context_limit_for)
-import src/core/compaction (compact_step_with_limit)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_step_with_limit)
 
 func msg(role: string, content: string, tool_call_id: string) -> Message {
   {
