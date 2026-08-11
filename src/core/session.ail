@@ -2522,12 +2522,33 @@ func c2_loop(
           -- SUCCESSOR: nothing is lost — the deleted resolution was the first
           -- thing this arm did to the world, so its successor was `st`'s own.
           -- The two `SealSystemPrompt`/`SealExhausted` finalize sites below
-          -- therefore return to `st.world_state`, which is where they stood
-          -- before WI-D3 and is NOT a narrowing: WI-D3 pointed them at `st_ctx`
+          -- therefore returned to `st.world_state`, which is where they stood
+          -- before WI-D3 and was NOT a narrowing: WI-D3 pointed them at `st_ctx`
           -- only so that item did not newly widen them, and with no resolution
-          -- here there is no widening to preserve. They still ignore
+          -- here there was no widening to preserve.
+          --
+          -- WI-D4's LAST SENTENCE HAS EXPIRED, and the history is kept two-part
+          -- per S15 because a documented deferral is only legible against the
+          -- scope that deferred it. It read: "They still ignore
           -- `chain.next_state`, the pre-step chain's successor, which remains a
-          -- separate un-threaded seam and is out of this item's scope.
+          -- separate un-threaded seam and is out of this item's scope." WI-D25
+          -- is the item whose scope it is. Both sites now take
+          -- `token_to_world(chain.next_state)`, and the deferral's ground did
+          -- not survive re-measurement: it was about WI-D3's deleted
+          -- resolution, which says nothing about the chain.
+          --
+          -- WHY — the `Ok` arm's reason, met on the two failing arms. The chain
+          -- is dispatched BELOW this comment and ABOVE the match, so a pre-step
+          -- hook's `ai_step` calls have already happened on ALL THREE arms.
+          -- Sealing failed; the effects did not. Returning `st.world_state`
+          -- here un-happens whatever the chain consumed, and the run's terminal
+          -- world reports a cursor that never advanced.
+          --
+          -- IT WAS INVISIBLE FOR THE REASON S29 GIVES: every `on_pre_step`
+          -- binding in the tree returned `ctx.world` unchanged, so the drop and
+          -- the thread produced identical worlds. `world_state_probe`'s
+          -- `consuming_pre_step_2`/`_3` are the first bindings that do not, and their
+          -- two seal-terminal rows go red against the reverted argument.
           let context_limit = policy.step.compaction.context_limit;
           let split = split_for_compaction(st.msgs);
           let compactable_msgs = segment_messages(split.segment);
@@ -2546,14 +2567,14 @@ func c2_loop(
               let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
-              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
+              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
             },
             -- Terminal: compaction exhausted.
             Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
-              c2_finalize(st.provider, st.world_state, session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
+              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result)
             },
             Ok(payload) => {
               let compacted_msgs = payload_messages(payload);
