@@ -1,0 +1,28 @@
+-- Expected-negative probe.
+--
+-- The current std/ai.stepWithStream callback returns unit. This state-returning
+-- callback must fail to type-check, proving that explicit accumulator threading
+-- cannot be added only at the Motoko call site.
+--
+-- Expected:
+--   ailang check probe_state_returning_callback_rejected.ail
+--   => non-zero with a callback return-type mismatch ([StreamChunk] vs unit).
+
+module probe_state_returning_callback_rejected
+
+import std/ai (
+  stepWithStream,
+  Message,
+  StepResult,
+  AIError,
+  StreamChunk
+)
+import std/result (Result)
+
+func state_returning_callback(chunk: StreamChunk) -> [StreamChunk] ! {IO} {
+  [chunk]
+}
+
+export func rejected(messages: [Message]) -> Result[StepResult, AIError] ! {AI} {
+  stepWithStream("", messages, [], [], state_returning_callback)
+}

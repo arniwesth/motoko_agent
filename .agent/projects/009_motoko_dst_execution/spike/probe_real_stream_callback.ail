@@ -1,0 +1,41 @@
+-- Positive control against the real std/ai.stepWithStream callback.
+--
+-- This proves the pinned runtime invokes an IO-only callback and still returns
+-- a final typed result. It deliberately does not claim returned chunk capture.
+
+module probe_real_stream_callback
+
+import std/ai (
+  stepWithStream,
+  Message,
+  StreamChunk,
+  ContentDelta,
+  ThinkingDelta,
+  Usage
+)
+import std/io (println, exit)
+import std/result (Ok, Err)
+
+func render(chunk: StreamChunk) -> () ! {IO} {
+  match chunk {
+    ContentDelta(text) => println("LIVE content ${text}"),
+    ThinkingDelta(text) => println("LIVE thinking ${text}"),
+    Usage(_) => println("LIVE usage")
+  }
+}
+
+export func main() -> () ! {AI, IO} {
+  let messages: [Message] = [{
+    role: "user",
+    content: "stream callback substrate probe",
+    tool_calls: [],
+    tool_call_id: ""
+  }];
+  match stepWithStream("", messages, [], [], render) {
+    Ok(result) => println("PASS real_stream_callback ${result.finish_reason}"),
+    Err(error) => {
+      let _ = println("FAIL real_stream_callback ${error.code}");
+      exit(1)
+    }
+  }
+}

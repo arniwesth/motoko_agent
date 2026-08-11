@@ -1,0 +1,76 @@
+-- Direct positive integration probe for the D1 streaming-capture gate.
+--
+-- Unlike the modeled representations in stream_capture_probe.ail, this probe
+-- drives the REAL provider path: a native SSE stream from an OpenAI-shaped
+-- endpoint, through the real std/ai chunk callback, using the proposed
+-- stepWithStreamRecorded API.
+--
+-- ADR-001 D1 requires the probe to prove five properties. This file emits the
+-- evidence; run_integration_probe.sh asserts it:
+--
+--   1. immediate projection      -- LIVE lines appear between CALL begin and RETURNED
+--   2. exact returned-log parity -- returned chunk count and order == projected
+--   3. success                   -- server MODE=success
+--   4. partial-stream-then-error -- server MODE=partial_error
+--   5. no duplicate delivery     -- projected count == supplied count == returned count
+--
+-- Note the probe CANNOT accumulate its own projections: that is precisely the
+-- capability the upstream request is about. Parity is therefore asserted
+-- externally, by comparing projected stdout lines against the returned list —
+-- the same method stream_capture_probe.ail uses.
+--
+-- Requires a toolchain containing stepWithStreamRecorded. See README.
+
+module probe_recorded_stream_integration
+
+import std/ai (
+  stepWithStreamRecorded,
+  Message,
+  StreamChunk,
+  ContentDelta,
+  ThinkingDelta,
+  Usage
+)
+import std/io (println)
+import std/list (length, foldl)
+
+-- Live projection. Stands in for the production TUI renderer.
+func render(chunk: StreamChunk) -> () ! {IO} {
+  match chunk {
+    ContentDelta(text) => println("LIVE ${text}"),
+    ThinkingDelta(_) => println("LIVE thinking"),
+    Usage(_) => println("LIVE usage")
+  }
+}
+
+-- Render the returned list to a stable, comparable string.
+func join(acc: string, chunk: StreamChunk) -> string {
+  match chunk {
+    ContentDelta(text) => "${acc}${text}|",
+    ThinkingDelta(text) => "${acc}thinking|",
+    Usage(_) => "${acc}usage|"
+  }
+}
+
+export func main() -> () ! {AI, IO} {
+  let messages: [Message] = [{
+    role: "user",
+    content: "recorded stream integration probe",
+    tool_calls: [],
+    tool_call_id: "",
+    images: []
+  }];
+
+  -- Sandwich marker: every LIVE line printed after this and before RETURNED
+  -- was projected during the call, not batched afterwards.
+  let _ = println("CALL begin");
+
+  let rec = stepWithStreamRecorded("", messages, [], [], render);
+
+  let _ = println("RETURNED count=${show(length(rec.chunks))} order=${foldl(join, "", rec.chunks)}");
+
+  match rec.outcome {
+    Ok(result) => println("OUTCOME ok ${result.finish_reason}"),
+    Err(error) => println("OUTCOME err ${error.code}")
+  }
+}
