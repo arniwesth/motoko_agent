@@ -405,13 +405,21 @@ func join_lines(xs: [string]) -> string {
 -- WHICH MAKES THE REAL OBSTACLE VISIBLE, and it is sharper here than at
 -- `ailang`: RIPGREP EXITS 1 WHEN IT MATCHES NOTHING. That is a normal answer,
 -- and it is the exact answer this function branches on to decide whether to run
--- `grep_fallback_scan`. Under the seam it would have to come out of a decoded
--- JSON field, and the two representations a typed seam could offer today are
--- both wrong for it: `ToolFailed` would make "no matches" a fault the catalogue
--- declares no class for, and `ToolCompleted` with a JSON blob is the
--- string-parsing path. The exit code has to become a TYPED field, which is a
--- program-schema bump — WI-D21 §3. Until then this site stays ambient because
--- the seam renders where it needs to match, not because the seam cannot run it.
+-- `grep_fallback_scan`.
+--
+-- THE TYPED FIELD THIS PARAGRAPH ASKED FOR NOW EXISTS, and the site still does
+-- not route — kept two-part per S15. Through WI-D22 the text here read: "the
+-- exit code has to become a TYPED field, which is a program-schema bump —
+-- WI-D21 §3." WI-D22 took the bump and WI-D23 landed the field:
+-- `ExtProcOutcome.exit_code` carries a real subprocess code through
+-- `ToolCompleted`, so "rg exited 1" would arrive typed, not as a fault class
+-- and not out of parsed JSON. Two obstacles remain, both measured elsewhere
+-- rather than restated: this site reads `out.stdout` as BYTES where the seam
+-- renders a JSON string (the shape half, above), and an extension-initiated
+-- dispatch through the seam records an identity the validator rejects — the
+-- blank call id, `compose.ail`'s `on_response_intercept` note. Routing waits
+-- on that identity work (WI-D21 §5); the seam can run ripgrep and can now
+-- state its exit, and this site stays ambient for those two named reasons.
 --
 -- WHAT DID ROUTE HERE: both `grep_fallback_scan` calls, which are the FS half of
 -- this function, and `mk_ok`'s clock. The world therefore records the fallback

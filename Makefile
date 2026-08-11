@@ -1486,6 +1486,8 @@ corpus_rotating:
 world_state:
 	@set -eu; \
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/world_state_probe.ail < /dev/null; \
+	echo "  -- WI-D23 exit-code witness (full caps; NOT part of main — main must keep completing with Process withheld) --"; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry exit_code_witness scripts/dst/world_state_probe.ail < /dev/null; \
 	echo "  -- provider class poison pair (AI withheld) --"; \
 	if ailang run --caps IO,Env,FS,Process,Net,SharedMem,Clock,Stream,Trace --entry main \
 	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \

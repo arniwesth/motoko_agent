@@ -1005,3 +1005,40 @@ in three files.** `types.ail:170-179` ("requires a program_schema_version bump")
 arm ("OUT OF THIS ITEM'S SCOPE"), and the catalogue's coverage-gap entry (the class-projection gap
 this item closes). D2's rule applies — the reason expired while some conclusions hold — and the
 handoff routes each to a two-part restatement rather than a deletion.
+
+**Cluster 41 = WI-D24, the eighth recording adapter: HANDED OFF 2026-08-09**,
+`HANDOFF-execute-d24-the-eighth-recording-adapter.md`. **Item 2 of the goal line's critical path**,
+and the first handoff written under its scope rule — two of D21 §5's neighbours (the fault-class
+discrimination, `RandomDrawIdentity`'s adapter) go to the register by name rather than trailing into
+the item.
+
+**The grounding found the item is SMALLER on one axis and LARGER on another than D21 priced.**
+Smaller: **no schema work at all** — `dst_persistence` already encodes and decodes
+`expect_extension_effect` (`:459`, `:896`), and D22's freeze put all ten identity classes in frozen
+v2 bytes, so the producer change lands on a complete surface. Larger: **recording is half the item.**
+`tools_of` collects only `ToolIdentity`, so a dispatch recorded under the new class is not served at
+replay — the extension's call falls through to the live arm and a real subprocess runs inside a
+deterministic run, after which `UnusedInteraction` (FATAL, *"the one most easily forgotten"*) refuses
+the run. The tripwire exists and fires late; the item owns serving, not just recording (S27: one
+decision).
+
+**The clustering finding is a queue-discipline hazard nobody had named**: if the class shares the
+driver's tool queue, `world_tool`'s correlation guard passes blank ids, so a driver call can consume
+an extension's entry silently — S26's present-but-wrong, in the world's supply. The handoff offers
+the distinct-seam design (own queue, true eighth adapter, hazard unrepresentable) against the
+originator-field design (cheaper, one adapter producing two identity classes — the S16/C5 shared
+producer shape), and leaves the choice with a stop condition on the un-fixturable case.
+
+**Transport is constrained by one measured fact prior items never needed**: `session.ail:52` imports
+`ext/runtime`, so the fold that knows `h.id` cannot call back into `ext_ports_of` — per-extension
+delivery must be built in `session` and threaded in as data. The two D21 assertions at
+`dst_program.ail:697`/`:724` were re-read and **stand as validator-rule pins**; what flips is their
+prose plus one owed integration row that turns D21 §4's latent rejected-program defect into a green
+record→validate→replay round trip — the item's headline sentence.
+
+**Clustering note to carry: a "build the adapter" item is really a "teach every consumer of the
+class" item.** The class already existed in the type, the codec, the validator and the frozen bytes;
+what did not exist was a producer — and the moment one exists, every consumer built while the class
+read zero (the tool queue, the discovery balance, the witness) is exercised for the first time. That
+is S33's late-surfacing proxy shape at the scale of a whole identity class, and it is why the
+handoff routes the item through the round trip rather than through the adapter alone.
