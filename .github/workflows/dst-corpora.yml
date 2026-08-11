@@ -69,13 +69,32 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the pinned AILANG toolchain
         run: ./scripts/install-prerequisites.sh
-      # The installer puts ailang in ~/.local/bin and now exports that through
-      # $GITHUB_PATH. This step is the assertion that it arrived: a toolchain
-      # that installs successfully and is then invisible to the next step made
-      # `make corpus_pr` fail in under a second on every PR since WI-A15, and
-      # "Process completed with exit code 2" said nothing about why.
+      # The installer puts ailang in ~/.local/bin and exports that through
+      # $GITHUB_PATH; this step asserts it arrived, so a toolchain that installs
+      # successfully and is then invisible to the next step reads as itself
+      # rather than as "exit code 2".
       - name: Confirm ailang is on PATH
         run: ailang --version
+      # WHY THIS STEP EXISTS, and why its absence cost every PR since WI-A15.
+      #
+      # `ailang.lock` records each `path` dependency as an ABSOLUTE path, so the
+      # committed lock names the checkout of whoever last ran `ailang lock` --
+      # /workspaces/motoko_agent, a dev container. On a runner the workspace is
+      # /home/runner/work/motoko_agent/motoko_agent, every path dep resolves to a
+      # directory that does not exist, and `ailang run` dies before it executes a
+      # line:
+      #
+      #   Error: ... package directory not found:
+      #     /workspaces/motoko_agent/packages/motoko-ext-abi
+      #
+      # `ailang lock`, which `sync_packages` runs, rewrites those paths to the
+      # current checkout. verify-extensions.yml has always hydrated and so has
+      # always been immune; this workflow never did, which is why it failed in
+      # under a second, identically, on every run from its first day -- and why
+      # it never reproduced on a developer machine, where the baked path is the
+      # one that exists.
+      - name: Hydrate extension packages (rewrites ailang.lock's absolute paths)
+        run: make CI=1 sync_packages
       - name: D11's blocking PR corpus
         run: make corpus_pr
 
@@ -103,6 +122,13 @@ jobs:
         run: ./scripts/install-prerequisites.sh
       - name: Confirm ailang is on PATH
         run: ailang --version
+      # Same reason as the PR corpus job above: the committed lock's absolute
+      # path dependencies do not exist on a runner until `ailang lock` rewrites
+      # them. This job has never actually run (GitHub fires `schedule` only from
+      # the default branch, and this workflow is not on main yet), so it would
+      # have hit the failure on its first real execution.
+      - name: Hydrate extension packages (rewrites ailang.lock's absolute paths)
+        run: make CI=1 sync_packages
       - name: Resolve the rotation epoch
         id: epoch
         run: |
