@@ -14,7 +14,7 @@ import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (contains, substring, replaceMany)
 import std/string as Str (length)
-import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, calibrated_tokens_anchored, calibrated_usage_percent_anchored)
 import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
 import src/core/types (Msg)
 
@@ -157,7 +157,12 @@ export type ModelRequest = { model: string }
 
 export type TokenTelemetry = {
   last_input_tokens: int,
-  last_output_tokens: int
+  last_output_tokens: int,
+  -- char/4 estimate of the window that produced last_input_tokens. Lets the
+  -- compaction gate anchor on provider truth: scale the current raw estimate by
+  -- (last_input_tokens / last_estimated_input_tokens). 0 before the first
+  -- provider result (calibration falls back to the raw estimate).
+  last_estimated_input_tokens: int
 }
 
 -- Re-grounded on current compaction.ail. The Phase-A source of truth is the
@@ -363,10 +368,61 @@ export pure func history_usage_percent(h: History, limit: int) -> int {
   match h { MkHistory(xs) => usage_percent_with_limit(xs, limit) }
 }
 
-export pure func checkpoint_would_relieve(h: History, plan: CheckpointPlan, limit: int, threshold: int) -> bool {
-  let projected = checkpoint(h, plan).history;
-  history_usage_percent(projected, limit) < threshold
+-- Calibrated token count for the current window. estimate_tokens_messages is a
+-- char/4 proxy that structurally under-counts dense content (code/JSON tokenize
+-- below 4 chars/token) and ignores provider-side request framing (system
+-- scaffolding, tool schemas). We anchor on provider truth: scale the raw
+-- estimate by the (actual / estimate) ratio observed on the previously-sent
+-- window. Before the first provider result — or if either anchor is 0 — we fall
+-- back to the raw estimate.
+export pure func calibrated_tokens_messages(xs: [Message], t: TokenTelemetry) -> int {
+  calibrated_tokens_anchored(xs, t.last_input_tokens, t.last_estimated_input_tokens)
 }
+
+export pure func calibrated_usage_percent(xs: [Message], limit: int, t: TokenTelemetry) -> int {
+  calibrated_usage_percent_anchored(xs, limit, t.last_input_tokens, t.last_estimated_input_tokens)
+}
+
+export pure func history_usage_percent_calibrated(h: History, limit: int, t: TokenTelemetry) -> int {
+  match h { MkHistory(xs) => calibrated_usage_percent(xs, limit, t) }
+}
+
+export pure func checkpoint_would_relieve(h: History, plan: CheckpointPlan, limit: int, threshold: int, t: TokenTelemetry) -> bool {
+  let projected = checkpoint(h, plan).history;
+  history_usage_percent_calibrated(projected, limit, t) < threshold
+}
+
+-- No anchor yet (last_estimated == 0) => calibration falls back to the raw estimate.
+pure func calibrated_falls_back_without_anchor() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "" }];
+    let t: TokenTelemetry = { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 };
+    -- 16 chars => raw estimate 4 tokens; /100 limit *100 == 4%
+    calibrated_usage_percent(msgs, 100, t) == 4
+  }
+
+-- Affine anchor: the last window measured real 200 / est 100, i.e. ~76 tokens of
+-- fixed overhead over density*est. The current tiny 4-token window inherits that
+-- overhead: 1.235*4 + (200 - 1.235*100) ~= 82 => 82% of a 100 limit.
+pure func calibrated_applies_affine_overhead() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "" }];
+    let t: TokenTelemetry = { last_input_tokens: 200, last_output_tokens: 0, last_estimated_input_tokens: 100 };
+    calibrated_usage_percent(msgs, 100, t) == 82
+  }
+
+-- Degenerate anchor (huge real for a tiny sent window) is floored at the raw
+-- estimate (4): calibration can only ever raise usage, never suppress compaction
+-- the raw policy would have triggered.
+pure func calibrated_floors_at_raw() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "" }];
+    let t: TokenTelemetry = { last_input_tokens: 100, last_output_tokens: 0, last_estimated_input_tokens: 400 };
+    calibrated_usage_percent(msgs, 100, t) == 4
+  }
 
 -- ============================================================================
 -- StepDecision and phase result.
@@ -990,7 +1046,7 @@ pure func test_apply_checkpoint_returns_rewrite_with_event() -> bool
         let s: StepState = {
           step_idx: 1,
           history: h,
-          telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+          telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
           totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
           nudges_used: 0,
           ext_artifacts: jo([]),

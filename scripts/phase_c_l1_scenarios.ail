@@ -162,7 +162,7 @@ func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), Scenario
       let state = {
         step_idx: 1,
         history: h,
-        telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
         totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
         nudges_used: 0,
         ext_artifacts: jo([]),
@@ -233,7 +233,7 @@ func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), Scena
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(h) => {
       let split = split_for_compaction(msgs);
-      let projected = project(h, { last_input_tokens: 3, last_output_tokens: 0 }, policy(10).compaction);
+      let projected = project(h, { last_input_tokens: 3, last_output_tokens: 0, last_estimated_input_tokens: 0 }, policy(10).compaction);
       match projected {
         Err(e) => Err({ failed_invariant: "projection under limit", trace: ["project_err=${e}"] }),
         Ok(p) => {
@@ -305,7 +305,7 @@ func scenario_summary_cache_replay_stable() -> Result[(), ScenarioFailure] {
       let first_state = {
         step_idx: 0,
         history: h,
-        telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+        telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
         totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
         nudges_used: 0,
         ext_artifacts: artifact,
@@ -337,7 +337,7 @@ func state_from_msgs(msgs: [Message], context_limit: int) -> Result[StepState, s
     Ok(h) => Ok({
       step_idx: 0,
       history: h,
-      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0 },
+      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0, last_estimated_input_tokens: 0 },
       totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
       nudges_used: 0,
       ext_artifacts: jo([]),
@@ -453,7 +453,7 @@ func scenario_actual_token_pressure_defers_to_seal() -> Result[(), ScenarioFailu
       let state = {
         step_idx: 0,
         history: h,
-        telemetry: { last_input_tokens: 1, last_output_tokens: 0 },
+        telemetry: { last_input_tokens: 1, last_output_tokens: 0, last_estimated_input_tokens: 0 },
         totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
         nudges_used: 0,
         ext_artifacts: jo([]),

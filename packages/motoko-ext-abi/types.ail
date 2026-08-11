@@ -68,7 +68,11 @@ export type ExtPorts = {
 
 export type TokenTelemetry = {
   last_input_tokens: int,
-  last_output_tokens: int
+  last_output_tokens: int,
+  -- char/4 estimate of the window that produced last_input_tokens. Lets the
+  -- compaction gate anchor on provider truth (last_input_tokens/last_estimated).
+  -- 0 before the first provider result.
+  last_estimated_input_tokens: int
 }
 
 export type ExtCtx = {

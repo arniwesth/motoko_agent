@@ -41,6 +41,35 @@ export pure func usage_percent_with_limit(msgs: [Msg], limit: int) -> int {
   else (estimate_tokens_messages(msgs) * 100) / limit
 }
 
+-- Tokenizer density vs char/4, in permille (~1.235x); see
+-- src/core/compaction.delta_token_density_permille. Applied only to the content
+-- delta, so this is a small error surface.
+pure func delta_token_density_permille() -> int { 1235 }
+
+-- Affine calibration of char/4 against provider truth (mirror of
+-- src/core/compaction.affine_calibrate on [Msg]). Provider tokens are affine,
+-- not a pure ratio: real ~= density*char4 + fixed_overhead (system prompt + tool
+-- schemas). We anchor the overhead on ground truth so it never explodes when the
+-- anchor is a heavily-compacted window:
+--   calibrated = anchor_real + density*(raw - anchor_est)   [= density*raw + overhead]
+-- Floored at raw so calibration only ever raises usage; falls back to raw when
+-- the anchor is absent. anchor_actual = last real input_tokens, anchor_estimate =
+-- char/4 estimate of that same last-sent window.
+export pure func calibrated_usage_percent_with_limit(msgs: [Msg], limit: int, anchor_actual: int, anchor_estimate: int) -> int {
+  if limit == 0 then 0
+  else {
+    let raw = estimate_tokens_messages(msgs);
+    let calibrated =
+      if anchor_actual > 0 && anchor_estimate > 0
+      then {
+        let scaled = anchor_actual + ((raw - anchor_estimate) * delta_token_density_permille()) / 1000;
+        if scaled > raw then scaled else raw
+      }
+      else raw;
+    (calibrated * 100) / limit
+  }
+}
+
 pure func elide_content(content: string) -> string {
   let n = length(content);
   if n <= 80 then content
@@ -117,7 +146,7 @@ pure func structural_note(tier: string, keep_last: int) -> string {
 }
 
 export pure func compact_for_pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision {
-  let pct = usage_percent_with_limit(msgs, ctx.context_limit);
+  let pct = calibrated_usage_percent_with_limit(msgs, ctx.context_limit, ctx.telemetry.last_input_tokens, ctx.telemetry.last_estimated_input_tokens);
   if pct >= emergency_pct() then {
     let emergency1 = elide_old_tool_results(msgs, emergency_keep_last());
     if not same_msgs(msgs, emergency1) then Compacted(emergency1, structural_note("emergency", emergency_keep_last()), jo([]))
@@ -191,6 +220,19 @@ func test_single_tier_ladder_selects_correctly() -> bool
       Ok(out) => usage_percent_with_limit(msgs, 740) >= elide_tier_pct() && usage_percent_with_limit(msgs, 740) < elide_hard_tier_pct() && count_elided(out) == 2,
       Err(_) => false
     }
+  }
+
+func test_calibrated_usage_affine_and_floor() -> bool
+  tests [((), true)]
+  {
+    let msgs = [tool("t1", "0123456789012345")];
+    -- raw: 16 chars => 4 tokens => 40% of a 10-token limit.
+    -- affine anchor (real 200 / est 100 => ~76 overhead): 1.235*4 + 76 ~= 82 => 820%.
+    -- degenerate anchor (100/400) floors back to raw 40%.
+    -- no anchor (0/0) => raw 40%.
+    calibrated_usage_percent_with_limit(msgs, 10, 200, 100) == 820
+      && calibrated_usage_percent_with_limit(msgs, 10, 100, 400) == 40
+      && calibrated_usage_percent_with_limit(msgs, 10, 0, 0) == 40
   }
 
 func test_pre_step_passthrough_when_unchanged() -> bool

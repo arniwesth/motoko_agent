@@ -67,7 +67,7 @@ pure func search_schema() -> ToolSchema = {
 
 pure func motoko_runtime_status_schema() -> ToolSchema = {
   name: "MotokoRuntimeStatus",
-  description: "Get exact Motoko runtime status for the current session, including current step, step budget, compaction counts, system-prefix digest, and cumulative usage. Use this when asked about how many steps have run, whether compaction happened, or whether the system prefix stayed stable.",
+  description: "Get exact Motoko runtime status for the current session, including current step, step budget, compaction counts, system-prefix digest, cumulative usage, and the current context-window size (both the provider-reported actual_input_tokens and the char/4 estimated_input_tokens, each as a percent of context_limit). Use this when asked about how many steps have run, how full the context window is, whether compaction happened, or whether the system prefix stayed stable.",
   parameters: "{\"type\":\"object\",\"properties\":{},\"required\":[]}"
 }
 

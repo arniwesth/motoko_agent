@@ -40,7 +40,7 @@ func state_from_msgs(msgs: [Message], context_limit: int) -> Result[StepState, s
     Ok(h) => Ok({
       step_idx: 0,
       history: h,
-      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0 },
+      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0, last_estimated_input_tokens: 0 },
       totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
       nudges_used: 0,
       ext_artifacts: jo([]),

@@ -58,6 +58,8 @@ import src/core/ext/runtime (
 )
 import src/core/phase_vocab (
   LedgerEvent,
+  calibrated_tokens_messages,
+  calibrated_usage_percent,
   to_schema_v1_kvs,
   payload_digest,
   system_prefix_digest_for,
@@ -327,7 +329,7 @@ type C2LoopState = {
   step_idx: int,
   totals: RuntimeLoopTotals,
   ext_artifacts: Json,
-  telemetry: { last_input_tokens: int, last_output_tokens: int },
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
   provider: StepProvider,
   pending_tool_calls: [ToolCall],
   pending_tool_context: [Message],
@@ -438,6 +440,13 @@ pure func runtime_status_json(
   let context_msgs = c2_pending_context(st);
   let split = split_for_compaction(context_msgs);
   let pinned = split.pinned;
+  let limit = policy.step.compaction.context_limit;
+  let actual_input_tokens = st.telemetry.last_input_tokens;
+  let actual_pct = if limit == 0 then 0 else (actual_input_tokens * 100) / limit;
+  let estimated_input_tokens = estimate_tokens_messages(context_msgs);
+  let estimated_pct = usage_percent_with_limit(context_msgs, limit);
+  let calibrated_input_tokens = calibrated_tokens_messages(context_msgs, st.telemetry);
+  let calibrated_pct = calibrated_usage_percent(context_msgs, limit, st.telemetry);
   jo([
     kv("tool", js("MotokoRuntimeStatus")),
     kv("current_step", jnum(_int_to_float(tool_step_idx))),
@@ -455,6 +464,15 @@ pure func runtime_status_json(
       kv("count", jnum(_int_to_float(count_system_prefix(pinned)))),
       kv("chars", jnum(_int_to_float(system_prefix_chars(pinned)))),
       kv("digest", js(system_prefix_digest_for(pinned)))
+    ])),
+    kv("context_window", jo([
+      kv("context_limit", jnum(_int_to_float(limit))),
+      kv("actual_input_tokens", jnum(_int_to_float(actual_input_tokens))),
+      kv("actual_usage_pct", jnum(_int_to_float(actual_pct))),
+      kv("estimated_input_tokens", jnum(_int_to_float(estimated_input_tokens))),
+      kv("estimated_usage_pct", jnum(_int_to_float(estimated_pct))),
+      kv("calibrated_input_tokens", jnum(_int_to_float(calibrated_input_tokens))),
+      kv("calibrated_usage_pct", jnum(_int_to_float(calibrated_pct)))
     ])),
     kv("usage", jo([
       kv("input_tokens", jnum(_int_to_float(st.totals.input_tokens))),
@@ -559,7 +577,7 @@ func c2_initial_state_with_counts(history: [Message], provider: StepProvider, pr
     step_idx: 0,
     totals: zero_totals(),
     ext_artifacts: jo([]),
-    telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+    telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
     provider: provider,
     pending_tool_calls: [],
     pending_tool_context: [],
@@ -608,8 +626,8 @@ func ext_ports_for_provider(rt: ExtRuntime, history: [Message], provider: StepPr
   }
 }
 
-pure func ext_token_telemetry(t: { last_input_tokens: int, last_output_tokens: int }) -> TokenTelemetry {
-  { last_input_tokens: t.last_input_tokens, last_output_tokens: t.last_output_tokens }
+pure func ext_token_telemetry(t: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int }) -> TokenTelemetry {
+  { last_input_tokens: t.last_input_tokens, last_output_tokens: t.last_output_tokens, last_estimated_input_tokens: t.last_estimated_input_tokens }
 }
 
 func ported_provider(rt: ExtRuntime, history: [Message], provider: StepProvider) -> StepProvider {
@@ -854,7 +872,7 @@ func mk_v2_ext_ctx(
   context_limit: int,
   ports: ExtPorts,
   artifacts: Json,
-  telemetry: { last_input_tokens: int, last_output_tokens: int }
+  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int }
 ) -> ExtCtx {
   let remaining = if budget.total - step_idx < 0 then 0 else budget.total - step_idx;
   {
@@ -1368,7 +1386,7 @@ func c2_after_dp7(
 	  cost_rates: CostRates,
 	  totals: RuntimeLoopTotals,
 	  ext_artifacts: Json,
-	  telemetry: { last_input_tokens: int, last_output_tokens: int },
+	  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
 	  next_provider: StepProvider,
   prior_counts: RuntimeStatusCounts,
   session_id: string,
@@ -1676,7 +1694,7 @@ func c2_loop(
                 Ok(result) => {
                   let n_calls = List.length(result.tool_calls);
                   let step_cost = step_cost_millicents(result.input_tokens, result.output_tokens, cost_rates);
-                  let phase = phase_from_result(result, step_idx, n_calls, millicents_to_usd(step_cost), step_cost);
+                  let phase = phase_from_result(result, step_idx, n_calls, millicents_to_usd(step_cost), step_cost, estimate_tokens_messages(compacted_msgs));
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "completed" });
                   let _ = ledger_emit(session_id, end_event);
                   let _ = c2_emit_events(session_id, phase.events);
@@ -2388,7 +2406,7 @@ pure func test_runtime_status_includes_prior_conversation_counts() -> bool
       step_idx: 1,
       totals: zero_totals(),
       ext_artifacts: jo([]),
-      telemetry: { last_input_tokens: 0, last_output_tokens: 0 },
+      telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
       provider: LiveAI,
       pending_tool_calls: [],
       pending_tool_context: [],
@@ -2428,6 +2446,57 @@ pure func test_runtime_status_includes_prior_conversation_counts() -> bool
     contains(encoded, "\"provider_calls_started\":27")
       && contains(encoded, "\"provider_calls_completed\":27")
       && contains(encoded, "\"steps_executed_so_far\":27")
+  }
+
+pure func test_runtime_status_reports_actual_context_window() -> bool
+  tests [((), true)]
+  {
+    let st: C2LoopState = {
+      msgs: [{ role: "system", content: "sys", tool_calls: [], tool_call_id: "" }],
+      step_idx: 1,
+      totals: zero_totals(),
+      ext_artifacts: jo([]),
+      telemetry: { last_input_tokens: 500, last_output_tokens: 20, last_estimated_input_tokens: 0 },
+      provider: LiveAI,
+      pending_tool_calls: [],
+      pending_tool_context: [],
+      pending_tool_prefix: [],
+      pending_tool_batched: true,
+      accumulated_tool_msgs: [],
+      pending_approval: None,
+      last_finish_reason: "tool_calls",
+      last_response_text: "",
+      nudges_used: 0,
+      finalize_source: "",
+      prior_counts: zero_runtime_status_counts(),
+      trace: { records: [] }
+    };
+    let policy: SessionPolicy = {
+      step: {
+        step_budget: 100,
+        max_cost_millicents: 0,
+        cost_metered: false,
+        persist_retries: 0,
+        retry_stream_errors: false,
+        require_system_prompt: true,
+        model: "m",
+        provider_base_url: "",
+        checkpoint_enabled: false,
+        checkpoint_pct: 90,
+        compaction: {
+          context_limit: 1000,
+          elide_tier_pct: 70,
+          elide_hard_tier_pct: 85,
+          emergency_pct: 95
+        }
+      },
+      headless: false
+    };
+    let encoded = encode(runtime_status_json(st, policy, 0));
+    -- actual = 500 provider tokens against a 1000 limit => 50%
+    contains(encoded, "\"context_limit\":1000")
+      && contains(encoded, "\"actual_input_tokens\":500")
+      && contains(encoded, "\"actual_usage_pct\":50")
   }
 
 pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool

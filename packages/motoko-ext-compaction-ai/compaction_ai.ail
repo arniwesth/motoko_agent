@@ -11,7 +11,7 @@ import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, PreStepDecision, PassThrough, Compacted, Msg, ToolCall)
 import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
-import src/core/compaction (usage_percent_with_limit)
+import src/core/compaction (calibrated_usage_percent_anchored)
 
 func msg_to_message(m: Msg) -> Message {
   { role: m.role, content: m.content, tool_calls: m.tool_calls, tool_call_id: m.tool_call_id }
@@ -24,8 +24,16 @@ func msgs_to_messages(msgs: [Msg]) -> [Message] {
   }
 }
 
-func usage_percent(msgs: [Msg], context_limit: int) -> int {
-  usage_percent_with_limit(msgs_to_messages(msgs), context_limit)
+-- Measure against provider truth: calibrate the char/4 estimate using the last
+-- real input_tokens (ctx.telemetry) so the threshold fires at real usage, not
+-- at char/4's ~23%-low estimate. See src/core/compaction.calibrated_usage_percent_anchored.
+func usage_percent(ctx: ExtCtx, msgs: [Msg], context_limit: int) -> int {
+  calibrated_usage_percent_anchored(
+    msgs_to_messages(msgs),
+    context_limit,
+    ctx.telemetry.last_input_tokens,
+    ctx.telemetry.last_estimated_input_tokens
+  )
 }
 
 func format_msg(m: Msg) -> string {
@@ -157,7 +165,7 @@ func cache_artifact(digest: string, summary: string) -> Json {
 }
 
 export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
-  let pct = usage_percent(msgs, ctx.context_limit);
+  let pct = usage_percent(ctx, msgs, ctx.context_limit);
   if pct < cfg.threshold_pct then PassThrough
   else {
     let keep_recent = if pct >= 90 then (cfg.keep_recent / 2) else cfg.keep_recent;
@@ -173,7 +181,7 @@ export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -
         None => summarize_with_ai(ctx, summarization_prompt(old_turns, recent_turns), cfg.model)
       };
       let compacted = split_result.prefix ++ [summary_msg(summary)] ++ recent_turns;
-      let new_pct = usage_percent(compacted, ctx.context_limit);
+      let new_pct = usage_percent(ctx, compacted, ctx.context_limit);
       Compacted(compacted, "AI-summarized ${show(list_length(old_turns))} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary))
     }
   }
