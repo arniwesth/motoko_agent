@@ -1,0 +1,129 @@
+module scratchpad/verify_guard
+
+import std/ai (Message)
+import std/io (println, exit)
+import std/json (jo)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  CallModel,
+  StepPolicy,
+  StepState,
+  TakeCheckpoint,
+  apply_checkpoint,
+  history_from_seed
+)
+import src/core/step_machine (decide)
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func policy(context_limit: int) -> StepPolicy {
+  {
+    step_budget: 8,
+    max_cost_millicents: 0,
+    cost_metered: true,
+    persist_retries: 0,
+    retry_stream_errors: true,
+    require_system_prompt: true,
+    model: "phase-c-model",
+    provider_base_url: "",
+    checkpoint_enabled: true,
+    checkpoint_pct: 90,
+    compaction: { context_limit: context_limit, elide_tier_pct: 70, elide_hard_tier_pct: 85, emergency_pct: 95 }
+  }
+}
+
+func state_from_msgs(msgs: [Message], context_limit: int) -> Result[StepState, string] {
+  match history_from_seed(msgs) {
+    Err(e) => Err(e),
+    Ok(h) => Ok({
+      step_idx: 0,
+      history: h,
+      telemetry: { last_input_tokens: context_limit, last_output_tokens: 0 },
+      totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+      nudges_used: 0,
+      ext_artifacts: jo([]),
+      pending_tool_calls: [],
+      last_finish_reason: "",
+      last_response_text: ""
+    })
+  }
+}
+
+export func main() -> () ! {IO} {
+  let pressured = state_from_msgs([
+    msg("system", "s"),
+    msg("user", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    msg("assistant", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+  ], 20);
+  let pressured_ok = match pressured {
+    Err(e) => {
+      let _ = println("pressured seed error: ${e}");
+      false
+    },
+    Ok(state) => {
+      match decide(state, policy(20)) {
+        TakeCheckpoint(plan) => {
+          let _ = println("pressured before=TakeCheckpoint");
+          let applied = apply_checkpoint(state, plan);
+          match decide(applied.state, policy(20)) {
+            CallModel(_) => {
+              let _ = println("pressured after=CallModel");
+              true
+            },
+            TakeCheckpoint(_) => {
+              let _ = println("pressured after=TakeCheckpoint");
+              false
+            },
+            _ => {
+              let _ = println("pressured after=Other");
+              false
+            }
+          }
+        },
+        CallModel(_) => {
+          let _ = println("pressured before=CallModel");
+          false
+        },
+        _ => {
+          let _ = println("pressured before=Other");
+          false
+        }
+      }
+    }
+  };
+
+  let degenerate = state_from_msgs([
+    msg("system", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    msg("user", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+  ], 20);
+  let degenerate_ok = match degenerate {
+    Err(e) => {
+      let _ = println("degenerate seed error: ${e}");
+      false
+    },
+    Ok(state) => {
+      match decide(state, policy(20)) {
+        CallModel(_) => {
+          let _ = println("degenerate decision=CallModel");
+          true
+        },
+        TakeCheckpoint(_) => {
+          let _ = println("degenerate decision=TakeCheckpoint");
+          false
+        },
+        _ => {
+          let _ = println("degenerate decision=Other");
+          false
+        }
+      }
+    }
+  };
+
+  if pressured_ok && degenerate_ok then println("verify_guard PASS")
+  else {
+    let _ = println("verify_guard FAIL");
+    exit(1)
+  }
+}
