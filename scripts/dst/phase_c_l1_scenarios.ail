@@ -1,10 +1,10 @@
--- scripts/phase_c_l1_scenarios.ail
+-- scripts/dst/phase_c_l1_scenarios.ail
 --
 -- Phase C Layer-1 scenario harness. WI-C0 establishes the reporting contract:
 -- failures name the scenario id, the first failed invariant, and a normalized
 -- trace. Later Phase C work items add the real compaction/checkpoint cases.
 
-module scripts/phase_c_l1_scenarios
+module scripts/dst/phase_c_l1_scenarios
 
 import std/io (println, exit)
 import std/list (length)
@@ -37,57 +37,15 @@ import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
 import src/core/step_machine (decide)
 import src/core/hook_phase (stage_record)
 import src/core/ext/runtime (PreStepStage, StageApplied, StageRejected, StagePassed)
+import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 
-export type ScenarioFailure = {
-  failed_invariant: string,
-  trace: [string]
-}
-
-export type Scenario = {
-  id: string,
-  run: () -> Result[(), ScenarioFailure]
-}
-
-func print_trace(lines: [string]) -> () ! {IO} {
-  match lines {
-    [] => (),
-    line :: rest => {
-      let _ = println("trace ${line}");
-      print_trace(rest)
-    }
-  }
-}
-
-func run_one(s: Scenario) -> bool ! {IO} {
-  match s.run() {
-    Ok(_) => {
-      println("scenario=${s.id} ok");
-      true
-    },
-    Err(f) => {
-      let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
-      let _ = print_trace(f.trace);
-      false
-    }
-  }
-}
-
-func run_all(scenarios: [Scenario], failed: int) -> int ! {IO} {
-  match scenarios {
-    [] => failed,
-    s :: rest => {
-      let ok = run_one(s);
-      run_all(rest, if ok then failed else failed + 1)
-    }
-  }
-}
-
-func harness_self_test() -> Result[(), ScenarioFailure] {
+func harness_self_test() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   Ok(())
 }
 
 func harness_self_test_scenario() -> Scenario {
-  { id: "harness_self_test", run: harness_self_test }
+  { id: "phase_c.l1.harness_self_test", seed: "fixed", run: harness_self_test }
 }
 
 func msg(role: string, content: string) -> Message {
@@ -131,11 +89,6 @@ func policy_with_checkpoint(context_limit: int) -> StepPolicy {
   }
 }
 
-func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
-  if ok then Ok(())
-  else Err({ failed_invariant: invariant_name, trace: trace })
-}
-
 func no_system_in(msgs: [Message]) -> bool {
   match msgs {
     [] => true,
@@ -143,7 +96,8 @@ func no_system_in(msgs: [Message]) -> bool {
   }
 }
 
-func scenario_segment_excludes_system_prefix() -> Result[(), ScenarioFailure] {
+func scenario_segment_excludes_system_prefix() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let split = split_for_compaction([msg("system", "s1"), msg("system", "s2"), msg("user", "u"), msg("assistant", "a")]);
   let seg = segment_messages(split.segment);
   let pinned_ok = length(split.pinned) == 2;
@@ -154,7 +108,8 @@ func scenario_segment_excludes_system_prefix() -> Result[(), ScenarioFailure] {
   ])
 }
 
-func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), ScenarioFailure] {
+func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   match history_from_seed([msg("system", "s"), msg("user", "u")]) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(h) => {
@@ -189,7 +144,8 @@ func scenario_history_rewrite_requires_checkpoint_event() -> Result[(), Scenario
   }
 }
 
-func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFailure] {
+func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let input_msgs = [msg("system", "s"), msg("user", "u"), msg("assistant", "a")];
   match history_from_seed(input_msgs) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
@@ -223,7 +179,8 @@ func scenario_checkpoint_output_is_valid_transcript() -> Result[(), ScenarioFail
   }
 }
 
-func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), ScenarioFailure] {
+func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let msgs = [
     msg("system", "pinned"),
     msg("user", "compactable-a"),
@@ -253,7 +210,8 @@ func scenario_project_prep_vs_uncompacted_history_pressure() -> Result[(), Scena
   }
 }
 
-func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure] {
+func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let split = split_for_compaction([msg("user", "hi")]);
   match seal_compacted_payload(split, [msg("user", "hi")], "phase-c-model", 1000, true) {
     Err(SealSystemPromptEmpty(_)) => Ok(()),
@@ -268,7 +226,8 @@ func scenario_empty_system_prompt_rejected() -> Result[(), ScenarioFailure] {
   }
 }
 
-func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure] {
+func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let split = split_for_compaction([]);
   match seal_compacted_payload(split, [msg("user", "abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 10, false) {
     Err(SealExhausted(_)) => Ok(()),
@@ -283,7 +242,8 @@ func scenario_oversized_payload_rejected() -> Result[(), ScenarioFailure] {
   }
 }
 
-func scenario_ext_compaction_invalid_rejected() -> Result[(), ScenarioFailure] {
+func scenario_ext_compaction_invalid_rejected() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let input = [
     { role: "assistant", content: "call", tool_calls: [call("tc")], tool_call_id: "" },
     { role: "tool", content: "result", tool_calls: [], tool_call_id: "tc" }
@@ -297,7 +257,8 @@ func scenario_ext_compaction_invalid_rejected() -> Result[(), ScenarioFailure] {
   }
 }
 
-func scenario_summary_cache_replay_stable() -> Result[(), ScenarioFailure] {
+func scenario_summary_cache_replay_stable() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let artifact = jo([kv("ext", js("summary")), kv("summary", js("cached summary"))]);
   match history_from_seed([msg("system", "s"), msg("user", "u")]) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
@@ -348,7 +309,8 @@ func state_from_msgs(msgs: [Message], context_limit: int) -> Result[StepState, s
   }
 }
 
-func scenario_checkpoint_never_emitted_when_policy_off() -> Result[(), ScenarioFailure] {
+func scenario_checkpoint_never_emitted_when_policy_off() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   match state_from_msgs(pressured_msgs(), 20) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(state) => {
@@ -361,7 +323,8 @@ func scenario_checkpoint_never_emitted_when_policy_off() -> Result[(), ScenarioF
   }
 }
 
-func scenario_checkpoint_emitted_under_pressure() -> Result[(), ScenarioFailure] {
+func scenario_checkpoint_emitted_under_pressure() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   match state_from_msgs(pressured_msgs(), 20) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(state) => {
@@ -373,7 +336,8 @@ func scenario_checkpoint_emitted_under_pressure() -> Result[(), ScenarioFailure]
   }
 }
 
-func scenario_checkpoint_terminates_not_spins() -> Result[(), ScenarioFailure] {
+func scenario_checkpoint_terminates_not_spins() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   match state_from_msgs(pressured_msgs(), 20) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(state) => {
@@ -409,7 +373,8 @@ func scenario_checkpoint_terminates_not_spins() -> Result[(), ScenarioFailure] {
   }
 }
 
-func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure] {
+func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let a: PreStepStage = { ext_id: "A", outcome: StageApplied("a") };
   let b: PreStepStage = { ext_id: "B", outcome: StageRejected("bad") };
   let c: PreStepStage = { ext_id: "C", outcome: StageApplied("c") };
@@ -429,7 +394,8 @@ func scenario_compactor_chain_order_is_registry_order() -> Result[(), ScenarioFa
   ok_or_failure(ok, "chain order is registry order", ["order=A,B,C"])
 }
 
-func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFailure] {
+func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let stages: [PreStepStage] = [
     { ext_id: "A", outcome: StageApplied("a") },
     { ext_id: "B", outcome: StageRejected("invalid") },
@@ -446,7 +412,8 @@ func scenario_invalid_stage_skipped_chain_continues() -> Result[(), ScenarioFail
   }
 }
 
-func scenario_actual_token_pressure_defers_to_seal() -> Result[(), ScenarioFailure] {
+func scenario_actual_token_pressure_defers_to_seal() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   match history_from_seed([msg("system", "s"), msg("user", "over pressure")]) {
     Err(e) => Err({ failed_invariant: "seed accepted", trace: ["seed_err=${e}"] }),
     Ok(h) => {
@@ -472,62 +439,62 @@ func scenario_actual_token_pressure_defers_to_seal() -> Result[(), ScenarioFailu
 }
 
 func history_rewrite_requires_checkpoint_event_scenario() -> Scenario {
-  { id: "history_rewrite_requires_checkpoint_event", run: scenario_history_rewrite_requires_checkpoint_event }
+  { id: "phase_c.l1.history_rewrite_requires_checkpoint_event", seed: "fixed", run: scenario_history_rewrite_requires_checkpoint_event }
 }
 
 func checkpoint_output_is_valid_transcript_scenario() -> Scenario {
-  { id: "checkpoint_output_is_valid_transcript", run: scenario_checkpoint_output_is_valid_transcript }
+  { id: "phase_c.l1.checkpoint_output_is_valid_transcript", seed: "fixed", run: scenario_checkpoint_output_is_valid_transcript }
 }
 
 func project_prep_vs_uncompacted_history_pressure_scenario() -> Scenario {
-  { id: "project_prep_vs_uncompacted_history_pressure", run: scenario_project_prep_vs_uncompacted_history_pressure }
+  { id: "phase_c.l1.project_prep_vs_uncompacted_history_pressure", seed: "fixed", run: scenario_project_prep_vs_uncompacted_history_pressure }
 }
 
 func ext_compaction_invalid_rejected_scenario() -> Scenario {
-  { id: "ext_compaction_invalid_rejected", run: scenario_ext_compaction_invalid_rejected }
+  { id: "phase_c.l1.ext_compaction_invalid_rejected", seed: "fixed", run: scenario_ext_compaction_invalid_rejected }
 }
 
 func empty_system_prompt_rejected_scenario() -> Scenario {
-  { id: "empty_system_prompt_rejected", run: scenario_empty_system_prompt_rejected }
+  { id: "phase_c.l1.empty_system_prompt_rejected", seed: "fixed", run: scenario_empty_system_prompt_rejected }
 }
 
 func oversized_payload_rejected_scenario() -> Scenario {
-  { id: "oversized_payload_rejected", run: scenario_oversized_payload_rejected }
+  { id: "phase_c.l1.oversized_payload_rejected", seed: "fixed", run: scenario_oversized_payload_rejected }
 }
 
 func summary_cache_replay_stable_scenario() -> Scenario {
-  { id: "summary_cache_replay_stable", run: scenario_summary_cache_replay_stable }
+  { id: "phase_c.l1.summary_cache_replay_stable", seed: "fixed", run: scenario_summary_cache_replay_stable }
 }
 
 func checkpoint_never_emitted_when_policy_off_scenario() -> Scenario {
-  { id: "checkpoint_never_emitted_when_policy_off", run: scenario_checkpoint_never_emitted_when_policy_off }
+  { id: "phase_c.l1.checkpoint_never_emitted_when_policy_off", seed: "fixed", run: scenario_checkpoint_never_emitted_when_policy_off }
 }
 
 func checkpoint_emitted_under_pressure_scenario() -> Scenario {
-  { id: "checkpoint_emitted_under_pressure", run: scenario_checkpoint_emitted_under_pressure }
+  { id: "phase_c.l1.checkpoint_emitted_under_pressure", seed: "fixed", run: scenario_checkpoint_emitted_under_pressure }
 }
 
 func checkpoint_terminates_not_spins_scenario() -> Scenario {
-  { id: "checkpoint_terminates_not_spins", run: scenario_checkpoint_terminates_not_spins }
+  { id: "phase_c.l1.checkpoint_terminates_not_spins", seed: "fixed", run: scenario_checkpoint_terminates_not_spins }
 }
 
 func compactor_chain_order_is_registry_order_scenario() -> Scenario {
-  { id: "compactor_chain_order_is_registry_order", run: scenario_compactor_chain_order_is_registry_order }
+  { id: "phase_c.l1.compactor_chain_order_is_registry_order", seed: "fixed", run: scenario_compactor_chain_order_is_registry_order }
 }
 
 func invalid_stage_skipped_chain_continues_scenario() -> Scenario {
-  { id: "invalid_stage_skipped_chain_continues", run: scenario_invalid_stage_skipped_chain_continues }
+  { id: "phase_c.l1.invalid_stage_skipped_chain_continues", seed: "fixed", run: scenario_invalid_stage_skipped_chain_continues }
 }
 
 func actual_token_pressure_defers_to_seal_scenario() -> Scenario {
-  { id: "actual_token_pressure_defers_to_seal", run: scenario_actual_token_pressure_defers_to_seal }
+  { id: "phase_c.l1.actual_token_pressure_defers_to_seal", seed: "fixed", run: scenario_actual_token_pressure_defers_to_seal }
 }
 
 func segment_excludes_system_prefix_scenario() -> Scenario {
-  { id: "segment_excludes_system_prefix", run: scenario_segment_excludes_system_prefix }
+  { id: "phase_c.l1.segment_excludes_system_prefix", seed: "fixed", run: scenario_segment_excludes_system_prefix }
 }
 
-export func main() -> () ! {IO} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let scenarios = [
     harness_self_test_scenario(),
     segment_excludes_system_prefix_scenario(),

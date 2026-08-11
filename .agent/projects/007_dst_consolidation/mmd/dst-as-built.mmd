@@ -1,0 +1,58 @@
+flowchart TB
+  %% DST framework AS BUILT — replaces 004_phase_core_refactor/mmd/dst-status.mmd
+  %% (2026-07-06 status map: its "designed" band has fully landed).
+  %% Verified 2026-07-12 against src/core, scripts/dst/, packages/, .github/workflows/.
+
+  subgraph INJECT["1 · Injected nondeterminism — swap ports, keep the code"]
+    live["Live adapters<br/>live_ports · LiveAI"]
+    fake["Fakes (pure)<br/>stub_step · scripted_ports · ext_fixture<br/>caps-as-conformance: --caps IO"]
+  end
+
+  subgraph CORE["2 · Production transition code — identical in prod & DST"]
+    decide["step_machine.decide<br/>pure · L0 · Z3-advisory"]
+    phases["model / tool / hook phases<br/>ports only → PhaseResult + StateDelta"]
+    driver["session driver<br/>sole ledger emitter"]
+  end
+
+  subgraph LEDGER["3 · Ledger = trace"]
+    events["typed LedgerTrace (phase_vocab)<br/>incl. extension_diagnostic (ABI 4.0)"]
+    wire["schema-v1 JSONL projection"]
+  end
+
+  subgraph CHECK["4 · Invariants + scenarios (shared harness)"]
+    harness["src/core/test/dst_harness.ail<br/>Scenario · run_all · seed=fixed"]
+    inv["pure invariants<br/>transcript · compactor · checkpoint"]
+    scen["54 in-repo scenarios in scripts/dst/<br/>compaction.* 12 · runtime_status.* 2<br/>phase_c.l1/approval/c2 15+7+18"]
+    kit["motoko_ext_conformance 4.0 ⇄ ABI 4.0<br/>4 compactor scenarios<br/>selftest ×5 hooks · registry probe ×13<br/>(package-owned runner — sole exception)"]
+    l2["L2 harness-dst.test.ts (bun) · 7 harness.*"]
+    l3["L3 phase_a_event_parity.sh<br/>two-capture diff -r"]
+  end
+
+  report[["5 · Failure contract<br/>scenario=id seed=… invariant=… + trace lines"]]
+
+  subgraph GATES["make dst — all blocking in CI on every PR"]
+    g1["compaction_dst · conformance · phase_c_l1<br/>smoke_parity · verify_core(advisory)  — main job"]
+    g2["dst_l2 — separate bun job, no AILANG"]
+  end
+
+  live -->|production| driver
+  fake -->|DST| driver
+  driver --> decide --> phases --> driver
+  driver ==> events --> wire
+  events --> inv
+  events --> scen
+  harness --> scen
+  inv --> report
+  scen --> report
+  kit --> report
+  l2 --> report
+  l3 --> report
+  scen --> g1
+  kit --> g1
+  l3 --> g1
+  l2 --> g2
+
+  deferred["Deferred: seeded generation · smoke_v2 audit<br/>in-flight diagnostics · env-manifest L2"]:::dim
+  scen -.-> deferred
+
+  classDef dim fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;

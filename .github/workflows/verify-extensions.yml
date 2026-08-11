@@ -2,8 +2,8 @@ name: verify-extensions
 
 # Catches two classes of AILANG version drift:
 #
-# 1. "Pin drift" (PR #16): AILANG_REF in install-prerequisites.sh lagged
-#    behind what extensions actually required.
+# 1. "Pin drift" (PR #16): the installer AILANG_REF lagged behind what
+#    extensions actually required.
 #
 # 2. "Dev-build gap" (PR #33): PR was verified locally against a dev build
 #    (v0.21.0-99-g...) while the released v0.22.0 had stricter type
@@ -11,7 +11,7 @@ name: verify-extensions
 #
 # Fix: CI derives the AILANG version to build from ailang.toml's floor
 # constraint (e.g. `ailang = ">=0.22.0"` → build v0.22.0). The floor and
-# AILANG_REF in install-prerequisites.sh must both be kept in sync — a
+# installer AILANG_REF must both be kept in sync — a
 # mismatch causes this job to fail on the "versions must match" check.
 
 on:
@@ -37,7 +37,7 @@ jobs:
   verify_extensions:
     name: verify_extensions + check_core + smoke_no_delegated_storm
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -55,14 +55,6 @@ jobs:
           ref="v${version}"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "ailang.toml floor: $ref"
-
-          # Sanity-check: install-prerequisites.sh must reference the same version
-          # so local devs install exactly what CI tests against.
-          script_ref=$(grep -E '^AILANG_REF=' scripts/install-prerequisites.sh | head -n1 | cut -d'"' -f2)
-          if [[ "$script_ref" != "$ref" ]]; then
-            echo "::error::Version mismatch: ailang.toml floor=$ref but install-prerequisites.sh AILANG_REF=$script_ref — bump them together." >&2
-            exit 1
-          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -91,14 +83,41 @@ jobs:
       - name: Confirm ailang version
         run: ailang --version
 
-      - name: Sync extension packages
-        run: ./scripts/sync-extension-packages.sh
-
-      - name: ailang lock
-        run: ailang lock
+      - name: Hydrate extension packages
+        run: make CI=1 sync_packages
 
       - name: check_core (verify_extensions + type-check src/core/*.ail)
         run: make check_core
 
       - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)
         run: make smoke_no_delegated_storm
+
+      - name: DST AILANG gates
+        run: make --keep-going compaction_dst conformance phase_c_l1
+
+      - name: smoke_parity
+        run: make smoke_parity
+
+      - name: verify_core (advisory)
+        continue-on-error: true
+        run: make verify_core
+
+  dst_l2:
+    name: dst_l2
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install TUI dependencies
+        working-directory: src/tui
+        run: bun install --frozen-lockfile
+
+      - name: Layer-2 DST
+        run: make dst_l2

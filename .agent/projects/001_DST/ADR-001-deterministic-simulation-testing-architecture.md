@@ -2,6 +2,7 @@
 
 Date: 2026-06-27
 Status: Proposed
+As-built: the implemented DST framework is documented in `design_docs/implemented/motoko_agent/m-motoko-dst-framework.md`
 
 ## Context
 

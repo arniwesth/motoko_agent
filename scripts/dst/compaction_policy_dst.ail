@@ -1,4 +1,4 @@
-module scripts/compaction_policy_dst
+module scripts/dst/compaction_policy_dst
 
 import std/io (println, exit)
 import std/list (length)
@@ -7,6 +7,7 @@ import std/string (length as string_length)
 import std/ai (ToolCall)
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   compact_for_pre_step,
   elide_old_tool_results,
@@ -20,55 +21,6 @@ import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   emergency_keep_last,
   emergency_final_keep_last
 )
-
-type ScenarioFailure = {
-  failed_invariant: string,
-  trace: [string]
-}
-
-type Scenario = {
-  id: string,
-  run: () -> Result[(), ScenarioFailure]
-}
-
-func print_trace(lines: [string]) -> () ! {IO} {
-  match lines {
-    [] => (),
-    line :: rest => {
-      let _ = println("trace ${line}");
-      print_trace(rest)
-    }
-  }
-}
-
-func run_one(s: Scenario) -> bool ! {IO} {
-  match s.run() {
-    Ok(_) => {
-      println("scenario=${s.id} ok");
-      true
-    },
-    Err(f) => {
-      let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
-      let _ = print_trace(f.trace);
-      false
-    }
-  }
-}
-
-func run_all(scenarios: [Scenario], failed: int) -> int ! {IO} {
-  match scenarios {
-    [] => failed,
-    s :: rest => {
-      let ok = run_one(s);
-      run_all(rest, if ok then failed else failed + 1)
-    }
-  }
-}
-
-func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
-  if ok then Ok(())
-  else Err({ failed_invariant: invariant_name, trace: trace })
-}
 
 func tool(id: string, content: string) -> Msg {
   { role: "tool", content: content, tool_calls: [], tool_call_id: id }
@@ -175,7 +127,8 @@ func expect_compacted_keep(decision: PreStepDecision, keep_last: int, invariant_
   }
 }
 
-func scenario_estimate_tier_ladder() -> Result[(), ScenarioFailure] {
+func scenario_estimate_tier_ladder() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let msgs = tool_heavy_msgs();
   let below_limit = limit_for_pct(msgs, elide_tier_pct() - 10);
   let tier_limit = limit_for_pct(msgs, elide_tier_pct() + 5);
@@ -221,7 +174,8 @@ func tool_shape_ok(input: [Msg], out: [Msg], keep_last: int) -> bool {
     && keep_last == 2
 }
 
-func scenario_tool_shape_preserved_by_elision() -> Result[(), ScenarioFailure] {
+func scenario_tool_shape_preserved_by_elision() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let c = long_content();
   let input = [
     user("question"),
@@ -248,7 +202,8 @@ func non_tool_pressure_msgs() -> [Msg] {
   ]
 }
 
-func scenario_emergency_recovery_or_defer() -> Result[(), ScenarioFailure] {
+func scenario_emergency_recovery_or_defer() -> Result[(), ScenarioFailure]
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   let tools = tool_heavy_msgs();
   let tool_limit = limit_for_pct(tools, emergency_pct() + 2);
   let recovery = compact_for_pre_step(ctx(tool_limit), tools);
@@ -276,15 +231,15 @@ func scenario_emergency_recovery_or_defer() -> Result[(), ScenarioFailure] {
 }
 
 func estimate_tier_ladder_scenario() -> Scenario {
-  { id: "compaction.estimate_tier_ladder", run: scenario_estimate_tier_ladder }
+  { id: "compaction.estimate_tier_ladder", seed: "fixed", run: scenario_estimate_tier_ladder }
 }
 
 func tool_shape_preserved_by_elision_scenario() -> Scenario {
-  { id: "compaction.tool_shape_preserved_by_elision", run: scenario_tool_shape_preserved_by_elision }
+  { id: "compaction.tool_shape_preserved_by_elision", seed: "fixed", run: scenario_tool_shape_preserved_by_elision }
 }
 
 func emergency_recovery_or_defer_scenario() -> Scenario {
-  { id: "compaction.emergency_recovery_or_defer", run: scenario_emergency_recovery_or_defer }
+  { id: "compaction.emergency_recovery_or_defer", seed: "fixed", run: scenario_emergency_recovery_or_defer }
 }
 
 export func main() -> () ! {IO} {

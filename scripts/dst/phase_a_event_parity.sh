@@ -62,6 +62,10 @@ run_json_smoke() {
   local full_loop="$4"
   local stdin_mode="$5"
   local out="$out_dir/${name}.jsonl"
+  local -a ai_args=()
+  case ",${caps}," in
+    *,AI,*) ai_args=(--ai-stub) ;;
+  esac
 
   echo "check ${file}"
   ailang check "$file" >/dev/null
@@ -69,13 +73,13 @@ run_json_smoke() {
   echo "run ${name}"
   if [ "$stdin_mode" = "devnull" ]; then
     MOTOKO_SESSION_ID=phase-a-parity \
-      ailang run --caps "$caps" --net-allow-http --net-allow-localhost --entry main "$file" </dev/null \
+      ailang run --caps "$caps" "${ai_args[@]}" --entry main "$file" </dev/null \
       | sed -E 's/"duration_ms":[0-9]+/"duration_ms":0/g; s/make\[[0-9]+\]/make[0]/g' \
       | awk '/^\{/' \
       | filter_new_types "$name"
   else
     MOTOKO_SESSION_ID=phase-a-parity \
-      ailang run --caps "$caps" --net-allow-http --net-allow-localhost --entry main "$file" \
+      ailang run --caps "$caps" "${ai_args[@]}" --entry main "$file" \
       | sed -E 's/"duration_ms":[0-9]+/"duration_ms":0/g; s/make\[[0-9]+\]/make[0]/g' \
       | awk '/^\{/' \
       | filter_new_types "$name"
@@ -94,7 +98,7 @@ run_json_smoke() {
 
   if [ "$name" = "smoke_v2_compaction_full_loop" ]; then
     grep -q '"type":"compaction_extension".*"note":"structural:' "$out"
-    grep -q '"type":"provider_call_prepared".*"msg_count":13' "$out"
+    grep -q '"type":"provider_call_prepared".*"msg_count":14' "$out"
   fi
 
   if [ "$name" = "smoke_v2_ext_fixture_parity" ]; then

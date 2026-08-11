@@ -1,0 +1,64 @@
+-- Shared deterministic scenario runner for in-repo DST gates.
+
+module src/core/test/dst_harness
+
+import std/io (println)
+import std/result (Result, Ok, Err)
+
+export type ScenarioFailure = {
+  failed_invariant: string,
+  trace: [string]
+}
+
+export type Scenario = {
+  id: string,
+  seed: string,
+  run: () -> Result[(), ScenarioFailure]
+    ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace}
+}
+
+export func print_trace(lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    line :: rest => {
+      let _ = println("trace ${line}");
+      print_trace(rest)
+    }
+  }
+}
+
+export pure func failure(failed_invariant: string, trace: [string]) -> ScenarioFailure {
+  { failed_invariant: failed_invariant, trace: trace }
+}
+
+export pure func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
+  if ok then Ok(()) else Err(failure(invariant_name, trace))
+}
+
+export func report_failure(scenario: string, f: { failed_invariant: string, trace: [string] }) -> () ! {IO} {
+  let _ = println("scenario=${scenario} seed=fixed invariant=${f.failed_invariant}");
+  print_trace(f.trace)
+}
+
+export func run_one(s: Scenario) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match s.run() {
+    Ok(_) => {
+      println("scenario=${s.id} ok");
+      true
+    },
+    Err(f) => {
+      let _ = report_failure(s.id, f);
+      false
+    }
+  }
+}
+
+export func run_all(scenarios: [Scenario], failed: int) -> int ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match scenarios {
+    [] => failed,
+    s :: rest => {
+      let ok = run_one(s);
+      run_all(rest, if ok then failed else failed + 1)
+    }
+  }
+}

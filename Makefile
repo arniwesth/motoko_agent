@@ -15,6 +15,20 @@ prune:
 
 # Mirror extension source packages into .packages/motoko_* for runtime extension loading.
 sync_packages:
+	@set -eu; \
+	if [ "$(CI)" = "1" ]; then \
+		version=$$(grep -E '^ailang\s*=' ailang.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1); \
+		if [ -z "$$version" ]; then \
+			echo "Could not parse ailang floor from ailang.toml" >&2; \
+			exit 1; \
+		fi; \
+		ref="v$$version"; \
+		script_ref=$$(grep -E '^AILANG_REF=' scripts/install-prerequisites.sh | head -n1 | cut -d'"' -f2); \
+		if [ "$$script_ref" != "$$ref" ]; then \
+			echo "Version mismatch: ailang.toml floor=$$ref but install-prerequisites.sh AILANG_REF=$$script_ref — bump them together." >&2; \
+			exit 1; \
+		fi; \
+	fi
 	./scripts/sync-extension-packages.sh
 	ailang lock
 
@@ -44,35 +58,39 @@ smoke_no_delegated_storm:
 smoke_parity:
 	@bash -euo pipefail -c '\
 	if [ -n "$${PARITY_BASELINE:-}" ]; then \
-		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_after; \
+		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_after; \
 		diff -r "$$PARITY_BASELINE" /tmp/phase_a_parity_after; \
 	else \
-		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_a; \
-		./scripts/phase_a_event_parity.sh /tmp/phase_a_parity_b; \
+		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_a; \
+		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_b; \
 		diff -r /tmp/phase_a_parity_a /tmp/phase_a_parity_b; \
 	fi'
 
 phase_c_l1: compaction_dst
-	ailang run --caps IO --entry main scripts/phase_c_l1_scenarios.ail
-	ailang run --caps IO --entry main scripts/phase_c_approval_protocol.ail
-	ailang run --caps IO,Env,Clock,FS,Trace --entry main scripts/phase_c2_wiring_scenarios.ail
+	ailang run --caps IO --entry main scripts/dst/phase_c_l1_scenarios.ail
+	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
+	ailang run --caps IO,Env,Clock,FS,Trace --entry main scripts/dst/phase_c2_wiring_scenarios.ail
+
+.PHONY: dst
+dst:
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 smoke_parity dst_l2
 
 compaction_dst:
-	ailang run --caps IO --entry main scripts/compaction_policy_dst.ail
-	ailang run --caps IO,Env,FS --entry main scripts/compaction_catalog_dst.ail
-	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/runtime_status_tool_dst.ail < /dev/null
+	ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail
+	ailang run --caps IO,Env,FS --entry main scripts/dst/compaction_catalog_dst.ail
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
 	MOTOKO_MODELS_FILE=scripts/fixtures/qwen36-small-model-catalog.json \
 	  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
-	  scripts/long_qwen_compaction_dst.ail < /dev/null
+	  scripts/dst/long_qwen_compaction_dst.ail < /dev/null
 
 conformance:
 	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/invariants.ail
 	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/harness.ail
-	ailang check scripts/conformance_selftest.ail
-	ailang check scripts/conformance_registry_probe.ail
+	ailang check scripts/dst/conformance_selftest.ail
+	ailang check scripts/dst/conformance_registry_probe.ail
 	ailang test packages/motoko_ext_conformance/invariants.ail
-	ailang run --caps IO,Env,FS --entry main scripts/conformance_selftest.ail
-	ailang run --caps IO,Env,FS --entry main scripts/conformance_registry_probe.ail
+	ailang run --caps IO,Env,FS --entry main scripts/dst/conformance_selftest.ail
+	ailang run --caps IO,Env,FS --entry main scripts/dst/conformance_registry_probe.ail
 
 # Type-check every AILANG core runtime module in src/core/, then
 # runtime-boot-probe every extension in the active profile's registry
@@ -195,6 +213,10 @@ deepseekv4_flash_compaction_heavy_headless: build
 # Install all prerequisites (Go, Bun, Node, context-mode, AILANG, TUI deps)
 install:
 	./scripts/install-prerequisites.sh	
+
+.PHONY: dst_l2
+dst_l2:
+	cd src/tui && bun test src/harness-dst.test.ts
 
 # Run all core runtime module tests
 test_core:

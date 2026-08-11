@@ -39,6 +39,10 @@ func glm5_rates() -> CostRates {
   { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000 }
 }
 
+func parity_system_message() -> Message {
+  { role: "system", content: "parity system prefix", tool_calls: [], tool_call_id: "" }
+}
+
 -- Each step reports 100k input + 50k output tokens via the new
 -- continuing_token_step helper (commit 9531dae addressing motoko-explore
 -- feedback msg 39904980). step_cost = (100000*60000 + 50000*208000) /
@@ -77,7 +81,7 @@ func test_cap_50k_trips_at_step_4() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
     false,
     mk_budget(),
     "openrouter/z-ai/glm-5",
-    [],
+    [parity_system_message()],
     "/tmp",
     10,
     false,
@@ -110,7 +114,7 @@ func test_cap_100k_completes_normally() -> bool ! {AI, FS, Process, IO, Env, Net
     false,
     mk_budget(),
     "openrouter/z-ai/glm-5",
-    [],
+    [parity_system_message()],
     "/tmp",
     10,
     false,
@@ -143,7 +147,7 @@ func test_cap_zero_disables_check() -> bool ! {AI, FS, Process, IO, Env, Net, Sh
     false,
     mk_budget(),
     "openrouter/z-ai/glm-5",
-    [],
+    [parity_system_message()],
     "/tmp",
     10,
     false,
@@ -175,7 +179,7 @@ func test_zero_rates_fail_open() -> bool ! {AI, FS, Process, IO, Env, Net, Share
     false,
     mk_budget(),
     "openrouter/z-ai/glm-5",
-    [],
+    [parity_system_message()],
     "/tmp",
     10,
     false,
