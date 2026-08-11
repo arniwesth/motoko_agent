@@ -620,10 +620,23 @@ def check_abi_version():
     # EVERY profile, not only `driver_only`. One fact deserves one guard, and a
     # second profile is exactly how the first one's transcription went unnoticed
     # for eleven items — nothing was comparing it to anything.
-    subjects = [PROFILE,
-                REPO / "scripts/dst/driver_only_dst.ail",
-                REPO / "src/core/dst_driver_plus_no_ops.ail",
-                REPO / "scripts/dst/driver_plus_no_ops_dst.ail"]
+    #
+    # WI-D27 ADDED THE THIRD PROFILE'S PAIR, and the derivation is worth stating
+    # because the gate cannot state it: this loop red-flags `seen == 0` — no
+    # profile record naming an ABI version at all — but it CANNOT see a file
+    # missing from `subjects`. A new profile whose pair was never added here is
+    # not under-covered loudly, it is under-covered silently, exactly the way
+    # `driver_only`'s own `4.0` went stale for eleven items. So the list is
+    # derived rather than appended to: it is every `src/core/dst_driver*.ail`
+    # and every `scripts/dst/driver_*_dst.ail`, and a profile that lands without
+    # joining it is a profile this guard does not check.
+    subjects = sorted((REPO / "src/core").glob("dst_driver*.ail")) \
+        + sorted((REPO / "scripts/dst").glob("driver_*_dst.ail"))
+    if len(subjects) < 4:
+        fail(f"the profile-record glob found {len(subjects)} file(s); this tree has at least two "
+             "profiles and each carries a module and an acceptance script, so a smaller set means "
+             "the glob no longer matches the naming convention and this guard is checking less "
+             "than it reports.")
     seen = 0
     for path in subjects:
         if not path.exists():
