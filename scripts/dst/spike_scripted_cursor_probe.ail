@@ -1,0 +1,273 @@
+-- scripts/dst/spike_scripted_cursor_probe.ail
+--
+-- SPIKE ONLY — throwaway. Tests one hypothesis recorded in
+-- ../../.agent/projects/009_motoko_dst_execution/NOTE-spike-findings-real-driver-vertical.md
+-- (F2): the live scripted provider derives its script index from
+--
+--   assistant_count(payload) - assistant_count(initial_history)
+--
+-- where `payload` is the POST-compaction message list actually sent to the
+-- provider. If a compactor removes assistant messages from that payload, the
+-- index moves backwards and the script replays earlier steps.
+--
+-- Structural compaction cannot demonstrate this: `elide_old_tool_results` only
+-- shortens tool-result *content*, it never removes a message, so the assistant
+-- count is unchanged. A compactor that folds turns into a summary — which is
+-- what motoko_ext_compaction_ai does, `prefix ++ [summary_msg] ++ recent_turns`
+-- — does reduce it. This probe models exactly that reduction deterministically,
+-- with no provider call and no AI summarizer in the loop, so the result is
+-- about the cursor and nothing else.
+--
+-- Two scenarios, same script and same driver entry point:
+--
+--   control  — no compaction. The index must advance 0,1,2,3,4 and the run
+--              must terminate cleanly on the scripted `stop`.
+--   folding  — an on_pre_step hook that folds older turns into one assistant
+--              summary once the segment is long enough, exactly as an AI
+--              compactor does. The hypothesis predicts the index stops
+--              advancing and the run never reaches the terminal step.
+--
+-- RESULT (2026-07-31): the hypothesis is CONFIRMED, so this probe exits 1 by
+-- design. That non-zero exit is the evidence, not a broken test:
+--
+--   control: served=[s0,s1,s2,s3,done]                     advancing=true
+--   folding: served=[s0,s1,s2,s2,s2,s2,s2,s2,s2,s2,s2,s2]  advancing=false
+--
+-- The index does not merely rewind, it PINS: once the fold caps the payload at
+-- two assistant messages, `assistant_count(payload)` stops growing while the
+-- real history keeps growing, so the same scripted step is served forever and
+-- the run dies of step-budget exhaustion instead of reaching its terminator.
+
+module scripts/dst/spike_scripted_cursor_probe
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/ai (Message, ToolCall)
+import std/json (Json, jo)
+import std/option (None)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderResult)
+import src/core/test/stub_step (Scripted, ScriptedStep, tool_step, prose_step)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan,
+  BudgetPatch,
+  Compacted,
+  Delegate,
+  ExtCtx,
+  ExtRuntime,
+  ExtensionHooks,
+  FinalizeDecision,
+  NoDecision,
+  NoIntercept,
+  NoOpinion,
+  Deny,
+  PassThrough,
+  PreStepDecision,
+  PromptPatch,
+  ResponseInterceptDecision,
+  ToolHandleDecision,
+  ToolPolicyDecision,
+  ToolSchema
+)
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func history() -> [Message] {
+  [msg("system", "s"), msg("user", "u")]
+}
+
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+-- Four continuers with distinguishable tool-call ids, then a terminator.
+-- Each continuer appends one assistant message, so under a correctly advancing
+-- cursor the driver serves s0, s1, s2, s3, then "done" and stops.
+func step_named(name: string) -> ScriptedStep {
+  { tool_step("T", "{}", name) | prose: name }
+}
+
+func script() -> [ScriptedStep] {
+  [
+    step_named("s0"),
+    step_named("s1"),
+    step_named("s2"),
+    step_named("s3"),
+    prose_step("done")
+  ]
+}
+
+-- ---------------------------------------------------------------------------
+-- Extension plumbing
+-- ---------------------------------------------------------------------------
+
+func no_describe() -> [ToolSchema] { [] }
+func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+func no_handle(_ctx: ExtCtx, _call: ToolCallEnvelope)
+  -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate }
+func no_intercept(_ctx: ExtCtx, _text: string)
+  -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept }
+func no_solver(_ctx: ExtCtx, _text: string)
+  -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+
+func deny_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Deny("probe: tools denied") }
+
+pure func summary_msg() -> Msg {
+  { role: "assistant", content: "[SUMMARY] folded", tool_calls: [], tool_call_id: "" }
+}
+
+pure func drop_first(n: int, xs: [Msg]) -> [Msg] {
+  if n <= 0 then xs
+  else match xs { [] => [], _ :: rest => drop_first(n - 1, rest) }
+}
+
+-- The fold. Mirrors motoko_ext_compaction_ai's shape:
+--   compacted = prefix ++ [summary_msg] ++ recent_turns
+-- Here the segment carries no pinned prefix (the driver splits that off first),
+-- so it is simply [summary] ++ last two turns once the segment exceeds four.
+pure func fold(msgs: [Msg]) -> [Msg] {
+  let n = List.length(msgs);
+  if n <= 4 then msgs
+  else summary_msg() :: drop_first(n - 2, msgs)
+}
+
+pure func assistants(msgs: [Msg]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => (if m.role == "assistant" then 1 else 0) + assistants(rest)
+  }
+}
+
+func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let folded = fold(msgs);
+  let _ = println("  PRESTEP step=${show(ctx.step)} segment_in=${show(List.length(msgs))} assistants_in=${show(assistants(msgs))} -> segment_out=${show(List.length(folded))} assistants_out=${show(assistants(folded))}");
+  if List.length(folded) == List.length(msgs) then PassThrough
+  else Compacted(folded, "probe: folded older turns into one summary", jo([]))
+}
+
+func passthrough_pre_step(_ctx: ExtCtx, _msgs: [Msg])
+  -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  PassThrough
+}
+
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}) -> ExtensionHooks {
+  {
+    id: id,
+    provided_tools: [],
+    on_describe_tools: no_describe,
+    on_build_system_prompt: no_prompt,
+    on_budget_plan: no_budget,
+    on_pre_step: pre,
+    on_tool_policy: deny_policy,
+    on_tool_handle: no_handle,
+    on_response_intercept: no_intercept,
+    on_solver_candidate: no_solver
+  }
+}
+
+func rt_with(pre: (ExtCtx, [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}, id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Observation: which scripted step was served, in order
+-- ---------------------------------------------------------------------------
+
+pure func served_ids(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "assistant" then
+        match m.tool_calls {
+          c :: _ => c.id :: served_ids(rest),
+          [] => "stop" :: served_ids(rest)
+        }
+      else served_ids(rest)
+  }
+}
+
+-- The trace records one ProviderResult per provider exchange, carrying the
+-- served step's prose. This works on the Err path too, where no message list
+-- is returned.
+pure func served_from_trace(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e {
+          ProviderResult(i) => (if i.text == "" then "stop" else i.text) :: served_from_trace(rest),
+          _ => served_from_trace(rest)
+        },
+        _ => served_from_trace(rest)
+      }
+  }
+}
+
+pure func join(xs: [string]) -> string {
+  match xs { [] => "", x :: [] => x, x :: rest => "${x},${join(rest)}" }
+}
+
+pure func strictly_advancing(xs: [string]) -> bool {
+  match xs {
+    [] => true,
+    _ :: [] => true,
+    a :: rest => match rest { b :: _ => a != b && strictly_advancing(rest), [] => true }
+  }
+}
+
+func report(label: string, traced: TracedSessionResult) -> () ! {IO} {
+  let served = served_from_trace(traced.trace.records);
+  let outcome = match traced.result {
+    Ok(_) => "ok",
+    Err(e) => "err ${e.code}: ${e.message}"
+  };
+  let _ = println("${label}: outcome=${outcome}");
+  println("${label}: served=[${join(served)}] advancing=${show(strictly_advancing(served))}")
+}
+
+func run(rt: ExtRuntime) -> TracedSessionResult
+  ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    rt, "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), Scripted(script())
+  )
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let control = run(rt_with(passthrough_pre_step, "probe_control"));
+  let _ = report("control", control);
+  let folding = run(rt_with(folding_pre_step, "probe_folding"));
+  let _ = report("folding", folding);
+
+  let control_ok = match control.result {
+    Ok(_) => strictly_advancing(served_from_trace(control.trace.records)),
+    Err(_) => false
+  };
+  let folding_ok = match folding.result {
+    Ok(_) => strictly_advancing(served_from_trace(folding.trace.records)),
+    Err(_) => false
+  };
+  if control_ok && folding_ok then
+    println("spike_scripted_cursor_probe PASS — the script index advanced under folding compaction")
+  else {
+    let _ = println("spike_scripted_cursor_probe FAIL — control_ok=${show(control_ok)} folding_ok=${show(folding_ok)}");
+    exit(1)
+  }
+}

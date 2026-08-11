@@ -1,0 +1,61 @@
+flowchart TB
+  %% ADR-001 (007) D2 conformance gate as a STATUS MAP.
+  %% Colour = status at HEAD, not role: green met · amber-dashed partial · gray-dashed absent.
+  %% Grounded 2026-07-25 against a7932c68b53ba0aa2ef42739e4dbe69296f37a8a
+  %% (scorecard ADR:258-272, evidence criteria ADR:189-204, naming rule ADR:206-225).
+  %% Re-rendered 2026-07-26 after the RR1-RR10 edits: criterion 1 (RR2) and pillar 5 (RR6) changed.
+
+  subgraph PROFILE["D2 · seven-pillar conformance profile — repo policy, not field canon"]
+    direction TB
+    p1["1 · Hermetic determinism<br/>met for the current seeded executions<br/>--caps IO,Env,Rand · gate replay"]:::met
+    p6["6 · Invariant oracle<br/>useful for PBT, incomplete for D2<br/>no assertion over a returned session trace"]:::partial
+    p7["7 · Search economics + repro<br/>half — RNG canary, 25 PR cases, 500 nightly<br/>no exact-program replay, shrink, or schema key"]:::partial
+    p2["2 · Simulated environment (logical)<br/>absent on the seeded axis<br/>substrate exists: Ports · ScriptedPortsState"]:::absent
+    p3["3 · Seed-driven schedule<br/>absent — seed draws input params<br/>stage_records feeds a pure projection"]:::absent
+    p4["4 · Fault injection<br/>absent — no seed-timed fault mechanism"]:::absent
+    p5["5 · Time as a controlled dimension<br/>absent — normalized away, not virtualized<br/>bar: advanced by the world, observed by production"]:::absent
+  end
+
+  subgraph SCOPE["D1 · out of scope by decision — revisit tripwires attached"]
+    direction TB
+    x1["2-physical · torn writes, partitions, consensus<br/>reopen on: fsync · WAL · crash-recovery<br/>resume-from-ledger · replicated state"]:::excluded
+    x2["3-concurrent · multi-actor interleaving<br/>reopen on: parallel tools · ledger-sharing subagents<br/>racing ext callbacks · state-advancing stream handlers"]:::excluded
+  end
+
+  subgraph EVIDENCE["The gate is enforceable only with automated evidence — behaviour, not constructors"]
+    direction TB
+    e1["1 · seed produces a typed program of ordered<br/>external instructions, kinds and order generated —<br/><b>and consumed by the real driver as responses to<br/>requests production code issued</b><br/>a list feeding a pure projection does not qualify"]:::gate
+    e2["2 · required fault classes reach named<br/>production recovery branches"]:::gate
+    e3["3 · two programs differing only in clock advance<br/>produce different timeout/retry/deadline behaviour"]:::gate
+    e4["4 · real traced driver returns exactly one terminal<br/>record per terminal path; invariants over that trace"]:::gate
+    e5["5 · the exact serialized program replays<br/>without invoking the generator"]:::gate
+    e6["6 · a hermeticity probe proves effects cannot<br/>silently bypass the controlled world"]:::gate
+  end
+
+  bar{"all required pillars<br/>hold together?"}:::decision
+
+  PROFILE --> EVIDENCE
+  EVIDENCE --> bar
+  SCOPE -. "not required; not evidence" .-> bar
+
+  bar -->|"no — 2-logical/3/4/5 absent at HEAD"| head["<b>HEAD is PBT, not DST</b><br/>seeded deterministic scenario +<br/>parameter-generation testing<br/>interim name: deterministic trajectory testing"]:::met
+  bar -->|"yes — the complete D2 bar"| earned["<b>single-actor, logical-fault DST</b><br/>the word 'simulation' unlocks<br/>for the seeded axis"]:::absent
+
+  soft["'Soft DST' — correct at no point<br/>names a rigor cut; what is given up is scope"]:::rejected
+  bar -.-> soft
+
+  grandfather[["Grandfathered: all existing dst identifiers<br/>make targets · script/module names · PASS labels<br/>workflow text · as-built title<br/>new identifiers follow the rule"]]:::note
+  head --- grandfather
+
+  owner009["Project 009 owns the architecture that meets<br/>this bar — world protocol, program, faults,<br/>clock, terminal trace, replay"]:::deferred
+  earned --- owner009
+
+  classDef met fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef partial fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef absent fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;
+  classDef excluded fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef rejected fill:#3a1620,stroke:#f7768e,color:#f7c6cf,stroke-dasharray:5 5;
+  classDef note fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef deferred fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
