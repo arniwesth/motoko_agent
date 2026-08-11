@@ -64,10 +64,54 @@ export type IdentityBody
   | EnvironmentReadIdentity(string)                 -- key
   | RandomDrawIdentity(string)                      -- bounds label
   | ClockAdvanceIdentity
+  -- WI-D17's filesystem mutators. ONE component, the path, and NO origin — the
+  -- `EnvironmentReadIdentity` shape rather than the `ToolIdentity` shape,
+  -- because these are the DRIVER's own seams and D2 gives an origin only to the
+  -- three classes that answer a named producer's request.
+  --
+  -- WHAT THAT COSTS AND WHO PAYS IT, stated rather than discovered at part 2:
+  -- when compose's writes are routed, the producer becomes an EXTENSION and
+  -- "which extension wrote this path" stops being derivable from the log.
+  -- Adding the component later is a constructor arity change, which reaches
+  -- `identity_kind`, `identity_origin`, `identity_body_eq`,
+  -- `identity_body_projection`, `dst_program.validate_identity`,
+  -- `dst_secrets.scan_identity`, `dst_persistence.identity_slots`/`body_of` and
+  -- both directions of `ext_world`'s JSON — nine sites. It is NOT taken here
+  -- because a component that is blank at every construction site in the tree is
+  -- a field no fixture can distinguish from an absent one, and D2's own rule for
+  -- `ExtensionEffectIdentity` is that a blank component is legitimate only where
+  -- the class genuinely has none.
+  | FileWriteIdentity(string)                       -- path
+  | FileRemoveIdentity(string)                      -- path
 
 -- The stable kind id, DERIVED. These strings appear in the interaction log and
 -- in harness-failure projections, so they are part of the artifact surface and
 -- change only with a schema version.
+--
+-- WI-D17 ADDED TWO AND MOVED NO VERSION, and the reason is worth stating
+-- because "part of the artifact surface" reads as though it should have.
+-- Measured across the three versions that could plausibly have been the one:
+--
+--   `event_vocabulary_version` ("event-vocabulary/1") versions the 34
+--     `LedgerEvent` variants and their wire projection. It has nothing to do
+--     with this sum; naming it here would be versioning the wrong artifact.
+--   `program_schema_version` ("execution-program/1") versions the persisted
+--     program's SHAPE. Adding a constructor adds no field and removes none, and
+--     no existing program's bytes change meaning.
+--   The persistence codec's own tag vocabulary. `dst_persistence.body_of`
+--     REFUSES an unknown kind (`UnknownInteractionKind`), so an old build handed
+--     a new artifact rejects it loudly rather than reinterpreting it — which is
+--     precisely the behaviour D8's rule demands a version bump in order to
+--     guarantee, already guaranteed structurally.
+--
+-- ONE DECODER IS NOT LOUD, AND IT IS REPORTED RATHER THAN FIXED HERE:
+-- `ext_world.identity_body_of` falls through to `ClockAdvanceIdentity` for an
+-- unrecognised tag, by its own stated design ("a total decoder is the right
+-- shape"). An old build reading a new `file_write` interaction over that
+-- transport therefore reads a clock advance. That was already true for every
+-- constructor this sum has ever gained; it is named here because this item is
+-- the first to gain one since the note was written, and closing it is a change
+-- to a total decoder's contract, not to this list.
 export pure func identity_kind(b: IdentityBody) -> string {
   match b {
     ProviderIdentity(_, _, _) => "expect_provider",
@@ -76,7 +120,9 @@ export pure func identity_kind(b: IdentityBody) -> string {
     ExtensionEffectIdentity(_, _, _) => "expect_extension_effect",
     EnvironmentReadIdentity(_) => "environment_read",
     RandomDrawIdentity(_) => "runtime_random_draw",
-    ClockAdvanceIdentity => "advance_clock"
+    ClockAdvanceIdentity => "advance_clock",
+    FileWriteIdentity(_) => "file_write",
+    FileRemoveIdentity(_) => "file_remove"
   }
 }
 
@@ -91,7 +137,9 @@ export pure func all_interaction_kinds() -> [string] {
    identity_kind(ExtensionEffectIdentity("", "", "")),
    identity_kind(EnvironmentReadIdentity("")),
    identity_kind(RandomDrawIdentity("")),
-   identity_kind(ClockAdvanceIdentity)]
+   identity_kind(ClockAdvanceIdentity),
+   identity_kind(FileWriteIdentity("")),
+   identity_kind(FileRemoveIdentity(""))]
 }
 
 -- The origin, derived the same way. Blank for the three classes D2 gives no
@@ -105,7 +153,9 @@ export pure func identity_origin(b: IdentityBody) -> string {
     ExtensionEffectIdentity(e, _, _) => e,
     EnvironmentReadIdentity(_) => "",
     RandomDrawIdentity(_) => "",
-    ClockAdvanceIdentity => ""
+    ClockAdvanceIdentity => "",
+    FileWriteIdentity(_) => "",
+    FileRemoveIdentity(_) => ""
   }
 }
 
@@ -127,7 +177,11 @@ export pure func identity_body_eq(a: IdentityBody, b: IdentityBody) -> bool {
     RandomDrawIdentity(l) =>
       match b { RandomDrawIdentity(l2) => l == l2, _ => false },
     ClockAdvanceIdentity =>
-      match b { ClockAdvanceIdentity => true, _ => false }
+      match b { ClockAdvanceIdentity => true, _ => false },
+    FileWriteIdentity(p) =>
+      match b { FileWriteIdentity(p2) => p == p2, _ => false },
+    FileRemoveIdentity(p) =>
+      match b { FileRemoveIdentity(p2) => p == p2, _ => false }
   }
 }
 
@@ -142,7 +196,9 @@ export pure func identity_body_projection(b: IdentityBody) -> string {
     ExtensionEffectIdentity(e, k, c) => "extension_effect ext=${e} class=${k} call_id=${c}",
     EnvironmentReadIdentity(k) => "env_read key=${k}",
     RandomDrawIdentity(l) => "random_draw bounds=${l}",
-    ClockAdvanceIdentity => "advance_clock"
+    ClockAdvanceIdentity => "advance_clock",
+    FileWriteIdentity(p) => "file_write path=${p}",
+    FileRemoveIdentity(p) => "file_remove path=${p}"
   }
 }
 
@@ -237,7 +293,13 @@ export pure func class_has_deadline(b: IdentityBody) -> bool {
     ProviderIdentity(_, _, _) => false,
     EnvironmentReadIdentity(_) => false,
     RandomDrawIdentity(_) => false,
-    ClockAdvanceIdentity => false
+    ClockAdvanceIdentity => false,
+    -- A filesystem mutation is synchronous and has no timeout at the seam:
+    -- `Ports.file_write` takes no `timeout_ms` the way `ToolInvocation` does, so
+    -- recording a deadline here would be inventing one. `recording_file_write`
+    -- records -1, which is what this false means.
+    FileWriteIdentity(_) => false,
+    FileRemoveIdentity(_) => false
   }
 }
 
@@ -379,14 +441,21 @@ pure func all_distinct(xs: [string], seen: [string]) -> bool {
 
 -- The kind is derived from the body, so there is no representable program in
 -- which a kind disagrees with its own payload (design note 1). This asserts the
--- derivation is TOTAL and INJECTIVE across the seven classes — if two classes
+-- derivation is TOTAL and INJECTIVE across the nine classes — if two classes
 -- ever derived the same kind string, the interaction log would conflate them
 -- and the completeness count per class would silently merge two classes.
-pure func test_identity_kind_is_injective_across_the_seven_classes() -> bool
+--
+-- WI-D17 took it from seven to nine, and the injectivity clause is what made the
+-- cheap design fail early: a single `FileMutationIdentity(op, path)` serving both
+-- mutators would have to derive its kind from `op`, which makes
+-- `FileMutationIdentity("bogus", p)` representable and reading as a write. Two
+-- constructors is what design note 1 asks for and this is the assertion that
+-- says so.
+pure func test_identity_kind_is_injective_across_the_nine_classes() -> bool
   tests [((), true)]
   {
     let ks = all_interaction_kinds();
-    List.length(ks) == 7 && all_distinct(ks, [])
+    List.length(ks) == 9 && all_distinct(ks, [])
   }
 
 -- Identity equality must discriminate on EVERY component D2 names, in both
@@ -405,6 +474,14 @@ pure func test_identity_equality_discriminates_every_component() -> bool
       && not identity_body_eq(ExtensionEffectIdentity("e", "k", "c"), ExtensionEffectIdentity("e", "x", "c"))
       && not identity_body_eq(EnvironmentReadIdentity("a"), EnvironmentReadIdentity("b"))
       && not identity_body_eq(RandomDrawIdentity("a"), RandomDrawIdentity("b"))
+      -- WI-D17. The path discriminates, and — the half a one-constructor design
+      -- would have lost — a write and a remove of the SAME path are different
+      -- logical requests. Strict replay delivering one to the other would be a
+      -- reproduction that deleted what the run created.
+      && not identity_body_eq(FileWriteIdentity("a"), FileWriteIdentity("b"))
+      && not identity_body_eq(FileRemoveIdentity("a"), FileRemoveIdentity("b"))
+      && not identity_body_eq(FileWriteIdentity("a"), FileRemoveIdentity("a"))
+      && identity_body_eq(FileWriteIdentity("a"), FileWriteIdentity("a"))
   }
 
 -- A tool and an approval sharing origin, call id and name are DIFFERENT logical

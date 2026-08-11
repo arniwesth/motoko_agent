@@ -32,7 +32,7 @@ import src/core/phase_vocab (
   ErrorEvent,
   RunSummary
 )
-import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
   ExtRegistry,
   ExtensionHooks,
@@ -252,6 +252,12 @@ func fixed_ext_exec(world: ExtWorld, _name: string, _args: string) -> ExtProcOut
 -- content claim — see `ExtFileRead`. This fixture has no filesystem behind it.
 func fixed_ext_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: world } }
 
+-- WI-D17's mutators. `ok: false` for the same reason `present: false` is the
+-- read's answer: this fixture has no filesystem behind it, and a no-op that
+-- claimed success would state something about the world that is not true.
+func fixed_ext_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+func fixed_ext_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+
 func runtime_hooks() -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   long_runtime()
 }
@@ -273,6 +279,11 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
     clock_now: fixed_clock,
     env_get: fixed_env,
     file_read: fixed_file,
+    -- WI-D17 added `file_write`/`file_remove`. Taken from `base` — the
+    -- deterministic pair — for the same reason `file_read` takes `fixed_file`:
+    -- this fixture has no filesystem behind it and no site in it writes one.
+    file_write: base.file_write,
+    file_remove: base.file_remove,
     tool_exec: fixed_exec
   }
 }
@@ -349,6 +360,11 @@ func strict_ports() -> Ports ! {AI, IO, Trace} {
     clock_now: fixed_clock,
     env_get: fixed_env,
     file_read: fixed_file,
+    -- WI-D17 added `file_write`/`file_remove`. Taken from `base` — the
+    -- deterministic pair — for the same reason `file_read` takes `fixed_file`:
+    -- this fixture has no filesystem behind it and no site in it writes one.
+    file_write: base.file_write,
+    file_remove: base.file_remove,
     tool_exec: fixed_exec
   }
 }
@@ -850,6 +866,8 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
       },
       proc_exec: fixed_ext_exec,
       file_read: fixed_ext_file_read,
+      file_write: fixed_ext_file_write,
+      file_remove: fixed_ext_file_remove,
       clock_now: fixed_ext_clock,
       env_get: fixed_ext_env
     },

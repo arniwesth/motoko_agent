@@ -498,6 +498,46 @@ not re-issued (D4)"*. **The second profile binds the same table at the same iden
 cascade now has two consumers and the anchors target names one. **A third profile extends the list
 again with nothing naming it in advance** — S22's derive-the-consumer-list rule, owed on this cascade.
 
+**S26. AN ASSERTION THAT NAMES ITS SUBJECT POSITIONALLY CAN PASS WHILE READING THE WRONG SUBJECT —
+so EXTEND a shared fixture by APPENDING, never by inserting.** Earned by WI-D17, and it is a failure
+shape distinct from every other rule here.
+
+The two new filesystem classes were first added to `invariants_dst`'s fixture at ordinals 15 and 16,
+pushing the terminal provider from 15 to 17. Three checks in
+`scenario_fixture_carries_every_protected_shape` name an interaction **by ordinal literal**, one of
+them `total_chunks(log) == 8 && List.length(at_ord(log, 15).outcome.chunks) == 0`. **That row went on
+printing `✓`** — `at_ord(log, 15)` was now a `file_write`, which also has no chunks. The insertion was
+caught only because a *different* row (`count_status(log, "missing") == 1`) happened to break.
+
+**This project's counted mode is "absent reads identically to unchanged". This is the other one:
+PRESENT-BUT-WRONG reads identically to CORRECT.** A green row reading the wrong subject is worse than
+a red one, because a red row is an invitation to look and a green row is a claim that nobody will
+re-open. **An ordinal literal is a positional reference with no type behind it at all.** Fixed by
+appending after the provider, so every ordinal literal in the file still points at what it was written
+for.
+
+**S25. A HANDOFF THAT PRESCRIBES PINNING A DISTINCTION MUST STATE THE DESIGN ASSUMPTION THE
+DISTINCTION DEPENDS ON — otherwise it either pins a non-difference or pushes the item toward the
+design that makes the difference real.** Earned by WI-D17, and it is the SECOND consecutive item whose
+handoff framing led toward the wrong answer, which is what makes it a rule rather than a slip.
+
+**D17's instance.** The handoff measured `lookup_file` as first-match and concluded: *"prepending gives
+write-then-read-sees-the-write for free, and appending gives stale-read-wins — a one-token difference
+with opposite semantics. Pin it."* **The item's mutants say it is conditional.** With the dedupe the
+adapter actually carries (`remove_path` then prepend), append and prepend are **observationally
+identical** — at most one entry per path, so position cannot matter to a lookup that matches on path.
+Only *without* the dedupe does append produce the stale read. **The prescribed pin would have pinned a
+distinction that does not exist under the chosen design.**
+
+**D16's instance, the same shape one item earlier:** the handoff framed the write/print question as
+*"a file write is not an observation"* — true, and the wrong question, because the write CAUSES an
+observation.
+
+**The rule: when a handoff states a consequence, state what it is conditional on.** Both errors were
+unconditional statements of things true only under a design the item had not yet chosen — and in both
+cases the item's own measurement defeated them, which is the process working and is not a reason to
+keep making them.
+
 **S24. A FIXTURE SUITE PROVES THE SHAPES IT ENUMERATES; IT DOES NOT PROVE THE WALKER REACHED THE
 CODE.** Earned by WI-D15, which had **four** slips in its own tooling — and **two were FAIL-OPEN, and
 the assertion suite caught neither.** Both were caught by a human reading a verdict that was better
@@ -3122,6 +3162,66 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D17, 2026-08-08 (~1h05m) — THE FILESYSTEM WRITE CLASS, AND THE REMOVE CLASS WITH IT.**
+Verified at review: `Ports` **6 fields → 8** (`file_write: (WorldState, string, string) -> FileMutation
+! {FS}`, `file_remove: (WorldState, string) -> FileMutation ! {FS}`, `FileMutation` =
+`{ ok, error, next_state }`); `IdentityBody` **7 constructors → 9**; `ExtPorts` **7 fields**, both new
+rows deriving `returns-it`. **Classifier-2 set unchanged at `{env_get}`** — measured, and for the
+reason D16 established, arrived at without a widening because these fields were born wide. **Nothing
+routed**; zero call sites on either surface, reported rather than presented as coverage.
+
+**THE RECORDING DECISION, AND IT REPLACED D3'S REASON RATHER THAN INHERITING IT.** Writes recorded,
+reads not — D16's choice — but D3's stated reason (*"until a fixture seeds `WorldState.files`, a
+replay cannot lose what no run put there"*) **named its own expiry condition, and this item is what
+creates it.** The replacement is a measurement I verified: **`InitialWorld` carries
+`synthetic_environment` and has NO `files` counterpart** (`dst_program.ail:76-80`), and
+`world_state_of` builds from `empty_world_state()` setting script/clock/approvals/**env**/tools —
+**`files` is never reconstituted** (`dst_replay.ail:745-754`). So an env read reads a value **the
+program supplies** and a file read reads one **it does not**. **Recording both — the obvious way to
+"close D3's asymmetry" — does not close it**: it produces a log describing observations whose source
+the artifact cannot rebuild, the two-homes shape one level up, in the instrument. **The write is
+recorded for GRADING, not reconstitution** — a difference in kind from the other four recorded classes,
+and stated at `recording_ports`.
+
+**`removeFile` BUILT, `mkdirAll` DEFERRED, on two different grounds rather than one budget line.**
+Remove because *D16's argument for the write is remove's argument verbatim* — it changes what
+`fileExists` returns and compose branches on exactly that — so deferring it would be adopting an
+argument and refusing its conclusion. `mkdirAll` because directory existence is observed only through
+`isDir`/`listDir`, which have no core seam, so a mediated `mkdirAll` would mutate a table nothing can
+read. **6 of compose's 18 write-side sites stay unroutable until the directory seam exists.**
+
+**THE VALIDATOR RULE WAS WIDENED, AND THE NEGATIVE CONTROL SAYS HOW FAR.** `OutcomeMissing` is now
+admitted for `file_remove` **and nothing else** — verified in `dst_program.ail:341-399` — on WI-A13's
+reading B, with `OutcomeOk` rejected as indistinguishable from a real delete and `OutcomeFault`
+rejected because A7's catalogue declares no filesystem class. **`file_write` stays refused, asserted by
+mutant 12d rather than described.**
+
+**TWO-TIER COMPATIBILITY, THE FIRST IN THIS PROJECT AND IT WILL RECUR.** Adding a constructor made
+`program_persistence`'s two rows mutually unsatisfiable — the specimen must carry every class, and the
+frozen v1 bytes must not be regenerated (*"it destroys the evidence"*). Resolved structurally: **a
+class added after the freeze cannot be in the frozen bytes by construction**, so
+`frozen_v1_interactions()` is pinned forever and `specimen_interactions()` = frozen ++ post-v1. **The
+cost is stated rather than buried: the two new classes' codec paths are ROUND-TRIPPED, NOT FROZEN**,
+and nothing in the tree can freeze them. I confirmed `scripts/dst/fixtures/` is untouched.
+
+**The census fail-open my handoff named is CLOSED and made a tripwire**: both classes pinned at zero in
+`dst_discovery.absent_classes`, so **the moment part 2 routes a write, `check_discovery` goes red** and
+the routing item must give the class a witness or move it out, having said which.
+
+**Three guards fired that this item never touched** — `invariants`, `program_persistence` and D16's own
+reachability assertion — each because it derives its subject list from `all_interaction_kinds()`.
+**D16's assertion earned itself on the first addition after it landed:** two named failures where the
+pre-D16 suite would have printed five green rows and said nothing.
+
+**Counter at 72; both instances are on this class's own subject matter.** Site 1 is
+`scripted_file_write` returning `next_state: state` — what five of the six other deterministic adapters
+legitimately do and what `ambient_file_write` legitimately does one screen away. Site 2 earned **S26**.
+Verified green at review: `invariants`, `program_persistence`, `discovery`, `execution_program` all
+pass, exit 0; classifier-2 selftest 0 failures, 7 fields derived and 7 pinned.
+
+**ABI rows now TWELVE** (9 changed + 3 added), plus three added types. Still not cut; `ailang.toml`
+unchanged at 5.0, verified.
 
 **WI-D16, 2026-08-07 (~1h39m; the ~1h25m first recorded here read a D15 leftover commit as D16's start) — ROUTE B PART 1. `ExtPorts` 4 fields → 5, classifier-2 members 2 → 1.**
 Verified at review: `proc_exec` now `(ExtWorld, string, string) -> ExtProcOutcome`, a new

@@ -23,8 +23,12 @@ import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, 
 -- happened while these codecs were being written, and the round-trip tests
 -- below are what caught it; nothing else could have.
 import std/option (Option, Some, None)
-import std/fs (fileExists, readFile)
+import std/fs (fileExists, readFile, writeFileResult, removeFileResult)
 import std/env (getEnvOr)
+-- WI-D17. `Str.length` is the write class's CONTENT WITNESS and the only thing
+-- the recorder learns about a written body — see `recording_file_write` for why
+-- the content itself must not enter the log.
+import std/string as Str (length)
 import src/core/phase_vocab (ApprovalRequest)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/tool_dispatch_adapter (dispatch_one)
@@ -38,6 +42,7 @@ import src/core/tool_dispatch_adapter (dispatch_one)
 import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   ToolIdentity, ApprovalIdentity, EnvironmentReadIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing, generator_authored_count
 )
 -- WI-A13 stage 4. The GENERATOR STATE rides in `WorldState` for exactly the
@@ -196,10 +201,28 @@ export type WorldState = {
   -- A POINT READ and not a filesystem, deliberately. The driver's whole call
   -- graph asks two questions of a path — does it exist, and what does it hold —
   -- so `FileRead` answers exactly those, and this table is a KEYED LOOKUP like
-  -- `env` rather than a cursor like `script`. There are no writes and no
+  -- `env` rather than a cursor like `script`. There are no
   -- listings here because nothing the driver observes needs them, and a world
   -- that models more than the driver observes is a world whose extra shape no
   -- gate can keep honest.
+  --
+  -- WI-D17 MADE IT WRITABLE, and that sentence used to also say "there are no
+  -- writes". It is the FIRST field in this record that an adapter ADDS to. Every
+  -- other state update in this module either consumes a cursor
+  -- (`scripted_approval`, `world_tool`), advances a scalar (`virtual_clock`) or
+  -- returns the world unchanged; the one other append site is
+  -- `record_interaction`, and it appends to `log`. So the invariant a reader
+  -- should carry away is that this table is now BOTH seeded input and produced
+  -- output, and the two are indistinguishable once written — see
+  -- `scripted_file_write`.
+  --
+  -- IT STAYS A MAP. `scripted_file_write` removes any existing entry for the
+  -- path before prepending the new one, so at most one entry per path exists and
+  -- `lookup_file`'s first match is the only match. Growing the list without that
+  -- removal would still READ correctly (first match wins on a prepend) while
+  -- making the table's length meaningless and making the correctness depend on
+  -- an ordering rather than on a key — which is the shape `env`'s comment above
+  -- calls a keyed lookup and is not.
   --
   -- AN ABSENT PATH READS AS ABSENT AND DOES NOT FALL BACK TO THE HOST. That is
   -- the one place this class deliberately differs from `tools`, whose empty
@@ -247,10 +270,11 @@ export type WorldState = {
   -- its own counter.
   --
   -- Every adapter carries it forward through record update (`{ state | ... }`),
-  -- so the FIVE deterministic seams below preserve it without naming it — four
-  -- from WI-A12 until WI-D3 added `scripted_file`, and the count is stated
-  -- rather than left to drift because record update is exactly what makes a new
-  -- seam cost nothing here. Only
+  -- so the SEVEN deterministic seams below preserve it without naming it — four
+  -- from WI-A12, five after WI-D3 added `scripted_file`, seven after WI-D17
+  -- added `scripted_file_write` and `scripted_file_remove` — and the count is
+  -- stated rather than left to drift because record update is exactly what makes
+  -- a new seam cost nothing here. Only
   -- the RECORDING adapters append, and they are separate closures — a live or
   -- plain scripted run leaves this empty, which is why adding the field is
   -- behaviour-preserving for every existing target.
@@ -272,9 +296,10 @@ export type WorldState = {
   -- script, because its output is still a valid, replayable, perfectly
   -- reproducible program — it is simply the same program for every seed.
   --
-  -- `no_generator()` is the default and means "not installed". The five
-  -- deterministic seams — four until WI-D3 added `scripted_file` — and the four
-  -- recording ones never read it; only the
+  -- `no_generator()` is the default and means "not installed". The seven
+  -- deterministic seams — four until WI-D3 added `scripted_file`, five until
+  -- WI-D17 added the two mutators — and the six recording ones never read it;
+  -- only the
   -- GENERATING adapters do, which is what keeps adding this field
   -- behaviour-preserving for every existing target.
   gen: GeneratorState
@@ -353,6 +378,32 @@ export type EnvRead = {
 export type FileRead = {
   present: bool,
   content: string,
+  next_state: WorldState
+}
+
+-- One filesystem MUTATION and its successor world. WI-D17.
+--
+-- ONE type for TWO seams — `file_write` and `file_remove` — because their
+-- answers have identical shape: the world either accepted the mutation or it
+-- did not, and there is nothing else to hand back. That is not the same
+-- judgement as `FileRead`'s, which carries `present` because two of its answers
+-- are observationally distinct; here `ok: false` is the only failure a caller
+-- can be told about, and a second field distinguishing kinds of failure would
+-- be modelling something no call site branches on.
+--
+-- `error` IS carried, and that is a deliberate widening rather than a copy of
+-- `FileRead`. std/fs offers `writeFileResult`/`removeFileResult` beside the
+-- unit-returning `writeFile`/`removeFile`, so the failure is available at the
+-- seam today. WI-A1's ordering rule applies exactly: widen the port BEFORE
+-- adopting whatever fills it, because the port is where the information is
+-- thrown away. compose's seven `writeFile` sites are all `let _ = writeFile(…)`
+-- — a discarded result on the live path — and routing them through a port that
+-- also discarded it would carry the drop across the boundary instead of closing
+-- it. The message is not currently branched on by anything; it is carried so
+-- that part 2 can route those sites without a second widening.
+export type FileMutation = {
+  ok: bool,
+  error: string,
   next_state: WorldState
 }
 
@@ -467,6 +518,46 @@ export type Ports = {
   -- binding — `ambient_file` — which is what makes the host-env pair's live half
   -- die and its deterministic half mean something.
   file_read: (WorldState, string) -> FileRead ! {FS},
+  -- WI-D17's filesystem WRITE class, on `file_read`'s shape: a path and a body
+  -- in, acceptance out, world threaded through.
+  --
+  -- WHY A WRITE IS IN THE WORLD AT ALL, since `ADR:303` scopes the boundary to
+  -- "external observations that can affect session control flow" and a write is
+  -- not an observation. It is in scope DERIVATIVELY. WI-D16 measured the shape
+  -- in compose (`compose.ail:502-521`): `writeFile(snippet_path, …)` is followed
+  -- by `check_snippet(snippet_path)`, which shells out to that path, and by
+  -- `if fileExists(snippet_path) then removeFile(…)`, and control flow branches
+  -- on the result twice. Leaving the write ambient while `tool_exec` and
+  -- `file_read` are mediated puts one fact in two homes that can disagree, which
+  -- is `ADR:340-341`'s "exactly one home, visibly threaded".
+  --
+  -- The consequence is stated where it can be checked rather than left implicit:
+  -- a deterministic run's write lands in `WorldState.files` and is therefore
+  -- visible to a subsequent `file_read` in the same run. Nothing reaches the
+  -- real filesystem. A live run performs it, because `ambient_file_write` is
+  -- bound there — the same data-not-a-code-path arrangement `world_tool` uses,
+  -- so no production code branches on test mode.
+  file_write: (WorldState, string, string) -> FileMutation ! {FS},
+  -- WI-D17's filesystem REMOVE class. A separate field and not a mode flag on
+  -- `file_write`, for the reason `ToolOutcome` is a sum: a boolean discriminator
+  -- in a request makes "remove with a body" representable and then something has
+  -- to forbid what the type should never have allowed.
+  --
+  -- IT IS HERE ON D16'S OWN ARGUMENT AND NOT ON A SEPARATE ONE, which is the
+  -- whole reason it could not be deferred. `removeFile` changes what
+  -- `fileExists` returns, and compose branches on exactly that at the
+  -- `if not checked.ok then if fileExists(p) then removeFile(p)` arm — the same
+  -- arm D16 cited to justify mediating the write. Mediating `writeFile` and
+  -- leaving `removeFile` ambient would leave the two-homes defect standing on
+  -- five of compose's eighteen write-side call sites, so it would be adopting an
+  -- argument and refusing its conclusion.
+  --
+  -- `mkdirAll` is NOT here, and that is a different answer on a different
+  -- ground: directory existence is observed only through `isDir` and `listDir`,
+  -- neither of which has a core seam (`Ports` has no directory class at all), so
+  -- a mediated `mkdirAll` would mutate a table nothing can read. It belongs with
+  -- the directory seam WI-D16 §6 priced, not here.
+  file_remove: (WorldState, string) -> FileMutation ! {FS},
   -- WI-A12's typed tool contract. State-threaded, typed request, typed result.
   -- No `{Clock}` in the row: the adapter ADVANCES the virtual clock
   -- arithmetically from the scripted duration, it never reads one. That keeps
@@ -595,6 +686,110 @@ export func ambient_file(state: WorldState, path: string) -> FileRead ! {FS} {
   { present: here, content: content, next_state: state }
 }
 
+-- The deterministic filesystem WRITE: put the entry in the world's own table
+-- and hand back the successor. WI-D17.
+--
+-- THIS IS THE FIRST ADAPTER IN THIS MODULE THAT ADDS TO A TABLE, and the whole
+-- difficulty of the class is one line long. Every other deterministic seam here
+-- consumes a cursor, advances a scalar, or returns `state` unchanged; the only
+-- other append in the file is `record_interaction`, which grows `log`. So the
+-- failure mode is specific and it is this project's counted one: an adapter that
+-- returned `next_state: state` here would type-check, satisfy every existing
+-- assertion, and make a subsequent `file_read` report `present: false` — which
+-- is BYTE-IDENTICAL to what that read returns if the write was never routed at
+-- all. Absent reads identically to unchanged, at C1, D6, D12, D13, D16 and here.
+-- `test_a_write_is_read_back_and_a_dropped_update_is_not_a_miss` is the fixture
+-- that separates them, and it asserts the CONTENT rather than the presence,
+-- because presence alone is satisfied by a world that was seeded and never
+-- written.
+--
+-- `remove_path` FIRST, then prepend. Two properties, both load-bearing:
+--
+--   * the removal keeps `files` a MAP — one entry per path — so its length
+--     stays a meaningful count and an overwrite cannot leave a shadowed stale
+--     entry behind for a later `remove` to uncover;
+--   * the PREPEND is what makes the read see the write even if the removal were
+--     ever dropped, because `lookup_file` is first-match. Appending would be a
+--     one-token difference with the opposite semantics — stale-read-wins — and
+--     it would be invisible to any fixture that writes each path once.
+--
+-- `ok` is unconditionally true because a table insertion cannot fail. That is
+-- the one place this adapter and `ambient_file_write` can disagree, and they
+-- disagree only where the host itself fails; the deterministic world has no
+-- permissions and no full disk to model, and modelling them would be inventing
+-- world shape that no gate keeps honest (`WorldState.files`' own rule).
+export func scripted_file_write(state: WorldState, path: string, content: string) -> FileMutation ! {FS} {
+  { ok: true,
+    error: "",
+    next_state: { state | files: ({ path: path, content: content }) :: remove_path(state.files, path) } }
+}
+
+-- The deterministic filesystem REMOVE. WI-D17.
+--
+-- `ok` REPORTS WHETHER THE PATH WAS THERE, and that is not decoration.
+--
+-- MEASURED, not assumed, because D1's stop condition rides on it — the
+-- deterministic and ambient adapters must agree without production code
+-- branching on test mode, and an adapter pair that disagrees on a reachable
+-- input falsifies D1 rather than merely being untidy. Probed on this pin:
+--
+--   removeFileResult("<a path that does not exist>")
+--     = Err 'cannot remove file: remove …: no such file or directory'
+--   writeFileResult("/proc/definitely/not/writable/x.txt", "x")
+--     = Err 'cannot write file: open …: no such file or directory'
+--
+-- So `ok: false` for an absent path is what the live half does, and the second
+-- line is why `FileMutation.error` is a real channel rather than a field that is
+-- always "": the host can and does fail a write.
+--
+-- compose guards its removes with `fileExists`, and a guard is only interesting
+-- because the unguarded case exists.
+export func scripted_file_remove(state: WorldState, path: string) -> FileMutation ! {FS} {
+  match lookup_file(state.files, path) {
+    Some(_) => { ok: true, error: "", next_state: { state | files: remove_path(state.files, path) } },
+    None => { ok: false, error: "no such file: ${path}", next_state: state }
+  }
+}
+
+-- Every entry for `path`, dropped. Shared by both mutators so that "what it
+-- means to no longer hold this path" has one definition — the same reason
+-- `virtual_clock` is shared rather than reimplemented per adapter.
+pure func remove_path(entries: [{ path: string, content: string }], path: string) -> [{ path: string, content: string }] {
+  match entries {
+    [] => [],
+    e :: rest => if e.path == path then remove_path(rest, path) else e :: remove_path(rest, path)
+  }
+}
+
+-- The ambient filesystem write: the real one. The world is returned UNCHANGED,
+-- and that is correct rather than the trap above: a live run's reads go through
+-- `ambient_file`, which consults the real filesystem and never looks at
+-- `state.files`, so growing the table here would be maintaining a second copy of
+-- a fact the live world already owns — two homes, in the direction this class
+-- exists to remove.
+--
+-- WHICH MEANS THE TWO ADAPTERS DIFFER IN A WAY THE TYPE CANNOT SEE. `next_state:
+-- state` is right here and wrong in `scripted_file_write`, so copying this
+-- function's body into that one produces the exact defect the fixture above
+-- exists to catch. Stated here because this is the site a reader arrives at
+-- when they wonder why one adapter threads and the other does not.
+export func ambient_file_write(state: WorldState, path: string, content: string) -> FileMutation ! {FS} {
+  match writeFileResult(path, content) {
+    Ok(_) => { ok: true, error: "", next_state: state },
+    Err(e) => { ok: false, error: e, next_state: state }
+  }
+}
+
+-- The ambient filesystem remove. `removeFileResult` rather than `removeFile`
+-- for `FileMutation`'s stated reason: the unit-returning form is where the
+-- failure is thrown away, and this is the layer that must not throw it away.
+export func ambient_file_remove(state: WorldState, path: string) -> FileMutation ! {FS} {
+  match removeFileResult(path) {
+    Ok(_) => { ok: true, error: "", next_state: state },
+    Err(e) => { ok: false, error: e, next_state: state }
+  }
+}
+
 -- The ambient environment: the process environment. Hoisted out of `live_ports`'
 -- inline closure at WI-D3 so that the live env read and the live file read are
 -- ONE named pair a probe can install together — see `ambient_context_reader`.
@@ -716,6 +911,83 @@ pure func env_has_key(entries: [{ key: string, value: string }], key: string) ->
   match entries {
     [] => false,
     e :: rest => if e.key == key then true else env_has_key(rest, key)
+  }
+}
+
+-- The recording filesystem write. WI-D17.
+--
+-- THE CONTENT DOES NOT ENTER THE LOG; ITS LENGTH DOES. Three reasons, in
+-- decreasing weight:
+--
+--   1. SECRETS. `dst_secrets.scan_interaction` scans the payload and the request
+--      projection, but a file body is the single most likely place in this whole
+--      surface for a credential to appear, and the right answer to "will the
+--      scanner catch it" is to not put it there. A length is a witness that
+--      cannot carry one.
+--   2. D2 asks for a BOUNDED full request projection. A file body is unbounded,
+--      and the precedent for bounding is already set one class over:
+--      `recording_tool` projects call id, tool, workdir and timeout and does NOT
+--      project the tool's arguments.
+--   3. Replay does not need it. `world_state_of` reconstitutes `files: []` and
+--      the REPLAYED DRIVER PERFORMS THE WRITE AGAIN through this same adapter,
+--      so the table is rebuilt by the run rather than restored from the artifact
+--      — which is why this class is recorded for grading and not for
+--      reconstitution. See the note on `recording_ports` for the full statement
+--      of why writes are recorded and reads are not.
+--
+-- What the length buys over recording nothing is that a replay writing DIFFERENT
+-- content to the same path differs in the projection, so `ProjectionDiffers`
+-- fires. Recording only the path would make that replay indistinguishable from a
+-- faithful one.
+--
+-- The status is `OutcomeFault` on a rejected write and carries no
+-- `fault_class_id`, because the fault catalogue declares no filesystem class.
+-- That is a DECLARED GAP in exactly `recording_approval`'s sense and not a
+-- solved problem: until a class id exists, D11's class-reached counter cannot
+-- see a failed write. It cannot arise in a deterministic run — `ok` is
+-- unconditionally true there — so the gap is reachable only on the live path,
+-- which no gate in this tree grades.
+export func recording_file_write(state: WorldState, path: string, content: string) -> FileMutation ! {FS} {
+  let done = scripted_file_write(state, path, content);
+  {
+    ok: done.ok,
+    error: done.error,
+    next_state: record_interaction(
+      done.next_state,
+      FileWriteIdentity(path),
+      "file_write path=${path} bytes=${Str.length(content)}",
+      -1,
+      { advance_ms: 0, chunks: [],
+        payload: "",
+        status: if done.ok then OutcomeOk else OutcomeFault,
+        fault_class_id: "" }
+    )
+  }
+}
+
+-- The recording filesystem remove. WI-D17.
+--
+-- A remove of an ABSENT path IS recorded, and with `OutcomeMissing` rather than
+-- `OutcomeFault`. That is `recording_env`'s distinction, not `recording_tool`'s:
+-- "the path was not there" is a normal answer to a normal request — compose
+-- issues exactly this call under a `fileExists` guard — and classifying it as a
+-- fault would manufacture a fault class the catalogue does not contain. It is
+-- the same reason `OutcomeMissing` exists at all.
+export func recording_file_remove(state: WorldState, path: string) -> FileMutation ! {FS} {
+  let done = scripted_file_remove(state, path);
+  {
+    ok: done.ok,
+    error: done.error,
+    next_state: record_interaction(
+      done.next_state,
+      FileRemoveIdentity(path),
+      "file_remove path=${path}",
+      -1,
+      { advance_ms: 0, chunks: [],
+        payload: "",
+        status: if done.ok then OutcomeOk else OutcomeMissing,
+        fault_class_id: "" }
+    )
   }
 }
 
@@ -1398,6 +1670,8 @@ export func ports_shape_probe(
     clock_now: virtual_clock,
     env_get: scripted_env,
     file_read: scripted_file,
+    file_write: scripted_file_write,
+    file_remove: scripted_file_remove,
     tool_exec: world_tool
   }
 }

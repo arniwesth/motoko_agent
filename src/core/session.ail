@@ -45,7 +45,7 @@ import src/core/types (Msg)
 import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
 import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
 import src/core/context_usage (resolve_context_limit)
@@ -900,6 +900,26 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
     let read = p.file_read(w0, path);
     { present: read.present, content: read.content, next_state: world_to_token(read.next_state) }
   };
+  -- WI-D17's two filesystem MUTATOR seams, bridged to `Ports.file_write` and
+  -- `Ports.file_remove`. Same `let w0` shape, same tool reason as every seam
+  -- above: `derive.py`'s call matcher cannot follow an argument list with nested
+  -- parentheses, so the conversion stays in its own `let` (S3, and WI-B2b paid
+  -- for discovering it).
+  --
+  -- `ok` and `error` are FORWARDED rather than collapsed, for the reason
+  -- `file_read`'s `present` is: the core seam carries the distinction and
+  -- re-deriving it here — say, `ok: error == ""` — would put the same fact in two
+  -- homes at the bridge, one layer below where anyone would look for it.
+  let file_write = func(w: ExtWorld, path: string, content: string) -> ExtFileMutation ! {FS} {
+    let w0 = token_to_world(w);
+    let done = p.file_write(w0, path, content);
+    { ok: done.ok, error: done.error, next_state: world_to_token(done.next_state) }
+  };
+  let file_remove = func(w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+    let w0 = token_to_world(w);
+    let done = p.file_remove(w0, path);
+    { ok: done.ok, error: done.error, next_state: world_to_token(done.next_state) }
+  };
   -- WI-C5 routes the clock. It is written with the SAME `let w0` shape as
   -- `ai_step` above and for the same tool reason, not for symmetry: the
   -- inventory's call matcher cannot follow an argument list with nested
@@ -918,6 +938,11 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
     -- extension (that is part 2). A seam with no callers is the situation WI-D3
     -- hit with `clock_now`; it is reported rather than presented as coverage.
     file_read: file_read,
+    -- WI-D17. Nothing calls these either, and the reason they are here anyway is
+    -- the ordering `derive.py` measures: the core class exists, so they derive
+    -- `returns-it` rather than `unrouted`.
+    file_write: file_write,
+    file_remove: file_remove,
     -- WI-C5. Was `ext_unrouted_clock` — an ambient `now()` that plan rule S2
     -- chose deliberately, because `ExtPorts.clock_now`'s `() -> int` shape
     -- admitted no world capture and the alternative was a frozen snapshot that

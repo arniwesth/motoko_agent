@@ -117,6 +117,7 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity,
   StreamChunkRecord,
   TimedOutcome,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -643,11 +644,37 @@ pure func specimen_bounds() -> GeneratorBounds {
     max_resource_size: 21, max_clock_advance_ms: 22 }
 }
 
--- Eight interactions: all seven identity classes, all three outcome statuses,
--- chunks present and absent, a deadline present and absent, a fault class id
--- present and blank, and the one blank component D2 makes legitimate — an
--- extension effect with no call id.
-pure func specimen_interactions() -> [Interaction] {
+-- Eight interactions: the seven identity classes THAT EXISTED WHEN THE BYTES
+-- WERE FROZEN, all three outcome statuses, chunks present and absent, a deadline
+-- present and absent, a fault class id present and blank, and the one blank
+-- component D2 makes legitimate — an extension effect with no call id.
+--
+-- WI-D17 SPLIT THIS FUNCTION FROM `specimen_interactions()` AND THE SPLIT IS THE
+-- INTERESTING PART OF THE EDIT. Two rows in this file were in direct
+-- contradiction the moment `IdentityBody` gained a constructor:
+--
+--   `scenario_specimen_covers_every_shape` says every identity class must be in
+--     the specimen, "or their codec paths are frozen by nothing", and it derives
+--     the class list from `all_interaction_kinds()` so a new class reddens it.
+--   `scenario_the_frozen_v1_specimen_still_decodes` says the specimen must equal
+--     what the frozen bytes hold, and says in its own comment that regenerating
+--     the file "is the response that is not available, because it destroys the
+--     evidence".
+--
+-- Both are right, and they conflict only because ONE program was serving both.
+-- The resolution is not a judgement call about which row matters more: A CLASS
+-- ADDED AFTER THE FREEZE CANNOT BE IN THE FROZEN BYTES, by construction. So the
+-- frozen program is pinned here, forever, at what v1 actually contained, and
+-- `specimen_interactions()` below grows — carrying every class through the
+-- encoder, the digest, the diffability floor, the store and the secret scanner,
+-- which is what the coverage row is actually asking for.
+--
+-- WHAT THIS COSTS, stated rather than buried: the two new classes' codec paths
+-- are round-tripped, not FROZEN. Nothing in the tree can freeze them, because
+-- there are no historical bytes containing them. The next encoding change is
+-- pinned for the original seven and unpinned for these two, and the only fix is
+-- time — a future freeze taken at a future schema version.
+pure func frozen_v1_interactions() -> [Interaction] {
   [inter(0, ProviderIdentity("origin.alpha", 0, "model.one"),
          "rq.provider.zero", -1,
          { advance_ms: 31, chunks: [chunk(0, "first "), chunk(5, "second")],
@@ -685,6 +712,34 @@ pure func specimen_interactions() -> [Interaction] {
            status: OutcomeOk, fault_class_id: "" })]
 }
 
+-- The frozen eight PLUS every class added since. This is what every row in this
+-- file except the two frozen-bytes rows uses.
+pure func specimen_interactions() -> [Interaction] {
+  frozen_v1_interactions() ++ post_v1_interactions()
+}
+
+pure func post_v1_interactions() -> [Interaction] {
+  [-- WI-D17's two filesystem mutators. The specimen carries every identity class
+   -- so that each one's codec path is frozen by something, and the completeness
+   -- check that names the omission is derived from `all_interaction_kinds()` —
+   -- which is why adding the classes reddened this file without anyone pointing
+   -- at it.
+   --
+   -- The write's path carries a SPACE and the remove's carries a BACKSLASH,
+   -- deliberately: a path is the one identity component that routinely holds
+   -- characters the line-oriented encoding has to escape, and a specimen whose
+   -- paths are all `/w/tmp/x.ail` would freeze the codec without freezing the
+   -- escaping. `PATH_WITH_BACKSLASH` above makes the same point for the env key.
+   inter(8, FileWriteIdentity("/w/tmp/dir with space/snippet.ail"),
+         "rq.file_write.eight", -1,
+         { advance_ms: 37, chunks: [], payload: "", status: OutcomeOk,
+           fault_class_id: "" }),
+   inter(9, FileRemoveIdentity("/w/tmp/back\\slash/snippet.ail"),
+         "rq.file_remove.nine", -1,
+         { advance_ms: 38, chunks: [], payload: "", status: OutcomeMissing,
+           fault_class_id: "" })]
+}
+
 pure func specimen_program() -> ExecutionProgram {
   { schema_version: program_schema_version(),
     generator_id: "gen.specimen",
@@ -698,6 +753,18 @@ pure func specimen_program() -> ExecutionProgram {
 
 pure func encoded_specimen() -> string {
   match encode_artifact(specimen_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
+}
+
+-- What the frozen v1 bytes actually contain. Identical to `specimen_program()`
+-- in every field EXCEPT the interaction list, which stops at the seven classes
+-- that existed at the freeze — see `frozen_v1_interactions()` for why the split
+-- exists and what it costs.
+pure func frozen_v1_program() -> ExecutionProgram {
+  { specimen_program() | interactions: frozen_v1_interactions() }
+}
+
+pure func encoded_frozen_v1() -> string {
+  match encode_artifact(frozen_v1_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
 }
 
 pure func v1_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v1.artifact" }
@@ -1073,7 +1140,7 @@ func scenario_the_frozen_v1_specimen_still_decodes() -> bool ! {IO, FS} {
   match FS.readFileResult(v1_fixture_path()) {
     Err(e) => { let _ = println("  ✗ the frozen v1 specimen could not be read (${e}); the compatibility policy has no artifact and asserts nothing"); false },
     Ok(bytes) => {
-      let matches_encoder = bytes == encoded_specimen();
+      let matches_encoder = bytes == encoded_frozen_v1();
       match decode_artifact(bytes) {
         ProgramDecodeRefused(rs) => {
           let _ = println("  ✗ THE FROZEN v1 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
@@ -1084,7 +1151,7 @@ func scenario_the_frozen_v1_specimen_still_decodes() -> bool ! {IO, FS} {
           false
         },
         ProgramDecoded(back) => {
-          let diff = program_diff(specimen_program(), back);
+          let diff = program_diff(frozen_v1_program(), back);
           let ok = List.length(diff) == 0;
           let _ = if ok then println("  ✓ the frozen v1 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
                   else println("  ✗ the frozen v1 specimen decodes to a DIFFERENT program: ${join_keys(diff)} — this build silently reinterprets an old artifact, which is what D8 forbids");

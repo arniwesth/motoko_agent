@@ -44,20 +44,29 @@ check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to
 check src/core/tool_phase.ail 313 'is_scratchpad_tool_name' "the mixed guard"
 check src/core/tool_phase.ail 314 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
 # WI-D16 RE-BASELINED the five session.ail anchors 881/1126/1232/2677/2787 ->
-# 911/1160/1266/2711/2821. It is the MECHANICAL drift this header describes and
-# not the D4 judgement the failure message warns about: the widening of
-# ExtPorts.proc_exec and the new ExtPorts.file_read seam added 30 and then 4
-# lines inside `ext_ports_of`, above all five. Each anchored expression was
-# compared to `git show HEAD:` before and after and is character-identical, so
-# no site changed identity, routing or attribution — only its offset. The table
-# identity hash and driver_only_attribution_ref move with it.
+# 911/1160/1266/2711/2821, and WI-D17 RE-BASELINED THEM AGAIN to
+# 931/1185/1291/2736/2846. Both are the MECHANICAL drift this header describes
+# and not the D4 judgement the failure message warns about: D16's widening of
+# ExtPorts.proc_exec and its new ExtPorts.file_read seam added 30 and then 4
+# lines inside `ext_ports_of`, and D17's ExtPorts.file_write/file_remove seams
+# added 20 more plus 5 in the record literal — all above all five anchors. Each
+# anchored expression was compared to `git show HEAD:` before and after and is
+# character-identical, so no site changed identity, routing or attribution —
+# only its offset. The table identity hash and driver_only_attribution_ref move
+# with it.
+#
+# TWICE IN TWO ITEMS IS THE PATTERN, AND IT IS WORTH NAMING: every seam added to
+# ExtPorts lands inside `ext_ports_of`, which sits above all five anchors, so
+# every Route B surface item re-baselines this list and re-issues both profiles.
+# That is not a defect in the anchors — a line-number anchor is what makes the
+# drift visible at all — but an item that plans for Route B should price it.
 #
 # WI-C5 RETIRED the session.ail:878 anchor. `ext_unrouted_clock` no longer
 # exists: widening ExtPorts.clock_now to thread the world token let
 # ext_ports_of route that seam, so the site is not un-routed, it is GONE. Its
 # replacement is :881 below, and it is checked as ROUTED rather than as ambient.
 check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (declared UNROUTED core)"
-for l in 911 1160 1266 2711 2821; do
+for l in 931 1185 1291 2736 2846; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 373 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

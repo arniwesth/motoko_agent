@@ -86,6 +86,7 @@ import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
+  FileWriteIdentity, FileRemoveIdentity,
   TimedOutcome, OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
   StreamChunkRecord,
   all_interaction_kinds, interaction_kind, total_advance_ms
@@ -240,7 +241,36 @@ pure func fixture_log() -> [Interaction] {
    mk(14, ExtensionEffectIdentity("compose", "extension_effect_fault", "call-7"),
       "ext_effect ext=compose", 500, ok_out(0, "served")),
    mk(15, ProviderIdentity("loop_v2", 1, "m"),
-      "model_step model=m msg_count=6", -1, ok_out(0, encode_provider_outcome(step_terminal())))]
+      "model_step model=m msg_count=6", -1, ok_out(0, encode_provider_outcome(step_terminal()))),
+   -- WI-D17's two filesystem mutators, in compose's own order: a write, the
+   -- remove that undoes it on the rejection arm, and a second write at a
+   -- different path.
+   --
+   -- THEY ARE APPENDED AFTER THE PROVIDER RATHER THAN INSERTED BEFORE IT, and
+   -- that is not cosmetic. Three checks in `scenario_fixture_carries_every_protected_shape`
+   -- name an interaction BY ORDINAL — `at_ord(log, 15)` is the non-streaming
+   -- provider, `at_ord(log, 0/2/3)` are the deadline sentinels. Inserting these
+   -- two above the provider pushed it to 17 and the chunk check went on PASSING,
+   -- because it then read a file_write, which also has no chunks. A green row
+   -- reading the wrong interaction is worse than a red one; appending keeps
+   -- every ordinal literal in this file pointing at what it was written for.
+   --
+   -- The remove is `ok_out`, not `missing_out`: it removes the path written one
+   -- row above, so it succeeds. `missing_out` here would ALSO have been wrong in
+   -- a way that showed — `count_status(log, "missing") == 1` is the approval
+   -- end-of-input row's assertion, and a second missing breaks it.
+   --
+   -- Both carry `deadline_ms: -1`: a filesystem mutation has no timeout at the
+   -- seam, which `class_has_deadline` states and `mk` reads.
+   --
+   -- TWO writes so that a checker collapsing the class is visible — the same
+   -- reason `ext_world`'s codec fixture carries two file entries.
+   mk(16, FileWriteIdentity("/w/tmp/snippet.ail"),
+      "file_write path=/w/tmp/snippet.ail bytes=42", -1, ok_out(0, "")),
+   mk(17, FileRemoveIdentity("/w/tmp/snippet.ail"),
+      "file_remove path=/w/tmp/snippet.ail", -1, ok_out(0, "")),
+   mk(18, FileWriteIdentity("/w/tmp/module.ail"),
+      "file_write path=/w/tmp/module.ail bytes=137", -1, ok_out(0, ""))]
 }
 
 pure func fixture_advance() -> int { total_advance_ms(fixture_log()) }

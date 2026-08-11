@@ -822,3 +822,39 @@ strength of D3's read class — and D3's read class **is not recorded**. There i
 and no `recording_file`; the four recording adapters are clock, env, approval and tool, and
 `EnvironmentReadIdentity` exists. So the precedent being copied contains an asymmetry nobody has
 re-asked, and copying it silently would propagate one.
+
+**Cluster 36 = WI-D18, the directory seam and the world's path key: HANDED OFF 2026-08-08**,
+`HANDOFF-execute-d18-the-directory-seam-and-the-path-key.md`. **The last of part 2's build blockers**,
+chosen over door 3 on D16's rule: a blocked verdict is not a blocked build, and door 3 gates whether
+compose's coverage *counts* while this gates whether compose can be *routed at all*.
+
+**The clustering note is that the named work was not the biggest thing in it.** The item was scoped as
+"add the directory class" — three call sites, all in `author_tools.ail`, plus the six `mkdirAll` sites
+D17 deferred. Grounding it turned up **two things that are not about directories**:
+
+**A gap in what D3 built.** `list_dir_impl` guards `fileExists(path)` **then** `isDir(path)`, so
+`author_tools.ail:189` asks `fileExists` about a **directory** — and routing that through
+`Ports.file_read` gives **two adapters with two different wrong answers**: `scripted_file` finds no
+flat entry and says `present: false`, `ambient_file` says true and proceeds to `readFile` a directory.
+`normalize_type:140` needs three values where `FileRead.present` has two. **Part 2 would have hit this
+whether or not anyone built a directory seam.**
+
+**And a live two-homes defect with a producer no rule covers.** `lookup_file` and `remove_path` are
+exact string equality and nothing normalizes, while the real filesystem does — so `tmp/x`, `./tmp/x`
+and `/w/tmp/x` are three world entries and one file on disk. **The two-homes shape produced by the
+world's KEY rather than by an unmediated effect**, and it is already reachable: `compose.ail:769`
+creates `"${ctx.workdir}/tmp"` and `:771` writes `"tmp/${name}.ail"`. Absolute mkdir, relative write;
+on disk they agree when cwd is workdir, in a world keyed on strings they never do. **The symptom is a
+read returning `present: false` for a path just written — indistinguishable from a write that was
+never routed**, which is D17's mutant 1 arriving from a different direction.
+
+**Clustering rule to carry: when the seam count is small, ground the CALLERS before pricing the item.**
+Three call sites read like plumbing. The callers said otherwise, and both findings are about classes
+that already shipped.
+
+**S25 applied to this handoff, which is the rule's first use by its author.** The measurement that
+"no compose session can observe a created-but-empty directory" — all six `mkdirAll` sites write into
+the directory immediately, verified line by line — is stated **with its condition**: it holds for
+compose as written today and is falsified by a create-then-list site or by a future
+`InitialWorld.files` that seeds an empty directory. The handoff asks the item to decide whether it is
+buying that permanently or buying it with a guard.
