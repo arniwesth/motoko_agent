@@ -1,8 +1,23 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { startLoopbackServer, type LoopbackServer } from "./loopback.js";
+
+// The search path shells out to ripgrep. Skip the integration test in
+// environments where `rg` is not a spawnable binary (e.g. CI images without
+// ripgrep installed) so the suite stays green there while still exercising
+// the real path wherever ripgrep is available.
+function ripgrepAvailable(): boolean {
+  try {
+    execFileSync("rg", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const itWithRg = ripgrepAvailable() ? it : it.skip;
 
 describe("scratchpad loopback server", () => {
   let tempDir = "";
@@ -15,7 +30,7 @@ describe("scratchpad loopback server", () => {
     tempDir = "";
   });
 
-  it("returns structured JSON for tool.search", async () => {
+  itWithRg("returns structured JSON for tool.search", async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "motoko-loopback-"));
     fs.mkdirSync(path.join(tempDir, "src"), { recursive: true });
     fs.writeFileSync(path.join(tempDir, "src", "sample.ts"), "const x = 'WebSocket';\n", "utf8");

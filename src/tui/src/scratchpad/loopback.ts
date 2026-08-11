@@ -93,12 +93,20 @@ export async function startLoopbackServer(opts: LoopbackResolverOptions): Promis
           });
           return result(reqId, 0, parseRipgrepMatches(opts.workdir, pattern, out).slice(0, 50 * 1024));
         } catch (e: any) {
-          const code = typeof e.status === "number" ? e.status : 1;
+          // rg exits 1 when it ran successfully but found no matches — treat
+          // that as a success with an empty match set. A spawn failure
+          // (notably ENOENT when ripgrep isn't installed) has no numeric
+          // status; surface it as an error instead of silently reporting
+          // "0 matches", which would mask a missing-ripgrep environment.
+          const status = typeof e.status === "number" ? e.status : null;
           const stdout = String(e.stdout ?? "");
+          if (status === null) {
+            return result(reqId, 127, "", `ripgrep (rg) could not be run: ${String(e.code ?? e.message ?? e)}`);
+          }
           return result(
             reqId,
-            code === 1 ? 0 : code,
-            code === 1 ? parseRipgrepMatches(opts.workdir, pattern, stdout).slice(0, 50 * 1024) : stdout.slice(0, 50 * 1024),
+            status === 1 ? 0 : status,
+            status === 1 ? parseRipgrepMatches(opts.workdir, pattern, stdout).slice(0, 50 * 1024) : stdout.slice(0, 50 * 1024),
             String(e.stderr ?? "").slice(0, 4000),
           );
         }
