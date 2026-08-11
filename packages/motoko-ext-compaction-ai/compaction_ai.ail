@@ -8,9 +8,9 @@ import std/crypto (sha256Hex)
 import std/json (Json, jo, kv, js, jnum, get, getInt, asString)
 import std/list (length as list_length)
 import std/option (Option, Some, None)
-import std/result (Ok, Err)
+import std/result (Result, Ok, Err)
 import std/string (contains, substring, length as string_length)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, PreStepDecision, PassThrough, Compacted, Msg, ToolCall)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtPorts, PreStepDecision, PassThrough, Compacted, Msg, ToolCall)
 import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/compaction (calibrated_usage_percent_anchored)
@@ -74,9 +74,46 @@ RECENT TURNS (keep these verbatim - ${show(recent_count)} messages):
 Provide a concise summary that captures essential context for continuing the original task."
 }
 
-export func summarize_with_ai(ctx: ExtCtx, prompt: string, model: string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+-- Number of summarizer attempts before giving up. A transient provider
+-- error (RateLimit / ConnectionFailed / Timeout, surfaced as Err) or an
+-- empty response gets one retry; a persistent failure is reported so the
+-- caller can degrade to PassThrough rather than corrupting the compacted
+-- context with a placeholder summary.
+--
+-- NOTE: this does NOT interrupt an already in-flight stalled request —
+-- std/ai's step/stepWithStream expose no per-call timeout, so an endpoint
+-- that accepts the connection and then never streams still blocks the loop
+-- (observed with :free OpenRouter models; MOT-38). A true wall-clock
+-- timeout has to come from AILANG core; route that via ailang-feedback.
+-- What this DOES fix: every summarizer failure that actually returns is
+-- now converted into a safe skip instead of being spliced into the
+-- context as if it were a real summary.
+func summarizer_max_attempts() -> int { 2 }
+
+func summarize_attempt(ctx: ExtCtx, prompt: string, model: string, attempts_left: int) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
   let prompt_msgs: [Msg] = [{ role: "user", content: prompt, tool_calls: [], tool_call_id: "" }];
   match ctx.ports.ai_step(model, prompt_msgs) {
+    Ok(content) =>
+      if string_length(content) == 0 then
+        (if attempts_left > 1 then summarize_attempt(ctx, prompt, model, attempts_left - 1) else Err("empty summary"))
+      else Ok(content),
+    Err(msg) =>
+      if attempts_left > 1 then summarize_attempt(ctx, prompt, model, attempts_left - 1) else Err(msg)
+  }
+}
+
+-- Result-returning summarizer used on the compaction path. Ok(summary) on
+-- success; Err(reason) once attempts are exhausted so compact_with_ai can
+-- degrade to PassThrough.
+export func summarize_with_ai_result(ctx: ExtCtx, prompt: string, model: string) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  summarize_attempt(ctx, prompt, model, summarizer_max_attempts())
+}
+
+-- Back-compat string-returning wrapper. Preserves the historical
+-- "[summarizer unavailable: ...]" sentinel for external callers and the
+-- package smoke contract.
+export func summarize_with_ai(ctx: ExtCtx, prompt: string, model: string) -> string ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  match summarize_with_ai_result(ctx, prompt, model) {
     Ok(content) => content,
     Err(msg) => "[summarizer unavailable: ${msg}]"
   }
@@ -309,6 +346,16 @@ func cache_artifact(digest: string, summary: string, step: int) -> Json {
   ])
 }
 
+-- Assemble the Compacted decision from a resolved summary (fresh or
+-- cached). Returns PassThrough if the summary fails to relieve pressure.
+func finalize_compaction(ctx: ExtCtx, msgs: [Msg], prefix: [Msg], recent_turns: [Msg], old_count: int, digest: string, summary: string, pct: int) -> PreStepDecision {
+  let status = latest_runtime_status_result(msgs);
+  let compacted = prefix ++ [summary_msg(ctx, summary, status)] ++ recent_turns;
+  let new_pct = usage_percent(ctx, compacted, ctx.context_limit);
+  if new_pct > pct then PassThrough
+  else Compacted(compacted, "AI-summarized ${show(old_count)} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary, ctx.step))
+}
+
 export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -> PreStepDecision ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
   let pct = usage_percent(ctx, msgs, ctx.context_limit);
   if pct < cfg.threshold_pct then PassThrough
@@ -326,15 +373,15 @@ export func compact_with_ai(ctx: ExtCtx, msgs: [Msg], cfg: CompactionAiConfig) -
       if pct - projected_pct < cfg.min_relief_pct then PassThrough
       else {
       let digest = segment_digest(old_turns);
-      let summary = match cached_summary(ctx.artifacts, digest) {
-        Some(cached) => cached,
-        None => summarize_with_ai(ctx, summarization_prompt(old_turns, recent_turns), cfg.model)
-      };
-      let status = latest_runtime_status_result(msgs);
-      let compacted = split_result.prefix ++ [summary_msg(ctx, summary, status)] ++ recent_turns;
-      let new_pct = usage_percent(ctx, compacted, ctx.context_limit);
-      if new_pct > pct then PassThrough
-      else Compacted(compacted, "AI-summarized ${show(list_length(old_turns))} turns (${show(pct)}% -> ${show(new_pct)}%)", cache_artifact(digest, summary, ctx.step))
+      match cached_summary(ctx.artifacts, digest) {
+        Some(cached) => finalize_compaction(ctx, msgs, split_result.prefix, recent_turns, list_length(old_turns), digest, cached, pct),
+        -- Fresh summary: on any returned failure, skip compaction this step
+        -- rather than splice a broken placeholder into the context (MOT-38).
+        None => match summarize_with_ai_result(ctx, summarization_prompt(old_turns, recent_turns), cfg.model) {
+          Ok(summary) => finalize_compaction(ctx, msgs, split_result.prefix, recent_turns, list_length(old_turns), digest, summary, pct),
+          Err(_) => PassThrough
+        }
+      }
       }
     }
   }
@@ -371,6 +418,20 @@ func test_ctx(step: int, limit: int, artifacts: Json) -> ExtCtx {
     artifacts: artifacts,
     telemetry: zero_token_telemetry()
   }
+}
+
+-- A summarizer port that actually succeeds, so the compaction happy-path
+-- tests exercise a real summary rather than relying on the degrade path.
+func stub_ai_step(_model: string, _msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  Ok("stub summary of prior turns")
+}
+
+func stub_ext_ports() -> ExtPorts {
+  { noop_ext_ports() | ai_step: stub_ai_step }
+}
+
+func test_ctx_stub(step: int, limit: int, artifacts: Json) -> ExtCtx {
+  { test_ctx(step, limit, artifacts) | ports: stub_ext_ports() }
 }
 
 func user(content: string) -> Msg {
@@ -415,7 +476,7 @@ func test_ai_batch_compacts_many_old_messages() -> bool
   tests [((), true)]
   {
     let msgs = repeated_pairs(8, long_content());
-    match compact_with_ai(test_ctx(1, 250, empty_ext_artifacts()), msgs, test_cfg(false)) {
+    match compact_with_ai(test_ctx_stub(1, 250, empty_ext_artifacts()), msgs, test_cfg(false)) {
       Compacted(out, note, _) =>
         contains(note, "AI-summarized")
           && list_length(out) < list_length(msgs)
@@ -424,16 +485,30 @@ func test_ai_batch_compacts_many_old_messages() -> bool
     }
   }
 
+-- MOT-38: a batch that WOULD compact with a working summarizer must skip
+-- compaction (PassThrough) when the summarizer fails, instead of splicing
+-- a "[summarizer unavailable: ...]" placeholder in as if it were a real
+-- summary. Uses test_ctx (noop ports → ai_step returns Err).
+func test_ai_summarizer_failure_degrades_to_passthrough() -> bool
+  tests [((), true)]
+  {
+    let msgs = repeated_pairs(8, long_content());
+    match compact_with_ai(test_ctx(1, 250, empty_ext_artifacts()), msgs, test_cfg(false)) {
+      PassThrough => true,
+      Compacted(_, _, _) => false
+    }
+  }
+
 func test_ai_rate_limit_gap_and_same_step_cache() -> bool
   tests [((), true)]
   {
     let msgs = repeated_pairs(8, long_content());
     let cfg = test_cfg(true);
-    match compact_with_ai(test_ctx(10, 1000, empty_ext_artifacts()), msgs, cfg) {
+    match compact_with_ai(test_ctx_stub(10, 1000, empty_ext_artifacts()), msgs, cfg) {
       PassThrough => false,
       Compacted(out1, _, artifacts) => {
-        let later = compact_with_ai(test_ctx(11, 1000, artifacts), msgs, cfg);
-        let same_step = compact_with_ai(test_ctx(10, 1000, artifacts), msgs, cfg);
+        let later = compact_with_ai(test_ctx_stub(11, 1000, artifacts), msgs, cfg);
+        let same_step = compact_with_ai(test_ctx_stub(10, 1000, artifacts), msgs, cfg);
         match later {
           PassThrough =>
             match same_step {
