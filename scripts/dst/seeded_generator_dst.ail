@@ -433,6 +433,15 @@ func witness_of(initial: WorldState, run: TracedSessionResult) -> DiscoveryWitne
     approval_reads: tool_role_messages(final_msgs),
     approvals_consumed: List.length(initial.approvals) - List.length(run.world.approvals),
     clock_delta_ms: run.world.clock_ms - initial.clock_ms,
+    -- WI-D19. This scenario routes no filesystem mutation, so the expectation is
+    -- the literal zero WI-D17 and WI-D18 pinned in `absent_classes` — the field is
+    -- where that pin now lives, and it is still a claim rather than silence. See
+    -- `DiscoveryWitness` for why the three classes moved from a hard-coded 0 to a
+    -- witness at WI-D19, and note that an extension installed into THIS scenario
+    -- has to change these by hand: nothing derives them from the run.
+    file_writes: 0,
+    file_removes: 0,
+    dir_makes: 0,
     expected_env_reads: if dispatches > 0 then env_reads_with_dispatch(dispatches)
                         else env_reads_always()
   }

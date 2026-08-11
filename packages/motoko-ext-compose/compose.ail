@@ -17,6 +17,10 @@ import pkg/sunholo/motoko_ext_compose/types (ToolResultMeta, ComposeHostConfig)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ToolCallEnvelope, ToolResultEnvelope,
   ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
+  -- WI-D19: the routed half of `on_response_intercept`. `ExtPathKind`'s three
+  -- constructors are imported by name because `remove_if_file` matches on them
+  -- exhaustively rather than defaulting — see that function.
+  ExtPorts, ExtWorld, ExtFileMutation, ExtPathFile, ExtPathDir, ExtPathMissing,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
   Msg, PreStepDecision, PassThrough
 )
@@ -758,36 +762,129 @@ export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: Com
   else Handled(handle_compose_tool(ctx, compose_req_from_call(ctx, call), runtime_cfg, snippet_caps))
 }, next_state: ctx.world } }
 
-export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
-  if mode != "inline" then NoIntercept
+-- WI-D19. THE `fileExists` GUARD, ROUTED THROUGH `path_stat` AND NOT THROUGH
+-- `file_read.present`. Both seams can answer "is there something here", and the
+-- reason this one is chosen is what the call site is actually asking.
+--
+-- THE QUESTION IS "IS THERE A FILE TO REMOVE", NOT "DOES THIS PATH HOLD BYTES".
+-- The guard exists to protect a `removeFile`, and `removeFile` is defined over a
+-- file. `ExtPathFile` IS that predicate. `ExtFileRead.present` is not: it is
+-- two-valued, so it answers the same for a directory as for a file, and WI-D18
+-- §3.2 measured the two adapters DISAGREEING on exactly that input. Routing this
+-- guard through `file_read` would put an adapter disagreement between compose
+-- and a `removeFile` that the host refuses over a directory.
+--
+-- AND `file_read` RETURNS THE CONTENT, WHICH THIS SITE DOES NOT WANT. WI-D17 §3
+-- and WI-D18 §6 decide what the recorder does with each class; a read issued
+-- only for its boolean would hand the recorder a body nobody asked for and force
+-- that decision on bytes with no consumer. `path_stat` writes no interaction at
+-- all, which is the answer those sections already reached for a pure observation.
+--
+-- THE MATCH IS EXHAUSTIVE ON PURPOSE, for `session.ext_ports_of`'s reason at the
+-- other end of the same seam: a wildcard here would silently absorb a fourth
+-- `ExtPathKind` constructor, and the whole point of typing the kind rather than
+-- rendering it to a string was that a fourth value must not have a default arm.
+--
+-- `ok: true` on the two non-file arms is "there was nothing to remove", which is
+-- what the ambient `if fileExists(p) then removeFile(p) else ()` returned. It is
+-- NOT "the remove succeeded" — no remove was attempted.
+func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+  let stat = p.path_stat(w, path);
+  match stat.kind {
+    ExtPathFile    => p.file_remove(stat.next_state, path),
+    ExtPathDir     => { ok: true, error: "", next_state: stat.next_state },
+    ExtPathMissing => { ok: true, error: "", next_state: stat.next_state }
+  }
+}
+
+-- WI-D19 — THE FIRST ROUTED HOOK IN THIS TREE. Seven of this hook's nine effect
+-- sites now go through `ctx.ports` and thread the world out on `next_state`; the
+-- two `exec` sites do NOT, and the reason is a finding rather than a shortfall.
+--
+-- WHAT ROUTED: `now()` -> `clock_now`; `mkdirAll` -> `dir_make`; `writeFile` ->
+-- `file_write`; both `fileExists` -> `path_stat`; both `removeFile` ->
+-- `file_remove`. Six of `ExtPorts`' seven world-threading seams get their first
+-- caller here — every one built at WI-C5, D16, D17 and D18 except `env_get`,
+-- which D16 declined to widen on the ground that its callers are in
+-- `register_with_config` and cannot reach a port at all.
+--
+-- WHAT DID NOT ROUTE, AND WHY IT IS NOT A BUDGET DECISION. `check_snippet` and
+-- `run_snippet` shell out with `exec("ailang", [...])`. The seam that looks like
+-- their home is `ExtPorts.proc_exec`, and it ANSWERS A DIFFERENT QUESTION — it
+-- fronts `Ports.tool_exec`, whose live adapter is `dispatch_one` ->
+-- `run_native_batch` -> `tool_runtime.run_native_call`, a dispatcher over
+-- MOTOKO'S OWN TOOL NAMES. `proc_exec(w, "ailang", …)` reaches that function's
+-- final `else` and returns
+--   "ailang requires extension capability and is not available in native runtime"
+-- so routing here would not run the compiler at all; it would return a
+-- tool-error blob that `check_snippet` has no way to tell from a check failure.
+--
+-- The shape fails independently of the semantics: `ExtProcOutcome` carries
+-- `output: string` and nothing else, and BOTH callers branch on `out.exitCode`
+-- (`:260`, `:275`) and read `out.stdout` and `out.stderr` separately. There is no
+-- exit code to read. Recovering one would mean parsing the rendered string, which
+-- is the silent-wrong shape this project exists to remove, or widening
+-- `ExtProcOutcome` — an ABI change, and the handoff scoped this item on it not
+-- needing one. Reported rather than patched; see the WI-D19 note.
+export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  if mode != "inline" then { decision: NoIntercept, next_state: ctx.world }
   else {
     let snippet = extract_ailang_fence(response_text);
-    if snippet == "" then NoIntercept
+    if snippet == "" then { decision: NoIntercept, next_state: ctx.world }
     else {
-      let name = "inline_${show(now())}";
+      let p = ctx.ports;
+      let reading = p.clock_now(ctx.world);
+      let name = "inline_${show(reading.now_ms)}";
       let path = "tmp/${name}.ail";
-      let _ = mkdirAll("${ctx.workdir}/tmp");
+      -- WI-D19 FIXES THE SPELLING AT THE CALL SITE, which is the rule WI-D18 §5
+      -- wrote at `WorldState.files`: the world keys on RAW STRINGS and does not
+      -- normalise, so the caller supplies ONE spelling per path.
+      --
+      -- This line read `mkdirAll("${ctx.workdir}/tmp")` while the write below is
+      -- `"tmp/${name}.ail"`. Absolute create, relative write. On disk they agree
+      -- only when the process runs in `workdir`; in the world they are two
+      -- different directories, and `dir_list` on the created one reports
+      -- `entries: []` — a PLAUSIBLE answer rather than a crash, which is why
+      -- `world_state_probe`'s `assert_directory_class` row 8 pins it.
+      --
+      -- THE WRITE'S SPELLING WINS, AND IT IS NOT A COIN FLIP: it is pinned by the
+      -- compiler. `compose_module_header` emits `module tmp/${name}` and AILANG
+      -- resolves a module path against the file's path, so `"tmp/${name}.ail"`
+      -- cannot become absolute without the header moving with it and the
+      -- `ailang check` below failing. The create is the free half, so the create
+      -- is what moves.
+      --
+      -- It is also a repair on a real filesystem. When cwd is not `workdir` the
+      -- old pair created `workdir/tmp` and then wrote into a `./tmp` that nothing
+      -- had created; now both name the same directory under cwd, which is the
+      -- directory `ailang check tmp/x.ail` resolves against.
+      --
+      -- SCOPED TO THIS HOOK. `one_attempt:501` has the same defect and is Route B
+      -- part 2b's, not this item's.
+      let made = p.dir_make(reading.next_state, "tmp");
       let clean = compose_file_body(snippet);
-      let _ = writeFile(path, "${compose_module_header(name)}\n\n${clean}");
+      let written = p.file_write(made.next_state, path, "${compose_module_header(name)}\n\n${clean}");
       let checked = check_snippet(path);
       if not checked.ok then {
-        let _ = if fileExists(path) then removeFile(path) else ();
-        InterceptHandled({
-          tool_call_id: "inline-${show(ctx.step)}",
-          tool: "ComposeInline",
-          exit_code: 1,
-          stdout: "",
-          stderr: checked.errors,
-          metadata: jo([])
-        })
+        let cleaned = remove_if_file(p, written.next_state, path);
+        { decision: InterceptHandled({
+            tool_call_id: "inline-${show(ctx.step)}",
+            tool: "ComposeInline",
+            exit_code: 1,
+            stdout: "",
+            stderr: checked.errors,
+            metadata: jo([])
+          }),
+          next_state: cleaned.next_state }
       } else {
         let ran = run_snippet(path, snippet_caps);
-        let _ = if fileExists(path) then removeFile(path) else ();
-        InterceptHandled(mk_result("inline-${show(ctx.step)}", "inline", 1, ran.stdout, ran.stderr, ran.exit_code, "inline snippet executed", ran.truncated, "{}"))
+        let cleaned = remove_if_file(p, written.next_state, path);
+        { decision: InterceptHandled(mk_result("inline-${show(ctx.step)}", "inline", 1, ran.stdout, ran.stderr, ran.exit_code, "inline snippet executed", ran.truncated, "{}")),
+          next_state: cleaned.next_state }
       }
     }
   }
-}, next_state: ctx.world } }
+}
 
 func no_budget_patch() -> BudgetPatch {
   {

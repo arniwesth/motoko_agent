@@ -187,6 +187,11 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   FinalizeDecision,
   NoDecision,
   NoIntercept,
+  -- WI-D19: the routed intercept below matches `ExtPathKind` exhaustively.
+  ExtPathFile,
+  ExtPathDir,
+  ExtPathMissing,
+  ExtFileMutation,
   PassThrough,
   Pending,
   DenyAfterTimeout,
@@ -261,16 +266,106 @@ func no_intercept(ctx: ExtCtx, _text: string)
   -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }
 func no_solver(ctx: ExtCtx, _text: string)
   -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+
+-- ---------------------------------------------------------------------------
+-- WI-D19: THE ROUTED INTERCEPT, and why this scenario exists at all
+-- ---------------------------------------------------------------------------
+--
+-- WI-D19 routed `motoko_ext_compose`'s `on_response_intercept` through
+-- `ExtPorts`. That gave five seams their first CALLER, but it gave the
+-- RECORDER nothing, because no graded profile in this tree installs compose —
+-- C5's compose-bearing profile is still owed. Left there, the item would have
+-- shipped a routing with no graded evidence and `absent_classes`' three pinned
+-- classes would have stayed green for the wrong reason. The handoff's own words:
+-- do not silence the tripwire by not grading the profile.
+--
+-- So this hook is compose's ROUTED CHAIN, in this scenario's registry, driven by
+-- the same production dispatcher and the same `RecordingWorld` adapters. It is
+-- the shape and not the extension — `compose.ail:769-785` in miniature:
+--
+--   dir_make("tmp") -> file_write("tmp/inline.ail") -> path_stat -> file_remove
+--
+-- ONE SPELLING FOR THE DIRECTORY AND THE FILE UNDER IT, which is WI-D18 §5's rule
+-- and the defect WI-D19 fixed at compose's call site. A census cannot see that
+-- rule — the three counts balance whether or not the two paths agree — so the
+-- `dir_list` below is wired to GUARD the remove, which is what puts a path-key
+-- failure into a count. Written `"/w/tmp"` here against `"tmp/inline.ail"` there,
+-- the listing comes back empty, the remove never happens, and `file_remove`
+-- balances 0 against a witnessed 4.
+--
+-- It returns `NoIntercept` so the driver's own loop is unchanged and every other
+-- witness in this file keeps measuring what it measured before. The effects are
+-- performed; only the decision is empty.
+--
+-- THE THREE CLASSES IT PRODUCES ARE EXACTLY THE THREE WI-D17 AND WI-D18 PINNED
+-- AT ZERO. `path_stat` produces none, deliberately — it is a READ, and WI-D18 §6
+-- decided reads are not recorded because `InitialWorld` cannot rebuild them.
+-- That asymmetry is why the witness has three fields and not five.
+func routing_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let made = p.dir_make(ctx.world, "tmp");
+  let wrote = p.file_write(made.next_state, "tmp/inline.ail", "module tmp/inline\n");
+  let stat = p.path_stat(wrote.next_state, "tmp/inline.ail");
+  -- THE LISTING IS HERE FOR TWO REASONS AND NEITHER IS THE CENSUS, which cannot
+  -- see it — `dir_list` is a READ and WI-D18 §6 decided reads are not recorded.
+  --
+  --   1. IT IS `ExtPorts.dir_list`'S FIRST EXECUTED CALLER. WI-D18 §7 listed the
+  --      `session.ext_ports_of` bridge closure that derives `present` from the
+  --      entry count as a mutant it could not run, because nothing in the tree
+  --      called an `ExtPorts.dir_list` at all. This calls one, through the
+  --      production bridge, so the mutant became runnable — and WI-D19 ran it.
+  --   2. IT IS WHERE THE PATH KEY IS OBSERVABLE. `dir_make("tmp")` and
+  --      `file_write("tmp/inline.ail")` use ONE spelling, so the listing holds the
+  --      file. Spelled the way `compose.ail:769`/`:771` were before WI-D19 —
+  --      absolute create, relative write — the created directory is a DIFFERENT
+  --      key and this listing comes back empty.
+  --
+  -- SO THE REMOVE IS GUARDED BY THE LISTING, and that is how a read with no
+  -- census reaches the census. `file_removes` is witnessed at one per dispatch;
+  -- if the listing ever comes back empty or misspelled the removes stop happening
+  -- and the balance goes red by name. A bare `dir_list` whose answer nothing
+  -- consumed would be a call site, not a test — WI-D18's mutant 5 is what taught
+  -- this file that a claim nothing reads is pinned by nothing.
+  let listed = p.dir_list(stat.next_state, "tmp");
+  let holds_the_file = listed.present && show(listed.entries) == show(["inline.ail"]);
+  -- THE SECOND DIRECTORY, AND IT IS THE HALF THAT CATCHES THE BRIDGE MUTANT.
+  -- The listing above cannot: it is a POPULATED directory, so `present` and
+  -- `List.length(entries) > 0` agree on it, and WI-D19 ran the mutant and watched
+  -- it pass for exactly that reason. The distinguishing input is a directory that
+  -- EXISTS AND IS EMPTY — `present: true, entries: []` — which is the state
+  -- WI-D18's whole kinded table was built to represent and which a bridge
+  -- deriving presence from the count reports as ABSENT.
+  --
+  -- It is created OUTSIDE `tmp` on purpose. Created under it, `tmp`'s own listing
+  -- would gain a second entry and `holds_the_file` above would go red for an
+  -- unrelated reason — one assertion breaking another is how a suite stops
+  -- measuring what its labels say.
+  let mk_empty = p.dir_make(listed.next_state, "probe_empty");
+  let empty_listing = p.dir_list(mk_empty.next_state, "probe_empty");
+  let empty_is_present = empty_listing.present && List.length(empty_listing.entries) == 0;
+  let gone: ExtFileMutation =
+    if holds_the_file && empty_is_present then
+      match stat.kind {
+        ExtPathFile    => p.file_remove(empty_listing.next_state, "tmp/inline.ail"),
+        ExtPathDir     => { ok: true, error: "", next_state: empty_listing.next_state },
+        ExtPathMissing => { ok: true, error: "", next_state: empty_listing.next_state }
+      }
+    else { ok: true, error: "", next_state: empty_listing.next_state };
+  { decision: NoIntercept, next_state: gone.next_state }
+}
 func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("discovery: approval required", DenyAfterTimeout)
 }
 
-func approval_rt(id: string) -> ExtRuntime {
-  let v: VerificationConfig = { enabled: false, command: "" };
-  let hooks: ExtensionHooks = {
-    id: id,
+-- NAMED AND SHARED AT WI-D19, and the sharing is the point rather than tidiness:
+-- the routed scenario differs from the three original ones in EXACTLY ONE hook
+-- slot, so a second hooks literal would let the two drift in a way no reader
+-- would see and no gate would report.
+func approval_hooks_of(id: string) -> ExtensionHooks {
+  { id: id,
     provided_tools: [],
     on_describe_tools: no_describe,
     on_build_system_prompt: no_prompt,
@@ -279,9 +374,12 @@ func approval_rt(id: string) -> ExtRuntime {
     on_tool_policy: pending_policy,
     on_tool_handle: no_handle,
     on_response_intercept: no_intercept,
-    on_solver_candidate: no_solver
-  };
-  { registry: { hooks: [hooks] }, strict_mode: false, verification: v }
+    on_solver_candidate: no_solver }
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [approval_hooks_of(id)] }, strict_mode: false, verification: v }
 }
 
 -- ---------------------------------------------------------------------------
@@ -427,6 +525,15 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
     approval_reads: tool_role_messages(final_msgs),
     approvals_consumed: List.length(initial.approvals) - List.length(run.world.approvals),
     clock_delta_ms: run.world.clock_ms - initial.clock_ms,
+    -- WI-D19. This scenario routes no filesystem mutation, so the expectation is
+    -- the literal zero WI-D17 and WI-D18 pinned in `absent_classes` — the field is
+    -- where that pin now lives, and it is still a claim rather than silence. See
+    -- `DiscoveryWitness` for why the three classes moved from a hard-coded 0 to a
+    -- witness at WI-D19, and note that an extension installed into THIS scenario
+    -- has to change these by hand: nothing derives them from the run.
+    file_writes: 0,
+    file_removes: 0,
+    dir_makes: 0,
     expected_env_reads: expected_env
   }
 }
@@ -777,6 +884,106 @@ export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Shared
   println("CENSUS wire ${census_line(census(run.world.log))}")
 }
 
+-- ---------------------------------------------------------------------------
+-- WI-D19: the routed scenario, and the tripwire it answers
+-- ---------------------------------------------------------------------------
+
+func routing_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [{ approval_hooks_of(id) | on_response_intercept: routing_intercept }] },
+    strict_mode: false, verification: v }
+}
+
+func run_routing(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    routing_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+-- The three counts, derived from the SCENARIO rather than from the log.
+--
+-- `routing_intercept` performs exactly one `dir_make`, one `file_write` and one
+-- `file_remove` per dispatch, and the driver dispatches the intercept once per
+-- assistant response. So the expectation is the response count — which is
+-- `provider_calls_witnessed`, read off `ProviderCallPrepared` records that
+-- production driver code writes and that exist whether or not the recorder ever
+-- recorded anything.
+--
+-- THIS IS THE POINT OF THE WHOLE SCENARIO. A count read off `log` would agree
+-- with the recorder by construction and the balance would be an identity; this
+-- one can disagree, and the mutation rows below make it.
+func routing_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("-- WI-D19: a ROUTED extension on a graded profile --");
+  let initial = base_world([approve_line(), approve_line(), approve_line()]);
+  let run = run_routing("discovery_routing", initial);
+  let log = run.world.log;
+  let intercepts = provider_calls_witnessed(run.trace.records);
+  -- TWO `dir_make`s per dispatch and ONE of everything else, counted from
+  -- `routing_intercept`'s own text: the compose-shaped `tmp` and the empty
+  -- `probe_empty` that exists to make the bridge's `present` derivation
+  -- falsifiable. Written as an arithmetic expression rather than a literal so
+  -- that adding a seam to the hook and forgetting this line is a red row.
+  let w = { witness_for(initial, run, env_reads_always(1))
+            | file_writes: intercepts, file_removes: intercepts, dir_makes: intercepts * 2 };
+
+  let ok_ran = check("routing: the scenario reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so every witness below is vacuous");
+
+  -- REACHABILITY, ASSERTED SEPARATELY FROM THE BALANCE (S24). A scenario whose
+  -- hook was never dispatched records nothing and balances against zero, and
+  -- that is byte-identical to the pre-WI-D19 state. This row is what stops the
+  -- balance below from being satisfied by a routing that never ran.
+  --
+  -- IT IS READ OFF THE LOG DELIBERATELY, and that is not the circularity the
+  -- balance below avoids — the two rows ask different questions. This one asks
+  -- DID THE ROUTED CALL RUN, and the log is the only thing that knows; the
+  -- balance asks DID THE RECORDER COUNT IT RIGHT, and answers that against a
+  -- witness the recorder did not write. A first draft of this row used
+  -- `intercepts > 0` — the PROVIDER-call count — and that measured less than its
+  -- own label: it is satisfied by a run in which the driver called the model and
+  -- the hook was never dispatched at all, which is precisely the state this file
+  -- was in before the routed scenario existed.
+  let ok_reached = check("routing: the routed hook actually RAN — its seams reached the recorder",
+                         count_kind(log, "dir_make") > 0
+                           && count_kind(log, "file_write") > 0
+                           && count_kind(log, "file_remove") > 0,
+                         "dir_make=${show(count_kind(log, "dir_make"))} file_write=${show(count_kind(log, "file_write"))} file_remove=${show(count_kind(log, "file_remove"))} — a routed call that never executes proves nothing, and every row below would pass vacuously");
+
+  let _ = println("  routed classes: dir_make=${show(count_kind(log, "dir_make"))} file_write=${show(count_kind(log, "file_write"))} file_remove=${show(count_kind(log, "file_remove"))} (witness ${show(intercepts)} of each)");
+
+  let fs = check_discovery(log, w);
+  let _ = if List.length(fs) > 0 then report_findings(fs) else ();
+  let ok_balanced = check("routing: the three routed classes balance against a witness that is not the log",
+                          List.length(fs) == 0,
+                          "${show(List.length(fs))} finding(s) above");
+
+  -- THE TRIPWIRE, DEMONSTRATED RATHER THAN DESCRIBED. WI-D17 and WI-D18 pinned
+  -- these three at zero so that the first routing would have to answer for them
+  -- by name. This is that answer executed: the old expectation, against the new
+  -- run, must be RED — and red by the rule those items named.
+  let _ = println("  the WI-D17/D18 tripwire, run against the routed log (each must go red):");
+  let t1 = mutant("the pre-WI-D19 pin: file_write expected 0", "discovery-over-recorded",
+                  log, { w | file_writes: 0 });
+  let t2 = mutant("the pre-WI-D19 pin: file_remove expected 0", "discovery-over-recorded",
+                  log, { w | file_removes: 0 });
+  let t3 = mutant("the pre-WI-D19 pin: dir_make expected 0", "discovery-over-recorded",
+                  log, { w | dir_makes: 0 });
+  -- And the other direction, which the pin could never state: a recorder that
+  -- acts without logging. WI-D17's mutant 8 on the adapter, restated on the gate.
+  let t4 = mutant("the recorder drops the file_write class", "discovery-under-recorded",
+                  renumber(drop_kind(log, identity_kind(FileWriteIdentity(""))), 0),
+                  { w | clock_delta_ms: total_advance_ms(renumber(drop_kind(log, identity_kind(FileWriteIdentity(""))), 0)) });
+  let t5 = mutant("the recorder drops the dir_make class", "discovery-under-recorded",
+                  renumber(drop_kind(log, identity_kind(DirMakeIdentity(""))), 0),
+                  { w | clock_delta_ms: total_advance_ms(renumber(drop_kind(log, identity_kind(DirMakeIdentity(""))), 0)) });
+
+  ok_ran && ok_reached && ok_balanced && t1 && t2 && t3 && t4 && t5
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("discovery_dst: WI-A13 stage 2 — completeness AND fidelity against driver_only");
 
@@ -816,8 +1023,12 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- here and pairwise equal in `approve`.
   let ok_eof = run_scenario("eof", [approve_line()], true, 1);
 
+  -- WI-D19: the first graded run in this tree whose extension routes a
+  -- filesystem mutation through `ExtPorts`.
+  let ok_routing = routing_scenario();
+
   let _ = println("");
-  if ok_approve && ok_deny && ok_eof then
+  if ok_approve && ok_deny && ok_eof && ok_routing then
     println("discovery_dst PASS")
   else {
     let _ = println("discovery_dst FAIL");

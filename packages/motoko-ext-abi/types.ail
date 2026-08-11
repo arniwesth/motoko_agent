@@ -522,6 +522,40 @@ export type PreStepDecision
 -- `{ decision: <its decision>, next_state: ctx.world }`. Returning a DIFFERENT
 -- world than the one it was given, without having called a world-threading
 -- port, is the F6 defect this whole protocol exists to prevent.
+--
+-- WI-D19 FOUND THE SAME DEFECT ON THE OTHER SIDE OF THE SEAM, IN THE DRIVER, AND
+-- IT HAD BEEN THERE SINCE WI-B2b. The type above is only half of the protocol:
+-- the hook returning a successor means nothing unless the caller CARRIES it, and
+-- `session.c2_loop` carried `ResponseInterceptOutcome.next_state` on exactly ONE
+-- of the four arms it can leave the intercept by.
+--
+-- The four sites, all in `c2_loop` around `dispatch_response_intercept`:
+--
+--   InterceptHandled          carried it. The one that was right.
+--   NoIntercept + tool_calls  carried `exchange.next_state` — the world as it was
+--                             BEFORE the hook ran.
+--   NoIntercept + hybrid bash  the same.
+--   NoIntercept + terminal    dropped it twice: `post_ctx` was reused for
+--                             `dispatch_solver_candidate` (so the SOLVER hook was
+--                             also handed the pre-intercept world) and the
+--                             terminal `c2_after_dp7` then passed
+--                             `exchange.next_state` again, discarding the solver
+--                             hook's successor as well.
+--
+-- WHY IT WAS INVISIBLE FOR SEVEN ITEMS: every hook binding in the tree returned
+-- `ctx.world` unchanged, so dropping the successor and threading it produced
+-- IDENTICAL worlds. Nothing in the type system, the effect checker, the ambient
+-- inventory or the capability trap distinguishes them — the difference only
+-- appears once a hook actually performs a world-threading effect, which no hook
+-- did until WI-D19 routed `on_response_intercept`. The measurement that exposed
+-- it is `discovery_dst`'s routed scenario: the recorder logged four interactions
+-- into worlds the driver then threw away, and `check_discovery` reported the
+-- routed classes as under-recorded 0-against-4.
+--
+-- THE SAME AUDIT IS OWED FOR THE OTHER SLOTS AND WAS NOT DONE HERE. `on_pre_step`,
+-- `on_tool_handle` and `on_solver_candidate` have the same shape and the same
+-- reason for being invisible; part 2b routes `on_tool_handle` and is where its
+-- arms have to be walked.
 -- WI-B4 MEASURED A HOLE IN THE CLOSED-ROW GUARANTEE, and it is recorded here
 -- because this is the file whose rows the guarantee is about.
 --
