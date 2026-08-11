@@ -83,6 +83,12 @@ export type IdentityBody
   -- the class genuinely has none.
   | FileWriteIdentity(string)                       -- path
   | FileRemoveIdentity(string)                      -- path
+  -- WI-D18's directory create, on the same shape and for the same reason. The
+  -- two READS the directory class adds (`path_stat`, `dir_list`) get no
+  -- constructor at all, and that is WI-D17 §3's line rather than a new
+  -- judgement: the log records the driver's ACTS, and reconstitutes the world's
+  -- SUPPLY. A read of a table `InitialWorld` cannot carry is neither.
+  | DirMakeIdentity(string)                         -- path
 
 -- The stable kind id, DERIVED. These strings appear in the interaction log and
 -- in harness-failure projections, so they are part of the artifact surface and
@@ -122,7 +128,8 @@ export pure func identity_kind(b: IdentityBody) -> string {
     RandomDrawIdentity(_) => "runtime_random_draw",
     ClockAdvanceIdentity => "advance_clock",
     FileWriteIdentity(_) => "file_write",
-    FileRemoveIdentity(_) => "file_remove"
+    FileRemoveIdentity(_) => "file_remove",
+    DirMakeIdentity(_) => "dir_make"
   }
 }
 
@@ -139,7 +146,8 @@ export pure func all_interaction_kinds() -> [string] {
    identity_kind(RandomDrawIdentity("")),
    identity_kind(ClockAdvanceIdentity),
    identity_kind(FileWriteIdentity("")),
-   identity_kind(FileRemoveIdentity(""))]
+   identity_kind(FileRemoveIdentity("")),
+   identity_kind(DirMakeIdentity(""))]
 }
 
 -- The origin, derived the same way. Blank for the three classes D2 gives no
@@ -155,7 +163,8 @@ export pure func identity_origin(b: IdentityBody) -> string {
     RandomDrawIdentity(_) => "",
     ClockAdvanceIdentity => "",
     FileWriteIdentity(_) => "",
-    FileRemoveIdentity(_) => ""
+    FileRemoveIdentity(_) => "",
+    DirMakeIdentity(_) => ""
   }
 }
 
@@ -181,7 +190,9 @@ export pure func identity_body_eq(a: IdentityBody, b: IdentityBody) -> bool {
     FileWriteIdentity(p) =>
       match b { FileWriteIdentity(p2) => p == p2, _ => false },
     FileRemoveIdentity(p) =>
-      match b { FileRemoveIdentity(p2) => p == p2, _ => false }
+      match b { FileRemoveIdentity(p2) => p == p2, _ => false },
+    DirMakeIdentity(p) =>
+      match b { DirMakeIdentity(p2) => p == p2, _ => false }
   }
 }
 
@@ -198,7 +209,8 @@ export pure func identity_body_projection(b: IdentityBody) -> string {
     RandomDrawIdentity(l) => "random_draw bounds=${l}",
     ClockAdvanceIdentity => "advance_clock",
     FileWriteIdentity(p) => "file_write path=${p}",
-    FileRemoveIdentity(p) => "file_remove path=${p}"
+    FileRemoveIdentity(p) => "file_remove path=${p}",
+    DirMakeIdentity(p) => "dir_make path=${p}"
   }
 }
 
@@ -299,7 +311,8 @@ export pure func class_has_deadline(b: IdentityBody) -> bool {
     -- recording a deadline here would be inventing one. `recording_file_write`
     -- records -1, which is what this false means.
     FileWriteIdentity(_) => false,
-    FileRemoveIdentity(_) => false
+    FileRemoveIdentity(_) => false,
+    DirMakeIdentity(_) => false
   }
 }
 
@@ -441,7 +454,7 @@ pure func all_distinct(xs: [string], seen: [string]) -> bool {
 
 -- The kind is derived from the body, so there is no representable program in
 -- which a kind disagrees with its own payload (design note 1). This asserts the
--- derivation is TOTAL and INJECTIVE across the nine classes — if two classes
+-- derivation is TOTAL and INJECTIVE across the ten classes — if two classes
 -- ever derived the same kind string, the interaction log would conflate them
 -- and the completeness count per class would silently merge two classes.
 --
@@ -451,11 +464,18 @@ pure func all_distinct(xs: [string], seen: [string]) -> bool {
 -- `FileMutationIdentity("bogus", p)` representable and reading as a write. Two
 -- constructors is what design note 1 asks for and this is the assertion that
 -- says so.
-pure func test_identity_kind_is_injective_across_the_nine_classes() -> bool
+--
+-- WI-D18 took it to ten with `DirMakeIdentity`, and the count is what says the
+-- directory class did NOT reuse a mutator's constructor. `FileWriteIdentity` for
+-- a `mkdirAll` would have type-checked at every one of the nine sites this sum
+-- reaches, produced a log whose every count still balanced, and recorded a
+-- directory create as a file write of zero bytes — a kind disagreeing with its
+-- own payload, which is what design note 1 forbids and what this row measures.
+pure func test_identity_kind_is_injective_across_the_ten_classes() -> bool
   tests [((), true)]
   {
     let ks = all_interaction_kinds();
-    List.length(ks) == 9 && all_distinct(ks, [])
+    List.length(ks) == 10 && all_distinct(ks, [])
   }
 
 -- Identity equality must discriminate on EVERY component D2 names, in both
@@ -482,6 +502,16 @@ pure func test_identity_equality_discriminates_every_component() -> bool
       && not identity_body_eq(FileRemoveIdentity("a"), FileRemoveIdentity("b"))
       && not identity_body_eq(FileWriteIdentity("a"), FileRemoveIdentity("a"))
       && identity_body_eq(FileWriteIdentity("a"), FileWriteIdentity("a"))
+      -- WI-D18. A directory create and a file write AT THE SAME PATH are
+      -- different logical requests, and that pair is the one worth asserting:
+      -- they are the two acts a routed compose performs one line apart
+      -- (`mkdirAll` then `writeFile`), so a replay that delivered one to the
+      -- other would be a reproduction that created a directory where the run
+      -- wrote a file.
+      && not identity_body_eq(DirMakeIdentity("a"), DirMakeIdentity("b"))
+      && not identity_body_eq(DirMakeIdentity("a"), FileWriteIdentity("a"))
+      && not identity_body_eq(DirMakeIdentity("a"), FileRemoveIdentity("a"))
+      && identity_body_eq(DirMakeIdentity("a"), DirMakeIdentity("a"))
   }
 
 -- A tool and an approval sharing origin, call id and name are DIFFERENT logical

@@ -104,7 +104,8 @@ import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   PreStepDecision, ToolPolicyDecision, ToolHandleDecision,
   ResponseInterceptDecision, FinalizeDecision,
-  AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, TokenTelemetry,
+  AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation,
+  ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, TokenTelemetry,
   PassThrough, Allow, Delegate, NoIntercept, NoDecision,
   InterceptHandled, Accept, ContinueWithFeedback,
   empty_ext_world
@@ -151,6 +152,9 @@ func probe_proc_exec(world: ExtWorld, _cmd: string, _args: string) -> ExtProcOut
 func probe_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: world } }
 func probe_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
 func probe_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+func probe_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} { { kind: ExtPathMissing, next_state: world } }
+func probe_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} { { present: false, entries: [], next_state: world } }
+func probe_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
 func probe_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: 0, next_state: world } }
 func probe_env_get(_key: string, fallback: string) -> string ! {Env} { fallback }
 
@@ -160,6 +164,9 @@ func probe_ports() -> ExtPorts {
     file_read: probe_file_read,
     file_write: probe_file_write,
     file_remove: probe_file_remove,
+    path_stat: probe_path_stat,
+    dir_list: probe_dir_list,
+    dir_make: probe_dir_make,
     clock_now: probe_clock_now,
     env_get: probe_env_get }
 }

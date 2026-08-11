@@ -858,3 +858,38 @@ the directory immediately, verified line by line — is stated **with its condit
 compose as written today and is falsified by a create-then-list site or by a future
 `InitialWorld.files` that seeds an empty directory. The handoff asks the item to decide whether it is
 buying that permanently or buying it with a guard.
+
+**Cluster 37 = WI-D19, Route B part 2a — the first routing: HANDED OFF 2026-08-08**,
+`HANDOFF-execute-d19-route-b-part-2a-the-first-routing.md`. **Every seam built at C5, D16, D17 and D18
+has zero callers. This item gives six of the seven their first.**
+
+**The clustering decision was to refuse a blocker that is not one, for the second time.** D18's report
+says part 2 is *"blocked on ONE thing: door 3's producer"* and then, in the same sentence, that all
+nine sites are routable. **Door 3 gates the VERDICT; the build is unblocked** — which is D16's rule, and
+this project conflated verdict with build for nine consecutive items before D16 named it. Deferring
+again on door 3 would be the same error with a different blocker.
+
+**Part 2 was CUT on a measurement, and the measurement had to be corrected first.** The transitive
+closure that must thread `(ports, world)` is **41 functions, 15 of them exported, across 8 modules** —
+D15's *"6 modules, ~23 sources"* was a lower bound and it was low. But a naive call-graph walk from
+`register_with_config` reports **20 of the 21** effect-bearing functions as reachable, **and that number
+is wrong: registration CONSTRUCTS the hooks record, so every hook body is reachable through the
+constructor without running at registration time.**
+
+**Clustering note to carry: that is classifier 3's coarsening reproduced in a five-line reachability
+walk.** D15 spent a whole item establishing that an import — or here, a reference through a constructor
+— is not a call, and the same trap was live in the tool used to price its successor. **Any walk used to
+size part 2b needs the same correction applied before it is trusted.**
+
+The honest partition is what cuts the work: **registration** = 4 `config.ail` functions, structurally
+unroutable because registration runs before the world exists; **`on_tool_handle`** = 17 functions across
+five modules, part 2b; **`on_response_intercept`** = 3 functions in one module, nine effect sites, this
+item.
+
+**And 2a was chosen over 2b for a reason beyond size: it is the TWIN of the chain every decision so far
+was argued from.** D16 measured `compose.ail:502-521` — write, exec-reads-the-path, branch,
+`fileExists`/`removeFile` — inside `one_attempt`, which is 2b's subtree. `:769-785` is that same chain
+in the smaller hook. **So the first routing tests D16's, D17's and D18's reasoning against the code that
+motivated it, at a tenth of 2b's size** — and the handoff's most valuable requested line is whether any
+seam needed changing on contact with its first caller, because four items built these on measurements
+taken with no callers at all.

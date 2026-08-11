@@ -223,15 +223,15 @@ export pure func attribution_rows() -> [AttributionRow] {
 -- eight reads are reachable by installation, not by attribution.
 export pure func unconditional_core_sites() -> [CoreSite] {
   [
-    { site: { file: "src/core/session.ail", line: 931 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 965 }, effect: "Clock", routed: true,
       note: "ext_ports_of's extension clock seam — the SIXTH routed core site, added by WI-C5. It replaced the ambient `session.ail:878` rather than joining it: widening ExtPorts.clock_now to take the world token removed the shape obstacle that plan rule S2 had accommodated, so the seam routes through Ports.clock_now like every other" },
-    { site: { file: "src/core/session.ail", line: 1185 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1224 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 1291 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1330 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2736 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2775 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2846 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2885 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
     { site: { file: "src/core/tool_phase.ail", line: 373 }, effect: "Clock", routed: true,
       note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it" },
@@ -651,7 +651,7 @@ pure func test_discovered_site_in_neither_list_is_rejected() -> bool
   tests [((), true)]
   {
     let discovered: [CoreSite] = [
-      { site: { file: "src/core/session.ail", line: 1291 }, effect: "Clock", routed: true, note: "" },
+      { site: { file: "src/core/session.ail", line: 1330 }, effect: "Clock", routed: true, note: "" },
       { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
       { site: { file: "src/core/omitted.ail", line: 42 }, effect: "Clock", routed: false, note: "" }
     ];

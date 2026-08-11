@@ -143,7 +143,7 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   TimedOutcome,
   ok_outcome,
   identity_kind,
@@ -409,6 +409,19 @@ pure func absent_classes(log: [Interaction]) -> [DiscoveryFinding] {
                      count_kind(log, identity_kind(FileWriteIdentity(""))))
     ++ class_balance(identity_kind(FileRemoveIdentity("")), 0,
                      count_kind(log, identity_kind(FileRemoveIdentity(""))))
+    -- WI-D18's `dir_make` JOINS THEM, on WI-D17's reason and with WI-D17's
+    -- consequence. It is recorded and unrouted, which is the same state
+    -- `file_write` was left in, so the same choice is available and the same one
+    -- is taken: pinning it at zero converts "the census printed 0" from silence
+    -- into a claim, and Route B part 2 has to answer for it by name the moment a
+    -- compose `mkdirAll` is routed.
+    --
+    -- The READS are not here and could not be: `path_stat` and `dir_list` write
+    -- no interaction, so there is no kind to balance. That asymmetry is the
+    -- recording decision showing through the census, which is where it should be
+    -- visible.
+    ++ class_balance(identity_kind(DirMakeIdentity("")), 0,
+                     count_kind(log, identity_kind(DirMakeIdentity(""))))
 }
 
 -- The whole discovery gate, in one call.
@@ -639,9 +652,15 @@ pure func test_an_unrouted_filesystem_mutation_is_over_recorded() -> bool
   {
     let wrote = balanced_log() ++ [mk(FileWriteIdentity("/w/tmp/x.ail"), 4, 0)];
     let removed = balanced_log() ++ [mk(FileRemoveIdentity("/w/tmp/x.ail"), 4, 0)];
+    -- WI-D18's directory create, in the same row rather than a new one: it is
+    -- unreachable for the identical reason and it must fail by the identical
+    -- name.
+    let made = balanced_log() ++ [mk(DirMakeIdentity("/w/tmp"), 4, 0)];
     has_discovery_rule(check_discovery(wrote, balanced_witness()),
                        "discovery-over-recorded")
       && has_discovery_rule(check_discovery(removed, balanced_witness()),
+                            "discovery-over-recorded")
+      && has_discovery_rule(check_discovery(made, balanced_witness()),
                             "discovery-over-recorded")
       -- And the negative control it needs: the balanced log, which contains
       -- NEITHER, must still produce no findings. Without this the assertion

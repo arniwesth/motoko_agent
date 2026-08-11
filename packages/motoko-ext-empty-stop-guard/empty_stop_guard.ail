@@ -3,7 +3,7 @@ module sunholo/motoko_ext_empty_stop_guard/empty_stop_guard
 import std/string (trim, contains)
 import std/json (Json, jo)
 import std/result (Result, Err)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, ExtCtx, ExtPorts, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg, TokenTelemetry)
 
 export pure func is_blank(s: string) -> bool {
   trim(s) == ""
@@ -85,6 +85,22 @@ func noop_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} 
   { ok: false, error: "no filesystem behind this port", next_state: world }
 }
 
+-- WI-D18's DIRECTORY seams. `ExtPathMissing` and `present: false` for
+-- `noop_file_read`'s reason: this port has no filesystem behind it, and a no-op
+-- claiming a path is a file would state something about the world that is not
+-- true.
+func noop_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} {
+  { kind: ExtPathMissing, next_state: world }
+}
+
+func noop_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} {
+  { present: false, entries: [], next_state: world }
+}
+
+func noop_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
 -- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
 -- `world` unchanged is S12's IDENTITY TRANSITION, and here it is the correct
 -- answer rather than a silent defect: this clock reads nothing, so there is no
@@ -106,6 +122,9 @@ func noop_ext_ports() -> ExtPorts {
     file_read: noop_file_read,
     file_write: noop_file_write,
     file_remove: noop_file_remove,
+    path_stat: noop_path_stat,
+    dir_list: noop_dir_list,
+    dir_make: noop_dir_make,
     clock_now: noop_clock_now,
     env_get: noop_env_get
   }

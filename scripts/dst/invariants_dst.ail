@@ -86,7 +86,7 @@ import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   TimedOutcome, OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
   StreamChunkRecord,
   all_interaction_kinds, interaction_kind, total_advance_ms
@@ -270,7 +270,23 @@ pure func fixture_log() -> [Interaction] {
    mk(17, FileRemoveIdentity("/w/tmp/snippet.ail"),
       "file_remove path=/w/tmp/snippet.ail", -1, ok_out(0, "")),
    mk(18, FileWriteIdentity("/w/tmp/module.ail"),
-      "file_write path=/w/tmp/module.ail bytes=137", -1, ok_out(0, ""))]
+      "file_write path=/w/tmp/module.ail bytes=137", -1, ok_out(0, "")),
+   -- WI-D18's directory create. APPENDED, again, and for the reason written
+   -- three rows up: this file addresses interactions by ordinal literal, and
+   -- WI-D17 lost a row to an insertion that stayed green while reading a
+   -- different interaction. Appending is the rule, not the tidy choice.
+   --
+   -- It sits AFTER the write it logically precedes, which is worth saying out
+   -- loud: the fixture is a completeness specimen, not a trace of a plausible
+   -- run, and reordering it to read more naturally is precisely the edit that
+   -- silently repoints every ordinal literal above.
+   --
+   -- `ok_out`, because `mkdirAll` is idempotent and has no missing state, and
+   -- because `count_status(log, "missing") == 1` is the approval end-of-input
+   -- row's assertion. `deadline_ms: -1`, because a directory create has no
+   -- timeout at the seam — `class_has_deadline` says so and `mk` reads it.
+   mk(19, DirMakeIdentity("/w/tmp"),
+      "dir_make path=/w/tmp", -1, ok_out(0, ""))]
 }
 
 pure func fixture_advance() -> int { total_advance_ms(fixture_log()) }

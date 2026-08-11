@@ -47,7 +47,7 @@ import src/core/dst_interaction (
   ExtensionEffectIdentity,
   EnvironmentReadIdentity,
   RandomDrawIdentity,
-  FileWriteIdentity, FileRemoveIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   ClockAdvanceIdentity,
   StreamChunkRecord,
   TimedOutcome,
@@ -320,6 +320,19 @@ pure func mutants() -> [Mutant] {
      rule: "program-outcome-status-disagrees-with-fault",
      program: with_interaction(0, { base(0) |
                 identity: { ordinal: 0, body: FileWriteIdentity("/w/tmp/x.ail") },
+                deadline_ms: -1,
+                outcome: { base(0).outcome | status: OutcomeMissing, chunks: [], fault_class_id: "" } }) },
+
+   -- 12e. WI-D18. `dir_make` is NOT admitted for a 'missing' status either, and
+   --      it reaches the rejecting arm by FALLING THROUGH rather than by being
+   --      named — which is exactly why it needs a row. `mkdirAll` is idempotent,
+   --      so "the directory was already there" is an ordinary `ok` and the class
+   --      has no reading-B state at all. Without this the widening drifts one
+   --      class at a time.
+   { name: "dir_make interaction with a 'missing' status",
+     rule: "program-outcome-status-disagrees-with-fault",
+     program: with_interaction(0, { base(0) |
+                identity: { ordinal: 0, body: DirMakeIdentity("/w/tmp") },
                 deadline_ms: -1,
                 outcome: { base(0).outcome | status: OutcomeMissing, chunks: [], fault_class_id: "" } }) },
 

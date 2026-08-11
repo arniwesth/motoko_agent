@@ -3,7 +3,7 @@ module sunholo/motoko_ext_conformance/harness
 import std/io (println)
 import std/json (Json, jo, kv, js, encode)
 import std/result (Result, Ok, Err)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, AiStepOutcome, 
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, 
   BudgetPlan,
   ExtCtx,
   ExtPorts,
@@ -65,6 +65,23 @@ func noop_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} 
   { ok: false, error: "no filesystem behind this port", next_state: world }
 }
 
+-- WI-D18's DIRECTORY seams. `ExtPathMissing` and `present: false` are the honest
+-- answers for a port with no filesystem behind it — `noop_file_read`'s judgement
+-- exactly. Note that `ExtPathMissing` and not `ExtPathFile` is the one that
+-- cannot mislead: a no-op claiming a path is a file would state something about
+-- the world that is not true, and a caller would then try to read it.
+func noop_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} {
+  { kind: ExtPathMissing, next_state: world }
+}
+
+func noop_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} {
+  { present: false, entries: [], next_state: world }
+}
+
+func noop_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
 -- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
 -- `world` unchanged is S12's IDENTITY TRANSITION, and here it is the correct
 -- answer rather than a silent defect: this clock reads nothing, so there is no
@@ -94,6 +111,9 @@ export func canned_ports() -> ExtPorts {
     file_read: noop_file_read,
     file_write: noop_file_write,
     file_remove: noop_file_remove,
+    path_stat: noop_path_stat,
+    dir_list: noop_dir_list,
+    dir_make: noop_dir_make,
     clock_now: noop_clock_now,
     env_get: noop_env_get
   }
@@ -106,6 +126,9 @@ export func poison_ports() -> ExtPorts {
     file_read: noop_file_read,
     file_write: noop_file_write,
     file_remove: noop_file_remove,
+    path_stat: noop_path_stat,
+    dir_list: noop_dir_list,
+    dir_make: noop_dir_make,
     clock_now: noop_clock_now,
     env_get: noop_env_get
   }

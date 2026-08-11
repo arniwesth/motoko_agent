@@ -32,7 +32,7 @@ import src/core/phase_vocab (
   ErrorEvent,
   RunSummary
 )
-import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
   ExtRegistry,
   ExtensionHooks,
@@ -257,6 +257,10 @@ func fixed_ext_file_read(world: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
 -- claimed success would state something about the world that is not true.
 func fixed_ext_file_write(world: ExtWorld, _path: string, _content: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
 func fixed_ext_file_remove(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
+-- WI-D18's directory trio, same answer and same reason.
+func fixed_ext_path_stat(world: ExtWorld, _path: string) -> ExtPathStat ! {FS} { { kind: ExtPathMissing, next_state: world } }
+func fixed_ext_dir_list(world: ExtWorld, _path: string) -> ExtDirListing ! {FS} { { present: false, entries: [], next_state: world } }
+func fixed_ext_dir_make(world: ExtWorld, _path: string) -> ExtFileMutation ! {FS} { { ok: false, error: "no filesystem behind this port", next_state: world } }
 
 func runtime_hooks() -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
   long_runtime()
@@ -284,6 +288,10 @@ func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
     -- this fixture has no filesystem behind it and no site in it writes one.
     file_write: base.file_write,
     file_remove: base.file_remove,
+    -- WI-D18's directory class, from `base` for the same reason.
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: base.dir_make,
     tool_exec: fixed_exec
   }
 }
@@ -365,6 +373,10 @@ func strict_ports() -> Ports ! {AI, IO, Trace} {
     -- this fixture has no filesystem behind it and no site in it writes one.
     file_write: base.file_write,
     file_remove: base.file_remove,
+    -- WI-D18's directory class, from `base` for the same reason.
+    path_stat: base.path_stat,
+    dir_list: base.dir_list,
+    dir_make: base.dir_make,
     tool_exec: fixed_exec
   }
 }
@@ -868,6 +880,9 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
       file_read: fixed_ext_file_read,
       file_write: fixed_ext_file_write,
       file_remove: fixed_ext_file_remove,
+      path_stat: fixed_ext_path_stat,
+      dir_list: fixed_ext_dir_list,
+      dir_make: fixed_ext_dir_make,
       clock_now: fixed_ext_clock,
       env_get: fixed_ext_env
     },

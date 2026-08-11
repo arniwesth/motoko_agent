@@ -117,7 +117,7 @@ import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, RandomDrawIdentity, ClockAdvanceIdentity,
-  FileWriteIdentity, FileRemoveIdentity,
+  FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
   StreamChunkRecord,
   TimedOutcome,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -737,6 +737,24 @@ pure func post_v1_interactions() -> [Interaction] {
    inter(9, FileRemoveIdentity("/w/tmp/back\\slash/snippet.ail"),
          "rq.file_remove.nine", -1,
          { advance_ms: 38, chunks: [], payload: "", status: OutcomeMissing,
+           fault_class_id: "" }),
+   -- WI-D18's directory create, added to the SAME post-freeze list rather than
+   -- to `frozen_v1_interactions()`, for the reason that split exists: a class
+   -- added after the freeze cannot be in the frozen bytes.
+   --
+   -- Its path carries a TRAILING-SEGMENT UNICODE character where the two above
+   -- carry a space and a backslash. A directory path is the identity component
+   -- most likely to hold a byte the line-oriented encoding has to think about,
+   -- and three specimens covering three different awkward characters freeze more
+   -- of the escaping than three copies of `/w/tmp` would.
+   --
+   -- `OutcomeOk` and not `OutcomeMissing`: `dst_program.validate_outcome` admits
+   -- `missing` for `file_remove` and for nothing else, and `mkdirAll` has no
+   -- missing state because it is idempotent. A `dir_make`/`missing` specimen
+   -- would be rejected by the validator, which is what mutant 12e asserts.
+   inter(10, DirMakeIdentity("/w/tmp/naïve dir"),
+         "rq.dir_make.ten", -1,
+         { advance_ms: 39, chunks: [], payload: "", status: OutcomeOk,
            fault_class_id: "" })]
 }
 
