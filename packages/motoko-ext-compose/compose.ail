@@ -753,7 +753,7 @@ func handle_compose_tool(ctx: ExtCtx, req: { id: string, intent: string, intent_
   )
 }
 
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: ComposeHostConfig, snippet_caps: string) -> ToolHandleDecision ! {IO, AI, Process, FS, Env, Clock} {
+export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: ComposeHostConfig, snippet_caps: string) -> ToolHandleDecision ! {IO, AI, Process, FS, Env, Clock, Rand} {
   if not is_compose_tool_name(call.tool) then Delegate
   else Handled(handle_compose_tool(ctx, compose_req_from_call(ctx, call), runtime_cfg, snippet_caps))
 }
@@ -816,7 +816,7 @@ func join_csv(xs: [string]) -> string {
 export func register_with_config(runtime_cfg: ComposeHostConfig) -> ExtensionHooks ! {Env, FS} {
   let composition_mode = runtime_cfg.compose.mode;
   let snippet_caps = join_csv(runtime_cfg.snippet_caps);
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
     on_tool_handle(ctx, call, runtime_cfg, snippet_caps)
   };
   let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {

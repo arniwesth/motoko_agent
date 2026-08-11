@@ -32,7 +32,7 @@ func enabled_in(workdir: string) -> bool ! {FS} {
 -- register_with_config uses a type variable for cfg so this extension is
 -- host-config-agnostic. workdir is read from MOTOKO_WORKDIR env var
 -- (set by the host at startup), falling back to "." if unset.
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process, Rand} {
   let workdir = getEnvOr("MOTOKO_WORKDIR", ".");
   let active = enabled_in(workdir);
   let cached_prompt = load_agent_prompt(workdir);
@@ -50,7 +50,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
         PassThrough
       },
     on_tool_policy: on_tool_policy,
-    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+    on_tool_handle: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
       on_tool_handle(ctx, call)
     },
     on_response_intercept: func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {

@@ -1,5 +1,10 @@
 # AILANG: a call in the field-value position of a record update is not a dependency, so type-checking depends on invisible declaration order
 
+**✅ FIXED in AILANG v0.33.0** (verified 2026-08-04 during WI-B1, and independently re-verified:
+the minimal repro that returned `undefined variable: doubled` on v0.26.0 now reports
+`✓ No errors found!`). **The `let`-binding workarounds are live in the tree and can now be removed** —
+a deliberate change, not a drive-by, since each carries a comment pointing at this file.
+
 ## Status
 
 Found 2026-08-03 during WI-A13 stage 6 (`.agent/projects/009_motoko_dst_execution`). **Filed upstream

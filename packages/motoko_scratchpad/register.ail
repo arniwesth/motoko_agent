@@ -13,7 +13,7 @@ func parse_int_or(s: string, fallback: int) -> int {
   }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, Net} {
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, Net, Rand} {
   let timeout_secs = parse_int_or(getEnvOr("MOTOKO_SCRATCHPAD_TIMEOUT_SECS", "30"), 30);
   make_hooks(timeout_secs)
 }

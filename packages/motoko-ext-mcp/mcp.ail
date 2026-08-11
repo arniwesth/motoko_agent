@@ -154,7 +154,7 @@ func mcp_error_envelope(call: ToolCallEnvelope, msg: string) -> ToolResultEnvelo
 export func make_hooks(cfg: McpConfig) -> ExtensionHooks {
   let tool_names = collect_all_tool_names(cfg);
   let servers = cfg.servers;
-  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
     match find_server_for_tool(servers, call.tool) {
       None    => Delegate,
       Some(s) =>

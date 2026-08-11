@@ -156,6 +156,16 @@ field the encoder writes and the decoder ignores; both halves type-check and the
 until a replay serves a different response while every count still balances. A14 and A15 encode
 programs for D8's persistence and inherit this directly.
 
+**S9. Clear the compile cache before believing ANY check whose input you just mutated — not only a
+type error after a toolchain change.** Three phantoms now, and the third is a different species. The
+first two corrupted a *diagnostic*: a stale cache reported row mismatches against source that was
+already correct, once across a stdlib change and once across a compiler version change, and clearing
+`.ailang/cache` fixed both with no source edit. **WI-B1's corrupts a *detector*.** Its mutation loop
+dropped `Rand` from the ABI row and read **GREEN on a warm cache and RED on a cold one** — so the
+verdicts were partly cache artifacts, and it nearly argued for reverting a correct, load-bearing ABI
+change. A stale diagnostic is noise; a stale detector **inverts a verdict**, and C5 mutation testing
+is now required by most remaining items. Clear first, every run.
+
 **S8. When a guard asserts that X influences Y, check that X cannot reach Y except through the
 mechanism under test.** Earned by A13 stage 4, and it is the first rule this project has that
 mutation testing (C5) structurally could not produce. The generator's whole risk is a seed that
@@ -1615,7 +1625,13 @@ not three green states**: the new pin exposes the effect/ABI repairs and the `Me
 simultaneously, so B1 alone leaves the tree red. B1 is therefore **preparation-only**, and **WI-B4
 is the wave's green integration gate.**
 
-**WI-B1. Repin the toolchain — preparation-only, not independently green.** Update `ailang.toml`,
+**WI-B1. Repin the toolchain — preparation-only, not independently green.** **Its gate is
+"zero effect-row failures tree-wide", NOT `make check_core` exit 0.** An earlier revision — and A15's
+handoff — put `check_core` in B1's definition of done while also calling B1 preparation-only, which
+is a self-contradiction the executing session ran into: `check_core` dies in its `verify_extensions`
+prerequisite, where all seven extensions fail on one `[Message]` literal missing `images`. **That is
+WI-B3's work, so B1's own gate cannot depend on it.** The corrected gate is measurable, was met, and
+does not reach across the wave. Update `ailang.toml`,
 `scripts/install-prerequisites.sh:39`, and the Makefile guard together; **clear every
 `.ailang/cache` in the tree before believing any diagnostic** (the phantom-type-error trap
 reproduced across a version change). The two latent under-declarations (`walk_agents` `FS`,
@@ -1624,6 +1640,32 @@ omnigraph `register_with_config` `Process`) become hard errors and are fixed her
 all mechanical via the compiler-driven repair loop. M2 is *not* allocated between B1 and B2: three
 of its edits are the `motoko-ext-abi/types.ail` row corrections that belong to B2, and the rest are
 the mechanical repairs here. Treat the 381 as the wave's total, not B1's.
+
+**Measured at B1, and both numbers need their caveat carried or they will mislead.** The
+`v0.26.0 → v0.33.0` sweep found **98 files newly red: 27 effect-row, 71 `images`.** B1 repaired
+**66 effect-row lines across 46 files** and left zero effect-row failures reachable. **That is not a
+refutation of M2's 381.** `ailang check` reports the *first* error per module and stops, so a sweep
+surfaces a **frontier, not a total**, and this one terminated early by running into B3 rather than by
+finishing. M2's 381 remains the wave's floor; B1's 66 is "the complete count of effect-row repairs
+reachable on this pin."
+
+**The same caveat governs the ABI, and it is S8's shape.** M2 predicted three ABI changes; B1 measured
+**exactly one** — `ExtensionHooks.on_tool_handle` gains `Rand`. The other three hooks and
+`ExtPorts.ai_step` sit in modules that never reached effect checking, because the `images` error
+precedes it. **Absent reads identically to unchanged**, so the correct reading is *"one demanded so
+far, the rest unmeasured until B3 lands"* — not *"M2 over-predicted"*. **D5's coverable surface
+survived intact**, verified by diff rather than intent: the three rowless slots and `on_budget_plan`
+are byte-identical.
+
+**Two mechanisms B2 must budget for, both measured at B1.** Rows are **closed**, so widening an ABI
+hook field does not permit narrower implementations — it *forces* every one to widen in lockstep,
+which is why one field cost 46 sites. The four hook result types carry **191 rowed implementation
+sites** (`ToolHandleDecision` 49, `PreStepDecision` 59, `ResponseInterceptDecision` 40,
+`FinalizeDecision` 43); if all four gain both effects, that is the cascade's lower bound and it is how
+381 becomes plausible. And the widening propagates **upward** — constructing a record whose field
+holds an effect-declaring closure makes the *constructing* function perform that effect, so every
+`make_hooks` and `register_with_config` above a widened hook widens too. Probed and confirmed **not**
+a v0.33.0 regression: v0.26.0 does the same, and it is already-filed `fb_74f53de3ae65854c`.
 
 **WI-B2. The extension-ABI major.** Depends on B1 (the pin that forces it) and **A12** — its larger
 half threads the world token, and `world_state` is built there; if the trigger fires before A12,
@@ -1649,7 +1691,13 @@ two riders honoured: tooling first (the brace-balanced rewriter and fix loop are
 minutes true), and the settled decision that Motoko's `Msg` and the ext-ABI `Msg` stay at four
 fields, vision parts dropped at the seam.
 
-**WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** Depends on B1, B2,
+**WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** **Also re-run
+B1's mutation loop, which could not complete.** Twenty files carrying cascade sites were behind the
+`images` wall and are **unverified — which must not read as verified**. Exactly one of them has a
+narrow row (`compose.ail:756`) and is the remaining over-widening candidate; the other 41 full-row
+sites are forced structurally by closed-row assignment. B1's loop also has a named structural blind
+spot: it is per-file, so it cannot see a mutation whose breakage lands in a *different* file —
+S8's unwalked-branch complement arriving inside a detector. Depends on B1, B2,
 B3 (the source and ABI set is not final until they land), **A4** (classifier 2 must exist to be
 re-derived) and **A10** (a manifest must exist to re-issue). Re-run `make effect_inventory`,
 `effect_inventory_selftest`, `ext_call_inventory` and `ext_call_inventory_selftest` (A4's targets,

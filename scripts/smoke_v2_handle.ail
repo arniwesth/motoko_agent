@@ -29,7 +29,7 @@ import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope, result_to_j
 
 -- Stub that handles any "FakeTool" call by returning a synthetic envelope.
 -- For other tools, returns Delegate so the native path takes over.
-pure func handle_fake_tool(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+pure func handle_fake_tool(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
   if call.tool == "FakeTool" then {
     let env: ToolResultEnvelope = {
       tool_call_id: call.id,

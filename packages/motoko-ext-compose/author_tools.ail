@@ -90,7 +90,7 @@ func mk_err(tool: string, path: string, err: string) -> AuthorToolResult {
   { ok: false, tool: tool, path: path, bytes: 0, truncated: false, excerpt: "", payload_json: payload, error: err, ledger_entry: None }
 }
 
-func mk_ok(tool: string, path: string, raw_content: string, payload: Json, max_bytes: int) -> AuthorToolResult {
+func mk_ok(tool: string, path: string, raw_content: string, payload: Json, max_bytes: int) -> AuthorToolResult ! {Clock} {
   let capped = cap_text(raw_content, max_bytes);
   let payload_json = encode(payload);
   let entry: LedgerEntry = {

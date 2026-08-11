@@ -133,7 +133,7 @@ func microrag_context_for(path: string, content: string) -> string ! {Process} {
 -- Auto-injection wrap: write the file, run microRAG, return combined result.
 -- The retrieval gets surfaced via the tool's stdout so it's in the model's
 -- next-turn history — adaptive context based on what was just written.
-func auto_write_with_microrag(call: ToolCallEnvelope) -> ToolHandleDecision ! {FS, Process} {
+func auto_write_with_microrag(call: ToolCallEnvelope) -> ToolHandleDecision ! {FS, Process, Rand} {
   let path = get_str(call, "path");
   let content = get_str(call, "content");
   if path == "" then Handled(make_error_result(call, "WriteFile: missing 'path'"))
@@ -157,7 +157,7 @@ pure func microrag_tool_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPol
 -- Auto-fire on WriteFile to .ail. For everything else, Delegate to motoko's
 -- default handlers (the actual WriteFile / EditFile / ReadFile path-validation
 -- + sha256 hash + emit_event chain in src/core/tool_runtime.ail).
-func microrag_tool_handle(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func microrag_tool_handle(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
   if call.tool == "WriteFile" then {
     let path = get_str(call, "path");
     if is_ail_file(path) then auto_write_with_microrag(call)

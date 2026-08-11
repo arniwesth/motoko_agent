@@ -18,7 +18,7 @@ func parse_int_or(s: string, fallback: int) -> int {
 -- inside make_hooks (see workdir_is_ailang_project), so a non-AILANG
 -- workdir loads the extension with empty provided_tools — same shape
 -- as motoko_ext_omnigraph's portability gate.
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS, Process, Rand} {
   let workdir          = getEnvOr("MOTOKO_WORKDIR", ".");
   let timeout_ms       = parse_int_or(getEnvOr("AILANG_DOCS_TIMEOUT_MS", "30000"), 30000);
   let max_output_chars = parse_int_or(getEnvOr("AILANG_DOCS_MAX_OUTPUT_CHARS", "8000"), 8000);
