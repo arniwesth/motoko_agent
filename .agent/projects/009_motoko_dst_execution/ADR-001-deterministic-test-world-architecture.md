@@ -1565,11 +1565,37 @@ The exact representation may reuse existing types, but the contract is:
    reachable without restructuring the driver — routing all seven through one finalization point that
    emits the projection *and* appends the same record was sufficient — but the plan should treat this
    as unimplemented everywhere rather than partially satisfied.
-2. A typed internal termination reason maps exhaustively to the wire `finish_reason`. Success,
-   budget exhaustion, maximum steps, compaction exhaustion, provider failure, unrecovered tool
-   failure, invalid history, and internal driver failure are distinguishable. The implementation
-   must derive this list from reachable terminal returns rather than preserve the current
-   integer-code helper or stale labels.
+
+   **Amendment, 2026-08-02 (WI-A9 implemented; `ff8d8e5`).** The conclusion above held exactly — the
+   returned trace contained no `RunSummary` on any path — but **the account of *why* was incomplete,
+   and an implementer working from the five call sites alone would have left two terminal paths
+   unfinalized.** There are **seven terminal returns**, not five: invalid history (`c2_step_state`
+   `Err`) and the internal approval failure (`AwaitApproval` with no pending approval) emitted **no
+   `run_summary` at all**, not even a projection, so they appear at no `emit_run_summary` call site.
+   Both now route through the single finalizer. The general lesson, recorded because it will recur:
+   **when an item rewrites a class of returns, enumerate the class, not the helper's callers.**
+2. A typed internal termination reason maps exhaustively to the wire `finish_reason`. The
+   implementation must derive this list from reachable terminal returns rather than preserve the
+   current integer-code helper or stale labels.
+
+   **Amendment, 2026-08-02 (WI-A9 implemented; `ff8d8e5`).** An earlier revision enumerated the
+   reasons as "success, budget exhaustion, maximum steps, compaction exhaustion, provider failure,
+   unrecovered tool failure, invalid history, and internal driver failure". Deriving the list from
+   reachable terminal returns — as this clause itself requires — **falsifies that enumeration in
+   both directions**, at the same count of eight:
+
+   - **`dp7_rejected` was a stale label of exactly the kind this clause warns against.** The retired
+     integer helper mapped `2 -> "dp7_rejected"` and **no call site ever passed 2**; a DP7 rejection
+     re-injects a user message and the run terminates later via max-steps or budget. Dropped.
+   - **Unrecovered tool failure is not a terminal path.** Tool results feed back into the loop as
+     messages; no terminal return corresponds to it. No variant was invented for it.
+   - **System-prompt-empty is reachable and was absent.** The seal failure `SealSystemPromptEmpty`
+     is a genuine terminal return, now `TermSystemPromptEmpty`.
+
+   All eight reachable reasons map onto the existing wire strings, so **no wire-compatibility change
+   was required.** One discrimination remains fragile and is assigned to D3's catalogue rather than
+   left here: max-steps is separated from internal failure by matching a literal error message,
+   because `step_machine.ail` emits the same `Internal` code for both.
 3. `DoneEvent` may remain a success event, but it is not a second terminal record. Returned outcome,
    `DoneEvent` when present, and `RunSummary` must agree.
 4. Every logical `LedgerEvent` produced by the driver reaches the returned trace, and the obligation

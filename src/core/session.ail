@@ -73,6 +73,16 @@ import src/core/phase_vocab (
   envelope_to_tool_message,
   ProviderCallPrepared,
   RunSummary,
+  TerminationReason,
+  TermSuccess,
+  TermBudgetExhausted,
+  TermMaxSteps,
+  TermCompactionExhausted,
+  TermProviderFailure,
+  TermSystemPromptEmpty,
+  TermInvalidHistory,
+  TermInternalFailure,
+  finish_reason_wire,
   NativeToolDenied,
   Dp7VerifierRejected,
   CostExhausted,
@@ -839,50 +849,27 @@ func per_step_usage_kvs(result: StepResult, cost_step_mc: int) -> [{key: string,
     else with_read
 }
 
--- Map a finish_reason variant to its JSONL string. Single source of truth
--- so the run_summary's finish_reason values stay consistent across all 6
--- termination paths.
-pure func finish_reason_str(r: int) -> string {
-  if r == 0 then "stop"
-  else if r == 1 then "cost_exhausted"
-  else if r == 2 then "dp7_rejected"
-  else if r == 3 then "compaction_exhausted"
-  else if r == 4 then "max_steps"
-  else "error"
-}
+-- finish_reason_str(r: int) lived here. It is gone: D6.2 requires a typed
+-- termination reason derived from the reachable terminal returns, and the wire
+-- mapping now lives beside RunSummaryInfo as phase_vocab.finish_reason_wire.
+-- No integer termination code survives at any terminal call site.
 
--- Build and emit a schema-v1 run_summary event. Always emitted on every
--- termination path (success, Err, cost_exhausted, dp7_rejected,
--- compaction_exhausted, max_steps) so downstream eval harnesses get
--- partial totals on crash and never see a "missing totals" case.
-func emit_run_summary(
-  session_id: string,
+-- Build the schema-v1 run_summary event. Split out from the finalizer so the
+-- record that is projected and the record that is appended are provably the
+-- same value, not two constructions that could drift.
+pure func mk_run_summary(
   model: string,
   totals: RuntimeLoopTotals,
   steps_executed: int,
-  finish_code: int,
+  reason: TerminationReason,
   error_msg: string,
-  started_at_ms: int
-) -> () ! {IO, Clock, Trace} {
-  let now_ms = now();
-  let duration = now_ms - started_at_ms;
-  let total_tokens = totals.input_tokens + totals.output_tokens;
-  let usage_kvs = if totals.cache_read > 0 || totals.cache_creation > 0 then
-    [kv("input_tokens",                jnum(_int_to_float(totals.input_tokens))),
-     kv("output_tokens",               jnum(_int_to_float(totals.output_tokens))),
-     kv("cache_read_input_tokens",     jnum(_int_to_float(totals.cache_read))),
-     kv("cache_creation_input_tokens", jnum(_int_to_float(totals.cache_creation))),
-     kv("total_tokens",                jnum(_int_to_float(total_tokens)))]
-    else
-    [kv("input_tokens",  jnum(_int_to_float(totals.input_tokens))),
-     kv("output_tokens", jnum(_int_to_float(totals.output_tokens))),
-     kv("total_tokens",  jnum(_int_to_float(total_tokens)))];
-  let error_kv = if error_msg == "" then kv("error", js(""))
-                 else kv("error", js(error_msg));
-  ledger_emit(session_id, RunSummary({
+  duration_ms: int,
+  commit: string
+) -> LedgerEvent {
+  RunSummary({
     model: model,
-    motoko_commit: motoko_commit(),
-    finish_reason: finish_reason_str(finish_code),
+    motoko_commit: commit,
+    finish_reason: finish_reason_wire(reason),
     steps_executed: steps_executed,
     input_tokens: totals.input_tokens,
     output_tokens: totals.output_tokens,
@@ -890,9 +877,38 @@ func emit_run_summary(
     cache_creation_input_tokens: totals.cache_creation,
     total_cost_usd: millicents_to_usd(totals.cost_millicents),
     total_cost_millicents: totals.cost_millicents,
-    duration_ms: duration,
+    duration_ms: duration_ms,
     error: error_msg
-  }))
+  })
+}
+
+-- THE finalizer (D6.1). Every terminal return in the driver goes through here.
+--
+-- It does both halves of the contract in one place: it emits the run_summary
+-- projection (what downstream eval harnesses consume) AND appends the same
+-- record to the returned LedgerTrace (what the invariant oracle consumes).
+-- Before this, only the projection existed — emit_run_summary's sole ledger
+-- operation was ledger_emit, so the returned trace contained no RunSummary on
+-- any path, and the returned trace is what D6 makes authoritative.
+--
+-- Centralizing it is the point: a new terminal path cannot update one channel
+-- and silently miss the other, because there is only one channel to call.
+-- The RunSummary is appended last, so it is the final record of the trace.
+func c2_finalize(
+  session_id: string,
+  model: string,
+  totals: RuntimeLoopTotals,
+  steps_executed: int,
+  reason: TerminationReason,
+  error_msg: string,
+  started_at_ms: int,
+  trace: LedgerTrace,
+  result: Result[[Message], AIError]
+) -> TracedSessionResult ! {IO, Clock, Trace} {
+  let now_ms = now();
+  let summary = mk_run_summary(model, totals, steps_executed, reason, error_msg, now_ms - started_at_ms, motoko_commit());
+  let _ = ledger_emit(session_id, summary);
+  { result: result, trace: ledger_append(trace, WireRecord(summary)) }
 }
 
 pure func test_provider_api_model_openrouter_keeps_vendor_model() -> bool
@@ -1323,6 +1339,25 @@ func any_writefile_attempt(msgs: [Message]) -> bool {
   }
 }
 
+-- Map a Fail decision's AIError code onto the typed termination reason.
+-- The three codes `decide` can produce are Internal, BudgetExceeded and
+-- ContextExhausted (src/core/step_machine.ail:57,93,95,99).
+--
+-- The MaxSteps discrimination matches on the message text because that is the
+-- only thing distinguishing the two Internal failures step_machine emits: the
+-- step-budget one and the approval-without-pending-call one share a code. This
+-- preserves the pre-existing behaviour exactly rather than changing it — but it
+-- is a real fragility, since an edit to that message string in step_machine
+-- would silently reclassify max-steps runs as internal failures. Giving the
+-- step-budget Fail its own code would fix it and would change the AIError code
+-- callers see, which is a compatibility decision this item does not own.
+pure func decision_fail_reason(code: string, message: string) -> TerminationReason {
+  if code == "BudgetExceeded" then TermBudgetExhausted
+  else if code == "ContextExhausted" then TermCompactionExhausted
+  else if code == "Internal" && message == "v2 loop: step budget exhausted" then TermMaxSteps
+  else TermInternalFailure
+}
+
 func c2_fail(
   session_id: string,
   model: string,
@@ -1332,13 +1367,9 @@ func c2_fail(
   started_at_ms: int,
   code: string,
   message: string,
-  retryable: bool
-) -> Result[[Message], AIError] ! {IO, Trace} {
-  let finish_reason =
-    if code == "BudgetExceeded" then 1
-    else if code == "ContextExhausted" then 3
-    else if code == "Internal" && message == "v2 loop: step budget exhausted" then 4
-    else 5;
+  retryable: bool,
+  trace: LedgerTrace
+) -> TracedSessionResult ! {IO, Clock, Trace} {
   let _ = if code == "BudgetExceeded" then
     ledger_emit(session_id, CostExhausted({
       step: step_idx,
@@ -1347,8 +1378,8 @@ func c2_fail(
       cap_millicents: max_cost_millicents
     }))
   else ();
-  let _ = emit_run_summary(session_id, model, totals, step_idx, finish_reason, message, started_at_ms);
-  Err({ code: code, message: message, retryable: retryable })
+  let result: Result[[Message], AIError] = Err({ code: code, message: message, retryable: retryable });
+  c2_finalize(session_id, model, totals, step_idx, decision_fail_reason(code, message), message, started_at_ms, trace, result)
 }
 
 pure func c2_pending_context(st: C2LoopState) -> [Message] {
@@ -1556,18 +1587,20 @@ func c2_loop(
   st: C2LoopState
 ) -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
   match c2_step_state(st) {
+    -- Terminal: invalid history. This path emitted no run_summary at all
+    -- before A9 — it is one of the two terminal returns the ADR's five-call-site
+    -- enumeration missed. It now finalizes like every other.
     Err(reason) => {
       let result: Result[[Message], AIError] = Err({ code: "InvalidHistory", message: reason, retryable: false });
-      { result: result, trace: st.trace }
+      c2_finalize(session_id, model, st.totals, st.step_idx, TermInvalidHistory, reason, started_at_ms, st.trace, result)
     },
     Ok(step_state) => {
       let decision = decide(step_state, policy.step);
       let trace_with_decision = c2_append_decision(st.trace, st.step_idx, decision);
       match decision {
-        Fail(info) => {
-          let result = c2_fail(session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable);
-          { result: result, trace: trace_with_decision }
-        },
+        -- Terminal: budget, max steps, compaction exhaustion or internal,
+        -- discriminated by decision_fail_reason.
+        Fail(info) => c2_fail(session_id, model, st.totals, st.step_idx, max_cost_millicents, started_at_ms, info.code, info.message, info.retryable, trace_with_decision),
         Finalize(info) => {
           let done_step = c2_done_step(st.step_idx);
           let empty_event = EmptyStopFinalize({
@@ -1581,13 +1614,18 @@ func c2_loop(
               let _ = ledger_emit(session_id, empty_event);
               ledger_append(trace_with_decision, WireRecord(empty_event))
             } else trace_with_decision;
-          let _ = emit_run_summary(session_id, model, st.totals, st.step_idx, 0, "", started_at_ms);
+          -- Terminal: success. c2_finalize runs first so the run_summary
+          -- projection still precedes the done projection on the wire, exactly
+          -- as it did before; the DoneEvent is projected only and is not a
+          -- second terminal record (D6.3), so the appended RunSummary remains
+          -- the final record of the returned trace.
+          let finalized = c2_finalize(session_id, model, st.totals, st.step_idx, TermSuccess, "", started_at_ms, trace_after_empty_floor, Ok(st.msgs));
           let _ = ledger_emit(session_id, DoneEvent({
             step: done_step,
             output: info.output,
             source: st.finalize_source
           }));
-          { result: Ok(st.msgs), trace: trace_after_empty_floor }
+          finalized
         },
         InjectUserMessage(msg) => {
           let next_msgs = st.msgs ++ [msg];
@@ -1643,9 +1681,12 @@ func c2_loop(
         },
         AwaitApproval(_) => {
           match st.pending_approval {
+            -- Terminal: internal driver failure. The second of the two terminal
+            -- returns that emitted no run_summary before A9.
             None => {
-              let result: Result[[Message], AIError] = Err({ code: "Internal", message: "approval requested without pending approval state", retryable: false });
-              { result: result, trace: trace_with_decision }
+              let msg = "approval requested without pending approval state";
+              let result: Result[[Message], AIError] = Err({ code: "Internal", message: msg, retryable: false });
+              c2_finalize(session_id, model, st.totals, st.step_idx, TermInternalFailure, msg, started_at_ms, trace_with_decision, result)
             },
             Some(req) => {
               let raw = readLine();
@@ -1731,19 +1772,22 @@ func c2_loop(
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
           let trace_after_stages = c2_trace_stage_records(trace_with_decision, step_idx, chain.stages);
           match seal_compacted_payload(split, msgs_to_messages(chain.msgs), model, context_limit, policy.step.require_system_prompt) {
+            -- Terminal: the seal could not produce a usable system prompt.
+            -- Reachable, and absent from the ADR's enumeration of termination
+            -- reasons; it maps to the "error" wire string like the other
+            -- non-specific failures.
             Err(SealSystemPromptEmpty(reason)) => {
               let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
               let _ = ledger_emit(session_id, event);
-              let _ = emit_run_summary(session_id, model, st.totals, step_idx, 5, reason, started_at_ms);
               let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
-              { result: result, trace: ledger_append(trace_after_stages, WireRecord(event)) }
+              c2_finalize(session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), result)
             },
+            -- Terminal: compaction exhausted.
             Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
-              let _ = emit_run_summary(session_id, model, st.totals, step_idx, 3, compaction_reason, started_at_ms);
               let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
-              { result: result, trace: ledger_append(trace_after_stages, WireRecord(event)) }
+              c2_finalize(session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), result)
             },
             Ok(payload) => {
               let compacted_msgs = payload_messages(payload);
@@ -1798,8 +1842,8 @@ func c2_loop(
                     };
                     c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, started_at_ms, next_state)
                   } else {
-                    let _ = emit_run_summary(session_id, model, st.totals, step_idx, 5, e.message, started_at_ms);
-                    { result: Err(e), trace: ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)) }
+                    -- Terminal: unretried provider/stream failure.
+                    c2_finalize(session_id, model, st.totals, step_idx, TermProviderFailure, e.message, started_at_ms, ledger_append(ledger_append(trace_after_stages, WireRecord(start_event)), WireRecord(prepared_event)), Err(e))
                   }
                 },
                 Ok(result) => {
@@ -2421,16 +2465,32 @@ pure func test_millicents_to_usd_fraction() -> bool
     millicents_to_usd(12345678) == 123.45678
   }
 
-pure func test_finish_reason_str_table() -> bool
+-- Replaces test_finish_reason_str_table. The integer helper is gone, so the
+-- table is pinned over the typed reason instead. The wire strings are a
+-- compatibility surface and must not change: every string on the right here is
+-- byte-identical to what the integer table produced for the code that reached
+-- that path. "dp7_rejected" is absent because no call site ever produced it.
+pure func test_finish_reason_wire_table() -> bool
   tests [((), true)]
   {
-    finish_reason_str(0) == "stop"
-      && finish_reason_str(1) == "cost_exhausted"
-      && finish_reason_str(2) == "dp7_rejected"
-      && finish_reason_str(3) == "compaction_exhausted"
-      && finish_reason_str(4) == "max_steps"
-      && finish_reason_str(5) == "error"
-      && finish_reason_str(99) == "error"
+    finish_reason_wire(TermSuccess) == "stop"
+      && finish_reason_wire(TermBudgetExhausted) == "cost_exhausted"
+      && finish_reason_wire(TermCompactionExhausted) == "compaction_exhausted"
+      && finish_reason_wire(TermMaxSteps) == "max_steps"
+      && finish_reason_wire(TermProviderFailure) == "error"
+      && finish_reason_wire(TermSystemPromptEmpty) == "error"
+      && finish_reason_wire(TermInvalidHistory) == "error"
+      && finish_reason_wire(TermInternalFailure) == "error"
+  }
+
+-- The reachable Fail codes map to the reasons the integer helper produced.
+pure func test_decision_fail_reason_mapping() -> bool
+  tests [((), true)]
+  {
+    finish_reason_wire(decision_fail_reason("BudgetExceeded", "cap")) == "cost_exhausted"
+      && finish_reason_wire(decision_fail_reason("ContextExhausted", "r")) == "compaction_exhausted"
+      && finish_reason_wire(decision_fail_reason("Internal", "v2 loop: step budget exhausted")) == "max_steps"
+      && finish_reason_wire(decision_fail_reason("Internal", "something else")) == "error"
   }
 
 pure func test_zero_totals_initializes_clean() -> bool

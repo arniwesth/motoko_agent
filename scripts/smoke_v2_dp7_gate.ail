@@ -23,7 +23,7 @@
 
 module scripts/smoke_v2_dp7_gate
 
-import std/io (println)
+import std/io (println, exit)
 import std/result (Result, Ok, Err)
 import std/ai (Message, AIError)
 import src/core/config (CostRates, VerificationConfig)
@@ -141,5 +141,9 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   report("passing check_core → DP7 approves → loop returns Ok",      r2);
   let r3 = test_dp7_fail_open_on_missing_make();
   report("missing Makefile → DP7 fails open → loop returns Ok",      r3);
-  println("done")
+  if r1 && r2 && r3 then println("smoke_v2_dp7_gate PASS")
+  else {
+    let _ = println("smoke_v2_dp7_gate FAIL");
+    exit(1)
+  }
 }

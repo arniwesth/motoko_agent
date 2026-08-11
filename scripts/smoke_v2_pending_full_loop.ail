@@ -21,7 +21,7 @@
 
 module scripts/smoke_v2_pending_full_loop
 
-import std/io (println)
+import std/io (println, exit)
 import std/option (None)
 import std/result (Result, Ok, Err)
 import std/ai (Message, AIError, ToolCall, ToolSchema)
@@ -175,5 +175,9 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   report("Pending(DenyAfterTimeout) + EOF stdin → loop completes (deny applied)",  r1);
   let r2 = test_pending_allow_default_on_eof();
   report("Pending(AllowAfterTimeout) + EOF stdin → loop completes (allow applied)", r2);
-  println("done")
+  if r1 && r2 then println("smoke_v2_pending_full_loop PASS")
+  else {
+    let _ = println("smoke_v2_pending_full_loop FAIL");
+    exit(1)
+  }
 }

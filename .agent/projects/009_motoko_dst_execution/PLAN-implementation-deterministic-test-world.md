@@ -149,13 +149,20 @@ is in flight. Milestone C depends on B.
 
 **Sizing model, corrected by measurement at cluster 1** (`NOTE-cluster-1-execution-report-and-plan-corrections.md`):
 
-- **Size widen-and-converge work by *sites touched*, not files and not days.** A1 and A2 were
-  estimated at half a day and 1–2 days and measured at ~5.5 and ~10 minutes — wrong by roughly two
-  orders of magnitude, systematically, because both scaled M1 by *file* count. Scaling M1's 14
-  minutes by *site* count predicts ~10 minutes for cluster 1's 48 sites against the ~18 actually
-  spent editing. That is the model.
-- **The judgement ratio for contract-changing work is ~19%, not M1's 10%** (A1 3/13, A2 6/35).
-  M1's additive band understates anything that changes a contract.
+- **Size by *sites touched*, not files and not days. This is the plan's sizing rule** — two
+  independent confirmations (clusters 1 and 4), not a single observation. A1, A2 and A16 were
+  estimated in days and measured in minutes, wrong by roughly two orders of magnitude and always in
+  the same direction, because all three scaled M1 by *file* count. Site-scaling predicts both runs:
+  cluster 1's 48 sites → ~10 min predicted against ~18 spent editing; cluster 4's 37 sites → ~13 min
+  predicted for A9 against ~14 actual.
+- **Size against the right population, which is not always the obvious one.** A9's five
+  `emit_run_summary` call sites were the visible number; the load-bearing counts were **seven
+  terminal returns and eight reachable termination reasons**. Sizing against the helper's callers
+  would have missed two terminal paths outright (C2). **For an item that rewrites a *class* of
+  things, count the class, not the helper.**
+- **The judgement ratio scales with how much contract an item touches:** M1's additive band 10%,
+  port widenings **~19%** (A1 3/13, A2 6/35), items rewriting a class of returns or a result
+  contract **~27%** (A16 3/11, A9 7/26). Use 27% for A10, A13 and B2.
 - **This does not generalise to new-artifact work.** A7, A8, A10, A13, A14, A15 and B2 build things
   that do not exist; nothing here measures those and their estimates stand unrevised.
 - The 14-minute discipline held for the reason M1 gave: **tooling first.** Cluster 1 wrote a
@@ -253,6 +260,16 @@ fail-closed validator. New construction; the required classes, per-class fields 
 applicability condition, delivery constructor, named recovery-branch id, logical transition), and
 the 007-D1.3 physical-fault tripwire are all fixed in D3 — the work is the artifact and validator,
 not the design.
+**A branch discrimination that can silently break belongs here too, and this item owns deciding it**
+(cluster 4, C4). `decision_fail_reason` (`session.ail:1357`) separates max-steps from internal
+failure by matching the literal message `"v2 loop: step budget exhausted"`, because
+`step_machine.ail:93` and `:57` emit **the same `Internal` code** for the step-budget failure and
+the approval-without-pending-call failure. Behaviour is exact today, but editing that string
+silently reclassifies every max-steps run. Giving the step-budget `Fail` its own code fixes it and
+**changes the `AIError` code callers see — a compatibility decision, which is why A9 did not take
+it.** D3's catalogue names a recovery-branch id per class, so this is the decision's natural home:
+decide it here, with the wire-compatibility consequence stated.
+
 **One uncovered case cluster 1 surfaced belongs in this catalogue.** After A2, an extension-issued
 `ai_step` against a `Scripted` provider is handed a fresh empty `ProviderState` and serves
 `terminal_step()`, per D1's exclusion of the extension model path. **No test in the tree changed its
@@ -296,13 +313,25 @@ their D6-fixed fields — outcome, ledger trace, interaction log, replay metadat
 interaction position, actual request projection, partial ledger trace, replay metadata — plus
 setup-failure-before-the-world-is-established as a typed `HarnessFailure` rather than a successful
 empty trace.
+*Size:* **MEASURED: ~14 min, 6 files (2 new), 26 sites of which 7 needed judgement** (`ff8d8e5`,
+2026-08-02). Previously unsized.
 *Acceptance evidence:* a trace-level test asserts exactly one `RunSummary` as the final record on
-every enumerated terminal path (success, budget, max-steps, compaction exhaustion, provider
-failure, tool failure, invalid history, internal); returned outcome, `DoneEvent`, and `RunSummary`
-agree; no integer code survives at a terminal call site; a setup failure returns a typed
-`HarnessFailure` carrying its partial evidence, and a raw capability bypass remains a non-zero run
-rather than a typed value — D6.6 requires the two be distinguishable and they are tested as
-distinct.
+every enumerated terminal path; returned outcome, `DoneEvent`, and `RunSummary` agree; no integer
+code survives at a terminal call site; a setup failure returns a typed `HarnessFailure` carrying its
+partial evidence, and a raw capability bypass remains a non-zero run rather than a typed value —
+D6.6 requires the two be distinguishable and they are tested as distinct. Landed as
+`make terminal_trace`, invoked by CI.
+
+**The terminal-path enumeration this item inherited was wrong in three ways, all found by building
+it** (`NOTE-cluster-4-execution-report-and-plan-corrections.md`, C2/C3; ADR amended 2026-08-02):
+**seven terminal returns, not five `emit_run_summary` call sites** — invalid history and the
+internal approval failure emitted nothing at all, not even a projection, and an implementer working
+from the five would have left both unfinalized. Among the reasons, **`dp7_rejected` is unreachable**
+(no call site ever passed it; a DP7 rejection re-injects and terminates later), **unrecovered tool
+failure is not a terminal path** at all (tool results feed back as messages), and
+**system-prompt-empty is reachable and was missing**. An earlier revision of this line listed "tool
+failure" among the paths to assert. Eight reachable reasons, all mapping onto the existing wire
+strings, so no wire change was required.
 
 **WI-A10. Build the profile definition and execution-manifest machinery, and define `driver_only`
 v1** (D5; P4). Depends on A4, A5, A6, A7, A8: the definition references the attribution table,
@@ -377,6 +406,16 @@ larger site count, for values with no equivalent instrument.**
 *Therefore, binding:* **land an executable advancement assertion for each cursor before threading
 it.** Not after. A cursor threaded without one is indistinguishable from a cursor frozen, in a tree
 where every type-check passes.
+
+**Cluster 4 sharpened this and the strengthening is not optional.** A9 found *four* silent-wrong
+sites, and their shape is worse than cluster 1's: cluster 1's were successor literals where the
+wrong value froze a cursor; A9's are **trace arguments where the wrong value yields a trace that
+still passes its own invariant** — handing the finalizer `st.trace` instead of the trace carrying
+the decision record silently drops the evidence the failure is about, while the one-`RunSummary`
+assertion stays green. A12 now threads `world_state` through those same literals *and* through a
+finalizer taking a trace argument. **The advancement assertion must therefore cover trace
+completeness, not only cursor advancement**, or a dropped record satisfies every check A9 leaves
+behind.
 *Size:* **estimate — several days**, staged as one PR per effect class. Basis: the spike threaded
 world state and routed the clock on a throwaway branch; this repeats that behaviour-preservingly
 across six effect classes plus the typed tool contract. Per the corrected model, re-size against
@@ -464,7 +503,34 @@ silent-freeze hazard threatens.
 *Acceptance evidence:* all nine run in a `make` target reachable from CI; the target fails when any
 one of them fails (verified by breaking one deliberately); `scripted_ports.ail`'s unit tests are in
 a named target.
-*Size:* **estimate — under a day.** Basis: wiring, not authoring; the scripts exist and pass today.
+*Size:* ~~estimate — under a day~~ → **MEASURED: ~9 min, 6 files, 11 sites of which 3 needed
+judgement** (`61f38db`, 2026-08-02). Wrong in the same direction and for the same reason as cluster
+1's estimates — sized as wiring by file count, when the real site count was 11, not the 2 this item
+implied.
+
+**The demonstration clause earned its keep, and that is a finding about how to write acceptance
+evidence** (cluster 4, C1). "Verified by breaking one deliberately" could not be satisfied as
+written: **four of the eight scripts had no failing exit path at all** —
+`smoke_v2_{dp7_gate,pending_full_loop,compaction_full_loop,cost_budget_full_loop}` printed `✗` on a
+failed assertion and exited **0**. Wiring them would have produced a target green regardless of
+whether their assertions held. Measured, not inferred: with one assertion inverted, the script
+exited 0 before the fix and 1 after. **Prefer acceptance clauses that must be demonstrated over
+clauses that can be asserted** — an assertion here would have shipped the illusion of coverage.
+
+**WI-A17. Sweep the second coverage axis: `ailang test`.** No dependencies; small. Cluster 4 found
+that `check_core` type-checks `src/core/*.ail` but never *runs* their inline tests, so
+`session.ail`'s 21 and `phase_vocab.ail`'s 27 — including the `RunSummary` goldens that hold the
+wire strings — were executed by nothing. A16 put those two files in `make terminal_trace`, but the
+general defect stands: **`ailang check` coverage and `ailang test` coverage are separate axes and
+only the first has a target.** Cluster 1's C6/C7 did not catch it because they looked at
+`src/core/test/` rather than `src/core/`. Also fix or retire `scripts/dst/probe_phase_vocab_sealed.ail`,
+which fails at baseline (`IMP010: symbol 'MkHistory' not exported`) and stayed broken precisely
+because it is in no target.
+*Acceptance evidence:* every `.ail` file carrying inline tests is in a target CI invokes, verified
+by an inventory that fails when a file with tests is unreferenced — not a hand-maintained list;
+breaking one inline test turns CI red.
+*Size:* **estimate — under a day**, at 27%: it is an inventory plus wiring, and the inventory is
+the part that must not be hand-maintained.
 
 ### Milestone B — the repin (trigger: a released AILANG carrying the recorded-stream API)
 

@@ -20,7 +20,7 @@
 
 module scripts/smoke_v2_cost_budget_full_loop
 
-import std/io (println)
+import std/io (println, exit)
 import std/result (Result, Ok, Err)
 import std/ai (Message, AIError)
 import src/core/config (CostRates)
@@ -208,5 +208,9 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   report("cap=0 disables check (6*16400 OK)", r3);
   let r4 = test_zero_rates_fail_open();
   report("rates=0 fail-open (1mc cap, rates skip check)", r4);
-  println("done")
+  if r1 && r2 && r3 && r4 then println("smoke_v2_cost_budget_full_loop PASS")
+  else {
+    let _ = println("smoke_v2_cost_budget_full_loop FAIL");
+    exit(1)
+  }
 }

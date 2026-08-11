@@ -73,7 +73,95 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace smoke_driver smoke_parity dst_l2 dst_seeded
+
+# D6's terminal-trace contract (WI-A9). Four checks, in order:
+#
+#   1. terminal_trace_dst asserts, over the trace the driver RETURNS, that every
+#      drivable terminal path ends with exactly one RunSummary as its final
+#      record and that the outcome agrees with it.
+#   2. THE D6.6 DISTINCTION. A raw capability bypass must stay an expected
+#      non-zero run — it must NOT become a typed HarnessFailure. A denied
+#      ambient effect terminates evaluation on the pin, so no typed result and
+#      no partial trace can exist. Withholding Env must therefore fail, and this
+#      check fails if it ever starts succeeding, which is what would happen if
+#      someone "unified" the two outcomes behind a catch-all.
+#   3. A structural guard: every terminal return in the driver must go through
+#      c2_finalize. c2_finalize holds the sole `{ result:` record literal, so
+#      more than one means a terminal path has been added that appends no
+#      RunSummary — the exact regression D6.1 exists to prevent, and one that no
+#      per-path test can catch for a path nobody wrote a test for.
+#   4. The typed reason's wire mapping and result-class unit tests. session.ail
+#      and phase_vocab.ail carry inline tests that no target ran before this
+#      one, including the RunSummary goldens that pin the wire strings.
+.PHONY: terminal_trace
+terminal_trace:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	  --ai-stub --entry main scripts/dst/terminal_trace_dst.ail < /dev/null; \
+	if ailang run --caps IO --entry main scripts/dst/terminal_trace_dst.ail \
+	     < /dev/null > /dev/null 2>&1; then \
+		echo "FAIL: a run with capabilities withheld exited 0 — a raw capability bypass must remain a non-zero run (D6.6)"; \
+		exit 1; \
+	else \
+		echo "  ✓ capability bypass remains a non-zero run (D6.6)"; \
+	fi; \
+	n=$$(grep -c '{ result:' src/core/session.ail); \
+	if [ "$$n" -ne 1 ]; then \
+		echo "FAIL: $$n terminal record literals in session.ail, expected 1 (c2_finalize). A terminal return is bypassing the finalizer — see D6.1."; \
+		grep -n '{ result:' src/core/session.ail; \
+		exit 1; \
+	else \
+		echo "  ✓ all terminal returns route through c2_finalize"; \
+	fi; \
+	ailang test src/core/dst_result.ail > /dev/null && echo "  ✓ src/core/dst_result.ail"; \
+	ailang test src/core/phase_vocab.ail > /dev/null && echo "  ✓ src/core/phase_vocab.ail"; \
+	ailang test src/core/session.ail > /dev/null && echo "  ✓ src/core/session.ail"
+
+# Driver full-loop coverage (WI-A16). These eight smoke scripts exercise the v2
+# driver loop end-to-end and, until this target existed, ran in no make target
+# and no CI job — cluster 1 (WI-A2) changed the contract every one of them
+# depends on and nothing in the repo would have run them. smoke_v2_dp7_gate is
+# the ONLY executable coverage of c2_after_dp7. src/core/test/scripted_ports.ail
+# is here for the same reason: check_core globs src/core/*.ail only, so its six
+# unit tests were run by nothing.
+#
+# Every script runs even if an earlier one fails, so a driver change sees its
+# whole blast radius in one pass rather than one failure at a time. The target
+# still exits non-zero if any script or the unit tests fail.
+#
+# All eight need the full capability set and --ai-stub, and all eight read from
+# /dev/null so a stub prompt cannot block CI. This mirrors compaction_dst.
+.PHONY: smoke_driver
+smoke_driver:
+	@fail=0; \
+	for f in scripts/smoke_v2_dp7_gate.ail \
+	         scripts/smoke_v2_pending_full_loop.ail \
+	         scripts/smoke_v2_compaction_full_loop.ail \
+	         scripts/smoke_v2_stream_parity.ail \
+	         scripts/smoke_v2_ext_fixture_parity.ail \
+	         scripts/smoke_v2_cost_budget_full_loop.ail \
+	         scripts/smoke_v2_compaction_chain.ail \
+	         scripts/smoke_phase_a_tool_parity.ail; do \
+		if ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+		     --ai-stub --entry main "$$f" < /dev/null > /dev/null 2>&1; then \
+			echo "  ✓ $$f"; \
+		else \
+			echo "  ✗ $$f"; \
+			ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+			  --ai-stub --entry main "$$f" < /dev/null 2>&1 | tail -15; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	if ailang test src/core/test/scripted_ports.ail > /dev/null 2>&1; then \
+		echo "  ✓ src/core/test/scripted_ports.ail (6 unit tests)"; \
+	else \
+		echo "  ✗ src/core/test/scripted_ports.ail"; \
+		ailang test src/core/test/scripted_ports.ail 2>&1 | tail -15; \
+		fail=$$((fail + 1)); \
+	fi; \
+	echo "smoke_driver: $$fail failed"; \
+	[ "$$fail" -eq 0 ] || exit 1
 
 dst_seeded:
 	ailang run --caps IO,Env,Rand --entry main scripts/dst/compaction_seeded_dst.ail
