@@ -1,0 +1,119 @@
+flowchart TB
+  %% Plan · ADR-004 long Qwen compaction-session DST — PLANNED implementation.
+  %% Grounded at HEAD de3c348 against PLAN-long-qwen-compaction-session-dst.md (2026-07-08).
+  %% Legend: amber-dashed = closed decision; gray = frozen source constraint; green = artifact to BUILD;
+  %% purple = config/catalog edit; teal = scenario/test; blue = fast gate / acceptance.
+
+  subgraph DEC["Closed decisions — ADR-004 review disposition"]
+    d1["standing DST = deterministic/offline<br/>live Qwen is calibration evidence only"]:::decision
+    d2["model label = openrouter/qwen/qwen3.6-35b-a3b<br/>prod catalog limit = 262144"]:::decision
+    d3["script clock = retained marker routing<br/>Ported(Ports), no assistant-count index"]:::decision
+    d4["summarizer branch = prompt shape<br/>single user msg · no system prefix"]:::decision
+    d5["oracle = in-memory LedgerTrace<br/>CompactionStageRecord + ProviderCallPrepared + ProviderResult"]:::decision
+  end
+
+  subgraph FROZEN["Frozen source constraints — reuse, do not redesign"]
+    session["session.ail CallModel path<br/>split → pre-step chain → seal → dispatch<br/>run_v2_session_traced returns trace"]:::frozen
+    ports["stub_step/scripted_ports limits<br/>Ported does not thread state<br/>scripted_ports_from_steps assistant-count invalid"]:::frozen
+    ai["compaction_ai law<br/>one-user summarizer · digest artifact<br/>old_turns pass-through · keep_recent halving"]:::frozen
+    ledger["phase_vocab ledger<br/>TraceStageApplied/Rejected<br/>ProviderCallPrepared = seal accepted"]:::frozen
+    law["validate_compactor_output<br/>conformance invariant reused directly"]:::frozen
+  end
+
+  subgraph CFG["WI-1 / WI-2 — Config + catalog artifacts"]
+    prodcat[".motoko/model-catalog.json EDIT<br/>openrouter/qwen/qwen3.6-35b-a3b → 262144"]:::core
+    liveprof["qwen36-compaction-live profile<br/>agent model = Qwen<br/>compaction_ai model = Qwen"]:::core
+    testcat["scripts/fixtures/qwen36-small-model-catalog.json<br/>same label → small limit, e.g. 1200"]:::new
+    catprobe["long_qwen_catalog_fixture_probe.ail<br/>MOTOKO_MODELS_FILE resolves runtime label"]:::scn
+  end
+
+  subgraph HARNESS["WI-3 — Traced deterministic harness to BUILD"]
+    script["scripts/long_qwen_compaction_dst.ail<br/>calls Session.run_v2_session_traced directly"]:::new
+    rt["local ExtRuntime<br/>compaction_ai id exactly compaction_ai<br/>then compaction_structural + LongResult handler"]:::new
+    routed["custom routed Ported(Ports)<br/>agent: retained markers<br/>summarizer: single-user fake summary"]:::new
+    tools["deterministic on_tool_handle<br/>large paired tool results<br/>next-step marker in retained tail"]:::new
+    norm["bounded normalized trace projection<br/>record names · steps · digests · counts<br/>no full payload bodies"]:::new
+  end
+
+  subgraph SCN["WI-4 / WI-5 — Standing scenario ids"]
+    s1["compaction.long_qwen_ai_multiple_compactions<br/>≥3 compaction_ai TraceStageApplied<br/>zero TraceStageRejected"]:::scn
+    s2["compaction.long_qwen_ai_replay_deterministic<br/>two runs byte-stable after narrow normalization"]:::scn
+    s3["compaction.compaction_ai_output_shape_valid<br/>validate_compactor_output accepts<br/>tool ids remain paired"]:::scn
+    s4["compaction.compaction_ai_artifact_cache_stable<br/>first run writes artifact<br/>second same segment must use cache"]:::scn
+  end
+
+  subgraph ORACLE["Oracle checks — must bite"]
+    applied["count CompactionStageRecord<br/>ext_id = compaction_ai<br/>outcome = TraceStageApplied"]:::gate
+    clean["negative outcomes absent<br/>TraceStageRejected<br/>compaction_exhausted<br/>SystemPromptEmpty"]:::gate
+    prepared["ProviderCallPrepared<br/>system prefix count/chars > 0<br/>payload_digest present"]:::gate
+    result["ProviderResult after prepared<br/>dispatch succeeded<br/>not just seal acceptance"]:::gate
+    history["persisted history still grows<br/>compaction is provider-payload-local"]:::gate
+  end
+
+  subgraph GATE["WI-6 / WI-7 — Gates and evidence"]
+    make["make compaction_dst<br/>offline deterministic run<br/>with MOTOKO_MODELS_FILE fixture"]:::gate
+    live["manual live calibration note<br/>date · profile · model · log path<br/>never CI oracle"]:::decision
+    accept["ADR-004 acceptance checklist<br/>catalog · profile · scenarios · replay · cache"]:::gate
+  end
+
+  %% decisions drive planned work
+  d1 --> script
+  d1 --> make
+  d2 --> prodcat
+  d2 --> liveprof
+  d2 --> testcat
+  d3 --> routed
+  d4 --> routed
+  d5 --> norm
+
+  %% frozen constraints shape the harness
+  session --> script
+  ports -. "forbids assistant-count clock" .-> routed
+  ai --> rt
+  ai --> s3
+  ai --> s4
+  ledger --> norm
+  law --> s3
+
+  %% catalog/profile flow
+  prodcat --> liveprof
+  testcat --> catprobe
+  catprobe --> script
+
+  %% harness composition
+  script --> rt
+  rt --> routed
+  rt --> tools
+  routed --> s1
+  routed --> s2
+  tools --> s1
+  norm --> s2
+
+  %% scenarios feed oracle checks
+  s1 --> applied
+  s1 --> clean
+  s1 --> prepared
+  s1 --> result
+  s1 --> history
+  s2 --> norm
+  s3 --> law
+  s4 --> ai
+
+  %% gates
+  applied --> make
+  clean --> make
+  prepared --> make
+  result --> make
+  history --> make
+  s3 --> make
+  s4 --> make
+  liveprof -. "manual only" .-> live
+  make --> accept
+  live -. "calibration evidence only" .-> accept
+
+  classDef decision fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef core fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef scn fill:#12323a,stroke:#39c5cf,color:#c5f6fb;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;

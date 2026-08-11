@@ -1,0 +1,662 @@
+module scripts/long_qwen_compaction_dst
+
+import std/ai (Message, StepResult, ToolCall, AIError, StreamChunk)
+import std/io (println, exit)
+import std/json (Json, jo, kv, js)
+import std/list (length)
+import std/option (None)
+import std/result (Result, Ok, Err)
+import std/string (contains, length as string_length)
+import std/trace as Trace
+import src/core/config (CostRates, VerificationConfig)
+import src/core/ports (Ports, ports_shape_probe)
+import src/core/test/stub_step (StepProvider, Ported)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/phase_vocab (
+  LedgerTrace,
+  LedgerRecord,
+  WireRecord,
+  CompactionStageRecord,
+  DecisionRecord,
+  InMemoryStageOutcome,
+  TraceStageApplied,
+  TraceStageRejected,
+  TraceStagePassed,
+  LedgerEvent,
+  ProviderCallPrepared,
+  ProviderResult,
+  CompactionExhausted,
+  ErrorEvent,
+  RunSummary
+)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtRuntime,
+  ExtRegistry,
+  ExtensionHooks,
+  ExtCtx,
+  BudgetPlan,
+  PromptPatch,
+  BudgetPatch,
+  ToolPolicyDecision,
+  ToolHandleDecision,
+  ResponseInterceptDecision,
+  FinalizeDecision,
+  PreStepDecision,
+  PassThrough,
+  Compacted,
+  Allow,
+  Delegate,
+  Handled,
+  NoIntercept,
+  NoDecision,
+  Msg
+)
+import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
+import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
+import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+
+let qwen_model = "openrouter/qwen/qwen3.6-35b-a3b"
+
+type ScenarioFailure = { failed_invariant: string, trace: [string] }
+type Scenario = { id: string, run: () -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} }
+type LongStats = { applied: int, rejected: int, prepared: int, provider_results: int, projection: [string], final_count: int, final_digest: string }
+
+func print_trace(lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    line :: rest => {
+      let _ = println("trace ${line}");
+      print_trace(rest)
+    }
+  }
+}
+
+func run_one(s: Scenario) -> bool ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match s.run() {
+    Ok(_) => {
+      println("scenario=${s.id} ok");
+      true
+    },
+    Err(f) => {
+      let _ = println("scenario=${s.id} invariant=${f.failed_invariant}");
+      let _ = print_trace(f.trace);
+      false
+    }
+  }
+}
+
+func run_all(scenarios: [Scenario], failed: int) -> int ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  match scenarios {
+    [] => failed,
+    s :: rest => {
+      let ok = run_one(s);
+      run_all(rest, if ok then failed else failed + 1)
+    }
+  }
+}
+
+func ok_or_failure(ok: bool, invariant_name: string, trace: [string]) -> Result[(), ScenarioFailure] {
+  if ok then Ok(()) else Err({ failed_invariant: invariant_name, trace: trace })
+}
+
+func no_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+func budget() -> BudgetPlan {
+  { total: 40, solver: 40, verifier: 0 }
+}
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func abi_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func abi_tool(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func abi_assistant(content: string, calls: [ToolCall]) -> Msg {
+  { role: "assistant", content: content, tool_calls: calls, tool_call_id: "" }
+}
+
+func tool_call(id: string) -> ToolCall {
+  { id: id, name: "LongResult", arguments: "{\"marker\":\"${id}\"}" }
+}
+
+func step_marker(n: int) -> string {
+  "long-qwen-step-${show(n)}"
+}
+
+func filler_block() -> string {
+  " deterministic tool payload abcdefghijklmnopqrstuvwxyz 0123456789 abcdefghijklmnopqrstuvwxyz 0123456789"
+}
+
+func repeat_block(n: int) -> string {
+  if n <= 0 then "" else "${filler_block()}${repeat_block(n - 1)}"
+}
+
+func long_stdout(current: string, next: string) -> string {
+  "tool-result current=${current} next=${next}${repeat_block(8)}"
+}
+
+func is_summarizer_prompt(msgs: [Message]) -> bool {
+  match msgs {
+    m :: [] => m.role == "user" && length(m.tool_calls) == 0 && m.tool_call_id == "",
+    _ => false
+  }
+}
+
+func contains_marker(msgs: [Message], marker: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => if contains(m.content, marker) || m.tool_call_id == marker then true else contains_marker(rest, marker)
+  }
+}
+
+func highest_agent_idx_from_markers(msgs: [Message], n: int) -> int {
+  if n <= 0 then 1
+  else if contains_marker(msgs, step_marker(n)) then n
+  else highest_agent_idx_from_markers(msgs, n - 1)
+}
+
+func step_result(content: string, calls: [ToolCall], finish: string) -> StepResult {
+  {
+    message: { role: "assistant", content: content, tool_calls: [], tool_call_id: "" },
+    tool_calls: calls,
+    finish_reason: finish,
+    input_tokens: 100,
+    output_tokens: 40,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0
+  }
+}
+
+func routed_step(max_tools: int, model: string, msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+  if is_summarizer_prompt(msgs) then {
+    let prompt = match msgs { m :: [] => m.content, _ => "" };
+    Ok(step_result("summary:${show(string_length(prompt))}", [], "stop"))
+  } else {
+    let idx = highest_agent_idx_from_markers(msgs, max_tools + 1);
+    if idx <= max_tools then {
+      let marker = step_marker(idx);
+      Ok(step_result("calling LongResult ${marker}", [tool_call(marker)], "tool_calls"))
+    } else {
+      Ok(step_result("long qwen deterministic run complete", [], "stop"))
+    }
+  }
+}
+
+func fixed_clock() -> int ! {Clock} { 123456789 }
+func fixed_env(_key: string, fallback: string) -> string ! {Env} { fallback }
+func fixed_exec(_name: string, _args: string) -> string ! {IO, Process, FS} { "" }
+
+func runtime_hooks() -> ExtRuntime ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  long_runtime()
+}
+
+func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
+  let model_step = func(model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+    -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+    routed_step(max_tools, model, msgs, on_chunk)
+  };
+  let base = ports_shape_probe(model_step, runtime_hooks);
+  {
+    model_step: base.model_step,
+    approval_read: base.approval_read,
+    clock_now: fixed_clock,
+    env_get: fixed_env,
+    tool_exec: fixed_exec,
+    hooks_runtime: runtime_hooks
+  }
+}
+
+func compaction_ai_hook() -> ExtensionHooks {
+  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 60, keep_recent: 8 };
+  {
+    id: "compaction_ai",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ . { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      compact_with_ai(ctx, msgs, cfg)
+    },
+    on_tool_policy: \_ _ . Allow,
+    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  }
+}
+
+func structural_hook() -> ExtensionHooks {
+  {
+    id: "compaction_structural",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ . { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_pre_step: func(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      compact_for_pre_step(ctx, msgs)
+    },
+    on_tool_policy: \_ _ . Allow,
+    on_tool_handle: \_ _ . Delegate ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  }
+}
+
+func next_marker_from_call_id(id: string) -> string {
+  if id == step_marker(1) then step_marker(2)
+  else if id == step_marker(2) then step_marker(3)
+  else if id == step_marker(3) then step_marker(4)
+  else if id == step_marker(4) then step_marker(5)
+  else if id == step_marker(5) then step_marker(6)
+  else if id == step_marker(6) then step_marker(7)
+  else if id == step_marker(7) then step_marker(8)
+  else if id == step_marker(8) then step_marker(9)
+  else if id == step_marker(9) then step_marker(10)
+  else if id == step_marker(10) then step_marker(11)
+  else if id == step_marker(11) then step_marker(12)
+  else step_marker(13)
+}
+
+func long_tool_hook() -> ExtensionHooks {
+  {
+    id: "long_result_tool",
+    provided_tools: ["LongResult"],
+    on_describe_tools: \_ . [{ name: "LongResult", description: "deterministic long-result fixture", parameters: "{\"type\":\"object\"}" }],
+    on_build_system_prompt: \_ . { prepend: [], append: [] },
+    on_budget_plan: \_ _ . { requested_total: None, requested_solver: None, requested_verifier: None } ! {Env, FS},
+    on_pre_step: \_ _ . PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_tool_policy: \_ _ . Allow,
+    on_tool_handle: func(_ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      let next = next_marker_from_call_id(call.id);
+      Handled({
+        tool_call_id: call.id,
+        tool: call.tool,
+        exit_code: 0,
+        stdout: long_stdout(call.id, next),
+        stderr: "",
+        metadata: jo([kv("fixture", js("long_qwen")), kv("next", js(next))])
+      })
+    },
+    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
+    on_solver_candidate: \_ _ . NoDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream}
+  }
+}
+
+func long_runtime() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let reg: ExtRegistry = { hooks: [compaction_ai_hook(), structural_hook(), long_tool_hook()] };
+  { registry: reg, strict_mode: false, verification: v }
+}
+
+func initial_history() -> [Message] {
+  [
+    msg("system", "deterministic long qwen compaction dst system prompt"),
+    msg("user", "Start the long deterministic tool loop. ${step_marker(1)}")
+  ]
+}
+
+func run_long() -> TracedSessionResult ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  Session.run_v2_session_traced(
+    long_runtime(),
+    "long qwen compaction dst",
+    "",
+    false,
+    budget(),
+    qwen_model,
+    initial_history(),
+    ".",
+    40,
+    false,
+    0,
+    no_rates(),
+    Ported(long_ports(12))
+  )
+}
+
+func digest_msgs(msgs: [Message], acc: int) -> string {
+  match msgs {
+    [] => show(acc),
+    m :: rest => digest_msgs(rest, acc + string_length(m.role) + string_length(m.content) + string_length(m.tool_call_id) + length(m.tool_calls))
+  }
+}
+
+func record_projection(r: LedgerRecord) -> string {
+  match r {
+    CompactionStageRecord(s) => {
+      let tag = match s.outcome {
+        TraceStageApplied(note) => "applied:${note}",
+        TraceStageRejected(reason) => "rejected:${reason}",
+        TraceStagePassed => "passed"
+      };
+      "stage step=${show(s.step)} ext=${s.ext_id} ${tag}"
+    },
+    WireRecord(ev) => event_projection(ev),
+    DecisionRecord(d) => "decision step=${show(d.step)} ${d.decision}"
+  }
+}
+
+func event_projection(ev: LedgerEvent) -> string {
+  match ev {
+    ProviderCallPrepared(i) => "prepared step=${show(i.step)} model=${i.model} msg=${show(i.msg_count)} sys=${show(i.system_prefix_count)} chars=${show(i.system_prefix_chars)} digest=${i.payload_digest}",
+    ProviderResult(i) => "provider_result step=${show(i.step)} finish=${i.finish_reason} tools=${show(i.tool_calls)}",
+    CompactionExhausted(info) => "compaction_exhausted step=${show(info.step)}",
+    ErrorEvent(info) => "error code=${info.code}",
+    RunSummary(info) => "run_summary finish=${info.finish_reason} steps=${show(info.steps_executed)} error=${info.error}",
+    _ => "event"
+  }
+}
+
+func projection_records(records: [LedgerRecord]) -> [string] {
+  match records {
+    [] => [],
+    r :: rest => record_projection(r) :: projection_records(rest)
+  }
+}
+
+func applied_count(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let inc = match r {
+        CompactionStageRecord(s) => if s.ext_id == "compaction_ai" then match s.outcome { TraceStageApplied(_) => 1, _ => 0 } else 0,
+        _ => 0
+      };
+      inc + applied_count(rest)
+    }
+  }
+}
+
+func rejected_count(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let inc = match r {
+        CompactionStageRecord(s) => match s.outcome { TraceStageRejected(_) => 1, _ => 0 },
+        _ => 0
+      };
+      inc + rejected_count(rest)
+    }
+  }
+}
+
+func prepared_count(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let inc = match r { WireRecord(ProviderCallPrepared(_)) => 1, _ => 0 };
+      inc + prepared_count(rest)
+    }
+  }
+}
+
+func provider_result_count(records: [LedgerRecord]) -> int {
+  match records {
+    [] => 0,
+    r :: rest => {
+      let inc = match r { WireRecord(ProviderResult(_)) => 1, _ => 0 };
+      inc + provider_result_count(rest)
+    }
+  }
+}
+
+func has_exhausted_or_system_empty(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => false,
+    r :: rest => {
+      let here = match r {
+        WireRecord(CompactionExhausted(_)) => true,
+        WireRecord(ErrorEvent(info)) => info.code == "SystemPromptEmpty",
+        _ => false
+      };
+      here || has_exhausted_or_system_empty(rest)
+    }
+  }
+}
+
+func prepared_fields_ok(records: [LedgerRecord]) -> bool {
+  match records {
+    [] => true,
+    r :: rest => {
+      let here = match r {
+        WireRecord(ProviderCallPrepared(info)) =>
+          info.model == qwen_model && info.system_prefix_count >= 1 && info.system_prefix_chars > 0 && info.payload_digest != "",
+        _ => true
+      };
+      here && prepared_fields_ok(rest)
+    }
+  }
+}
+
+func provider_result_after_prepared(records: [LedgerRecord], step: int, seen_prepared: bool) -> bool {
+  match records {
+    [] => false,
+    r :: rest => match r {
+      WireRecord(ProviderCallPrepared(info)) =>
+        if info.step == step then provider_result_after_prepared(rest, step, true)
+        else provider_result_after_prepared(rest, step, seen_prepared),
+      WireRecord(ProviderResult(info)) =>
+        if seen_prepared && info.step == step then true
+        else provider_result_after_prepared(rest, step, seen_prepared),
+      CompactionStageRecord(s) =>
+        if s.ext_id == "compaction_ai" && s.step > step then false
+        else provider_result_after_prepared(rest, step, seen_prepared),
+      _ => provider_result_after_prepared(rest, step, seen_prepared)
+    }
+  }
+}
+
+func applied_stages_have_dispatch_success(records: [LedgerRecord], all_records: [LedgerRecord]) -> bool {
+  match records {
+    [] => true,
+    r :: rest => {
+      let here = match r {
+        CompactionStageRecord(s) =>
+          if s.ext_id == "compaction_ai" then match s.outcome {
+            TraceStageApplied(_) => provider_result_after_prepared(all_records, s.step, false),
+            _ => true
+          } else true,
+        _ => true
+      };
+      here && applied_stages_have_dispatch_success(rest, all_records)
+    }
+  }
+}
+
+func summarize_long_result(result: TracedSessionResult) -> Result[LongStats, ScenarioFailure] {
+  match result.result {
+    Err(e) => Err({ failed_invariant: "session result is Ok", trace: ["${e.code}: ${e.message}"] }),
+    Ok(final_history) => {
+      let records = result.trace.records;
+      let stats = {
+        applied: applied_count(records),
+        rejected: rejected_count(records),
+        prepared: prepared_count(records),
+        provider_results: provider_result_count(records),
+        projection: projection_records(records) ++ ["final count=${show(length(final_history))} digest=${digest_msgs(final_history, 0)}"],
+        final_count: length(final_history),
+        final_digest: digest_msgs(final_history, 0)
+      };
+      Ok(stats)
+    }
+  }
+}
+
+func scenario_multiple_compactions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let result = run_long();
+  match summarize_long_result(result) {
+    Err(f) => Err(f),
+    Ok(s) => {
+      let records = result.trace.records;
+      if s.applied < 3 then Err({ failed_invariant: "at least three compaction_ai stages applied", trace: s.projection })
+      else if s.rejected != 0 then Err({ failed_invariant: "no TraceStageRejected records", trace: s.projection })
+      else if has_exhausted_or_system_empty(records) then Err({ failed_invariant: "no compaction exhausted or SystemPromptEmpty", trace: s.projection })
+      else if not prepared_fields_ok(records) then Err({ failed_invariant: "prepared call has Qwen model, system prefix, and digest", trace: s.projection })
+      else if not applied_stages_have_dispatch_success(records, records) then Err({ failed_invariant: "each applied compaction_ai stage has same-step ProviderCallPrepared then ProviderResult", trace: s.projection })
+      else if s.prepared < s.applied then Err({ failed_invariant: "each compaction reaches provider_call_prepared", trace: s.projection })
+      else if s.provider_results < s.prepared then Err({ failed_invariant: "each prepared provider call has ProviderResult", trace: s.projection })
+      else {
+        let _ = println("long_qwen_counts applied=${show(s.applied)} rejected=${show(s.rejected)} prepared=${show(s.prepared)} provider_results=${show(s.provider_results)} projection_records=${show(length(s.projection))}");
+        ok_or_failure(s.final_count >= 25, "persisted history grows through tool loop", s.projection)
+      }
+    }
+  }
+}
+
+func same_string_list(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && same_string_list(xs, ys) }
+  }
+}
+
+func scenario_replay_deterministic() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let r1 = run_long();
+  let r2 = run_long();
+  match summarize_long_result(r1) {
+    Err(f) => Err(f),
+    Ok(s1) => match summarize_long_result(r2) {
+      Err(f) => Err(f),
+      Ok(s2) => {
+        let same = same_string_list(s1.projection, s2.projection);
+        if same then {
+          let _ = println("long_qwen_replay deterministic=true projection_records=${show(length(s1.projection))}");
+          Ok(())
+        }
+        else Err({ failed_invariant: "normalized trace projection replays deterministically", trace: ["left_count=${show(length(s1.projection))}", "right_count=${show(length(s2.projection))}"] ++ s1.projection })
+      }
+    }
+  }
+}
+
+func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> ExtCtx {
+  {
+    task: "direct",
+    step: 0,
+    model: qwen_model,
+    context_limit: limit,
+    cwd: ".",
+    hybrid_tools: false,
+    budget: budget(),
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 1,
+    history_slice: [],
+    state_key: "k",
+    ports: {
+      ai_step: func(model: string, msgs: [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+        let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
+        match ports.model_step(model, msgs, on_chunk) {
+          Ok(r) => Ok(r.message.content),
+          Err(e) => Err(e.message)
+        }
+      },
+      proc_exec: fixed_exec,
+      clock_now: fixed_clock,
+      env_get: fixed_env
+    },
+    artifacts: artifacts,
+    telemetry: zero_token_telemetry()
+  }
+}
+
+func summary_ports(summary: string) -> Ports ! {AI, IO, Trace} {
+  let model_step = func(_model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO})
+    -> Result[StepResult, AIError] ! {AI, IO, Trace} {
+    Ok(step_result(summary, [], "stop"))
+  };
+  ports_shape_probe(model_step, runtime_hooks)
+}
+
+func direct_msgs() -> [Msg] {
+  [
+    abi_msg("user", "old plain one ${repeat_block(4)}"),
+    abi_msg("assistant", "old answer one ${repeat_block(4)}"),
+    abi_msg("user", "old plain two ${repeat_block(4)}"),
+    abi_assistant("call LongResult", [tool_call("direct-call-1")]),
+    abi_tool("direct-call-1", "direct tool result ${repeat_block(4)}"),
+    abi_msg("user", "recent question"),
+    abi_msg("assistant", "recent answer")
+  ]
+}
+
+func contains_summary_msg(msgs: [Msg], text: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest => if m.role == "assistant" && contains(m.content, text) then true else contains_summary_msg(rest, text)
+  }
+}
+
+func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let input = direct_msgs();
+  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 1, keep_recent: 4 };
+  match compact_with_ai(direct_ctx(100, summary_ports("DIRECT-SUMMARY"), empty_ext_artifacts()), input, cfg) {
+    PassThrough => Err({ failed_invariant: "direct compact_with_ai compacts", trace: ["decision=PassThrough"] }),
+    Compacted(out, _, _) => {
+      if not contains_summary_msg(out, "[CONTEXT SUMMARY] DIRECT-SUMMARY") then Err({ failed_invariant: "summary message emitted", trace: ["out_len=${show(length(out))}"] })
+      else match validate_compactor_output(input, out) {
+        Err(reason) => Err({ failed_invariant: "validate_compactor_output accepts direct compaction", trace: [reason] }),
+        Ok(_) => Ok(())
+      }
+    }
+  }
+}
+
+func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let input = direct_msgs();
+  let cfg: CompactionAiConfig = { model: qwen_model, threshold_pct: 1, keep_recent: 4 };
+  match compact_with_ai(direct_ctx(100, summary_ports("CACHED-SUMMARY-A"), empty_ext_artifacts()), input, cfg) {
+    PassThrough => Err({ failed_invariant: "first cache run compacts", trace: ["decision=PassThrough"] }),
+    Compacted(out1, _, artifacts) => {
+      if not contains_summary_msg(out1, "CACHED-SUMMARY-A") then Err({ failed_invariant: "first run records cached summary", trace: [] })
+      else match compact_with_ai(direct_ctx(100, summary_ports("CACHE-MISS-FAIL"), artifacts), input, cfg) {
+        PassThrough => Err({ failed_invariant: "second cache run compacts", trace: ["decision=PassThrough"] }),
+        Compacted(out2, _, _) => {
+          if contains_summary_msg(out2, "CACHED-SUMMARY-A") && not contains_summary_msg(out2, "CACHE-MISS-FAIL") then Ok(())
+          else Err({ failed_invariant: "same-segment artifact cache reuses summary", trace: ["second_len=${show(length(out2))}"] })
+        }
+      }
+    }
+  }
+}
+
+func multiple_compactions_scenario() -> Scenario {
+  { id: "compaction.long_qwen_ai_multiple_compactions", run: scenario_multiple_compactions }
+}
+
+func replay_deterministic_scenario() -> Scenario {
+  { id: "compaction.long_qwen_ai_replay_deterministic", run: scenario_replay_deterministic }
+}
+
+func output_shape_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_output_shape_valid", run: scenario_output_shape_valid }
+}
+
+func artifact_cache_scenario() -> Scenario {
+  { id: "compaction.compaction_ai_artifact_cache_stable", run: scenario_artifact_cache_stable }
+}
+
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+  let scenarios = [
+    multiple_compactions_scenario(),
+    replay_deterministic_scenario(),
+    output_shape_scenario(),
+    artifact_cache_scenario()
+  ];
+  let failed = run_all(scenarios, 0);
+  if failed == 0 then println("long_qwen_compaction_dst PASS count=${show(length(scenarios))}")
+  else {
+    let _ = println("long_qwen_compaction_dst FAIL failed=${show(failed)}");
+    exit(1)
+  }
+}
