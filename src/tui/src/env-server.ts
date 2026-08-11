@@ -796,6 +796,14 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
     ]) || "lake";
   }
 
+  function leanEnv(): Record<string, string> {
+    const elanBin = join(String(process.env.HOME ?? ""), ".elan", "bin");
+    const currentPath = String(process.env.PATH ?? "");
+    return existsSync(elanBin) && !currentPath.split(":").includes(elanBin)
+      ? { PATH: `${elanBin}:${currentPath}` }
+      : {};
+  }
+
   function projectRootForReplBin(bin: string): string {
     // <project>/.lake/build/bin/repl -> <project>
     const marker = "/.lake/build/bin/repl";
@@ -834,6 +842,7 @@ export async function startEnvServer(port: number, workdir: string): Promise<num
       command: replBin || lake,
       args: replBin ? splitArgs(process.env.MOTOKO_LEAN_REPL_ARGS, []) : splitArgs(process.env.MOTOKO_LEAN_REPL_ARGS, ["exe", "repl"]),
       cwd: replCwd || undefined,
+      env: leanEnv(),
       mathlibCommand: mathlibCwd && mathlibReplBin ? lake : (mathlibBin || (replBin || lake)),
       mathlibArgs: mathlibCwd && mathlibReplBin
         ? splitArgs(process.env.MOTOKO_LEAN_MATHLIB_REPL_ARGS, ["env", mathlibReplBin])
