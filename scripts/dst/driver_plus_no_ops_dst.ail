@@ -476,7 +476,7 @@ func scenario_exclusion_check() -> bool ! {IO} {
 
 func scenario_manifest() -> bool ! {IO} {
   let m = no_ops_manifest("HEAD", "ailang 0.33.0", "5.0", "{}",
-                          ["env_get", "proc_exec"], [], "HEAD");
+                          ["env_get"], [], "HEAD");
   let rs = validate_manifest(m, driver_plus_no_ops());
   let ok = List.length(rs) == 0 && List.length(m.extension_packages) == 4;
   let _ = if ok then {

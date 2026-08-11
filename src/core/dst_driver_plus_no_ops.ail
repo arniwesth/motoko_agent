@@ -162,11 +162,19 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 
+-- v2 (2026-08-07, WI-D16). RE-ISSUED, not corrected: the attribution table's
+-- five `session.ail` anchors moved when `ExtPorts.proc_exec` was widened and
+-- `ExtPorts.file_read` was added, which pushed 30 lines into `ext_ports_of`
+-- above all of them. Nothing about WHICH sites are attributed or routed changed
+-- — each anchored expression is character-identical to HEAD's — but the table's
+-- content hash covers the rows, so it moved and D4's rule re-issues BOTH
+-- profiles that bind it. `driver_only` went 14 -> 15 in the same change.
+--
 -- v1. The first issue. There is no supersession history here yet, and when
 -- there is it goes at the TOP of this block with its date, per plan rule S15 —
 -- re-dating a claim in place is how a sentence becomes a false statement about
 -- history, and this file will carry claims that move.
-export pure func no_ops_version() -> string { "1" }
+export pure func no_ops_version() -> string { "2" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -174,7 +182,10 @@ export pure func no_ops_version() -> string { "1" }
 -- can be re-issued silently by the other's edit.
 export pure func no_ops_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
-    content_hash: "sha256:ccfc1e3401635ae59326da4052621d934875bdedd0a05552dd7dc1e41a64b210" }
+    -- WI-D16: re-recorded with `driver_only`'s, from
+    -- sha256:ccfc1e3401635ae59326da4052621d934875bdedd0a05552dd7dc1e41a64b210.
+    -- An anchor re-measurement, not a table correction — see `no_ops_version`.
+    content_hash: "sha256:d3bf3ae5ae6a7612744b8a266febcb2e1ec17450b5a72215a9ee1f16fa7eb685" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -711,7 +722,7 @@ pure func disjoint(xs: [string], ys: [string]) -> bool {
 pure func test_manifest_projects_the_install_list() -> bool
   tests [((), true)]
   {
-    let m = no_ops_manifest("r", "t", "5.0", "{}", ["env_get", "proc_exec"], [], "r");
+    let m = no_ops_manifest("r", "t", "5.0", "{}", ["env_get"], [], "r");
     List.length(m.extension_packages) == List.length(driver_plus_no_ops().installed_packages)
       && List.length(m.extension_packages) == 4
       && m.profile_id == no_ops_id()

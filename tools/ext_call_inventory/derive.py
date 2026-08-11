@@ -679,7 +679,39 @@ def self_test(repo: Path, membership: dict, ext_fields: list[str]) -> int:
             print(f"  ok  membership {f:<12} {want['state']:<11} "
                   f"seam={('Ports.' + got_seam) if got_seam else 'none'}")
 
-    # And the control that makes the three pinned seams falsifiable: if the
+    # WI-D16's REACHABILITY assertion, which is a different question from every
+    # verdict above and is asserted separately per plan rule S24.
+    #
+    # The loop above iterates `expected["membership"]`, so it can only ever
+    # check fields the PIN already names. A field ADDED to `ExtPorts` is
+    # therefore invisible to it: WI-D16 added `file_read` and the suite stayed
+    # green on four pinned fields while saying nothing at all about the fifth.
+    # That is the fail-open shape this file's own docstring is written against,
+    # reappearing one level up in the harness rather than in the classifier —
+    # and it is the same asymmetry the `fixtures` block already closes with its
+    # `missing` check, which had no membership counterpart.
+    #
+    # Both directions are asserted because they fail differently: an UNPINNED
+    # derived field is a new seam nobody reviewed, and a PINNED field that no
+    # longer derives is a row deleted from the ABI without the pin noticing.
+    pinned = set(expected["membership"])
+    derived = set(membership)
+    reach_fails = [
+        f"REACHABILITY: ExtPorts.{f} derives '{membership[f]['state']}' but is not "
+        "pinned in expected.json. A new ABI row is not covered by a pin that does "
+        "not name it."
+        for f in sorted(derived - pinned)
+    ] + [
+        f"REACHABILITY: expected.json pins ExtPorts.{f} but no such field derives. "
+        "The row was removed or renamed and the pin did not notice."
+        for f in sorted(pinned - derived)
+    ]
+    fails.extend(reach_fails)
+    if not reach_fails:
+        print(f"  ok  reachability      {len(derived)} ExtPorts field(s) derived, "
+              f"{len(pinned)} pinned, sets identical")
+
+    # And the control that makes the pinned seams falsifiable: if the
     # bridge resolves NOTHING, every membership line above would still have to
     # be individually wrong to notice. One assertion catches the whole class.
     resolved_seams = [f for f, m in membership.items() if m.get("seam")]

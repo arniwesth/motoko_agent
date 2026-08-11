@@ -81,8 +81,10 @@ pure func head_inventory() -> [CoreSite] {
 --
 -- EMPTY AT WI-B4, and the emptiness is measured rather than convenient.
 -- WI-B2b widened `ExtPorts.ai_step` to return `AiStepOutcome`, which carries
--- `next_state`, so `ai_step` LEFT the classifier-2 set: the derived set is
--- {env_get, proc_exec} and there are ZERO member call sites anywhere in the
+-- `next_state`, so `ai_step` LEFT the classifier-2 set. WI-D16 widened
+-- `ExtPorts.proc_exec` the same way and it left too, so the derived set is
+-- {env_get} — down from {env_get, proc_exec} — and there are ZERO member call
+-- sites anywhere in the
 -- tree. The entry that used to sit here — `compaction_ai / ai_step` — named a
 -- site that no longer qualifies (and had drifted to :111 besides).
 --
@@ -283,7 +285,7 @@ func scenario_manifest() -> bool ! {IO} {
   -- reproducible, so a stale version here pins the wrong contract — and nothing
   -- compared it until `check_fixtures.py` gained the re-derivation.
   let m = driver_only_manifest("HEAD", "ailang 0.33.0", "5.0", "{}",
-                               ["env_get", "proc_exec"], [], "HEAD");
+                               ["env_get"], [], "HEAD");
   let rs = validate_manifest(m, driver_only());
   let ok = List.length(rs) == 0;
   let _ = if ok then {

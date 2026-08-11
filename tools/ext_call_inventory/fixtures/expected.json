@@ -30,7 +30,31 @@
     "routed it through Ports.clock_now, so it derives `returns-it` like ai_step.",
     "The `null` seam is kept described here because the next un-widened seam",
     "re-introduces it, and because a pin whose only legal value is unreachable is",
-    "worth naming as such rather than deleting."
+    "worth naming as such rather than deleting.",
+    "",
+    "WI-D16 MOVED THIS BLOCK DELIBERATELY, and the move is the item's point rather",
+    "than a cost of it. `proc_exec` was widened from `(string, string) -> string` to",
+    "`(ExtWorld, string, string) -> ExtProcOutcome`, so it can now return the",
+    "successor `Ports.tool_exec` threads. D5's classifier 2 selects a field",
+    "BECAUSE it cannot return successor state; the field can, so the criterion no",
+    "longer selects it and the set went {env_get, proc_exec} -> {env_get}. It moved",
+    "member -> returns-it, which is the same transition WI-B2b made for `ai_step`",
+    "and WI-C5 for `clock_now`, and the seam is unchanged at Ports.tool_exec.",
+    "",
+    "`env_get` is the SOLE remaining member and was left un-widened on purpose --",
+    "see its row in packages/motoko-ext-abi/types.ail. Its problematic callers are",
+    "in `register_with_config`, which runs before a world exists and has no",
+    "`ExtCtx`, so a wider seam would route nothing.",
+    "",
+    "`file_read` is NEW at WI-D16 and derives `returns-it` off Ports.file_read. It",
+    "has ZERO call sites: the item shipped the seam and routed no extension.",
+    "",
+    "AND THE SUITE COULD NOT HAVE CAUGHT THE ADDITION. The membership loop iterates",
+    "THIS BLOCK, so a field added to ExtPorts and not added here was simply never",
+    "asked about -- four green pinned rows and total silence on the fifth. WI-D16",
+    "added a REACHABILITY assertion in derive.py that compares the derived field set",
+    "against this block in both directions, on plan rule S24: reachability is a",
+    "separate question from any verdict and has to be asserted separately."
   ],
   "fixtures": {
     "control_resolved.ail": {
@@ -60,9 +84,25 @@
     }
   },
   "membership": {
-    "ai_step": { "state": "returns-it", "seam": "model_step" },
-    "proc_exec": { "state": "member", "seam": "tool_exec" },
-    "env_get": { "state": "member", "seam": "env_get" },
-    "clock_now": { "state": "returns-it", "seam": "clock_now" }
+    "ai_step": {
+      "state": "returns-it",
+      "seam": "model_step"
+    },
+    "proc_exec": {
+      "state": "returns-it",
+      "seam": "tool_exec"
+    },
+    "file_read": {
+      "state": "returns-it",
+      "seam": "file_read"
+    },
+    "env_get": {
+      "state": "member",
+      "seam": "env_get"
+    },
+    "clock_now": {
+      "state": "returns-it",
+      "seam": "clock_now"
+    }
   }
 }

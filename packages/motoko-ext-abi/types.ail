@@ -140,6 +140,46 @@ export type ExtClockReading = {
   next_state: ExtWorld
 }
 
+-- The result of a world-threading `proc_exec`. WI-D16, and the same record shape
+-- as `AiStepOutcome` and `ExtClockReading` above for plan decision P1's reason:
+-- a later effect class adds a FIELD, where a sum would restructure every match
+-- site. `next_state` is again named for D5's classifier-2 criterion — the
+-- literal field name `derive.py` looks for — and not for taste.
+--
+-- `output` STAYS A STRING, and that is a deliberate narrowing of what this
+-- widening claims. The core seam behind it, `Ports.tool_exec`, returns a typed
+-- `ToolOutcome` with four variants, and `session.tool_outcome_text` renders
+-- those four onto one string at the bridge. That rendering is UNCHANGED here.
+-- Widening the ABI to carry the discrimination is a SECOND widening on a second
+-- ground — D1's part-3 typed-fault argument, not state threading — exactly as
+-- WI-A2's `next_state` was a second widening of `model_step` beside WI-A1's
+-- emission log. Doing both in one edit would make it impossible to say which
+-- ground moved the pin. The fault text is rendered rather than dropped, so
+-- nothing is silently lost in the interim; what is lost is the ability to MATCH
+-- on it, and that is stated rather than left for a reader to find.
+export type ExtProcOutcome = {
+  output: string,
+  next_state: ExtWorld
+}
+
+-- One extension-side file read and its successor world. WI-D16.
+--
+-- It is `Ports.FileRead`'s shape field for field, and copied rather than
+-- generalised on purpose. `present` is carried EXPLICITLY rather than inferred
+-- from an empty `content` for the reason `FileRead`'s own comment gives: a file
+-- that exists and is empty is a different world from a file that is not there,
+-- and compose branches differently on the two at every site —
+-- `config.ail:39` guards `readFile` with `fileExists`, and
+-- `author_tools.ail:160-163` and `:250-252` do the same. A reader that inferred
+-- absence from "" would turn an empty config into a missing one and silently
+-- take the other branch. That is the silent-wrong shape this project exists to
+-- remove, and it is one field away at every one of those sites.
+export type ExtFileRead = {
+  present: bool,
+  content: string,
+  next_state: ExtWorld
+}
+
 export type ExtPorts = {
   -- WI-B2b: takes and returns the world token. This is the widening that lifts
   -- D1's extension-model-path exclusion — `session.ext_ai_step` handed
@@ -179,11 +219,57 @@ export type ExtPorts = {
   -- slot's own note below — the narrowing removes the row's contradiction of
   -- D5 criterion 2 without supplying the vocabulary criterion 2 needs.
   ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Trace},
-  -- `proc_exec` and `env_get` stay un-widened and stay in the classifier-2 set.
-  -- They front `Ports.tool_exec` and `Ports.env_get`, both of which thread a
-  -- successor, so both still drop one. Widening them is WI-C5's, and leaving
-  -- them measured-and-named is S2: the classifier keeps reporting them.
-  proc_exec: (string, string) -> string ! {IO, Process, FS},
+  -- SUPERSEDED AT WI-D16 IN ITS FIRST CLAUSE, and kept in the past tense per
+  -- plan rule S15. Through WI-D15 this row read
+  --   proc_exec: (string, string) -> string ! {IO, Process, FS}
+  -- and the note here read: "`proc_exec` and `env_get` stay un-widened and stay
+  -- in the classifier-2 set. They front `Ports.tool_exec` and `Ports.env_get`,
+  -- both of which thread a successor, so both still drop one. Widening them is
+  -- WI-C5's, and leaving them measured-and-named is S2." That debt was owed
+  -- from WI-C5 through WI-D15 and this row is where WI-D16 discharges half of
+  -- it.
+  --
+  -- WI-D16: takes and returns the world token, exactly as `ai_step` and
+  -- `clock_now` do. The seam already CAPTURED the world — two-argument fields
+  -- can, which is the whole of plan rule S3 — so unlike `clock_now`'s widening
+  -- this one removes no shape obstacle. What it removes is the DROP: the bridge
+  -- called `p.tool_exec(world, inv)`, whose `ToolExecution` threads a successor,
+  -- and then discarded `.next_state` because this signature had nowhere to put
+  -- it. A tool call that advances the world's clock arithmetically from the
+  -- scripted duration (`world_tool`, `ports.ail:619`) and consumes one entry
+  -- from `state.tools` therefore advanced a world nobody could observe.
+  --
+  -- CONSEQUENCE FOR THE PIN, stated because it is the point rather than a side
+  -- effect: D5's classifier 2 selects "a field whose call is the extension-side
+  -- entry to a core seam that D1 requires to thread successor state, AND WHICH
+  -- CANNOT RETURN IT". `ExtProcOutcome` can return it, so the criterion no
+  -- longer selects this field and the set goes {env_get, proc_exec} ->
+  -- {env_get}. `tools/ext_call_inventory/fixtures/expected.json` carries that
+  -- membership and goes red on this edit. THAT IS THE PIN WORKING. Editing it
+  -- to restore green without reading the derived membership destroys the one
+  -- signal it exists to give.
+  proc_exec: (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS},
+  -- WI-D16's filesystem read seam. It is a POINT READ — a path in, existence
+  -- and contents out — because it fronts `Ports.file_read` and that seam is
+  -- narrow by construction (WI-D3). Copied, not generalised.
+  --
+  -- WHAT IT DELIBERATELY DOES NOT COVER, named here because the gap is the
+  -- expensive part and a reader will otherwise assume the seam is total over
+  -- `std/fs`. compose's read side also calls `listDir` (`author_tools.ail:192`),
+  -- `isDir` (`:140`, `:190`) and `isFile` (`:141`, `:161`, `:250`).
+  -- `fileExists`/`isFile` collapse onto `present` for a path the caller already
+  -- believes is a file, but `isDir` and `listDir` DO NOT: a directory listing is
+  -- not a point read, and `present && content == ""` cannot tell a directory
+  -- from an empty file.
+  --
+  -- The reason not to add them here is structural rather than budgetary. `Ports`
+  -- HAS NO DIRECTORY SEAM. An `ExtPorts.list_dir` would front no core seam at
+  -- all, so `derive.py` would classify it `unrouted` — a field that looks like
+  -- mediation, is reported as a bypass, and mediates nothing. The core world
+  -- class has to exist before the extension seam can front it, which is the
+  -- ordering WI-D3 followed for this seam and the one a directory class needs
+  -- too. Priced for WI-D16 part 2, which is where it will bite.
+  file_read: (ExtWorld, string) -> ExtFileRead ! {FS},
   -- WI-C5: takes and returns the world token, exactly as `ai_step` does.
   --
   -- WHAT THIS WIDENING BOUGHT, precisely, because the shape and the coverage are
@@ -204,6 +290,32 @@ export type ExtPorts = {
   -- row below no longer blocks anything — D6 narrowed it. The sentence was true
   -- when written at WI-C5 and is kept rather than re-dated, per plan rule S15.
   clock_now: (ExtWorld) -> ExtClockReading ! {Clock},
+  -- NOT WIDENED AT WI-D16, DELIBERATELY, AND THIS IS THE REASON RATHER THAN AN
+  -- OVERSIGHT. It is now the SOLE member of D5's classifier-2 set, and it stays
+  -- one: it fronts `Ports.env_get`, whose `EnvRead` threads a successor that
+  -- this `string` return cannot carry. The classifier keeps reporting it, which
+  -- is plan rule S2 — measured and named beats silently absorbed.
+  --
+  -- Widening it would be motion without progress, and the measurement is
+  -- WI-D15's. The env reads that actually block an extension happen at
+  -- REGISTRATION — `motoko-ext-compose/register.ail:3` imports `std/env
+  -- (getEnvOr)`, and that is compose's ONE registration-only ambient source.
+  -- Registration runs before the world exists, so `register_with_config` has no
+  -- `ExtCtx` and therefore no `ports` to call. A wider `env_get` is a seam whose
+  -- problematic callers cannot reach it however wide it gets, so widening it
+  -- buys exactly zero routed sources and costs another ABI row plus eight
+  -- construction sites.
+  --
+  -- What those registration reads need instead is DISCLOSURE, not mediation —
+  -- the `registration_effects` profile field drafted at WI-D15
+  -- (`DRAFT-amendment-adr-001-registration-effects.md` §3). That draft is not
+  -- applied, so this row's justification currently rests on the measurement and
+  -- not on ADR text; if the amendment is dispositioned the other way, this
+  -- comment is what has to change.
+  --
+  -- Symmetry with the three widened rows above is NOT a reason. Two of them
+  -- (`ai_step`, `proc_exec`) had a demonstrated drop and one (`clock_now`) had a
+  -- shape obstacle; this row has neither on any reachable caller.
   env_get: (string, string) -> string ! {Env}
 }
 
