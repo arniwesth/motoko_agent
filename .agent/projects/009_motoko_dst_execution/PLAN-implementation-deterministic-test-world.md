@@ -485,6 +485,16 @@ sides.** D6's answer is the general one: the gate now derives its subject list f
 `registry_generated.ail` and asserts membership both ways, so **an extension added tomorrow cannot
 escape measurement by not being noticed.**
 
+**AND WI-D13 SHOWS THE UNIT CHANGING UNDER PROSE THAT WAS NEVER WRONG.** When a derivation acquires
+a **finer** unit, every passage written while only the coarser unit existed becomes ambiguous at best.
+`packages/motoko-ext-abi/types.ail` carries three passages asserting *"THE SLOT IS STILL A BARRIER"* —
+**true of the slot, and read as a claim about all fifteen extensions because until WI-D13 there was no
+other unit to read it in.** The moment `check_barrier_count` re-derived per `(extension, slot)`, four
+extensions had zero barriers while every one of those sentences remained literally true. **Qualified
+in place per S15 rather than rewritten**, comment-only, no ABI surface change. **The rule: adding a
+unit to a derivation is a documentation cascade over everything that quantified in the old one**, and
+unlike a stale number nothing about it looks stale.
+
 **AND WI-D12 SHOWS THE QUANTIFIER'S UNIT CHANGING THE ANSWER: the ADR's own "1 of 15" for the
 textual route is 0 of 15 under the ADR's own property 2.** The figure reasons over each extension's
 **package sources** — *"`std/json.jo` carries no row and three of those four import it"*, which is
@@ -531,6 +541,21 @@ one, and row 5's *"compose is now actionable"* was false because compose is not 
 site outside the table (`dst_hook_guard`'s unreachability) went the same way. **So: when an item
 reports a concentration, the reason it says was REMOVED must be checked as an artifact, not
 asserted.** A concentration is falsifiable and nothing was falsifying these.
+
+**EXTENDED BY WI-D13, AND IT IS THE HARDEST FORM TO REFUSE: a vacuity that arrives with a NUMBER
+attached is harder to see than one that does not.** Classifier 3 clears four extensions, and D13
+measured what their coverage would be worth: **two of criterion 2's three clauses hold because nothing
+happens** — *"effectful only through world-mediated ports"* over an empty set of effects, and
+*"origin tagged by extension id"* over nothing to tag. Amendment A predicted it in advance
+(`ADR:1611`): *"the first hook classifier 3 clears will be one that performs nothing, not one that
+mediates."*
+
+**Installing them would produce a real, non-zero extension-model coverage number and exercise none of
+the world-mediation machinery.** `driver_only`'s table already leans on an empty install list in four
+places; this would be a fifth vacuity **and the first with a figure in front of it.** D13 declined and
+recorded the reason as being about *evidence*, not correctness. **The rule: when a measurement first
+makes a previously-blocked claim available, ask what the claim would be evidence OF before banking
+it** — and a non-zero number is the worst possible moment to stop asking.
 
 **S21. When a row closes, re-ask of every surviving exemption in every OTHER row why it survives — a
 closure narrows the set of reasons, and a reason that used to be one of many can become the only
@@ -3014,6 +3039,39 @@ route.
 **And the handoff contained the very defect it was written about:** it cited `:2113` for the
 "None of the three" sentence, which was at `:2115`; `:2113` was the coverage-floor row. Verified
 against the pre-edit file at review.
+
+**WI-D13, 2026-08-07 — `basis` LANDED, THE BARRIER DERIVATION RE-SHAPED, AND FOUR EXTENSIONS CLEAR
+— NOT ONE.** Verified at review: `basis` rejects three ways by name with a loading control, the
+producer catalogue re-derives **3 measured (each with a Makefile target) and 2 assumed (deliberately
+without one)**, the SLOT-level count is still **3**, and the per-`(extension, slot)` derivation reports
+**33 of 45 pairs stand** with `compaction_structural`, `decision_framework`, `empty_stop_guard` and
+`progress_contract_guard` at **zero barriers**. `driver_only` **v12 → v13**, installing nothing.
+
+**The criterion decision, which is the item's durable output: CRITERION 2, with two of its three
+clauses VACUOUS.** Criterion 1 is **unavailable rather than unearned** — all twelve barrier-slot
+bodies of the four extensions accept a rowless declaration with a `println` control rejecting each, so
+it is true in substance, but criterion 1's basis is the declared row and the ABI's closed rows forbid
+narrowing. **So the handoff's criterion-1 stop rule did not fire, and the reason is that criterion 1
+has no route rather than that the answer is criterion 1.**
+
+**Clause 2 fails closed and says so.** No producer exists for *"is this port call origin-tagged"*, so
+the derivation clears a barrier only when classifier 3 reports **zero** `ExtPorts` field calls — i.e.
+only when there is nothing to tag — and refuses with `clause 2 UNDISCHARGED` otherwise.
+
+**The trigger fired and was discharged by NAMING rather than by red.** An extension at zero barriers
+must appear in `installed_packages` or `omitted_extensions`; naming is not a coverage claim, installing
+is. Two-sided: removing one entry after the other four landed reddens **per extension, by name**.
+**The four are OMITTED** — see S21's extension for the reasoning, which is about evidence rather than
+correctness.
+
+**The profile now states the thing D6 got wrong, correctly scoped:** *"the empty install list is a
+CHOICE rather than a consequence for them, and a consequence still for the rest."*
+
+**And the handoff anticipated one extension where four clear.** `compaction_structural`'s
+distinguishing property — the one binding of fifteen that uses a named top-level function, making its
+declared row *operative* where the other fourteen's is inert — is **orthogonal to the clearance**,
+because classifier 3 does not read declarations at all. The other three were already in classifier 3's
+`4 of 15` and nothing separated them once the derivation had a per-extension unit.
 
 **WI-D12, 2026-08-07 (~1h02m) — CLASSIFIER 3 IS BUILT, GREEN, AND IN `make dst`.**
 `tools/ext_ambient_inventory/derive.py`, fourteen fixtures, two targets **inside the aggregate gate**.

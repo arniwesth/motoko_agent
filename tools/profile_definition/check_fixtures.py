@@ -234,20 +234,86 @@ def check_barrier_count(abi, disp):
     than inherited — which is WI-C5's trigger, not an ABI edit's side effect.
     This is B4's guard shape, which WI-D6 recorded as the standard: pin the
     FACT, not the direction, so the check fires whichever way the row moves.
+
+    =========================================================================
+    RE-SHAPED AT WI-D13 (2026-08-07): A BARRIER IS A PROPERTY OF THE
+    (EXTENSION, SLOT) PAIR, NOT OF THE SLOT.
+    =========================================================================
+
+    Everything above is RETAINED and still computed — see `slot_barriers`
+    below, which is that derivation unchanged, and the trigger on it unchanged.
+    What follows is a second, finer derivation over the same inputs plus one
+    more, and the reason it exists is that the coarse one CANNOT ANSWER THE
+    QUESTION IT IS ASKED. ADR-001 Amendment A states it (`ADR:1580`): the rule
+    above reads the ABI row and the dispatch table, both per-SLOT facts shared
+    by all fifteen extensions, while D5 criterion 2 is a claim about a hook of
+    an INSTALLED extension. The old derivation cannot tell one extension from
+    another, so it answered every extension's question with one number.
+
+    THE THIRD PRODUCER, and it is why the finer derivation is possible now and
+    was not at WI-D7. `tools/ext_ambient_inventory/derive.py` — classifier 3,
+    built at WI-D12 — decides PER EXTENSION whether every effect it can perform
+    arrives through an `ExtPorts` field call, over the extension's transitive
+    module closure. It is the only producer in this tree that can supply
+    criterion 2's evidence, because criterion 2 is a claim about the CALL PATH
+    and every row-reading instrument is blind to provenance by construction
+    (`ADR:1449`). Per S16 it is a genuinely separate producer: it reads imports
+    and call names, never the declaration being tested.
+
+    CRITERION 2 IS A CONJUNCTION OF THREE CLAUSES (WI-B4 read it that way and
+    was right; reading it as one test is how it gets passed):
+
+        (1) effectful only through D1 world-mediated ports
+        (2) with origin tagged by extension id
+        (3) and explicit world state returned to the host
+
+    and this derivation clears a barrier only when it can discharge ALL THREE:
+
+        (1) classifier 3 reports the extension PORT-MEDIATED.
+        (3) the slot's OUTCOME TYPE carries an explicit `next_state` field,
+            read from the ABI's own type declaration rather than assumed.
+        (2) classifier 3 reports ZERO `ExtPorts` field calls in the closure, so
+            there is nothing to tag and the clause is VACUOUS.
+
+    Clause (2) is the fail-closed one and the honest one. This tree has NO
+    producer for "is this port call origin-tagged" — WI-B4 established that
+    `PreStepStage = { ext_id, outcome }` tags `on_pre_step`'s dispatch, and that
+    is one slot read by hand, not a derivation. So this check does not clear a
+    barrier for an extension that actually calls a port: it refuses, and says
+    which clause it cannot discharge. The consequence is stated rather than
+    discovered, and Amendment A predicted it (`ADR:1611`): **the first hooks
+    this clears are ones that PERFORM NOTHING, not ones that mediate.**
+
+    CRITERION 1 IS NOT AVAILABLE HERE AND IS NOT USED. In substance these hooks
+    are effect-free, which is criterion 1's text — but criterion 1's basis is
+    the DECLARED ROW (`ADR:1415` records it as an assumption), the declared rows
+    on these slots are non-empty, and a named binding cannot declare narrower
+    than a closed ABI slot. Amendment A deliberately WITHHELD criterion 1 from
+    its scope, so admitting a measurement there is an ADR-scope act and not this
+    file's. Every clearance below is criterion 2.
+
+    WHAT GOES RED AT THIS GRANULARITY. The slot-level trigger above is
+    unchanged. The new one is its (extension, slot) analogue and has the same
+    shape: an extension whose barrier count reaches ZERO is INSTALLABLE, and
+    that must be DECIDED rather than inherited — so it must be accounted for by
+    name in the profile, either installed or omitted. Naming it is not a
+    coverage claim; INSTALLING it is, and that is WI-C5's.
     """
     slots = ["on_budget_plan", "on_pre_step", "on_tool_handle",
              "on_response_intercept", "on_solver_candidate"]
 
-    barriers, covered, gated = [], [], []
+    slot_barriers, covered, gated = [], [], []
+    returns_world = {}
     for slot in slots:
         # `\s*` spans newlines: two of these five slots wrap their arrow onto
         # the next line, and a line-anchored pattern would read them as rowless.
-        m = re.search(re.escape(slot) + r":\s*\([^)]*\)\s*->\s*\w+\s*(!\s*\{([^}]*)\})?",
+        m = re.search(re.escape(slot) + r":\s*\([^)]*\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
                       abi, re.M)
         if not m:
             fail(f"could not read `{slot}`'s declaration in {ABI_TYPES.relative_to(REPO)} — "
                  "the barrier count cannot be derived, so installability is unknown")
-        row = (m.group(2) or "").strip()
+        row = (m.group(3) or "").strip()
+        returns_world[slot] = outcome_returns_world(abi, m.group(1))
 
         # The dispatch classification is a SECOND producer: it lives in
         # dst_profile_coverage.ail, not in the ABI, and neither derives from
@@ -256,29 +322,206 @@ def check_barrier_count(abi, disp):
         if not re.search(camel + r"\s*=>\s*Unconditional", disp):
             gated.append(slot)
         elif row:
-            barriers.append((slot, row))
+            slot_barriers.append((slot, row))
         else:
             covered.append(slot)
 
-    n = len(barriers)
-    print(f"  ✓ barrier count DERIVED from the ABI rows and the dispatch table: {n}")
-    for slot, row in barriers:
-        print(f"      BARRIER  {slot}: unconditionally dispatched, declares ! {{{row}}}")
+    n = len(slot_barriers)
+    print(f"  ✓ SLOT-level barrier count DERIVED from the ABI rows and the dispatch table: {n}")
+    for slot, row in slot_barriers:
+        print(f"      BARRIER  {slot}: unconditionally dispatched, declares ! {{{row}}}"
+              f"  (outcome returns world state: {'yes' if returns_world[slot] else 'NO'})")
     for slot in covered:
         print(f"      coverable {slot}: unconditionally dispatched, declares NO row")
     for slot in gated:
         print(f"      gated     {slot}: excludable, so not a barrier")
 
     if n == 0:
-        fail("the barrier count has reached ZERO: every unconditionally-dispatched hook\n"
-             "      declares an empty effect row, so an extension IS now installable in a\n"
+        fail("the SLOT-level barrier count has reached ZERO: every unconditionally-dispatched\n"
+             "      hook declares an empty effect row, so an extension IS now installable in a\n"
              "      conformant profile. That is WI-C5's trigger and it must be DECIDED, not\n"
              "      inherited as a side effect of an ABI edit. Re-decide driver_only's empty\n"
              "      install list, and note that installing anything is a coverage claim and a\n"
              "      profile version bump. See the header of src/core/dst_driver_only.ail.")
 
-    print(f"    → {n} barrier(s) stand, so NO extension is installable in a conformant profile")
-    print("    → driver_only's empty install list is therefore still not a free choice")
+    print(f"    → {n} slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone")
+    check_per_extension_barriers(slot_barriers, returns_world)
+
+
+def outcome_returns_world(abi, type_name):
+    """Criterion 2 clause 3, DERIVED from the ABI's type declaration.
+
+    Per S16, the ways a slot's outcome type can carry explicit world state were
+    enumerated BEFORE the unit was chosen, because a scan that finds one shape
+    and silently misses four is a fail-open:
+
+      (a) a literal `next_state` field on a flat record type. All four outcome
+          types in this ABI are this shape, and it is deliberate — the ABI's own
+          comment says `next_state` is "named for the criterion, not for taste"
+          and to satisfy `derive.py`'s SUCCESSOR_FIELD.
+      (b) a nested record carrying the field one level down. None exists.
+      (c) an alias, `export type X = Y`, to a record that carries it. None.
+      (d) a type parameter instantiated to something carrying it. None.
+      (e) the field renamed. The name is load-bearing by design, per (a).
+
+    Only (a) is matched, and every other shape reads as ABSENT — which leaves
+    the barrier STANDING. That is the fail-closed direction: this function can
+    refuse a hook that in fact returns world state, and cannot clear one that
+    does not.
+    """
+    m = re.search(r"export\s+type\s+" + re.escape(type_name) + r"\s*=\s*\{([^}]*)\}", abi, re.S)
+    if not m:
+        return False
+    return re.search(r"\bnext_state\s*:", m.group(1)) is not None
+
+
+def ambient_inventory():
+    """Classifier 3's per-extension verdict. The third producer (S16)."""
+    out = subprocess.check_output(
+        [sys.executable, str(REPO / "tools/ext_ambient_inventory/derive.py"), "--json"],
+        cwd=REPO,
+    )
+    return json.loads(out)
+
+
+def check_per_extension_barriers(slot_barriers, returns_world):
+    """WI-D13's derivation: barriers per (extension, slot). See the long note
+    in `check_barrier_count` for the rule and for why clause 2 fails closed."""
+    inv = ambient_inventory()
+    exts = inv["extensions"]
+
+    # Fail-closed on the instrument itself, on classifier 3's own discipline: a
+    # verdict derived from a partial resolution is not a verdict. This mirrors
+    # the tool's own RESOLUTION gate rather than trusting that it ran.
+    needed, resolved = set(inv["std_modules_needed"]), set(inv["std_modules_resolved"])
+    if needed - resolved or inv["provision_failures"] or inv["producer_disagreements"]:
+        fail("classifier 3 did not fully resolve, so no extension's criterion-2 evidence is\n"
+             f"      admissible: unresolved {sorted(needed - resolved)}, "
+             f"provision failures {inv['provision_failures']}, "
+             f"producer disagreements {inv['producer_disagreements']}.\n"
+             "      Every extension keeps every barrier. Re-run `make ext_ambient_inventory`.")
+
+    installable = set(installable_extension_dirs().values())
+    cleared, standing = {}, {}
+    for ext_id in sorted(installable):
+        e = exts.get(ext_id)
+        if e is None:
+            fail(f"extension '{ext_id}' is installable per ailang.toml and classifier 3 has no\n"
+                 "      verdict for it, so its criterion-2 evidence is missing. Fail-closed: the\n"
+                 "      barrier count for it is unknown, not zero.")
+        port_mediated = e["verdict"] == "PORT-MEDIATED"
+        nothing_to_tag = e["ext_ports_calls"] == 0
+        for slot, row in slot_barriers:
+            if port_mediated and nothing_to_tag and returns_world[slot]:
+                cleared.setdefault(ext_id, []).append(slot)
+            else:
+                if port_mediated and returns_world[slot] and not nothing_to_tag:
+                    why = (f"clause 2 UNDISCHARGED: {e['ext_ports_calls']} ExtPorts field call(s) in "
+                           "the closure and this tree has no origin-tagging producer")
+                elif not port_mediated:
+                    why = f"clause 1 fails: {len(e['ambient'])} ambient source(s) in the closure"
+                else:
+                    why = "clause 3 fails: the outcome type returns no explicit world state"
+                standing.setdefault(ext_id, []).append((slot, why))
+
+    zero = sorted(e for e in installable if not standing.get(e))
+    pairs = sum(len(v) for v in standing.values())
+    total = len(installable) * len(slot_barriers)
+
+    print(f"  ✓ barrier count RE-DERIVED per (extension, slot) — classifier 3 is the third "
+          f"producer: {pairs} of {total} pairs stand")
+    for ext_id in sorted(cleared):
+        slots_c = ", ".join(cleared[ext_id])
+        rest = len(standing.get(ext_id, []))
+        print(f"      CLEARED for '{ext_id}': {slots_c}"
+              + (f"  ({rest} still standing)" if rest else "  — ZERO barriers remain"))
+    if not cleared:
+        print("      no extension clears any barrier; the pair derivation agrees with the "
+              "slot derivation, which is the state through WI-D12")
+    for ext_id in sorted(standing):
+        if ext_id in cleared:
+            for slot, why in standing[ext_id]:
+                print(f"      standing for '{ext_id}': {slot} — {why}")
+    n_all = len(installable) - len(cleared)
+    print(f"      all {len(slot_barriers)} barriers stand unchanged for the other {n_all} extension(s)")
+
+    if not zero:
+        print("    → no extension has reached ZERO barriers, so driver_only's empty install "
+              "list is still not a free choice")
+        return
+
+    # THE TRIGGER, at the granularity the re-shape introduced. An extension at
+    # zero barriers is INSTALLABLE. Naming it is not a coverage claim; leaving
+    # it unnamed is inheriting the decision, which is the thing WI-D7's trigger
+    # was written to refuse.
+    profile_src = PROFILE.read_text() if PROFILE.exists() else ""
+    named = set(re.findall(r'extension_id:\s*"([^"]+)",\s*reason:', profile_src))
+    named |= set(re.findall(r'extension_id:\s*"([^"]+)",\s*package_id:', profile_src))
+    unaccounted = sorted(set(zero) - named)
+    if unaccounted:
+        fail("the barrier count has reached ZERO for extension(s) "
+             f"{unaccounted},\n"
+             "      which the profile neither installs nor omits by name. Those extensions ARE\n"
+             "      now installable in a conformant profile, on D5 criterion 2 established by\n"
+             "      measurement (classifier 3), and that must be DECIDED rather than inherited.\n"
+             "      This is WI-D7's trigger at the granularity WI-D13 gave it: a barrier is a\n"
+             "      property of the (extension, slot) pair, so it can reach zero for one\n"
+             "      extension without any ABI row moving.\n"
+             "      Naming an extension in omitted_extensions is NOT a coverage claim and is\n"
+             "      the conservative discharge. INSTALLING one is a coverage claim and a\n"
+             "      profile version bump, and it belongs to WI-C5.\n"
+             "      See the header of src/core/dst_driver_only.ail.")
+
+    print(f"    → ZERO barriers remain for {zero}, so those extensions ARE installable")
+    print("    → each is accounted for BY NAME in the profile, so the empty install list is a "
+          "CHOICE rather than a consequence for them, and a consequence still for the rest")
+
+
+MAKEFILE = REPO / "Makefile"
+PROFILE_MODULE = REPO / "src/core/dst_profile.ail"
+
+
+def check_recognised_producers():
+    """WI-D13. `recognised_producers` in src/core/dst_profile.ail is the closed
+    set of instruments a classification's `basis` may name, and it is a
+    TRANSCRIPTION of facts that live outside AILANG: three Python tools with
+    Makefile targets, plus two non-instrument bases the ADR names.
+
+    A transcription is exactly what goes stale silently, which is this script's
+    whole reason for existing. So the MEASURED producers are re-derived: each
+    must have a real `.PHONY` target behind it. A basis naming an instrument
+    that no longer exists reads as evidence and is worse than a blank one.
+
+    The two ASSUMED producers are deliberately not checked against the Makefile
+    — `declared_row` and `disclosure` are not tools and have no target. That is
+    the point of the kind: it separates "an instrument answered" from "we read a
+    declaration", which is the distinction `basis` was added to make visible.
+    """
+    src = PROFILE_MODULE.read_text()
+    block = re.search(r"export pure func recognised_producers\(\).*?\n}", src, re.S)
+    if not block:
+        fail("could not find `recognised_producers` in src/core/dst_profile.ail; the basis\n"
+             "      catalogue moved and this guard cannot re-derive it, so an unrecognised\n"
+             "      producer could pass unnoticed")
+    entries = re.findall(r'producer_id:\s*"([^"]+)",\s*\n?\s*kind:\s*(\w+)', block.group(0))
+    if not entries:
+        fail("`recognised_producers` parsed to ZERO entries. An empty closed set accepts no\n"
+             "      basis at all, and a guard that re-derives nothing cannot be told from one\n"
+             "      that does not run — the `agree=0 disagree=0` shape, one artifact over.")
+
+    makefile = MAKEFILE.read_text()
+    measured = [pid for pid, kind in entries if kind == "Measured"]
+    missing = [p for p in measured if not re.search(r"^\.PHONY:.*\b" + re.escape(p) + r"\b",
+                                                    makefile, re.M)]
+    if missing:
+        fail(f"`recognised_producers` names measured producer(s) {missing} with no .PHONY\n"
+             "      target in the Makefile. A basis may name them and the gate would accept it,\n"
+             "      so the record would carry evidence from an instrument this tree cannot run.")
+    kinds = {pid: kind for pid, kind in entries}
+    print(f"  ✓ classification-basis producers re-derived: {len(measured)} measured, each with a "
+          f"Makefile target ({', '.join(sorted(measured))}); "
+          f"{len(entries) - len(measured)} assumed, deliberately without one "
+          f"({', '.join(sorted(p for p, k in kinds.items() if k == 'Assumed'))})")
 
 
 def main():
@@ -345,6 +588,7 @@ def main():
     else:
         print("  i src/core/dst_driver_only.ail not present yet (machinery commit); profile check skipped")
 
+    check_recognised_producers()
     print("  ✓ no fact in the fixtures is a stale transcription of the tool's output")
 
 

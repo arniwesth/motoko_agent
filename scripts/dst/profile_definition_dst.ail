@@ -327,6 +327,21 @@ pure func with_disclosure(ext_id: string, covered: [string], excluded: [string])
     disclosures: [{ extension_id: ext_id, covered: covered, excluded: excluded }] }
 }
 
+-- WI-D13. A definition that installs one extension, discloses every slot as
+-- covered, and classifies ONE hook — so the only thing under test is the
+-- classification's basis. Everything else is the clean definition's, so an
+-- unrelated rule firing means the mutation did something other than what it
+-- says (the same discipline `assert_rejected` documents above).
+pure func with_basis(producer: string, revision: string) -> ProfileDefinition {
+  { clean() |
+    installed_packages: [installed("based", "packages/motoko-ext-based/based.ail")],
+    disclosures: [{ extension_id: "based", covered: all_ids_rec(all_hook_slots()), excluded: [] }],
+    hook_classifications: [
+      { extension_id: "based", hook_id: "on_pre_step", classification: WorldMediated,
+        basis: { producer: producer, revision: revision } }
+    ] }
+}
+
 pure func all_ids_rec(xs: [HookSlot]) -> [string] {
   match xs {
     [] => [],
@@ -569,6 +584,29 @@ export func main() -> () ! {IO} {
                                      clean().waived_fault_classes ++
                                      [{ class_id: "provider_error_retryable", condition: "because" }] });
 
+  -- WI-D13. THE BASIS, AT THE LOAD-TIME GATE RATHER THAN IN A UNIT TEST.
+  -- `src/core/dst_profile.ail`'s inline tests call `validate_classifications`
+  -- directly, which proves the rule computes the right answer and proves
+  -- nothing about whether the gate ever asks it. These go through `load`, i.e.
+  -- `validate_definition_at_load` — the same call a runner makes. A rule that
+  -- is correct and unwired is the fail-open this field exists to close.
+  let _ = println("  -- WI-D13: a classification's evidentiary basis --");
+  let basis_blank = assert_rejected("WorldMediated on NO producer — the entry that passed the gate until WI-D13",
+                                    "classification-basis-not-recorded",
+                                    with_basis("", "c3de56f"));
+  let basis_undated = assert_rejected("a real producer, UNDATED — a measurement that cannot be dated cannot be told from a stale one",
+                                      "classification-basis-not-recorded",
+                                      with_basis("ext_ambient_inventory", ""));
+  let basis_unknown = assert_rejected("a producer this tree does not have",
+                                      "classification-basis-unrecognised",
+                                      with_basis("successor_detector", "c3de56f"));
+  -- THE CONTROL. Same definition, same field, a producer that exists and a
+  -- revision — and it loads clean through the WHOLE gate. Without this the
+  -- three above cannot be told from a definition that is rejected for some
+  -- other reason entirely.
+  let basis_ok = assert_clean("WorldMediated MEASURED by classifier 3, dated",
+                              with_basis("ext_ambient_inventory", "c3de56f"));
+
   let _ = println("  -- decision 2: the routed-set claim is computed --");
   let claim = routed_claim_is_computed();
 
@@ -581,6 +619,7 @@ export func main() -> () ! {IO} {
   let all = control && sweep && floor && unknown && overlap && partial && seven
             && stale_bind && stale_id && unaccounted && c2 && roots
             && undeclared && no_instr && stale_decl && unwaived && not_cond
+            && basis_blank && basis_undated && basis_unknown && basis_ok
             && claim && manifest && exclusion;
   if all then println("profile_definition_dst PASS")
   else {

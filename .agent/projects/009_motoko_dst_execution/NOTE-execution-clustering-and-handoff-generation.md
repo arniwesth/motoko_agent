@@ -684,3 +684,34 @@ that carries its answer in the same breath.**
 derivation to `(extension, slot)` can take the count to zero for one extension **without touching the
 ABI** — which is exactly the case that message was written for, and the handoff scopes the install out
 on that ground.
+
+
+## Cluster 31 outcome, and cluster 32 = the second profile
+
+**WI-D13: `basis` landed, the barrier derivation re-shaped to `(extension, slot)`, and FOUR extensions
+clear — not the one the handoff anticipated.** Verified: `33 of 45 pairs stand`, slot-level count
+still 3, `driver_only` v13 installing nothing, `basis` rejecting three ways with a loading control.
+**The criterion decision: criterion 2, two of three clauses vacuous — and criterion 1 is UNAVAILABLE
+rather than unearned**, so the handoff's stop rule did not fire for a reason it had not imagined.
+**D13 declined to install**, on the ground that the coverage would be a fifth vacuity *with a number
+attached*. Earned S21's and S15's newest extensions.
+
+**Cluster 32 = WI-D14, the second profile: HANDED OFF 2026-08-07**,
+`HANDOFF-execute-d14-the-second-profile.md`.
+
+**Grounding found that the ADR had already ruled on D13's dilemma, and nobody had looked.** Row 3's
+own final clause reads *"the result reports per-extension covered/excluded hook **ids**, so a profile
+covering only ABI-pure no-op slots is visible as such"* — and `ADR:8819` shows it was raised in review
+as **R5** with that clause as the disposition. **The ADR contemplates a no-op-covering profile and
+answers it with disclosure, not refusal.** D13's pause was right; the remedy was already specified.
+
+**And the reframing is the handoff's main work: the number is the least interesting part.** Every
+clause of row 3 that quantifies over installed extensions — the coverage floor, the unconditional-hook
+rule, the classifier-2 rule, the per-extension id disclosure — **has been vacuous for the entire
+project**. This is the first profile that would make them *bind*. **If any of them fails, that is
+worth more than the profile.**
+
+**Clustering note: when an item declines something on judgement, check whether the governing document
+already decided it.** D13's decline was sound reasoning that duplicated a review round from before the
+ADR was accepted. **A decision recorded in an artifact nobody re-reads is indistinguishable from a
+decision never taken** — the same shape as D11's false antecedent, one document over.
