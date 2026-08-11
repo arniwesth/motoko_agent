@@ -161,16 +161,16 @@ pure func fold(msgs: [Msg]) -> [Msg] {
 }
 
 func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   let folded = fold(msgs);
   if List.length(folded) == List.length(msgs) then PassThrough
   else Compacted(folded, "probe: folded older turns into one summary", jo([]))
 }, next_state: ctx.world } }
 
 func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 
-func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -185,7 +185,7 @@ func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS
   }
 }
 
-func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}, id: string) -> ExtRuntime {
+func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
 }

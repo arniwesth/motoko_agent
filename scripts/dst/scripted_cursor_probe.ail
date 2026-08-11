@@ -167,7 +167,7 @@ pure func assistants(msgs: [Msg]) -> int {
 }
 
 func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   let folded = fold(msgs);
   let _ = println("  PRESTEP step=${show(ctx.step)} segment_in=${show(List.length(msgs))} assistants_in=${show(assistants(msgs))} -> segment_out=${show(List.length(folded))} assistants_out=${show(assistants(folded))}");
   if List.length(folded) == List.length(msgs) then PassThrough
@@ -175,11 +175,11 @@ func folding_pre_step(ctx: ExtCtx, msgs: [Msg])
 }, next_state: ctx.world } }
 
 func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   PassThrough
 }, next_state: ctx.world } }
 
-func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
+func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -194,7 +194,7 @@ func hooks(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS
   }
 }
 
-func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}, id: string) -> ExtRuntime {
+func rt_with(pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}, id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { hooks: [hooks(id, pre)] }, strict_mode: false, verification: v }
 }

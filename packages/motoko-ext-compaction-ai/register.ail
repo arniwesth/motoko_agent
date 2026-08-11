@@ -106,7 +106,7 @@ export func register_with_config(_cfg: a) -> ExtensionHooks ! {AI, Clock, Env, F
     -- harmless identity: `compact_with_ai` may have run the summarizer twice,
     -- and overwriting its successor with the world this hook was ENTERED with
     -- would replay those provider calls. It type-checks either way.
-    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+    on_pre_step: func(ctx: ExtCtx, msgs) -> PreStepOutcome ! {AI, IO, Trace} {
       compact_with_ai(ctx, msgs, compaction_cfg)
     },
     on_tool_policy: \_ _ . Allow,

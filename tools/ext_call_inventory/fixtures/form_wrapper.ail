@@ -13,15 +13,15 @@ module tools/ext_call_inventory/fixtures/form_wrapper
 import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, ExtCtx, ExtWorld, Msg)
 
 export func call_step(
-  f: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace},
+  f: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Trace},
   w: ExtWorld,
   model: string,
   msgs: [Msg]
-) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+) -> AiStepOutcome ! {AI, IO, Trace} {
   f(w, model, msgs)
 }
 
 export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
-  -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> AiStepOutcome ! {AI, IO, Trace} {
   call_step(ctx.ports.ai_step, ctx.world, model, msgs)
 }

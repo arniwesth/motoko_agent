@@ -97,7 +97,7 @@ func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   PassThrough
 }, next_state: ctx.world } }
 

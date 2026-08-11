@@ -51,11 +51,11 @@ func noop_env_get(_key: string, fallback: string) -> string ! {Env} {
   fallback
 }
 
-func canned_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} { { result: {
+func canned_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
   Ok("CANNED SUMMARY")
 }, next_state: world } }
 
-func poison_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} { { result: {
+func poison_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: {
   Ok("POISON")
 }, next_state: world } }
 

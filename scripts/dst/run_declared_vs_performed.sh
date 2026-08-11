@@ -425,9 +425,14 @@ check_slot_row() {
   fi
 }
 
+# WI-D8 moved this pin from ten effects to three, and the pin is why it moved
+# DELIBERATELY: it went red on the narrowing rather than accepting it, which is
+# the row saying "a change of width is a change of claim". The claim was
+# re-measured — every step of compaction_ai's chain read off the effect checker
+# one at a time — and the pin follows the measurement.
 check_slot_row on_pre_step \
-  "! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}" \
-  "compaction_ai" "all ten, reached through ExtPorts.ai_step"
+  "! {AI, IO, Trace}" \
+  "compaction_ai" "the three ExtPorts.ai_step performs, reached through that single call"
 check_slot_row on_response_intercept \
   "! {IO, Process, FS, Clock}" \
   "compose" "the inline-snippet path"
@@ -450,7 +455,7 @@ check_refuser() {
   fi
 }
 check_refuser packages/motoko-ext-compaction-ai/compaction_ai.ail compact_with_ai \
-  "-> PreStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace}"
+  "-> PreStepOutcome ! {AI, IO, Trace}"
 check_refuser "$COMPOSE" compose.on_response_intercept \
   "-> ResponseInterceptOutcome ! {IO, Process, FS, Clock}"
 check_refuser packages/motoko-ext-context-mode/context_mode.ail finalize_with_index \
@@ -475,6 +480,153 @@ if [ -z "$stale" ]; then
   ok "no source site binds an intercept or solver hook at the pre-D7 nine-effect row"
 else
   bad "binding sites still at the nine-effect row, so the narrowing is partial: $stale"
+fi
+
+# ===========================================================================
+# WI-D8: `ExtPorts.ai_step`'s ROW, MEASURED — and the two limitations that
+# decide how much any of these narrowings is worth
+# ===========================================================================
+#
+# Nothing before this item had ever measured `ExtPorts.ai_step`. WI-D7 took
+# its row as given ("whose own port row is exactly those ten") and concluded
+# from it that `on_pre_step`'s barrier is the row's VOCABULARY. The row was
+# over-declared by seven effects.
+#
+# MEASURED FROM THE BODIES, not from the annotations: the port's entire effect
+# demand comes from `session.ext_ai_step`, which calls `Ports.model_step` and
+# nothing else, and the effect checker names its row when it is narrowed —
+# `Effect checking failed for function 'ext_ai_step' … Missing effects: AI, IO,
+# Trace`. Seven of the ten it declared — Process, FS, Env, Net, SharedMem,
+# Clock, Stream — are effects `model_step` cannot produce.
+
+# The port row, and the slot row it propagates to. Both asserted at the
+# MEASURED width; both go red if anyone re-widens them without re-measuring.
+if grep -qF -- "ai_step: (ExtWorld, string, [Msg]) -> AiStepOutcome ! {AI, IO, Trace}" "$ABI"; then
+  ok "ExtPorts.ai_step declares ! {AI, IO, Trace} — the row Ports.model_step performs (WI-D8; was ten effects through WI-D7)"
+else
+  bad "ExtPorts.ai_step is no longer at its measured row ! {AI, IO, Trace}. It was measured from ext_ai_step's BODY, not from an annotation — re-measure before moving it"
+fi
+if grep -qF -- "on_pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}" "$ABI"; then
+  ok "ExtensionHooks.on_pre_step declares ! {AI, IO, Trace} — the fixpoint of compaction_ai's chain once the port narrowed"
+else
+  bad "ExtensionHooks.on_pre_step is no longer at ! {AI, IO, Trace}; re-measure the compaction_ai chain before moving it"
+fi
+
+# S22: DERIVE the site sets and assert the counts. The WI-D8 handoff said
+# "eleven annotation sites"; deriving them found SEVENTEEN, and the first
+# derivation written here MISSED THREE MORE because it classified a site by
+# the return type named on the same line — which lambda-form bindings
+# (`on_pre_step: \ctx _msgs. …  ! {…}`) do not name. Both undercounts are the
+# reason this is computed rather than quoted.
+derive_sites() {   # $1 = slot regex on the line, $2 = row
+  grep -rlE "$1" --include=*.ail src/ scripts/ packages/ tools/ 2>/dev/null \
+    | grep -v '^\.packages/' | grep -v '\.ailang' | sort -u
+}
+old_ten='\{(AI|IO|Process|FS|Env|Net|SharedMem|Clock|Stream|Trace)(, ?(AI|IO|Process|FS|Env|Net|SharedMem|Clock|Stream|Trace)){9}\}'
+left=$(grep -rlE "(AiStepOutcome|PreStepOutcome|on_pre_step|ai_step).*! ?$old_ten" \
+       --include=*.ail src/ scripts/ packages/ tools/ 2>/dev/null | grep -v '^\.packages/' || true)
+if [ -z "$left" ]; then
+  ok "no source site binds ai_step or on_pre_step at the pre-D8 ten-effect row (derived, not enumerated)"
+else
+  bad "sites still at the pre-D8 ten-effect row, so the WI-D8 narrowing is partial: $left"
+fi
+
+# THE TWO LIMITATIONS, each two-sided, because the value of every narrowing in
+# this file depends on them and BOTH were read wrong on first contact.
+#
+# The first reading of limitation 1 was "a lambda's row is never checked",
+# taken from a single `! {}` probe. That is false: a lambda's row IS checked in
+# `let` and in ARGUMENT position. It is record-FIELD position that is not — and
+# that happens to be where every hook in this tree is bound.
+LIMPROBE=scripts/dst/.dvp_limitation_probe.ail
+limcleanup() { rm -f "$LIMPROBE"; }
+write_lim() {  # $1 = the binding form's body text
+  cat > "$LIMPROBE" <<EOF
+module scripts/dst/dvp_limitation_probe
+import std/io (println)
+import std/env (getEnvOr)
+$1
+EOF
+}
+
+write_lim 'type R = { f: (string) -> () ! {IO} }
+export func main() -> () ! {IO, Env} {
+  let r: R = { f: func(s: string) -> () ! {IO} { let _ = getEnvOr("PATH",""); println(s) } };
+  r.f("x")
+}'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "LIMITATION 1 still holds: a RECORD-FIELD lambda's declared row is NOT checked against its body — so narrowing a hook slot constrains only the bindings written as top-level functions"
+else
+  bad "LIMITATION 1 IS FIXED UPSTREAM: record-field lambda rows are now effect-checked. That is GOOD NEWS and it invalidates this file's controls — control_env/control_fs bind a performing body inline and must be re-sited, and every 'the compiler is the enforcer' claim in WI-D6/D7/D8 becomes true at more sites than it was"
+fi
+
+write_lim 'export func main() -> () ! {IO} {
+  let f = func(s: string) -> () ! {} { println(s) };
+  f("x")
+}'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  ok "LIMITATION 2 still holds: an EMPTY row on a lambda reads as 'unannotated, infer' rather than as the claim 'performs nothing' — so a slot narrowed to ! {} (WI-D6's on_budget_plan) constrains a lambda binding not at all"
+else
+  bad "LIMITATION 2 IS FIXED UPSTREAM: ! {} on a lambda is now a checked claim. Re-read WI-D6's on_budget_plan narrowing — it buys strictly more than it did"
+fi
+
+# The two-sided half of limitation 1: the SAME body in argument position IS
+# rejected, so the acceptance above is attributable to record-field position
+# rather than to the effect checker being off, the file being unreachable, or
+# the probe being malformed.
+write_lim 'func take(f: (string) -> () ! {IO}) -> () ! {IO} { f("x") }
+export func main() -> () ! {IO, Env} {
+  take(func(s: string) -> () ! {IO} { let _ = getEnvOr("PATH",""); println(s) })
+}'
+if AILANG_RELAX_MODULES=1 ailang check "$LIMPROBE" >/dev/null 2>&1; then
+  bad "the control for limitation 1 was ACCEPTED in argument position too — the probe establishes nothing about record-field position, and rows 'LIMITATION 1' above are measuring the effect checker being absent rather than a positional gap"
+else
+  ok "control for limitation 1: the same body in ARGUMENT position is rejected, so the record-field acceptance is caused by the position"
+fi
+limcleanup
+
+# WHERE THE ENFORCEMENT ACTUALLY LIVES, and it is not where WI-D6 and WI-D7
+# put it. A record-field lambda's row is unchecked, but its body's effects
+# still propagate to the ENCLOSING function — so for the eight extensions that
+# bind on_pre_step inline, the row that constrains them is
+# `register_with_config`'s, not the slot's.
+#
+# THE FIRST VERSION OF THIS ROW SAID "all fifteen carry the wide row and
+# therefore absorb anything". THAT WAS WRONG AND THE DERIVATION CAUGHT IT —
+# exactly ONE registration (compaction_ai's) carries the ten-effect row; the
+# other fourteen are already narrow, and two (decision_framework, microrag)
+# declare no row at all and absorb NOTHING. The absorption is per EFFECT, not
+# global, so it is computed per effect rather than asserted.
+# THE DENOMINATOR IS ROWS, NOT EXTENSIONS, and the two differ — which is why it
+# is stated rather than left to be inferred from a fraction. Fifteen extensions
+# declare FOURTEEN registration rows between them: `decision_framework` and
+# `microrag` declare no row at all (so they absorb nothing), and `compose`
+# declares TWO — a wrapper in `register.ail` and the real one in `compose.ail`,
+# which is the file that also binds the hook.
+n_reg_rows=$( { grep -rlE "func register_with_config.*!" --include=*.ail packages/ 2>/dev/null || true; } | wc -l | tr -d ' ')
+if [ "$n_reg_rows" -eq 14 ]; then
+  ok "14 register_with_config rows across the 15 extensions (decision_framework and microrag declare none; compose declares two) — the denominator for the absorption rows below"
+else
+  bad "the number of register_with_config rows moved from 14 to $n_reg_rows, so every absorption fraction below has a different denominator than the one they were measured against"
+fi
+absorb() {  # $1 = effect name, $2 = expected count of ROWS admitting it
+  local n
+  n=$( { grep -rhE "func register_with_config.*!" --include=*.ail packages/ 2>/dev/null || true; } \
+       | grep -oE '!\s*\{[^}]*\}' | grep -cE "[{,]\s*$1\s*[,}]" || true )
+  if [ "$n" -eq "$2" ]; then
+    ok "absorption of '$1' by register_with_config rows: $n of $n_reg_rows, unchanged — an inline hook that begins performing '$1' compiles silently under exactly those $n"
+  else
+    bad "absorption of '$1' moved from $2 to $n rows. That changes how much the WI-D6/D7/D8 slot narrowings actually enforce — re-read the note in declared_vs_performed.ail"
+  fi
+}
+absorb Env 14
+absorb FS 12
+absorb Process 7
+# The one registration that absorbs EVERYTHING, named rather than counted.
+if grep -qE "func register_with_config.*! ?$old_ten" packages/motoko-ext-compaction-ai/register.ail; then
+  ok "compaction_ai's register_with_config still carries the ten-effect row — the ONE registration that absorbs any effect its inline hooks begin performing (recorded, not fixed: narrowing it is its own measurement item)"
+else
+  ok "compaction_ai's register_with_config is no longer at the ten-effect row — the single total-absorption site WI-D8 recorded is closed; that finding is now stale"
 fi
 
 # TWO-SIDED compile-time controls, one per narrowed slot, on D6's discipline:

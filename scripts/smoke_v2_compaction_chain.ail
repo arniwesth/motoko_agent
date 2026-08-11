@@ -101,7 +101,7 @@ func rewrite_tool(msgs: [Msg]) -> [Msg] {
   }
 }
 
-func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
+func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
@@ -119,19 +119,19 @@ func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process
 }
 
 func hook_a() -> ExtensionHooks {
-  base_hook("chain_A", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+  base_hook("chain_A", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted(msgs ++ [mk_msg("user", "chain-A")], "A", jo([]))
   }, next_state: ctx.world } })
 }
 
 func hook_b_bad() -> ExtensionHooks {
-  base_hook("chain_B", func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+  base_hook("chain_B", func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted([call_msg("tc-chain")], "B", jo([]))
   }, next_state: ctx.world } })
 }
 
 func hook_c() -> ExtensionHooks {
-  base_hook("chain_C", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}  { { decision: {
+  base_hook("chain_C", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted(rewrite_tool(msgs), "C", jo([]))
   }, next_state: ctx.world } })
 }

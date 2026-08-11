@@ -85,14 +85,14 @@ func drop_first_tool_result(msgs: [Msg]) -> [Msg] {
 -- S12: this hook calls no port, so returning the world it was given is the
 -- CORRECT identity transition rather than a dropped successor.
 func prefix_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> PreStepOutcome ! {AI, IO, Trace} {
   { decision: Compacted([system_msg()] ++ msgs, "reject fixture: system injection", jo([])),
     next_state: ctx.world }
 }
 
 -- S12: as above — no port call, so the identity transition is correct.
 func pair_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> PreStepOutcome ! {AI, IO, Trace} {
   { decision: Compacted(drop_first_tool_result(msgs), "reject fixture: severed tool pair", jo([])),
     next_state: ctx.world }
 }
@@ -103,7 +103,7 @@ func pair_pre_step(ctx: ExtCtx, msgs: [Msg])
 -- never `ctx.world` — the latter type-checks identically and replays the
 -- consumed script entry.
 func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
-  -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} {
+  -> PreStepOutcome ! {AI, IO, Trace} {
   let step = ctx.ports.ai_step(ctx.world, ctx.model, msgs);
   let summary = match step.result {
     Ok(content) => content,
@@ -113,7 +113,7 @@ func nocache_pre_step(ctx: ExtCtx, msgs: [Msg])
     next_state: step.next_state }
 }
 
-func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace}) -> ExtensionHooks {
+func hooks(id: string, pre_step: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtensionHooks {
   {
     id: id,
     provided_tools: [],
