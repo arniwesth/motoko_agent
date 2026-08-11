@@ -87,6 +87,16 @@ two-argument and routed its extension seam in one line. Identical nominal scope,
 sole difference parameter count — had env run first, the limitation would have surfaced on the cheap
 class.
 
+**S5. Size a detector by its defect-discovery round trips, weighted by how loudly each defect
+fails — and accept that it cannot be sized before it runs.** This is the property that distinguishes
+detector work from the other two kinds: a widen-and-converge site and an artifact row are both
+countable from the source in advance; **a detector's cost is dominated by defects in the detector
+itself, which are invisible until it runs against real source.** Cluster 2 measured 4 / 4 / 1 round
+trips against 11 / 8.5 / 5.5 minutes — a better predictor than lines or files. The weighting matters
+more than the count: A5's four round trips were compiler errors with line numbers; A4's four each
+produced a **plausible report** that had to be read and disbelieved. Budget loud defects at
+near-zero and silent ones at the cost of noticing them.
+
 **S4. Size a constructed artifact by the rows whose content must be *discovered*, not by its row
 count.** Cluster 3 measured the controlled comparison: A7 has 68 sites and took 11.5 minutes; A8 has
 158 and took 8. Every A7 row needed a recovery branch located and confirmed in the driver — eleven
@@ -144,9 +154,21 @@ routed to the world clock as part of WI-A12 — every profile needs them; (2) `e
 is never routed — it is *attributed* to `test_dummy` in the WI-A5 table, which is what removes it
 from the baseline's reachable set; (3) the eight `motoko-ext-compose` sites are deferred to
 Milestone C, because they route through `ExtPorts.clock_now` — a seam with zero call sites that may
-not survive first contact — and belong with the ABI major. The first profile to claim a routed set
-is `driver_only` (P4), claiming **4 routed sites** — a claim that per D4's scheduling prohibition
-cannot be made before the attribution table validates (without it the fail-closed obligation is 5).
+not survive first contact — and belong with the ABI major.
+
+**Corrected 2026-08-03 (cluster 2, C3): stop citing a fixed site count here.** The "four driver
+sites" and `driver_only`'s "4 routed sites" were true when written and the source has moved **twice
+inside one milestone**. At HEAD there are **five** routed core sites — A12 added `tool_phase.ail:342`
+— plus **two ambient core sites that did not exist when D4's table was written**:
+`session.ail:796` (`ext_unrouted_clock`, deliberately ambient under S2) and `stub_step.ail:146`
+(inside `live_ports`). D4's `4 / 12 / 13` and `5 / 13 / 13` splits describe a tree A12 changed.
+
+**The count is not the decision; the ordering is.** A validator holding its own copy of "the
+thirteen sites" agrees with itself by construction and goes stale exactly when the source moves.
+A5 already discharges this correctly — `make attribution_table` takes the discovered set as an
+**argument**, never as a constant, and re-checks every cited line's *content* on each run. Any
+profile claim must be computed the same way, from the classifier's output at the revision the
+profile binds.
 
 **P4. The first conformant profile is named `driver_only`, v1.** A purpose-built narrow profile,
 per D10 deliberately not carrying "DST" or "simulation" in its name: the real traced driver plus
@@ -197,6 +219,14 @@ is in flight. Milestone C depends on B.
   terminal returns and eight reachable termination reasons**. Sizing against the helper's callers
   would have missed two terminal paths outright (C2). **For an item that rewrites a *class* of
   things, count the class, not the helper.**
+- **Sharpened by cluster 2, which falsified a prediction made from it and was confirmed by its own
+  logic.** The handoff predicted A4 would come in *low* like A6's 16%, because classifier 1 is a
+  working precedent. It came in at **58%** — the highest of any item. The predictor still holds,
+  because what it actually tracks is **how much the specification leaves undetermined**: A6 was low
+  because D5's rules were stated *and correct*; A4 was high because D5's rules were stated *and
+  wrong*, so the item whose specification most needed re-derivation had the highest ratio. A
+  precedent supplies **shape, not content** — classifier 1 gave A4 its fail-closed posture, `/tmp`
+  refusal, target+selftest pair and output conventions, and none of its membership derivation.
 - **The judgement ratio is predicted by whether the change introduces a value that did not
   previously exist** — not by "widening versus contract rewrite", which was the earlier reading and
   A12 falsified it from the inside. Bands: M1's additive 10%; port widenings **~19%**; contract
@@ -298,7 +328,8 @@ fail-closed triage, not a pass; re-derivation wired into the repin checklist.
 
 **WI-A5. Build the site-to-hook attribution table and its profile-load validation** (D4 clause 3) —
 **in the same change as WI-A4**, per D4's producer clause. Initial rows: `ext/runtime.ail:190` →
-`test_dummy`; `tool_phase.ail:222` → `scratchpad`; each with a named reviewer recorded, which is
+`test_dummy`; `tool_phase.ail:287` → `scratchpad` (**A12 moved it; the plan cited `:222`, which is
+now the guard's old address — corrected at implementation**); each with a named reviewer recorded, which is
 the **stated exception** to the automated-gate promise until the interprocedural necessity
 validator exists (that validator is *not* scheduled here; building it prematurely is exactly the
 prose-refinement trap).
@@ -482,6 +513,29 @@ would have loaded clean and then failed closed on the first step.** A6 closed th
 `test_seven_slots_are_unconditional` and a `describe_tools_excluded` fixture; take the set from
 A6's code, not from prose.
 
+**Two decisions cluster 2 deliberately left to this item rather than deciding on its own authority**
+(cluster 2, C4 and its handoff notes):
+
+1. **Is a profile with an unrouted *reachable core* site conformant?** Two exist and both are
+   declared rather than hidden: `session.ail:796` (ambient by design under S2, with the `Clock`
+   poison probe as its instrument) and `stub_step.ail:146` (inside `live_ports`). D4's
+   all-or-nothing routing rule points at non-conformant. **The live sub-question is whether
+   `stub_step.ail:146` is in a deterministic profile's reachable set at all**, since `live_ports` is
+   not the adapter a deterministic run uses — and D4's "profile-reachable" is installation-scoped,
+   not execution-scoped, which is what makes the answer non-obvious. Decide it here; A5's
+   declaration carries a `routed` flag per site precisely so the gap is stated rather than absent.
+2. **`driver_only`'s routed-set claim**, which cluster 6 routed and clusters 2 and 6 both declined to
+   record. The table it needs now exists; compute the count from the classifier at the bound
+   revision, per P3.
+
+**Consume A5 and A4 through their exports, not by re-deriving:**
+`dst_attribution_table.validate_at_load(loading_against, discovered)` is the whole load-time gate in
+one call; `table_identity()` is the `(source revision, content hash)` pair a profile records — and
+**a table correction re-issues every referring profile**, as D4 states; `reachable_core_sites(installed)`
+gives unconditional-core plus attributed-and-intersecting; `make ext_call_inventory --json` yields
+`classifier_2_set`, `unrouted_fields`, `member_call_sites`, `unresolved` and the per-field rationale
+for the manifest's derived-set records.
+
 **Take A6's *set-completeness* fixture shape, not its easy one** (cluster 3, C8). This plan's A6
 acceptance named "a fixture profile installing an all-excluded extension is rejected" — satisfiable
 but weak. The fixture that separates a real validator from a row-shape validator is
@@ -527,6 +581,17 @@ CI-run.
 *Acceptance evidence:* **the check is green on the unmutated ADR at HEAD** — the falsifiable half,
 and the one a containment check would fail; *and* mutating one anchor in a scratch copy turns it
 red. Both, because the second alone passes trivially while the first is broken.
+*Size:* **MEASURED: ~35 min, 3 files (3 new), 13 passages of which 13 needed judgement**
+(2026-08-03). Landed as `make predicate_anchors`, invoked by CI.
+**The ADR asserted the count without the enumeration, and A11 could not be built against that.**
+"the six" named no locations, and two defensible sixes existed — Status plus the four D1/D5 rule
+statements plus the predicate definition, or Status, D1, the acceptance row and the handoff. A check
+on either would have asserted a curation rather than verified one. D1 is amended (2026-08-03) to
+enumerate the six by section, and `tools/predicate-anchors/anchors.json` records all **thirteen**
+normative-region mentions — 6 anchors, 7 references — each with a named reviewer. Passages are
+matched by **paragraph hash, not by line**: the ADR is amended often and a line-keyed check goes red
+on every unrelated edit, which trains people to re-baseline without reading. Whitespace is collapsed
+before hashing, so a reflow is not drift and any changed word is.
 
 **WI-A12. Thread `world_state` through the driver, one effect class at a time** (D1). Depends on
 A2; subsumes and deletes the interim `C2LoopState` cursor field in its first change, per D1.
@@ -771,8 +836,12 @@ fields, vision parts dropped at the seam.
 **WI-B4. Re-derive both classifiers on the new pin, and close the repin wave.** Depends on B1, B2,
 B3 (the source and ABI set is not final until they land), **A4** (classifier 2 must exist to be
 re-derived) and **A10** (a manifest must exist to re-issue). Re-run `make effect_inventory`,
-`effect_inventory_selftest`, and the classifier-2 target; re-record both derived sets and the
-scan-root commit; re-issue `driver_only`'s manifest. If the trigger fires before A4/A10, this
+`effect_inventory_selftest`, `ext_call_inventory` and `ext_call_inventory_selftest` (A4's targets,
+landed 2026-08-03); re-record both derived sets and the scan-root commit; re-issue `driver_only`'s
+manifest. **Classifier 2 re-derives its own membership set from source on every run**, so the repin
+step is to read the printed set and reconcile it against the recorded one, not to re-specify it —
+and `ext_call_inventory_selftest`'s pinned membership block is what goes red if the ABI major (B2)
+changes the answer. If the trigger fires before A4/A10, this
 degrades to re-running classifier 1 alone and the rest waits — say so rather than letting it pass
 silently.
 *Acceptance evidence:* **this is the wave's green gate** — full compile and test suites pass on the

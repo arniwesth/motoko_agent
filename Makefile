@@ -73,7 +73,7 @@ phase_c_l1: compaction_dst
 
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage fault_catalogue event_vocabulary attribution_table predicate_anchors ext_call_inventory ext_call_inventory_selftest smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #
@@ -642,3 +642,94 @@ effect_inventory:
 
 effect_inventory_selftest:
 	@python3 tools/effect-inventory/derive.py --self-test
+
+# ---------------------------------------------------------------------------
+# ADR-001 D5 obligation 2, classifier 2: ExtPorts fields that drop a cursor D1
+# requires threaded, and their call sites.
+#
+# Membership is DERIVED from D5's criterion on every run -- from the ExtPorts
+# record, the core Ports record, and the extension-side bridge -- and never read
+# from a list. D5's own enumeration named `ai_step` alone; WI-A12 falsified that
+# by state-threading `Ports.tool_exec` and `Ports.env_get`, and a classifier
+# built to the list would have reported a clean routing audit over two dropped
+# cursors. Re-derive after any change to either port record or to the bridge.
+#
+# `ext_call_inventory_selftest` runs the fixture suite: one fixture per
+# indirection form the ADR places outside the matcher boundary, each of which
+# must be reported unresolved, plus a control that must resolve. All five
+# type-check, so the forms are real rather than illustrative.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ADR-001 D4 clause 3, WI-A5: the site-to-hook attribution table.
+#
+# Two checks, because the fixtures and the artifact fail differently:
+#
+#   1. the fixture suite (scripts/dst/attribution_table_dst.ail) — every
+#      rejecting shape, both directions of the empty-intersection rule, and the
+#      set-completeness fixture that a row-shape validator would accept;
+#   2. an ANCHOR check tying each row to the source it describes.
+#
+# (2) is not redundant with the staleness rule. Staleness compares recorded
+# revisions and can only say "something changed"; this says WHICH row no longer
+# describes its site. It deliberately does NOT compare `table_source_revision()`
+# against git HEAD — the table is bound to the revision its rows were MEASURED
+# at, and every later commit that touches nothing it cites leaves it valid.
+# Comparing to HEAD would make the artifact stale on every unrelated commit,
+# which trains people to bump the field without re-measuring.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# ADR-001 D1, WI-A11: the classifier-2 predicate documentation check.
+#
+# An anchor-set DRIFT check, not a containment check, and the choice is forced.
+# The ADR records that its normative statements of the rule are "substantively
+# aligned, not word-identical -- the six use six formulations", so a check
+# requiring one canonical sentence at all six is RED ON THE UNMUTATED ADR by
+# construction. Canonicalising them is six amendments this project does not
+# budget and would destroy what each formulation carries.
+#
+# Every mention in the ADR's normative region is recorded with a paragraph hash,
+# a classification (anchor = states the rule, reference = applies it) and a named
+# reviewer. It fails when a recorded passage's text changes without a re-accepted
+# hash, or when a mention appears that no record accounts for.
+#
+# Passages are matched BY HASH; the recorded line is a hint and a stale hint is
+# reported, never failed on. A line-keyed check would go red on every unrelated
+# ADR edit, which trains people to re-baseline it without reading.
+# ---------------------------------------------------------------------------
+.PHONY: predicate_anchors
+predicate_anchors:
+	@python3 tools/predicate-anchors/check.py
+
+.PHONY: attribution_table
+attribution_table:
+	@ailang run --caps IO --entry main scripts/dst/attribution_table_dst.ail < /dev/null
+	@fail=0; \
+	check() { \
+	  if sed -n "$$2p" "$$1" | grep -q -- "$$3"; then \
+	    echo "  ✓ $$1:$$2 still $$4"; \
+	  else \
+	    echo "  ✗ $$1:$$2 no longer $$4 — the attribution table describes a site that moved"; \
+	    echo "      expected to find: $$3"; \
+	    echo "      actual line:      $$(sed -n "$$2p" "$$1")"; \
+	    fail=1; \
+	  fi; \
+	}; \
+	echo "attribution anchors:"; \
+	check src/core/ext/runtime.ail 190 'now()' "the ambient clock read attributed to test_dummy"; \
+	check src/core/tool_phase.ail 286 'is_scratchpad_tool_name' "the mixed guard"; \
+	check src/core/tool_phase.ail 287 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"; \
+	check src/core/session.ail 796 'now()' "the S2 un-routed ext clock (declared UNROUTED core)"; \
+	check src/core/test/stub_step.ail 146 'now()' "live_ports' real clock (declared UNROUTED core)"; \
+	for l in 929 1026 2245 2354; do \
+	  check src/core/session.ail $$l 'clock_now' "a routed core clock site"; \
+	done; \
+	check src/core/tool_phase.ail 342 'clock_now' "the FIFTH routed core clock site (D4's table says four)"; \
+	[ "$$fail" -eq 0 ] || exit 1
+	@ailang test src/core/dst_attribution_table.ail > /dev/null && echo "  ✓ src/core/dst_attribution_table.ail"
+
+.PHONY: ext_call_inventory ext_call_inventory_selftest
+ext_call_inventory:
+	@python3 tools/ext_call_inventory/derive.py
+
+ext_call_inventory_selftest:
+	@python3 tools/ext_call_inventory/derive.py --self-test

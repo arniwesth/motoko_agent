@@ -1,0 +1,19 @@
+module tools/ext_call_inventory/fixtures/form_alias
+
+-- FORM 1 of the four the ADR names: a LOCAL ALIAS.
+--
+-- The port record is bound to a new name with no annotation, so the receiver at
+-- the call site carries no declared type. The call is a real classifier-2 call
+-- site; a scan keyed on `ctx.ports.` alone reports zero and passes.
+--
+-- Note the contrast with an ANNOTATED alias (`let p: ExtPorts = ctx.ports`),
+-- which this tool resolves and counts. The annotation is the whole difference:
+-- it is what makes the receiver's type readable from the file.
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg)
+
+export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
+  -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  let p = ctx.ports;
+  p.ai_step(model, msgs)
+}

@@ -462,6 +462,45 @@ Two things follow, and the second is the one with teeth:
   once" and it was stale at two sites. **The claim here is narrower and checkable: six normative sites,
   substantively aligned, not word-identical** — the six use six formulations, and asserting otherwise
   is the mistake this paragraph exists to stop repeating.
+
+  **Amendment, 2026-08-03 (WI-A11 implemented). "Six normative sites" was a count without an
+  enumeration, and the check this clause asks for cannot be built against one.** A11's brief is an
+  anchor-set drift check that fails when an anchor's text changes without a re-accepted hash **or
+  when a normative statement of the predicate appears outside the six**. That second half is
+  unenforceable while "the six" names no locations: two different readings of this ADR each produce a
+  defensible six — one taking Status plus the four D1/D5 rule statements plus the predicate
+  definition, another taking Status, D1, the acceptance row and the implementation handoff — and a
+  check built on either would have been asserting a curation, not verifying one. Twelve passages in
+  the normative region mentioned the rule when A11 measured it — thirteen once this amendment's own
+  table row below is counted — so the gap between "a dozen mentions" and "six sites" was doing real
+  work that nobody had written down.
+
+  **The six are hereby enumerated, and the enumeration is the normative artifact — not the count.**
+  They are the passages that state the obligation as a rule binding on a profile definition:
+
+  | # | Section | States |
+  |---|---|---|
+  | 1 | Status | the rule and its profile-definition rejection |
+  | 2 | D1, handoff-item-2 correction | *every* hook it registers, not only those reaching the call |
+  | 3 | D1, conformance obligation | installing without excluding is a profile-definition rejection |
+  | 4 | D1, predicate definition | "calls a classifier-2 field on an `ExtPorts`-typed value" |
+  | 5 | D5, profile validity | installing while any hook is un-excluded is invalid |
+  | 6 | D5, routing audit | the classifier-2 condition the audit checks |
+
+  The remaining mentions **apply or discuss** the rule rather than stating it — this paragraph and
+  its table, the omission-versus-exclusion consequence, D3's no-instrument note, the acceptance
+  table's evidence row, and the Consequences and handoff discussions. That split is a judgement, so
+  it is recorded the way clause 3's attributions are: **per passage, with a named reviewer**, in
+  `tools/predicate-anchors/anchors.json`, and `make predicate_anchors` fails closed on any mention it
+  cannot match to a recorded classification. A thirteenth-plus mention appearing later is a triage
+  event, not a silent pass.
+
+  **Why the check is drift and not containment**, restated because it is easy to get backwards: this
+  paragraph says the six are deliberately *not* word-identical, so a check requiring one canonical
+  sentence at all six is red on the unmutated ADR **by construction**. Canonicalising them is six
+  amendments this project does not budget, and would destroy the information each formulation
+  carries. The check therefore hashes each passage as it stands and fails when one changes without a
+  re-accepted hash.
 - **The practical consequence is about utility, not eligibility.** `compaction_ai` calls
   `ctx.ports.ai_step` (`packages/motoko-ext-compaction-ai/compaction_ai.ail:106`) and appears in the
   extension order of **all fourteen** checked-in configurations. Every one of them can be made
@@ -1103,6 +1142,48 @@ treatment D6 gives the event vocabulary because it carries the same kind of weig
   fail-closed default counts it as unconditional core and the driver obligation is five. Pre-table the
   split is 5 / 13 / 13; post-table it is the 4 / 12 / 13 stated in D4.
 
+**Amendment, 2026-08-03 (WI-A5 implemented). The table now exists and validates
+(`src/core/dst_attribution_table.ail`, `make attribution_table`), and building it against HEAD
+falsified two anchors in the text above and one number in D4's clock table.**
+
+**1. The mixed-guard example moved.** `src/core/tool_phase.ail:222` is cited above as the mixed guard
+`is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt)`. WI-A12 rewrote that file.
+The guard is now at `:286` and the effectful call it guards — `exec_scratchpad_cell_ws` — is at
+`:287`. **The example is intact; only its coordinates are stale.** The shipped row cites `:287`, and
+`make attribution_table` re-checks every cited line's *content* on each run, so the next move is
+caught by name rather than by a reader noticing.
+
+**2. The core clock inventory is no longer four driver sites.** D4's table says four. At HEAD there
+are **five** routed core sites — WI-A12 added `tool_phase.ail:342` — and **two** ambient core sites
+that did not exist when the table was written: `session.ail:796` (`ext_unrouted_clock`, created by
+A12 under plan rule S2) and `stub_step.ail:146` (`live_ports`' real clock). The `4 / 12 / 13` and
+`5 / 13 / 13` splits above describe a source tree that A12 has since changed, and no artifact should
+be re-derived from them.
+
+The consequence for this clause is a design one and it is already discharged: **the completeness
+check takes the discovered site set as an argument and never as a constant.** A validator holding its
+own copy of "the thirteen sites" agrees with itself by construction and goes stale exactly when the
+source moves — which is what happened here, twice, inside one milestone.
+
+**3. An unattributed core site can be UNROUTED, and clause 1's fallback does not say so.** The rule
+above sends a site with no valid row to unconditional core, which is right. But `session.ail:796` is
+core, unattributed, and deliberately **not routed** (plan S2: `ExtPorts.clock_now`'s zero-argument
+shape admits no world capture, so a loud ambient read was chosen over a silently frozen snapshot).
+A profile that folded it into "the unconditional set, all routed" would be asserting something false.
+The shipped declaration therefore carries `routed` per site, and an unrouted entry is a **declared,
+visible gap** rather than an absent one. Whether such a profile is conformant is D4's all-or-nothing
+rule to apply and WI-A10's to apply it; this clause's job is to make the fact impossible to miss.
+
+**4. A trap worth recording, because it would have inverted the empty-intersection rule silently.**
+Rows name base hook ids (`test_dummy`, `scratchpad`); installed hooks do not carry them.
+`parse_tokens` (`src/core/ext/registry_generated.ail:52-64`) stamps every instance as
+`"${name}#${idx}"`, so a live registry holds `scratchpad#5`. Under plain string equality a row's
+`scratchpad` intersects **nothing**, the intersection is empty, and the empty-intersection rule then
+declares the site genuinely unreachable and drops it from the profile — the exact inverse of what the
+attribution says, arrived at without an error message. This is D4's own fail-open shape re-entering
+through the matching function rather than through the rule, and the acceptance evidence for it is a
+test rather than this paragraph.
+
 Clause 3 is not a technicality. `src/core/ext/runtime.ail:190` reads the clock inside
 `emit_dummy_hook`, in a core module present in *every* profile, behind five `emit_dummy_hook` calls
 (`:206`, `:222`, `:245`, `:287`, `:374`), each guarded by `if is_test_dummy(h.id)` (`:206`, `:222`,
@@ -1497,6 +1578,64 @@ requirement is replaced by three ordered obligations:
    through an extension-side entry. It does not "retire field by field": it is retired **once**, by
    the single world-token ABI major that *Consequences* budgets, and an earlier revision's
    field-by-field phrasing implied a schedule that does not exist.
+
+   **Amendment, 2026-08-03 (WI-A4 implemented). The set is THREE fields, not one, and the two
+   paragraphs above name the wrong non-members.** The criterion is correct and unchanged. What
+   changed is the world it selects over: WI-A12 state-threaded `Ports.tool_exec` and `Ports.env_get`,
+   and the escape clause directly above — "grows only when D1 requires another cursor threaded
+   through an extension-side entry" — is exactly the event that fired.
+
+   Applying the criterion at HEAD, mechanically, per field:
+
+   | `ExtPorts` field | core seam it fronts | seam threads a successor | ext field can return it | verdict |
+   |---|---|---|---|---|
+   | `ai_step` | `Ports.model_step` | yes, `ProviderExchange.next_state` | no — `Result[string, string]` | **member** |
+   | `proc_exec` | `Ports.tool_exec` | yes, `ToolExecution.next_state` | no — `string` | **member** |
+   | `env_get` | `Ports.env_get` | yes, `EnvRead.next_state` | no — `string` | **member** |
+   | `clock_now` | none | n/a | n/a | **unrouted, not a member** |
+
+   The bridge is `session.ext_ports_of`, and the two new members drop their successors in one line
+   each: `session.ail:764` takes `.value` off an `EnvRead`, `session.ail:780` takes `.outcome` off a
+   `ToolExecution`. **A discarded `ToolExecution.next_state` is not different in kind from a
+   discarded `ProviderExchange.next_state`** — same cursor, same ABI edge, same loss — and no reading
+   of the criterion distinguishes them.
+
+   **`clock_now` remains a non-member, and the paragraph above reaches that answer by the wrong
+   route.** It is not that the field "loses no cursor" — `Ports.clock_now` returns a
+   `ClockReading` carrying `next_state`, so there is a cursor there to lose. It is that the
+   extension-side seam **never reaches that port at all**: `ext_unrouted_clock` performs an ambient
+   `now()` (`session.ail:796`), so the field is not the entry to a core seam and the criterion's
+   first conjunct is unsatisfied. That is a worse condition than membership, not a better one, and it
+   is deliberate — plan rule S2 chose a loud ambient read over a silently frozen snapshot because
+   `ExtPorts.clock_now`'s zero-argument shape admits no world capture. **The instrument that covers
+   it is the `Clock` poison probe, not this classifier**, and the two must not be confused.
+
+   **The self-defeat argument the original paragraph was protecting still holds, and this amendment
+   does not disturb it.** The rejected earlier definition — "fields that do not yet return world
+   state" — selects all four including `clock_now`, which would make the clock bullet require a
+   `compose` profile to route its eight reads into a field the rejection rule then rejects. The
+   criterion selects three and excludes `clock_now`, so `clock_now` stays a routing destination.
+   The correction is to the enumeration, not to the rule that produced it.
+
+   **Exposure is nil and no conformant profile changes.** Membership only bites through the
+   extension-granularity rule, and that rule fires on *calls*. At this revision the only classifier-2
+   call sites in `src` + `packages` are the two known `ai_step` sites; there are zero calls to
+   `proc_exec`, `env_get` or `clock_now` outside the ABI package itself. All fourteen checked-in
+   configurations install `compaction_ai`, which already calls `ai_step`, so every one of them was
+   already subject to the rule and none moves. **This is a wording correction, not a scope change** —
+   checked deliberately before amending, because if it had moved a configuration it would have been
+   the plan's decision to make, not this ADR's.
+
+   **What made the stale enumeration dangerous was not that it was wrong — it is that a classifier
+   built to it would have been structurally unable to notice.** A detector carrying a hardcoded
+   member list reports a clean routing audit over a dropped world cursor the moment an extension
+   touches `proc_exec` or `env_get`: it fails *open*, which is the exact defect classifier 1 was
+   respecified four times to avoid. So the correction is carried by the tool rather than by this
+   paragraph: `tools/ext_call_inventory/derive.py` **re-derives membership from the criterion on
+   every run** — reading the `ExtPorts` record, the `Ports` record and the bridge — and never
+   consults a list, including this table. The table above is this amendment reporting the tool's
+   output, not the tool's input. `make ext_call_inventory_selftest` pins the current answer as a
+   regression guard, so the ABI major (WI-B2) changing it goes red rather than passing silently.
 
    ***Classifier 2's own matcher boundary*** — it does not inherit classifier 1's wholesale, because
    an ABI-field scan and a module-import scan fail differently. The shared limits are the fixed

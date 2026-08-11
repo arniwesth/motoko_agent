@@ -1,0 +1,26 @@
+module tools/ext_call_inventory/fixtures/form_wrapper
+
+-- FORM 3: a WRAPPER FUNCTION. The field is not called here at all -- it is taken
+-- as a VALUE and handed to a wrapper, which calls it somewhere the receiver's
+-- type is no longer visible. The port's own type resolves fine; what escapes is
+-- the function.
+--
+-- This is the form most likely to look clean to a careless matcher, because the
+-- text `ctx.ports.ai_step` appears verbatim and a matcher that keys on the path
+-- rather than on the call would happily count it as a resolved site. It is the
+-- opposite: the call site is elsewhere and invisible.
+
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Msg)
+
+export func call_step(
+  f: (string, [Msg]) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream},
+  model: string,
+  msgs: [Msg]
+) -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  f(model, msgs)
+}
+
+export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
+  -> Result[string, string] ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream} {
+  call_step(ctx.ports.ai_step, model, msgs)
+}
