@@ -261,7 +261,7 @@ scripted TUI approval scenario before Phase C inverts the dispatch recursion.
 
 ### 6. Extension ABI v3 and conformance kit (D6, D8)
 
-- **ABI v3**: `ExtCtx` gains `ports: ExtPorts` (ai_step, http, proc_exec, kv, clock_now,
+- **ABI v3**: `ExtCtx` gains `ports: ExtPorts` (ai_step, proc_exec, clock_now,
   env_get), `artifacts: Json`, and (added by D9) **`telemetry`** — the per-step usage numbers
   from `StepResult` (`last_input_tokens`, output/cache tokens) so compactor extensions can
   implement actual-token-gated policy without core deciding it for them; `Compacted` gains an
@@ -291,9 +291,10 @@ scripted TUI approval scenario before Phase C inverts the dispatch recursion.
     bug 1) and `conformance.compactor.tool_pairing_preserved` (live bug 2), plus
     `conformance.compactor.deterministic_replay` and
     `conformance.compactor.artifact_cache_effective`;
-  - commands: `ailang check packages/motoko_ext_conformance/harness.ail`, then
-    `ailang run --caps IO --entry main packages/motoko_ext_conformance/harness.ail` pointed at
-    the package under test (exact arg convention frozen with the kit);
+  - commands: `ailang check packages/motoko_ext_conformance/invariants.ail`,
+    `ailang check packages/motoko_ext_conformance/harness.ail`,
+    `ailang test packages/motoko_ext_conformance/invariants.ail`, then
+    `ailang run --caps IO,Env,FS --entry main scripts/conformance_selftest.ail`;
   - registry probe: a generated `scripts/conformance_registry_probe.ail` that imports
     `registry_generated.ail`'s package list and runs the harness per package in core CI.
 
@@ -318,16 +319,23 @@ sides' understandings of the contract drift apart.
 
 **What is physically in the package** — two modules with different audiences:
 
-1. `invariants.ail` — **the contract law.** Pure predicates over hook inputs and outputs,
-   e.g. `pairing_preserved(segment_in, msgs_out)`, `ids_preserved(segment_in, msgs_out)`,
-   `no_system_in_output(msgs_out)`, `envelope_well_formed(call, result_env)`. Pure means: no
-   effects, runnable under `ailang test` with zero caps, Z3-eligible. The crucial move is who
-   imports it: **core's transcript gate imports these same functions and runs them in
-   production** — when a compactor returns `Compacted(...)` at runtime, the gate validates it
-   with the *identical* predicate an extension's CI ran before shipping. One implementation of
-   the law; disagreement between "what core enforces" and "what extensions were tested
-   against" is impossible by construction.
-2. `harness.ail` — **the test rig.** Test-only; core never imports it. It drives one
+1. `invariants.ail` — **the contract law.** The canonical home of the compactor-output law is
+   `packages/motoko_ext_conformance/invariants.ail`, typed on ABI `Msg`, extracted from
+   `src/core/phase_vocab`, and imported back by the core transcript gate. It exposes three
+   named pure predicates over hook inputs and outputs — `no_system_in_output(msgs_out)`,
+   `pairing_preserved(segment_in, msgs_out)`, and `ids_preserved(segment_in, msgs_out)` — plus
+   a composed `validate_compactor_output` wrapper preserving the single core `Err` message.
+   `envelope_well_formed(call, result_env)` is deferred: at HEAD it has no core-law referent
+   and is a tool-handle obligation owned by core's transcript gate. Pure means: no effects,
+   runnable under `ailang test` with zero caps, Z3-eligible. The crucial move is who imports
+   it: **core's transcript gate imports these same functions and runs them in production** —
+   when a compactor returns `Compacted(...)` at runtime, the gate validates it with the
+   *identical* predicate an extension's CI ran before shipping. One implementation of the law;
+   disagreement between "what core enforces" and "what extensions were tested against" is
+   impossible by construction.
+2. `harness.ail` — **the test rig.** Test-only; core never imports it. It is a `main`-less
+   package-agnostic library importing only ABI + `invariants`; extension CI supplies hooks by
+   import, and name-string selection exists only in the hydration-class registry probe. It drives one
    extension's `ExtensionHooks` through scenarios: synthetic `ExtCtx` values, fixture
    histories/segments, and **fake ports** (pure, scripted — the same pattern as
    `scripts/smoke_ports_record.ail`). It runs the invariants over the hook outputs and, on
@@ -355,6 +363,9 @@ extension still performs outside ports; migrating it to empty is the progress me
   "certified against conformance vN" into a checkable registry-inclusion condition instead of
   a README claim.
 
+`deterministic_replay` and `artifact_cache_effective` are harness-only behavioral scenarios,
+not gate predicates.
+
 **A worked example — why v0.2.0 fails and v0.3.0 passes.** The harness hands `compact_with_ai`
 a fixture segment sitting above its threshold, with a fake `ai_step` port returning a canned
 summary. v0.2.0 splits by position and drops messages: the output severs a tool pair ⇒
@@ -376,8 +387,9 @@ contract" (kit's job) or "core's chain is wrong" (core's job) — and if neither
 gains a new obligation.
 
 **Versioning.** Lockstep majors with the ABI (kit `3.x` certifies ABI `3.x`); the kit exports
-`conformance_abi_version()` and the harness refuses a mismatched ABI loudly, so version skew
-is an error, never a silent pass.
+`conformance_abi_version()`. The ABI exposes no runtime version symbol, so the loud mismatch
+guard is compile-time structural dependence on ABI 3.0 shapes (`ExtCtx.ports`, three-argument
+`Compacted`) plus the declared constant; version skew is an error, never a silent pass.
 
 ---
 

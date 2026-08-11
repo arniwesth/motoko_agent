@@ -1,0 +1,32 @@
+module scripts/conformance_registry_probe
+
+import std/io (println, exit)
+import pkg/sunholo/motoko_ext_abi/types (ExtensionHooks)
+import pkg/sunholo/motoko_ext_conformance/harness (run_conformance)
+import src/core/config (load_runtime_config)
+import src/core/ext/registry_generated (parse_core_ext_order)
+
+func registry_names_csv() -> string {
+  "test_dummy,omnigraph,context_mode,mcp,exa_search,ailang_docs,compose,a2a,decision_framework,microrag,compaction_ai,scratchpad,compaction_structural"
+}
+
+func run_hooks(hooks: [ExtensionHooks], failed: int) -> int ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  match hooks {
+    [] => failed,
+    h :: rest => {
+      let n = run_conformance(h);
+      run_hooks(rest, failed + n)
+    }
+  }
+}
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  let cfg = load_runtime_config();
+  let registry = parse_core_ext_order(registry_names_csv(), cfg);
+  let failures = run_hooks(registry.hooks, 0);
+  if failures == 0 then println("conformance registry probe PASS")
+  else {
+    let _ = println("conformance registry probe FAIL count=${show(failures)}");
+    exit(1)
+  }
+}

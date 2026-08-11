@@ -1,0 +1,233 @@
+module sunholo/motoko_ext_conformance/invariants
+
+import std/result (Result, Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (Msg, ToolCall)
+
+export pure func conformance_abi_version() -> string { "3.0" }
+
+pure func has_assistant_call(calls: [ToolCall], wanted_id: string) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.id == wanted_id then true else has_assistant_call(rest, wanted_id)
+  }
+}
+
+pure func has_assistant_call_id(msgs: [Msg], wanted_id: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "assistant" && has_assistant_call(m.tool_calls, wanted_id) then true
+      else has_assistant_call_id(rest, wanted_id)
+  }
+}
+
+pure func has_tool_result_id(msgs: [Msg], wanted_id: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "tool" && m.tool_call_id == wanted_id then true
+      else has_tool_result_id(rest, wanted_id)
+  }
+}
+
+pure func output_calls_pairing_preserved(input: [Msg], output: [Msg], calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => {
+      let present_agrees =
+        if has_tool_result_id(input, c.id) then has_tool_result_id(output, c.id)
+        else not has_tool_result_id(output, c.id);
+      if present_agrees then output_calls_pairing_preserved(input, output, rest) else false
+    }
+  }
+}
+
+pure func output_calls_ids_preserved(input: [Msg], calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => {
+      let known_id = has_assistant_call_id(input, c.id) || has_tool_result_id(input, c.id);
+      if c.id != "" then (if known_id then output_calls_ids_preserved(input, rest) else false) else false
+    }
+  }
+}
+
+pure func validate_output_calls(input: [Msg], output: [Msg], calls: [ToolCall]) -> Result[(), string] {
+  match calls {
+    [] => Ok(()),
+    c :: rest =>
+      if c.id == "" then Err("compactor output contains empty assistant tool_call id")
+      else if not (has_assistant_call_id(input, c.id) || has_tool_result_id(input, c.id)) then Err("compactor output invented assistant tool_call id ${c.id}")
+      else if has_tool_result_id(input, c.id) != has_tool_result_id(output, c.id) then Err("compactor output severed tool_result pair ${c.id}")
+      else validate_output_calls(input, output, rest)
+  }
+}
+
+pure func validate_compactor_output_rec(input: [Msg], all_output: [Msg], remaining: [Msg]) -> Result[(), string] {
+  match remaining {
+    [] => Ok(()),
+    m :: rest =>
+      if m.role == "system" then Err("compactor output contains system message")
+      else if m.role == "tool" && m.tool_call_id == "" then Err("compactor output contains tool message with empty tool_call_id")
+      else {
+        let call_check = validate_output_calls(input, all_output, m.tool_calls);
+        match call_check {
+          Err(e) => Err(e),
+          Ok(_) =>
+            if m.role == "tool" && not has_tool_result_id(input, m.tool_call_id) then
+              Err("compactor output invented tool_result id ${m.tool_call_id}")
+            else if m.role == "tool" && has_assistant_call_id(input, m.tool_call_id) != has_assistant_call_id(all_output, m.tool_call_id) then
+              Err("compactor output severed assistant tool_call pair ${m.tool_call_id}")
+            else if m.role == "assistant" then
+              validate_compactor_output_rec(input, all_output, rest)
+            else validate_compactor_output_rec(input, all_output, rest)
+        }
+      }
+  }
+}
+
+export pure func no_system_in_output(output: [Msg]) -> bool {
+  match output {
+    [] => true,
+    m :: rest => m.role != "system" && no_system_in_output(rest)
+  }
+}
+
+pure func pairing_preserved_rec(input: [Msg], all_output: [Msg], remaining: [Msg]) -> bool {
+  match remaining {
+    [] => true,
+    m :: rest => {
+      let calls_ok = output_calls_pairing_preserved(input, all_output, m.tool_calls);
+      let tool_ok =
+        if m.role == "tool" then {
+          if has_assistant_call_id(input, m.tool_call_id) then has_assistant_call_id(all_output, m.tool_call_id)
+          else not has_assistant_call_id(all_output, m.tool_call_id)
+        } else true;
+      if calls_ok then (if tool_ok then pairing_preserved_rec(input, all_output, rest) else false) else false
+    }
+  }
+}
+
+export pure func pairing_preserved(input: [Msg], output: [Msg]) -> bool {
+  pairing_preserved_rec(input, output, output)
+}
+
+pure func ids_preserved_rec(input: [Msg], remaining: [Msg]) -> bool {
+  match remaining {
+    [] => true,
+    m :: rest => {
+      let calls_ok = output_calls_ids_preserved(input, m.tool_calls);
+      let tool_ok =
+        if m.role == "tool" then {
+          if m.tool_call_id != "" then has_tool_result_id(input, m.tool_call_id) else false
+        } else true;
+      if calls_ok then (if tool_ok then ids_preserved_rec(input, rest) else false) else false
+    }
+  }
+}
+
+export pure func ids_preserved(input: [Msg], output: [Msg]) -> bool {
+  ids_preserved_rec(input, output)
+}
+
+export pure func validate_compactor_output(input: [Msg], output: [Msg]) -> Result[(), string] {
+  validate_compactor_output_rec(input, output, output)
+}
+
+pure func mk_msg_with_call(id: string) -> Msg {
+  { role: "assistant", content: "call", tool_calls: [{ id: id, name: "T", arguments: "{}" }], tool_call_id: "" }
+}
+
+pure func mk_tool_msg(id: string) -> Msg {
+  { role: "tool", content: "result", tool_calls: [], tool_call_id: id }
+}
+
+pure func mk_plain_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+pure func result_ok(r: Result[(), string]) -> bool {
+  match r { Ok(_) => true, Err(_) => false }
+}
+
+pure func result_err(r: Result[(), string]) -> bool {
+  match r { Ok(_) => false, Err(_) => true }
+}
+
+pure func all_predicates(input: [Msg], output: [Msg]) -> bool {
+  let no_system = no_system_in_output(output);
+  let pairing = pairing_preserved(input, output);
+  let ids = ids_preserved(input, output);
+  if no_system then (if pairing then ids else false) else false
+}
+
+pure func wrapper_ok(input: [Msg], output: [Msg]) -> bool {
+  result_ok(validate_compactor_output(input, output))
+}
+
+pure func equivalence_case(input: [Msg], output: [Msg]) -> bool {
+  let left = wrapper_ok(input, output);
+  let right = all_predicates(input, output);
+  if left then right else not right
+}
+
+pure func test_validate_compactor_output_accepts_identity() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    result_ok(validate_compactor_output(input, input))
+  }
+
+pure func test_validate_compactor_output_accepts_orphan_identity() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_tool_msg("orphan")];
+    result_ok(validate_compactor_output(input, input))
+  }
+
+pure func test_validate_compactor_output_rejects_bad_shapes() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    result_err(validate_compactor_output(input, [mk_plain_msg("system", "bad")]))
+      && result_err(validate_compactor_output(input, [{ role: "tool", content: "bad", tool_calls: [], tool_call_id: "" }]))
+      && result_err(validate_compactor_output(input, [mk_tool_msg("new-id")]))
+      && result_err(validate_compactor_output(input, [mk_msg_with_call("tc1")]))
+      && result_err(validate_compactor_output(input, [mk_tool_msg("tc1")]))
+  }
+
+pure func test_named_predicates_partition_bad_shapes() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    not no_system_in_output([mk_plain_msg("system", "bad")])
+      && not ids_preserved(input, [{ role: "tool", content: "bad", tool_calls: [], tool_call_id: "" }])
+      && not ids_preserved(input, [mk_tool_msg("new-id")])
+      && not pairing_preserved(input, [mk_msg_with_call("tc1")])
+      && not pairing_preserved(input, [mk_tool_msg("tc1")])
+  }
+
+pure func test_dropped_complete_pair_is_accepted() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_plain_msg("user", "before"), mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_plain_msg("assistant", "after")];
+    let output = [mk_plain_msg("assistant", "summary")];
+    result_ok(validate_compactor_output(input, output))
+      && no_system_in_output(output)
+      && pairing_preserved(input, output)
+      && ids_preserved(input, output)
+  }
+
+pure func test_wrapper_equivalent_to_named_predicates() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_plain_msg("user", "before"), mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    equivalence_case(input, input)
+      && equivalence_case(input, [mk_tool_msg("orphan")])
+      && equivalence_case(input, [mk_plain_msg("assistant", "summary")])
+      && equivalence_case(input, [mk_plain_msg("system", "bad")])
+      && equivalence_case(input, [{ role: "tool", content: "bad", tool_calls: [], tool_call_id: "" }])
+      && equivalence_case(input, [mk_tool_msg("new-id")])
+      && equivalence_case(input, [mk_msg_with_call("tc1")])
+      && equivalence_case(input, [mk_tool_msg("tc1")])
+  }

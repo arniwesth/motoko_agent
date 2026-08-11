@@ -59,6 +59,15 @@ compaction_dst:
 	ailang run --caps IO --entry main scripts/compaction_policy_dst.ail
 	ailang run --caps IO,Env,FS --entry main scripts/compaction_catalog_dst.ail
 
+conformance:
+	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/invariants.ail
+	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/harness.ail
+	ailang check scripts/conformance_selftest.ail
+	ailang check scripts/conformance_registry_probe.ail
+	ailang test packages/motoko_ext_conformance/invariants.ail
+	ailang run --caps IO,Env,FS --entry main scripts/conformance_selftest.ail
+	ailang run --caps IO,Env,FS --entry main scripts/conformance_registry_probe.ail
+
 # Type-check every AILANG core runtime module in src/core/, then
 # runtime-boot-probe every extension in the active profile's registry
 # so DP7 can catch the class of bugs that pass type-check but crash
