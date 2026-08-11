@@ -2,7 +2,7 @@ module src/core/ext/ctx_defaults
 
 import std/json (Json, jo)
 import std/result (Result, Err)
-import pkg/sunholo/motoko_ext_abi/types (ExtWorld, AiStepOutcome, ExtPorts, Msg, TokenTelemetry)
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, AiStepOutcome, ExtPorts, Msg, TokenTelemetry)
 
 func noop_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} { { result: {
   Err("ext ai_step port unavailable")
@@ -12,8 +12,14 @@ func noop_proc_exec(_cmd: string, _cwd: string) -> string ! {IO, Process, FS} {
   ""
 }
 
-func noop_clock_now() -> int ! {Clock} {
-  0
+-- WI-C5 widened `ExtPorts.clock_now` to thread the world token. Returning
+-- `world` unchanged is S12's IDENTITY TRANSITION, and here it is the correct
+-- answer rather than a silent defect: this clock reads nothing, so there is no
+-- cursor to advance. The distinction matters because the same expression is a
+-- real defect in a port that DID something — S12 exists because no type tells
+-- the two apart.
+func noop_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 0, next_state: world }
 }
 
 func noop_env_get(_key: string, fallback: string) -> string ! {Env} {

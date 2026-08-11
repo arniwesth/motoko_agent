@@ -45,7 +45,7 @@ import src/core/types (Msg)
 import src/core/dst_fault_catalogue (max_steps_discriminator_message)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome) -- WI-B2b: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
+import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, AiStepOutcome, ExtClockReading) -- WI-B2b; ExtClockReading WI-C5: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
 import src/core/ext_world (world_to_token, token_to_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct)
 import src/core/context_usage (resolve_context_limit)
@@ -773,12 +773,23 @@ func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, m
 -- The extension-side clock stays UN-ROUTED, deliberately, and this comment is
 -- the whole reason why.
 --
--- WI-A12 widened `Ports.clock_now` to be state-threaded. `ExtPorts.clock_now`
--- is `() -> int` and widening it is the Milestone B ABI major (D1), out of
--- A12's scope by the plan's own boundary — the eight `motoko-ext-compose` clock
--- sites and this seam belong to WI-C5.
+-- HISTORY, KEPT DELIBERATELY, AND IN THE PAST TENSE (plan rule S15). Everything
+-- below describes the state between WI-A12 and WI-C5. **WI-C5 widened
+-- `ExtPorts.clock_now` to `(ExtWorld) -> ExtClockReading` and the seam is now
+-- ROUTED — see `ext_ports_of` above.** The block is kept rather than deleted
+-- because the measurement in it (what does and does not parse on the pin) is
+-- the evidence for a language limitation that is still true, and a future item
+-- reaching for a zero-argument port will want it. The CONCLUSION it reaches —
+-- "the ambient read is chosen" — is retired.
 --
--- Bridging the two would need a `() -> int` closure capturing the world, and on
+-- WI-A12 widened `Ports.clock_now` to be state-threaded. `ExtPorts.clock_now`
+-- WAS `() -> int`, and widening it was the Milestone B ABI major (D1), out of
+-- A12's scope by the plan's own boundary — the eight `motoko-ext-compose` clock
+-- sites and this seam belonged to WI-C5. The seam half is done; the eight
+-- compose sites are NOT, and are reported unrouted at WI-C5 rather than
+-- silently carried.
+--
+-- Bridging the two WOULD HAVE NEEDED a `() -> int` closure capturing the world, and on
 -- pinned AILANG v0.26.0 that CANNOT BE WRITTEN: zero-argument lambdas do not
 -- parse in expression position (`func() ->` lexes `()` as the unit token, and
 -- `func ( ) ->` builds a one-parameter function of unit — "arity mismatch:
@@ -796,13 +807,11 @@ func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, m
 --     withheld DIE the moment a caller appears, turning the world_state poison
 --     probe red and naming the problem.
 --
--- The ambient read is chosen for that reason. It is also exactly the pre-A12
--- behaviour of this seam, so it changes nothing observable today:
--- `ExtPorts.clock_now` has ZERO call sites repo-wide, and the only
--- constructions are the `noop_clock_now` stubs in the conformance harness and
--- the progress-contract guard. This is the one residual ambient clock read
--- reachable from the driver's call graph, it is guarded rather than hidden, and
--- WI-C5 removes it. It is NOT one of P3's four routed driver sites.
+-- The ambient read WAS chosen for that reason, and WI-C5 REMOVED IT — the
+-- prediction in the last sentence of this paragraph is the one that came true.
+-- The widening it was waiting on is the one thing that could retire it, because
+-- the obstacle was the port's SHAPE and not its call sites: a two-argument port
+-- could always have been bridged, which is the whole of plan rule S3.
 -- Project a typed tool outcome onto the un-widened `ExtPorts.proc_exec` string
 -- return. Faults are RENDERED rather than dropped: an extension handed "" when
 -- a tool actually failed is the silent-wrong shape this whole item exists to
@@ -861,21 +870,34 @@ func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPorts ! {
     };
     tool_outcome_text(p.tool_exec(world, inv).outcome)
   };
+  -- WI-C5 routes the clock. It is written with the SAME `let w0` shape as
+  -- `ai_step` above and for the same tool reason, not for symmetry: the
+  -- inventory's call matcher cannot follow an argument list with nested
+  -- parentheses, so `p.clock_now(token_to_world(w))` written inline would be
+  -- reported UNROUTED — and that is the tool's fail-open answer, which looks
+  -- like a clean result. Keep the conversion in its own `let`.
+  let clock_now = func(w: ExtWorld) -> ExtClockReading ! {Clock} {
+    let w0 = token_to_world(w);
+    let reading = p.clock_now(w0);
+    { now_ms: reading.now_ms, next_state: world_to_token(reading.next_state) }
+  };
   {
     ai_step: ai_step,
     proc_exec: proc_exec,
-    clock_now: ext_unrouted_clock,
-    -- Unlike the clock, this one IS routed: `env_get` is two-argument, so a
-    -- closure capturing the world can be written. The clock's `() -> int` shape
-    -- cannot be, which is the whole of the difference between them — see above.
+    -- WI-C5. Was `ext_unrouted_clock` — an ambient `now()` that plan rule S2
+    -- chose deliberately, because `ExtPorts.clock_now`'s `() -> int` shape
+    -- admitted no world capture and the alternative was a frozen snapshot that
+    -- no gate could see. The ABI widening removed the shape obstacle, so the
+    -- seam is now routed through the world like every other, and the S2
+    -- exception it justified is retired rather than merely unused.
+    clock_now: clock_now,
+    -- `env_get` was routed even before that, because it is two-argument and a
+    -- closure capturing the world could always be written for it. That
+    -- difference — parameter count, nothing else — is the whole of what plan
+    -- rule S3 is about.
     env_get: env_get
   }
 }
-
--- See `ext_ports_of`. Un-routed by scope, ambient by choice so that a caller
--- appearing before WI-C5 fails loudly under the Clock poison probe instead of
--- silently reading a frozen value.
-func ext_unrouted_clock() -> int ! {Clock} { now() }
 
 
 

@@ -1,0 +1,383 @@
+-- scripts/dst/declared_vs_performed.ail
+--
+-- WI-C5's declared-versus-performed detector. D5 names this instrument and
+-- states it is unavailable; this is the first build of it, and what it can and
+-- cannot establish is written here rather than left to be inferred from a green.
+--
+-- ============================================================================
+-- THE TWO PRODUCERS, named at the site because S16 requires it
+-- ============================================================================
+--
+-- S16: a check whose two sides share a PRODUCER tests threading, not the
+-- property. WI-C3 measured that the hard way. So this file names both:
+--
+--   DECLARED  is the effect row written on the hook slot in
+--             `packages/motoko-ext-abi/types.ail` and on the binding site in the
+--             extension. It is a STATIC ANNOTATION, authored by hand, read out
+--             of source. `run_declared_vs_performed.sh` greps it; nothing here
+--             computes it.
+--
+--   PERFORMED is the AILANG RUNTIME's capability enforcement, observed OUT OF
+--             PROCESS as the exit status of `ailang run --caps <row minus X>`.
+--             The interpreter traps a capability only when an effect operation
+--             is actually EVALUATED — `src/core/ports.ail:406` records that
+--             mechanism and `make world_state`'s poison pairs already rely on
+--             it. Nothing in this file, and nothing in the extension, can
+--             influence it.
+--
+-- Neither derives from the other. The annotation is what a human wrote; the
+-- trap is what the interpreter did. That is a genuinely independent second
+-- producer, and it is out of process for the same reason WI-C3's wire gate is.
+--
+-- ============================================================================
+-- WHY EVERY ARM COMES IN A PAIR
+-- ============================================================================
+--
+-- A subject that COMPLETES with a capability withheld proves nothing on its
+-- own: it is indistinguishable from a harness that never reached the hook at
+-- all. That is cluster 4's C1b defect — a green check implying coverage it does
+-- not have — and it is the same vacuity `make world_state` spends a second run
+-- to close. So each capability is measured by a PAIR:
+--
+--   subject + capability withheld -> must EXIT 0     (the hook performs it not)
+--   control + capability withheld -> must EXIT != 0  (the withholding is real,
+--                                                     and the harness does
+--                                                     reach the hook)
+--
+-- The control is dispatched through the SAME fold, from the same entry point
+-- shape, differing only in the hook bound. If the control completed, the
+-- subject's completion would be evidence about the harness rather than about
+-- the extension.
+--
+-- ============================================================================
+-- WHAT THIS DETECTOR CANNOT ESTABLISH, stated because a green must not be
+-- read as more than it is
+-- ============================================================================
+--
+-- 1. IT IS A WITNESS OVER EXERCISED PATHS, NOT A PROOF OVER ALL INPUTS. A hook
+--    that reads Env only on a branch this arm does not take completes with Env
+--    withheld and is reported as not performing it. `compose_intercept_inline`
+--    exists to make that limit VISIBLE rather than to hide it: the same hook,
+--    the same declared row, and two different performed answers selected by an
+--    argument. Any future reader who wants "performed" to mean "over all
+--    inputs" needs a static analysis, and this is not one.
+--
+-- 2. IT CANNOT SEE AN EFFECT THAT IS NOT CAPABILITY-GUARDED. The detector's
+--    resolution is exactly the capability set AILANG enforces
+--    (IO, FS, Net, Env, Process, and the rest of the row). An effect the
+--    runtime does not gate is invisible here.
+--
+-- 3. IT ESTABLISHES OVER-DECLARATION ONLY, NEVER UNDER-DECLARATION. A hook that
+--    completes with X withheld is over-declared in X. A hook that dies proves
+--    it performs X, which its row already said. The dangerous direction B4
+--    found — a WIDER row on a function-typed PARAMETER type-checking silently —
+--    is not addressed by this instrument and is not claimed to be.
+--
+-- Arms are selected by `--entry`, deliberately, NOT by an environment variable.
+-- `Env` is one of the capabilities under test, so an env-var arm selector would
+-- kill every Env-withheld run before it reached the subject and every one of
+-- those deaths would read as a performed effect.
+
+module scripts/dst/declared_vs_performed
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/fs (readFile)
+import std/json (Json, jo)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+
+import src/core/config (VerificationConfig)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/ext/runtime as Rt (
+  PreStepStage,
+  dispatch_budget_plan,
+  dispatch_pre_step_chain,
+  dispatch_solver_candidate,
+  dispatch_response_intercept
+)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtPorts, ExtWorld, ExtRuntime, ExtensionHooks,
+  BudgetPlan, BudgetPatch, PromptPatch, ToolSchema,
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  PreStepDecision, ToolPolicyDecision, ToolHandleDecision,
+  ResponseInterceptDecision, FinalizeDecision,
+  AiStepOutcome, ExtClockReading, TokenTelemetry,
+  PassThrough, Allow, Delegate, NoIntercept, NoDecision,
+  InterceptHandled, Accept, ContinueWithFeedback,
+  empty_ext_world
+)
+
+import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
+import pkg/sunholo/motoko_ext_compose/compose as Compose (register_with_config)
+
+-- ---------------------------------------------------------------------------
+-- A context with no driver behind it
+-- ---------------------------------------------------------------------------
+
+-- These ports are never CALLED by any arm below; they exist because `ExtCtx`
+-- has the field. Every one of them is a constant, so binding them cannot
+-- contribute a performed effect and cannot make a subject die for the harness's
+-- reasons rather than the hook's.
+func probe_ai_step(world: ExtWorld, _model: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Process, FS, Env, Net, SharedMem, Clock, Stream, Trace} {
+  { result: { Ok("unused") }, next_state: world }
+}
+
+func probe_proc_exec(_cmd: string, _args: string) -> string ! {IO, Process, FS} { "" }
+func probe_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: 0, next_state: world } }
+func probe_env_get(_key: string, fallback: string) -> string ! {Env} { fallback }
+
+func probe_ports() -> ExtPorts {
+  { ai_step: probe_ai_step,
+    proc_exec: probe_proc_exec,
+    clock_now: probe_clock_now,
+    env_get: probe_env_get }
+}
+
+pure func zero_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}
+
+pure func plan() -> BudgetPlan { { total: 100, solver: 60, verifier: 40 } }
+
+func probe_ctx(mode: string) -> ExtCtx {
+  { task: "declared_vs_performed",
+    step: 1,
+    model: "probe-model",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: plan(),
+    mode: mode,
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 100,
+    history_slice: [],
+    state_key: "probe",
+    context_limit: 0,
+    ports: probe_ports(),
+    artifacts: jo([]),
+    telemetry: zero_telemetry(),
+    world: empty_ext_world() }
+}
+
+pure func no_verification() -> VerificationConfig { { enabled: false, command: "" } }
+
+pure func stage_ids(ss: [PreStepStage]) -> [string] {
+  match ss {
+    [] => [],
+    s :: rest => s.ext_id :: stage_ids(rest)
+  }
+}
+
+pure func join_ids(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}+${join_ids(rest)}"
+  }
+}
+
+func rt_of(h: ExtensionHooks) -> ExtRuntime {
+  { registry: { hooks: [h] }, strict_mode: false, verification: no_verification() }
+}
+
+-- ---------------------------------------------------------------------------
+-- The subject: compose, built the way the host builds it
+-- ---------------------------------------------------------------------------
+
+-- The config is a LITERAL rather than `read_compose_host_config`, which is
+-- `! {FS}` and would read a file — under an FS-withheld run that read would die
+-- in the harness and be scored as a performed effect of the hook. The literal
+-- is the only construction that keeps the measurement about compose.
+--
+-- `mode` is a parameter because it SELECTS what `on_response_intercept`
+-- performs; see limitation 1 in the header.
+pure func compose_cfg(mode: string) -> ComposeHostConfig {
+  { compose: { mode: mode,
+               subagent_model: "probe-model",
+               max_attempts: 1,
+               effect_guard: "off",
+               certificate_template: false,
+               authoring: { structured: false,
+                            author_tools: false,
+                            author_tools_budget: 0,
+                            author_tools_max_bytes: 0,
+                            author_tools_max_turns: 0,
+                            author_tools_deny_globs: [],
+                            authoring_budget: 0,
+                            fallback_after: 0,
+                            min_observed_chars: 0,
+                            stdout_max_bytes: 0 },
+               claimcheck: { enabled: false,
+                             informalizer_model: "",
+                             comparator_model: "",
+                             timeout_ms: 0,
+                             max_invocations: 0,
+                             stdout_max_bytes: 0,
+                             ledger_in_informalizer: false } },
+    snippet_caps: [] }
+}
+
+-- ---------------------------------------------------------------------------
+-- The controls: hooks that genuinely perform the capability under test
+-- ---------------------------------------------------------------------------
+
+-- Reads a real environment variable. Same slot, same fold, same declared row as
+-- compose's `budget_hook` — the ONLY difference is that this body performs.
+func env_reading_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  let _ = getEnvOr("PATH", "");
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+-- Reads a real file. Same slot, same fold, same declared row.
+func fs_reading_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  let _ = readFile("ailang.toml");
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func control_hooks(budget: (ExtCtx, BudgetPlan) -> BudgetPatch ! {Env, FS}) -> ExtensionHooks {
+  { id: "dvp_control",
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: budget,
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_tool_policy: \_ctx _call. Allow,
+    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { { decision: { NoIntercept }, next_state: ctx.world } },
+    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { { decision: { NoDecision }, next_state: ctx.world } } }
+}
+
+-- ---------------------------------------------------------------------------
+-- The witness hook, and the mutant that forced it to exist
+-- ---------------------------------------------------------------------------
+--
+-- FOUND BY MUTATION, and it is the failure mode this whole item was warned
+-- about. The first version of these arms printed a fixed completion marker.
+-- Deleting the dispatch from an arm — leaving a program that measures NOTHING —
+-- left this gate GREEN AT NINE OF NINE ROWS, because the marker's producer was
+-- the arm's own code rather than the dispatch. That is S16 one level down,
+-- inside the instrument built to answer S16.
+--
+-- The fix is that every subject arm now prints a value it can only obtain BY
+-- DISPATCHING. `dvp_witness` is registered AFTER compose in the same registry,
+-- and the folds in `src/core/ext/runtime.ail` are unconditional and in order,
+-- so the witness's sentinel can only appear in the result if the fold ran and
+-- invoked compose's hook FIRST. Deleting the dispatch now fails to compile;
+-- faking the sentinel takes a deliberate edit rather than a deletion.
+--
+-- The sentinels are pairwise distinct (S7): a single shared value could not
+-- distinguish which arm's fold produced it.
+pure func budget_sentinel() -> int { 4242 }
+pure func solver_sentinel() -> string { "dvp-solver-witness" }
+pure func intercept_sentinel() -> string { "dvp-intercept-witness" }
+pure func witness_id() -> string { "dvp_witness" }
+
+func witness_hooks() -> ExtensionHooks {
+  { id: witness_id(),
+    provided_tools: [],
+    on_describe_tools: \_ . [],
+    on_build_system_prompt: \_ctx. { prepend: [], append: [] },
+    on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+      { requested_total: Some(budget_sentinel()), requested_solver: None, requested_verifier: None }
+    },
+    on_pre_step: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    on_tool_policy: \_ctx _call. Allow,
+    on_tool_handle: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} { { decision: { Delegate }, next_state: ctx.world } },
+    on_response_intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      { decision: { InterceptHandled({ tool_call_id: intercept_sentinel(), tool: "dvp", exit_code: 0,
+                                       stdout: "", stderr: "", metadata: jo([]) }) },
+        next_state: ctx.world }
+    },
+    on_solver_candidate: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+      { decision: { Accept(solver_sentinel()) }, next_state: ctx.world }
+    } }
+}
+
+-- compose FIRST, witness SECOND. The order is the load-bearing part: every fold
+-- in ext/runtime.ail walks the registry in order, so reaching the witness
+-- entails having invoked compose.
+func compose_then_witness(mode: string) -> ExtRuntime ! {AI, Clock, Env, FS, IO, Process, Rand} {
+  let hooks = Compose.register_with_config(compose_cfg(mode));
+  { registry: { hooks: [hooks, witness_hooks()] }, strict_mode: false, verification: no_verification() }
+}
+
+-- ---------------------------------------------------------------------------
+-- The arms. Each prints a value DERIVED FROM ITS DISPATCH; the runner asserts
+-- the exact sentinel. Exit status alone is not the measurement — see the
+-- witness note above for the mutant that established why.
+-- ---------------------------------------------------------------------------
+
+func reached(arm: string, witnessed: string) -> () ! {IO} {
+  println("declared_vs_performed[${arm}] REACHED COMPLETION witness=${witnessed}")
+}
+
+-- SUBJECT. compose's `on_budget_plan`, dispatched through the production fold.
+-- Declared `! {Env, FS}` by the ABI row at types.ail:298 and by compose's own
+-- `budget_hook`. Run with Env and FS withheld.
+export func compose_budget() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_budget_plan(compose_then_witness("tool"), probe_ctx("tool"), plan());
+  reached("compose_budget", show(out.total))
+}
+
+-- SUBJECT. compose's `on_pre_step`. Declared with ten effects at the binding
+-- site; the body is `PassThrough` beside `ctx.world`.
+-- The strongest witness of the four: `PreStepChainResult.stages` carries one
+-- entry PER HOOK, each tagged with `ext_id`, so this arm names compose directly
+-- rather than inferring it from fold order.
+export func compose_pre_step() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_pre_step_chain(compose_then_witness("tool"), probe_ctx("tool"), []);
+  reached("compose_pre_step", join_ids(stage_ids(out.stages)))
+}
+
+-- SUBJECT. compose's `on_solver_candidate`. Declared with nine effects; the
+-- body is `no_finalize_decision()` beside `ctx.world`.
+export func compose_solver() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_solver_candidate(compose_then_witness("tool"), probe_ctx("tool"), "candidate");
+  let seen = match out.decision { Accept(s) => s, ContinueWithFeedback(_) => "continue", NoDecision => "none" };
+  reached("compose_solver", seen)
+}
+
+-- SUBJECT, and the honest one. compose's `on_response_intercept` with
+-- `mode != "inline"`, which short-circuits to `NoIntercept` before touching the
+-- filesystem. Completes with FS and Process withheld.
+-- The witness sentinel appearing here means compose returned `NoIntercept` and
+-- `first_intercept` recursed PAST it — which is exactly "compose's
+-- on_response_intercept was invoked and did not perform".
+export func compose_intercept_noninline() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_response_intercept(compose_then_witness("tool"), probe_ctx("tool"), "no fence here");
+  let seen = match out.decision { InterceptHandled(r) => r.tool_call_id, NoIntercept => "none" };
+  reached("compose_intercept_noninline", seen)
+}
+
+-- THE LIMIT, MADE EXECUTABLE. The SAME hook, the SAME declared row, and the
+-- same withheld capabilities as the arm above — differing only in `mode` and in
+-- the response carrying an AILANG fence. This one reaches `mkdirAll`/`writeFile`
+-- and DIES.
+--
+-- The runner asserts this arm fails. That assertion is what stops
+-- `compose_intercept_noninline`'s green from being read as "compose's
+-- `on_response_intercept` performs no FS", which is false. Per header
+-- limitation 1: performed is a property of a hook AND ITS INPUTS, and a
+-- detector that reported only the first arm would be reporting a per-hook fact
+-- that does not exist.
+export func compose_intercept_inline() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_response_intercept(compose_then_witness("inline"), probe_ctx("inline"),
+            "here is code\n```ailang\nexport func main() -> () ! {IO} { () }\n```\n");
+  let seen = match out.decision { InterceptHandled(r) => r.tool_call_id, NoIntercept => "none" };
+  reached("compose_intercept_inline", seen)
+}
+
+-- CONTROL for Env. Must die with Env withheld.
+export func control_env() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_budget_plan(rt_of(control_hooks(env_reading_budget)), probe_ctx("tool"), plan());
+  reached("control_env", show(out.total))
+}
+
+-- CONTROL for FS. Must die with FS withheld.
+export func control_fs() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let out = Rt.dispatch_budget_plan(rt_of(control_hooks(fs_reading_budget)), probe_ctx("tool"), plan());
+  reached("control_fs", show(out.total))
+}

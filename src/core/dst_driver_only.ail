@@ -211,6 +211,28 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- waived set still every conditional class, no hook classification moved, and
 -- the catalogue is still `fault-catalogue/2`.
 --
+-- BUMPED TO 7 AT WI-C5, and this one IS a correction rather than a
+-- re-measurement — the first in five items. Widening `ExtPorts.clock_now`
+-- routed the extension seam, so `session.ail:878` LEFT the unconditional-core
+-- set (the function that carried it is deleted) and `session.ail:881` joined it
+-- as the sixth ROUTED site. The four A12 sites moved again — 1104 -> 1126,
+-- 1210 -> 1232, 2521 -> 2543, 2631 -> 2653 — and `stub_step.ail:202` did not
+-- move. **The claim DID change this time: 5 routed of 7 became 6 of 7.**
+-- Coverage still did not: install list still empty, still nothing covered
+-- provably.
+--
+-- **AND THE CASCADE WAS PAID TWICE WITHIN WI-C5, exactly as within WI-C3.** The
+-- second payment was caused by rewriting a HISTORICAL COMMENT BLOCK for tense
+-- under plan rule S15 after the anchors had been derived, which moved four
+-- `session.ail` numbers by nine. S15 tells you to go back and tense a comment;
+-- doing so re-dates every anchor below it. That interaction is now plan rule
+-- S18. **A THIRD consumer surfaced too, which no checklist in this project
+-- named:** `dst_attribution_table`'s own unit test
+-- `test_discovered_site_in_neither_list_is_rejected` carries a copy of a moved
+-- anchor, alongside the two C3 found (`tools/predicate-anchors`, and
+-- `attribution_table_dst`'s `omitted_site()` fixture). It was caught by
+-- `ailang test` inside `make dst`, not by search.
+--
 -- **C1 refuted the v3 note's claim that half this cascade is avoidable by
 -- inserting below the anchor; WI-C3 refutes the other half.** Three of the six
 -- moves here are not comments at all — they are a FIELD added to a record type
@@ -219,14 +241,24 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- after, and an extracted converter has to be in scope before the function that
 -- calls it. Four items have now paid this; the case for a coordinate-independent
 -- anchor is no longer a preference.
-export pure func driver_only_version() -> string { "6" }
+-- v6 -> v7 at WI-C5. Re-issued because the attribution table's
+-- unconditional-core set changed: `session.ail:878` left it (the seam was
+-- routed) and `session.ail:881` joined it, and four routed sites moved line.
+-- That changes the table's content hash, which is part of this profile's
+-- conformance, so the version and the ref below move together — a profile
+-- carrying a stale ref fails closed at load, which is the point.
+--
+-- The COVERAGE claim is unchanged: still an empty install list, still nothing
+-- covered provably. What moved is the routed-set arithmetic (6 routed of 7,
+-- from 5 of 7), not what this profile can claim about extensions.
+export pure func driver_only_version() -> string { "7" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
 -- `driver_only_version` and re-recording both halves of this pair.
 export pure func driver_only_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
-    content_hash: "sha256:ea292462e314d41791ed11bdfc3360c307f9c83e147710ed40dab89cb6ba0897" }
+    content_hash: "sha256:addd5e2cad023e9ac49380c716272aa70a24a852f27a375cddc68e040977c64c" }
 }
 
 -- ---------------------------------------------------------------------------
@@ -345,10 +377,15 @@ export pure func driver_only() -> ProfileDefinition {
     -- A10 decision 1, in force. Exactly the reachable-and-unrouted set; the
     -- machinery checks BOTH directions, so a site that gets routed or moves
     -- cannot leave a stale declaration behind reading as if the gap were live.
+    -- WENT FROM TWO ENTRIES TO ONE AT WI-C5. `src/core/session.ail:878` —
+    -- `ext_unrouted_clock` — is gone: widening `ExtPorts.clock_now` to take and
+    -- return the world token removed the shape obstacle plan rule S2 had
+    -- accommodated, and `ext_ports_of` now routes that seam through
+    -- `Ports.clock_now` like every other. The S2 exception is RETIRED rather
+    -- than merely unexercised, and the machinery checks both directions, so a
+    -- declaration left behind here for a site that is no longer
+    -- reachable-and-unrouted would be a rejection.
     unrouted_reachable_sites: [
-      { site_key: "src/core/session.ail:878",
-        instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site",
-        why_unroutable: "ext_unrouted_clock. ExtPorts.clock_now is zero-argument and AILANG has no zero-arg lambdas in expression position on the pin, so no world capture is possible here at all. Standing rule S2 chose the ambient read over a frozen snapshot deliberately: a frozen cursor is silently wrong and invisible to every gate, while the ambient read turns the Clock poison probe red the moment anyone calls it. Closing it is WI-C5's, behind Milestone B's ABI widening." },
       { site_key: "src/core/test/stub_step.ail:202",
         instrument: "make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read",
         why_unroutable: "live_ports' clock adapter — the one place the driver's call graph reads a real wall clock, by design, and therefore the one place {Clock} is genuinely load-bearing. It is IN this profile's reachable set even though a deterministic run binds the scripted adapter instead: D4's profile-reachable is INSTALLATION-scoped, not execution-scoped, and carving it out on execution-scope grounds would put a fail-open exception into an installation-scoped rule (A10 decision 1)." }
@@ -493,7 +530,7 @@ pure func test_the_four_non_vacuous_fields_are_populated() -> bool
 pure func test_manifest_reads_the_vocabulary_version() -> bool
   tests [((), true)]
   {
-    let m = driver_only_manifest("r", "t", "4.0", "{}", ["ai_step"], ["clock_now"], "r");
+    let m = driver_only_manifest("r", "t", "4.0", "{}", ["ai_step"], [], "r");
     m.event_vocabulary_version == event_vocabulary_version()
       && m.profile_id == driver_only_id()
       -- Reads rather than transcribes. This line held the literal "1" and went

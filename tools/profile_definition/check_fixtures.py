@@ -18,9 +18,13 @@ from `ailang.toml` and fails if the AILANG side disagrees.
 Three checks, and the third is the one that matters:
 
   1. the recorded classifier-2 set equals the tool's, member for member;
-  2. the recorded unrouted-field set equals the tool's (`clock_now` is a
-     DISTINCT unrouted state, not a non-member -- treating it as a non-member
-     would silently bless an extension reading an ambient clock);
+  2. the recorded unrouted-field set equals the tool's. An unrouted field is a
+     DISTINCT state, not a non-member -- treating it as a non-member would
+     silently bless an extension reading an ambient clock. `clock_now` was the
+     only member until WI-C5 widened it to thread the world token, so the set is
+     EMPTY at HEAD and this check is currently vacuous; it is kept because the
+     next un-widened seam re-populates it, and because an empty set that is
+     re-derived is not the same claim as one that is assumed;
   3. every member call site that lives inside an installable extension package
      is named in the AILANG fixture's classifier-2 call list, so the fixture
      cannot omit an extension that the tool found and stay green.

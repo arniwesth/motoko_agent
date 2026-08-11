@@ -143,10 +143,9 @@ pure func clean() -> ProfileDefinition {
     exercised_fault_classes: [],
     attribution_ref: { source_revision: id.source_revision, content_hash: id.content_hash },
     omitted_extensions: [{ extension_id: "compaction_ai", reason: "calls the classifier-2 field ai_step" }],
+    -- ONE entry since WI-C5 routed `session.ail:878`; the fixture tracks the
+    -- measured unrouted set rather than carrying a site the table no longer has.
     unrouted_reachable_sites: [
-      { site_key: "src/core/session.ail:878",
-        instrument: "make world_state (Clock poison pair)",
-        why_unroutable: "ExtPorts.clock_now is zero-argument; plan rule S2" },
       { site_key: "src/core/test/stub_step.ail:202",
         instrument: "make world_state (Clock poison pair)",
         why_unroutable: "live_ports' clock adapter; a deterministic run uses the scripted adapter" }
@@ -168,7 +167,12 @@ pure func clean_manifest() -> ExecutionManifest {
     -- WI-B4: `ai_step` LEFT this set at WI-B2b (widened to return AiStepOutcome,
     -- which carries next_state). 3 -> 2, zero member call sites tree-wide.
     classifier_2_set: ["env_get", "proc_exec"],
-    unrouted_fields: ["clock_now"],
+    -- EMPTY at HEAD, and re-derived rather than transcribed:
+    -- `tools/profile_definition/check_fixtures.py` fails if this disagrees with
+    -- `tools/ext_call_inventory/derive.py`. It held ["clock_now"] until WI-C5
+    -- widened that field to return `ExtClockReading`, which carries the
+    -- `next_state` the tool looks for.
+    unrouted_fields: [],
     scan_roots: ["src", "packages"],
     scan_root_commit: "HEAD",
     profile_rules_version: "profile-rules/1",
@@ -471,7 +475,18 @@ func manifest_checks() -> bool ! {IO} {
   let b = assert_manifest_rejected("a blank normalized configuration", "manifest-field-missing", { m | normalized_configuration: "" });
   let c = assert_manifest_rejected("no scan-root commit", "manifest-field-missing", { m | scan_root_commit: "" });
   let d = assert_manifest_rejected("an empty classifier-2 set", "manifest-field-missing", { m | classifier_2_set: [] });
-  let e = assert_manifest_rejected("an empty unrouted-field set", "manifest-field-missing", { m | unrouted_fields: [] });
+  -- FLIPPED AT WI-C5, and it is a WEAKENING rather than a fix. This row used to
+  -- assert that an empty unrouted-field set is rejected. That stopped being
+  -- right when `clock_now` — the set's only member — was widened, because EMPTY
+  -- became the correct value rather than a missing one. The rule cannot now
+  -- tell "nothing is unrouted" from "nobody gathered this"; what stands in for
+  -- it is check_fixtures.py re-deriving the set from the tool. Recorded as the
+  -- weaker arrangement it is rather than deleted, and the discrimination is
+  -- kept alive by row `d` above: an empty CLASSIFIER-2 set is still rejected,
+  -- so this is not a blanket "empty lists are fine".
+  let e = manifest_ok({ m | unrouted_fields: [] }, clean());
+  let _ = if e then println("  ✓ an EMPTY unrouted-field set is ACCEPTED — legitimate since WI-C5, and weaker than the rule it replaced")
+          else println("  ✗ an empty unrouted-field set was rejected, but empty is the correct value at HEAD");
   let f = assert_manifest_rejected("a manifest naming a different profile version", "manifest-profile-mismatch", { m | profile_version: "99" });
   -- The composition defect, in the one place a manifest is MOST likely to
   -- commit it: a manifest is a transcription by nature, so every version it
@@ -538,9 +553,8 @@ export func main() -> () ! {IO} {
                                    { clean() | unrouted_reachable_sites: [] });
   let no_instr = assert_rejected("a declared unrouted site with NO INSTRUMENT", "unrouted-site-without-instrument",
                                  { clean() | unrouted_reachable_sites: [
-                                     { site_key: "src/core/session.ail:878", instrument: "", why_unroutable: "S2" },
                                      { site_key: "src/core/test/stub_step.ail:202",
-                                       instrument: "make world_state", why_unroutable: "live adapter" }] });
+                                       instrument: "", why_unroutable: "live adapter" }] });
   let stale_decl = assert_rejected("a declaration for a site that is no longer reachable-and-unrouted", "declared-site-not-reachable",
                                    { clean() | unrouted_reachable_sites:
                                        clean().unrouted_reachable_sites ++

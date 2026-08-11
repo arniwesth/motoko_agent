@@ -32,7 +32,7 @@ import src/core/phase_vocab (
   ErrorEvent,
   RunSummary
 )
-import pkg/sunholo/motoko_ext_abi/types (ExtWorld, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
+import pkg/sunholo/motoko_ext_abi/types (ExtWorld, ExtClockReading, empty_ext_world, AiStepOutcome, PreStepOutcome, ToolHandleOutcome, 
   ExtRuntime,
   ExtRegistry,
   ExtensionHooks,
@@ -190,9 +190,13 @@ func fixed_clock(state: WorldState) -> ClockReading ! {Clock} {
   { now_ms: 123456789, next_state: state }
 }
 
--- The same constant for `ExtPorts.clock_now`, which is `() -> int` and is NOT
--- widened by A12 — the extension-side clock belongs to WI-C5.
-func fixed_ext_clock() -> int ! {Clock} { 123456789 }
+-- The same constant for `ExtPorts.clock_now`. WI-C5 widened that field to thread
+-- the world token, so this fixture now mirrors `fixed_clock` above exactly:
+-- same constant, world returned unchanged, because a fixture clock advances no
+-- cursor.
+func fixed_ext_clock(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 123456789, next_state: world }
+}
 -- WI-A12 made `Ports.env_get` state-threaded; this fixture always served the
 -- caller's fallback, so the threaded form does the same and returns the world
 -- unchanged. `fixed_ext_env` is the un-widened `ExtPorts` shape (WI-C5's).

@@ -128,9 +128,53 @@ phase_c_l1: compaction_dst
 	ailang run --caps IO --entry main scripts/dst/phase_c_approval_protocol.ail
 	ailang run --caps IO,Env,Clock,FS,Trace --entry main scripts/dst/phase_c2_wiring_scenarios.ail
 
+# WI-C5. D5's declared-versus-performed detector, which D5 itself names and
+# records as unavailable. Two producers, and S16 requires them named:
+#
+#   DECLARED   the effect row in packages/motoko-ext-abi/types.ail and on the
+#              extension's binding site — a static annotation a human wrote,
+#              read out of source by the runner's own grep.
+#   PERFORMED  the exit status of `ailang run --caps <row minus X>`. AILANG
+#              traps a capability only when an effect operation is actually
+#              EVALUATED (src/core/ports.ail:406), so a completed run witnesses
+#              that the operation was not evaluated. Out of process, produced by
+#              the interpreter, and nothing in the extension can influence it.
+#
+# Neither derives from the other, which is the entire point: WI-C3's in-process
+# parity gate stayed green through the exact defect it existed to find because
+# both of its sides came from one channel.
+#
+# THE HEADLINE MEASUREMENT: compose's on_budget_plan declares ! {Env, FS} and
+# performs NEITHER. That gap is why D5's declared-row rule blocks an install
+# that the extension's behaviour does not require blocking.
+#
+# Every subject is paired with a control that must DIE on the named capability,
+# because a subject completing with a capability withheld is otherwise
+# indistinguishable from a harness that never reached the hook — cluster 4's
+# C1b defect, and the same vacuity `make world_state` spends a second run to
+# close.
+.PHONY: declared_vs_performed
+declared_vs_performed:
+	./scripts/dst/run_declared_vs_performed.sh
+
+# WI-C5. `routing_violation_at`'s production call site, driven through the
+# guarded dispatch rather than called directly — an exclusion checked only at
+# load time is an exclusion nothing enforces at dispatch.
+#
+# The fixture is SYNTHETIC and the script says so on every run: no profile in
+# this tree can reach the guard today, because driver_only installs nothing and
+# no extension is installable while ExtensionHooks.on_budget_plan carries the
+# ABI's closed ! {Env, FS} row. These rows establish the mechanism, not that a
+# shipping profile is protected by it.
+.PHONY: hook_guard
+hook_guard:
+	@set -eu; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+	  --ai-stub --entry main scripts/dst/hook_guard_dst.ail < /dev/null | grep -v 'STRICT_FALLBACK\|^  '
+
 .PHONY: dst
 dst:
-	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity smoke_driver smoke_parity dst_l2 dst_seeded
+	+$(MAKE) --keep-going compaction_dst conformance phase_c_l1 terminal_trace world_state profile_coverage profile_definition driver_only fault_catalogue event_vocabulary invariants run_report latency_pair corpus_pr corpus_rotating attribution_table execution_program discovery strict_replay seeded_generator program_persistence predicate_anchors ext_call_inventory ext_call_inventory_selftest test_coverage_selftest test_coverage recorded_stream stream_parity declared_vs_performed hook_guard smoke_driver smoke_parity dst_l2 dst_seeded
 
 # D5's coverage floor and per-extension hook disclosure (WI-A6). Two checks:
 #

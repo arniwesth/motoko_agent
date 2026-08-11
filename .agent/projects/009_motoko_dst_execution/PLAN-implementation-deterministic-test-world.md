@@ -195,6 +195,35 @@ across all sixteen families on the recording subject, while the wire gate goes r
 **`wire_deltas=10` against `trace_deltas=14`** — including the fixture-adequacy row that exists to
 make de-duplication visible.
 
+**SHARPENED BY WI-C5, AND IT EXTENDS TO THE INSTRUMENT'S OWN PLUMBING.** S16 as written governs the
+two sides of the property. C5 built a detector whose two sides were genuinely independent — a static
+ABI row against an out-of-process capability trap — and it was **green at nine of nine rows over an
+arm whose dispatch had been DELETED**, because the *completion marker* was produced by the arm's own
+code. The property's producers were right and the instrument's were not. **So: the value a check
+asserts on must be one the subject can only produce BY DOING THE WORK.** C5's fix registers a witness
+hook after the subject in the same unconditional fold, so the asserted sentinel is unobtainable
+unless the fold ran and invoked the subject first.
+
+**Independently reproduced at review, and the fix is stronger than the report claims.** Deleting
+`compose_budget`'s dispatch and leaving its `reached(...)` marker behind reddens **two** rows, not one:
+the witness row (`compose_budget exited 0 but its witness is not '4242' — the fold did not run past
+compose, so this row measures nothing`, witness=100, the arm's own input) **and** an independent
+structural row (`expected 6 mentions of compose_then_witness (1 definition + 5 arms), found 5`). The
+second catches the same deletion by a different route, which is what makes the repair robust rather
+than a patch over one mutant.
+
+**And the limit C5 measured on its own fix, because it is the honest boundary:** a subject whose
+binding is a CONSTANT NO-OP is unobservable in a dispatch result by definition. Removing the subject
+from the registry entirely reddened only the ONE arm that names it by id. Three of four arms
+therefore establish "the fold ran and performed nothing", not "the subject ran and performed
+nothing", and the two are joined by a separate structural row rather than conflated.
+
+**A further C5 finding, for any future "did X perform effect E" check: prefer the ENFORCEMENT
+mechanism over the RECORD.** The world interaction log looks like a second producer and is not one
+for ambient effects — it records what was requested *through the world*, so absence from it is not
+absence of the effect, and that fails OPEN in the direction that grants coverage credit. The
+interpreter's capability trap cannot be silent.
+
 **Two consequences, and the second is the transferable one.** First, an in-process check built this
 way is still worth having — it tests that every branch carries both channels forward, which is S12's
 identity-transition class on a pair of channels, and WI-C3's mutant A reddens 5 rows with it. Second,
@@ -209,6 +238,15 @@ trace side at all.** `ledger_emit` does not call `ledger_append`. Before WI-C3 t
 them — **both sides empty, and two empty sides are green.** Any future item that reads "parity is
 checked over the returned trace" for a registered variant is reading a comparison against an empty
 list.
+
+**S18. Tensing a comment IS a source edit for anchor-cascade purposes.** Earned by WI-C5, which is
+the SECOND consecutive item to pay the line-number cascade twice, both times for the same reason:
+comment edits landed after the anchors were computed. C3's operational rule ("finish every source
+edit, including comments, BEFORE running the cascade") is correct and was followed for the source
+edits; what broke it was rewriting a historical comment block for tense under S15 *after* the anchor
+numbers were derived, which moved four `session.ail` line numbers by nine. **S15 and the anchor rule
+interact, and the interaction is the trap:** S15 tells you to go back and tense a comment, and doing
+so re-dates every anchor below it. Do the tensing first.
 
 **S17. A mutation loop must save and restore by FILE COPY, never by `git checkout`.** Earned by WI-C3,
 which lost the item's entire implementation to `git checkout src/core/session.ail` used to revert a
@@ -234,6 +272,27 @@ sweep reads **146 pass / 93 fail**, the flagged one **222 / 17**. That is a fals
 than the fifth frontier B4 found, and it would consume an item's remaining budget chasing a break
 nobody made. The sweep is:
 
+**AND `.ailang/cache` IS PER-SOURCE-DIRECTORY, so clearing the root one is NOT cache-cold.** Added
+by WI-C5. At HEAD there are **20+** cache directories under `src/`, `scripts/`, `packages/` and
+`tools/`, plus `~/.ailang/cache`. A partially-cleared tree produced a **type error that contradicted
+the source**, survived `ailang lock`, and vanished the moment every cache was cleared — which is the
+trap the "Traps carried forward" list already names ("clear `.ailang` caches before believing type
+errors that contradict source") without saying where the caches are. The command is:
+
+```bash
+find . -type d -name cache -path "*.ailang*" -exec rm -rf {} +
+```
+
+**DO NOT ALSO DELETE `~/.ailang/cache`.** It is not only a compilation cache: it holds the
+**installed registry packages** under `~/.ailang/cache/registry`, so removing it UNINSTALLS every
+registry dependency (`sunholo/logging` is the one this repo has). WI-C5 did exactly that, and the
+repair was worse than the damage — **`ailang install <pkg>` is NOT IDEMPOTENT: it appended a second
+`"sunholo/logging" = "0.4.0"` line to `ailang.toml`, and a duplicated key in `[dependencies]`
+silently breaks `pkg/` resolution across the ENTIRE tree**, with an error
+(*"requires ailang.toml and ailang.lock"*) that names neither the duplicate nor the file. That cost
+about fifteen minutes and four wrong hypotheses. If a registry package does go missing, reinstall it
+and then **check `git diff ailang.toml`**.
+
 **And the MECHANISM, measured at review and worth more than the flag: a WARM CACHE MASKS `MOD010`
 COMPLETELY.** Same file, same command — `packages/motoko-ext-abi/types.ail` passes cache-warm
 without the flag, 12 of 12 sampled package files fail `MOD010` cache-cold without it, and 12 of 12
@@ -243,13 +302,37 @@ unflagged fails *green*; cache-cold and unflagged fails *red* by 76 files — **
 which is why neither reads as a defect on its own**, and only cache-cold with the flag is the real
 number.
 
+**`cmd` is not a root in this repo and is removed from the command below** — it produces a spurious
+error and a non-zero exit from `find`, which is reason enough not to name it.
+
+**But the consequence WI-C5's report drew from that is WRONG, and it is corrected here rather than
+carried, because it is alarming in the direction that would void every sweep this project has
+recorded.** The report says this environment's `bfs` "aborts the whole traversal", so the loop
+"iterates over nothing" and the sweep is "a perfect green having checked not one file."
+**Measured — `bfs 4.1.1` does not abort.** With the missing root in first, middle or last position
+the traversal returns **242 files every time**, identical to the command without it, and the exact
+`for f in $(find src scripts packages tools cmd -name '*.ail' | sort)` loop iterates **242** times.
+Nor is it silent: `bfs` prints `bfs: error: cmd: No such file or directory.` to stderr and exits 1.
+**So no prior sweep measurement is invalidated, and this was not an instrument certifying nothing.**
+
+**What it DID cost is real and is the part to carry: WI-C5 reported no whole-tree sweep at all**,
+having concluded from the wrong diagnosis that the sweep was broken. S13 requires one. **A wrong
+diagnosis of an instrument suppresses the measurement just as effectively as a broken instrument
+does** — and unlike a broken instrument, nothing goes red.
+
+**The missing sweep, run at review, cache-cold with the flag: `225 pass / 17 fail`.** 225 rather than
+C3's 222 because `dst_hook_guard.ail`, `declared_vs_performed.ail` and `hook_guard_dst.ail` are new.
+**The failing set matches the expected seventeen member for member** — 7 `TC_ARITY_001` smoke scripts,
+1 sealed-vocabulary probe, 5 `src/examples/`, 3 code-graph fixtures, 1 test-coverage fixture — so the
+set is now stable across B4, C1, C3 **and** C5.
+
 ```bash
-for f in $(find src scripts packages tools cmd -name '*.ail' | sort); do
+for f in $(find src scripts packages tools -name '*.ail' | sort); do
   AILANG_RELAX_MODULES=1 ailang check "$f" >/dev/null 2>&1 || echo "FAIL $f"
 done
 ```
 
-The 17 expected failures are stable across B4, C1 and C3: the 7 `TC_ARITY_001` smoke scripts, the
+The 17 expected failures are stable across B4, C1, C3 and C5: the 7 `TC_ARITY_001` smoke scripts, the
 sealed-vocabulary probe (`IMP010`), 5 `src/examples/`, 3 code-graph fixtures and 1 test-coverage
 fixture. **Confirm the failing set member-for-member rather than the count** — the count moves by one
 whenever an item adds a file.
@@ -2141,7 +2224,16 @@ consumer is the production hook dispatch site (`ext/runtime.ail:279`), and C5 is
 that can legitimately exclude a hook and so the first where it is non-vacuous — and claim the routed
 set — **12 sites post-table; 13 is the
 fail-closed figure if the attribution table is absent or invalid** (D4's 4/12/13 versus 5/13/13
-split). The dispatch-time exclusion check A10 installs becomes binding here, and its in-runner
+split).
+
+**CORRECTED AT WI-C5: THE 12/13 PAIR IS STALE AND NO NUMBER SHOULD BE TRANSCRIBED HERE AT ALL.**
+D4's 4/12/13 and 5/13/13 predate WI-A5's measurement of the actual inventory, which found **seven**
+unconditional-core clock sites rather than thirteen. `dst_attribution_table` has carried the
+correction for the routed half since A5 — *"D4's table says four and predates it"* — and it was never
+propagated to the totals, so the C5 handoff inherited a stale pair from the ADR. **The claim is
+COMPUTED by `dst_profile.routed_set_claim` from the table at the revision the profile binds**, and
+`driver_only`'s acceptance prints the computed answer against this prose rather than asserting either
+number. Read the claim, do not transcribe it. The dispatch-time exclusion check A10 installs becomes binding here, and its in-runner
 probe — reaching an excluded hook returns a typed `HarnessFailure` with partial evidence — is part
 of this item's acceptance rather than assumed from load-time validation.
 
@@ -2202,6 +2294,32 @@ block the name:
   it picked up — and it was *unwritable* before C1, because there was nothing to append from.
   **The remaining honest gap:** fifteen families run on a real run because they ride along with parity
   in one script, on one profile, with two adapters — not because anything wires them deliberately.
+  **C5 landed 2026-08-05** (**~95 min**, `10:39Z → 12:14Z`; the plan first recorded ~55, which
+  contradicts the report's own timestamps and is corrected here because these windows are the
+  project's sizing evidence) and its durable output is **D5's declared-versus-performed
+  detector**, which D5 names and records as unavailable. `make declared_vs_performed` compares two
+  genuinely independent producers — the ABI's static effect row, grepped from source, against the
+  AILANG interpreter's capability trap observed OUT OF PROCESS as an exit status — and measures that
+  **compose's `on_budget_plan` declares `! {Env, FS}` and performs NEITHER.**
+  **THE INSTALL ANSWER IS NO, AND C4 SHOULD READ IT AS NO.** `on_budget_plan`
+  (`packages/motoko-ext-abi/types.ail:298`) is coverable under neither D5 criterion — criterion 1
+  fails on the closed declared row, and criterion 2 fails because `BudgetPatch` **has no `next_state`
+  field at all**, so there is nowhere to return world state even if `Env`/`FS` were mediated — and it
+  is unconditionally dispatched, so it cannot be excluded either. Changing it is a second ABI major
+  and was reported rather than taken. **So `driver_only` still covers nothing provably, and C5 did not
+  change that sentence.** What C5 did change: the barrier is now known to be the RULE rather than the
+  BEHAVIOUR, which is the input a decision to move that row did not previously have.
+  **`ExtPorts.clock_now` was widened** to `(ExtWorld) -> ExtClockReading` and routed through
+  `Ports.clock_now` in `ext_ports_of`; `ext_unrouted_clock` is DELETED, `session.ail:878` has left the
+  declared-unrouted set, and **plan rule S2's only live exception is retired** (its pin measurement is
+  kept in the past tense per S15). The routed set went **5 of 7 to 6 of 7**, computed.
+  **`routing_violation_at` has a production call site** in `src/core/dst_hook_guard`, scoped to the
+  one GATED slot and driven through the guarded dispatch by `make hook_guard` — **and it is vacuous
+  today for the same reason the install is refused**, which the script prints on every run.
+  **NOT delivered, and named rather than softened: compose's eight clock reads are still unrouted.**
+  Partial threading was rejected as worse than none (a half-threaded world is F6's dropped cursor),
+  the full refactor is a 30-parameter recursive function across three files, and the coverage value is
+  zero while the package is un-installable.
 
 ## Traps carried forward
 
