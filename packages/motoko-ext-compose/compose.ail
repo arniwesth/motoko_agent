@@ -1,7 +1,6 @@
 module sunholo/motoko_ext_compose/compose
 
 import pkg/sunholo/motoko_ext_ai_compat/ai_compat (callStreamResult)
-import std/bytes (toString)
 import std/datetime (formatRFC3339)
 import std/crypto (sha256Hex)
 -- WI-D20 REMOVED `std/clock (now)` AND `std/fs (writeFile, fileExists,
@@ -17,16 +16,30 @@ import std/crypto (sha256Hex)
 -- perform — the instrument reporting a state that ceased to exist, which is the
 -- silent-wrong shape one level up from the code.
 --
--- `std/process` STAYS and is still used, by `check_snippet` and `run_snippet`.
--- That asymmetry is the honest residue of the proc_exec finding below.
+-- `std/process` WENT AT WI-D26, and with it the asymmetry. Kept two-part per
+-- S15; the sentence here read: "`std/process` STAYS and is still used, by
+-- `check_snippet` and `run_snippet`. That asymmetry is the honest residue of the
+-- proc_exec finding below." The finding was about the TOOL NAME compose passed,
+-- not about the seam — see the block at `on_response_intercept` for the three
+-- items it took to establish that and the one line that closed it.
+--
+-- `std/bytes (toString)` WENT WITH IT for WI-D20's classifier-3 reason: its only
+-- calls were on `ProcessOutput`'s byte streams, and the seam hands back a
+-- decoded string. `std/io (println)` STAYS, and its four call sites are compose's
+-- ambient remainder along with registration's three and the ambient AI — all
+-- three disclosed classes by decision, none of them this item's.
 import std/io (println)
 import std/json (encode, Json, jo, kv, js, jb, jnum, get)
-import std/process (exec, ProcessError)
 import std/result (Ok, Err)
 import std/string (trim, split, startsWith, contains, toLower)
 import std/option (None)
 
 import pkg/sunholo/motoko_ext_compose/types (ToolResultMeta, ComposeHostConfig)
+-- WI-D26. The routed subprocess request and the streams that come back. Its
+-- header carries the item's central measurement: `BashExec` reaches
+-- `exec(cmd, args)` directly and `bash -lc` is only the fallback for a request
+-- that needs a shell, so nothing on this path is quoted and nothing needs to be.
+import pkg/sunholo/motoko_ext_compose/proc (bash_exec_tool, bash_exec_args, decode_bash_result, message_of)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ToolCallEnvelope, ToolResultEnvelope,
   ExtCtx, ExtensionHooks, PromptPatch, BudgetPlan, BudgetPatch,
@@ -269,41 +282,74 @@ func cap_text(s: string, max_chars: int) -> string {
   else "${_str_slice(s, 0, max_chars)}\n...[truncated]"
 }
 
-func process_error_to_string(err: ProcessError) -> string {
-  show(err)
+-- ---------------------------------------------------------------------------
+-- WI-D26. THE TWO ROUTED SUBPROCESS HELPERS
+-- ---------------------------------------------------------------------------
+--
+-- Both took `(path, …)` and returned a value; both now take `(p, w, path, …)`
+-- and return a `next_state` beside it. The widening is the whole shape of the
+-- change and it is the same widening WI-D19 and WI-D20 made to this module's FS
+-- helpers, one seam later.
+--
+-- `process_error_to_string` WENT WITH `ProcessError`. It existed to render
+-- `exec`'s `Err` arm, and there is no `Err` arm at the seam: `run_process_result`
+-- catches `ProcessError` itself and renders it as a `BashExecResult` with the
+-- reason on STDERR and exit_code 1. Measured against a command that does not
+-- exist rather than inferred — see `proc.ail`'s header — because WI-D26's own
+-- handoff predicted the `ToolErrorResult` shape here and predicted it wrong.
+-- `errors: stderr-else-stdout-else-message` is therefore the same answer the
+-- `Err` arm gave, arriving by a different road.
+--
+-- `exit_code == -1` LANDS IN THE FAILURE BRANCH, and it is stated once here for
+-- both helpers. -1 is `ExtProcOutcome`'s "no subprocess ran, or the producer
+-- cannot state one" — the ABI's three fault variants, and every in-tree noop
+-- port. Against `ok: exit_code == 0` that is a failure, which is the
+-- fail-closed direction and the only honest reading: a check that cannot be
+-- said to have passed has not passed. Note the consequence for `run_snippet`'s
+-- caller, which is sharper: `one_attempt` reads `ran.exit_code != 0` as
+-- "snippet runtime failed", so a -1 becomes a RETRY rather than a false success.
+
+func check_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string) -> { ok: bool, errors: string, exit_code: int, next_state: ExtWorld } ! {IO, Process, FS} {
+  let out = p.proc_exec(w, bash_exec_tool(), bash_exec_args("ailang", ["check", snippet_path]));
+  -- THE BRANCH IS THE TYPED FIELD. `out.exitCode` became `out.exit_code` — a
+  -- field read where the ambient form had a field read. Nothing here decodes
+  -- anything to decide `ok`; `message_of` decodes only to recover the TEXT,
+  -- which is the one thing the ABI renders rather than types. That division is
+  -- what WI-D22's schema bump and WI-D23's plumbing bought, and reversing it —
+  -- deciding success from the text — is WI-D26's mutant 1.
+  { ok: out.exit_code == 0,
+    errors: if out.exit_code == 0 then "" else trim(message_of(out.output)),
+    exit_code: out.exit_code,
+    next_state: out.next_state }
 }
 
-func check_snippet(snippet_path: string) -> { ok: bool, errors: string, exit_code: int } ! {Process} {
-  match exec("ailang", ["check", snippet_path]) {
-    Err(e) => { ok: false, errors: process_error_to_string(e), exit_code: 1 },
-    Ok(out) => {
-      if out.exitCode == 0 then { ok: true, errors: "", exit_code: 0 }
-      else {
-        let stderr = trim(toString(out.stderr));
-        let stdout = trim(toString(out.stdout));
-        let msg = if stderr != "" then stderr else stdout;
-        { ok: false, errors: msg, exit_code: out.exitCode }
-      }
-    }
-  }
-}
-
-func run_snippet(snippet_path: string, caps: string) -> { stdout: string, stderr: string, exit_code: int, truncated: bool, raw_stdout: string } ! {Process} {
-  match exec("ailang", ["run", "--caps", caps, "--entry", "main", snippet_path]) {
-    Err(e) => { stdout: "", stderr: process_error_to_string(e), exit_code: 1, truncated: false, raw_stdout: "" },
-    Ok(out) => {
-      let raw_out = toString(out.stdout);
-      let raw_err = toString(out.stderr);
-      let stdout_len = if _str_len(raw_out) > 8000 then 8000 else _str_len(raw_out);
-      let stderr_len = if _str_len(raw_err) > 2000 then 2000 else _str_len(raw_err);
-      {
-        stdout: _str_slice(raw_out, 0, stdout_len),
-        stderr: _str_slice(raw_err, 0, stderr_len),
-        exit_code: out.exitCode,
-        truncated: out.truncated || _str_len(raw_out) > stdout_len || _str_len(raw_err) > stderr_len,
-        raw_stdout: raw_out
-      }
-    }
+func run_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string, caps: string) -> { stdout: string, stderr: string, exit_code: int, truncated: bool, raw_stdout: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  -- `caps` IS ONE ARGV ELEMENT, exactly as it was under ambient `exec`. It is a
+  -- comma-joined capability list out of config (`--caps IO,FS,Net`), so it is
+  -- one token to `ailang` and one token here; there is no shell to split it and
+  -- nothing to quote against.
+  let out = p.proc_exec(w, bash_exec_tool(), bash_exec_args("ailang", ["run", "--caps", caps, "--entry", "main", snippet_path]));
+  let streams = decode_bash_result(out.output);
+  let raw_out = streams.stdout;
+  let raw_err = streams.stderr;
+  let stdout_len = if _str_len(raw_out) > 8000 then 8000 else _str_len(raw_out);
+  let stderr_len = if _str_len(raw_err) > 2000 then 2000 else _str_len(raw_err);
+  {
+    stdout: _str_slice(raw_out, 0, stdout_len),
+    stderr: _str_slice(raw_err, 0, stderr_len),
+    exit_code: out.exit_code,
+    -- BOTH TRUNCATIONS ARE OR-ed, WHICH IS WHAT THE AMBIENT FORM ALREADY DID and
+    -- is worth saying because there are now two truncators in the chain rather
+    -- than one. `streams.truncated` is the SEAM's flag — `mk_meta`'s, set by
+    -- `run_process_result` when the subprocess output exceeded ITS limit — and
+    -- the two `_str_len` comparisons are compose's own 8000/2000 caps. Dropping
+    -- the seam's half would put `truncated: false` on an answer that had already
+    -- lost bytes before this function saw it: a silent lie in a field whose only
+    -- job is to say bytes were lost. The ambient form OR-ed `out.truncated` the
+    -- same way; only the source of the flag moved.
+    truncated: streams.truncated || _str_len(raw_out) > stdout_len || _str_len(raw_err) > stderr_len,
+    raw_stdout: raw_out,
+    next_state: out.next_state
   }
 }
 
@@ -559,18 +605,22 @@ func one_attempt(
       let written = p.file_write(reading.next_state, snippet_path, full_source);
       let meta = snippet_meta_json(p, written.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "pending", "", 0);
       let stored_pending = store_snippet_with_meta(p, meta.next_state, ctx.workdir, archive_key, attempt, full_source, meta.json);
-      let checked = check_snippet(snippet_path);
+      -- WI-D26. The check is a world-threading call now, so `stored_pending` is
+      -- no longer the newest world below this line — `checked.next_state` is, and
+      -- both branches start from it. Every `stored_pending.next_state` that used
+      -- to appear under here would have discarded the subprocess.
+      let checked = check_snippet(p, stored_pending.next_state, snippet_path);
       if not checked.ok then {
         let compact = compact_error_message(checked.errors);
-        let fail_meta = snippet_meta_json(p, stored_pending.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "check_failed", compact, checked.exit_code);
+        let fail_meta = snippet_meta_json(p, checked.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "check_failed", compact, checked.exit_code);
         let stored_fail = store_snippet_with_meta(p, fail_meta.next_state, ctx.workdir, archive_key, attempt, full_source, fail_meta.json);
         let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":false", "\"errors\":${json_escape(compact)}"]);
         let cleaned = remove_if_file(p, stored_fail.next_state, snippet_path);
         { outcome: NeedRetry({ reason: compact, prior_error: "${compact}\n${targeted_hint(compact)}", ledger: author_ledger, last_snippet: snippet }), next_state: cleaned.next_state }
       } else {
         let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":true", "\"errors\":\"\""]);
-        let ran = run_snippet(snippet_path, caps);
-        let cleaned = remove_if_file(p, stored_pending.next_state, snippet_path);
+        let ran = run_snippet(p, checked.next_state, snippet_path, caps);
+        let cleaned = remove_if_file(p, ran.next_state, snippet_path);
         let _ = emit_event("compose_exec", ctx.step, req.id, ["\"stdout\":${json_escape(ran.stdout)}", "\"stderr\":${json_escape(ran.stderr)}", "\"exit_code\":${show(ran.exit_code)}"]);
         if ran.exit_code != 0 then {
           let reason = "snippet runtime failed (exit ${show(ran.exit_code)})";
@@ -877,9 +927,13 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
   }
 }
 
--- WI-D19 — THE FIRST ROUTED HOOK IN THIS TREE. Seven of this hook's nine effect
--- sites now go through `ctx.ports` and thread the world out on `next_state`; the
--- two `exec` sites do NOT, and the reason is a finding rather than a shortfall.
+-- WI-D19 — THE FIRST ROUTED HOOK IN THIS TREE, and since WI-D26 it is a FULLY
+-- routed one: all nine of this hook's effect sites go through `ctx.ports` and
+-- thread the world out on `next_state`. Kept two-part per S15 — the sentence
+-- here read: "Seven of this hook's nine effect sites now go through `ctx.ports`
+-- and thread the world out on `next_state`; the two `exec` sites do NOT, and the
+-- reason is a finding rather than a shortfall." The finding was real and is
+-- recorded below; what closed it was one line, after three items of preparation.
 --
 -- WHAT ROUTED: `now()` -> `clock_now`; `mkdirAll` -> `dir_make`; `writeFile` ->
 -- `file_write`; both `fileExists` -> `path_stat`; both `removeFile` ->
@@ -938,11 +992,29 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
 -- `ext/runtime`'s fold stamps per hook. A recorded extension effect now
 -- VALIDATES and REPLAYS — `discovery_dst`'s `effect_scenario` is the round trip.
 --
--- SO WHAT REMAINS AT THESE SITES IS THE ORIGINAL PARAGRAPH'S POINT AND NOTHING
--- ELSE: `proc_exec(w, "ailang", …)` reaches no compiler, and the honest route is
--- `BashExec` with a command line, whose result arrives rendered as JSON where
--- `check_snippet` needs a typed answer. That is a shape question about THIS
--- site, not a world-model gap, and it is what the routing item has to solve.
+-- WI-D26 SOLVED IT, AND WHAT IT COST IS THE PART WORTH RECORDING. Through
+-- WI-D25 this block ended: "SO WHAT REMAINS AT THESE SITES IS THE ORIGINAL
+-- PARAGRAPH'S POINT AND NOTHING ELSE: `proc_exec(w, "ailang", …)` reaches no
+-- compiler, and the honest route is `BashExec` with a command line, whose result
+-- arrives rendered as JSON where `check_snippet` needs a typed answer. That is a
+-- shape question about THIS site, not a world-model gap, and it is what the
+-- routing item has to solve."
+--
+-- The shape question had already been answered by WI-D23 and the paragraph did
+-- not notice: `ExtProcOutcome` carries `exit_code` TYPED beside the rendered
+-- `output`, so `check_snippet` does not need a typed answer out of the JSON — it
+-- needs the code, which is typed, and the TEXT, which is what JSON is for. The
+-- residual work was one `decode` for the streams. See `proc.ail`, which is where
+-- the request and the decode live, and whose header carries this item's one
+-- genuine correction: `BashExec` is NOT a shell door. `run_process_result`
+-- reaches `exec(cmd, args)` with the argv intact and falls back to `bash -lc`
+-- only for a request that needs a shell, so routing these two sites introduced
+-- no quoting boundary and needed no charset argument about the generated paths.
+--
+-- WHAT REMAINS IN THIS HOOK IS NOTHING. What remains in the MODULE is the four
+-- `println` sites and the ambient AI in the tool-handle chain, both disclosed
+-- classes by decision, and door 3's `show` residue, which is a classifier
+-- question and not an effect this hook performs.
 export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   if mode != "inline" then { decision: NoIntercept, next_state: ctx.world }
   else {
@@ -981,9 +1053,12 @@ export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: stri
       let made = p.dir_make(reading.next_state, "tmp");
       let clean = compose_file_body(snippet);
       let written = p.file_write(made.next_state, path, "${compose_module_header(name)}\n\n${clean}");
-      let checked = check_snippet(path);
+      -- WI-D26. `written.next_state` was the newest world here until the check
+      -- started threading one; both branches below now descend from
+      -- `checked.next_state`.
+      let checked = check_snippet(p, written.next_state, path);
       if not checked.ok then {
-        let cleaned = remove_if_file(p, written.next_state, path);
+        let cleaned = remove_if_file(p, checked.next_state, path);
         { decision: InterceptHandled({
             tool_call_id: "inline-${show(ctx.step)}",
             tool: "ComposeInline",
@@ -994,8 +1069,8 @@ export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: stri
           }),
           next_state: cleaned.next_state }
       } else {
-        let ran = run_snippet(path, snippet_caps);
-        let cleaned = remove_if_file(p, written.next_state, path);
+        let ran = run_snippet(p, checked.next_state, path, snippet_caps);
+        let cleaned = remove_if_file(p, ran.next_state, path);
         { decision: InterceptHandled(mk_result("inline-${show(ctx.step)}", "inline", 1, ran.stdout, ran.stderr, ran.exit_code, "inline snippet executed", ran.truncated, "{}")),
           next_state: cleaned.next_state }
       }

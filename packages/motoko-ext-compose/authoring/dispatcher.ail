@@ -1,9 +1,13 @@
 module sunholo/motoko_ext_compose/authoring/dispatcher
 
-import std/bytes (toString)
+-- `std/bytes (toString)` WENT WITH `std/process` AT WI-D26. Its only two calls
+-- were `toString(out.stdout)`/`toString(out.stderr)` in `check_snippet` below —
+-- ambient `exec` handed back BYTES, and the seam hands back a decoded string.
+-- Left on the import it would have kept counting as an ambient source for an
+-- effect this module can no longer perform; see `author_tools.ail`'s copy of
+-- this note for the classifier-3 mechanism WI-D20 measured.
 import std/crypto (sha256Hex)
 import std/json (Json, decode, get, asString, asBool, asArray, encode, jo, kv, js, jb)
-import std/process (exec)
 import std/string (trim, find, substring)
 
 import pkg/sunholo/motoko_ext_compose/authoring/state (ProgramState, FuncDecl, init_program_state, set_module_path, add_import_decl, upsert_func, add_type_alias_line, add_type_def_line)
@@ -18,6 +22,9 @@ import pkg/sunholo/motoko_ext_compose/authoring/render (render_program)
 -- observe nothing, and would make `mk_ok`/`mk_err` effectful-looking for the
 -- benefit of one caller. The shape follows the effect, not the module.
 import pkg/sunholo/motoko_ext_abi/types (ExtPorts, ExtWorld)
+-- WI-D26. `std/process` LEFT THIS MODULE with the routing of the one `exec`
+-- below. See `proc.ail`'s header for why the argv stays an argv.
+import pkg/sunholo/motoko_ext_compose/proc (bash_exec_tool, bash_exec_args, message_of)
 
 export type AuthoringToolResult = {
   ok: bool,
@@ -220,8 +227,26 @@ func rename_var_in_funcs_rec(funcs: [FuncDecl], name: string, from: string, to: 
   }
 }
 
--- WI-D20. Four of this function's five effects route; the `exec` does not, for
--- the reason given at `compose.check_snippet`.
+-- WI-D20 ROUTED FOUR OF THIS FUNCTION'S FIVE EFFECTS; WI-D26 ROUTED THE FIFTH.
+-- Kept two-part per S15 — the line here read: "the `exec` does not, for the
+-- reason given at `compose.check_snippet`." That reason (the seam reaches no
+-- compiler under the tool name `ailang`, and the answer arrives rendered where a
+-- typed one is wanted) expired in two halves, at WI-D23 for the type and at
+-- WI-D26 for the tool name: `proc_exec(w, "BashExec", …)` runs the compiler and
+-- `ExtProcOutcome.exit_code` carries its code typed. This function now performs
+-- no ambient effect.
+--
+-- THE BRANCH IS THE TYPED CODE AND NOTHING ELSE. `out.exitCode == 0` became
+-- `checked.exit_code == 0` — a field read where the ambient form also had a
+-- field read, so nothing here parses anything to decide `ok`. `message_of`
+-- decodes only to recover the TEXT, which is the one thing the ABI renders.
+--
+-- `exit_code == -1` LANDS IN THE FAILURE BRANCH AND THAT IS THE FAIL-CLOSED
+-- DIRECTION. -1 is `ExtProcOutcome`'s "no subprocess ran, or the producer cannot
+-- state one" — the three fault variants and every in-tree noop port. Against
+-- `ok: exit_code == 0` that reads as "the check did not pass", which is the only
+-- honest answer when nothing can say whether it did. The same holds at
+-- `compose.check_snippet`; it is stated at both because both own an `ok`.
 --
 -- THE REMOVE IS NOT GUARDED HERE AND IS NOT GIVEN A GUARD. `remove_if_file` is
 -- the shape WI-D19 built for `if fileExists(p) then removeFile(p) else ()`, and
@@ -234,27 +259,23 @@ func rename_var_in_funcs_rec(funcs: [FuncDecl], name: string, from: string, to: 
 -- THE PATH SPELLING IS ALREADY CONSISTENT — `.motoko-store/tmp` for the create
 -- and `.motoko-store/tmp/…` for the write and the remove, all relative. This is
 -- the site `compose.ail:501` should have looked like, and now does.
-func check_snippet(p: ExtPorts, w: ExtWorld, snippet: string) -> { ok: bool, errors: string, next_state: ExtWorld } ! {FS, Process, Clock} {
+func check_snippet(p: ExtPorts, w: ExtWorld, snippet: string) -> { ok: bool, errors: string, next_state: ExtWorld } ! {IO, FS, Process, Clock} {
   let made = p.dir_make(w, ".motoko-store/tmp");
   let reading = p.clock_now(made.next_state);
   let stamp = show(reading.now_ms);
   let path = ".motoko-store/tmp/compose_structured_${sha256Hex("${stamp}${snippet}")}.ail";
   let written = p.file_write(reading.next_state, path, snippet);
-  let checked =
-    match exec("ailang", ["check", path]) {
-      Ok(out) => {
-        if out.exitCode == 0 then { ok: true, errors: "" }
-        else {
-          let stderr = trim(toString(out.stderr));
-          let stdout = trim(toString(out.stdout));
-          let msg = if stderr != "" then stderr else stdout;
-          { ok: false, errors: msg }
-        }
-      },
-      Err(e) => { ok: false, errors: show(e) }
-    };
-  let removed = p.file_remove(written.next_state, path);
-  { ok: checked.ok, errors: checked.errors, next_state: removed.next_state }
+  let checked = p.proc_exec(written.next_state, bash_exec_tool(), bash_exec_args("ailang", ["check", path]));
+  -- The successor threads from the CALL and not from `written`, which is the
+  -- whole of what routing adds to this function's shape. `exec` returned a value
+  -- and left the world where it found it; `proc_exec` returns a world, and a
+  -- `file_remove` started from `written.next_state` would discard the subprocess
+  -- the line above just performed — S29's dropped successor, one line from where
+  -- it would be invisible.
+  let removed = p.file_remove(checked.next_state, path);
+  { ok: checked.exit_code == 0,
+    errors: if checked.exit_code == 0 then "" else trim(message_of(checked.output)),
+    next_state: removed.next_state }
 }
 
 func handle_set_module(st: ProgramState, args: Json) -> AuthoringToolResult {
@@ -390,7 +411,7 @@ func handle_rename_var(st: ProgramState, args: Json) -> AuthoringToolResult {
   }
 }
 
-func handle_finalize(p: ExtPorts, w: ExtWorld, st: ProgramState) -> { result: AuthoringToolResult, next_state: ExtWorld } ! {FS, Process, Clock} {
+func handle_finalize(p: ExtPorts, w: ExtWorld, st: ProgramState) -> { result: AuthoringToolResult, next_state: ExtWorld } ! {IO, FS, Process, Clock} {
   let snippet = render_program(st);
   let checked = check_snippet(p, w, snippet);
   if checked.ok then {
@@ -444,7 +465,7 @@ func unsupported_tool(st: ProgramState, tool: string) -> AuthoringToolResult {
 -- nothing, so the world they were handed IS their successor. `finalize` is the
 -- only arm whose successor differs from its input, and it is the only one that
 -- reads a port.
-export func dispatch_authoring_tool(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, state_in: ProgramState) -> { result: AuthoringToolResult, next_state: ExtWorld } ! {FS, Process, Clock} {
+export func dispatch_authoring_tool(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, state_in: ProgramState) -> { result: AuthoringToolResult, next_state: ExtWorld } ! {IO, FS, Process, Clock} {
   match decode(raw_tool_call_json) {
     Err(_) => { result: mk_err(state_in, "", "malformed_tool_call", "invalid JSON in tool_call fence", "emit strict JSON object with tool and args", []), next_state: w },
     Ok(obj) => {

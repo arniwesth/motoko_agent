@@ -134,6 +134,16 @@ import src/core/phase_vocab (
 )
 import src/core/test/stub_step (ScriptedWorld, RecordingWorld, tool_step, prose_step)
 import src/core/ports (ScriptedStep, WorldState, empty_world_state, scripted_dir_list)
+-- WI-D26. THE TWO COMPOSE SCENARIOS BELOW INSTALL THE REAL EXTENSION, so this
+-- file imports the package the way the HOST does — `register_with_config` from
+-- `compose.ail`, with a literal config. Same entry point
+-- `declared_vs_performed` uses, and for the same reason it gives: a hand-built
+-- hooks record would be a rebuilt subject, and S14's whole point is that the
+-- gate must drive OUR closure rather than a replica of it.
+import src/core/fs_node (FsNode, FsFile, FsDir)
+import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
+import pkg/sunholo/motoko_ext_compose/compose as Compose (register_with_config)
+import pkg/sunholo/motoko_ext_compose/author_tools as AuthorTools (dispatch_author_tool_with_globs)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/dst_interaction (
@@ -1326,6 +1336,419 @@ func effect_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMe
   }
 }
 
+-- ===========================================================================
+-- WI-D26: THE FIRST DETERMINISTIC COMPOSE AUTHORING LOOP IN THE PROJECT
+-- ===========================================================================
+--
+-- Every scenario above this one drives a hook that WI-D19–WI-D24 wrote for this
+-- file — compose's shape, in miniature, in this file's registry. This one
+-- installs `motoko_ext_compose` itself, through `register_with_config`, and
+-- drives `on_response_intercept`'s real body: `dir_make` -> `clock_now` ->
+-- `file_write` -> `check_snippet` -> branch -> `file_remove`. The `check_snippet`
+-- in that chain is WI-D26's routed site, and the `ailang check` it would run is
+-- SERVED FROM `WorldState.ext_effects` instead of run.
+--
+-- WHAT THAT BUYS, AND IT IS THE ITEM'S HEADLINE: compose's authoring loop takes
+-- its failure branch, on a compiler diagnostic that no compiler produced, in a
+-- run that records, validates and replays. Before this item that sentence had no
+-- referent — the `exec` was ambient, so a deterministic run of this path
+-- performed a real subprocess and a replay performed it again.
+--
+-- WHY `on_response_intercept` AND NOT `handle_compose_tool`. The handoff asked
+-- for the tool-handle chain, and that chain is not reachable deterministically:
+-- `one_attempt` calls `callStreamResult` — compose's AMBIENT AI, a disclosed
+-- class and explicitly out of this item's scope — before it ever reaches a
+-- snippet to check. There is no branch through `handle_compose_tool` that
+-- authors nothing. The intercept chain is the AI-free half of the same code:
+-- SAME `check_snippet`, SAME `run_snippet`, same two call sites the item routed,
+-- reached from a fenced response instead of from an authored one. So the
+-- deviation is in the entry point and not in the subject, and the subject is the
+-- routed seam.
+--
+-- ---------------------------------------------------------------------------
+-- THE FIXTURE'S TWO EXIT CODES DISAGREE ON PURPOSE. This is the whole row.
+-- ---------------------------------------------------------------------------
+--
+-- `ScriptedTool` carries `exit_code` as a TYPED field and `content` as the
+-- string the ABI renders into `ExtProcOutcome.output`. In a LIVE run the two
+-- cannot disagree: both come out of one `run_process_result`, which writes the
+-- subprocess's code to the record and encodes that same record to JSON. In a
+-- SCRIPTED world they are two independent fields, and this fixture sets them
+-- apart — typed 71, embedded 0.
+--
+-- That is S33's distinguishing input, and it is one of the cases S33 names as
+-- not having EXISTED until the project built it: WI-D22 added
+-- `ScriptedTool.exit_code`, and the divergence became constructible in the same
+-- edit. A routed `check_snippet` that reads the typed field sees 71 and fails
+-- the check. One that recovers a code by parsing `output` — the pre-WI-D23 shape,
+-- and the natural thing to write for anyone who remembers that the exit code
+-- "is in the JSON" — sees 0 and passes it. Both compile. Both are green on every
+-- live input and on every fixture whose two codes agree.
+--
+-- THE FIXTURE IS AN ORACLE AND IS NOT A CLAIM ABOUT PRODUCTION. Nothing here
+-- says a real seam produces disagreeing codes; the row says compose reads the
+-- one the ABI types. Stated because a reader who found `"exit_code":0` inside a
+-- fixture whose typed code is 71 is owed the reason on the spot.
+--
+-- The stderr text is a REAL diagnostic, measured by running `ailang check` on a
+-- module with an undefined variable through the production dispatcher, so the
+-- `errors` assertion below is about the string compose actually forwards.
+
+func compose_cfg() -> ComposeHostConfig {
+  { compose: { mode: "inline",
+               subagent_model: "dst-model",
+               max_attempts: 1,
+               effect_guard: "off",
+               certificate_template: false,
+               authoring: { structured: false,
+                            author_tools: false,
+                            author_tools_budget: 0,
+                            author_tools_max_bytes: 4096,
+                            author_tools_max_turns: 0,
+                            author_tools_deny_globs: [],
+                            authoring_budget: 0,
+                            fallback_after: 0,
+                            min_observed_chars: 0,
+                            stdout_max_bytes: 0 },
+               claimcheck: { enabled: false,
+                             informalizer_model: "",
+                             comparator_model: "",
+                             timeout_ms: 0,
+                             max_invocations: 0,
+                             stdout_max_bytes: 0,
+                             ledger_in_informalizer: false } },
+    snippet_caps: ["IO"] }
+}
+
+-- The diagnostic, as `ailang check` really emits it. Kept as one function
+-- because the fixture below embeds it in JSON and the assertion compares against
+-- it — two spellings of one string is the drift S23 exists to stop.
+func check_stderr_text() -> string {
+  "Error: type error in tmp/inline_1 (decl 0): undefined variable: undefined_symbol_xyz"
+}
+
+-- The served answer. `content` is a `BashExecResult` rendering — the shape
+-- `dispatch_one`'s `tool_result_item_to_json` produces and `proc.decode_bash_result`
+-- reads — carrying the diagnostic on STDERR, which is where a real failing
+-- `ailang check` puts it (progress goes to stdout; measured).
+--
+-- `exit_code: 71` on the ScriptedTool, `"exit_code":0` inside the content. See
+-- the block above: the disagreement is the oracle. 71 is distinct from every
+-- other quantity in this file (S7) — the driver's tools carry -1, D24's effects
+-- 41/43/47/53/59/61, and the grep scenario below uses 1.
+func compose_check_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+  -- TWO entries against the ONE dispatch the script produces, and the slack is
+  -- WI-D24's load-bearing kind rather than defensive: an empty `ext_effects`
+  -- queue does not fail, it DELEGATES to the real dispatcher, so a fixture sized
+  -- exactly to its expectation turns any future off-by-one into a live
+  -- `ailang check` inside a deterministic gate. The second entry is never
+  -- consumed and nothing here can see it — `reconstitution_balance` counts the
+  -- queue the LOG rebuilds, not the one this function seeded.
+  [{ tool_call_id: "", duration_ms: 43, code: "", message: "",
+     content: "{\"tool\":\"BashExec\",\"cmd\":\"ailang check tmp/inline_1.ail\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"${check_stderr_text()}\",\"truncated\":false}",
+     exit_code: 71 },
+   { tool_call_id: "", duration_ms: 47, code: "", message: "",
+     content: "{\"tool\":\"BashExec\",\"cmd\":\"unreached\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false}",
+     exit_code: 73 }]
+}
+
+-- The response the model "returns". The fence is what `extract_ailang_fence`
+-- looks for, and reaching it is what puts compose on the routed path at all —
+-- a response without one returns `NoIntercept` before any effect happens, which
+-- is the reachability half S24 requires be asserted separately.
+func fenced_response() -> string {
+  "here is the snippet\n```ailang\nexport func main() -> () ! {IO} { undefined_symbol_xyz() }\n```\n"
+}
+
+-- TWO prose steps and no tool steps. The intercept's `InterceptHandled` makes
+-- the driver append a tool message and LOOP rather than dispatch tool calls, so
+-- a script of tool steps would leave `WorldState.tools` unconsumed and put this
+-- scenario's census in a different shape from every other one in this file for
+-- reasons that have nothing to do with compose. The second step carries no
+-- fence, so the intercept returns `NoIntercept` and the run finalises.
+func compose_script() -> [ScriptedStep] {
+  [prose_step(fenced_response()), prose_step("done")]
+}
+
+func compose_check_world() -> WorldState {
+  { empty_world_state() |
+    script: compose_script(),
+    approvals: [],
+    env: world_env(),
+    ext_effects: compose_check_effects() }
+}
+
+func compose_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  -- THE REAL REGISTRY, WHOLESALE. Not `approval_hooks_of` with one slot
+  -- overridden: the id, the tool policy, the pre-step and the solver slot are
+  -- compose's own, so the origin the fold stamps onto the recorded effect is the
+  -- extension's real id rather than one this file chose. WI-D24's scenario
+  -- deliberately used an id no production registry contains, to kill an adapter
+  -- that hardcoded "compose"; this one is the other half of that pair, and the
+  -- id it asserts is "compose" because compose is the subject.
+  { registry: { hooks: [Compose.register_with_config(compose_cfg())] },
+    strict_mode: false, verification: v }
+}
+
+func run_compose(w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  Session.run_v2_session_traced(
+    compose_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+-- The decision compose returned, read off the MESSAGE LIST rather than off the
+-- hook. `InterceptHandled` becomes a tool message the driver appends, and the
+-- driver's own return value is that message list, so the run's transcript
+-- carries compose's verdict — a witness the recorder did not write and compose
+-- did not hand to this file.
+pure func result_msgs(r: TracedSessionResult) -> [Message] {
+  match r.result {
+    Ok(msgs) => msgs,
+    Err(_) => []
+  }
+}
+
+pure func tool_message_contents(msgs: [Message]) -> [string] {
+  match msgs {
+    [] => [],
+    m :: rest =>
+      if m.role == "tool" then m.content :: tool_message_contents(rest)
+      else tool_message_contents(rest)
+  }
+}
+
+pure func any_contains(xs: [string], needle: string) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if contains(x, needle) then true else any_contains(rest, needle)
+  }
+}
+
+func compose_check_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  let _ = println("");
+  let _ = println("-- WI-D26: COMPOSE's own check path, served from the world --");
+  let initial = compose_check_world();
+  let run = run_compose(initial);
+  let log = run.world.log;
+  let effects = count_kind(log, identity_kind(ExtensionEffectIdentity("", "", "")));
+
+  let ok_ran = check("compose: the scenario reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so every witness below is vacuous");
+
+  -- REACHABILITY BEFORE VERDICT (S24). A `check_snippet` that never ran records
+  -- nothing and asserts nothing, and that is byte-identical to every run in this
+  -- tree before WI-D26.
+  let ok_reached = check("compose: the routed check RAN — compose's own seam reached the recorder",
+                         effects == 1,
+                         "expect_extension_effect=${show(effects)}, expected 1; a routed call that never executes proves nothing, and more than one means the failure branch was not taken");
+
+  -- THE ORIGIN IS COMPOSE'S OWN ID, off the transport.
+  let origins = effect_origins(log);
+  let ok_origin = check("compose: the recorded effect names compose as the performer",
+                        all_equal(origins, "compose") && List.length(origins) == 1,
+                        "origins=[${join(origins)}] — expected one \"compose\"");
+
+  -- ---- THE BRANCH -------------------------------------------------------
+  --
+  -- THE ROW THE ITEM EXISTS FOR. Compose took the failure branch, and the only
+  -- thing that could have told it to is `ExtProcOutcome.exit_code` — 71 on the
+  -- typed field against 0 inside the rendered output. `ComposeInline` with
+  -- exit_code 1 is what `on_response_intercept`'s `not checked.ok` arm builds;
+  -- the success arm builds `mk_result(…, "inline", …)` and would have consumed a
+  -- SECOND ext_effect, which is why the reachability row above pins 1 and not
+  -- "at least 1".
+  let tool_msgs = tool_message_contents(result_msgs(run));
+  let ok_branch = check("compose: the FAILURE branch was taken, on the typed exit code and not on the rendered one",
+                        any_contains(tool_msgs, "ComposeInline"),
+                        "no ComposeInline tool message in the transcript — compose either did not intercept, or took the success branch, which is what reading \"exit_code\":0 out of `output` would do");
+
+  -- AND IT FORWARDED THE SEAM'S STDERR. The branch alone does not establish that
+  -- the streams survived the decode: a routed site that got the code right and
+  -- dropped the text would pass the row above and hand the model an empty
+  -- diagnostic, which is a worse failure than a wrong branch because nothing
+  -- downstream can see it.
+  let ok_errors = check("compose: the diagnostic came back through the decode, not lost with the rendering",
+                        any_contains(tool_msgs, "undefined variable: undefined_symbol_xyz"),
+                        "the ComposeInline result carries no diagnostic text — `decode_bash_result` lost the seam's stderr, and the model would be told the check failed for no stated reason");
+
+  let _ = println("  recorded: expect_extension_effect=${show(effects)} origin=[${join(origins)}]");
+
+  -- ---- VALIDATE and REPLAY ----------------------------------------------
+  let program = program_of(run.world, initial);
+  let rejections = validate_program(program, required_class_ids());
+  let _ = if List.length(rejections) > 0 then println("      ${first_rejection_message(rejections)}") else ();
+  let ok_valid = check("compose: the recorded program VALIDATES",
+                       List.length(rejections) == 0,
+                       "${show(List.length(rejections))} rejection(s)");
+
+  match world_state_of(program, required_class_ids()) {
+    Err(r) => {
+      let _ = println("      ${refusal_message(r)}");
+      let ok_recon = check("compose: the program reconstitutes a world", false,
+                           "refused with ${refusal_rule(r)}");
+      ok_ran && ok_reached && ok_origin && ok_branch && ok_errors && ok_valid && ok_recon
+    },
+    Ok(replay_world) => {
+      -- THE RECONSTITUTED QUEUE MUST CARRY THE TYPED CODE. If the projection
+      -- dropped `exit_code` — defaulting it to 0, which is the shape WI-D22's
+      -- schema bump exists to refuse — the replay would take compose's SUCCESS
+      -- branch and this scenario would be a recorded failure replaying as a pass.
+      let ok_served = match replay_world.ext_effects {
+        e :: _ =>
+          check("compose: the reconstituted queue serves the same TYPED code the recording did",
+                e.exit_code == 71,
+                "head exit_code=${show(e.exit_code)} — expected 71; a 0 here is a recorded compiler failure replaying as a pass"),
+        [] =>
+          check("compose: the reconstituted queue serves the same TYPED code the recording did",
+                false,
+                "the reconstituted ext_effects queue is EMPTY, so a replay would run a real `ailang check`")
+      };
+
+      let replay = run_compose(replay_world);
+      let ms = strict_replay_findings(program.interactions, replay.world.log);
+      let _ = if List.length(ms) > 0 then println("      ${replay_message_first(ms)}") else ();
+      let ok_replay = check("compose: the authoring loop REPLAYS to an identical interaction log",
+                            List.length(ms) == 0,
+                            "${show(List.length(ms))} mismatch(es)");
+
+      let ok_replay_branch = check("compose: the REPLAY takes the same failure branch",
+                                   any_contains(tool_message_contents(result_msgs(replay)), "ComposeInline"),
+                                   "the replay produced no ComposeInline result — the recorded run failed the check and the replay did not");
+
+      ok_ran && ok_reached && ok_origin && ok_branch && ok_errors && ok_valid
+        && ok_served && ok_replay && ok_replay_branch
+    }
+  }
+}
+
+-- ===========================================================================
+-- WI-D26: THE QUIET SEARCH — `grep_impl`'s no-match branch, which must NOT gate
+-- on the exit code
+-- ===========================================================================
+--
+-- `author_tools.grep_impl` is the one routed site in the compose package whose
+-- typed exit code is available and deliberately unread, because ripgrep exits 1
+-- when it matches nothing and that is a normal answer rather than a failure.
+-- The site's own comment says so; this scenario is the input that makes the
+-- claim cost something.
+--
+-- THE DIVERGENT INPUT IS A SEARCH WITH NO HITS. The seeded answer is exactly
+-- what ripgrep produces for one — exit 1, empty stdout — and the correct
+-- behaviour is to run `grep_fallback_scan`, which reads the file through
+-- `ExtPorts` and finds the pattern the subprocess did not report. A routed form
+-- that gated on `exit_code == 0` would skip the scan and return nothing, and
+-- would be GREEN on every search that finds something, which is every realistic
+-- fixture anyone would write (S33's mechanism).
+--
+-- THE SCAN'S OWN READS ARE NOT RECORDED — WI-D18 §6 decided reads are not, since
+-- `InitialWorld` cannot rebuild them — so the census cannot see this. The
+-- verdict is carried out of the hook by a `file_write`, which IS recorded and
+-- which lands in the final world. That is WI-D20's `routing_tool_handle` shape:
+-- put the observation somewhere a witness outside the hook can read it.
+func grep_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+  -- exit_code 1 with EMPTY stdout: ripgrep's "no matches". The embedded code
+  -- agrees with the typed one here, unlike the check scenario's fixture — this
+  -- row is not about which code is read, it is about the code not being read at
+  -- all, so a disagreement would only muddy it.
+  [{ tool_call_id: "", duration_ms: 53, code: "", message: "",
+     content: "{\"tool\":\"BashExec\",\"cmd\":\"rg -n --no-heading -F needle_xyz haystack.txt\",\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false}",
+     exit_code: 1 },
+   { tool_call_id: "", duration_ms: 59, code: "", message: "",
+     content: "{\"tool\":\"BashExec\",\"cmd\":\"unreached\",\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false}",
+     exit_code: 1 }]
+}
+
+-- The file the FALLBACK SCAN must find the pattern in. It is in the world's
+-- table and not on disk, so a scan that did not go through `ExtPorts` would read
+-- nothing here either — which means this row also witnesses that WI-D20's FS
+-- routing of the scan is real.
+func grep_haystack() -> [{ path: string, node: FsNode }] {
+  [{ path: "haystack.txt", node: FsFile("alpha\nbravo needle_xyz charlie\ndelta\n") }]
+}
+
+func grep_world() -> WorldState {
+  { empty_world_state() |
+    script: [prose_step("no fence here"), prose_step("done")],
+    approvals: [],
+    env: world_env(),
+    files: grep_haystack(),
+    ext_effects: grep_effects() }
+}
+
+-- The hook: compose's REAL `dispatch_author_tool_with_globs`, reached through
+-- `ctx.ports`, with a grep tool call the model might have written. The verdict
+-- is written to a path the scenario reads off the final world.
+--
+-- It returns `NoIntercept` so the driver's loop is unchanged; the effects happen
+-- and only the decision is empty, which is `routing_intercept`'s arrangement one
+-- module over.
+func grep_probe_intercept(ctx: ExtCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let call = "{\"tool\":\"grep\",\"args\":{\"pattern\":\"needle_xyz\",\"path_glob\":\"haystack.txt\",\"max_matches\":10}}";
+  let out = AuthorTools.dispatch_author_tool_with_globs(p, ctx.world, call, 4096, []);
+  -- `excerpt` AND NOT `ok`: `grep_impl` answers `ok: true` on both branches, so
+  -- a verdict read off `ok` would be satisfied by a grep that found nothing —
+  -- the exact non-measurement this scenario exists to avoid.
+  let verdict = if contains(out.excerpt, "needle_xyz") then "SCANNED" else "SKIPPED";
+  let wrote = p.file_write(out.next_state, "grep_verdict.txt", verdict);
+  { decision: NoIntercept, next_state: wrote.next_state }
+}
+
+func grep_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [{ approval_hooks_of(id) | on_response_intercept: grep_probe_intercept }] },
+    strict_mode: false, verification: v }
+}
+
+func run_grep(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  Session.run_v2_session_traced(
+    grep_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), RecordingWorld(w)
+  )
+}
+
+pure func file_content_of(files: [{ path: string, node: FsNode }], path: string) -> string {
+  match files {
+    [] => "(absent)",
+    f :: rest =>
+      if f.path == path then (match f.node { FsFile(c) => c, FsDir => "(dir)" })
+      else file_content_of(rest, path)
+  }
+}
+
+func compose_grep_quiet_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
+  let _ = println("");
+  let _ = println("-- WI-D26: a QUIET ripgrep — exit 1 means no matches, not failure --");
+  let initial = grep_world();
+  let run = run_grep("ext_grep_26", initial);
+  let effects = count_kind(run.world.log, identity_kind(ExtensionEffectIdentity("", "", "")));
+
+  let ok_ran = check("grep: the scenario reached its terminator",
+                     match run.result { Ok(_) => true, Err(_) => false },
+                     "the run returned Err, so every witness below is vacuous");
+
+  let ok_reached = check("grep: the routed search RAN — the seam reached the recorder",
+                         effects > 0,
+                         "expect_extension_effect=0; a routed call that never executes proves nothing");
+
+  let verdict = file_content_of(run.world.files, "grep_verdict.txt");
+  -- THE ROW. `SKIPPED` is what an `exit_code == 0` gate produces: the search
+  -- exited 1, the gate calls that a failure, the fallback scan never runs and
+  -- the caller is told there are no matches in a file that contains one.
+  let ok_scanned = check("grep: a no-match search still runs the fallback scan — the exit code is NOT the gate",
+                         verdict == "SCANNED",
+                         "verdict=${verdict} — `grep_impl` gated on the exit code, so ripgrep's normal \"no matches\" answer (exit 1) suppressed the fallback scan; every quiet search silently loses its second chance");
+
+  let _ = println("  verdict=${verdict} (expect_extension_effect=${show(effects)})");
+  ok_ran && ok_reached && ok_scanned
+}
+
 pure func first_rejection_message(rs: [ProgramRejection]) -> string {
   match rs {
     [] => "(none)",
@@ -1596,8 +2019,15 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- imports `dst_replay`.
   let ok_effect = effect_scenario();
 
+  -- WI-D26: the first deterministic run of COMPOSE's own authoring loop. The
+  -- scenario above drives a hook this file wrote; these two install the
+  -- extension and drive its real bodies.
+  let ok_compose = compose_check_scenario();
+  let ok_grep = compose_grep_quiet_scenario();
+
   let _ = println("");
-  if ok_approve && ok_deny && ok_eof && ok_routing && ok_handle && ok_batch && ok_effect then
+  if ok_approve && ok_deny && ok_eof && ok_routing && ok_handle && ok_batch && ok_effect
+     && ok_compose && ok_grep then
     println("discovery_dst PASS")
   else {
     let _ = println("discovery_dst FAIL");

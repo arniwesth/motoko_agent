@@ -1,0 +1,165 @@
+-- scripts/dst/compose_live_exec.ail
+--
+-- WI-D26: THE LIVE HALF OF S14's TWO SUBJECTS.
+--
+-- `discovery_dst`'s `compose_check_scenario` drives compose's routed
+-- `check_snippet` against a SCRIPTED `ext_effects` entry: it proves the
+-- adoption — that compose branches on the typed code, that the effect records
+-- under compose's identity, that the program validates and replays. It proves
+-- nothing about whether the seam can run a compiler, because in that scenario
+-- no compiler runs.
+--
+-- S14 is explicit that this is the failure mode worth paying for: "a direct
+-- probe of an upstream API is NOT evidence that OUR adoption of it works", and
+-- the mirror holds — an adoption proven only against a script is not evidence
+-- that the live arm exists. WI-D19 shipped a routing claim that was false in
+-- exactly that direction (`proc_exec(w, "ailang", …)` reaches no compiler), and
+-- it took WI-D21 to measure it. This file is the row that would have caught it.
+--
+-- WHAT IT DRIVES, AND WHY IT IS NOT A SESSION. `dispatch_response_intercept`
+-- with a live `ExtPorts`, exactly as `declared_vs_performed` drives the same
+-- hook — not `run_v2_session_traced`, because a session needs a provider and
+-- `--ai-stub` cannot be made to emit a chosen fence. The hook is the subject;
+-- the driver loop is not.
+--
+-- THE PORTS ARE THE PRODUCTION BRIDGE OVER `live_ports`:
+--
+--   * `Session.ext_ports_of` is the real bridge — the same closure the four
+--     `mk_v2_ext_ctx` sites build, exported since WI-D23 §5.3 so a probe can
+--     reach it without re-deciding what it is.
+--   * `live_ports` binds `ambient_file_write` and friends, so compose's
+--     `dir_make`/`file_write`/`file_remove` hit the REAL filesystem and the
+--     snippet the compiler reads is one compose actually wrote.
+--   * `ext_effect_exec` is `ports_shape_probe`'s `world_ext_effect`, whose `[]`
+--     arm DELEGATES to `live_tool_outcome` -> `dispatch_one_typed` -> the real
+--     `run_process_result`. The world below seeds an EMPTY `ext_effects` queue
+--     on purpose: an empty queue is what makes this arm live.
+--
+-- THE SNIPPET IS DELIBERATELY BROKEN. A passing check would leave
+-- `run_snippet` to execute the snippet, which is a second subprocess and a
+-- second question; a failing one exercises the branch this item routed and
+-- returns a diagnostic only a real compiler can produce. The assertion is on
+-- that diagnostic's TEXT — "undefined variable" is `ailang check`'s wording and
+-- nothing in Motoko generates it — so a green here cannot be produced by a stub,
+-- by a tool-error blob, or by the "requires extension capability" string
+-- WI-D19's `proc_exec(w, "ailang", …)` would have returned.
+
+module scripts/dst/compose_live_exec
+
+import std/io (println, exit)
+import std/string (contains)
+import std/json (jo)
+import src/core/config (VerificationConfig)
+import src/core/session as Session (ext_ports_of)
+import src/core/ports (empty_world_state)
+import src/core/ext_world (world_to_token)
+import src/core/test/stub_step (live_ports)
+import src/core/ext/runtime as Rt (dispatch_response_intercept)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtCtx, ExtRuntime, ExtensionHooks, BudgetPlan,
+  ResponseInterceptDecision, InterceptHandled, NoIntercept, TokenTelemetry
+)
+import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
+import pkg/sunholo/motoko_ext_compose/compose as Compose (register_with_config)
+
+func plan() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+
+pure func zero_telemetry() -> TokenTelemetry {
+  { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }
+}
+
+-- `mode: "inline"` is what puts `on_response_intercept` on the routed path;
+-- every other field is the smallest value that lets compose build.
+func cfg() -> ComposeHostConfig {
+  { compose: { mode: "inline",
+               subagent_model: "live-probe",
+               max_attempts: 1,
+               effect_guard: "off",
+               certificate_template: false,
+               authoring: { structured: false,
+                            author_tools: false,
+                            author_tools_budget: 0,
+                            author_tools_max_bytes: 0,
+                            author_tools_max_turns: 0,
+                            author_tools_deny_globs: [],
+                            authoring_budget: 0,
+                            fallback_after: 0,
+                            min_observed_chars: 0,
+                            stdout_max_bytes: 0 },
+               claimcheck: { enabled: false,
+                             informalizer_model: "",
+                             comparator_model: "",
+                             timeout_ms: 0,
+                             max_invocations: 0,
+                             stdout_max_bytes: 0,
+                             ledger_in_informalizer: false } },
+    snippet_caps: ["IO"] }
+}
+
+func rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { hooks: [Compose.register_with_config(cfg())] },
+    strict_mode: false, verification: v }
+}
+
+-- The EMPTY world is the live arm's precondition, not an oversight. See the
+-- header: `world_ext_effect`'s `[]` arm delegates.
+func live_ctx(r: ExtRuntime) -> ExtCtx ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let w = empty_world_state();
+  { task: "compose_live_exec",
+    step: 1,
+    model: "live-probe",
+    cwd: ".",
+    hybrid_tools: false,
+    budget: plan(),
+    mode: "inline",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 100,
+    history_slice: [],
+    state_key: "live",
+    context_limit: 0,
+    ports: Session.ext_ports_of(live_ports(r), w, ""),
+    artifacts: jo([]),
+    telemetry: zero_telemetry(),
+    world: world_to_token(w) }
+}
+
+func fenced() -> string {
+  "here is code\n```ailang\nexport func main() -> () ! {IO} { undefined_symbol_xyz() }\n```\n"
+}
+
+func check(label: string, cond: bool, why: string) -> bool ! {IO} {
+  if cond then { let _ = println("  ✓ ${label}"); true }
+  else { let _ = println("  ✗ ${label} — ${why}"); false }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("compose_live_exec — WI-D26's routed `ailang check`, run for real");
+  let r = rt();
+  let out = Rt.dispatch_response_intercept(r, live_ctx(r), fenced());
+  match out.decision {
+    NoIntercept => {
+      let _ = check("compose intercepted the fenced response", false,
+                    "decision was NoIntercept — the hook never reached `check_snippet`, so nothing below was measured");
+      exit(1)
+    },
+    InterceptHandled(res) => {
+      -- The branch. `exit_code: 1` on the envelope is what
+      -- `on_response_intercept`'s `not checked.ok` arm builds; the success arm
+      -- carries the snippet's own code and a different tool name.
+      let ok_tool = check("the FAILURE branch ran — a real `ailang check` returned non-zero through the routed seam",
+                          res.tool == "ComposeInline" && res.exit_code == 1,
+                          "tool=${res.tool} exit_code=${show(res.exit_code)} — expected ComposeInline/1");
+      -- THE ROW THAT CANNOT BE FAKED. This wording comes from the AILANG
+      -- compiler. A tool-error blob would say "requires extension capability",
+      -- a spawn failure "not found: ailang", a stub nothing at all.
+      let ok_text = check("the diagnostic is the COMPILER's, so the seam really ran one",
+                          contains(res.stderr, "undefined variable"),
+                          "stderr=${res.stderr} — no compiler diagnostic; the seam returned something else and the branch above proves only that it was non-zero");
+      let _ = println("  stderr: ${res.stderr}");
+      if ok_tool && ok_text then println("compose_live_exec PASS")
+      else { let _ = println("compose_live_exec FAIL"); exit(1) }
+    }
+  }
+}

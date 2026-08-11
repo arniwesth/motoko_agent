@@ -40,6 +40,7 @@ away. Budget five to fifteen tool calls per apply. **Run the gates the report sa
 | D21 draft | A7 declares **seven** fault classes, so the class has none to name | `required_class_ids()` is asserted at **11**, and `extension_effect_fault` exists — the seven came from reading the `fault_class_*` **accessors**, a subset |
 | D22 | the quiet anchor run is *"a data point against D21's finding"* | Outside its scope, not against it — D21's law names `ext_ports_of`, in `session.ail`; D22 edited prose in `types.ail` |
 | D24 | silent-wrong goes to **76** (the host-side token rewrite) | Stays **75** — the wrong form never shipped and was not silent (two reachability rows went red), so it is authored-and-closed under D22's rule. Promoted to **S34** instead |
+| D26 handoff | *"the seam's only subprocess door is `bash -lc`"* — so quote the shell string | **False, and following it would have authored a shell injection** at the one model-text argument. The wrap is a conditional fallback (`tool_runtime.ail:888`); the argv door exists. Premise traced to D21 §8's unconditional record, quoted forward five items |
 
 **And the corrections themselves get corrected.** I corrected D21's catalogue claim and then wrote that
 its *other* ground held; the revised report showed it did not. **Verify your own corrections at the
@@ -64,11 +65,14 @@ Plus two framing errors that the items defeated on measurement: *"a file write i
 
 **Read paths end to end rather than grepping them.** D21's best finding — the seam already emits a
 program its own validator rejects — came from following `session.ail` → `ports.ail` →
-`tool_dispatch_adapter` → `tool_runtime`, and so did the correction to it.
+`tool_dispatch_adapter` → `tool_runtime`, and so did the correction to it. **And read one function
+BELOW the seam you are describing**: four items described `proc_exec` correctly and none opened the
+dispatcher's own branch (`tool_runtime.ail:888`), so a false "only door is `bash -lc`" premise
+survived from D21 to the D26 handoff — where it nearly became a prescribed injection.
 
 ## Two counters, and they are deliberately separate
 
-- **Silent-wrong: 75 across 47 runs.** *Production sites where two answers type-check and the wrong one
+- **Silent-wrong: 76 across 48 runs.** *Production sites where two answers type-check and the wrong one
   ships silently.*
 - **Instrument-weaker-than-its-claim: 7.** *A row that passes while measuring less than its label.*
   Opened at D21.
@@ -97,12 +101,12 @@ commit; D22 declined to and was right.
 paid for it does not belong there. They live at the top of the plan; skim the block before writing a
 handoff, because three or four will apply to any item.
 
-## Where the work stands (2026-08-09, after WI-D25)
+## Where the work stands (2026-08-09, after WI-D26)
 
-Route B is built and compose is mediated: **11 ambient sources, 32 `ExtPorts` field calls** — the
-remainder are four `println` (disclosed by decision), three `exec` import sites carrying four call
-sites (typed, identity-ready, and cleared for routing — item 1 of the critical path since D25), registration's three (structurally unroutable)
-and one ambient AI. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
+Route B is COMPLETE and compose's mediation is done: **8 ambient sources, 36 `ExtPorts` field
+calls** (D26 routed the four `exec` call sites and removed the three `std/process` imports — the
+first yield-adjacent movement since D15). The remainder is exactly the three disclosed classes:
+four `println` (by decision), registration's three (structurally unroutable), one ambient AI. **`execution-program/2` shipped** (D22), D17's two-tier compatibility surface is
 closed at zero classes, and **the typed subprocess discrimination is complete end to end** (D23):
 script → codec → `world_tool` → bridge → `ExtProcOutcome.exit_code`, witnessed at every joint, at
 ABI `5.0`. **The identity work is done** (D24): eight recording adapters, a separate
@@ -127,14 +131,12 @@ none queue.
 session with non-vacuous criterion-2 evidence, plus all fifteen extensions mediated-or-disclosed.
 The remaining critical path, in order:
 
-1. **Routing compose's `exec` sites** — three import sites, four call sites; no type work
-   (D23), no identity work (D24), landing sites confirmed by compiler verdict (D25): only
-   `on_tool_handle` and `on_response_intercept` can host a routed call, and both are routed and
-   audited. Watch-item: the stale `post_ctx.ports` at `session.ail:2679` goes live if anything
-   widens the solver row.
-2. **C5's compose-bearing profile** — the demonstration vehicle; also what ends the solver slot's
-   fixture-less threading label.
-3. **The final acceptance rerun** — the closing note; vacuity register and classification table as
+1. **C5's compose-bearing profile** — the demonstration vehicle; also what ends the solver
+   slot's fixture-less threading label. D26's template: `compose_check_scenario` installs compose
+   through `register_with_config`, records, validates, replays — ~30 lines of wiring. **First
+   obstacle, named:** `handle_compose_tool` is NOT deterministically reachable (ambient AI before
+   anything routed); the intercept path is the deterministic loop.
+2. **The final acceptance rerun** — the closing note; vacuity register and classification table as
    computed outputs.
 
 **The endgame scope rule: a finding joins the queue only if it blocks the goal line's two clauses;

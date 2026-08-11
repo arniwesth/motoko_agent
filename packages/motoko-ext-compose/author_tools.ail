@@ -1,21 +1,37 @@
 module sunholo/motoko_ext_compose/author_tools
 
 import std/crypto (sha256Hex)
-import std/bytes (toString)
--- WI-D20. `std/fs` AND `std/clock` ARE GONE; `std/process` REMAINS, and the
--- asymmetry is the finding rather than an unfinished edit. Every read here now
--- leaves through `ExtPorts` — `path_stat` for the three kind guards, `file_read`
--- for content, `dir_list` for entries, `clock_now` for the ledger stamp. The one
--- effect that stayed ambient is `grep_impl`'s `exec("rg", …)`, for the reason
--- given at that function: `ExtPorts.proc_exec` fronts a dispatcher over MOTOKO'S
--- OWN tool names and `rg` is not one of them, exactly as `ailang` is not.
+-- `std/bytes (toString)` WENT WITH `std/process`, and it is the same repair for
+-- the same reason WI-D20 gave when it removed five dead imports from
+-- `compose.ail`: classifier 3 (`tools/ext_ambient_inventory/derive.py`) reads
+-- IMPORT LINES, not call sites, so a symbol left on an import after its last
+-- caller goes counts as an ambient source for an effect the extension can no
+-- longer perform. Its one call was `toString(out.stdout)` in `grep_impl` —
+-- ambient `exec` handed back BYTES and the seam hands back a decoded string.
+-- WI-D20 REMOVED `std/fs` AND `std/clock`; WI-D26 REMOVED `std/process`, and
+-- with it the asymmetry the paragraph here used to report. Kept two-part per
+-- S15. Through WI-D25 this note read: "`std/process` REMAINS, and the asymmetry
+-- is the finding rather than an unfinished edit… The one effect that stayed
+-- ambient is `grep_impl`'s `exec("rg", …)`, for the reason given at that
+-- function: `ExtPorts.proc_exec` fronts a dispatcher over MOTOKO'S OWN tool
+-- names and `rg` is not one of them, exactly as `ailang` is not."
+--
+-- The reason was correct and it was about the TOOL NAME, not about the seam:
+-- `proc_exec(w, "BashExec", …)` runs any program at all, `rg` included. This
+-- module now performs NO ambient effect — every read leaves through `ExtPorts`
+-- (`path_stat` for the three kind guards, `file_read` for content, `dir_list`
+-- for entries, `clock_now` for the ledger stamp) and the one subprocess leaves
+-- through `proc_exec`.
 import std/json (Json, decode, get, asString, asNumber, encode, jo, kv, js, jb, jnum)
-import std/process (exec)
 import std/result (Ok, Err)
 import std/option (Option, Some, None)
 import std/string (trim, split, contains, startsWith, substring, find)
 
 import pkg/sunholo/motoko_ext_compose/ledger (LedgerEntry)
+-- WI-D26. The routed subprocess request and the streams that come back. See
+-- `proc.ail`'s header for why the argv stays an argv and why `decode_bash_result`
+-- deliberately refuses to hand back an exit code.
+import pkg/sunholo/motoko_ext_compose/proc (bash_exec_tool, bash_exec_args, decode_bash_result)
 -- `ExtPathKind`'s three constructors are imported by name because every guard
 -- below matches them EXHAUSTIVELY rather than defaulting — `session.ext_ports_of`'s
 -- reason at the other end of the same seam: a fourth constructor must be a
@@ -374,64 +390,85 @@ func join_lines(xs: [string]) -> string {
   }
 }
 
--- WI-D20. THE ONE FUNCTION IN THIS MODULE THAT STAYS PARTLY AMBIENT, and the
--- part that stays is `exec("rg", …)`. THIS IS THE SAME SEAM DEFECT WI-D19 §2
--- FOUND AT `ailang`, AND FINDING IT AT A SECOND, UNRELATED BINARY IS WHAT MAKES
--- IT A PROPERTY OF THE SEAM RATHER THAN A PROPERTY OF COMPOSE.
+-- WI-D26 ROUTED THIS SITE, AND THE ONE THING THAT MUST NOT CHANGE HERE IS THE
+-- BRANCH. Kept two-part per S15; the history is below, and it matters because
+-- three consecutive items recorded a different obstacle and each one was real
+-- when written.
 --
--- `ExtPorts.proc_exec` fronts `Ports.tool_exec`, whose live adapter is
--- `tool_runtime.run_native_call` — an if-chain over `ReadFile`, `Search`,
--- `WriteFile`, `EditFile`, `BashExec`, `RunTests` and a final `else` that
--- returns "<tool> requires extension capability and is not available in native
--- runtime". `rg` is not in that list, so `proc_exec(w, "rg", …)` would not run
--- ripgrep; it would return a tool-error blob. Re-verified at HEAD for this item
--- rather than taken from WI-D19's note.
+-- ---------------------------------------------------------------------------
+-- THE RULE AT THIS SITE: RIPGREP EXITS 1 WHEN IT MATCHES NOTHING
+-- ---------------------------------------------------------------------------
 --
--- The shape fails independently, as it does at `ailang`: this site needs
--- `out.stdout` as BYTES (`toString(out.stdout)`) and branches on `Ok`/`Err` to
--- pick the fallback scan, where `ExtProcOutcome` carries one rendered `output`
--- string and no status. An `Err` and an empty result would become the same
--- value, and the fallback would fire on a successful search that matched
--- nothing.
+-- That is a NORMAL ANSWER, not a failure, and it is the answer this function has
+-- to tell from a failure in order to decide whether `grep_fallback_scan` runs.
+-- The pre-routing code branched on `text == ""` and never looked at a status;
+-- the routed code branches on `text == ""` and never looks at `out.exit_code`.
+-- The typed code is AVAILABLE here since WI-D23 and it is deliberately NOT
+-- LOAD-BEARING — the one place in this package where that sentence is true.
 --
--- WI-D21: THE FIRST PARAGRAPH IS RIGHT ABOUT `"rg"` AND WRONG ABOUT THE SEAM,
--- and this site is where the difference bites hardest. `proc_exec(w, "rg", …)`
--- does hit the final `else`; `proc_exec(w, "BashExec", …)` does not — it runs a
--- real subprocess through `run_process_result` and returns
--- `BashExecResult { stdout, stderr, exit_code, meta }` encoded as JSON in
--- `output`. So ripgrep IS reachable through this seam, and both of the things
--- this site needs — the output and a status — are in that string.
+-- A routed form that adopted `exit_code == 0` gating would be green on every
+-- realistic fixture, because the proxy and the truth agree on every search that
+-- FINDS something (S33's mechanism, stated as the mechanism rather than as bad
+-- luck). The divergent input is a QUIET SEARCH: matches nothing, exits 1, stdout
+-- empty. Under exit-code gating the fallback scan stops running and every
+-- no-hit search silently loses its second chance. `discovery_dst`'s
+-- `compose_grep_quiet_scenario` is that input, built for this comment, and
+-- WI-D26's mutant 2 is this branch rewritten to gate on the code.
 --
--- WHICH MAKES THE REAL OBSTACLE VISIBLE, and it is sharper here than at
--- `ailang`: RIPGREP EXITS 1 WHEN IT MATCHES NOTHING. That is a normal answer,
--- and it is the exact answer this function branches on to decide whether to run
--- `grep_fallback_scan`.
+-- ---------------------------------------------------------------------------
+-- THE TWO ARMS BECAME ONE, AND NO SEMANTICS MOVED
+-- ---------------------------------------------------------------------------
 --
--- THE TYPED FIELD THIS PARAGRAPH ASKED FOR NOW EXISTS, and the site still does
--- not route — kept two-part per S15. Through WI-D22 the text here read: "the
--- exit code has to become a TYPED field, which is a program-schema bump —
--- WI-D21 §3." WI-D22 took the bump and WI-D23 landed the field:
--- `ExtProcOutcome.exit_code` carries a real subprocess code through
--- `ToolCompleted`, so "rg exited 1" would arrive typed, not as a fault class
--- and not out of parsed JSON. Two obstacles remained after WI-D23 and WI-D24
--- closed the second of them — kept two-part, same rule. What was written here:
--- "this site reads `out.stdout` as BYTES where the seam renders a JSON string
--- (the shape half, above), and an extension-initiated dispatch through the seam
--- records an identity the validator rejects — the blank call id... Routing waits
--- on that identity work (WI-D21 §5)."
+-- Ambient `exec` returned `Result`, and this function had an `Err` arm that ran
+-- the fallback scan unconditionally — the arm this checkout actually took, since
+-- `rg` is not installed here and `exec("rg", …)` answered `Err(NotFound)` at
+-- every call. The seam has no `Err`: `run_process_result` catches
+-- `ProcessError` itself and renders it as a `BashExecResult` with empty stdout,
+-- the reason on stderr and exit_code 1 (measured — see `proc.ail`'s header).
+-- So a spawn failure now arrives with `text == ""` and takes the SAME branch the
+-- `Err` arm took. Two arms, one behaviour, and the merge is a consequence of the
+-- seam's shape rather than a decision made here.
 --
--- WI-D24 closed the identity half: the bridge now dispatches through
--- `Ports.ext_effect_exec`, the eighth recording adapter records the effect as
--- `ExtensionEffectIdentity` with the performing extension's own id, and the
--- program validates and replays. ONE obstacle remains and it is this site's own
--- shape: `out.stdout` is read as bytes and the seam renders JSON. This site
--- stays ambient for that one measured reason.
+-- ---------------------------------------------------------------------------
+-- WHAT THE OBSTACLE WAS, EACH TIME, AND WHY IT IS GONE
+-- ---------------------------------------------------------------------------
 --
--- WHAT DID ROUTE HERE: both `grep_fallback_scan` calls, which are the FS half of
--- this function, and `mk_ok`'s clock. The world therefore records the fallback
--- reads and not the subprocess, which is an honest partial rather than a
--- silently complete one.
-func grep_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {FS, Process, Clock} {
+-- WI-D20 wrote: "`ExtPorts.proc_exec` fronts `Ports.tool_exec`, whose live
+-- adapter is `tool_runtime.run_native_call` — an if-chain over `ReadFile`,
+-- `Search`, `WriteFile`, `EditFile`, `BashExec`, `RunTests` and a final `else`
+-- that returns '<tool> requires extension capability'. `rg` is not in that list,
+-- so `proc_exec(w, "rg", …)` would not run ripgrep." True then and true now, and
+-- it is a fact about the TOOL NAME. WI-D21 supplied the correction the routing
+-- rests on: `proc_exec(w, "BashExec", …)` does not hit that `else` — it runs a
+-- real subprocess and returns `BashExecResult { stdout, stderr, exit_code, meta }`
+-- encoded as JSON in `output`.
+--
+-- WI-D20 also wrote: "this site needs `out.stdout` as BYTES and branches on
+-- `Ok`/`Err`… where `ExtProcOutcome` carries one rendered `output` string and no
+-- status. An `Err` and an empty result would become the same value, and the
+-- fallback would fire on a successful search that matched nothing." The second
+-- sentence is the one that expired most usefully: an `Err` and an empty result
+-- DO become the same value, and that turns out to be exactly right, because the
+-- old code ran the fallback scan on both. `toString(out.stdout)` is replaced by
+-- `decode_bash_result(out.output).stdout` — the bytes were always going to
+-- become a string on the next line.
+--
+-- WI-D23 landed the typed `exit_code`, WI-D24 the identity, and through WI-D25
+-- this block ended: "ONE obstacle remains and it is this site's own shape:
+-- `out.stdout` is read as bytes and the seam renders JSON. This site stays
+-- ambient for that one measured reason." The shape obstacle was the cost of one
+-- decode in a module that already imports `std/json` and decodes the tool call
+-- that reaches this function.
+--
+-- WHAT ROUTED EARLIER, unchanged: both `grep_fallback_scan` calls, which are the
+-- FS half of this function, and `mk_ok`'s clock. With the subprocess routed the
+-- world now records all three, and this function performs no ambient effect.
+--
+-- THE `pattern` ARGUMENT IS MODEL-AUTHORED FREE TEXT and crosses as one argv
+-- element, which is the whole of what needs to be said about it — see
+-- `proc.ail`'s header for why there is no shell on this path and what would have
+-- to change for that to stop being true.
+func grep_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [string]) -> AuthorToolResult ! {IO, FS, Process, Clock} {
   let pattern = json_string_field(args, "pattern", "");
   let path_glob0 = json_string_field(args, "path_glob", ".");
   let path_glob = if trim(path_glob0) == "" then "." else path_glob0;
@@ -441,62 +478,78 @@ func grep_impl(p: ExtPorts, w: ExtWorld, args: Json, max_bytes: int, globs: [str
     let guard_err = path_guard(path_glob, globs);
     if guard_err != "" then mk_err(w, "grep", path_glob, guard_err)
     else {
-      match exec("rg", ["-n", "--no-heading", "-F", pattern, path_glob]) {
-        Ok(out) => {
-          let text = toString(out.stdout);
-          let limited = cap_text(text, max_bytes);
-          -- The scan runs ONLY when ripgrep returned nothing, and the world it
-          -- returns is carried either way — `w` on the non-scanning branch is the
-          -- world unchanged, which is true, because nothing was observed.
-          let scanned =
-            if text == "" then grep_fallback_scan(p, w, path_glob, pattern, max_matches)
-            else { lines: [], next_state: w };
-          let raw = if text == "" then join_lines(scanned.lines) else text;
-          mk_ok(
-            p,
-            scanned.next_state,
-            "grep",
-            path_glob,
-            raw,
-            jo([
-              kv("tool", js("grep")),
-              kv("ok", jb(true)),
-              kv("result", jo([
-                kv("path_glob", js(path_glob)),
-                kv("matches", js(limited.text)),
-                kv("truncated", jb(limited.truncated))
-              ]))
-            ]),
-            max_bytes
-          )
-        },
-        Err(_) => {
-          let scanned = grep_fallback_scan(p, w, path_glob, pattern, max_matches);
-          let fallback = join_lines(scanned.lines);
-          mk_ok(
-            p,
-            scanned.next_state,
-            "grep",
-            path_glob,
-            fallback,
-            jo([
-              kv("tool", js("grep")),
-              kv("ok", jb(true)),
-              kv("result", jo([
-                kv("path_glob", js(path_glob)),
-                kv("matches", js(cap_text(fallback, max_bytes).text)),
-                kv("truncated", jb(cap_text(fallback, max_bytes).truncated))
-              ]))
-            ]),
-            max_bytes
-          )
-        }
-      }
+      let out = p.proc_exec(w, bash_exec_tool(), bash_exec_args("rg", ["-n", "--no-heading", "-F", pattern, path_glob]));
+      -- `out.exit_code` IS NOT READ, ON PURPOSE. See the block above this
+      -- function: 1 is ripgrep's answer for "no matches", and this branch has to
+      -- treat that identically to a match-free success.
+      let text = decode_bash_result(out.output).stdout;
+      -- The scan runs ONLY when ripgrep returned nothing, and the world it
+      -- returns is carried either way — `out.next_state` on the non-scanning
+      -- branch is the world the SUBPROCESS left, which is the one correction the
+      -- routing makes to this expression: before WI-D26 the non-scanning branch
+      -- carried `w`, and that was true because nothing had been observed. Now
+      -- something has, and the successor has to come from the call.
+      let scanned =
+        if text == "" then grep_fallback_scan(p, out.next_state, path_glob, pattern, max_matches)
+        else { lines: [], next_state: out.next_state };
+      let raw = if text == "" then join_lines(scanned.lines) else text;
+      -- ---------------------------------------------------------------------
+      -- THE ONE FIELD THE MERGE FORCED A CHOICE ON, and it is `matches`
+      -- ---------------------------------------------------------------------
+      --
+      -- The two `mk_ok` constructions that stood here — one per `exec` arm —
+      -- agreed on every field but this one, and they were reached by inputs the
+      -- seam no longer distinguishes, so the merge cannot preserve both:
+      --
+      --   old `Ok` arm, ripgrep ran and matched nothing:
+      --     matches = cap_text(text)     -- "" — the SEARCH's empty output
+      --     excerpt = raw                -- the fallback scan's lines
+      --   old `Err` arm, ripgrep failed to spawn:
+      --     matches = cap_text(fallback) -- the fallback scan's lines
+      --     excerpt = raw                -- the same lines
+      --
+      -- Both now arrive as `text == ""` — a no-match search and a spawn failure
+      -- are the same value at this seam, which is precisely what the block above
+      -- says is CORRECT for the branch and is what makes it a choice here.
+      -- Reading `out.exit_code` would not recover the distinction either: ripgrep
+      -- answers 1 for "no matches" and `run_process_result` writes 1 for a spawn
+      -- failure, so the two are equal on the typed field as well.
+      --
+      -- `raw` WINS, for two measured reasons rather than by taste. It is the
+      -- `Err` arm's answer, and the `Err` arm is the one this checkout actually
+      -- took at every call (`rg` is not installed here). And it is the arm that
+      -- does not lie: the old `Ok`-empty answer reported `matches: ""` beside an
+      -- `excerpt` full of fallback hits, so a consumer reading the structured
+      -- field saw "no results" for a search that had them. That is the
+      -- silent-wrong shape this project exists to remove, and it was one field
+      -- away from a correct answer already present in the same record.
+      --
+      -- STATED AS A BEHAVIOUR CHANGE rather than folded in silently, per WI-D19's
+      -- rule at the dispatcher — routing preserves what the code did, and where
+      -- two things were done it has to say which one it kept.
+      let limited = cap_text(raw, max_bytes);
+      mk_ok(
+        p,
+        scanned.next_state,
+        "grep",
+        path_glob,
+        raw,
+        jo([
+          kv("tool", js("grep")),
+          kv("ok", jb(true)),
+          kv("result", jo([
+            kv("path_glob", js(path_glob)),
+            kv("matches", js(limited.text)),
+            kv("truncated", jb(limited.truncated))
+          ]))
+        ]),
+        max_bytes
+      )
     }
   }
 }
 
-export func dispatch_author_tool_with_globs(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, max_bytes: int, deny_globs: [string]) -> AuthorToolResult ! {FS, Process, Clock} {
+export func dispatch_author_tool_with_globs(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, max_bytes: int, deny_globs: [string]) -> AuthorToolResult ! {IO, FS, Process, Clock} {
   let globs = configured_deny_globs(deny_globs);
   match decode(raw_tool_call_json) {
     Err(_) => mk_err(w, "", "", "malformed_tool_call"),
@@ -513,6 +566,6 @@ export func dispatch_author_tool_with_globs(p: ExtPorts, w: ExtWorld, raw_tool_c
   }
 }
 
-export func dispatch_author_tool(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, max_bytes: int) -> AuthorToolResult ! {FS, Process, Clock} {
+export func dispatch_author_tool(p: ExtPorts, w: ExtWorld, raw_tool_call_json: string, max_bytes: int) -> AuthorToolResult ! {IO, FS, Process, Clock} {
   dispatch_author_tool_with_globs(p, w, raw_tool_call_json, max_bytes, [])
 }
