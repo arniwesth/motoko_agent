@@ -535,3 +535,32 @@ review when the deliverable is a claim about an accepted decision rather than a 
 
 **After the disposition, the order D9 established stands:** classifier 3 → Route B → WI-C5. Route B
 alone clears zero barriers, and the review is what authorises classifier 3.
+
+
+## Cluster 26 outcome, and cluster 27 = land the amendment
+
+**The review returned BOTH AMENDMENTS ACCEPT WITH CONDITIONS** (B: 2, A: 4, neither Revise), all four
+re-derivations confirming D9, and two findings beyond its scope — that classifier 1 does not meet its
+recorded acceptance criterion, and that `compaction_structural` is the cheapest path to a non-zero
+coverage number.
+
+**Cluster 27 = WI-D10, land Amendments B and A: HANDED OFF 2026-08-06**,
+`HANDOFF-execute-d10-land-the-amendment.md`. **The first item in this project to edit the ADR's
+body** — every prior amendment appended a review section.
+
+**Grounding found a cascade nobody had named, and its shape decides the work.** Inserting at
+`ADR:1396` moves every line citation below it. Measured: **551 ADR citations across the project docs,
+91 below the insertion point, 0 in source.** The split is what makes it tractable —
+**76 are the ADR's own self-citations and 1 is the plan (live, must be re-derived); 14 are in notes,
+reviews and handoffs (historical, must NOT be touched).**
+
+**That 77/14 split is S15 applied to line references, and it is the trap.** A note citing `ADR:1412`
+was true when written; re-dating it in place makes the note claim something it never claimed. **The
+handoff also raises the structural fix — named anchors on the amended paragraphs — as a decision to
+record rather than a change to slip in**, because this cascade will otherwise recur on every future
+amendment.
+
+**Clustering note: a documentation cascade is real work and this project has only ever sized the
+source-anchor kind.** Four items paid the `make anchors` version. This is the same shape in a
+different medium, it is cheaper (no profile re-issue, no content hash), and it was invisible until
+someone counted.
