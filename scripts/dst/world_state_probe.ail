@@ -966,7 +966,15 @@ export func exit_code_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, S
   -- was built across four items with no caller at all and this is its first.
   let scripted_tool: ScriptedTool =
     { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "d23-scripted", exit_code: 5 };
-  let w5 = { empty_world_state() | tools: [scripted_tool] };
+  -- `ext_effects` AND NOT `tools` SINCE WI-D24, and this line is the D23 row
+  -- being MOVED rather than rewritten. The bridge's dispatch is an extension
+  -- effect: it is served from its own cursor and recorded under its own identity
+  -- class, so a world seeding `tools` here leaves this queue empty and the
+  -- closure delegates to the real dispatcher — which is exactly what this row
+  -- reported when WI-D24 landed (got exit_code 1, the defensive arm's code, from
+  -- a real `BashExec {}`). The row's subject is unchanged: it is still
+  -- `ext_ports_of`'s OWN closure against a scripted world, per S14.
+  let w5 = { empty_world_state() | ext_effects: [scripted_tool] };
   let eports = Session.ext_ports_of(scripted_ports(), w5, "");
   let adopted = eports.proc_exec(world_to_token(w5), "BashExec", "{}");
   let ok_adopt = check("adoption: ext_ports_of's proc_exec closure hands the scripted exit code 5 through ExtProcOutcome",

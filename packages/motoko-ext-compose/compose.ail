@@ -923,16 +923,26 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
 -- bump, scheduled as its own item." WI-D22 shipped the bump and WI-D23 the
 -- rest: `ExtProcOutcome.exit_code` is real, filled by the bridge from the
 -- typed outcome, so `out.exitCode`'s replacement is a typed read, not a parse.
--- What still blocks routing is IDENTITY, not typing: `recording_tool` records
--- every `tool_exec` invocation as `ToolIdentity("loop_v2", inv.call.id, ...)`
--- and the bridge's call id is blank, so the first `proc_exec` call in a
--- recorded run emits a program the validator rejects
--- (`IdentityComponentMissing`, asserted in `dst_program` since WI-D21).
--- Routing these sites waits on the eighth recording adapter and
--- `ExtCtx.ext_id` — WI-D21 §5's plan. Until that lands the residue stands for
--- the measured reason: the seam renders where these sites need to match, and
--- an extension-initiated dispatch through it records an identity that is
--- false twice over.
+-- AND THE IDENTITY BLOCKER IS GONE TOO, AS OF WI-D24 — third part, same rule.
+-- What this paragraph said through WI-D23: "What still blocks routing is
+-- IDENTITY, not typing: `recording_tool` records every `tool_exec` invocation as
+-- `ToolIdentity("loop_v2", inv.call.id, ...)` and the bridge's call id is blank,
+-- so the first `proc_exec` call in a recorded run emits a program the validator
+-- rejects. Routing these sites waits on the eighth recording adapter and
+-- `ExtCtx.ext_id` — WI-D21 §5's plan."
+--
+-- WI-D24 built the adapter and did NOT need `ExtCtx.ext_id`: the bridge calls
+-- `Ports.ext_effect_exec`, `ports.recording_ext_effect` records
+-- `ExtensionEffectIdentity(holder, extension_effect_fault, "")` where the blank
+-- call id is legitimate, and the ext id rides in the world token that
+-- `ext/runtime`'s fold stamps per hook. A recorded extension effect now
+-- VALIDATES and REPLAYS — `discovery_dst`'s `effect_scenario` is the round trip.
+--
+-- SO WHAT REMAINS AT THESE SITES IS THE ORIGINAL PARAGRAPH'S POINT AND NOTHING
+-- ELSE: `proc_exec(w, "ailang", …)` reaches no compiler, and the honest route is
+-- `BashExec` with a command line, whose result arrives rendered as JSON where
+-- `check_snippet` needs a typed answer. That is a shape question about THIS
+-- site, not a world-model gap, and it is what the routing item has to solve.
 export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   if mode != "inline" then { decision: NoIntercept, next_state: ctx.world }
   else {

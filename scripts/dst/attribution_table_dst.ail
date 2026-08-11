@@ -103,16 +103,16 @@ pure func unknown_hook() -> [AttributionRow] {
 -- necessity — D4's stated exception to the automated-gate promise — so a row
 -- without one carries no correctness claim at all and is malformed.
 pure func no_reviewer() -> [AttributionRow] {
-  [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+  [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
      hook_ids: ["test_dummy"], reviewer: "", note: "" }]
 }
 
 -- One site, two rows. A profile intersecting against both could get two
 -- different answers for the same site.
 pure func duplicate_site() -> [AttributionRow] {
-  [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+  [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
      hook_ids: ["test_dummy"], reviewer: "arni.westh", note: "" },
-   { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+   { site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
      hook_ids: ["compose"], reviewer: "arni.westh", note: "" }]
 }
 
@@ -120,9 +120,9 @@ pure func duplicate_site() -> [AttributionRow] {
 -- accounted for, the third is in neither the rows nor the unconditional-core
 -- set. Nothing about the TABLE is wrong.
 pure func omitted_site() -> [CoreSite] {
-  [{ site: { file: "src/core/session.ail", line: 1461 }, effect: "Clock",
+  [{ site: { file: "src/core/session.ail", line: 1476 }, effect: "Clock",
      routed: true, note: "in the unconditional-core set" },
-   { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+   { site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
      routed: false, note: "attributed to test_dummy" },
    { site: { file: "src/core/session.ail", line: 4242 }, effect: "Clock",
      routed: false, note: "discovered by inventory, classified by nobody" }]
@@ -132,7 +132,7 @@ pure func omitted_site() -> [CoreSite] {
 -- attributed sites. Must be accepted, or the fixture above proves nothing.
 pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
-    ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock",
+    ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
           routed: false, note: "" },
         { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process",
           routed: false, note: "" }]
@@ -143,8 +143,8 @@ pure func head_inventory() -> [CoreSite] {
 func scenario_empty_intersection() -> bool ! {IO} {
   -- `test_dummy` is in NO checked-in configuration. Row 1's site must vanish
   -- from every one of them, and reappear when it is installed.
-  let absent = classify_site("src/core/ext/runtime.ail:190", ["compaction_ai#0", "scratchpad#1"]);
-  let present = classify_site("src/core/ext/runtime.ail:190", ["test_dummy#0"]);
+  let absent = classify_site("src/core/ext/runtime.ail:199", ["compaction_ai#0", "scratchpad#1"]);
+  let present = classify_site("src/core/ext/runtime.ail:199", ["test_dummy#0"]);
   -- and the mixed-guard row, the case a semantic test would have dropped
   let sp_absent = classify_site("src/core/tool_phase.ail:318", ["compaction_ai#0"]);
   let sp_present = classify_site("src/core/tool_phase.ail:318", ["scratchpad#5"]);
@@ -161,7 +161,7 @@ func scenario_uninstalled_is_permitted() -> bool ! {IO} {
   -- to unconditional core, and the driver obligation was five instead of four.
   let rs = validate_rows(attribution_rows(), known_hook_ids());
   let ok = List.length(rs) == 0
-        && classify_site("src/core/ext/runtime.ail:190", []) == "attributed-unreachable";
+        && classify_site("src/core/ext/runtime.ail:199", []) == "attributed-unreachable";
   let _ = if ok then println("  ✓ a row naming a known-but-uninstalled hook is legal and removes its site")
           else println("  ✗ known-but-uninstalled hook was not permitted");
   ok

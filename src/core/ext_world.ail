@@ -25,7 +25,7 @@
 
 module src/core/ext_world
 
-import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray)
+import std/json (Json, encode, decode, jo, ja, kv, js, jnum, jb, get, asString, asNumber, asBool, asArray, asObject)
 -- NOT decoration. `std/json`'s accessors return `Option`, and without this
 -- import `None` and `Some(j)` in a match arm are FRESH VARIABLE BINDINGS rather
 -- than constructor patterns: the first arm matches everything, the second is
@@ -511,6 +511,21 @@ export pure func world_json(w: WorldState) -> Json {
     kv("env", ja(env_json(w.env))),
     kv("files", ja(files_json(w.files))),
     kv("tools", ja(scripted_tools_json(w.tools))),
+    -- WI-D24's two fields, and both HAVE to cross or the seam they exist for
+    -- does not work. `ext_effects` is the queue an extension's dispatch is
+    -- served from, and this transport is the only path between the driver's
+    -- world and the bridge that consumes it — a token that dropped it would hand
+    -- every extension an empty queue, which the adapter answers by performing a
+    -- REAL subprocess. `holder_ext_id` is the id the eighth recording adapter
+    -- writes into the interaction's identity; a token that dropped it would
+    -- record every extension effect as belonging to nobody, which
+    -- `validate_identity` rejects.
+    --
+    -- The first failure is silent and the second is loud, which is exactly the
+    -- asymmetry this module's header warns about — so both are asserted field by
+    -- field in the round trip below, with values distinct from every other.
+    kv("ext_effects", ja(scripted_tools_json(w.ext_effects))),
+    kv("holder_ext_id", js(w.holder_ext_id)),
     kv("log", ja(interactions_json(w.log))),
     kv("gen", generator_json(w.gen))
   ])
@@ -523,6 +538,8 @@ export pure func world_of_json(j: Json) -> WorldState {
     env: env_of(json_array(j, "env")),
     files: files_of(json_array(j, "files")),
     tools: scripted_tools_of(json_array(j, "tools")),
+    ext_effects: scripted_tools_of(json_array(j, "ext_effects")),
+    holder_ext_id: str_field(j, "holder_ext_id", ""),
     log: interactions_of(json_array(j, "log")),
     gen: generator_of(obj_field(j, "gen")) }
 }
@@ -539,6 +556,61 @@ export pure func world_to_token(w: WorldState) -> ExtWorld {
 
 export pure func token_to_world(t: ExtWorld) -> WorldState {
   world_of_json(t.token)
+}
+
+-- WI-D24. THE HOLDER STAMP, and this module is its home for the reason the
+-- header gives: it is the only place the opaque token is opened, and a second
+-- opener is a second decoder that can disagree with this one.
+--
+-- `ext/runtime`'s fold calls `stamp_holder` at the moment it has chosen which
+-- hook to run — the ONE place in the tree that knows which extension is about to
+-- perform an effect — and the four world-threading dispatchers call
+-- `clear_holder` on the way out so the driver never holds a stale holder. The
+-- pair is deliberately not one function with a flag: the two calls are made by
+-- different code for different reasons, and reading `stamp_holder(w, "")` at a
+-- dispatcher's return would say the driver is an extension named "".
+--
+-- IT COSTS A DECODE AND AN ENCODE per hook, which is the price of the token
+-- being Json rather than a record: `std/json` offers no way to add a key to an
+-- object without rebuilding it, so going through `WorldState` is both the
+-- cheapest correct implementation and the one that cannot drift from
+-- `world_json`'s field list.
+export pure func stamp_holder(t: ExtWorld, ext_id: string) -> ExtWorld {
+  { token: put_key(t.token, "holder_ext_id", js(ext_id)) }
+}
+
+export pure func clear_holder(t: ExtWorld) -> ExtWorld {
+  { token: put_key(t.token, "holder_ext_id", js("")) }
+}
+
+-- THE STAMP IS A KEY-SET AND NOT A WORLD ROUND TRIP, AND THAT IS A CORRECTION
+-- MADE ON CONTACT RATHER THAN A PREFERENCE. The first implementation was
+-- `world_to_token({ token_to_world(t) | holder_ext_id: id })`, which is shorter
+-- and is WRONG for a reason the type cannot show: `token_to_world` is TOTAL, so
+-- a token this module did not write decodes to `empty_world_state()` and the
+-- re-encode replaces it. `declared_vs_performed`'s trace ports hand the fold
+-- exactly such a token — `{ token: jo([kv("trace", …)]) }`, a deliberate
+-- fabrication whose whole job is to record which seams a hook called — and the
+-- round-trip form silently erased it, taking two reachability rows with it.
+--
+-- The rule the correction establishes, and it is wider than this field: THE HOST
+-- MUST NOT REWRITE A TOKEN IT DID NOT BUILD. `ExtWorld` is documented as opaque
+-- to extensions; opacity has to run both ways or "opaque" means "the host may
+-- reinterpret it". `put_key` therefore edits the object's own key set and is the
+-- IDENTITY on anything that is not a Json object.
+pure func put_key(obj: Json, key: string, v: Json) -> Json {
+  match asObject(obj) {
+    Some(fields) => jo(drop_key(fields, key) ++ [kv(key, v)]),
+    -- Not an object: nothing to set, and nothing may be destroyed to say so.
+    None => obj
+  }
+}
+
+pure func drop_key(fields: [{ key: string, value: Json }], key: string) -> [{ key: string, value: Json }] {
+  match fields {
+    [] => [],
+    f :: rest => if f.key == key then drop_key(rest, key) else f :: drop_key(rest, key)
+  }
 }
 
 -- The identity a hook that performs no world-threading effect returns. Named so
@@ -598,6 +670,18 @@ pure func codec_fixture_world() -> WorldState {
     -- round-tripped from one the decoder defaulted.
     tools: [{ tool_call_id: "t-17", duration_ms: 199, code: "E_TOOL",
               message: "tool said no", content: "the content", exit_code: 211 }],
+    -- WI-D24's extension-effect cursor. TWO entries against the tool queue's
+    -- one, and every quantity distinct from every other in this fixture (S7):
+    -- the failure this catches is a decoder reading `ext_effects` out of
+    -- `tools`, which a same-length pair of queues could not distinguish. The
+    -- blank `tool_call_id` is this class's real shape, so the fixture holds it.
+    ext_effects: [{ tool_call_id: "", duration_ms: 223, code: "",
+                    message: "", content: "ext content", exit_code: 227 },
+                  { tool_call_id: "", duration_ms: 229, code: "E_EXT",
+                    message: "ext said no", content: "", exit_code: 233 }],
+    -- The holder. A value no other field in this fixture holds, because the
+    -- decoder's failure mode here is reading it out of some other string.
+    holder_ext_id: "ext-holder-239",
     log: [
       { identity: { ordinal: 5, body: ProviderIdentity("origin-a", 7, "model-z") },
         request_projection: "proj-1",
@@ -633,6 +717,68 @@ pure func test_the_world_token_round_trips_every_scalar_field() -> bool
       && List.length(back.files) == List.length(w.files)
       && List.length(back.tools) == List.length(w.tools)
       && List.length(back.log) == List.length(w.log)
+      -- WI-D24's two fields. The queue length AND the holder scalar, because the
+      -- two fail differently: a dropped `ext_effects` makes a replay perform a
+      -- real subprocess and a dropped holder makes the recorder attribute the
+      -- effect to nobody.
+      && List.length(back.ext_effects) == List.length(w.ext_effects)
+      && back.holder_ext_id == w.holder_ext_id
+  }
+
+-- WI-D24. The stamp's own row, and it exists because the first implementation
+-- passed every other row in this module while destroying a token.
+--
+-- Two clauses, and the SECOND is the one that failed: setting the holder on a
+-- real world must round-trip it, and setting the holder on a token the host did
+-- not build must leave every other key intact. `declared_vs_performed`'s trace
+-- ports are the production instance of clause two — they hand the fold a
+-- fabricated `{trace: …}` token — and they went red under the round-trip form,
+-- which is how it was caught. This row is the in-module version so the next
+-- reader does not have to run a different target to learn the rule.
+pure func test_the_holder_stamp_preserves_a_token_the_host_did_not_build() -> bool
+  tests [((), true)]
+  {
+    let real = stamp_holder(world_to_token(codec_fixture_world()), "ext-stamped");
+    let foreign = stamp_holder({ token: jo([kv("trace", js("dir_make(x);"))]) }, "ext-stamped");
+    let cleared = clear_holder(foreign);
+    -- clause 1: a real world keeps every field AND takes the holder.
+    token_to_world(real).holder_ext_id == "ext-stamped"
+      && List.length(token_to_world(real).ext_effects) == 2
+      && List.length(token_to_world(real).log) == 1
+      -- clause 2: the foreign key survives both the stamp and the clear, and the
+      -- holder is really set on it rather than being silently dropped.
+      && (match get(foreign.token, "trace") { Some(v) => match asString(v) { Some(t) => t == "dir_make(x);", None => false }, None => false })
+      && (match get(foreign.token, "holder_ext_id") { Some(v) => match asString(v) { Some(h) => h == "ext-stamped", None => false }, None => false })
+      && (match get(cleared.token, "trace") { Some(v) => match asString(v) { Some(t) => t == "dir_make(x);", None => false }, None => false })
+      && (match get(cleared.token, "holder_ext_id") { Some(v) => match asString(v) { Some(h) => h == "", None => false }, None => false })
+  }
+
+-- WI-D24. The extension-effect cursor, asserted ENTRY BY ENTRY rather than by
+-- length, for the reason the script cursor is: this queue is what an extension's
+-- dispatch is served from, and a codec that carried two entries with the wrong
+-- contents would replay a run in which every extension effect succeeded. The
+-- second entry is the faulted one, so both `ScriptedTool` shapes cross.
+--
+-- IT ALSO PINS THAT THE TWO QUEUES DO NOT SHARE A HOME: the tool queue's single
+-- entry has a NON-BLANK call id and a different exit code, so a decoder reading
+-- either list into the other fails this row rather than passing on a length.
+pure func test_the_world_token_round_trips_the_extension_effect_cursor() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    let back = token_to_world(world_to_token(w));
+    match back.ext_effects {
+      a :: b :: [] =>
+        a.tool_call_id == "" && a.duration_ms == 223 && a.code == ""
+          && a.content == "ext content" && a.exit_code == 227
+          && b.duration_ms == 229 && b.code == "E_EXT"
+          && b.message == "ext said no" && b.exit_code == 233
+          && (match back.tools {
+                t :: [] => t.tool_call_id == "t-17" && t.exit_code == 211,
+                _ => false
+              }),
+      _ => false
+    }
   }
 
 -- The script cursor is what `ai_step` actually consumes, so its round trip is

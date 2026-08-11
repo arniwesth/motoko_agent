@@ -1042,3 +1042,35 @@ what did not exist was a producer — and the moment one exists, every consumer 
 read zero (the tool queue, the discovery balance, the witness) is exercised for the first time. That
 is S33's late-surfacing proxy shape at the scale of a whole identity class, and it is why the
 handoff routes the item through the round trip rather than through the adapter alone.
+
+**Cluster 42 = WI-D25, the successor audits: HANDED OFF 2026-08-09**,
+`HANDOFF-execute-d25-the-successor-audits.md`. **Item 1 of the goal line's remaining path, and the
+grounding inverted the item's premise.** S29's base rate said 2 drops of 2 audited slots; measured,
+**both remaining slots are mostly threaded already** — `dispatch_solver_candidate` has one production
+call site whose write side D19 re-seated and whose three `FinalizeDecision` arms all bind
+`finalized.next_state`, and `dispatch_pre_step_chain`'s successor feeds `dispatch_step` on the happy
+path. The one seam is a **documented deferral**: the two `Seal*` terminal branches pass
+`st.world_state` while `chain.next_state` exists, and the WI-D4-era comment says so verbatim —
+*"a separate un-threaded seam and is out of this item's scope."* D25 is the item whose scope it is.
+
+**The grounding also caught a false claim TWO ITEMS OLD, made in this role and repeated into the
+plan.** D24 §12.2 said `on_solver_candidate` "declares `! {Process}` and can" reach the effect seam;
+the D24 apply repeated it as "verified at the ABI rows". **The rows were verified; the inference was
+not.** Row inclusion is the truth: no `ExtPorts` field is callable under `{Process}` alone — the
+slot's only subprocess route is ambient `std/process.exec`. "Can" was inferred from the presence of
+an effect (S33's proxy, in this role, at review, past the it-pays table's own warning). Corrected in
+the plan and the protocol note in the same commit as the handoff.
+
+**The witness asymmetry is the item's design content.** `on_pre_step`'s row reaches exactly one port
+— `ai_step`, which threads the provider seam — so a performing pre-step hook consumes a scripted
+provider step and the seal-terminal drop becomes observable for the first time. `on_solver_candidate`
+reaches zero ports, a fabricated-token witness dies at the next `token_to_world` (S34's wall, met
+from the other side), so the honest deliverable there is enumeration plus a narrowed label per
+D20 §8.2 — a row that would pass either way is worse than no row.
+
+**Clustering note to carry: an audit item's deliverable is capability BOUNDS as compiler verdicts,
+not only thread/drop verdicts.** The four probes (each slot × one rejected call, one accepted call)
+are disclosure-table rows for the goal line's clause 2, produced by the effect checker totally —
+the plan's underused-producer rule applied to the audit itself. The thread audit answers "is the
+world carried"; the bounds answer "what could this slot ever do to it", and the second question is
+the one the demonstration and the disclosure table actually consume.

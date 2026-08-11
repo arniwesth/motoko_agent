@@ -92,6 +92,20 @@ export pure func fault_class_tool_failed() -> string { "ToolFailed" }
 export pure func fault_class_tool_correlation_mismatch() -> string { "ToolCorrelationMismatch" }
 export pure func fault_class_tool_deadline_exceeded() -> string { "ToolDeadlineExceeded" }
 
+-- WI-D24's row eleven, and it is the first accessor here whose consumer names
+-- the class in an IDENTITY rather than in an outcome. `ports.recording_ext_effect`
+-- puts it in `ExtensionEffectIdentity`'s class_id slot, where
+-- `dst_program.validate_static_references` checks it against `required_class_ids()`
+-- — so a drifted literal at that site produces a valid run whose program is
+-- rejected for naming a class no catalogue defines. That is the exact failure
+-- the three accessors above exist to prevent, one field over.
+--
+-- WI-D21 measured why this accessor did not exist until now: the `fault_class_*`
+-- functions were a SUBSET of the catalogue's eleven rows, and reading them for
+-- the catalogue's contents is what made two drafts of that item conclude the
+-- class id was missing when it had been written since WI-C5.
+export pure func fault_class_extension_effect() -> string { "extension_effect_fault" }
+
 -- WI-D1's four, for the same reason the three above are here: `ports` and
 -- `stub_step` name them at the moment a fault is recorded, and a copied literal
 -- is where the risk lives (S6).

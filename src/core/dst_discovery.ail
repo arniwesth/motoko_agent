@@ -280,6 +280,21 @@ export type DiscoveryWitness = {
   file_writes: int,
   file_removes: int,
   dir_makes: int,
+  -- WI-D24's EXTENSION-EFFECT class, and it is a witness field now for exactly
+  -- the reason the three above became witness fields at WI-D19: an adapter
+  -- records it. Through WI-D23 it was PINNED AT ZERO in `absent_classes` below,
+  -- and WI-D21 measured that the pin's published ground did not hold — see that
+  -- function's note for the correction and for why the re-wording waited for this
+  -- item rather than being taken when the error was found.
+  --
+  -- THE COUNT IS NOT READ OFF THE LOG, on the filesystem fields' argument: the
+  -- failure mode `class_balance` exists to catch is a recorder that logs the
+  -- wrong number, and a witness derived from the recorder agrees with it by
+  -- construction. It comes from the SCENARIO's control flow — the routed hook
+  -- performs a known number of `ctx.ports.proc_exec` calls per dispatch, and the
+  -- dispatch count is anchored to the independently-witnessed provider-call
+  -- count.
+  extension_effects: int,
   expected_env_reads: [EnvExpectation]
 }
 
@@ -444,7 +459,27 @@ pure func dense(xs: [Interaction], expected: int) -> [DiscoveryFinding] {
 -- for part 2b — an `on_tool_handle` write that reaches a graded profile will
 -- reopen this conversation by name.
 pure func absent_classes(log: [Interaction], w: DiscoveryWitness) -> [DiscoveryFinding] {
-  class_balance(identity_kind(ExtensionEffectIdentity("", "", "")), 0,
+  -- WI-D24 TOOK THE PIN OFF `ExtensionEffect` AND PUT A WITNESS UNDER IT, which
+  -- is D19's choice made a second time and for the second time in preference to
+  -- removal: a witnessed class still pins at zero for every run that routes
+  -- nothing, and every graded run in this tree but one does.
+  --
+  -- AND THIS IS WHERE D19'S RECORDED GROUND IS FINALLY RE-WORDED, three items
+  -- after it was refuted. The paragraph above still says this class's
+  -- unreachability was STRUCTURAL rather than "nothing calls it yet"; WI-D21 §5.3
+  -- measured that and it did not survive — the catalogue row had existed since
+  -- WI-C5, the ext id existed at every dispatch site, and the real reason the
+  -- count was zero was that no adapter constructed the class. D21 reported the
+  -- error instead of re-wording it in place, deliberately, so that the refutation
+  -- stayed visible to the item that would act on it. WI-D24 is that item: the
+  -- eighth recording adapter exists, so the sentence is superseded here rather
+  -- than at the site that made it, and the history above is kept per S15.
+  --
+  -- `RandomDraw` STAYS PINNED AT LITERAL ZERO and its ground is unchanged: no
+  -- `record_interaction` site constructs it, and unlike this class it has no
+  -- consumer asking for one. That is still "nothing routes it yet" rather than
+  -- "structural", and saying so is the honest version of the distinction D19 drew.
+  class_balance(identity_kind(ExtensionEffectIdentity("", "", "")), w.extension_effects,
                 count_kind(log, identity_kind(ExtensionEffectIdentity("", "", ""))))
     ++ class_balance(identity_kind(RandomDrawIdentity("")), 0,
                      count_kind(log, identity_kind(RandomDrawIdentity(""))))
@@ -584,6 +619,7 @@ pure func balanced_witness() -> DiscoveryWitness {
     file_writes: 0,
     file_removes: 0,
     dir_makes: 0,
+    extension_effects: 0,
     expected_env_reads: [] }
 }
 

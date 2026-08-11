@@ -21,7 +21,7 @@
 -- extension is installed, and without a way to say so they default to clause 1
 -- and every profile must route them — including profiles for which they are
 -- dead. The absence of `test_dummy` is exactly the fact that removes
--- `src/core/ext/runtime.ail:190` from a profile's reachable set.
+-- `src/core/ext/runtime.ail:199` from a profile's reachable set.
 --
 -- The mechanical rule, with the empty-intersection case answered:
 --
@@ -201,7 +201,7 @@ export pure func table_source_revision() -> string {
 export pure func attribution_rows() -> [AttributionRow] {
   [
     {
-      site: { file: "src/core/ext/runtime.ail", line: 190 },
+      site: { file: "src/core/ext/runtime.ail", line: 199 },
       effect: "Clock",
       hook_ids: ["test_dummy"],
       reviewer: "arni.westh",
@@ -226,15 +226,15 @@ export pure func attribution_rows() -> [AttributionRow] {
 -- eight reads are reachable by installation, not by attribution.
 export pure func unconditional_core_sites() -> [CoreSite] {
   [
-    { site: { file: "src/core/session.ail", line: 1096 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1111 }, effect: "Clock", routed: true,
       note: "ext_ports_of's extension clock seam — the SIXTH routed core site, added by WI-C5. It replaced the ambient `session.ail:878` rather than joining it: widening ExtPorts.clock_now to take the world token removed the shape obstacle that plan rule S2 had accommodated, so the seam routes through Ports.clock_now like every other" },
-    { site: { file: "src/core/session.ail", line: 1355 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1370 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 1461 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 1476 }, effect: "Clock", routed: true,
       note: "ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 2906 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 2921 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
-    { site: { file: "src/core/session.ail", line: 3016 }, effect: "Clock", routed: true,
+    { site: { file: "src/core/session.ail", line: 3031 }, effect: "Clock", routed: true,
       note: "provider.ports.clock_now — routed by WI-A12" },
     { site: { file: "src/core/tool_phase.ail", line: 413 }, effect: "Clock", routed: true,
       note: "ports.clock_now — the FIFTH routed core site; D4's table says four and predates it. WI-D20 moved it 373 -> 413 and CHANGED ITS ARGUMENT: it read ports.clock_now(world) and now reads ports.clock_now(handle_world), because a DELEGATING on_tool_handle may have advanced the world before this native dispatch begins and starting from `world` would discard what it did. Same site, same effect, same routing, different starting world — recorded here because the other two tool_phase anchors this item moved are byte-identical drift and this one is not" },
@@ -579,7 +579,7 @@ pure func test_known_but_uninstalled_is_permitted() -> bool
   tests [((), true)]
   {
     List.length(validate_rows(attribution_rows(), known_hook_ids())) == 0
-      && classify_site("src/core/ext/runtime.ail:190", ["compaction_ai#0"]) == "attributed-unreachable"
+      && classify_site("src/core/ext/runtime.ail:199", ["compaction_ai#0"]) == "attributed-unreachable"
   }
 
 pure func test_stale_binding_is_rejected() -> bool
@@ -654,8 +654,8 @@ pure func test_discovered_site_in_neither_list_is_rejected() -> bool
   tests [((), true)]
   {
     let discovered: [CoreSite] = [
-      { site: { file: "src/core/session.ail", line: 1461 }, effect: "Clock", routed: true, note: "" },
-      { site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
+      { site: { file: "src/core/session.ail", line: 1476 }, effect: "Clock", routed: true, note: "" },
+      { site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock", routed: false, note: "" },
       { site: { file: "src/core/omitted.ail", line: 42 }, effect: "Clock", routed: false, note: "" }
     ];
     let rs = validate_completeness(discovered, attribution_rows(), unconditional_core_sites());
@@ -671,7 +671,7 @@ pure func test_head_inventory_is_complete() -> bool
   tests [((), true)]
   {
     let discovered = unconditional_core_sites()
-      ++ [{ site: { file: "src/core/ext/runtime.ail", line: 190 }, effect: "Clock", routed: false, note: "" },
+      ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock", routed: false, note: "" },
           { site: { file: "src/core/tool_phase.ail", line: 318 }, effect: "Process", routed: false, note: "" }];
     List.length(validate_completeness(discovered, attribution_rows(), unconditional_core_sites())) == 0
   }
